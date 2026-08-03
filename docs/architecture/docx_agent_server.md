@@ -75,12 +75,21 @@ calls address a session it was never handed.
 ## Wire protocol
 
 Newline-delimited JSON-RPC 2.0 on stdin/stdout — the MCP stdio transport. Diagnostics go to
-stderr only.
+stderr only. Alternatively, `docxodus-mcp --http PORT` serves the same protocol over a minimal
+streamable-HTTP binding (each POST carries one message and gets one `application/json` response —
+no SSE, no session-id handshake, no TLS), so the server can sit behind a tunnel (`ngrok http PORT`)
+for remote-MCP or ChatGPT Apps development. Requests are serialized under a lock either way; the
+session registry assumes single-threaded access.
 
-- `initialize` → `{ protocolVersion, capabilities: { tools: {} }, serverInfo }`
+- `initialize` → `{ protocolVersion, capabilities: { tools: {}, resources: {}, extensions: { "io.modelcontextprotocol/ui": ... } }, serverInfo }`
+  — the requested `protocolVersion` is echoed when present (every implemented method is
+  shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema }, ... ] }` — the 14 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 15 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
+  (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
+- `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
+  template (see "Inline preview" below)
 
 **`isError` semantics:** a tool result is marked `isError: true` when either (a) the JSON text is
 a Docxodus `EditResult`-shaped object with `"success": false` (anchor not found, malformed
@@ -235,6 +244,17 @@ reads include every projected package story, including `hdr*`/`ftr*`; an `anchor
 `set_header_text` or `set_footer_text` can also be handed straight back to markdown, text, or HTML
 read-back. (The unscoped continuous HTML render is body-oriented; use the story anchor for
 header/footer HTML.)
+
+### `docxodus_preview` — render for the inline widget
+
+`{ sessionId, anchorId? }` → the same converter profile as `docxodus_get_content format:"html"`
+(`DocxSessionOps.RenderHtml`, or `RenderBlockHtml` when `anchorId` is given), but shaped for a UI
+host instead of the model: the markup rides in the result's `_meta["docxodus/html"]`, which MCP
+Apps hosts deliver to the widget (`ui/notifications/tool-result`) and ChatGPT exposes as
+`window.openai.toolResponseMetadata` — while `content`/`structuredContent` carry only
+`{ sessionId, anchorId?, htmlLength }`. A multi-hundred-KB render therefore costs the model's
+context nothing. Call it again after edits to refresh the view; the widget's Refresh button does
+exactly that via widget-initiated `tools/call`. See "Inline preview" below.
 
 ### `docxodus_search` — find text or blocks, get reusable anchor ids back
 
@@ -399,6 +419,57 @@ anchor fails those with the same error code. `InsertTable`'s `created` list only
 kind, query: "tc"`. This is a pre-existing Docxodus API asymmetry, not something this server
 smooths over — documented here (and in the tool's own schema) so an agent doesn't have to
 rediscover it by trial and error.
+
+## Inline preview (MCP Apps / ChatGPT Apps)
+
+The server implements the MCP Apps extension (`io.modelcontextprotocol/ui`, spec 2026-01-26 —
+the joint Anthropic/OpenAI standard for interactive UI in chat hosts) so a compliant host
+(Claude, ChatGPT, VS Code, Goose) renders the document inline next to tool results instead of
+making the user imagine it from markdown. Implementation lives in `UiResources.cs`; everything
+else routes through it.
+
+**The moving parts:**
+
+- **Capability**: `initialize` declares `capabilities.extensions["io.modelcontextprotocol/ui"]`
+  (mimeType `text/html;profile=mcp-app`) plus `resources: {}`.
+- **Template**: `resources/list`/`resources/read` serve `ui://docxodus/viewer.html` — a fully
+  self-contained HTML widget (no external fetches, so it renders under the spec's **default** CSP:
+  `script-src 'self' 'unsafe-inline'`, no network; `_meta.ui.csp` declares empty domain lists).
+- **Tool linkage**: `docxodus_open` and `docxodus_preview` carry
+  `_meta.ui.resourceUri = "ui://docxodus/viewer.html"` in `tools/list`, plus ChatGPT Apps SDK
+  compatibility aliases (`openai/outputTemplate`, `openai/widgetAccessible: true`,
+  `openai/toolInvocation/*`). OpenAI's docs designate `_meta.ui.resourceUri` as the standard field
+  and the `openai/*` keys as optional aliases, so one stamping serves both hosts.
+- **Data flow**: `docxodus_open` mirrors `{sessionId, path}` as `structuredContent`; the widget
+  instance attached to it reads the session id and fetches its first render by calling
+  `docxodus_preview` itself (widget-initiated `tools/call` — MCP Apps default tool visibility is
+  `["model", "app"]`). `docxodus_preview` returns the markup only in `_meta["docxodus/html"]`,
+  keeping the model's context clean.
+- **The viewer** detects its host at runtime: `window.openai` present → ChatGPT bridge
+  (`toolOutput`/`toolResponseMetadata`/`callTool`, `openai:set_globals` event); otherwise MCP Apps
+  JSON-RPC over `postMessage` (`ui/initialize` handshake, `ui/notifications/tool-input`/
+  `tool-result` notifications, `tools/call` requests). Received document HTML is parsed with
+  `DOMParser`; the converter's `<style>` blocks move into the widget head (safe — the converter
+  prefixes classes `docx-`) and the body is injected. A Refresh button re-invokes
+  `docxodus_preview`, which is how an agent-driven edit becomes visible mid-conversation.
+
+**Transports**: stdio works as always (Claude Desktop/Code config unchanged). `--http PORT`
+starts the minimal streamable-HTTP binding for hosts that require a hosted server (ChatGPT Apps
+developer mode behind a tunnel). It is a development convenience, not a production deployment
+story — no TLS, no auth, no SSE.
+
+**Verification**: `smoke/apps_probe.py --server bin/Debug/net10.0/docxodus-mcp.dll --docx <file>`
+covers both transports (capability/resource/meta shapes, open→preview→block-preview flow, the
+no-markup-in-content invariant). The widget itself was validated in Chromium against a
+spec-faithful fake host (handshake → notifications → widget `tools/call` → style-applied render →
+Refresh); the harness pattern is documented in the PR that introduced this feature.
+
+**Deliberate v1 limits**: one widget template for both whole-document and single-block renders;
+no push — the widget refreshes by polling `docxodus_preview` on demand rather than the server
+emitting `notifications/resources/updated`; `structuredContent` is stamped only on the two
+widget-bearing tools (a host that wants live-updating previews after every `docxodus_edit` should
+have the widget re-call `docxodus_preview` after the model announces an edit, or we add
+`_meta.ui.resourceUri` to more tools later).
 
 ## Known gaps
 

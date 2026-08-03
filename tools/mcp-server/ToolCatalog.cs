@@ -70,6 +70,19 @@ internal static class ToolCatalog
             }
             """),
         new ToolDefinition(
+            "docxodus_preview",
+            "Render a session's document (or a single block) to HTML for the host's inline preview widget. The markup travels in the result's _meta for the widget only; the model-visible result is a short summary. Call again after edits to refresh the rendered view.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "anchorId": { "type": "string", "description": "Optional. Render just this block (any addressable anchor, including hdr*/ftr* scopes) instead of the whole document. Whole-document renders include the converter's stylesheet; single-block renders are bare markup." }
+              },
+              "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
             "docxodus_search",
             "Find text or structural nodes in a session's document. Returns anchor ids usable directly as the anchorId/cellAnchorId argument of every other tool.",
             """
