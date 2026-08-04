@@ -126,8 +126,10 @@ internal static class Dispatcher
             case "html":
                 return $"{{\"html\":{JsonRpcIo.JsonString(
                     anchorId is null
-                        ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
-                        : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false))}}}";
+                        ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0,
+                            renderTrackedChanges: true)
+                        : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false,
+                            renderTrackedChanges: true))}}}";
 
             case "blocks":
             {

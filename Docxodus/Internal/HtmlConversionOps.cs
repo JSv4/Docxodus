@@ -627,6 +627,11 @@ internal static class HtmlConversionOps
             // returns null and a re-rendered citing paragraph silently loses its
             // citation marker from the DOM (the XML keeps the reference).
             RenderFootnotesAndEndnotes = options.RenderFootnotesAndEndnotes,
+            // These settings affect within-block output too. An incremental swap must not
+            // accept revisions that the matching full render preserves.
+            RenderTrackedChanges = options.RenderTrackedChanges,
+            ShowDeletedContent = options.ShowDeletedContent,
+            RenderMoveOperations = options.RenderMoveOperations,
             // The throwaway doc copies the source's (possibly huge) style gallery verbatim;
             // re-simplifying it every render is the dominant single-block cost (~70ms on a 160-style
             // python-docx doc) and only strips rsids, which never reach the HTML. Skip it — the

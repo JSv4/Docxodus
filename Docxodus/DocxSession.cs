@@ -3594,11 +3594,50 @@ public sealed class DocxSession : IDisposable
         insertionAnchor.AddAfterSelf(insertionEnvelope);
     }
 
-    private XElement CreateRevisionEnvelope(XName name, string author, string date) =>
-        new(name,
+    /// <summary>Create native revision markup and keep Word's document-level recording flag in
+    /// sync. The flag does not make existing revisions render; it tells Word to track subsequent
+    /// interactive edits after the generated document is opened.</summary>
+    private XElement CreateRevisionEnvelope(
+        XName name, string author, string date, params object[] content)
+    {
+        EnsureTrackRevisionsEnabled();
+        var envelope = new XElement(name,
             new XAttribute(W.id, NextRevisionId()),
             new XAttribute(W.author, author),
             new XAttribute(W.date, date));
+        envelope.Add(content);
+        return envelope;
+    }
+
+    private void EnsureTrackRevisionsEnabled()
+    {
+        var main = _doc!.MainDocumentPart
+            ?? throw new InvalidOperationException("document has no main document part");
+        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+        var xDoc = settingsPart.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+        {
+            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+            xDoc.Add(root);
+        }
+
+        if (root.Element(W.trackRevisions) is { } existing)
+        {
+            // Bare CT_OnOff is the canonical enabled form. In particular, do not leave an
+            // inherited w:val="false" in place after this session has emitted a revision.
+            if (existing.Attribute(W.val) is { } disabledOrExplicit)
+            {
+                disabledOrExplicit.Remove();
+                settingsPart.PutXDocument();
+            }
+            return;
+        }
+
+        if (WordprocessingMLUtil.EnsureSettingsChildInOrder(
+                root, new XElement(W.trackRevisions)))
+            settingsPart.PutXDocument();
+    }
 
     /// <summary>Create a text-only run that retains the source run's formatting/rsid
     /// attributes but gets its own internal Unid. <paramref name="textName"/> is
@@ -8555,10 +8594,7 @@ public sealed class DocxSession : IDisposable
         XElement? del = null;
         if (existingRuns.Count > 0)
         {
-            del = new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date));
+            del = CreateRevisionEnvelope(W.del, author, date);
             foreach (var run in existingRuns)
             {
                 run.Remove();
@@ -8576,10 +8612,7 @@ public sealed class DocxSession : IDisposable
         XElement? ins = null;
         if (blocks.Count > 0 && blocks[0].RunElements.Count > 0)
         {
-            ins = new XElement(W.ins,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date));
+            ins = CreateRevisionEnvelope(W.ins, author, date);
             foreach (var run in blocks[0].RunElements)
                 ins.Add(new XElement(run));
         }
@@ -8601,11 +8634,7 @@ public sealed class DocxSession : IDisposable
                 t.ReplaceWith(new XElement(W.delText,
                     new XAttribute(XNamespace.Xml + "space", "preserve"),
                     (string)t));
-            var del = new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date),
-                run);
+            var del = CreateRevisionEnvelope(W.del, author, date, run);
             element.Add(del);
         }
     }
@@ -8638,10 +8667,8 @@ public sealed class DocxSession : IDisposable
         {
             var author = _revisionAuthor ?? "docxodus";
             var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            WordprocessingMLUtil.InsertRPrChildInOrder(rPr, new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date)));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, CreateRevisionEnvelope(W.del, author, date));
         }
     }
 
@@ -8666,10 +8693,7 @@ public sealed class DocxSession : IDisposable
             }
             if (trPr.Element(W.del) is null)
             {
-                trPr.Add(new XElement(W.del,
-                    new XAttribute(W.id, NextRevisionId()),
-                    new XAttribute(W.author, author),
-                    new XAttribute(W.date, date)));
+                trPr.Add(CreateRevisionEnvelope(W.del, author, date));
             }
 
             foreach (var cell in row.Elements(W.tc))
@@ -8892,11 +8916,9 @@ public sealed class DocxSession : IDisposable
             return;
         }
 
-        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, new XElement(W.rPrChange,
-            new XAttribute(W.id, NextRevisionId()),
-            new XAttribute(W.author, revisionAuthor),
-            new XAttribute(W.date, revisionDate),
-            oldProperties));
+        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr,
+            CreateRevisionEnvelope(
+                W.rPrChange, revisionAuthor, revisionDate, oldProperties));
     }
 
     /// <summary>

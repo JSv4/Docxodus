@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Xml.Linq;
 using Docxodus.McpServer;
 using Xunit;
 
@@ -92,6 +93,13 @@ public class McpServerDispatcherTests : IDisposable
         using var ms = new MemoryStream(File.ReadAllBytes(path));
         using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
         return doc.MainDocumentPart!.RootElement!.OuterXml;
+    }
+
+    private static string SavedSettingsXml(string path)
+    {
+        using var ms = new MemoryStream(File.ReadAllBytes(path));
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
+        return doc.MainDocumentPart!.DocumentSettingsPart?.RootElement?.OuterXml ?? string.Empty;
     }
 
     private static string FirstBodyAnchorId(string sessionId, SessionStore store)
@@ -376,7 +384,8 @@ public class McpServerDispatcherTests : IDisposable
         var htmlWithBorder = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
             $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
             .GetProperty("html").GetString()!;
-        Assert.Contains("border-bottom", htmlWithBorder);
+        Assert.Contains(XElement.Parse(htmlWithBorder).DescendantsAndSelf(),
+            e => ((string?)e.Attribute("style"))?.Contains("border-bottom", StringComparison.Ordinal) == true);
 
         var cleared = Parse(Dispatcher.Call(_store, "docxodus_format", J(
             $$"""{"sessionId":{{sessionArg}},"action":"set_paragraph_format","anchorId":"{{anchor}}","paragraphFormat":{"clearBorders":true} }""")));
@@ -385,7 +394,8 @@ public class McpServerDispatcherTests : IDisposable
         var htmlAfterClear = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
             $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
             .GetProperty("html").GetString()!;
-        Assert.DoesNotContain("border-bottom", htmlAfterClear);
+        Assert.DoesNotContain(XElement.Parse(htmlAfterClear).DescendantsAndSelf(),
+            e => ((string?)e.Attribute("style"))?.Contains("border-bottom", StringComparison.Ordinal) == true);
     }
 
     [Fact]
@@ -1272,5 +1282,51 @@ public class McpServerDispatcherTests : IDisposable
             $$"""{"sessionId":{{sessionArg}},"action":"add","anchorId":"{{anchor}}","revisionId":"rev1","author":"Alice"}""")));
         Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_comment", J(
             $$"""{"sessionId":{{sessionArg}},"action":"add","revisionId":"rev1","span":{"start":0,"length":1},"author":"Alice"}""")));
+    }
+
+    [Fact]
+    public void MCP140_HtmlAndSavedSettings_PreserveTrackedRevisionCommentTarget()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"original"}"""));
+        SetMode(sessionId, "render_inline", "Reviewer A");
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"replacement"}"""));
+
+        var revisions = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("revisions").EnumerateArray().ToList();
+        var revisionId = Assert.Single(
+                revisions, r => r.GetProperty("type").GetString() == "insert")
+            .GetProperty("id").GetString()!;
+        var comment = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","revisionId":"{{revisionId}}","author":"Alice","markdown":"Keep this revision."}""")));
+        Assert.True(comment.GetProperty("success").GetBoolean());
+
+        string Render(string? anchorId = null)
+        {
+            var argsJson = $"{{\"sessionId\":{sessionArg},\"format\":\"html\"";
+            if (anchorId is not null)
+                argsJson += $",\"anchorId\":{JsonSerializer.Serialize(anchorId)}";
+            argsJson += "}";
+            return Parse(Dispatcher.Call(_store, "docxodus_get_content", J(argsJson)))
+                .GetProperty("html").GetString()!;
+        }
+
+        foreach (var html in new[] { Render(), Render(anchor) })
+        {
+            Assert.Contains("<ins", html);
+            Assert.Contains("<del", html);
+            Assert.Contains("replacement", html);
+            Assert.Contains("original", html);
+        }
+
+        var savedPath = Path.Combine(_root, "tracked-comment.docx");
+        Save(sessionId, savedPath);
+        Assert.Contains("trackRevisions", SavedSettingsXml(savedPath));
     }
 }

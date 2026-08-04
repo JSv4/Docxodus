@@ -348,6 +348,12 @@ action existed, flipping the mode meant `docxodus_save` → `docxodus_close` →
 (and, without `persistAnchorIds`, losing every anchor id at that boundary); that dance is no
 longer needed for mode switching.
 
+Once a mutation actually emits native revision markup, the session also enables
+`w:trackRevisions` in `settings.xml` (creating the part when absent), so Word keeps tracking later
+interactive edits. This setting is distinct from display: `docxodus_get_content(format: "html")`
+always renders pending markup as `<ins>`/`<del>`; accepting or rejecting it requires an explicit
+track-changes action.
+
 `list` (issue #318) reads the revision set directly off the live session's markup —
 `DocxSession.ListRevisions` enumerates `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`, paragraph-mark
 and table-row markers, and the `*PrChange` format-change family across body, headers, footers,
