@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Embeddable viewer/editor via CDN — `docxodus/embed` (npm).** The published package was
+  already CDN-servable (jsDelivr/unpkg expose `dist/` with CORS `*`, `application/wasm` MIME, and
+  the `credentials:"omit"` loader patch), but embedding the *editor* still required hand-booting
+  `dotnet.js` and assembling the exports object. The new `embed` entry closes that gap with two
+  one-call factories: `createViewer(container, source, options?)` (read-only render, converter
+  stylesheet + body injected into the container, footnotes on by default) and
+  `createEditor(container, source?, options?)` (full `DocxEditor`; no source opens a blank
+  document). `source` is a URL string, `Uint8Array`, `ArrayBuffer`, `Blob`, or `File`. Ships in
+  three shapes: `dist/embed.js` (plain ESM for bundler users via `docxodus/embed`, shares module
+  state with the main entry), `dist/embed.bundle.js` (self-contained ESM for one-tag CDN
+  `<script type="module">`, re-exports the entire main API), and `dist/embed.iife.js` (classic
+  script, global `Docxodus`). WASM assets auto-resolve from the bundle's own location —
+  `import.meta.url` for the ESM shapes, `document.currentScript` for the IIFE — probing
+  `<dir>/wasm/` (package/CDN layout) then `<dir>/` (wasm-webroot layout), with an explicit
+  `wasmBasePath` option override. Supporting fixes: `initialize()` now clears its cached promise
+  on failure so a retry with a different base path is possible (a rejected first attempt used to
+  be permanent), and the raw bridge exports are available via `getWasmExports()` (what
+  `DocxEditor.open` needs). New `examples/embed.html` demo; Playwright coverage in
+  `tests/cdn-embed.spec.ts` drives every shape from a second CORS-enabled origin
+  (`tests/cors-server.py`) so the cross-origin module import, `_framework` asset fetches, and
+  auto-detection are exercised in the exact jsDelivr shape — including from a host page that
+  serves no wasm assets at all.
 - **Comments can target tracked revisions by id (issue #341).**
   `DocxSession.AddCommentToRevision(revisionId, author, markdown, ...)` brackets the exact live
   insertion, deletion, move-destination, or formatting extent returned by `ListRevisions()`.

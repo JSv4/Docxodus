@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docxodus — embeddable viewer &amp; editor</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #eceff3; color: #17202a; }
+    header { padding: 14px 20px; background: #fff; border-bottom: 1px solid #d6dce4; display: flex;
+      gap: 16px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 15px; margin: 0 16px 0 0; }
+    header code { background: #f1f4f8; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 20px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    section { background: #fff; border: 1px solid #d6dce4; border-radius: 8px; overflow: hidden; }
+    section > h2 { font-size: 13px; margin: 0; padding: 10px 14px; background: #f6f8fb;
+      border-bottom: 1px solid #e2e7ee; }
+    .pane { min-height: 320px; max-height: 70vh; overflow: auto; padding: 20px; }
+    button, label.btn { font: inherit; font-size: 13px; padding: 5px 12px; border: 1px solid #c7cfda;
+      border-radius: 5px; background: #f8fafc; cursor: pointer; }
+    #status { font-size: 12px; color: #5d6975; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Docxodus embed demo</h1>
+    <label class="btn">Open .docx<input id="file" type="file" accept=".docx" hidden /></label>
+    <button id="save" disabled>Save edited copy</button>
+    <span id="status">loading WASM…</span>
+  </header>
+  <main>
+    <section><h2>Read-only viewer — <code>createViewer(el, source)</code></h2>
+      <div id="viewer" class="pane"></div></section>
+    <section><h2>Editor — <code>createEditor(el, source)</code></h2>
+      <div id="editor" class="pane"></div></section>
+  </main>
+
+  <!--
+    This demo is served from the repo's test webroot, so it imports the embed
+    bundle relatively. From a CDN the ONLY line that changes is the import:
+
+      import { createViewer, createEditor }
+        from "https://cdn.jsdelivr.net/npm/docxodus@9/dist/embed.bundle.js";
+
+    WASM assets auto-resolve from the wasm/ directory next to the bundle —
+    no other configuration needed. Pin a version (@9.x.y) in production so the
+    immutable CDN cache works for you, not against you.
+  -->
+  <script type="module">
+    import { createViewer, createEditor } from "./embed.bundle.js";
+
+    const status = (t) => (document.getElementById("status").textContent = t);
+    let editor = null;
+    let viewer = null;
+
+    async function openDoc(source) {
+      status("rendering…");
+      const t0 = performance.now();
+      viewer = viewer
+        ? (await viewer.reload(source), viewer)
+        : await createViewer("#viewer", source);
+      editor?.close();
+      document.getElementById("editor").innerHTML = "";
+      editor = await createEditor("#editor", source);
+      document.getElementById("save").disabled = false;
+      status(`ready in ${Math.round(performance.now() - t0)} ms — edit on the right, then Save`);
+    }
+
+    document.getElementById("file").addEventListener("change", (e) => {
+      const f = e.target.files?.[0];
+      if (f) openDoc(f).catch((err) => status(String(err)));
+    });
+
+    document.getElementById("save").addEventListener("click", () => {
+      const bytes = editor.save();
+      const url = URL.createObjectURL(new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+      const a = Object.assign(document.createElement("a"), { href: url, download: "edited.docx" });
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Blank editor on load so the page is immediately interactive.
+    try {
+      editor = await createEditor("#editor");
+      document.getElementById("save").disabled = false;
+      status("ready — open a .docx, or type into the blank document on the right");
+    } catch (err) { status(String(err)); }
+  </script>
+</body>
+</html>
