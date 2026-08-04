@@ -73,7 +73,7 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`). Style it after insert (issue #315 Stage A, same cell-paragraph addressing): `SetColumnWidths(cellAnchor, widthsTwips)` retunes `w:tblGrid` + every `w:tcW` and pins fixed layout; `SetTableBorders(cellAnchor, TableBorderSpec?)` writes `w:tblPr/w:tblBorders` for the spec's scope (`All`/`Outside`/`Inside`) only, style `"none"` removing those edges; `SetCellShading(cellAnchor, fill, TableShadingScope)` writes `w:tcPr/w:shd` (`val="clear"`) on the cell or its whole row (header-row banding; null fill clears); `SetRepeatHeaderRow(cellAnchor, bool)` toggles `w:trPr/w:tblHeader` (Word honors it on a run of rows starting at row 1). Bad widths/fill/size → `InvalidTableStyling`. Cell merge (`w:gridSpan`/`w:vMerge`) is Stage B — design first, not yet implemented.
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
-- If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
+- If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`, or target a tracked change from `ListRevisions()` with `AddCommentToRevision(revisionId, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
@@ -109,6 +109,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `AddComment(p, span?, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | `p` (the commented paragraph) | `p` |
+| `AddCommentToRevision(revisionId, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | every block touched by the revision | whole-document re-projection |
 | `AddCommentReply(cmt, author, md, …)` | the reply definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | the parent `cmt` plus every document-side `p` hosting its reference | the first referenced host `p` (normally the sole host) |
 | `UpdateComment(cmt, md)` | the new body paragraph anchors (scope `cmt`) | the old body paragraph anchors | `cmt` | `cmt` |
 | `SetCommentResolved(cmt, resolved)` | — | — | `cmt` | `cmt` |
@@ -721,7 +722,7 @@ rendering notes, appeared as a stray empty footnote with no citation.
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
   to `SetHeaderText` with `Headers` excluded.
 
-## Comments (issues #300 and #317)
+## Comments (issues #300, #317, and #341)
 
 Native Word comment authoring — real `w:comment` markup the Reviewing pane shows, not the
 Tier E annotation overlay (which stays: it solves a different problem, semantic tagging for
@@ -730,9 +731,9 @@ and the `CommentText`/`CommentReference` styles are find-or-created on first use
 create/delete is undo/redo-reconciled by `ReconcileCommentsPart` (the `ReconcileNoteParts`
 twin — `DocumentSnapshot` carries the part's relationship id). Mechanics live in
 `Internal/CommentOps.cs` (the `AnnotationOps` split). Exposed in .NET, WASM/npm
-(`addComment`/`addCommentReply`/`setCommentResolved`/`updateComment`/`removeComment`/
-`listComments`), stdio/`docx-scalpel` (`add_comment`/`add_comment_reply`/
-`set_comment_resolved`/`update_comment`/`remove_comment`/`list_comments`), and the MCP
+(`addComment`/`addCommentToRevision`/`addCommentReply`/`setCommentResolved`/`updateComment`/`removeComment`/
+`listComments`), stdio/`docx-scalpel` (`add_comment`/`add_comment_to_revision`/
+`add_comment_reply`/`set_comment_resolved`/`update_comment`/`remove_comment`/`list_comments`), and the MCP
 server's `docxodus_comment` tool.
 
 ### Methods
@@ -740,13 +741,14 @@ server's `docxodus_comment` tool.
 | Method | Description |
 |--------|-------------|
 | `AddComment(anchorId, span?, author, markdown, initials?, date?)` | Comment on a character span of a body paragraph (`null` span = whole block; the same `SplitRunsForSpan` mechanism annotations use brackets the range with `w:commentRangeStart`/`End`, then the `CommentReference`-styled `w:commentReference` run lands directly after the rangeEnd). The definition gets Word's shape: `CommentText` paragraphs, a leading `w:annotationRef` mark run, `w:id` allocated max+1 over definitions *and* dangling markers. `w:date` is written only when provided — deterministic by default; an Unspecified-kind `DateTime` is treated as UTC. |
+| `AddCommentToRevision(revisionId, author, markdown, initials?, date?)` | Comment on the exact live markup extent identified by `ListRevisions()`: insertion/deletion wrappers, the destination of a move, affected runs for run-format changes, or the affected paragraph for structural/property changes. Markers are placed outside revision wrappers, so accept/reject keeps the comment and either preserves its range on surviving content or collapses it to a point. Unknown or already-resolved ids return `RevisionNotFound`. |
 | `AddCommentReply(parentCmtAnchorId, author, markdown, initials?, date?)` | Add a Word-native reply. It gets its own definition, `w:id`, and adjacent `w:commentReference`; range start/end markers stay on the thread root exactly as Word writes them. The reply's `w15:commentEx/@w15:paraIdParent` points to the immediate parent's final-paragraph `w14:paraId`, so child-of-reply chains inherit the root range even though intermediate replies are reference-only. Both new entries begin reopened (`w15:done="0"`). |
 | `UpdateComment(cmtAnchorId, markdown)` | Replace the body paragraphs; `w:id`/`w:author`/`w:initials`/`w:date` are untouched, and the old last paragraph's `w14:paraId` is re-stamped on the new last paragraph so Word's `commentsExtended` reply/resolve metadata stays attached across a body edit. |
 | `SetCommentResolved(cmtAnchorId, resolved)` | Set Word's per-comment `w15:done` state (`true` resolves, `false` reopens). Calling it on a legacy flat comment upgrades that comment with the extension metadata without changing its body anchor or definition identity. |
 | `RemoveComment(cmtAnchorId)` | Kind-guarded delegate to `DeleteBlock`'s `cmt` teardown: definition + marker triple (wrapper run included) everywhere in the package, plus threading pruning (below). |
 | `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order, with additive init-only `ParentAnchorId?` and `Resolved?` properties (the existing five-argument CLR constructor/deconstructor remains intact). `ParentAnchorId` maps `paraIdParent` back to the parent's stable `cmt` anchor. Both additive fields are absent/null when no `commentEx` entry exists, distinguishing a legacy flat comment from an explicitly reopened one. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). The numeric `w:id` is never surfaced — comments are addressed by anchor. |
 
-`Created` from `AddComment` or `AddCommentReply` = the definition anchor (kind `cmt`) + its paragraph anchors
+`Created` from `AddComment`, `AddCommentToRevision`, or `AddCommentReply` = the definition anchor (kind `cmt`) + its paragraph anchors
 (kind `p`, scope `cmt`) — which are ordinary editable blocks, so `ReplaceText` on a comment
 paragraph and `DeleteBlock` on the definition also work (pinned by `DS364`/`DS329`-style
 tests). Body paragraphs only: Word has no comments-on-comments, so a `cmt`-scope host fails
@@ -778,8 +780,9 @@ write path, exactly as `InsertFootnote` is for `[^label]`.
 ### Not yet
 
 - **Cross-block spans.** A comment range is single-block in v1; Word can span paragraphs.
-- **Comments anchored in header/footer/note stories.** Word allows them; v1 is body-only,
-  matching `InsertFootnote`'s host rule.
+- **Anchor/span comments in header/footer/note stories.** Word allows them, but the
+  `AddComment(anchorId, span, …)` form remains body-only, matching `InsertFootnote`'s host rule.
+  `AddCommentToRevision` can target revision markup in every story `ListRevisions()` enumerates.
 - **Tracked-changes mode.** Consistent with every other insert op, `AddComment` doesn't wrap
   its markup in `w:ins`.
 
@@ -894,6 +897,8 @@ enumerate `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del ranges,
 through every surface: WASM/npm (`listRevisions`/`acceptRevision`/`rejectRevision`), stdio
 host + docx-scalpel (`list_revisions`/`accept_revision`/`reject_revision`), MCP
 (`docxodus_track_changes` actions `list`/`accept`/`reject` with `revisionId`).
+The same ids can be passed to `AddCommentToRevision` (or `docxodus_comment add` with
+`revisionId`) to anchor review discussion to the exact live change before it is resolved.
 
 ## ApplyFormat — substring and TextMatch overloads
 

@@ -15,7 +15,7 @@ namespace Docxodus.Tests;
 /// <summary>
 /// Tests for markup-native revision listing + selective per-revision accept/reject
 /// (<see cref="DocxSession.ListRevisions"/>, <see cref="DocxSession.AcceptRevision"/>,
-/// <see cref="DocxSession.RejectRevision"/> — issues #318 and #319). Test IDs DS370-DS399.
+/// <see cref="DocxSession.RejectRevision"/> — issues #318, #319, and #341). Test IDs DS370-DS417.
 /// </summary>
 public class DocxSessionRevisionTests
 {
@@ -173,6 +173,13 @@ public class DocxSessionRevisionTests
                 new XElement(W.moveTo, RevAttrs(511, "Alice"), RunT("moved bit")),
                 new XElement(W.moveToRangeEnd, new XAttribute(W.id, 510)),
                 RunT("here.")));
+
+    private static byte[] BuildParagraphFormatChangeDoc() =>
+        BuildWithBody(
+            Para(
+                new XElement(W.pPr,
+                    new XElement(W.pPrChange, RevAttrs(701, "Alice"), new XElement(W.pPr))),
+                RunT("Formatted paragraph.")));
 
     /// <summary>A 2x2 table whose second row is row-deleted (trPr/del + del-wrapped cell runs).</summary>
     private static byte[] BuildDeletedRowDoc()
@@ -477,6 +484,241 @@ public class DocxSessionRevisionTests
             Assert.Null(run.Element(W.rPr)?.Element(W.b));         // old (empty) formatting restored
             Assert.Empty(run.Descendants(W.rPrChange));
         }
+    }
+
+    // ─── Comments targeted by revision id (issue #341) ──────────────────
+
+    [Theory]
+    [InlineData("rev101", "ins")]
+    [InlineData("rev102", "del")]
+    public void DS410_AddCommentByRevisionId_BracketsExactContentExtent(
+        string revisionId, string wrapperLocalName)
+    {
+        using var s = new DocxSession(BuildMixedRevisionsDoc());
+
+        var result = s.AddCommentToRevision(revisionId, "Reviewer", "Discuss this revision.");
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Single(s.ListComments());
+        Assert.Equal(new[] { "rev101", "rev102", "rev103" },
+            s.ListRevisions().Select(r => r.Id).ToArray());
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var paragraph = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.p).First();
+        var children = paragraph.Elements().ToList();
+        var revisionIndex = children.FindIndex(e => e.Name.LocalName == wrapperLocalName);
+        Assert.True(revisionIndex > 0);
+        Assert.Equal(W.commentRangeStart, children[revisionIndex - 1].Name);
+        Assert.Equal(W.commentRangeEnd, children[revisionIndex + 1].Name);
+        Assert.NotNull(children[revisionIndex + 2].Element(W.commentReference));
+
+        var id = (string?)children[revisionIndex - 1].Attribute(W.id);
+        Assert.Equal(id, (string?)children[revisionIndex + 1].Attribute(W.id));
+        Assert.Equal(id, (string?)children[revisionIndex + 2].Element(W.commentReference)!.Attribute(W.id));
+
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                FileFormatVersions.Office2019)
+            .Validate(doc)
+            .ToList();
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void DS411_AddCommentByRevisionId_FormatRevisionBracketsAffectedRun()
+    {
+        using var s = new DocxSession(BuildFormatChangeDoc());
+
+        var result = s.AddCommentToRevision("rev401", "Reviewer", "Check this formatting.");
+        Assert.True(result.Success, result.Error?.Message);
+
+        var root = MainDocumentRoot(s.Save());
+        var paragraph = root.Descendants(W.p).Single();
+        var children = paragraph.Elements().ToList();
+        var changedRunIndex = children.FindIndex(e => e.Descendants(W.rPrChange).Any());
+        Assert.True(changedRunIndex > 0);
+        Assert.Equal(W.commentRangeStart, children[changedRunIndex - 1].Name);
+        Assert.Equal(W.commentRangeEnd, children[changedRunIndex + 1].Name);
+        Assert.NotNull(children[changedRunIndex + 2].Element(W.commentReference));
+    }
+
+    [Theory]
+    [InlineData("rev101", true, true, "New York")]
+    [InlineData("rev101", false, false, "New York")]
+    [InlineData("rev102", true, false, "Boston")]
+    [InlineData("rev102", false, true, "Boston")]
+    public void DS412_ResolvingCommentedContent_PreservesOrCollapsesCommentRange(
+        string revisionId, bool accept, bool contentSurvives, string text)
+    {
+        using var s = new DocxSession(BuildMixedRevisionsDoc());
+        Assert.True(s.AddCommentToRevision(revisionId, "Reviewer", "Discuss this.").Success);
+
+        var resolved = accept ? s.AcceptRevision(revisionId) : s.RejectRevision(revisionId);
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.Single(s.ListComments());
+
+        var root = MainDocumentRoot(s.Save());
+        var paragraph = root.Descendants(W.p).First();
+        var children = paragraph.Elements().ToList();
+        var startIndex = children.FindIndex(e => e.Name == W.commentRangeStart);
+        var endIndex = children.FindIndex(e => e.Name == W.commentRangeEnd);
+        Assert.True(startIndex >= 0);
+        Assert.True(endIndex > startIndex);
+        Assert.NotNull(children[endIndex + 1].Element(W.commentReference));
+        if (contentSurvives)
+        {
+            Assert.Contains(children.Skip(startIndex + 1).Take(endIndex - startIndex - 1),
+                e => e.Descendants(W.t).Any(t => t.Value == text));
+        }
+        else
+        {
+            Assert.Equal(startIndex + 1, endIndex); // collapsed point at the old insertion site
+        }
+    }
+
+    [Fact]
+    public void DS413_RejectCommentedInsertedParagraph_MovesCollapsedAnchorToSurvivor()
+    {
+        using var s = new DocxSession(BuildInsertedParagraphDoc());
+        Assert.True(s.AddCommentToRevision("rev201", "Reviewer", "Do we need this paragraph?").Success);
+        Assert.Equal("rev201", Assert.Single(s.ListRevisions()).Id);
+        Assert.True(s.RejectRevision("rev201").Success);
+        Assert.Single(s.ListComments());
+
+        var root = MainDocumentRoot(s.Save());
+        var paragraph = root.Descendants(W.p).Single(p => p.Descendants(W.t).Any(t => t.Value == "After."));
+        var children = paragraph.Elements().ToList();
+        var startIndex = children.FindIndex(e => e.Name == W.commentRangeStart);
+        var endIndex = children.FindIndex(e => e.Name == W.commentRangeEnd);
+        Assert.True(startIndex >= 0);
+        Assert.Equal(startIndex + 1, endIndex);
+        Assert.NotNull(children[endIndex + 1].Element(W.commentReference));
+    }
+
+    [Fact]
+    public void DS414_AddCommentByUnknownRevisionId_UsesRevisionNotFoundEnvelope()
+    {
+        using var s = new DocxSession(BuildMixedRevisionsDoc());
+        var result = s.AddCommentToRevision("rev999999", "Reviewer", "Cannot attach.");
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.RevisionNotFound, result.Error!.Code);
+        Assert.Empty(s.ListComments());
+        Assert.False(s.Undo());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS415_ResolvingCommentedRow_PreservesCommentAndValidMarkup(bool accept)
+    {
+        using var s = new DocxSession(BuildDeletedRowDoc());
+        Assert.True(s.AddCommentToRevision("rev601", "Reviewer", "Discuss this row.").Success);
+
+        var resolved = accept ? s.AcceptRevision("rev601") : s.RejectRevision("rev601");
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.Single(s.ListComments());
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var root = doc.MainDocumentPart!.GetXDocument().Root!;
+        var start = Assert.Single(root.Descendants(W.commentRangeStart));
+        var end = Assert.Single(root.Descendants(W.commentRangeEnd));
+        var reference = Assert.Single(root.Descendants(W.commentReference));
+        Assert.Equal((string?)start.Attribute(W.id), (string?)end.Attribute(W.id));
+        Assert.Equal((string?)start.Attribute(W.id), (string?)reference.Attribute(W.id));
+
+        if (accept)
+        {
+            Assert.Same(start.Parent, end.Parent);
+            Assert.Same(end.Parent, reference.Parent?.Parent);
+            Assert.Empty(start.ElementsAfterSelf().TakeWhile(e => e != end));
+        }
+        else
+        {
+            Assert.Contains("A2", VisibleText(bytes));
+            Assert.Contains("B2", VisibleText(bytes));
+        }
+
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                FileFormatVersions.Office2019)
+            .Validate(doc)
+            .ToList();
+        Assert.Empty(errors);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS416_CommentedMove_TargetsDestinationAndSurvivesResolution(bool accept)
+    {
+        using var s = new DocxSession(BuildMoveDoc());
+        Assert.True(s.AddCommentToRevision("rev500", "Reviewer", "Discuss this move.").Success);
+
+        var before = MainDocumentRoot(s.Save());
+        var destination = before.Descendants(W.p).Single(p => p.Descendants(W.moveTo).Any());
+        var destinationChildren = destination.Elements().ToList();
+        var moveIndex = destinationChildren.FindIndex(e => e.Name == W.moveTo);
+        Assert.Equal(W.commentRangeStart, destinationChildren[moveIndex - 1].Name);
+        Assert.Equal(W.commentRangeEnd, destinationChildren[moveIndex + 1].Name);
+        Assert.NotNull(destinationChildren[moveIndex + 2].Element(W.commentReference));
+
+        var resolved = accept ? s.AcceptRevision("rev500") : s.RejectRevision("rev500");
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.Single(s.ListComments());
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var root = doc.MainDocumentPart!.GetXDocument().Root!;
+        var paragraph = root.Descendants(W.p)
+            .Single(p => p.Descendants(W.commentReference).Any());
+        var children = paragraph.Elements().ToList();
+        var startIndex = children.FindIndex(e => e.Name == W.commentRangeStart);
+        var endIndex = children.FindIndex(e => e.Name == W.commentRangeEnd);
+        Assert.True(startIndex >= 0);
+        Assert.True(endIndex > startIndex);
+        Assert.NotNull(children[endIndex + 1].Element(W.commentReference));
+        if (accept)
+            Assert.Contains(children.Skip(startIndex + 1).Take(endIndex - startIndex - 1),
+                e => e.Descendants(W.t).Any(t => t.Value == "moved bit"));
+        else
+            Assert.Equal(startIndex + 1, endIndex);
+
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                FileFormatVersions.Office2019)
+            .Validate(doc)
+            .ToList();
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void DS417_ParagraphPropertyRevision_UsesItsTextBearingParagraph()
+    {
+        using var s = new DocxSession(BuildParagraphFormatChangeDoc());
+        Assert.True(s.AddCommentToRevision("rev701", "Reviewer", "Discuss this format.").Success);
+        Assert.True(s.RejectRevision("rev701").Success);
+        Assert.Single(s.ListComments());
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var paragraph = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.p).Single();
+        var children = paragraph.Elements().ToList();
+        var startIndex = children.FindIndex(e => e.Name == W.commentRangeStart);
+        var endIndex = children.FindIndex(e => e.Name == W.commentRangeEnd);
+        Assert.True(startIndex >= 0);
+        Assert.True(endIndex > startIndex);
+        Assert.Contains(children.Skip(startIndex + 1).Take(endIndex - startIndex - 1),
+            e => e.Descendants(W.t).Any(t => t.Value == "Formatted paragraph."));
+        Assert.NotNull(children[endIndex + 1].Element(W.commentReference));
+
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                FileFormatVersions.Office2019)
+            .Validate(doc)
+            .ToList();
+        Assert.Empty(errors);
     }
 
     // ─── Parity with whole-document accept/reject ─────────────────────────

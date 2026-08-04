@@ -1122,6 +1122,14 @@ export interface DocxodusWasmExports {
       date: string,
       markdown: string,
     ) => string;
+    AddCommentToRevision: (
+      handle: number,
+      revisionId: string,
+      author: string,
+      initials: string,
+      date: string,
+      markdown: string,
+    ) => string;
     AddCommentReply: (
       handle: number,
       parentCommentAnchor: string,

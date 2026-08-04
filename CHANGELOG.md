@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Comments can target tracked revisions by id (issue #341).**
+  `DocxSession.AddCommentToRevision(revisionId, author, markdown, ...)` brackets the exact live
+  insertion, deletion, move-destination, or formatting extent returned by `ListRevisions()`.
+  Comment markers sit outside revision wrappers, so selectively accepting or rejecting the
+  change preserves the comment: its range stays on surviving content or collapses to a point
+  when the content disappears, including a selectively removed table row. Unknown and
+  already-resolved ids return the existing `RevisionNotFound` error. The mutually-exclusive
+  `anchorId`/`revisionId` target is available
+  through WASM/npm (`addCommentToRevision`), stdio/docx-scalpel
+  (`add_comment_to_revision`), and MCP `docxodus_comment add`. Coverage: DS410–DS417,
+  MCP138, browser revision-session tests, and Python comment tests.
+
 ## [9.0.0] - 2026-08-03
 
 ### Changed
