@@ -9,10 +9,11 @@
   <!--
     Share THIS page's URL on social platforms.
 
-    X/Twitter reads the twitter:player meta and renders player.html inside the
-    tweet (web client; poster image until the user clicks). LinkedIn ignores
-    player meta — it renders the og:image/title/description card and this page
-    is one click away.
+    `twitter:player` points at player.html for clients that still honor the
+    historical Player Card format. X no longer documents that format, so an
+    in-post iframe is experimental and must not be the only access path.
+    LinkedIn and ordinary X clients render/link this landing page instead;
+    LinkedIn uses the og:image/title/description card.
 
     Hosting: enable GitHub Pages (Settings → Pages → Deploy from a branch →
     main, folder /docs) and this page serves at
@@ -80,10 +81,8 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    // @9 tracks the newest 9.x release; the embed bundle ships from v9.1.0.
-    // Pin an exact version here once one is published.
     const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@9/dist/embed.bundle.js";
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
     const DOC = params.get("doc")
       ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
 

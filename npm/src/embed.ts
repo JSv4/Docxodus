@@ -7,7 +7,7 @@
  * ```html
  * <div id="doc"></div>
  * <script type="module">
- *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@9/dist/embed.bundle.js";
+ *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
  *   await createViewer("#doc", "./contract.docx");
  * </script>
  * ```
@@ -109,6 +109,181 @@ function resolveContainer(container: string | HTMLElement): HTMLElement {
   return el;
 }
 
+// A style element nested in a normal DOM container is still document-global.
+// The converter emits selectors such as `body` and `span`, so inserting its
+// stylesheet verbatim would restyle the host page. Embed factories mount into a
+// private inner root and prefix every ordinary selector with that root. This
+// keeps regular DOM/querySelector/contenteditable behavior (unlike Shadow DOM,
+// whose selection boundary is awkward for DocxEditor) without leaking CSS.
+const EMBED_ROOT_ATTR = "data-docxodus-embed-root";
+const SCOPED_STYLE_ATTR = "data-docxodus-scoped-style";
+let nextEmbedRootId = 0;
+
+interface ScopedMount {
+  root: HTMLElement;
+  selector: string;
+}
+
+function createScopedMount(container: HTMLElement): ScopedMount {
+  let id: string;
+  do {
+    id = `d${++nextEmbedRootId}`;
+  } while (document.querySelector(`[${EMBED_ROOT_ATTR}="${id}"]`));
+
+  const root = document.createElement("div");
+  root.setAttribute(EMBED_ROOT_ATTR, id);
+  container.replaceChildren(root);
+  return { root, selector: `[${EMBED_ROOT_ATTR}="${id}"]` };
+}
+
+/** Split a selector list only at top-level commas (not commas inside :is(), attributes, etc.). */
+function splitSelectorList(selectorText: string): string[] {
+  const selectors: string[] = [];
+  let start = 0;
+  let parentheses = 0;
+  let brackets = 0;
+  let quote = "";
+  let escaped = false;
+
+  for (let i = 0; i < selectorText.length; i++) {
+    const ch = selectorText[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") parentheses++;
+    else if (ch === ")") parentheses--;
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets--;
+    else if (ch === "," && parentheses === 0 && brackets === 0) {
+      selectors.push(selectorText.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  selectors.push(selectorText.slice(start).trim());
+  return selectors.filter(Boolean);
+}
+
+function scopeSelector(selector: string, rootSelector: string): string {
+  let remaining = selector.trim();
+  let consumedRoot = false;
+  let separated = false;
+
+  // The converter's full-document CSS starts at body/:root. In an embed, the
+  // private mount root is the equivalent document root. Consume repeated roots
+  // too (`html body ...`) before attaching the remainder.
+  for (;;) {
+    const match = /^(?:html|body|:root)(?=$|[\s>+~.#[:])/.exec(remaining);
+    if (!match) break;
+    consumedRoot = true;
+    remaining = remaining.slice(match[0].length);
+    const whitespace = /^\s+/.exec(remaining);
+    if (whitespace) {
+      separated = true;
+      remaining = remaining.slice(whitespace[0].length);
+    } else {
+      separated = false;
+      break;
+    }
+  }
+
+  if (!consumedRoot) return `${rootSelector} ${remaining}`;
+  if (!remaining) return rootSelector;
+  if (separated || /^[>+~]/.test(remaining)) return `${rootSelector} ${remaining}`;
+  return `${rootSelector}${remaining}`;
+}
+
+type MutableCssRules = {
+  readonly cssRules: CSSRuleList;
+  deleteRule(index: number): void;
+};
+
+function scopeCssRules(container: MutableCssRules, rootSelector: string): void {
+  // Walk backwards because document-level @page and @import rules are removed.
+  // Neither can be selector-scoped; keeping them would let print settings or an
+  // imported stylesheet escape into the host page.
+  for (let i = container.cssRules.length - 1; i >= 0; i--) {
+    const rule = container.cssRules[i];
+    if (rule.type === CSSRule.PAGE_RULE || rule.type === CSSRule.IMPORT_RULE) {
+      container.deleteRule(i);
+      continue;
+    }
+    if (rule.type === CSSRule.STYLE_RULE) {
+      const styleRule = rule as CSSStyleRule;
+      styleRule.selectorText = splitSelectorList(styleRule.selectorText)
+        .map((selector) => scopeSelector(selector, rootSelector))
+        .join(", ");
+      continue;
+    }
+    const grouping = rule as CSSRule & Partial<MutableCssRules>;
+    if (grouping.cssRules && typeof grouping.deleteRule === "function") {
+      scopeCssRules(grouping as MutableCssRules, rootSelector);
+    }
+  }
+}
+
+function scopeStyleElement(style: HTMLStyleElement, rootSelector: string): void {
+  if (style.hasAttribute(SCOPED_STYLE_ATTR)) return;
+
+  // Parse through the browser's CSSOM rather than regex-rewriting CSS. `media`
+  // keeps this temporary parser stylesheet inert while it is attached, so the
+  // unscoped rules never affect layout even for a single frame.
+  const parser = document.createElement("style");
+  parser.media = "not all";
+  parser.textContent = style.textContent ?? "";
+  (document.head ?? document.documentElement).appendChild(parser);
+  try {
+    const sheet = parser.sheet as CSSStyleSheet | null;
+    if (!sheet) throw new Error("browser did not expose a CSS stylesheet");
+    scopeCssRules(sheet, rootSelector);
+    style.setAttribute(SCOPED_STYLE_ATTR, "");
+    style.textContent = Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
+  } catch (error) {
+    throw new Error(`Docxodus embed: failed to scope document CSS: ${String(error)}`);
+  } finally {
+    parser.remove();
+  }
+}
+
+function scopeDocumentStyles(fullHtml: string, rootSelector: string): string {
+  const parsed = new DOMParser().parseFromString(fullHtml, "text/html");
+  parsed.querySelectorAll<HTMLStyleElement>("style")
+    .forEach((style) => scopeStyleElement(style, rootSelector));
+  return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
+}
+
+/** Scope initial and remount renders synchronously, before DocxEditor inserts their HTML. */
+function createScopedEditorExports(
+  exports: DocxEditorExports,
+  rootSelector: string,
+): DocxEditorExports {
+  const convert = exports.DocumentConverter.ConvertDocxToHtmlComplete;
+  const bridge = { ...exports.DocxSessionBridge };
+  const renderHtml = bridge.RenderHtml;
+  if (renderHtml) {
+    bridge.RenderHtml = (...args) => scopeDocumentStyles(renderHtml(...args), rootSelector);
+  }
+  return {
+    DocxSessionBridge: bridge,
+    DocumentConverter: {
+      ConvertDocxToHtmlComplete: (...args) =>
+        scopeDocumentStyles(convert(...args), rootSelector),
+    },
+  };
+}
+
 /** Normalize any DocumentSource to bytes. */
 export async function toDocumentBytes(source: DocumentSource): Promise<Uint8Array> {
   if (source instanceof Uint8Array) return source;
@@ -160,6 +335,7 @@ export async function createViewer(
   const el = resolveContainer(container);
   const { wasmBasePath, ...conversion } = options;
   await ensureWasm(wasmBasePath);
+  const mount = createScopedMount(el);
 
   let lastHtml = "";
   const render = async (src: DocumentSource, opts: ConversionOptions) => {
@@ -169,10 +345,17 @@ export async function createViewer(
       ...opts,
     });
     const parsed = new DOMParser().parseFromString(lastHtml, "text/html");
-    const styles = Array.from(parsed.querySelectorAll("style"))
-      .map((s) => s.outerHTML)
-      .join("");
-    el.innerHTML = styles + parsed.body.innerHTML;
+    const fragment = document.createDocumentFragment();
+    parsed.querySelectorAll("style").forEach((sourceStyle) => {
+      const style = document.createElement("style");
+      style.textContent = sourceStyle.textContent;
+      scopeStyleElement(style, mount.selector);
+      fragment.appendChild(style);
+    });
+    const body = document.createElement("template");
+    body.innerHTML = parsed.body.innerHTML;
+    fragment.appendChild(body.content);
+    mount.root.replaceChildren(fragment);
   };
 
   await render(source, conversion);
@@ -209,10 +392,19 @@ export async function createEditor(
   const el = resolveContainer(container);
   const { wasmBasePath, ...editorOptions } = options;
   await ensureWasm(wasmBasePath);
+  const mount = createScopedMount(el);
   // The runtime object is the real bridge; DocxEditorExports is the editor's
   // narrower view of it, so the cast is safe by construction.
-  const exports = getWasmExports() as unknown as DocxEditorExports;
-  if (source == null) return DocxEditor.openBlank(el, exports, editorOptions);
-  const bytes = await toDocumentBytes(source);
-  return DocxEditor.open(el, bytes, exports, editorOptions);
+  const exports = createScopedEditorExports(
+    getWasmExports() as unknown as DocxEditorExports,
+    mount.selector,
+  );
+  try {
+    return source == null
+      ? DocxEditor.openBlank(mount.root, exports, editorOptions)
+      : DocxEditor.open(mount.root, await toDocumentBytes(source), exports, editorOptions);
+  } catch (error) {
+    el.replaceChildren();
+    throw error;
+  }
 }

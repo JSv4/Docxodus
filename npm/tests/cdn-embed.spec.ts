@@ -34,17 +34,34 @@ test.describe('CDN embed — ESM bundle (embed.bundle.js)', () => {
     await page.goto('/');
     const result = await page.evaluate(
       async ({ cdn, docBytes }) => {
+        const hostStyle = document.createElement('style');
+        hostStyle.textContent = 'body { margin: 7px; font-family: monospace; }';
+        document.head.appendChild(hostStyle);
         const mod = await import(/* @vite-ignore */ `${cdn}/embed.bundle.js`);
         const div = document.createElement('div');
         div.id = 'viewer';
         document.body.appendChild(div);
         const viewer = await mod.createViewer(div, new Uint8Array(docBytes));
-        return {
+        const root = div.querySelector<HTMLElement>('[data-docxodus-embed-root]')!;
+        const documentStyles = Array.from(div.querySelectorAll<HTMLStyleElement>('style'));
+        const result = {
           wasmBasePath: mod.wasmBasePath,
           hasContent: div.querySelectorAll('p, h1, h2, h3, table').length,
           hasStyles: div.querySelectorAll('style').length,
           htmlLength: viewer.html.length,
+          hostMargin: getComputedStyle(document.body).margin,
+          hostFont: getComputedStyle(document.body).fontFamily,
+          documentMargin: getComputedStyle(root).margin,
+          documentFont: getComputedStyle(root).fontFamily,
+          stylesScoped: documentStyles.every((style) =>
+            style.hasAttribute('data-docxodus-scoped-style')),
+          hasDocumentGlobalAtRules: documentStyles.some((style) =>
+            /@(page|import)\b/i.test(style.textContent ?? '')),
         };
+        await viewer.reload(new Uint8Array(docBytes));
+        const reloadedContent = div.querySelectorAll('p, h1, h2, h3, table').length;
+        viewer.destroy();
+        return { ...result, reloadedContent, destroyed: div.childNodes.length === 0 };
       },
       { cdn: CDN_ORIGIN, docBytes: readTestFile('HC031-Complicated-Document.docx') },
     );
@@ -54,26 +71,80 @@ test.describe('CDN embed — ESM bundle (embed.bundle.js)', () => {
     expect(result.hasContent).toBeGreaterThan(10);
     expect(result.hasStyles).toBeGreaterThan(0);
     expect(result.htmlLength).toBeGreaterThan(1000);
+    expect(result.hostMargin).toBe('7px');
+    expect(result.hostFont).toContain('monospace');
+    expect(result.documentMargin).toBe('20px');
+    expect(result.documentFont).toContain('Arial');
+    expect(result.stylesScoped).toBe(true);
+    expect(result.hasDocumentGlobalAtRules).toBe(false);
+    expect(result.reloadedContent).toBeGreaterThan(10);
+    expect(result.destroyed).toBe(true);
   });
 
   test('createEditor opens, edits, and saves a document loaded cross-origin', async ({ page }) => {
     await page.goto('/');
     const result = await page.evaluate(
       async ({ cdn, docBytes }) => {
+        const hostStyle = document.createElement('style');
+        hostStyle.textContent = 'body { margin: 7px; font-family: monospace; }';
+        document.head.appendChild(hostStyle);
         const mod = await import(/* @vite-ignore */ `${cdn}/embed.bundle.js`);
         const div = document.createElement('div');
         document.body.appendChild(div);
         const editor = await mod.createEditor(div, new Uint8Array(docBytes));
         const blocks = div.querySelectorAll('[data-anchor]').length;
+        const block = div.querySelector<HTMLElement>('[data-anchor][contenteditable="true"]');
+        if (!block) throw new Error('No editable block rendered');
+        const marker = ' PR347_REAL_EDIT';
+        block.focus();
+        block.textContent = (block.textContent ?? '') + marker;
+        block.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertText',
+          data: marker,
+        }));
+        block.blur();
+
+        // A later editor remount creates a fresh converter stylesheet. It must
+        // already be scoped when setPaginated returns, including removal of @page.
+        editor.setPaginated(true);
         const saved: Uint8Array = editor.save();
+        const hostMargin = getComputedStyle(document.body).margin;
+        const hostFont = getComputedStyle(document.body).fontFamily;
+        const documentStyles = Array.from(div.querySelectorAll<HTMLStyleElement>('style'));
+        const stylesScoped = documentStyles.every((style) =>
+          style.hasAttribute('data-docxodus-scoped-style'));
+        const hasDocumentGlobalAtRules = documentStyles.some((style) =>
+          /@(page|import)\b/i.test(style.textContent ?? ''));
         editor.close();
-        return { blocks, savedLength: saved.length };
+
+        const verification = document.createElement('div');
+        document.body.appendChild(verification);
+        const reopened = await mod.createEditor(verification, saved);
+        const persisted = verification.textContent?.includes(marker) ?? false;
+        reopened.close();
+        return {
+          blocks,
+          savedLength: saved.length,
+          persisted,
+          hostMargin,
+          hostFont,
+          styleCount: documentStyles.length,
+          stylesScoped,
+          hasDocumentGlobalAtRules,
+        };
       },
       { cdn: CDN_ORIGIN, docBytes: readTestFile('HC001-5DayTourPlanTemplate.docx') },
     );
 
     expect(result.blocks).toBeGreaterThan(0);
     expect(result.savedLength).toBeGreaterThan(1000);
+    expect(result.persisted).toBe(true);
+    expect(result.hostMargin).toBe('7px');
+    expect(result.hostFont).toContain('monospace');
+    expect(result.styleCount).toBeGreaterThan(0);
+    expect(result.stylesScoped).toBe(true);
+    expect(result.hasDocumentGlobalAtRules).toBe(false);
   });
 
   test('createEditor with no source opens a blank document', async ({ page }) => {

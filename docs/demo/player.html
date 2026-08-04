@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Docxodus — live DOCX editor</title>
   <!--
-    X/Twitter Player Card target: this page renders INSIDE a tweet's iframe
-    (~480x480) when a link carrying `twitter:player` meta (see index.html)
-    is shared. It must stay tiny, boot on tap, and work with zero hosting
-    beyond GitHub Pages — the engine streams from jsDelivr, the sample
-    document from raw.githubusercontent.com (both serve CORS `*`).
+    Experimental X/Twitter Player Card target. The page is sized for the
+    historical ~480x480 player iframe and boots on tap, but X no longer
+    documents Player Cards and may ignore `twitter:player` entirely. Treat the
+    ordinary landing-page link as the supported path. Hosting remains just
+    GitHub Pages: the engine streams from jsDelivr and the sample document from
+    raw.githubusercontent.com (both serve CORS `*`).
 
     Query overrides (used by tests and local dev):
-      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9
+      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.1.0
       ?doc=<docx URL>                        default: repo sample via raw.githubusercontent
   -->
   <style>
@@ -71,10 +72,8 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    // @9 tracks the newest 9.x release; the embed bundle ships from v9.1.0.
-    // Pin an exact version here once one is published.
     const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@9/dist/embed.bundle.js";
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
     const DOC = params.get("doc")
       ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
 
