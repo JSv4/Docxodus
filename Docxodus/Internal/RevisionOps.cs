@@ -70,6 +70,19 @@ internal static class RevisionOps
         public List<XElement> RangeMarkers { get; } = new();
     }
 
+    /// <summary>
+    /// The live XML boundaries a native comment can bracket for one revision group.
+    /// <see cref="First"/>/<see cref="Last"/> are inclusive element boundaries;
+    /// when a revision has no commentable inline content (for example, a paragraph-mark
+    /// revision), <see cref="PointParagraph"/> supplies a legal collapsed anchor.
+    /// </summary>
+    internal sealed class RevisionCommentTarget
+    {
+        public XElement? First { get; init; }
+        public XElement? Last { get; init; }
+        public XElement? PointParagraph { get; init; }
+    }
+
     private static readonly XName[] RevWrapperNames = { W.ins, W.del, W.moveFrom, W.moveTo };
 
     private static readonly HashSet<XName> PropsChangeNames = new()
@@ -100,6 +113,85 @@ internal static class RevisionOps
         }
         AssignIds(groups);
         return groups;
+    }
+
+    /// <summary>
+    /// Resolve the exact live extent a Word comment should bracket for a revision. Content
+    /// revisions bracket their outer revision wrappers, which keeps the comment markers outside
+    /// markup that accept/reject may unwrap or remove. Run-format revisions bracket the affected
+    /// runs. A move targets its destination (the proposed location); rejecting it therefore
+    /// collapses the range at that location while accepting it leaves the moved text selected.
+    /// Structural/paragraph-mark revisions fall back to the affected paragraph as a point target.
+    /// </summary>
+    internal static RevisionCommentTarget? CommentTarget(RevisionGroup group)
+    {
+        var content = group.Units
+            .Where(u => u.Kind == UnitKind.Content
+                && (group.Type != TypeMove || u.Element.Name == W.moveTo))
+            .Select(u => u.Element)
+            .Where(e => !group.Units.Any(u => u.Kind == UnitKind.Content
+                && u.Element != e && e.Ancestors().Contains(u.Element)
+                && (group.Type != TypeMove || u.Element.Name == W.moveTo)))
+            .ToList();
+        if (content.Count > 0)
+            return new RevisionCommentTarget { First = content[0], Last = content[^1] };
+
+        var formatRuns = group.Units
+            .Where(u => u.Kind == UnitKind.PropsChange && u.Element.Name == W.rPrChange)
+            .Select(u => u.Element.Parent?.Parent)
+            .Where(r => r is not null && r.Name == W.r)
+            .Select(r => r!)
+            .Distinct()
+            .ToList();
+        if (formatRuns.Count > 0)
+            return new RevisionCommentTarget { First = formatRuns[0], Last = formatRuns[^1] };
+
+        // Non-run property changes affect their containing paragraph as a whole.
+        var propertyParagraphs = group.Units
+            .Where(u => u.Kind == UnitKind.PropsChange)
+            .Select(AffectedParagraph)
+            .Where(p => p is not null)
+            .Select(p => p!)
+            .Distinct()
+            .ToList();
+        if (propertyParagraphs.Count > 0)
+        {
+            var firstInline = propertyParagraphs[0].Elements().FirstOrDefault(e => e.Name != W.pPr);
+            var lastInline = propertyParagraphs[^1].Elements().LastOrDefault(e => e.Name != W.pPr);
+            if (firstInline is not null && lastInline is not null)
+                return new RevisionCommentTarget { First = firstInline, Last = lastInline };
+            return new RevisionCommentTarget { PointParagraph = propertyParagraphs[0] };
+        }
+
+        // Paragraph/row marks have no textual extent. Anchor them as a point in the affected
+        // paragraph; if resolution removes that paragraph, the existing merge path carries the
+        // point into the surviving paragraph.
+        var pointParagraph = group.Units
+            .Select(AffectedParagraph)
+            .FirstOrDefault(p => p is not null);
+        return pointParagraph is null
+            ? null
+            : new RevisionCommentTarget { PointParagraph = pointParagraph };
+    }
+
+    private static XElement? AffectedParagraph(RevisionUnit unit)
+    {
+        if (unit.Paragraph is not null) return unit.Paragraph;
+        if (unit.MarkedRow?.Descendants(W.p).FirstOrDefault() is { } rowParagraph)
+            return rowParagraph;
+        if (unit.Element.Ancestors(W.p).FirstOrDefault() is { } ancestorParagraph)
+            return ancestorParagraph;
+
+        // Table/cell property changes live above their text-bearing paragraphs. A comment
+        // reference still needs a paragraph host, so use the first paragraph in that owner.
+        var tableOwner = unit.Element.Ancestors()
+            .FirstOrDefault(e => e.Name == W.tc || e.Name == W.tr || e.Name == W.tbl);
+        if (tableOwner?.Descendants(W.p).FirstOrDefault() is { } tableParagraph)
+            return tableParagraph;
+
+        // A final body-level sectPr has no paragraph ancestor. Its nearest legal review anchor
+        // is the preceding body paragraph (an in-paragraph section break was handled above).
+        return unit.Element.Ancestors(W.body).FirstOrDefault()?.Elements(W.p).LastOrDefault();
     }
 
     private sealed class WalkCtx
@@ -382,21 +474,21 @@ internal static class RevisionOps
         {
             if (prev.Paragraph != cur.Paragraph || cur.Paragraph is null) return false;
             var a = TopLevelWithin(cur.Paragraph, prev.Element);
-            return a is not null && a.ElementsAfterSelf().All(e => IgnorableBetween.Contains(e.Name));
+            return a is not null && a.ElementsAfterSelf().All(IsIgnorableBetween);
         }
         if (prev.Kind == UnitKind.ParaMark && cur.Kind == UnitKind.Content)
         {
             if (prev.Paragraph is null || cur.Paragraph is null) return false;
             if (!IsNextParagraph(prev.Paragraph, cur.Paragraph)) return false;
             var b = TopLevelWithin(cur.Paragraph, cur.Element);
-            return b is not null && b.ElementsBeforeSelf().All(e => IgnorableBetween.Contains(e.Name));
+            return b is not null && b.ElementsBeforeSelf().All(IsIgnorableBetween);
         }
         if (prev.Kind == UnitKind.ParaMark && cur.Kind == UnitKind.ParaMark)
         {
             if (prev.Paragraph is null || cur.Paragraph is null) return false;
             if (!IsNextParagraph(prev.Paragraph, cur.Paragraph)) return false;
             // An empty paragraph whose only substance is its (revised) mark.
-            return cur.Paragraph.Elements().All(e => IgnorableBetween.Contains(e.Name));
+            return cur.Paragraph.Elements().All(IsIgnorableBetween);
         }
         return false;
     }
@@ -409,7 +501,7 @@ internal static class RevisionOps
         foreach (var e in p.ElementsAfterSelf())
         {
             if (e == q) return true;
-            if (!IgnorableBetween.Contains(e.Name)) return false;
+            if (!IsIgnorableBetween(e)) return false;
         }
         return false;
     }
@@ -419,10 +511,15 @@ internal static class RevisionOps
         foreach (var e in a.ElementsAfterSelf())
         {
             if (e == b) return true;
-            if (!IgnorableBetween.Contains(e.Name)) return false;
+            if (!IsIgnorableBetween(e)) return false;
         }
         return false;
     }
+
+    private static bool IsIgnorableBetween(XElement element) =>
+        IgnorableBetween.Contains(element.Name)
+        || (element.Name == W.r && element.Descendants(W.commentReference).Any()
+            && !element.Descendants(W.t).Any() && !element.Descendants(W.delText).Any());
 
     private static void AssignIds(List<RevisionGroup> groups)
     {
@@ -504,6 +601,14 @@ internal static class RevisionOps
         var removedBlocks = new List<XElement>();
         var touchedParagraphs = new HashSet<XElement>();
 
+        var removedRows = g.Units
+            .Where(u => u.Kind == UnitKind.RowMark
+                && (u.Type == TypeInsert ? !accept : accept))
+            .Select(u => u.MarkedRow!)
+            .Distinct()
+            .ToList();
+        CollapseCommentsFromRemovedRows(removedRows);
+
         foreach (var u in g.Units.Where(u => u.Kind == UnitKind.PropsChange))
         {
             if (Detached(u.Element)) continue;
@@ -567,6 +672,53 @@ internal static class RevisionOps
         }
 
         return removedBlocks;
+    }
+
+    /// <summary>
+    /// A comment wholly contained by a row would otherwise lose its range/reference when
+    /// selective resolution removes that row. Move complete marker triples to the nearest
+    /// surviving paragraph as collapsed points before detaching the rows. This also protects
+    /// comments authored in Word, not only comments created through the revision-target API.
+    /// </summary>
+    private static void CollapseCommentsFromRemovedRows(IReadOnlyCollection<XElement> removedRows)
+    {
+        if (removedRows.Count == 0) return;
+
+        var removedSet = removedRows.ToHashSet();
+        var root = removedRows.First().Document?.Root;
+        if (root is null) return;
+
+        var pivot = removedRows.First();
+        var candidates = root.Descendants(W.p)
+            .Where(p => !p.Ancestors(W.tr).Any(removedSet.Contains))
+            .ToList();
+        var host = candidates.FirstOrDefault(p => XNode.DocumentOrderComparer.Compare(p, pivot) > 0)
+            ?? candidates.LastOrDefault(p => XNode.DocumentOrderComparer.Compare(p, pivot) < 0);
+        if (host is null) return;
+
+        var starts = removedRows.SelectMany(r => r.Descendants(W.commentRangeStart)).ToList();
+        var ends = removedRows.SelectMany(r => r.Descendants(W.commentRangeEnd)).ToList();
+        var referenceRuns = removedRows.SelectMany(r => r.Descendants(W.r))
+            .Where(r => r.Descendants(W.commentReference).Any())
+            .ToList();
+
+        foreach (var start in starts)
+        {
+            var id = (string?)start.Attribute(W.id);
+            if (id is null) continue;
+            var end = ends.FirstOrDefault(e => (string?)e.Attribute(W.id) == id);
+            var references = referenceRuns
+                .Where(r => r.Descendants(W.commentReference)
+                    .Any(cr => (string?)cr.Attribute(W.id) == id))
+                .ToList();
+            if (end is null || references.Count == 0) continue;
+
+            start.Remove();
+            end.Remove();
+            foreach (var reference in references) reference.Remove();
+            host.Add(start, end);
+            host.Add(references);
+        }
     }
 
     /// <summary>Whether the markup's payload survives resolution: an insertion survives

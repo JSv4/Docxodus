@@ -301,6 +301,16 @@ public static partial class DocxSessionBridge
             string.IsNullOrEmpty(date) ? null : date,
             markdown);
 
+    /// <summary>Add a native Word comment around the exact live extent of a tracked revision.
+    /// Unknown or already-resolved ids return <c>revision_not_found</c>.</summary>
+    [JSExport]
+    public static string AddCommentToRevision(int h, string revisionId, string author,
+        string initials, string date, string markdown) =>
+        DocxSessionOps.AddCommentToRevision(h, revisionId, author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
     /// <summary>Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it
     /// to the immediate parent so it inherits the thread root's range.</summary>
     [JSExport]

@@ -424,6 +424,27 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /** Add a native Word comment around the exact live extent of a tracked revision returned by
+   * {@link listRevisions}. Accepting/rejecting the revision keeps the comment and either leaves
+   * its range on surviving text or collapses it to a point. */
+  addCommentToRevision(
+    revisionId: string,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.AddCommentToRevision(
+        this.handle,
+        revisionId,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
   /**
    * Add a native Word reply to `parentCommentAnchorId`. It adds an adjacent reference and
    * inherits the thread root's range through `w15:paraIdParent`; the required

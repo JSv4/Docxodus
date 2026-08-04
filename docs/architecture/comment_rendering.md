@@ -5,9 +5,9 @@ This document describes the architecture for rendering Word document comments in
 **Source File:** `Docxodus/WmlToHtmlConverter.cs`
 
 > **Authoring comments** (the write side) is a separate surface: `DocxSession.AddComment` /
-> `UpdateComment` / `RemoveComment` / `ListComments` create and manage the same native
+> `AddCommentToRevision` / `UpdateComment` / `RemoveComment` / `ListComments` create and manage the same native
 > `w:comment` markup this converter renders — see the Comments section of
-> `docs/architecture/docx_mutation_api.md` (issue #300).
+> `docs/architecture/docx_mutation_api.md` (issues #300 and #341).
 
 ## Overview
 

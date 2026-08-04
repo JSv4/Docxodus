@@ -1228,4 +1228,49 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("revision_not_found",
             missing.GetProperty("error").GetProperty("code").GetString());
     }
+
+    [Fact]
+    public void MCP138_Comment_AddTargetsExactlyOneAnchorOrRevision()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"original"}"""));
+        SetMode(sessionId, "render_inline", "Reviewer A");
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"replacement"}"""));
+
+        var revisions = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("revisions").EnumerateArray().ToList();
+        var insertion = Assert.Single(revisions, r => r.GetProperty("type").GetString() == "insert");
+        var revisionId = insertion.GetProperty("id").GetString()!;
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","revisionId":"{{revisionId}}","author":"Alice","markdown":"Keep this revision."}""")));
+        Assert.True(added.GetProperty("success").GetBoolean());
+        Assert.Contains(added.GetProperty("created").EnumerateArray(),
+            a => a.GetProperty("kind").GetString() == "cmt");
+
+        var rejected = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"reject","revisionId":"{{revisionId}}"}""")));
+        Assert.True(rejected.GetProperty("success").GetBoolean());
+        var comments = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        Assert.Single(comments.GetProperty("comments").EnumerateArray());
+
+        var stale = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","revisionId":"{{revisionId}}","author":"Alice"}""")));
+        Assert.False(stale.GetProperty("success").GetBoolean());
+        Assert.Equal("revision_not_found", stale.GetProperty("error").GetProperty("code").GetString());
+
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","author":"Alice"}""")));
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","anchorId":"{{anchor}}","revisionId":"rev1","author":"Alice"}""")));
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","revisionId":"rev1","span":{"start":0,"length":1},"author":"Alice"}""")));
+    }
 }
