@@ -317,6 +317,18 @@ code the `[JSExport]` surface never exposed to the browser.
 
 ## 6. Test/rollout gates
 
+**Gate results for the E2 configuration (run 2026-08-04 on this branch):**
+
+| Gate | Result |
+|---|---|
+| Browser Playwright suite (53 specs) against E2-trimmed artifacts | **312/312 passed** (11.4 m) |
+| `dotnet test Docxodus.Tests` (non-WASM side, unaffected by the csproj change) | **3,351 passed, 0 failed** (3 standard skips) |
+| Targeted spec: WmlComparer-engine (`engine: 0`) compare of image-bearing docs, both directions — the reflective `GetPackage()` path | **passed** (valid redlines produced) |
+| Targeted spec: `rawInsertXml` with `validateRawOps: true`, valid + schema-invalid payloads — the `OpenXmlValidator` path | **passed** (invalid XML correctly rejected, so the validator demonstrably ran) |
+
+The two targeted specs were run as a one-off against the trimmed build; they must be
+added to the suite permanently when Phase 1 lands (see below).
+
 Every phase lands only when all of:
 1. `cd npm && npm run build && npm test` — full Playwright suite green against the new
    artifacts (the suite loads the real runtime in Chromium; a trimmed-away member fails
