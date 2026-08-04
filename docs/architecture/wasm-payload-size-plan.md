@@ -253,7 +253,10 @@ Emitting `.br`/`.gz` siblings and making them reachable:
    `DecompressionStream('gzip')` (validated: 4.14 MB gzip — still under target with
    zero extra decoder bytes). Recommend: negotiate-first, gzip-stream fallback,
    plain fetch last. Feature-detect and keep the current plain path as default so
-   nothing breaks.
+   nothing breaks. The JS-brotli-decoder route is the one known to cause real
+   cold-open slowdowns (single-threaded main-thread decode of the whole payload) —
+   §7 measures native `Content-Encoding: br` at ~45 ms total and rules it out as a
+   concern.
 4. **Consider migrating the csproj to `Microsoft.NET.Sdk.WebAssembly`** (the SDK the
    current `wasmbrowser` template uses). It emits max-level `.br`/`.gz` at publish
    natively (`CompressionEnabled`, replacing the dead `BlazorEnableCompression`),
@@ -344,6 +347,53 @@ trimming could bite at runtime, so they should land **with** Phase 1:
   `GetPackage()` (media-part copying during `CoalesceRecurse`).
 - A **`rawInsertXml`/`rawReplaceXml` call with `validateRawOps` enabled** — the
   `OpenXmlValidator` path.
+
+## 7. Cold-open performance: old vs new, raw vs Brotli (measured)
+
+A concern was raised that an earlier Brotli attempt caused notable slowdowns. Two
+findings:
+
+1. **No Brotli attempt exists in this repo's history** (`git log --all -i --grep`
+   turns up nothing; the only compression-related commit is the unrelated DOCX ZIP
+   fix #333). The remembered slowdown almost certainly refers to the **JS-side
+   decoder pattern** — Blazor's documented static-host fallback that fetches `.br`
+   files and decompresses them with Google's `decode.min.js` inside
+   `loadBootResource`. That approach IS slow: it decodes the entire payload
+   single-threaded on the main thread and defeats streaming WASM compilation. This
+   plan does **not** propose it (it appears only as a last-resort option in Phase 2.3,
+   with gzip-via-`DecompressionStream` preferred precisely because it's
+   browser-native).
+2. **Native `Content-Encoding: br` (the Phase 2 recommendation) measures as
+   essentially free**, and the trimmed payload boots *faster* than the old one under
+   every condition tested.
+
+Cold-open benchmark: time from navigation start to `window.DocxodusReady === true`
+(runtime booted, exports resolved, `GetVersion()` returned). Fresh browser per run
+(cold HTTP cache, cold runtime), 5 runs per configuration, medians reported;
+Chromium 141 headless on a 4-core container; wire bytes verified via CDP
+(`encodedDataLength`). "Old" = today's untrimmed 9.0.0-equivalent payload; "new" =
+the E2-trimmed payload; "brotli" = precompressed `.br` (quality 11) served with
+`Content-Encoding: br` and decoded natively by the browser's network stack.
+
+| Configuration | Wire | Localhost | 50 Mbps / 20 ms RTT |
+|---|---|---|---|
+| old, raw (today) | 16.9 MB | 703 ms | 3,295 ms |
+| new, raw (Phase 1) | 12.9 MB | 620 ms | 2,588 ms |
+| old, brotli | 4.2 MB | 747 ms | 1,202 ms |
+| **new, brotli (Phase 1+2)** | **3.2 MB** | **665 ms** | **1,022 ms** |
+
+Readings:
+
+- **Native Brotli decode costs ~45 ms** on the full payload (localhost deltas:
+  703→747 old, 620→665 new) — the browser decompresses in its network stack while
+  streaming. That is the entire downside, in exchange for a 4–5× wire reduction.
+- **Trimming makes cold open faster, not just smaller**: 703→620 ms on localhost
+  (~12% — less IL for the runtime to load and parse), before any network benefit.
+- On realistic broadband the combined effect is a **3.2× faster viewer cold open**
+  (3.30 s → 1.02 s). On slower links the gap widens further (transfer dominates).
+- Caveat: localhost numbers measure CPU only; the 50 Mbps column is CDP-throttled.
+  Real-world numbers depend on CDN RTT, but the ordering cannot flip — the brotli
+  configurations transfer 4–5× less and pay only the fixed ~45 ms decode cost.
 
 ## Appendix: methodology
 
