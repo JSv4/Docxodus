@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **MCP HTML preserves native tracked changes.** Full and anchored MCP HTML reads now emit pending
+  revisions as `<ins>`/`<del>` instead of implicitly accepting them on the renderer's throwaway
+  document. The shared full, single-block, and batched session render paths expose one consistent
+  review-mode option, without changing the browser editor's clean editing profile. Every
+  newly-authored native revision also enables Word's schema-ordered
+  `w:trackRevisions` setting (creating `settings.xml` when needed), so Word continues tracking
+  subsequent interactive edits. Coverage: DS408 and MCP140.
+
 ### Added
 - **Comments can target tracked revisions by id (issue #341).**
   `DocxSession.AddCommentToRevision(revisionId, author, markdown, ...)` brackets the exact live

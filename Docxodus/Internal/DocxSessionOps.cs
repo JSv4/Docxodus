@@ -75,18 +75,20 @@ internal static class DocxSessionOps
     /// incremental per-block re-render. Resolves against the live document (no Save /
     /// byte round-trip). Returns the block's HTML element (no html/head wrapper).
     /// </summary>
-    public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix, bool fabricateClasses) =>
+    public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix,
+        bool fabricateClasses, bool renderTrackedChanges = false) =>
         HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
-            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses, renderTrackedChanges));
 
     /// <summary>
     /// Batch single-block render: N anchors, one throwaway document, one converter run.
     /// Returns a JSON object mapping each anchor id to its HTML (null for an anchor that
     /// failed to resolve). See <see cref="HtmlConversionOps.RenderBlocksHtml(DocxSession, System.Collections.Generic.IReadOnlyList{string}, HtmlConversionOptions)"/>.
     /// </summary>
-    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses) =>
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix,
+        bool fabricateClasses, bool renderTrackedChanges = false) =>
         HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
-            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses, renderTrackedChanges));
 
     /// <summary>
     /// The block-render option profile for the editor's incremental swaps. Must agree
@@ -95,12 +97,14 @@ internal static class DocxSessionOps
     /// RenderFootnotesAndEndnotes off, a re-rendered citing paragraph silently loses
     /// its citation marker from the DOM.
     /// </summary>
-    private static HtmlConversionOptions EditorBlockRenderOptions(string cssPrefix, bool fabricateClasses) =>
+    private static HtmlConversionOptions EditorBlockRenderOptions(
+        string cssPrefix, bool fabricateClasses, bool renderTrackedChanges) =>
         new HtmlConversionOptions
         {
             CssClassPrefix = cssPrefix ?? "docx-",
             FabricateCssClasses = fabricateClasses,
             RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = renderTrackedChanges,
         };
 
     /// <summary>
@@ -111,7 +115,7 @@ internal static class DocxSessionOps
     /// remount through this path renders byte-identically to the bytes path.
     /// </summary>
     public static string RenderHtml(int handle, string cssPrefix, bool fabricateClasses,
-        bool paginated, double scale) =>
+        bool paginated, double scale, bool renderTrackedChanges = false) =>
         HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle), new HtmlConversionOptions
         {
             CssClassPrefix = cssPrefix ?? "docx-",
@@ -125,6 +129,7 @@ internal static class DocxSessionOps
             // with the editor's first-paint profile in npm/src/editor.ts `completeArgs`, which the
             // remount output is required to match byte-for-byte.
             RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = renderTrackedChanges,
             StampAnchors = true,
         });
 
