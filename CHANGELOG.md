@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file.
   (`tests/cors-server.py`) so the cross-origin module import, `_framework` asset fetches, and
   auto-detection are exercised in the exact jsDelivr shape — including from a host page that
   serves no wasm assets at all.
+- **Design stub: browser-LLM redlining demo** — `docs/architecture/browser_llm_demo.md`
+  captures the "AI redlines a contract entirely in the browser" demo design (markdown-projection
+  anchors as the LLM's edit contract, `TrackedChanges: RenderInline` so edits land as native
+  revisions, Chrome Prompt API / BYO-key Claude / WebLLM transport options). Stub only — nothing
+  implemented, no engine changes expected.
 - **Social-embed demo pages — `docs/demo/`** (GitHub Pages-ready: Settings → Pages → main,
   folder `/docs`). `index.html` is the shareable landing page carrying `og:*` meta (LinkedIn's
   card) plus `twitter:card=player` meta pointing at `player.html`, a ~480×480 boot-on-tap editor
