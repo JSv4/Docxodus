@@ -27,6 +27,16 @@ All notable changes to this project will be documented in this file.
   (`tests/cors-server.py`) so the cross-origin module import, `_framework` asset fetches, and
   auto-detection are exercised in the exact jsDelivr shape — including from a host page that
   serves no wasm assets at all.
+- **Social-embed demo pages — `docs/demo/`** (GitHub Pages-ready: Settings → Pages → main,
+  folder `/docs`). `index.html` is the shareable landing page carrying `og:*` meta (LinkedIn's
+  card) plus `twitter:card=player` meta pointing at `player.html`, a ~480×480 boot-on-tap editor
+  built to render inside an X/Twitter Player Card iframe — engine from jsDelivr (`docxodus@9`
+  range, live once the embed bundle publishes), sample document from `raw.githubusercontent.com`,
+  nothing self-hosted. Both accept `?engine=`/`?doc=` overrides, which
+  `tests/social-demo.spec.ts` uses to drive them fully locally (also exercising the embed
+  bundle's wasm-webroot fallback layout). Note the Player Card renders arbitrary pages today but
+  is officially intended for media players — X could stop rendering it; LinkedIn never renders
+  third-party JS, so the card + one click is its ceiling.
 - **Comments can target tracked revisions by id (issue #341).**
   `DocxSession.AddCommentToRevision(revisionId, author, markdown, ...)` brackets the exact live
   insertion, deletion, move-destination, or formatting extent returned by `ListRevisions()`.
