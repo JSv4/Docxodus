@@ -346,12 +346,29 @@ internal static class HtmlConversionOps
     /// default/first/even header stories), unid-scan fallback, one projection retry for
     /// anchors not yet on the live tree.
     /// </summary>
+    /// <remarks>
+    /// When the session's anchor-index cache is COLD (the preceding mutation invalidated
+    /// it — i.e. on every single-block re-render an editor performs), a body-scope anchor
+    /// resolves by a direct unid walk of the main part instead: the walk costs a fraction
+    /// of the whole-document index rebuild <see cref="DocxSession.FindAnchor"/> would
+    /// trigger, and for main-part elements it is exactly as authoritative (a body/unid
+    /// collision resolves to the main part in both). Non-body scopes keep the index path —
+    /// only the index knows which header/footer part owns a colliding unid.
+    /// </remarks>
     private static XElement? ResolveSessionAnchor(DocxSession session, string anchorId)
     {
         if (string.IsNullOrWhiteSpace(anchorId)) return null;
         var liveDoc = session.LiveDocument;
-        var el = session.FindAnchor(anchorId)?.Resolve(liveDoc);
         var unid = AnchorUnid(anchorId);
+
+        XElement? el = null;
+        if (!session.HasCachedAnchorIndex && AnchorScope(anchorId) == "body")
+        {
+            bool Match(XElement e) => (string?)e.Attribute(PtOpenXml.Unid) == unid;
+            el = liveDoc.MainDocumentPart?.GetXDocument().Root?.DescendantsAndSelf().FirstOrDefault(Match);
+        }
+
+        el ??= session.FindAnchor(anchorId)?.Resolve(liveDoc);
         el ??= FindByUnid(liveDoc, unid);
         if (el is null)
         {
@@ -359,6 +376,14 @@ internal static class HtmlConversionOps
             el = session.FindAnchor(anchorId)?.Resolve(liveDoc) ?? FindByUnid(liveDoc, unid);
         }
         return el;
+    }
+
+    /// <summary>The scope segment of a <c>kind:scope:unid</c> anchor id ("" when malformed).</summary>
+    private static string AnchorScope(string anchorId)
+    {
+        int first = anchorId.IndexOf(':');
+        int last = anchorId.LastIndexOf(':');
+        return first >= 0 && last > first ? anchorId.Substring(first + 1, last - first - 1) : "";
     }
 
     /// <summary>
@@ -372,9 +397,15 @@ internal static class HtmlConversionOps
         DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options)
     {
         long sig = ComputeFormattingSignature(liveDoc);
-        if (session.RenderShellBytes is null || session.RenderShellSignature != sig)
+        if (session.RenderShellDoc is null || session.RenderShellSignature != sig)
         {
-            session.RenderShellBytes = BuildShellDocBytes(liveDoc);
+            session.DisposeRenderShell();
+            var shellBytes = BuildShellDocBytes(liveDoc);
+            var shellStream = new MemoryStream();
+            shellStream.Write(shellBytes, 0, shellBytes.Length);
+            shellStream.Position = 0;
+            session.RenderShellStream = shellStream;
+            session.RenderShellDoc = WordprocessingDocument.Open(shellStream, true);
             session.RenderShellSignature = sig;
         }
 
@@ -415,13 +446,17 @@ internal static class HtmlConversionOps
         var htmlByUnid = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (bodyContent.Count == 0) return htmlByUnid;
 
-        using var ms = new MemoryStream();
-        ms.Write(session.RenderShellBytes, 0, session.RenderShellBytes.Length);
-        ms.Position = 0;
-        using var renderDoc = WordprocessingDocument.Open(ms, true);
-        var bodyEl = renderDoc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        bodyEl.RemoveNodes();
-        foreach (var el in bodyContent) bodyEl.Add(el);
+        // Render through the OPEN shell. Each render replaces the main part's XDocument with a
+        // brand-new body document (PutXDocument swaps the cached XDocument annotation), so the
+        // converter's per-render root annotations (comment/footnote trackers, section info, field
+        // info) can never leak from one render into the next — while the formatting-part
+        // XDocuments, and the style/numbering resolution caches the converter annotates onto
+        // them, persist across renders. That persistence is the point: re-opening the shell per
+        // render paid the package open + styles/numbering parse + cache rebuild on every
+        // keystroke commit, and it dominated single-block render time.
+        var renderDoc = session.RenderShellDoc;
+        renderDoc.MainDocumentPart!.PutXDocument(
+            BuildBodyDocument(bodyContent.Cast<object>().ToArray()));
 
         var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, BuildBlockConverterSettings(options));
         foreach (var e in htmlElement.Descendants())
@@ -551,10 +586,12 @@ internal static class HtmlConversionOps
 
     /// <summary>
     /// Build the reusable per-session "shell": a serialized throwaway .docx holding the copied
-    /// formatting parts and an EMPTY body. Built once (per formatting signature) and cached on the
-    /// session; <see cref="RenderTargetsFromShell"/> drops the batch's blocks into its body per
-    /// render. This front-loads the (expensive on a large style gallery) part clone+serialize so
-    /// it is paid once rather than every keystroke commit.
+    /// formatting parts and an EMPTY body. Built once (per formatting signature); the caller
+    /// opens it and keeps it OPEN on the session (<see cref="DocxSession.RenderShellDoc"/>), and
+    /// <see cref="RenderTargetsFromShell"/> replaces its main-part body document per render.
+    /// This front-loads the part clone+serialize AND the package open + formatting-part XML
+    /// parse (both expensive on a large style gallery) so they are paid once rather than on
+    /// every keystroke commit.
     /// </summary>
     private static byte[] BuildShellDocBytes(WordprocessingDocument sourceDoc)
     {

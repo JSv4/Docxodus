@@ -205,29 +205,47 @@ above shows `Last Updated October 2025 i` on page 1 of a section formatted `lowe
 
 ## 9. What operations cost
 
-Measured on the 346-block document above (Chromium, WASM, warm):
+Measured on a real document (`HC031-Complicated-Document.docx`, Chromium, WASM, warm) by
+`npm/tests/editor-latency-bench.spec.ts` — the standing latency instrument; run it before and
+after touching any hot path. Values are single-sample and machine-dependent; treat them as
+ratios, not contracts:
 
-| Operation | Cost | Why |
-|-----------|------|-----|
-| Open + first render | ~5–8 s | Full document conversion (one-time; M3 worker offload is the open item) |
-| Text edit (commit on blur) | ~150–220 ms | Single-block re-render + note-marker repair |
-| `setPageNumbering` | ~285 ms | Section attribute + band repaint |
-| `save()` | ~220 ms | Lossless serialize |
-| Undo / redo | ~200–360 ms | Incremental reconcile (was ~5.6 s as a full remount) |
-| Insert table / row | ~225–245 ms | Incremental reconcile (was ~6 s) |
-| Insert footnote | ~210 ms | Incremental reconcile + chrome renumber (was ~6.2 s) |
-| Delete block | ~95 ms | Incremental reconcile |
+| Operation | Cost | Before the 2026-08 latency pass | Why |
+|-----------|------|--------------------------------|-----|
+| Open + first render | ~3 s | ~3 s | Full document conversion (one-time; M3 worker offload is the open item) |
+| Text edit (commit on blur) | ~30 ms | ~100 ms | Session op + single-block re-render through the persistent shell |
+| Inline format (bold, size) | ~35–50 ms | ~90–110 ms | Same, plus selection restore |
+| Paragraph format (align) | ~40 ms | ~85 ms | Same |
+| Enter (split) | ~40 ms | ~135 ms | Both halves render in ONE batched `RenderBlocksHtml` call |
+| Backspace (merge) | ~25 ms | ~80 ms | Session op + one block render |
+| Insert table / row | ~85–130 ms | ~1.2–1.5 s (remount on real docs) | Incremental reconcile |
+| Delete block | ~25 ms | ~1.2 s (remount on real docs) | Incremental reconcile |
+| Undo / redo | ~55–125 ms | ~1.1–1.2 s (remount on real docs) | Snapshot restore + incremental reconcile |
+| `save()` | ~60–80 ms | ~60 ms | Lossless serialize |
 
-Structural operations no longer remount: `DocxEditor.reconcile()` diffs the DOM's top-level unit
+The "before" column's structural-op numbers deserve a note: the incremental reconcile existed,
+but on any document containing a block-level `w:sdt` (a TOC — i.e. most real documents) the
+render plan missed the sdt's content blocks, the plan/DOM diff read as 100 % churn, and every
+structural op silently fell back to the multi-second full remount. `ListBlocks` now flattens
+`w:sdtContent` exactly as the renderer does, so the diff actually engages.
+
+Structural operations reconcile: `DocxEditor.reconcile()` diffs the DOM's top-level unit
 sequence against the session's render plan (`ListBlocks` — LCS over `unid|contentHash` tokens),
 keeps unchanged units' DOM nodes, renders changed/created units in one batched WASM call
 (`RenderBlocksHtml`, with real sibling context and true list-marker numbers), and renumbers
-footnote/endnote marker chrome positionally from `ListNotes`. A full remount survives as the
-universal **fallback** — paginated mode, pure list-item insert/remove (sibling numbers shift
-without sibling XML changing), border-`div` regrouping (`insertHorizontalRule`, `clearBorders`,
-list toggles), or any inconsistency — so correctness never depends on the diff; the reconciled DOM
-is pinned equal to a remounted DOM by `npm/tests/editor-reconcile.spec.ts`. When an op reads
-slow in the rail, `editor['lastReconcileFallback']` says why it fell back.
+footnote/endnote marker chrome positionally from `ListNotes`. Substituted units pair by unid
+first, positionally as fallback. A full remount survives as the universal **fallback** —
+paginated mode, pure list-item insert/remove (sibling numbers shift without sibling XML
+changing), border-`div` regrouping (`insertHorizontalRule`, `clearBorders`, list toggles), or
+any inconsistency — so correctness never depends on the diff; the reconciled DOM is pinned
+equal to a remounted DOM by `npm/tests/editor-reconcile.spec.ts`. When an op reads slow in the
+rail, `editor['lastReconcileFallback']` says why it fell back.
+
+Single-block re-renders go through a **persistent render shell**: the session keeps an open
+throwaway document holding the formatting parts, and each render replaces only its body
+(`HtmlConversionOps.RenderTargetsFromShell`), so the package open, styles/numbering parse, and
+the converter's style-resolution caches are paid once per formatting-signature change instead
+of per keystroke.
 
 ---
 

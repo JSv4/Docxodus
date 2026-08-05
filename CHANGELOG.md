@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Editor interactive latency cut 52–98 % per operation.** Measured end-to-end on a real
+  document (`HC031`, Chromium/WASM, warm) by the new standing benchmark
+  `npm/tests/editor-latency-bench.spec.ts`: text commit 102 → 30 ms, Enter-split
+  137 → 41 ms, bold 108 → 52 ms, font size 88 → 34 ms, Backspace-merge 79 → 25 ms,
+  insert table 1.49 s → 130 ms, insert row 1.25 s → 85 ms, delete block 1.2 s → 24 ms,
+  undo/redo ~1.2 s → 124/54 ms. Five compounding fixes to the editor's hot paths:
+  - *The per-block render shell now stays open across renders.* The session-attached
+    single-block render (`HtmlConversionOps.RenderTargetsFromShell`) used to re-open its
+    cached shell bytes — package open + styles/numbering XML parse — on every keystroke
+    commit; the shell `WordprocessingDocument` is now kept open on the session and each
+    render replaces only the main part's body document, so the parse and the converter's
+    style/numbering resolution caches persist (guarded by the existing formatting
+    signature; `FormattingAssembler` additionally caches its style indexes on the styles
+    `XDocument` with a style-count guard, and `MarkupSimplifier` skips the settings-part
+    rewrite when there are no rsids to strip).
+  - *`ListBlocks` now mirrors the renderer for block-level content controls.* A body-level
+    `w:sdt` (a TOC is the everyday case) contributes its `w:sdtContent` blocks as top-level
+    render units, matching the flattening the HTML converter performs — before this, any
+    document containing one diffed as 100 % churn and the incremental structural reconcile
+    permanently fell back to the multi-second full remount (insert row / delete block /
+    undo / redo each cost a whole-document convert on such documents).
+  - *Reconcile substitutions pair by unid first* (positional pairing only as fallback), and
+    a same-unid leaf render may swap into a border-wrapped slot when the old node is
+    provably from a single-block swap (no `data-render-sig`) — border-changing ops still
+    remount.
+  - *Per-op fixed costs removed:* `SetParagraphFormat` no longer eagerly rebuilds the whole
+    anchor index (pPr writes can't change an anchor's kind/scope/unid), `SplitParagraph`
+    derives the new paragraph's kind locally via the projector's `KindFor` instead of a
+    whole-document index rebuild, the block-render path resolves body anchors by a direct
+    unid walk when the index cache is cold, and the editor's Enter path renders both split
+    halves in one batched `RenderBlocksHtml` call.
+  - *The session's per-op index-only rebuild no longer flushes parts.* After every mutation
+    the anchor-index rebuild re-serialized any part where a Unid was assigned — a whole
+    main-part XML write per keystroke that nothing in the session flow reads (ops and
+    renders read the cached XDocuments; both `DocxSession.Save` paths flush every projected
+    part themselves). The full projection path keeps the flush for external callers.
 - **The live demo now opens a purpose-built Docxodus product guide instead of a generic test
   fixture.** The four-page, branded DOCX opens with the literal “Edit this document. It’s real.”
   and teaches through precise editable exercises, control walkthroughs, a preservation matrix, and
