@@ -8,7 +8,9 @@ These pages are static and require no application server. They load the pinned
 
 1. Publish `docxodus@9.1.0` and confirm
    `https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js` returns JavaScript.
-2. In GitHub **Settings → Pages**, choose **Deploy from a branch**, branch `main`, folder `/docs`.
+2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
+   The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
+   running Jekyll.
 3. Open `https://jsv4.github.io/Docxodus/demo/` and verify the status becomes `live`.
 4. If the site is hosted anywhere else, update the absolute `og:url`, `og:image`,
    `twitter:player`, and `twitter:image` values in `index.html` before sharing.
