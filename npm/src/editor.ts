@@ -268,6 +268,18 @@ interface EditResultLite {
   error?: { message?: string };
 }
 
+interface DomSelectionPoint {
+  node: Node;
+  offset: number;
+}
+
+interface CrossBlockSelectionBookmark {
+  startUnid: string;
+  startOffset: number;
+  endUnid: string;
+  endOffset: number;
+}
+
 /** True if `block` renders as a list item (has a generated marker as its first child). */
 function isListBlock(block: HTMLElement): boolean {
   return !!block.querySelector(":scope > [data-list-marker]");
@@ -463,6 +475,54 @@ function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offse
   return { node: el, offset: el.childNodes.length };
 }
 
+/**
+ * Resolve a viewport coordinate to a DOM caret. Firefox exposes the standards-track
+ * caretPositionFromPoint; Chromium/WebKit expose caretRangeFromPoint. Keeping the compatibility
+ * shim here lets the editor bridge native mouse selection across its intentionally-independent
+ * per-paragraph editing hosts without changing their commit boundaries.
+ */
+function caretPointFromClient(
+  doc: Document,
+  clientX: number,
+  clientY: number,
+): DomSelectionPoint | null {
+  const caretDoc = doc as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const position = caretDoc.caretPositionFromPoint?.(clientX, clientY);
+  if (position) return { node: position.offsetNode, offset: position.offset };
+  const range = caretDoc.caretRangeFromPoint?.(clientX, clientY);
+  return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+/**
+ * Set a possibly-backward pair of points as one normalized DOM Range. Chromium's
+ * Selection.setBaseAndExtent() exposes cross-contenteditable endpoints but clips toString() and
+ * the effective contents to the originating host; addRange() carries the complete cross-block
+ * contents. Direction is immaterial to editor commands, which consume normalized start/end.
+ */
+function setSelectionBetween(anchor: DomSelectionPoint, focus: DomSelectionPoint): boolean {
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel || !anchor.node.isConnected || !focus.node.isConnected) return false;
+  try {
+    const probe = document.createRange();
+    probe.setStart(anchor.node, anchor.offset);
+    probe.collapse(true);
+    const focusIsBefore = probe.comparePoint(focus.node, focus.offset) < 0;
+    const range = document.createRange();
+    const start = focusIsBefore ? focus : anchor;
+    const end = focusIsBefore ? anchor : focus;
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Place the caret at content offset `offset` within `el`, skipping marker text. */
 function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
@@ -642,6 +702,21 @@ export class DocxEditor {
    */
   private lastSelection: { unid: string; span: { start: number; length: number } } | null = null;
 
+  /**
+   * Stable bookmark for a selection spanning independent editable blocks. Native controls such as
+   * a font-size combobox can take focus and collapse the live DOM selection; block ids + content
+   * offsets let the command restore that same range before applying. This is the multi-block
+   * counterpart to lastSelection above.
+   */
+  private lastCrossBlockSelection: CrossBlockSelectionBookmark | null = null;
+
+  /** State for the mouse-selection bridge between independent contenteditable block hosts. */
+  private dragSelection: {
+    anchor: DomSelectionPoint;
+    origin: HTMLElement;
+    crossedBlockBoundary: boolean;
+  } | null = null;
+
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
 
@@ -660,8 +735,12 @@ export class DocxEditor {
     this.handle = handle;
     this.options = options;
     this.editRoot = container;
-    if (typeof document !== "undefined")
+    if (typeof document !== "undefined") {
       document.addEventListener("selectionchange", this.onSelectionChange);
+      document.addEventListener("mousedown", this.onMouseDown, true);
+      document.addEventListener("mousemove", this.onMouseMove, true);
+      document.addEventListener("mouseup", this.onMouseUp, true);
+    }
   }
 
   /** Track the last meaningful selection so focus-stealing toolbar controls can still target it. */
@@ -670,16 +749,86 @@ export class DocxEditor {
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     if (!sel || sel.rangeCount === 0) return; // no selection info — keep the cache as-is
     const range = sel.getRangeAt(0);
-    const block = this.editableBlockOf(range.commonAncestorContainer);
+    const startBlock = this.editableBlockOf(range.startContainer);
+    const endBlock = this.editableBlockOf(range.endContainer);
+    const block = startBlock ?? endBlock;
     if (!block) return; // selection is outside the editor (e.g. a toolbar field) — keep the cache
-    const unid = block.getAttribute("data-anchor");
-    if (!unid) return;
     if (range.collapsed) {
       this.lastSelection = null; // an explicit caret in a block — drop any stale selection
+      this.lastCrossBlockSelection = null;
       return;
     }
+    if (
+      startBlock && endBlock && startBlock !== endBlock &&
+      this.ownerRoot(startBlock) === this.ownerRoot(endBlock)
+    ) {
+      const startUnid = startBlock.getAttribute("data-anchor");
+      const endUnid = endBlock.getAttribute("data-anchor");
+      if (startUnid && endUnid) {
+        this.lastSelection = null;
+        this.lastCrossBlockSelection = {
+          startUnid,
+          startOffset: contentOffsetOf(startBlock, range.startContainer, range.startOffset),
+          endUnid,
+          endOffset: contentOffsetOf(endBlock, range.endContainer, range.endOffset),
+        };
+      }
+      return;
+    }
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    this.lastCrossBlockSelection = null;
     const span = selectionSpanIn(block);
     if (span) this.lastSelection = { unid, span };
+  };
+
+  /** Start tracking a normal primary-button text drag inside one editable block. */
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    if (this.closed || !this.options.editable || event.button !== 0) return;
+    const target = event.target instanceof Node ? event.target : null;
+    const origin = this.editableBlockOf(target);
+    if (!origin || isInMarker(target)) return;
+    const anchor = caretPointFromClient(document, event.clientX, event.clientY);
+    if (!anchor || this.editableBlockOf(anchor.node) !== origin) return;
+    this.dragSelection = { anchor, origin, crossedBlockBoundary: false };
+  };
+
+  /**
+   * Browsers fence native mouse selection at a contenteditable host boundary. Once a drag reaches
+   * another block in the same OOXML story, take over just that gesture and create the cross-block
+   * Selection the editor's existing multi-block command path consumes. Intra-block selection stays
+   * entirely native, and separate hosts remain intact for safe per-anchor commits.
+   */
+  private readonly onMouseMove = (event: MouseEvent): void => {
+    const drag = this.dragSelection;
+    if (!drag) return;
+    if ((event.buttons & 1) === 0) {
+      this.dragSelection = null;
+      return;
+    }
+    const focus = caretPointFromClient(document, event.clientX, event.clientY);
+    if (!focus || isInMarker(focus.node)) return;
+    const focusBlock = this.editableBlockOf(focus.node);
+    if (!focusBlock || this.ownerRoot(focusBlock) !== this.ownerRoot(drag.origin)) return;
+    if (focusBlock !== drag.origin) drag.crossedBlockBoundary = true;
+    if (!drag.crossedBlockBoundary) return;
+    event.preventDefault();
+    setSelectionBetween(drag.anchor, focus);
+  };
+
+  /** Commit the final cross-block endpoint before releasing the gesture state. */
+  private readonly onMouseUp = (event: MouseEvent): void => {
+    const drag = this.dragSelection;
+    if (!drag) return;
+    if (drag.crossedBlockBoundary) {
+      const focus = caretPointFromClient(document, event.clientX, event.clientY);
+      const focusBlock = focus ? this.editableBlockOf(focus.node) : null;
+      if (focus && focusBlock && this.ownerRoot(focusBlock) === this.ownerRoot(drag.origin)) {
+        event.preventDefault();
+        setSelectionBetween(drag.anchor, focus);
+      }
+    }
+    this.dragSelection = null;
   };
 
   /** The editable block (contenteditable [data-anchor]) containing `node`, if any, within this editor.
@@ -782,8 +931,13 @@ export class DocxEditor {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (typeof document !== "undefined")
+    if (typeof document !== "undefined") {
       document.removeEventListener("selectionchange", this.onSelectionChange);
+      document.removeEventListener("mousedown", this.onMouseDown, true);
+      document.removeEventListener("mousemove", this.onMouseMove, true);
+      document.removeEventListener("mouseup", this.onMouseUp, true);
+    }
+    this.dragSelection = null;
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
@@ -1371,12 +1525,35 @@ export class DocxEditor {
 
   // ─── Multi-block selection helpers (format a whole stack of paragraphs at once) ──────
 
+  /**
+   * Restore a cross-block selection after a native toolbar control took focus. The bookmark uses
+   * stable anchor ids and content offsets, so it also survives incremental block swaps.
+   */
+  private restoreCrossBlockSelection(): boolean {
+    const bookmark = this.lastCrossBlockSelection;
+    const active = this.activeBlock;
+    if (!bookmark || !active) return false;
+    const all = Array.from(
+      this.ownerRoot(active).querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+    );
+    const first = all.find((block) => block.getAttribute("data-anchor") === bookmark.startUnid);
+    const last = all.find((block) => block.getAttribute("data-anchor") === bookmark.endUnid);
+    if (!first || !last || first === last || all.indexOf(first) > all.indexOf(last)) return false;
+    const start = contentPositionIn(first, bookmark.startOffset);
+    const end = contentPositionIn(last, bookmark.endOffset);
+    return setSelectionBetween(start, end);
+  }
+
   /** Editable blocks the current selection covers, in document order. Uses Range.comparePoint
    *  (robust to a selection boundary that normalized onto a wrapper element rather than a block
    *  or text node — Range.intersectsNode misses the end block at a `(block, childCount)` boundary).
    *  A collapsed or single-block selection yields just the active block. */
   private selectedBlocks(): HTMLElement[] {
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    let sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if ((!sel || sel.rangeCount === 0 || sel.isCollapsed) && this.lastCrossBlockSelection) {
+      this.restoreCrossBlockSelection();
+      sel = typeof window !== "undefined" ? window.getSelection() : null;
+    }
     // Enumerate the ACTIVE block's own root — a band's story container, else the body edit root —
     // so a selection can never span a band and the body (different OOXML parts).
     const root = this.activeBlock ? this.ownerRoot(this.activeBlock) : this.editRoot;

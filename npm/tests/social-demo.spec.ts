@@ -66,6 +66,54 @@ async function reselectBlock(page: Page, anchor: string) {
   }, anchor);
 }
 
+async function dragAcrossDemoBlocks(page: Page, firstNeedle: string, lastNeedle: string) {
+  const editable = page.locator('#doc [data-anchor][contenteditable="true"]');
+  const first = editable.filter({ hasText: firstNeedle }).first();
+  const last = editable.filter({ hasText: lastNeedle }).first();
+  await first.scrollIntoViewIfNeeded();
+  const textPoint = (element: HTMLElement, fraction: number) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (!(node.textContent ?? '').trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      return { x: rect.left + rect.width * fraction, y: rect.top + rect.height / 2 };
+    }
+    throw new Error('Editable block has no visible text');
+  };
+  const start = await first.evaluate(textPoint, 0.2);
+  const end = await last.evaluate(textPoint, 0.8);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 24 });
+  await page.mouse.up();
+
+  return page.evaluate(({ firstNeedle, lastNeedle }) => {
+    const blocks = Array.from(
+      document.querySelectorAll<HTMLElement>('#doc [data-anchor][contenteditable="true"]'),
+    );
+    const describe = (needle: string) => {
+      const block = blocks.find((candidate) => candidate.textContent?.includes(needle));
+      if (!block) throw new Error(`Could not find editable block containing ${needle}`);
+      return { anchor: block.getAttribute('data-anchor')!, text: block.textContent?.trim() ?? '' };
+    };
+    const selection = window.getSelection()!;
+    const blockOf = (node: Node | null) => {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node as Element : node?.parentElement;
+      return element?.closest('#doc [data-anchor][contenteditable="true"]')?.getAttribute('data-anchor');
+    };
+    return {
+      first: describe(firstNeedle),
+      last: describe(lastNeedle),
+      selectionText: selection.rangeCount ? selection.getRangeAt(0).toString() : '',
+      anchorBlock: blockOf(selection.anchorNode),
+      focusBlock: blockOf(selection.focusNode),
+    };
+  }, { firstNeedle, lastNeedle });
+}
+
 test.describe('social demo pages', () => {
   test('player.html boots its editor on tap', async ({ page }) => {
     await page.goto(`/player.html?${OVERRIDES}`);
@@ -124,16 +172,26 @@ test.describe('social demo pages', () => {
 
     // Main-page controls are not decorative: formatting, page view, and save all
     // call the live DocxEditor instance.
-    const result = await selectPracticeBlock(page);
+    const result = await dragAcrossDemoBlocks(
+      page,
+      'SELECT ONLY THIS SENTENCE',
+      'This is a real Word document',
+    );
+    expect(result.anchorBlock).not.toBe(result.focusBlock);
+    expect(result.selectionText).toContain('THIS SENTENCE');
+    expect(result.selectionText).toContain('This is a real Word document');
     await page.locator('#bar [data-fmt="italic"]').click();
-    expect(await formattingState(page, result.anchor, result.text)).toMatchObject({
+    expect(await formattingState(page, result.first.anchor, result.first.text)).toMatchObject({
+      found: true, italic: true, textPreserved: true,
+    });
+    expect(await formattingState(page, result.last.anchor, result.last.text)).toMatchObject({
       found: true, italic: true, textPreserved: true,
     });
 
     await page.locator('#fontSize').selectOption('18');
-    await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).fontSize).toBeGreaterThanOrEqual(23);
+    await expect.poll(async () => (await formattingState(page, result.last.anchor, result.last.text)).fontSize).toBeGreaterThanOrEqual(23);
     await page.locator('#alignment').selectOption('center');
-    await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).alignment).toBe('center');
+    await expect.poll(async () => (await formattingState(page, result.last.anchor, result.last.text)).alignment).toBe('center');
 
     const tableCount = await page.locator('#doc table').count();
     await page.locator('#insertTable').click();

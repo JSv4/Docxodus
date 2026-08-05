@@ -41,6 +41,13 @@ All notable changes to this project will be documented in this file.
     main-part XML write per keystroke that nothing in the session flow reads (ops and
     renders read the cached XDocuments; both `DocxSession.Save` paths flush every projected
     part themselves). The full projection path keeps the flush for external callers.
+- **Mouse selection now crosses editable document blocks.** Browsers normally fence a drag at the
+  edge of each independent `contenteditable` paragraph. `DocxEditor` now bridges that gesture into
+  one DOM range within the same OOXML story while retaining per-anchor edit/commit boundaries.
+  Inline and paragraph formatting therefore work across a physical multi-paragraph drag in both
+  the comprehensive editor and the embeddable demo. A stable anchor/offset bookmark also preserves
+  that selection when a native toolbar field takes focus. Real-pointer Playwright coverage drives
+  both surfaces and verifies multi-block formatting through their actual controls.
 - **The live demo now opens a purpose-built Docxodus product guide instead of a generic test
   fixture.** The four-page, branded DOCX opens with the literal “Edit this document. It’s real.”
   and teaches through precise editable exercises, control walkthroughs, a preservation matrix, and

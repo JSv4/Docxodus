@@ -60,8 +60,17 @@ The inline-format buttons apply to a **selected sub-range**, not the whole block
 paragraph-level command applies across a **multi-block selection**, reconciled as N single-block
 swaps with the cross-block selection restored.
 
-Size and font controls cache the last real selection, because a combobox steals focus when clicked —
-without that cache a sub-range selection would be lost before the command ran.
+Each document block remains an independent `contenteditable` host so edits can be committed through
+its stable OOXML anchor without replacing the surrounding document. Browsers normally fence a
+physical mouse drag at that host boundary, so `DocxEditor` takes over only after the pointer enters
+another editable block in the same OOXML story and exposes the gesture as one normalized DOM
+`Range`. Intra-block selection remains native, and body/header/footer story boundaries remain
+uncrossable.
+
+Size and font controls cache the last real selection, because a combobox steals focus when clicked.
+Single-block selections are bookmarked as one anchor plus a span; multi-block selections use two
+stable anchors plus content offsets. Without those bookmarks a sub-range selection would be lost
+before the command ran.
 
 ---
 
