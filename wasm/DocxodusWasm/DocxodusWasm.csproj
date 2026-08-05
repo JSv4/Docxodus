@@ -15,15 +15,27 @@
     <!-- Size optimization -->
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- IL Trimming - removes unused code -->
+    <!-- IL Trimming — only code reachable from the [JSExport] bridge surface ships.
+         Docxodus and DocumentFormat.OpenXml are trimmed (see the ItemGroup below);
+         modules never exported to the browser (PresentationBuilder, SpreadsheetWriter,
+         HtmlToWml, DocumentBuilder, ...) are removed. Validated by the full Playwright
+         suite plus tests/trim-validation.spec.ts, which pins the two paths where
+         trimming could bite at runtime (reflective GetPackage(), OpenXmlValidator).
+         See docs/architecture/wasm-packaging.md. -->
     <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
-    <!-- Suppress trim warnings for reflection-heavy code (PtOpenXmlUtil.cs uses reflection for SDK 3.x compat) -->
+    <TrimMode>full</TrimMode>
+    <TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+    <!-- The timezone database is dead weight: nothing in the library converts timezones. -->
+    <InvariantTimezone>true</InvariantTimezone>
+    <!-- No dotnet.native.js.symbols in the payload. -->
+    <WasmEmitSymbolMap>false</WasmEmitSymbolMap>
+    <!-- Suppressed deliberately: the only reflection in the WASM-compiled tree is
+         PtOpenXmlUtil.GetPackage() (SDK 3.x Package access), whose targets are pinned
+         by ILLink.Descriptors.xml. Trim safety is enforced by the browser test suite. -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
 
-    <!-- Webcil format and compression -->
+    <!-- Webcil format (size-neutral vs .dll; firewall/AV-friendly) -->
     <WasmEnableWebcil>true</WasmEnableWebcil>
-    <BlazorEnableCompression>true</BlazorEnableCompression>
 
     <!-- Disable unused runtime features -->
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
@@ -64,10 +76,18 @@
     <WasmExtraFilesToDeploy Include="index.html" />
   </ItemGroup>
 
-  <!-- Preserve types needed by the library from being trimmed -->
+  <!-- Trimming roots. DocxodusWasm must stay fully rooted — JS resolves its [JSExport]s
+       by name at runtime, invisibly to the trimmer. Docxodus and the Open XML SDK are
+       opted INTO trimming instead (DocumentFormat.OpenXml is IsTrimmable-annotated, but
+       under a rooted Docxodus most of it stayed reachable; Docxodus itself carries no
+       IsTrimmable metadata, so TrimmableAssembly is required for it in either TrimMode).
+       ILLink.Descriptors.xml pins the members PtOpenXmlUtil.GetPackage() reaches only
+       via reflection. -->
   <ItemGroup>
     <TrimmerRootAssembly Include="DocxodusWasm" />
-    <TrimmerRootAssembly Include="Docxodus" />
-    <TrimmerRootAssembly Include="DocumentFormat.OpenXml" />
+    <TrimmableAssembly Include="Docxodus" />
+    <TrimmableAssembly Include="DocumentFormat.OpenXml" />
+    <TrimmableAssembly Include="DocumentFormat.OpenXml.Framework" />
+    <TrimmerRootDescriptor Include="ILLink.Descriptors.xml" />
   </ItemGroup>
 </Project>

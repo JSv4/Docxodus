@@ -1,0 +1,19 @@
+<!-- Trimming roots for members reached only via reflection.
+
+     PtOpenXmlUtil.GetPackage() (Docxodus) extracts the underlying
+     System.IO.Packaging.Package from an OpenXmlPackage by walking the SDK 3.x
+     features chain reflectively: Assembly.GetType("...Features.IPackageFeature"),
+     IFeatureCollection.Get<T>() via GetMethod("Get") + MakeGenericMethod,
+     IPackageFeature.Package, then private "_package" / "<Feature>k__BackingField"
+     fields on the concrete feature classes. ILLink has no static edge to any of
+     these members, so pin them here. The whole Features namespace is ~19 KB of IL —
+     cheap insurance against an SDK or linker update silently breaking the chain.
+
+     Runtime coverage: npm/tests/trim-validation.spec.ts exercises this path in the
+     browser (WmlComparer-engine compare of image-bearing documents). -->
+<linker>
+  <assembly fullname="DocumentFormat.OpenXml.Framework">
+    <type fullname="DocumentFormat.OpenXml.Features*" preserve="all" />
+    <type fullname="DocumentFormat.OpenXml.Packaging.OpenXmlPackage" preserve="fields" required="false" />
+  </assembly>
+</linker>

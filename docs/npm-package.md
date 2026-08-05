@@ -935,13 +935,22 @@ public/
 
 ## Bundle Size
 
-| Component | Size (uncompressed) | Size (Brotli) |
-|-----------|---------------------|---------------|
-| dotnet.native.wasm | ~8 MB | ~3 MB |
-| Managed assemblies | ~15 MB | ~5 MB |
-| Total | ~37 MB | ~10-12 MB |
+The WASM runtime payload is IL-trimmed to the API surface the package actually exposes
+(see `docs/architecture/wasm-packaging.md`):
 
-The WASM files are loaded on-demand and cached by the browser.
+| Metric | Size |
+|--------|------|
+| `dist/wasm/_framework` fetched by the browser (uncompressed) | ~12.9 MB |
+| Over the wire from a Brotli-serving host | **~3.2 MB** |
+| Over the wire from a gzip-on-the-fly host | ~4.1 MB |
+
+Every `_framework` asset ships with a precompressed `.br` sibling (brotli quality 11).
+To get the ~3.2 MB wire size, configure your host to serve them with
+`Content-Encoding: br` and `Vary: Accept-Encoding`, keeping the original
+`Content-Type` — e.g. nginx `brotli_static on;`, Caddy `file_server { precompressed br }`.
+Netlify, Vercel, and Cloudflare Pages do this automatically. Hosts that ignore the
+`.br` files simply serve the uncompressed assets. The files are fetched once and
+cached by the browser.
 
 ## Browser Support
 

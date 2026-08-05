@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **WASM payload trimmed and precompressed: ~3.2 MB over the wire (was 16.7 MB raw with
+  no compression story).** The browser build now IL-trims `Docxodus` and
+  `DocumentFormat.OpenXml` to the `[JSExport]` bridge surface (`TrimMode=full`; modules
+  never exported to the browser — HtmlToWml, DocumentBuilder, PresentationBuilder,
+  SpreadsheetWriter, … — are removed; no exported API changes), drops the timezone
+  database and debug maps/symbols, and ships a brotli-11 `.br` sibling for every
+  framework asset so negotiation-capable hosts serve ~3.2 MB instead of ~12.9 MB.
+  The one reflective path (`PtOpenXmlUtil.GetPackage()`) is pinned by an ILLink
+  descriptor and canaried, with `OpenXmlValidator`, in the new browser spec
+  `trim-validation.spec.ts`; `build-wasm.sh` now fails the build if the brotli wire
+  total exceeds a 4 MB budget. Measured cold open at 50 Mbps: 1.0 s vs 3.3 s before
+  (3.2× faster); native `Content-Encoding: br` decode is noise (~45 ms). Full suite
+  (312 browser tests + .NET tests) green against the trimmed artifacts. See
+  `docs/architecture/wasm-packaging.md`.
+
 ### Fixed
 - **MCP HTML preserves native tracked changes.** Full and anchored MCP HTML reads now emit pending
   revisions as `<ins>`/`<del>` instead of implicitly accepting them on the renderer's throwaway
