@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.1.1] - 2026-08-05
+
 ### Changed
 - **Editor interactive latency cut 52–98 % per operation.** Measured end-to-end on a real
   document (`HC031`, Chromium/WASM, warm) by the new standing benchmark

@@ -608,7 +608,7 @@ def add_embed_page(document: Document) -> None:
     set_cell_border(cell, color=NAVY_2)
     lines = (
         'import { createEditor } from',
-        '  "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";',
+        '  "https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js";',
         '',
         'await createEditor("#editor", "/documents/example.docx");',
     )

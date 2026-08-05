@@ -1,14 +1,14 @@
 # Social demo setup
 
 These pages are static and require no application server. They load the pinned
-`docxodus@9.1.0` embed bundle from jsDelivr and the branded product guide from
+`docxodus@9.1.1` embed bundle from jsDelivr and the branded product guide from
 the same GitHub Pages directory. Regenerate that document with
 `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
-1. Publish `docxodus@9.1.0` and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js` returns JavaScript.
+1. Publish `docxodus@9.1.1` and confirm
+   `https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
    running Jekyll.

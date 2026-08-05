@@ -57,7 +57,7 @@ runtime location auto-detected — no build step, no configuration:
 ```html
 <div id="doc"></div>
 <script type="module">
-  import { createEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js';
+  import { createEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js';
   const editor = await createEditor('#doc', './contract.docx'); // or bytes / Blob / File
   // ...later: const editedBytes = editor.save();
 </script>
@@ -429,7 +429,7 @@ so a page can embed a full viewer or editor without hosting anything itself.
 <div id="editor"></div>
 <script type="module">
   import { createViewer, createEditor }
-    from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js';
+    from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js';
 
   // Choose either factory, or render both into separate containers as shown.
   // Source may be a URL, Uint8Array, ArrayBuffer, Blob, or File.
@@ -449,7 +449,7 @@ For pages that can't use modules, `dist/embed.iife.js` exposes the same surface 
 
 ```html
 <div id="doc"></div>
-<script src="https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.iife.js"></script>
 <script>
   Docxodus.createEditor('#doc').then((editor) => { /* ... */ });
 </script>
@@ -465,7 +465,7 @@ first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that re
 
 ### CDN caveats
 
-- **Pin an exact version in production** (`docxodus@9.1.0`, not `@latest`) — CDN responses are
+- **Pin an exact version in production** (`docxodus@9.1.1`, not `@latest`) — CDN responses are
   cached as immutable, and the wire shapes between the JS wrappers and the WASM assemblies must
   come from the same release.
 - The build patches the .NET loader to fetch with `credentials: "omit"` — required because the
