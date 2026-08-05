@@ -1177,8 +1177,7 @@ export class DocxEditor {
       return;
     }
 
-    const firstEl = this.renderInto(first.id);
-    const secondEl = this.renderInto(second.id);
+    const [firstEl, secondEl] = this.renderTwo(first.id, second.id);
     if (!firstEl || !secondEl) return;
 
     // el is the focused block — replaceNode guards the re-entrant blur→commit and tolerates a
@@ -1315,6 +1314,40 @@ export class DocxEditor {
     );
     if (html.charCodeAt(0) === 0x7b /* error object */) return null;
     return new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
+  }
+
+  /** Render two blocks in ONE batched bridge call when the bundle carries RenderBlocksHtml —
+   *  the per-render shell/converter setup is paid once instead of twice, which matters on the
+   *  Enter path (split renders both halves synchronously under the keystroke). Falls back to
+   *  two per-block renders on older bundles. Output is renderInto-identical per block (both
+   *  routes share the same extraction). */
+  private renderTwo(a: string, b: string): [HTMLElement | null, HTMLElement | null] {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderBlocksHtml === "function") {
+      try {
+        const map = JSON.parse(
+          bridge.RenderBlocksHtml(
+            this.handle,
+            JSON.stringify([a, b]),
+            this.options.cssPrefix,
+            this.options.fabricateClasses,
+          ),
+        ) as Record<string, string | null> & { error?: string };
+        if (!map.error) {
+          const parse = (h: string | null | undefined): HTMLElement | null =>
+            h
+              ? (new DOMParser().parseFromString(h, "text/html").body
+                  .firstElementChild as HTMLElement | null)
+              : null;
+          const fa = parse(map[a]);
+          const fb = parse(map[b]);
+          if (fa && fb) return [fa, fb];
+        }
+      } catch {
+        /* fall through to per-block renders */
+      }
+    }
+    return [this.renderInto(a), this.renderInto(b)];
   }
 
   /** The editable block immediately before `el` within its own root, or null. */
@@ -2244,7 +2277,8 @@ export class DocxEditor {
       if (oldMarker !== newMarker) return this.bail("substituted li marker drift");
     }
 
-    if (!this.applyBodyDiff(oldNodes, plan.body, bodyDiff, freshBody)) return this.bail("applyBodyDiff bail");
+    const bodyApply = this.applyBodyDiff(oldNodes, plan.body, bodyDiff, freshBody);
+    if (bodyApply !== true) return this.bail(`applyBodyDiff bail: ${bodyApply}`);
     this.applyNotesDiff("footnotes", plan.footnotes, fnState, rendered);
     this.applyNotesDiff("endnotes", plan.endnotes, enState, rendered);
 
@@ -2292,21 +2326,21 @@ export class DocxEditor {
       : root.querySelector<HTMLElement>("[data-anchor]");
   }
 
-  /** Insert/remove/swap body unit nodes per the diff. Returns false to bail (parent
-   *  ambiguity, order violation, wrapper semantics) — the session is already correct,
-   *  so bailing just means a full repaint. */
+  /** Insert/remove/swap body unit nodes per the diff. Returns `true` on success or a
+   *  bail-reason string (parent ambiguity, order violation, wrapper semantics) — the
+   *  session is already correct, so bailing just means a full repaint. */
   private applyBodyDiff(
     oldNodes: HTMLElement[],
     units: RenderUnit[],
     diff: UnitDiff,
     fresh: Map<number, HTMLElement>,
-  ): boolean {
+  ): true | string {
     // Kept nodes must appear in increasing old order (no move support in v1).
     let lastOld = -1;
     for (let j = 0; j < units.length; j++) {
       const oi = diff.keep.get(j);
       if (oi === undefined) continue;
-      if (oi < lastOld) return false;
+      if (oi < lastOld) return "kept order violation";
       lastOld = oi;
     }
 
@@ -2321,8 +2355,21 @@ export class DocxEditor {
         oldWrapper.replaceWith(freshRoot); // wrapper-shaped render (table) ⇄ wrapper
       } else if (oldWrapper === oldNodes[oi]) {
         oldNodes[oi].replaceWith(freshRoot);
+      } else if (
+        !oldNodes[oi].hasAttribute("data-render-sig") &&
+        unidOf(units[nj].id) === oldNodes[oi].getAttribute("data-anchor")
+      ) {
+        // Same block, leaf render, wrapped slot, and the old node carries NO signature:
+        // a sig-less node is one a SINGLE-BLOCK swap placed (mount and reconcile both
+        // stamp signatures), and those swaps never change border grouping — every
+        // border-changing op forces a full remount. The wrapper is therefore still
+        // valid; swap the leaf inside it, exactly as the single-block path itself does
+        // for a bordered paragraph. A STAMPED wrapped slot whose content changed stays
+        // remount territory — the change could be the border itself.
+        oldNodes[oi].replaceWith(freshRoot);
       } else {
-        return false; // leaf render into a wrapped slot — border-div semantics, remount
+        // border-div semantics, remount
+        return `leaf render into wrapped slot (unit ${units[nj].id.slice(0, 24)})`;
       }
       this.wireUnit(freshRoot, units[nj]);
     }
@@ -2351,10 +2398,11 @@ export class DocxEditor {
       }
       const prevW = prev ? this.unitWrapperOf(prev) : null;
       const nextW = next ? this.unitWrapperOf(next) : null;
-      if (prevW && nextW && prevW.parentElement !== nextW.parentElement) return false;
+      if (prevW && nextW && prevW.parentElement !== nextW.parentElement)
+        return "insert neighbors in different parents";
       if (prevW) prevW.after(el);
       else if (nextW) nextW.before(el);
-      else return false; // empty container — nowhere provably correct to insert
+      else return "insert with no anchored neighbor"; // empty container — nowhere provably correct
       this.wireUnit(el, units[j]);
     }
 

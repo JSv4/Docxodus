@@ -59,6 +59,26 @@ block(s), insert/remove nodes, update the `unid → fullId` map, place the caret
 restored exactly), and round-trips through save. Insert-at-doc-start and block delete/reorder
 remain follow-ups (Enter-split + Backspace-merge cover the core authoring loop).
 
+### M2.7 — Latency pass: persistent render shell + reconcile on real documents  · effort M · ✅ **DONE**
+**Problem:** interactive ops were still visibly laggy. Two causes: (1) every single-block
+re-render re-opened the render shell from bytes — package open + styles/numbering parse +
+converter style-cache rebuild on every keystroke commit (~50–100 ms of the ~55–135 ms per
+op); (2) on any document containing a block-level `w:sdt` (a TOC — most real documents),
+`ListBlocks` missed the sdt's content blocks, the plan/DOM diff read as 100 % churn, and
+M2.6's reconcile silently fell back to the multi-second remount for EVERY structural op.
+**Shipped:** the shell `WordprocessingDocument` stays open on the session and each render
+replaces only the main part's body document (annotation caches on the formatting-part
+XDocuments persist; `FormattingAssembler` caches its style indexes on the styles XDocument
+behind a style-count guard); `ListBlocks` flattens `w:sdtContent` exactly as the renderer
+does; reconcile substitutions pair by unid first; sig-less (single-block-swapped) wrapped
+paragraphs may leaf-swap in place; `SetParagraphFormat`/`SplitParagraph` no longer rebuild
+the whole anchor index per op; the per-op index-only rebuild no longer flushes parts (the
+whole-main-part XML write per keystroke that only external save paths need); Enter renders
+both split halves in one batched call. Measured (HC031, warm): text commit 102 → 30 ms,
+Enter 137 → 41 ms, bold 108 → 52 ms, insert row 1.25 s → 85 ms, delete block 1.2 s → 24 ms,
+undo/redo ~1.2 s → 124/54 ms. Standing instrument:
+`npm/tests/editor-latency-bench.spec.ts`.
+
 ### M2.6 — Incremental STRUCTURAL repaint (reconcile replaces remount)  · effort L · ✅ **DONE**
 **Problem:** every structural op (insert table/row/col, footnote/endnote, delete block,
 undo/redo) paid a full remount — ~5–6 s on a 346-block document — and the engine ops

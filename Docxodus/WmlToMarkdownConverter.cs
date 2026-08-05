@@ -382,12 +382,22 @@ public static class WmlToMarkdownConverter
     /// ops resolve anchors through (<see cref="DocxSession.AnchorIndex"/>), so an edit
     /// doesn't pay a whole-document markdown render just to look up one anchor id.
     /// </summary>
+    /// <summary>
+    /// The cheap index-only rebuild <see cref="DocxSession"/> performs after every mutation.
+    /// Skips the per-part Unid flush as well as enrichment: the flush re-serializes a whole
+    /// part's XML whenever any Unid was assigned — i.e. after EVERY mutation — and nothing in
+    /// the session flow reads part STREAMS between ops (ops and renders read the cached
+    /// XDocuments; both <see cref="DocxSession.Save(bool)"/> paths flush every projected part
+    /// themselves). The full projection path keeps the flush for external callers who save a
+    /// projected document directly.
+    /// </summary>
     internal static IReadOnlyDictionary<string, AnchorTarget> BuildAnchorIndexOnly(
         WordprocessingDocument doc, WmlToMarkdownConverterSettings settings) =>
-        BuildAnchorIndex(doc, settings, enrich: false).Index;
+        BuildAnchorIndex(doc, settings, enrich: false, flushAssignedUnids: false).Index;
 
     private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes, AnchorIdMap RenderMap)
-        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings, bool enrich = true)
+        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings, bool enrich = true,
+            bool flushAssignedUnids = true)
     {
         var main = doc.MainDocumentPart
             ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
@@ -477,8 +487,10 @@ public static class WmlToMarkdownConverter
             // Persist newly-assigned Unids to the part. Skipped when nothing was
             // assigned — the flush is ~19 ms/part on a large document, per rebuild.
             // Content mutations no longer depend on this flush: DocxSession.Save
-            // flushes every projected part itself on BOTH its paths.
-            if (assignedAny) scope.Part.PutXDocument();
+            // flushes every projected part itself on BOTH its paths — which is why
+            // the session's per-op index-only rebuild passes flushAssignedUnids:
+            // false (see BuildAnchorIndexOnly) and skips it entirely.
+            if (assignedAny && flushAssignedUnids) scope.Part.PutXDocument();
         }
 
         // Build the AnchorIdMap based on the requested rendering mode.

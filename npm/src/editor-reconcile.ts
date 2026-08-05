@@ -100,8 +100,37 @@ export function diffUnits(oldUnids: string[], newUnits: RenderUnit[]): UnitDiff 
   while (i < n) removed.push(i++);
   while (j < m) added.push(j++);
 
-  // Substitutions: an added index and a removed index with the same number of
-  // kept units before them — an in-place change of one unit.
+  // Substitutions: an added index and a removed index that are an IN-PLACE change
+  // of one unit. Paired by UNID first — a block whose content changed keeps its
+  // unid (unids are sticky in-session; only the content signature part of the
+  // token moves), so an equal-unid add/remove pair is that block re-rendering in
+  // place regardless of how many other units changed around it. Position-based
+  // (kept-count) pairing is the fallback for genuine replacements; unid pairing
+  // must run first or several same-position changes mispair, e.g. binding an
+  // edited paragraph's fresh render to a NEIGHBOR's border-wrapped node — which
+  // the DOM patcher can only resolve by bailing to a full remount.
+  const bareUnid = (token: string): string => {
+    const bar = token.indexOf("|");
+    return bar < 0 ? token : token.slice(0, bar);
+  };
+  const substituted: Array<{ oldIndex: number; newIndex: number }> = [];
+  const usedRemoved = new Set<number>();
+  const removedByUnid = new Map<string, number[]>();
+  for (const oi of removed) {
+    const u = bareUnid(oldUnids[oi]);
+    (removedByUnid.get(u) ?? removedByUnid.set(u, []).get(u)!).push(oi);
+  }
+  const unmatchedAdded: number[] = [];
+  for (const nj of added) {
+    const candidates = removedByUnid.get(bareUnid(newUnids[nj]));
+    const oi = candidates?.find((i) => !usedRemoved.has(i));
+    if (oi !== undefined) {
+      substituted.push({ oldIndex: oi, newIndex: nj });
+      usedRemoved.add(oi);
+    } else {
+      unmatchedAdded.push(nj);
+    }
+  }
   const keptBeforeOld = (oi: number): number => {
     let c = 0;
     for (const v of keep.values()) if (v < oi) c++;
@@ -112,9 +141,7 @@ export function diffUnits(oldUnids: string[], newUnits: RenderUnit[]): UnitDiff 
     for (const k of keep.keys()) if (k < nj) c++;
     return c;
   };
-  const substituted: Array<{ oldIndex: number; newIndex: number }> = [];
-  const usedRemoved = new Set<number>();
-  for (const nj of added) {
+  for (const nj of unmatchedAdded) {
     const target = keptBeforeNew(nj);
     for (const oi of removed) {
       if (usedRemoved.has(oi)) continue;

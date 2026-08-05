@@ -1462,10 +1462,17 @@ public sealed class DocxSession : IDisposable
 
     private IReadOnlyDictionary<string, AnchorTarget>? _cachedAnchorIndex;
 
+    /// <summary>Whether an anchor index is currently cached (a lookup now would be a dictionary
+    /// hit rather than a whole-document rebuild). Lets the block-render path choose a cheaper
+    /// resolution strategy right after a mutation invalidated the cache.</summary>
+    internal bool HasCachedAnchorIndex => _cachedProjection is not null || _cachedAnchorIndex is not null;
+
     /// <summary>
     /// The ordered top-level render units per scope container — see <see cref="RenderPlan"/>.
-    /// Body = the main body's direct children in document order (each <c>w:p</c> under its
-    /// projected kind, each <c>w:tbl</c> as ONE <c>tbl</c> unit); Footnotes/Endnotes = the
+    /// Body = the main body's blocks in document order (each <c>w:p</c> under its
+    /// projected kind, each <c>w:tbl</c> as ONE <c>tbl</c> unit), with a block-level
+    /// <c>w:sdt</c> flattened to its <c>w:sdtContent</c> blocks — mirroring the renderer,
+    /// which strips content controls; Footnotes/Endnotes = the
     /// non-boilerplate note definitions in part order. Elements the projection does not
     /// address (e.g. <c>w:sectPr</c>) are skipped. Unlike the projection itself, empty
     /// paragraphs are ALWAYS listed — the plan mirrors the rendered DOM, which contains
@@ -1480,15 +1487,30 @@ public sealed class DocxSession : IDisposable
         var bodyEl = _doc!.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
         if (bodyEl is not null)
         {
-            foreach (var el in bodyEl.Elements())
+            // Mirrors the RENDERER's top-level block sequence, which is the only contract
+            // that lets a DOM diff work. The converter strips content controls
+            // (RemoveContentControls) and flows their block content inline, so a block-level
+            // w:sdt (a TOC is the everyday case) contributes its w:sdtContent blocks as
+            // top-level units here — without this, every document containing one diffs as
+            // full churn and the incremental reconcile permanently falls back to remount.
+            void AddUnits(XElement container)
             {
-                string? kind =
-                    el.Name == W.tbl ? "tbl" :
-                    el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
-                var unid = (string?)el.Attribute(PtOpenXml.Unid);
-                if (kind is null || unid is null) continue;
-                body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
+                foreach (var el in container.Elements())
+                {
+                    if (el.Name == W.sdt)
+                    {
+                        if (el.Element(W.sdtContent) is { } content) AddUnits(content);
+                        continue;
+                    }
+                    string? kind =
+                        el.Name == W.tbl ? "tbl" :
+                        el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                    var unid = (string?)el.Attribute(PtOpenXml.Unid);
+                    if (kind is null || unid is null) continue;
+                    body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
+                }
             }
+            AddUnits(bodyEl);
         }
 
         List<RenderUnit> Notes(XElement? root, XName noteName, bool endnotes, string kindScope)
@@ -4555,13 +4577,14 @@ public sealed class DocxSession : IDisposable
             InvalidateProjectionCache();
 
             // The new paragraph's kind can differ from the original (Heading -> Normal via the
-            // next-paragraph style), so resolve its anchor from the fresh projection rather than
-            // assuming the original kind.
-            var secondAnchor =
-                AnchorForUnid(secondUnid, target.PartUri)
-                ?? new Anchor(
-                    $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
-                    target.Anchor.Kind, target.Anchor.Scope, secondUnid);
+            // next-paragraph style), so derive it from the element itself with the projector's
+            // own KindFor — the same derivation a full index rebuild would apply, minus the
+            // whole-document walk that made Enter the second-most expensive part of a split.
+            // `second` is already attached, so KindFor's style-chain lookup resolves.
+            var secondKind = WmlToMarkdownConverter.KindFor(second) ?? target.Anchor.Kind;
+            var secondAnchor = new Anchor(
+                $"{secondKind}:{target.Anchor.Scope}:{secondUnid}",
+                secondKind, target.Anchor.Scope, secondUnid);
 
             return new EditResult
             {
@@ -4699,15 +4722,27 @@ public sealed class DocxSession : IDisposable
     }
 
     // Cached formatting "shell" for session-attached single-block rendering (see
-    // Internal.HtmlConversionOps.RenderBlockHtml). A serialized throwaway .docx holding the
-    // formatting parts (styles/numbering/theme/fontTable/settings) + an empty body, built ONCE and
-    // reused across renders so a keystroke commit doesn't re-clone the (potentially huge) style
-    // gallery every time. HtmlConversionOps owns these; it rebuilds the shell when
+    // Internal.HtmlConversionOps.RenderBlockHtml): an OPEN throwaway .docx holding the formatting
+    // parts (styles/numbering/theme/fontTable/settings) + a body that each render replaces
+    // wholesale. Kept open across renders so a keystroke commit pays neither the part clone NOR
+    // the package re-open + styles/numbering XML re-parse — those parses (and the style/numbering
+    // resolution caches the converter annotates onto the part XDocuments) are the dominant fixed
+    // cost of a single-block render. HtmlConversionOps owns these; it rebuilds the shell when
     // <see cref="RenderShellSignature"/> (a cheap content signature of the formatting parts) changes
     // — i.e. when a format op adds a style / numbering level. Text edits never touch those parts, so
-    // the shell survives normal typing. Disposed implicitly with the session (plain GC).
-    internal byte[]? RenderShellBytes;
+    // the shell survives normal typing.
+    internal WordprocessingDocument? RenderShellDoc;
+    internal MemoryStream? RenderShellStream;
     internal long RenderShellSignature;
+
+    /// <summary>Release the cached block-render shell (rebuild happens lazily on next render).</summary>
+    internal void DisposeRenderShell()
+    {
+        RenderShellDoc?.Dispose();
+        RenderShellStream?.Dispose();
+        RenderShellDoc = null;
+        RenderShellStream = null;
+    }
 
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
@@ -5319,13 +5354,15 @@ public sealed class DocxSession : IDisposable
                 ApplyParagraphBorders(pPr, op.TopBorder, op.BottomBorder, op.ClearBorders is true);
 
             InvalidateProjectionCache();
-            var freshIndex = AnchorIndex();
-            var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
-
+            // pPr-only writes (jc/ind/spacing/pBdr/pageBreakBefore) can't change an anchor's
+            // kind — KindFor derives it from pStyle/numPr, which this op never touches — nor
+            // its scope or unid, so the cached anchor stays valid. Skipping the eager
+            // whole-document index rebuild here roughly halves this op's latency on a real
+            // document (the invalidated cache refills lazily on the next lookup).
             return new EditResult
             {
                 Success = true,
-                Modified = new[] { updated },
+                Modified = new[] { target.Anchor },
                 Patch = PatchFor(target),
             };
         }
@@ -8172,6 +8209,7 @@ public sealed class DocxSession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        DisposeRenderShell();
         _doc?.Dispose();
         _stream?.Dispose();
         _doc = null;

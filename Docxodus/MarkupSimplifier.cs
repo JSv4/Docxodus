@@ -104,7 +104,9 @@ namespace Docxodus
             if (part == null) return;
 
             XDocument settingsXDoc = part.GetXDocument();
-            settingsXDoc.Descendants(W.rsids).Remove();
+            var rsids = settingsXDoc.Descendants(W.rsids).ToList();
+            if (rsids.Count == 0) return; // nothing to strip — skip the part rewrite
+            rsids.ForEach(r => r.Remove());
             part.PutXDocument();
         }
 

@@ -54,33 +54,47 @@ namespace Docxodus
             // synthesized part stays in wDoc, consistent with this method's in-place mutation.
             Internal.StyleFactory.EnsureStylesPart(wDoc.MainDocumentPart);
 
-            FormattingAssemblerInfo fai = new FormattingAssemblerInfo();
             XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
 
-            // Optimization #1: Build style indexes once for O(1) lookups throughout processing
-            IndexStylesDocument(sXDoc, fai);
-
-            // Find default styles using the indexed data (single pass through styles)
-            foreach (var style in sXDoc.Root.Elements(W.style))
+            // The assembler info (style indexes + rolled-up style caches) is derived from the
+            // styles part alone, so it is cached ON the styles XDocument and reused across
+            // conversions of the same in-memory document — the session-attached single-block
+            // render converts through one long-lived shell, and rebuilding these per render was
+            // a fixed cost on every keystroke commit. The style count guards the cache: callers
+            // that add styles between conversions (StyleFactory) get a fresh index.
+            int styleCount = sXDoc.Root.Elements(W.style).Count();
+            FormattingAssemblerInfo fai = sXDoc.Annotation<FormattingAssemblerInfo>();
+            if (fai == null || fai.IndexedStyleCount != styleCount)
             {
-                if (style.Attribute(W._default).ToBoolean() != true)
-                    continue;
+                sXDoc.RemoveAnnotations<FormattingAssemblerInfo>();
+                fai = new FormattingAssemblerInfo { IndexedStyleCount = styleCount };
 
-                var styleType = (string)style.Attribute(W.type);
-                var styleId = (string)style.Attribute(W.styleId);
+                // Optimization #1: Build style indexes once for O(1) lookups throughout processing
+                IndexStylesDocument(sXDoc, fai);
 
-                switch (styleType)
+                // Find default styles using the indexed data (single pass through styles)
+                foreach (var style in sXDoc.Root.Elements(W.style))
                 {
-                    case "paragraph":
-                        fai.DefaultParagraphStyleName = styleId;
-                        break;
-                    case "character":
-                        fai.DefaultCharacterStyleName = styleId;
-                        break;
-                    case "table":
-                        fai.DefaultTableStyleName = styleId;
-                        break;
+                    if (style.Attribute(W._default).ToBoolean() != true)
+                        continue;
+
+                    var styleType = (string)style.Attribute(W.type);
+                    var styleId = (string)style.Attribute(W.styleId);
+
+                    switch (styleType)
+                    {
+                        case "paragraph":
+                            fai.DefaultParagraphStyleName = styleId;
+                            break;
+                        case "character":
+                            fai.DefaultCharacterStyleName = styleId;
+                            break;
+                        case "table":
+                            fai.DefaultTableStyleName = styleId;
+                            break;
+                    }
                 }
+                sXDoc.AddAnnotation(fai);
             }
 
             ListItemRetrieverSettings listItemRetrieverSettings = new ListItemRetrieverSettings();
@@ -4022,6 +4036,8 @@ namespace Docxodus
             public string DefaultParagraphStyleName;
             public string DefaultCharacterStyleName;
             public string DefaultTableStyleName;
+            /// <summary>Style-element count at index time — cache guard (see AssembleFormatting).</summary>
+            public int IndexedStyleCount;
             public Dictionary<string, XElement> RolledCharacterStyles;
 
             // Optimization #1: Pre-indexed style lookups (O(1) instead of O(n) linear search)
