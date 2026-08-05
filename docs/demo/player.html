@@ -87,6 +87,14 @@
     #bar #dl { padding: 0 10px; color: #fff; background: linear-gradient(135deg, #2c63e8, #784fe7); }
     #bar .brand { margin-left: auto; padding: 6px; color: #71869c; font-size: 9px; font-weight: 750; text-decoration: none; }
     #bar .brand:hover { color: #31485f; }
+    #morePanel { position: absolute; z-index: 4; top: 49px; right: 8px; width: 238px; display: grid;
+      grid-template-columns: repeat(4, 1fr); gap: 5px; padding: 9px; border: 1px solid #cad8e7;
+      border-radius: 12px; background: rgba(250,253,255,.98); box-shadow: 0 18px 48px rgba(23,43,67,.25); }
+    #morePanel[hidden] { display: none; }
+    #morePanel button { min-width: 0; height: 34px; border: 1px solid #dbe5ef; border-radius: 7px;
+      color: #344b63; background: #f4f8fc; font-size: 10px; font-weight: 760; cursor: pointer; }
+    #morePanel button:hover { color: #174ca7; background: #e7f0ff; border-color: #bfd2ee; }
+    #morePanel button[aria-pressed="true"] { color: #174ca7; background: #e3edff; border-color: #bcd1ff; }
     #doc { flex: 1; overflow: auto; background: #fff; color: #111; padding: 18px 20px; }
     #doc:focus-within { outline: none; }
 
@@ -124,8 +132,23 @@
       <span class="divider" aria-hidden="true"></span>
       <button id="undo" title="Undo" aria-label="Undo">↶</button>
       <button id="redo" title="Redo" aria-label="Redo">↷</button>
+      <button id="more" title="More formatting controls" aria-label="More formatting controls" aria-expanded="false">•••</button>
       <button id="dl" title="Download the edited DOCX">Save</button>
       <a class="brand" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">Docxodus ↗</a>
+    </div>
+    <div id="morePanel" role="toolbar" aria-label="More document controls" hidden>
+      <button data-fmt="strike" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false"><s>S</s></button>
+      <button data-fmt="superscript" title="Superscript" aria-label="Superscript" aria-pressed="false">x²</button>
+      <button data-size="12" title="12 point font" aria-label="12 point font">12pt</button>
+      <button data-size="18" title="18 point font" aria-label="18 point font">18pt</button>
+      <button data-align="left" title="Align left" aria-label="Align left">☰</button>
+      <button data-align="center" title="Align center" aria-label="Align center">≡</button>
+      <button data-list="bullet" title="Bulleted list" aria-label="Bulleted list">•≡</button>
+      <button data-list="decimal" title="Numbered list" aria-label="Numbered list">1≡</button>
+      <button data-indent="-720" title="Decrease indent" aria-label="Decrease indent">⇤</button>
+      <button data-indent="720" title="Increase indent" aria-label="Increase indent">⇥</button>
+      <button id="insertTable" title="Insert 2 × 2 table" aria-label="Insert table">▦</button>
+      <button id="insertRule" title="Insert horizontal rule" aria-label="Insert horizontal rule">―</button>
     </div>
     <div id="doc"></div>
   </div>
@@ -145,7 +168,7 @@
     let editor = null;
     let featureIndex = 0;
     let selectionFrame = 0;
-    const formatButtons = Array.from(document.querySelectorAll("#bar [data-fmt]"));
+    const formatButtons = Array.from(document.querySelectorAll("#app [data-fmt]"));
     const features = [
       ["01", "Zero uploads", "Your document never leaves this browser."],
       ["02", "Native DOCX editing", "Formatting changes stay in real OOXML."],
@@ -196,13 +219,40 @@
       }
     });
 
-    for (const btn of document.querySelectorAll("#bar button")) {
+    const closeMore = () => {
+      $("morePanel").hidden = true;
+      $("more").setAttribute("aria-expanded", "false");
+    };
+    for (const btn of document.querySelectorAll("#app button")) {
       // mousedown + preventDefault keeps the text selection alive in the block.
       btn.addEventListener("mousedown", (e) => e.preventDefault());
     }
     for (const btn of formatButtons) {
-      btn.addEventListener("click", () => { editor?.format(btn.dataset.fmt); syncFormatState(); });
+      btn.addEventListener("click", () => {
+        editor?.format(btn.dataset.fmt);
+        syncFormatState();
+        if (btn.closest("#morePanel")) closeMore();
+      });
     }
+    $("more").addEventListener("click", () => {
+      const willOpen = $("morePanel").hidden;
+      $("morePanel").hidden = !willOpen;
+      $("more").setAttribute("aria-expanded", String(willOpen));
+    });
+    for (const btn of document.querySelectorAll("#morePanel [data-size]")) {
+      btn.addEventListener("click", () => { editor?.setFontSize(Number(btn.dataset.size)); closeMore(); });
+    }
+    for (const btn of document.querySelectorAll("#morePanel [data-align]")) {
+      btn.addEventListener("click", () => { editor?.setAlignment(btn.dataset.align); closeMore(); });
+    }
+    for (const btn of document.querySelectorAll("#morePanel [data-list]")) {
+      btn.addEventListener("click", () => { editor?.toggleList(btn.dataset.list); closeMore(); });
+    }
+    for (const btn of document.querySelectorAll("#morePanel [data-indent]")) {
+      btn.addEventListener("click", () => { editor?.indent(Number(btn.dataset.indent)); closeMore(); });
+    }
+    $("insertTable").addEventListener("click", () => { editor?.insertTable(2, 2); closeMore(); });
+    $("insertRule").addEventListener("click", () => { editor?.insertHorizontalRule(); closeMore(); });
     $("undo").addEventListener("click", () => { editor?.undo(); syncFormatState(); });
     $("redo").addEventListener("click", () => { editor?.redo(); syncFormatState(); });
     document.addEventListener("selectionchange", () => {

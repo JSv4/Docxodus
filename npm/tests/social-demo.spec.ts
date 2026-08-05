@@ -19,14 +19,20 @@ async function formattingState(page: Page, anchor: string, text: string) {
   return page.evaluate(({ anchor, text }) => {
     const block = Array.from(document.querySelectorAll<HTMLElement>('#doc [data-anchor]'))
       .find((candidate) => candidate.getAttribute('data-anchor') === anchor);
-    if (!block) return { found: false, bold: false, italic: false, textPreserved: false };
+    if (!block) return {
+      found: false, bold: false, italic: false, strike: false, fontSize: 0,
+      alignment: '', textPreserved: false,
+    };
     const elements = [block, ...Array.from(block.querySelectorAll<HTMLElement>('*'))];
     const bold = elements.some((element) => {
       const weight = getComputedStyle(element).fontWeight;
       return weight === 'bold' || Number.parseInt(weight, 10) >= 600;
     });
     const italic = elements.some((element) => getComputedStyle(element).fontStyle === 'italic');
-    return { found: true, bold, italic, textPreserved: block.textContent?.trim() === text };
+    const strike = elements.some((element) => getComputedStyle(element).textDecorationLine.includes('line-through'));
+    const fontSize = Math.max(...elements.map((element) => Number.parseFloat(getComputedStyle(element).fontSize)));
+    const alignment = getComputedStyle(block).textAlign;
+    return { found: true, bold, italic, strike, fontSize, alignment, textPreserved: block.textContent?.trim() === text };
   }, { anchor, text });
 }
 
@@ -51,6 +57,18 @@ async function selectUnformattedBlock(page: Page) {
       text: block.textContent?.trim() ?? '',
     };
   });
+}
+
+async function reselectBlock(page: Page, anchor: string) {
+  await page.evaluate((anchor) => {
+    const block = document.querySelector<HTMLElement>(`#doc [data-anchor="${CSS.escape(anchor)}"]`);
+    if (!block) throw new Error(`Block ${anchor} was not remounted`);
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, anchor);
 }
 
 test.describe('social demo pages', () => {
@@ -81,6 +99,14 @@ test.describe('social demo pages', () => {
     await page.locator('#redo').click();
     await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).bold).toBe(true);
 
+    // The compact surface keeps advanced controls in a 4 × 3 overflow palette.
+    await reselectBlock(page, result.anchor);
+    await page.locator('#more').click();
+    await expect(page.locator('#morePanel')).toBeVisible();
+    await page.locator('#morePanel [data-fmt="strike"]').click();
+    await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).strike).toBe(true);
+    await expect(page.locator('#morePanel')).toBeHidden();
+
     const downloadPromise = page.waitForEvent('download');
     await page.locator('#dl').click();
     const download = await downloadPromise;
@@ -104,6 +130,15 @@ test.describe('social demo pages', () => {
       found: true, italic: true, textPreserved: true,
     });
 
+    await page.locator('#fontSize').selectOption('18');
+    await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).fontSize).toBeGreaterThanOrEqual(23);
+    await page.locator('#alignment').selectOption('center');
+    await expect.poll(async () => (await formattingState(page, result.anchor, result.text)).alignment).toBe('center');
+
+    const tableCount = await page.locator('#doc table').count();
+    await page.locator('#insertTable').click();
+    await expect(page.locator('#doc table')).toHaveCount(tableCount + 1);
+
     await page.locator('#pages').click();
     await expect(page.locator('#pages')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#doc #pagination-container')).toBeVisible();
@@ -114,14 +149,22 @@ test.describe('social demo pages', () => {
     await page.locator('#dl').click();
     expect((await downloadPromise).suggestedFilename()).toBe('docxodus-demo.docx');
 
-    // The share-card meta X and LinkedIn read must be present and absolute.
+    // X and LinkedIn get an honest link preview. X no longer documents the
+    // historical Player Card, so the live player remains a website iframe.
     const meta = await page.evaluate(() => ({
       card: document.querySelector('meta[name="twitter:card"]')?.getAttribute('content'),
       player: document.querySelector('meta[name="twitter:player"]')?.getAttribute('content'),
       ogImage: document.querySelector('meta[property="og:image"]')?.getAttribute('content'),
     }));
-    expect(meta.card).toBe('player');
-    expect(meta.player).toMatch(/^https:\/\/.+player\.html$/);
+    expect(meta.card).toBe('summary_large_image');
+    expect(meta.player).toBeUndefined();
     expect(meta.ogImage).toMatch(/^https:\/\//);
+
+    // The page explains both supported embedding modes and supplies code that
+    // is pinned to the release instead of a mutable latest URL.
+    await page.locator('#openEmbed').click();
+    await expect(page.locator('#embedDialog')).toBeVisible();
+    await expect(page.locator('#iframeCode')).toContainText('/demo/player.html');
+    await expect(page.locator('#moduleCode')).toContainText(RELEASE_ENGINE);
   });
 });

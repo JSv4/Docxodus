@@ -10,11 +10,10 @@
   <!--
     Share THIS page's URL on social platforms.
 
-    `twitter:player` points at player.html for clients that still honor the
-    historical Player Card format. X no longer documents that format, so an
-    in-post iframe is experimental and must not be the only access path.
-    LinkedIn and ordinary X clients render/link this landing page instead;
-    LinkedIn uses the og:image/title/description card.
+    X no longer documents its historical Player Card format, so this page uses
+    a large-image link card instead of promising an in-post iframe. LinkedIn
+    and X both render/link this landing page; websites can embed player.html
+    directly with the iframe supplied by the on-page Embed dialog.
 
     Hosting: enable GitHub Pages (Settings → Pages → GitHub Actions) and
     the repository's static Pages workflow serves this page at
@@ -27,14 +26,11 @@
   <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/" />
   <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
 
-  <meta name="twitter:card" content="player" />
+  <meta name="twitter:card" content="summary_large_image" />
   <!-- Set to the maintainer's handle before sharing; some clients want it present. -->
   <!-- <meta name="twitter:site" content="@yourhandle" /> -->
   <meta name="twitter:title" content="Docxodus — a Word-document engine in your browser" />
-  <meta name="twitter:description" content="A live .docx editor inside this tweet. WebAssembly, no server, lossless output." />
-  <meta name="twitter:player" content="https://jsv4.github.io/Docxodus/demo/player.html" />
-  <meta name="twitter:player:width" content="480" />
-  <meta name="twitter:player:height" content="480" />
+  <meta name="twitter:description" content="Open a live .docx editor powered by WebAssembly—no server, lossless output." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
 
   <style>
@@ -124,7 +120,8 @@
     .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
     .hero-button { display: inline-flex; align-items: center; gap: 10px; padding: 12px 17px;
       border: 1px solid rgba(255,255,255,.16); border-radius: 12px; background: rgba(255,255,255,.055);
-      font-size: 13px; font-weight: 730; text-decoration: none; transition: transform .2s, border-color .2s; }
+      color: inherit; font-size: 13px; font-weight: 730; text-decoration: none; cursor: pointer;
+      transition: transform .2s, border-color .2s; }
     .hero-button:hover { transform: translateY(-2px); border-color: rgba(82,229,255,.55); }
     .hero-button.primary { color: #07111f; border-color: transparent; background: linear-gradient(135deg, var(--cyan), #88f7df);
       box-shadow: 0 12px 34px rgba(82,229,255,.18); }
@@ -166,9 +163,9 @@
     .privacy-chip { flex: 0 0 auto; padding: 6px 9px; border: 1px solid rgba(82,224,162,.18); border-radius: 999px;
       color: #9be9c7; background: rgba(82,224,162,.07); font-size: 10.5px; font-weight: 720; }
 
-    #bar { display: flex; align-items: center; gap: 5px; min-height: 52px; padding: 7px 10px;
-      color: #27374a; background: rgba(255,255,255,.96); border-bottom: 1px solid #dce4ed; }
-    .tool-group { display: flex; align-items: center; gap: 4px; }
+    #bar { display: flex; align-items: center; gap: 5px; min-height: 52px; padding: 7px 10px; overflow-x: auto;
+      color: #27374a; background: rgba(255,255,255,.96); border-bottom: 1px solid #dce4ed; scrollbar-width: thin; }
+    .tool-group { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; }
     .tool-divider { width: 1px; height: 25px; margin: 0 4px; background: #dce4ed; }
     .tool { min-width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
       padding: 0 10px; border: 1px solid transparent; border-radius: 9px; color: #33465b; background: transparent;
@@ -177,6 +174,10 @@
     .tool:focus-visible { outline: 3px solid rgba(61,132,255,.24); outline-offset: 1px; }
     .tool[aria-pressed="true"] { color: #174ca7; background: #e5efff; border-color: #bfd4ff; }
     .tool:disabled { opacity: .38; cursor: wait; }
+    .tool-select { flex: 0 0 auto; height: 36px; padding: 0 27px 0 10px; border: 1px solid #d8e3ef;
+      border-radius: 9px; color: #33465b; background: #f8fbff; font-size: 11px; font-weight: 700; cursor: pointer; }
+    .tool-select:focus-visible { outline: 3px solid rgba(61,132,255,.24); outline-offset: 1px; }
+    .tool-select:disabled { opacity: .38; cursor: wait; }
     .tool.primary { margin-left: auto; padding: 0 15px; color: #fff; background: linear-gradient(135deg, #255fe8, #794fe9);
       border-color: transparent; box-shadow: 0 8px 20px rgba(64,78,218,.2); }
     .tool.primary:hover:not(:disabled) { color: #fff; background: linear-gradient(135deg, #3470fa, #8a61f7); border-color: transparent; }
@@ -250,6 +251,29 @@
     footer { padding: 0 20px 44px; text-align: center; color: #667f9b; font-size: 11px; }
     footer a { color: #91a9c5; }
 
+    #embedDialog { width: min(720px, calc(100% - 28px)); max-height: min(720px, calc(100vh - 28px));
+      padding: 0; overflow: auto; border: 1px solid rgba(159,185,216,.24); border-radius: 20px;
+      color: var(--text); background: linear-gradient(145deg, #101f33, #081422); box-shadow: 0 30px 100px rgba(0,0,0,.65); }
+    #embedDialog::backdrop { background: rgba(2,8,16,.76); backdrop-filter: blur(8px); }
+    .embed-inner { padding: clamp(22px, 5vw, 34px); }
+    .embed-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .embed-kicker { color: var(--cyan); font-size: 10px; font-weight: 850; letter-spacing: .15em; text-transform: uppercase; }
+    .embed-head h2 { margin: 8px 0 0; font-size: clamp(24px, 5vw, 35px); letter-spacing: -.045em; }
+    .dialog-close { width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 9px;
+      color: #a9bad0; background: rgba(255,255,255,.05); font-size: 19px; cursor: pointer; }
+    .embed-intro { margin: 14px 0 21px; color: #9db0c7; font-size: 13px; line-height: 1.6; }
+    .embed-option { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 14px;
+      background: rgba(255,255,255,.035); }
+    .embed-option-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    .embed-option strong { font-size: 13px; }
+    .copy-button { padding: 7px 10px; border: 1px solid rgba(82,229,255,.25); border-radius: 8px;
+      color: var(--cyan); background: rgba(82,229,255,.07); font-size: 10px; font-weight: 800; cursor: pointer; }
+    .embed-code { margin: 0; padding: 13px; overflow-x: auto; border-radius: 9px; color: #cde7ff;
+      background: #050d17; font: 10.5px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+    .social-note { display: flex; gap: 11px; margin-top: 18px; padding: 14px; border: 1px solid rgba(178,108,255,.18);
+      border-radius: 12px; color: #9db0c7; background: rgba(178,108,255,.055); font-size: 11.5px; line-height: 1.55; }
+    .social-note strong { color: #d9c4ff; }
+
     @keyframes orbit-spin { to { transform: rotate(360deg); } }
     @keyframes document-float { 0%,100% { transform: translateY(-5px) rotate(-2deg); } 50% { transform: translateY(7px) rotate(1deg); } }
     @keyframes chip-float { 0%,100% { transform: translateY(-4px); } 50% { transform: translateY(5px); } }
@@ -275,7 +299,6 @@
       .capability-stack { min-height: 290px; }
       .workspace-head { align-items: flex-start; flex-direction: column; gap: 8px; }
       .privacy-chip { display: none; }
-      #bar { overflow-x: auto; }
       .tool-label, #actionStatus { display: none; }
       .tool.primary { margin-left: auto; }
       #canvas, #doc { min-height: 560px; }
@@ -311,6 +334,7 @@
           <p class="hero-copy">Render, edit, redline, and save real DOCX documents with .NET-grade OOXML fidelity—entirely inside the browser via WebAssembly.</p>
           <div class="hero-actions">
             <a class="hero-button primary" href="#live-editor">Try the live editor <span aria-hidden="true">↘</span></a>
+            <button class="hero-button" id="openEmbed" type="button">Embed it <span aria-hidden="true">&lt;/&gt;</span></button>
             <a class="hero-button" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">View source <span aria-hidden="true">↗</span></a>
           </div>
           <div class="proof-row" aria-label="Key guarantees">
@@ -356,11 +380,35 @@
           <button class="tool" data-fmt="bold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false" disabled><strong>B</strong></button>
           <button class="tool" data-fmt="italic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false" disabled><em>I</em></button>
           <button class="tool" data-fmt="underline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false" disabled><u>U</u></button>
+          <button class="tool" data-fmt="strike" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false" disabled><s>S</s></button>
+          <button class="tool" data-fmt="superscript" title="Superscript" aria-label="Superscript" aria-pressed="false" disabled>x<sup>2</sup></button>
+          <button class="tool" data-fmt="subscript" title="Subscript" aria-label="Subscript" aria-pressed="false" disabled>x<sub>2</sub></button>
+          <select class="tool-select" id="fontSize" title="Font size" aria-label="Font size" disabled>
+            <option value="10">10 pt</option><option value="12" selected>12 pt</option><option value="14">14 pt</option>
+            <option value="18">18 pt</option><option value="24">24 pt</option><option value="32">32 pt</option>
+          </select>
         </div>
         <span class="tool-divider" aria-hidden="true"></span>
         <div class="tool-group">
           <button class="tool" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><span aria-hidden="true">↶</span><span class="tool-label">Undo</span></button>
           <button class="tool" id="redo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><span aria-hidden="true">↷</span><span class="tool-label">Redo</span></button>
+        </div>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <div class="tool-group">
+          <select class="tool-select" id="alignment" title="Paragraph alignment" aria-label="Paragraph alignment" disabled>
+            <option value="left">Align left</option><option value="center">Center</option>
+            <option value="right">Align right</option><option value="justify">Justify</option>
+          </select>
+          <button class="tool" data-list="bullet" title="Bulleted list" aria-label="Bulleted list" disabled>•≡</button>
+          <button class="tool" data-list="decimal" title="Numbered list" aria-label="Numbered list" disabled>1≡</button>
+          <button class="tool" data-indent="-720" title="Decrease indent" aria-label="Decrease indent" disabled>⇤</button>
+          <button class="tool" data-indent="720" title="Increase indent" aria-label="Increase indent" disabled>⇥</button>
+        </div>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <div class="tool-group">
+          <button class="tool" id="insertTable" title="Insert 2 × 2 table" aria-label="Insert table" disabled>▦</button>
+          <button class="tool" id="insertRule" title="Insert horizontal rule" aria-label="Insert horizontal rule" disabled>―</button>
+          <button class="tool" id="insertFootnote" title="Insert footnote" aria-label="Insert footnote" disabled>¹</button>
         </div>
         <span class="tool-divider" aria-hidden="true"></span>
         <button class="tool" id="pages" title="Toggle paginated view" aria-label="Toggle paginated view" aria-pressed="false" disabled><span aria-hidden="true">▱</span><span class="tool-label">Pages</span></button>
@@ -404,6 +452,25 @@
   <footer>Engine delivered by <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a> from
     <a href="https://www.npmjs.com/package/docxodus">docxodus@9.1.0</a>. Everything runs client-side.</footer>
 
+  <dialog id="embedDialog" aria-labelledby="embedTitle">
+    <div class="embed-inner">
+      <div class="embed-head">
+        <div><div class="embed-kicker">Two ways to ship it</div><h2 id="embedTitle">Put Docxodus anywhere.</h2></div>
+        <button class="dialog-close" id="closeEmbed" type="button" aria-label="Close embed dialog">×</button>
+      </div>
+      <p class="embed-intro">Use the compact hosted player for a zero-build embed, or import the editor module when you want complete control over the surrounding product.</p>
+      <section class="embed-option">
+        <div class="embed-option-head"><strong>Drop-in iframe · 480 × 480</strong><button class="copy-button" id="copyIframe" type="button">Copy iframe</button></div>
+        <pre class="embed-code"><code id="iframeCode"></code></pre>
+      </section>
+      <section class="embed-option">
+        <div class="embed-option-head"><strong>Native JavaScript · bring your own container</strong><button class="copy-button" id="copyModule" type="button">Copy module</button></div>
+        <pre class="embed-code"><code id="moduleCode"></code></pre>
+      </section>
+      <div class="social-note"><span aria-hidden="true">✦</span><span><strong>Sharing on X / LinkedIn:</strong> paste the demo URL, not iframe HTML. Social feeds decide the card presentation and normally open this live page on click; websites you control can render the iframe directly.</span></div>
+    </div>
+  </dialog>
+
   <script type="module">
     const params = new URLSearchParams(location.search);
     const ENGINE = params.get("engine")
@@ -414,8 +481,23 @@
     const $ = (id) => document.getElementById(id);
     const statusbar = $("statusbar");
     const loader = $("loader");
-    const controls = Array.from(document.querySelectorAll("#bar button"));
+    const controls = Array.from(document.querySelectorAll("#bar button, #bar select"));
     const formatButtons = Array.from(document.querySelectorAll("#bar [data-fmt]"));
+    const iframeSnippet = `<iframe
+  src="https://jsv4.github.io/Docxodus/demo/player.html"
+  width="480" height="480"
+  title="Docxodus live DOCX editor"
+  loading="lazy"
+  sandbox="allow-scripts allow-same-origin allow-downloads"
+  style="border:0;border-radius:18px;overflow:hidden">
+</iframe>`;
+    const moduleSnippet = `<div id="docx-editor"></div>
+<script type="module">
+  import { createEditor } from
+    "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
+
+  await createEditor("#docx-editor", "/documents/example.docx");
+<\/script>`;
     let editor = null;
     let paginated = false;
     let featureTimer = 0;
@@ -485,6 +567,31 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       flashAction("DOCX downloaded locally");
     };
+    const copyText = async (text, button) => {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const area = Object.assign(document.createElement("textarea"), { value: text });
+        area.style.cssText = "position:fixed;opacity:0";
+        document.body.append(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
+      const previous = button.textContent;
+      button.textContent = "Copied!";
+      setTimeout(() => { button.textContent = previous; }, 1500);
+    };
+
+    $("iframeCode").textContent = iframeSnippet;
+    $("moduleCode").textContent = moduleSnippet;
+    $("openEmbed").addEventListener("click", () => $("embedDialog").showModal());
+    $("closeEmbed").addEventListener("click", () => $("embedDialog").close());
+    $("copyIframe").addEventListener("click", (event) => copyText(iframeSnippet, event.currentTarget));
+    $("copyModule").addEventListener("click", (event) => copyText(moduleSnippet, event.currentTarget));
+    $("embedDialog").addEventListener("click", (event) => {
+      if (event.target === $("embedDialog")) $("embedDialog").close();
+    });
 
     for (const button of document.querySelectorAll("#bar button")) {
       button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -496,6 +603,29 @@
         flashAction(`${button.getAttribute("aria-label")} toggled`);
       });
     }
+    $("fontSize").addEventListener("change", () => {
+      editor?.setFontSize(Number($("fontSize").value));
+      flashAction(`${$("fontSize").value} pt applied`);
+    });
+    $("alignment").addEventListener("change", () => {
+      editor?.setAlignment($("alignment").value);
+      flashAction(`${$("alignment").selectedOptions[0].textContent} applied`);
+    });
+    for (const button of document.querySelectorAll("#bar [data-list]")) {
+      button.addEventListener("click", () => {
+        editor?.toggleList(button.dataset.list);
+        flashAction(button.dataset.list === "bullet" ? "Bulleted list toggled" : "Numbered list toggled");
+      });
+    }
+    for (const button of document.querySelectorAll("#bar [data-indent]")) {
+      button.addEventListener("click", () => {
+        editor?.indent(Number(button.dataset.indent));
+        flashAction(Number(button.dataset.indent) > 0 ? "Indent increased" : "Indent decreased");
+      });
+    }
+    $("insertTable").addEventListener("click", () => { editor?.insertTable(2, 2); flashAction("2 × 2 table inserted"); });
+    $("insertRule").addEventListener("click", () => { editor?.insertHorizontalRule(); flashAction("Horizontal rule inserted"); });
+    $("insertFootnote").addEventListener("click", () => { editor?.insertFootnote(); flashAction("Footnote inserted"); });
     $("undo").addEventListener("click", () => { editor?.undo(); syncFormatState(); flashAction("Last edit undone"); });
     $("redo").addEventListener("click", () => { editor?.redo(); syncFormatState(); flashAction("Edit restored"); });
     $("pages").addEventListener("click", () => {

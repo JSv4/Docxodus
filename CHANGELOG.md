@@ -7,12 +7,14 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **The social demo now looks and behaves like a product surface.** The main GitHub Pages demo
   has a responsive launch page, animated feature-driven WebAssembly loading state, explicit
-  local-only privacy messaging, and a real editor toolbar for bold/italic/underline, undo/redo,
-  continuous/paginated view, and lossless DOCX download. The compact social-player target gets
-  the same animated feature pitch plus functional format/history/save controls within its
-  480×480 layout. Loading failures remain visible and retryable, motion respects
-  `prefers-reduced-motion`, and `social-demo.spec.ts` now drives formatting, history, pagination,
-  and downloads against the real editor rather than checking decorative UI alone.
+  local-only privacy messaging, and a full compact ribbon for inline formatting, font size,
+  alignment, lists, indentation, table/rule/footnote insertion, history, pagination, and lossless
+  DOCX download. A copy-ready embed dialog documents both hosted iframe and native module usage.
+  The compact social-player target gets the same animated feature pitch plus a 4×3 overflow
+  palette for advanced controls within its 480×480 layout. Loading failures remain visible and
+  retryable, motion respects `prefers-reduced-motion`, and `social-demo.spec.ts` now drives
+  formatting, history, layout, insertion, pagination, and downloads against the real editor
+  rather than checking decorative UI alone.
 
 ## [9.1.0] - 2026-08-04
 
