@@ -12,7 +12,7 @@ import { test, expect, type Page } from '@playwright/test';
  * wasm-webroot fallback (assets next to the bundle, not under wasm/).
  */
 
-const OVERRIDES = 'engine=./embed.bundle.js&doc=./demo-sample.docx';
+const OVERRIDES = 'engine=./embed.bundle.js&doc=./docxodus-demo-guide.docx';
 const RELEASE_ENGINE = 'docxodus@9.1.0/dist/embed.bundle.js';
 
 async function formattingState(page: Page, anchor: string, text: string) {
@@ -36,17 +36,12 @@ async function formattingState(page: Page, anchor: string, text: string) {
   }, { anchor, text });
 }
 
-async function selectUnformattedBlock(page: Page) {
+async function selectPracticeBlock(page: Page) {
   return page.evaluate(() => {
-    const isBold = (root: HTMLElement) =>
-      [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))].some((element) => {
-        const weight = getComputedStyle(element).fontWeight;
-        return weight === 'bold' || Number.parseInt(weight, 10) >= 600;
-      });
     const block = Array.from(
       document.querySelectorAll<HTMLElement>('#doc [data-anchor][contenteditable="true"]'),
-    ).find((candidate) => (candidate.textContent?.trim().length ?? 0) > 0 && !isBold(candidate));
-    if (!block) throw new Error('No non-bold editable block found');
+    ).find((candidate) => candidate.textContent?.includes('Design is not decoration'));
+    if (!block) throw new Error('The editable style-playground block was not rendered');
     const range = document.createRange();
     range.selectNodeContents(block);
     const selection = window.getSelection()!;
@@ -82,11 +77,12 @@ test.describe('social demo pages', () => {
     await page.click('#start');
     await expect(page.locator('#app')).toBeVisible({ timeout: 45000 });
     expect(await page.locator('#doc [data-anchor]').count()).toBeGreaterThan(0);
+    await expect(page.locator('#doc')).toContainText('Welcome to Docxodus');
 
     // The toolbar drives the real editor: select an initially-normal block,
     // click Bold through the actual button handler, and verify the remounted
     // block now carries bold computed styling.
-    const result = await selectUnformattedBlock(page);
+    const result = await selectPracticeBlock(page);
     expect(result.text.length).toBeGreaterThan(0);
 
     await page.locator('#bar [data-fmt="bold"]').click();
@@ -121,10 +117,11 @@ test.describe('social demo pages', () => {
     await expect(page.locator('#status')).toContainText(/live/i, { timeout: 45000 });
     await expect(page.locator('#loader')).toBeHidden();
     expect(await page.locator('#doc [data-anchor]').count()).toBeGreaterThan(0);
+    await expect(page.locator('#doc')).toContainText('Welcome to Docxodus');
 
     // Main-page controls are not decorative: formatting, page view, and save all
     // call the live DocxEditor instance.
-    const result = await selectUnformattedBlock(page);
+    const result = await selectPracticeBlock(page);
     await page.locator('#bar [data-fmt="italic"]').click();
     expect(await formattingState(page, result.anchor, result.text)).toMatchObject({
       found: true, italic: true, textPreserved: true,

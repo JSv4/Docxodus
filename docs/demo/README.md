@@ -1,8 +1,9 @@
 # Social demo setup
 
 These pages are static and require no application server. They load the pinned
-`docxodus@9.1.0` embed bundle from jsDelivr and the sample DOCX from
-`raw.githubusercontent.com`.
+`docxodus@9.1.0` embed bundle from jsDelivr and the branded product guide from
+the same GitHub Pages directory. Regenerate that document with
+`python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
@@ -13,7 +14,7 @@ These pages are static and require no application server. They load the pinned
    running Jekyll.
 3. Open `https://jsv4.github.io/Docxodus/demo/` and verify the status becomes `live`.
 4. If the site is hosted anywhere else, update the absolute `og:url`, `og:image`,
-   `twitter:player`, and `twitter:image` values in `index.html` before sharing.
+   and `twitter:image` values in `index.html` before sharing.
 
 Both pages accept query overrides for local or preview testing:
 
@@ -25,8 +26,8 @@ Both pages accept query overrides for local or preview testing:
 
 - LinkedIn uses the landing page's Open Graph title, description, and image. It
   does not run the editor inside the feed; the user clicks through to the live page.
-- `twitter:player` is experimental. X no longer documents Player Cards and may
-  show only a normal link/card or ignore the player metadata. `player.html` is a
-  progressive enhancement, never the only route to the demo.
+- X receives a `summary_large_image` link card. Its current developer docs no
+  longer document historical Player Cards, so the page does not promise an
+  interactive editor inside a post. `player.html` is for iframe-capable sites.
 - The Playwright specs validate the static metadata, boot-on-tap behavior, and
   live editor locally. They cannot prove how an external social client will render a post.

@@ -6,16 +6,15 @@
   <title>Docxodus — live DOCX editor</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
   <!--
-    Experimental X/Twitter Player Card target. The page is sized for the
-    historical ~480x480 player iframe and boots on tap, but X no longer
-    documents Player Cards and may ignore `twitter:player` entirely. Treat the
-    ordinary landing-page link as the supported path. Hosting remains just
-    GitHub Pages: the engine streams from jsDelivr and the sample document from
-    raw.githubusercontent.com (both serve CORS `*`).
+    Compact website-embed target. The page is sized for a 480x480 iframe and
+    boots on tap. X no longer documents its historical Player Cards, so social
+    posts link to the ordinary landing page instead. Hosting remains static:
+    the engine streams from jsDelivr and the sample document comes from the
+    same GitHub Pages directory.
 
     Query overrides (used by tests and local dev):
       ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.1.0
-      ?doc=<docx URL>                        default: repo sample via raw.githubusercontent
+      ?doc=<docx URL>                        default: local branded product guide
   -->
   <style>
     :root { color-scheme: dark; --cyan: #52e5ff; --blue: #5c7cff; --violet: #b26cff;
@@ -158,7 +157,7 @@
     const ENGINE = params.get("engine")
       ?? "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
     const DOC = params.get("doc")
-      ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
+      ?? "./docxodus-demo-guide.docx";
 
     const $ = (id) => document.getElementById(id);
     const status = (text, progress) => {

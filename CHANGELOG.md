@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **The live demo now opens a purpose-built Docxodus product guide instead of a generic test
+  fixture.** The four-page, branded DOCX teaches users through editable practice copy, control
+  walkthroughs, a feature-preservation matrix, architecture/privacy callouts, and copyable embed
+  examples while showcasing styles, shaded tables, lists, links, headers, footers, and pagination.
+  `tools/generate-demo-guide.py` keeps the committed binary reproducible, and both demo surfaces
+  load the guide from their own GitHub Pages origin.
 - **The social demo now looks and behaves like a product surface.** The main GitHub Pages demo
   has a responsive launch page, animated feature-driven WebAssembly loading state, explicit
   local-only privacy messaging, and a full compact ribbon for inline formatting, font size,
