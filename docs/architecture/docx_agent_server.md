@@ -321,13 +321,16 @@ sequence stays intact), `set_level`, `remove`, `get_membership`. `listFormat` ac
 `upperRoman`, plus the `*Parenthesis` variants of the numbered formats (`decimalParenthesis` →
 `(1)`, `lowerRomanParenthesis` → `(i)` — the legal-drafting presets) and `none` (issue #313).
 
-### `docxodus_comment` — native Word review comments (issues #300 and #317)
+### `docxodus_comment` — native Word review comments (issues #300, #317, and #341)
 
 `add`/`reply`/`resolve`/`update`/`remove`/`list` over `DocxSession`'s comment API — real
 `w:comment` markup with `w:commentRangeStart`/`End` + `w:commentReference` body plumbing,
-visible in Word/Google Docs/LibreOffice's Reviewing pane. `add` targets a body paragraph
-(`anchorId` + optional `span`; required `author`, optional `initials`/`date` — `w:date` is
-written only when provided, keeping output deterministic). `reply` takes the parent
+visible in Word/Google Docs/LibreOffice's Reviewing pane. `add` requires exactly one target:
+a body paragraph (`anchorId` + optional `span`) or a tracked change from
+`docxodus_track_changes list` (`revisionId`; `span` is not accepted). Revision targeting brackets
+the change's live extent, preserving the comment as an anchored range or collapsed point after
+accept/reject. Both forms require `author`; `initials`/`date` are optional and `w:date` is written
+only when provided, keeping output deterministic. `reply` takes the parent
 definition's `commentAnchorId`, gives the reply its own definition/id plus an adjacent reference,
 and links it with Word's `w15:paraIdParent` metadata; only the thread root owns range markers,
 so nested replies inherit that range through reference-only parents. `resolve` addresses
@@ -364,6 +367,12 @@ not retroactively track prior direct edits). The response echoes the now-current
 action existed, flipping the mode meant `docxodus_save` → `docxodus_close` → `docxodus_open`
 (and, without `persistAnchorIds`, losing every anchor id at that boundary); that dance is no
 longer needed for mode switching.
+
+Once a mutation actually emits native revision markup, the session also enables
+`w:trackRevisions` in `settings.xml` (creating the part when absent), so Word keeps tracking later
+interactive edits. This setting is distinct from display: `docxodus_get_content(format: "html")`
+always renders pending markup as `<ins>`/`<del>`; accepting or rejecting it requires an explicit
+track-changes action.
 
 `list` (issue #318) reads the revision set directly off the live session's markup —
 `DocxSession.ListRevisions` enumerates `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`, paragraph-mark

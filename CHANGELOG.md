@@ -23,6 +23,69 @@ All notable changes to this project will be documented in this file.
   (both transports, 23 checks) plus a Chromium harness validating the widget against a
   spec-faithful fake host. See `docs/architecture/docx_agent_server.md` ("Inline preview").
 
+### Fixed
+- **MCP HTML preserves native tracked changes.** Full and anchored MCP HTML reads now emit pending
+  revisions as `<ins>`/`<del>` instead of implicitly accepting them on the renderer's throwaway
+  document. The shared full, single-block, and batched session render paths expose one consistent
+  review-mode option, without changing the browser editor's clean editing profile. Every
+  newly-authored native revision also enables Word's schema-ordered
+  `w:trackRevisions` setting (creating `settings.xml` when needed), so Word continues tracking
+  subsequent interactive edits. Coverage: DS408 and MCP140.
+
+### Added
+- **Embeddable viewer/editor via CDN — `docxodus/embed` (npm).** The published package was
+  already CDN-servable (jsDelivr/unpkg expose `dist/` with CORS `*`, `application/wasm` MIME, and
+  the `credentials:"omit"` loader patch), but embedding the *editor* still required hand-booting
+  `dotnet.js` and assembling the exports object. The new `embed` entry closes that gap with two
+  one-call factories: `createViewer(container, source, options?)` (read-only render, converter
+  stylesheet + body injected into the container, footnotes on by default) and
+  `createEditor(container, source?, options?)` (full `DocxEditor`; no source opens a blank
+  document). `source` is a URL string, `Uint8Array`, `ArrayBuffer`, `Blob`, or `File`. Ships in
+  three shapes: `dist/embed.js` (plain ESM for bundler users via `docxodus/embed`, shares module
+  state with the main entry), `dist/embed.bundle.js` (self-contained ESM for one-tag CDN
+  `<script type="module">`, re-exports the entire main API), and `dist/embed.iife.js` (classic
+  script, global `Docxodus`). WASM assets auto-resolve from the bundle's own location —
+  `import.meta.url` for the ESM shapes, `document.currentScript` for the IIFE — probing
+  `<dir>/wasm/` (package/CDN layout) then `<dir>/` (wasm-webroot layout), with an explicit
+  `wasmBasePath` option override. Supporting fixes: `initialize()` now clears its cached promise
+  on failure so a retry with a different base path is possible (a rejected first attempt used to
+  be permanent), and the raw bridge exports are available via `getWasmExports()` (what
+  `DocxEditor.open` needs). Each factory mounts into a private inner root and CSSOM-scopes the
+  converter stylesheet to that root, so broad document selectors (`body`, `span`, document
+  classes) cannot restyle the host page; unscopable document-global `@import`/`@page` rules are
+  omitted. New `examples/embed.html` demo; Playwright coverage in
+  `tests/cdn-embed.spec.ts` drives every shape from a second CORS-enabled origin
+  (`tests/cors-server.py`) so the cross-origin module import, `_framework` asset fetches, and
+  auto-detection are exercised in the exact jsDelivr shape — including a real edit/save/reopen
+  round trip and host-style isolation from a page that serves no wasm assets at all.
+- **Design stub: browser-LLM redlining demo** — `docs/architecture/browser_llm_demo.md`
+  captures the "AI redlines a contract entirely in the browser" demo design (markdown-projection
+  anchors as the LLM's edit contract, `TrackedChanges: RenderInline` so edits land as native
+  revisions, Chrome Prompt API / BYO-key Claude / WebLLM transport options). Stub only — nothing
+  implemented, no engine changes expected.
+- **Social-embed demo pages — `docs/demo/`** (GitHub Pages-ready: Settings → Pages → main,
+  folder `/docs`). `index.html` is the shareable landing page carrying `og:*` meta (LinkedIn's
+  card) plus `twitter:card=player` meta pointing at `player.html`, a ~480×480 boot-on-tap editor
+  designed for the historical X/Twitter Player Card iframe — engine from jsDelivr
+  (`docxodus@9.1.0`), sample document from `raw.githubusercontent.com`,
+  nothing self-hosted. Both accept `?engine=`/`?doc=` overrides, which
+  `tests/social-demo.spec.ts` uses to drive them fully locally (also exercising the embed
+  bundle's wasm-webroot fallback layout). X no longer documents Player Cards, so iframe rendering
+  is explicitly experimental and the ordinary landing-page link is the supported path; local
+  tests validate metadata and page behavior, not X's external rendering. LinkedIn never renders
+  third-party JS, so the card + one click is its ceiling.
+- **Comments can target tracked revisions by id (issue #341).**
+  `DocxSession.AddCommentToRevision(revisionId, author, markdown, ...)` brackets the exact live
+  insertion, deletion, move-destination, or formatting extent returned by `ListRevisions()`.
+  Comment markers sit outside revision wrappers, so selectively accepting or rejecting the
+  change preserves the comment: its range stays on surviving content or collapses to a point
+  when the content disappears, including a selectively removed table row. Unknown and
+  already-resolved ids return the existing `RevisionNotFound` error. The mutually-exclusive
+  `anchorId`/`revisionId` target is available
+  through WASM/npm (`addCommentToRevision`), stdio/docx-scalpel
+  (`add_comment_to_revision`), and MCP `docxodus_comment add`. Coverage: DS410–DS417,
+  MCP138, browser revision-session tests, and Python comment tests.
+
 ## [9.0.0] - 2026-08-03
 
 ### Changed

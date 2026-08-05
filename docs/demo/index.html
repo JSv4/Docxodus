@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docxodus — Word documents in the browser, no server</title>
+  <meta name="description" content="Render, edit, and redline .docx files entirely in the browser via WebAssembly. Try the live editor." />
+
+  <!--
+    Share THIS page's URL on social platforms.
+
+    `twitter:player` points at player.html for clients that still honor the
+    historical Player Card format. X no longer documents that format, so an
+    in-post iframe is experimental and must not be the only access path.
+    LinkedIn and ordinary X clients render/link this landing page instead;
+    LinkedIn uses the og:image/title/description card.
+
+    Hosting: enable GitHub Pages (Settings → Pages → Deploy from a branch →
+    main, folder /docs) and this page serves at
+    https://jsv4.github.io/Docxodus/demo/ — which is what the absolute URLs
+    below assume. Adjust them if hosting elsewhere.
+  -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Docxodus — a Word-document engine in your browser" />
+  <meta property="og:description" content="Render, edit, and redline .docx files entirely client-side via WebAssembly. This page IS the demo — the editor below is live." />
+  <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+
+  <meta name="twitter:card" content="player" />
+  <!-- Set to the maintainer's handle before sharing; some clients want it present. -->
+  <!-- <meta name="twitter:site" content="@yourhandle" /> -->
+  <meta name="twitter:title" content="Docxodus — a Word-document engine in your browser" />
+  <meta name="twitter:description" content="A live .docx editor inside this tweet. WebAssembly, no server, lossless output." />
+  <meta name="twitter:player" content="https://jsv4.github.io/Docxodus/demo/player.html" />
+  <meta name="twitter:player:width" content="480" />
+  <meta name="twitter:player:height" content="480" />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f2f4f7; color: #17202a; }
+    header { padding: 34px 24px 26px; text-align: center; background: #101418; color: #e8ecf1; }
+    header h1 { font-size: 26px; margin: 0 0 8px; }
+    header p { margin: 0 auto; max-width: 560px; color: #9aa7b4; font-size: 15px; line-height: 1.5; }
+    header nav { margin-top: 14px; display: flex; gap: 10px; justify-content: center; }
+    header a { color: #8db4f2; font-size: 13px; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    #stage { max-width: 880px; margin: 22px auto 40px; padding: 0 16px; }
+    #frame { background: #fff; border: 1px solid #d6dce4; border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(16, 20, 24, .08); overflow: hidden; }
+    #statusbar { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+      border-bottom: 1px solid #e2e7ee; background: #f8fafc; font-size: 12.5px; color: #5d6975; }
+    #statusbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #e2a93b; }
+    #statusbar .dot.ready { background: #2f9e62; }
+    #doc { min-height: 480px; max-height: 74vh; overflow: auto; padding: 26px 34px; }
+    footer { text-align: center; font-size: 12px; color: #7c8894; padding-bottom: 30px; }
+    footer a { color: inherit; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Docxodus</h1>
+    <p>Render, edit, and redline Word documents entirely in the browser — .NET-grade OOXML
+       fidelity compiled to WebAssembly. The document below is live: click into it and type.</p>
+    <nav>
+      <a href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://www.npmjs.com/package/docxodus" target="_blank" rel="noopener">npm</a>
+      <a href="./player.html">compact demo</a>
+    </nav>
+  </header>
+
+  <div id="stage">
+    <div id="frame">
+      <div id="statusbar"><span class="dot" id="dot"></span><span id="status">loading engine…</span></div>
+      <div id="doc"></div>
+    </div>
+  </div>
+  <footer>Engine served from <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a>;
+    everything runs client-side — the document never leaves this page.</footer>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const ENGINE = params.get("engine")
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
+    const DOC = params.get("doc")
+      ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
+
+    const status = (t, ready) => {
+      document.getElementById("status").textContent = t;
+      document.getElementById("dot").classList.toggle("ready", !!ready);
+    };
+    try {
+      const mod = await import(ENGINE);
+      status("opening document…");
+      const t0 = performance.now();
+      const editor = await mod.createEditor("#doc", DOC);
+      status(`live — engine booted in ${Math.round(performance.now() - t0)} ms. Edit away; it's all local.`, true);
+      window.__editor = editor; // console plaything
+    } catch (err) {
+      status(String(err).slice(0, 200));
+    }
+  </script>
+</body>
+</html>

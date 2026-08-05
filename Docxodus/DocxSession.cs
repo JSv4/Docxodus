@@ -1735,19 +1735,7 @@ public sealed class DocxSession : IDisposable
 
         // Capture the block anchors the resolution touches BEFORE applying — elements
         // detach during Apply and can no longer be resolved to a part afterwards.
-        var modified = new List<Anchor>();
-        var seenModified = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var u in group.Units)
-        {
-            for (var a = u.Paragraph ?? u.MarkedRow ?? u.Element; a is not null; a = a.Parent)
-            {
-                var unid = (string?)a.Attribute(PtOpenXml.Unid);
-                if (unid is null) continue;
-                if (AnchorForUnid(unid, partUri) is { } anch && seenModified.Add(anch.Id))
-                    modified.Add(anch);
-                break;
-            }
-        }
+        var modified = RevisionGroupAnchors(group, partUri);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -1781,6 +1769,26 @@ public sealed class DocxSession : IDisposable
             _ = _history.PopForUndo();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
+    }
+
+    private List<Anchor> RevisionGroupAnchors(
+        Internal.RevisionOps.RevisionGroup group, string partUri)
+    {
+        var anchors = new List<Anchor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var unit in group.Units)
+        {
+            for (var element = unit.Paragraph ?? unit.MarkedRow ?? unit.Element;
+                element is not null; element = element.Parent)
+            {
+                var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                if (AnchorForUnid(unid, partUri) is { } anchor && seen.Add(anchor.Id))
+                    anchors.Add(anchor);
+                break;
+            }
+        }
+        return anchors;
     }
 
     /// <summary>The story parts revision markup lives in, in the fixed order the
@@ -3586,11 +3594,50 @@ public sealed class DocxSession : IDisposable
         insertionAnchor.AddAfterSelf(insertionEnvelope);
     }
 
-    private XElement CreateRevisionEnvelope(XName name, string author, string date) =>
-        new(name,
+    /// <summary>Create native revision markup and keep Word's document-level recording flag in
+    /// sync. The flag does not make existing revisions render; it tells Word to track subsequent
+    /// interactive edits after the generated document is opened.</summary>
+    private XElement CreateRevisionEnvelope(
+        XName name, string author, string date, params object[] content)
+    {
+        EnsureTrackRevisionsEnabled();
+        var envelope = new XElement(name,
             new XAttribute(W.id, NextRevisionId()),
             new XAttribute(W.author, author),
             new XAttribute(W.date, date));
+        envelope.Add(content);
+        return envelope;
+    }
+
+    private void EnsureTrackRevisionsEnabled()
+    {
+        var main = _doc!.MainDocumentPart
+            ?? throw new InvalidOperationException("document has no main document part");
+        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+        var xDoc = settingsPart.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+        {
+            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+            xDoc.Add(root);
+        }
+
+        if (root.Element(W.trackRevisions) is { } existing)
+        {
+            // Bare CT_OnOff is the canonical enabled form. In particular, do not leave an
+            // inherited w:val="false" in place after this session has emitted a revision.
+            if (existing.Attribute(W.val) is { } disabledOrExplicit)
+            {
+                disabledOrExplicit.Remove();
+                settingsPart.PutXDocument();
+            }
+            return;
+        }
+
+        if (WordprocessingMLUtil.EnsureSettingsChildInOrder(
+                root, new XElement(W.trackRevisions)))
+            settingsPart.PutXDocument();
+    }
 
     /// <summary>Create a text-only run that retains the source run's formatting/rsid
     /// attributes but gets its own internal Unid. <paramref name="textName"/> is
@@ -6218,9 +6265,6 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
-        var main = _doc!.MainDocumentPart;
-        if (main is null)
-            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
 
         var totalText = ParagraphText(element);
         int spanStart, spanLength;
@@ -6242,14 +6286,86 @@ public sealed class DocxSession : IDisposable
                 return EditResult.Fail(EditErrorCode.EmptyCommentSpan, "block has no text to comment", anchorId);
         }
 
-        // Parse the comment body BEFORE snapshotting so a malformed payload is a clean no-op
-        // (no part created, no undo entry pushed).
+        return AddCommentCore(author, markdownPayload, initials, date,
+            placeMarkers: id =>
+            {
+                // Splits route through the same offset mechanism every other span op uses
+                // (AnnotationOps.SplitRunsForSpan).
+                var (startRun, endRun) = Internal.AnnotationOps.SplitRunsForSpan(
+                    element, spanStart, spanLength);
+                InsertCommentMarkers(id, startRun, endRun);
+            },
+            modified: new[] { target.Anchor },
+            patchTarget: target,
+            errorTargetId: anchorId);
+    }
+
+    /// <summary>
+    /// Add a native Word comment anchored to the exact live markup extent of the tracked
+    /// revision named by <paramref name="revisionId"/>. The id is one returned by
+    /// <see cref="ListRevisions"/>; an unknown or already-resolved id fails with
+    /// <see cref="EditErrorCode.RevisionNotFound"/>. Comment markers sit outside revision
+    /// wrappers, so accepting/rejecting leaves the comment on surviving text or collapses its
+    /// range to a point when that text vanishes.
+    /// This is the named revision-target counterpart to the anchor/span
+    /// <see cref="AddComment"/> operation.
+    /// </summary>
+    public EditResult AddCommentToRevision(
+        string revisionId, string author, string markdownPayload,
+        string? initials = null, DateTime? date = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (string.IsNullOrEmpty(revisionId))
+            return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
+
+        _ = AnchorIndex();
+        var parts = RevisionStoryParts();
+        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
+        var group = groups.FirstOrDefault(x => x.Id == revisionId);
+        if (group is null)
+            return EditResult.Fail(EditErrorCode.RevisionNotFound, $"revision not found: {revisionId}");
+
+        var commentTarget = Internal.RevisionOps.CommentTarget(group);
+        if (commentTarget is null)
+            return EditResult.Fail(EditErrorCode.RevisionNotFound,
+                $"revision has no commentable extent: {revisionId}");
+
+        var partUri = parts[group.PartIndex].Part.Uri.ToString();
+        var modified = RevisionGroupAnchors(group, partUri);
+        return AddCommentCore(author, markdownPayload, initials, date,
+            placeMarkers: id =>
+            {
+                if (commentTarget.First is not null && commentTarget.Last is not null)
+                {
+                    InsertCommentMarkers(id, commentTarget.First, commentTarget.Last);
+                    return;
+                }
+
+                var point = commentTarget.PointParagraph
+                    ?? throw new InvalidOperationException("revision comment target has no boundary");
+                InsertPointCommentMarkers(id, point);
+            },
+            modified: modified,
+            patchTarget: null,
+            errorTargetId: null);
+    }
+
+    private EditResult AddCommentCore(
+        string author, string markdownPayload, string? initials, DateTime? date,
+        Action<int> placeMarkers, IReadOnlyList<Anchor> modified,
+        AnchorTarget? patchTarget, string? errorTargetId)
+    {
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", errorTargetId);
+
+        // Parse the body BEFORE snapshotting so malformed payloads are clean no-ops.
         var paras = new List<XElement>();
         if (!string.IsNullOrEmpty(markdownPayload))
         {
             var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
             if (!parsed.Success)
-                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, errorTargetId);
             foreach (var block in parsed.Blocks)
                 paras.Add(BuildParagraphFromParsedBlock(block));
         }
@@ -6262,20 +6378,8 @@ public sealed class DocxSession : IDisposable
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
             var id = Internal.CommentOps.NextCommentId(main);
             var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeMarkers(id);
 
-            // Body plumbing: bracket the span, then the reference run directly after the
-            // rangeEnd — the shape Word writes. Splits route through the same offset
-            // mechanism every other span op uses (AnnotationOps.SplitRunsForSpan).
-            var (startRun, endRun) = Internal.AnnotationOps.SplitRunsForSpan(element, spanStart, spanLength);
-            var rangeStart = new XElement(W.commentRangeStart, new XAttribute(W.id, idStr));
-            var rangeEnd = new XElement(W.commentRangeEnd, new XAttribute(W.id, idStr));
-            startRun.AddBeforeSelf(rangeStart);
-            endRun.AddAfterSelf(rangeEnd);
-            var refRun = Internal.CommentOps.BuildReferenceRun(id);
-            UnidHelper.AssignToSelfAndDescendants(refRun);
-            rangeEnd.AddAfterSelf(refRun);
-
-            // Definition.
             Internal.CommentOps.ApplyCommentBodyStyle(paras);
             var comment = new XElement(W.comment,
                 new XAttribute(W.id, idStr),
@@ -6285,8 +6389,7 @@ public sealed class DocxSession : IDisposable
             if (date.HasValue)
                 comment.SetAttributeValue(W.date, Internal.CommentOps.FormatDate(date.Value));
             foreach (var p in paras) comment.Add(p);
-            var root = part.GetXDocument().Root!;
-            root.Add(comment);
+            part.GetXDocument().Root!.Add(comment);
             UnidHelper.AssignToSelfAndDescendants(comment);
             part.PutXDocument();
 
@@ -6304,16 +6407,38 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Modified = new[] { target.Anchor },
-                Patch = PatchFor(target),
+                Modified = modified,
+                Patch = patchTarget is null ? null : PatchFor(patchTarget),
             };
         }
         catch (Exception ex)
         {
             LastInternalError = ex;
             RestoreSnapshot(_history.PopForUndo().snapshot);
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, errorTargetId);
         }
+    }
+
+    private static void InsertCommentMarkers(int id, XElement first, XElement last)
+    {
+        var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var rangeStart = new XElement(W.commentRangeStart, new XAttribute(W.id, idStr));
+        var rangeEnd = new XElement(W.commentRangeEnd, new XAttribute(W.id, idStr));
+        first.AddBeforeSelf(rangeStart);
+        last.AddAfterSelf(rangeEnd);
+        var refRun = Internal.CommentOps.BuildReferenceRun(id);
+        UnidHelper.AssignToSelfAndDescendants(refRun);
+        rangeEnd.AddAfterSelf(refRun);
+    }
+
+    private static void InsertPointCommentMarkers(int id, XElement paragraph)
+    {
+        var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var rangeStart = new XElement(W.commentRangeStart, new XAttribute(W.id, idStr));
+        var rangeEnd = new XElement(W.commentRangeEnd, new XAttribute(W.id, idStr));
+        var refRun = Internal.CommentOps.BuildReferenceRun(id);
+        UnidHelper.AssignToSelfAndDescendants(refRun);
+        paragraph.Add(rangeStart, rangeEnd, refRun);
     }
 
     /// <summary>
@@ -8469,10 +8594,7 @@ public sealed class DocxSession : IDisposable
         XElement? del = null;
         if (existingRuns.Count > 0)
         {
-            del = new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date));
+            del = CreateRevisionEnvelope(W.del, author, date);
             foreach (var run in existingRuns)
             {
                 run.Remove();
@@ -8490,10 +8612,7 @@ public sealed class DocxSession : IDisposable
         XElement? ins = null;
         if (blocks.Count > 0 && blocks[0].RunElements.Count > 0)
         {
-            ins = new XElement(W.ins,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date));
+            ins = CreateRevisionEnvelope(W.ins, author, date);
             foreach (var run in blocks[0].RunElements)
                 ins.Add(new XElement(run));
         }
@@ -8515,11 +8634,7 @@ public sealed class DocxSession : IDisposable
                 t.ReplaceWith(new XElement(W.delText,
                     new XAttribute(XNamespace.Xml + "space", "preserve"),
                     (string)t));
-            var del = new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date),
-                run);
+            var del = CreateRevisionEnvelope(W.del, author, date, run);
             element.Add(del);
         }
     }
@@ -8552,10 +8667,8 @@ public sealed class DocxSession : IDisposable
         {
             var author = _revisionAuthor ?? "docxodus";
             var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            rPr.Add(new XElement(W.del,
-                new XAttribute(W.id, NextRevisionId()),
-                new XAttribute(W.author, author),
-                new XAttribute(W.date, date)));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, CreateRevisionEnvelope(W.del, author, date));
         }
     }
 
@@ -8580,10 +8693,7 @@ public sealed class DocxSession : IDisposable
             }
             if (trPr.Element(W.del) is null)
             {
-                trPr.Add(new XElement(W.del,
-                    new XAttribute(W.id, NextRevisionId()),
-                    new XAttribute(W.author, author),
-                    new XAttribute(W.date, date)));
+                trPr.Add(CreateRevisionEnvelope(W.del, author, date));
             }
 
             foreach (var cell in row.Elements(W.tc))
@@ -8643,7 +8753,8 @@ public sealed class DocxSession : IDisposable
                 // element when one is "missing" would leave that w:val="0" in place and the
                 // toggle would silently do nothing. Normalize: drop the w:val so the bare
                 // element (<w:b/>) means on; add one only when truly absent.
-                if (existing is null) rPr.Add(new XElement(name));
+                if (existing is null)
+                    WordprocessingMLUtil.InsertRPrChildInOrder(rPr, new XElement(name));
                 else existing.Attribute(W.val)?.Remove();
             }
             else existing?.Remove();
@@ -8656,14 +8767,16 @@ public sealed class DocxSession : IDisposable
         if (op.Underline is true)
         {
             rPr.Element(W.u)?.Remove();
-            rPr.Add(new XElement(W.u, new XAttribute(W.val, "single")));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, new XElement(W.u, new XAttribute(W.val, "single")));
         }
         else if (op.Underline is false) rPr.Element(W.u)?.Remove();
 
         if (op.Code is true)
         {
             rPr.Element(W.rStyle)?.Remove();
-            rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, "Code")));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, new XElement(W.rStyle, new XAttribute(W.val, "Code")));
         }
         else if (op.Code is false) rPr.Element(W.rStyle)?.Remove();
 
@@ -8671,14 +8784,16 @@ public sealed class DocxSession : IDisposable
         {
             rPr.Element(W.color)?.Remove();
             if (op.Color.Length > 0)
-                rPr.Add(new XElement(W.color, new XAttribute(W.val, op.Color)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.color, new XAttribute(W.val, op.Color)));
         }
 
         if (op.RunStyle is not null)
         {
             rPr.Element(W.rStyle)?.Remove();
             if (op.RunStyle.Length > 0)
-                rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
         }
 
         if (op.VertAlign is not null)
@@ -8695,7 +8810,8 @@ public sealed class DocxSession : IDisposable
             {
                 if (v is not ("superscript" or "subscript"))
                     throw new ArgumentException($"invalid vertAlign: {op.VertAlign}");
-                rPr.Add(new XElement(W.vertAlign, new XAttribute(W.val, v)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.vertAlign, new XAttribute(W.val, v)));
             }
         }
 
@@ -8709,16 +8825,16 @@ public sealed class DocxSession : IDisposable
             {
                 var halfPts = ((int)System.Math.Round(pts * 2, System.MidpointRounding.AwayFromZero))
                     .ToString(System.Globalization.CultureInfo.InvariantCulture);
-                rPr.Add(new XElement(W.sz, new XAttribute(W.val, halfPts)));
-                rPr.Add(new XElement(W.szCs, new XAttribute(W.val, halfPts)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.sz, new XAttribute(W.val, halfPts)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.szCs, new XAttribute(W.val, halfPts)));
             }
         }
 
         if (op.FontFamily is not null)
         {
-            // w:rFonts is the first EG_RPrBase child after an optional w:rStyle, so it must be
-            // placed there (a bare rPr.Add would append after w:sz/w:vertAlign → out of schema
-            // order). "" clears the explicit font so the run inherits the style/default.
+            // "" clears the explicit font so the run inherits the style/default.
             rPr.Element(W.rFonts)?.Remove();
             if (op.FontFamily.Length > 0)
             {
@@ -8726,9 +8842,7 @@ public sealed class DocxSession : IDisposable
                     new XAttribute(W.ascii, op.FontFamily),
                     new XAttribute(W.hAnsi, op.FontFamily),
                     new XAttribute(W.cs, op.FontFamily));
-                var rStyle = rPr.Element(W.rStyle);
-                if (rStyle is not null) rStyle.AddAfterSelf(rFonts);
-                else rPr.AddFirst(rFonts);
+                WordprocessingMLUtil.InsertRPrChildInOrder(rPr, rFonts);
             }
         }
     }
@@ -8749,8 +8863,8 @@ public sealed class DocxSession : IDisposable
         var oldProperties = SnapshotRunPropertiesForRevision(originalRPr);
 
         // rPrChange is the final CT_RPr child. Detach it while ApplyFormatToRun edits
-        // properties (several setters append) and re-append it below. Taking only the
-        // first also prevents malformed duplicate markers from becoming nested/stacked.
+        // properties, then reinsert it once below. Taking only the first also prevents
+        // malformed duplicate markers from becoming nested/stacked.
         var existingChanges = originalRPr?.Elements(W.rPrChange).ToList()
             ?? new List<XElement>();
         foreach (var change in existingChanges) change.Remove();
@@ -8796,23 +8910,15 @@ public sealed class DocxSession : IDisposable
             return;
         }
 
-        // ApplyFormatToRun historically appends several properties. Once rPrChange makes
-        // schema validity externally observable, normalize the changed outer rPr to the
-        // canonical CT_RPr order before placing the revision marker last.
-        var orderedRPr = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(currentRPr);
-        currentRPr.ReplaceNodes(orderedRPr.Nodes());
-
         if (existingChange is not null)
         {
-            currentRPr.Add(existingChange);
+            WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
             return;
         }
 
-        currentRPr.Add(new XElement(W.rPrChange,
-            new XAttribute(W.id, NextRevisionId()),
-            new XAttribute(W.author, revisionAuthor),
-            new XAttribute(W.date, revisionDate),
-            oldProperties));
+        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr,
+            CreateRevisionEnvelope(
+                W.rPrChange, revisionAuthor, revisionDate, oldProperties));
     }
 
     /// <summary>

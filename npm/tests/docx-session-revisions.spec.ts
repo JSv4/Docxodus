@@ -85,4 +85,51 @@ test.describe('DocxSession revision review (WASM bridge)', () => {
     expect(result.missingOk).toBe(false);
     expect(result.missingCode).toBe('revision_not_found');
   });
+
+  test('AddCommentToRevision keeps the native comment when the revision resolves', async ({ page }) => {
+    const bytes = readTestFile('HC001-5DayTourPlanTemplate.docx');
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(
+        new Uint8Array(bytesArray),
+        JSON.stringify({ trackedChanges: 'render_inline', revisionAuthor: 'Spec Reviewer' }),
+      );
+      try {
+        const projection = JSON.parse(bridge.Project(handle));
+        const bodyAnchor = Object.keys(projection.anchorIndex).find(
+          (key) => key.startsWith('p:body:') || key.startsWith('h:body:'),
+        )!;
+        JSON.parse(bridge.ReplaceText(handle, bodyAnchor, 'Commented revision.'));
+        const insertion = (JSON.parse(bridge.ListRevisions(handle)) as any[])
+          .find((revision) => revision.type === 'insert');
+
+        const made = JSON.parse(
+          bridge.AddCommentToRevision(
+            handle, insertion.id, 'Alice', 'AL', '', 'Keep this revision.',
+          ),
+        );
+        const rejected = JSON.parse(bridge.RejectRevision(handle, insertion.id));
+        const comments = JSON.parse(bridge.ListComments(handle));
+        const stale = JSON.parse(
+          bridge.AddCommentToRevision(handle, insertion.id, 'Alice', '', '', 'Too late.'),
+        );
+        return {
+          madeSuccess: made.success,
+          createdComment: (made.created ?? []).some((anchor: any) => anchor.kind === 'cmt'),
+          rejectedSuccess: rejected.success,
+          commentText: comments[0]?.text,
+          staleCode: stale.error?.code,
+        };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, Array.from(bytes));
+
+    expect(result.madeSuccess).toBe(true);
+    expect(result.createdComment).toBe(true);
+    expect(result.rejectedSuccess).toBe(true);
+    expect(result.commentText).toBe('Keep this revision.');
+    expect(result.staleCode).toBe('revision_not_found');
+  });
 });

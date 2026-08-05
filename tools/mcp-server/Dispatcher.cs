@@ -127,8 +127,10 @@ internal static class Dispatcher
             case "html":
                 return $"{{\"html\":{JsonRpcIo.JsonString(
                     anchorId is null
-                        ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
-                        : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false))}}}";
+                        ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0,
+                            renderTrackedChanges: true)
+                        : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false,
+                            renderTrackedChanges: true))}}}";
 
             case "blocks":
             {
@@ -420,10 +422,7 @@ internal static class Dispatcher
 
     private static string RunCommentAction(DocSession session, string action, JsonElement args) => action switch
     {
-        "add" => DocxSessionOps.AddComment(
-            session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"),
-            Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"),
-            OptStr(args, "markdown") ?? ""),
+        "add" => AddComment(session, args),
         "reply" => DocxSessionOps.AddCommentReply(
             session.Handle, Str(args, "commentAnchorId"), Str(args, "author"),
             OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown") ?? ""),
@@ -437,6 +436,24 @@ internal static class Dispatcher
     };
 
     private static bool IsMutatingCommentAction(string action) => action != "list";
+
+    private static string AddComment(DocSession session, JsonElement args)
+    {
+        var anchorId = OptStr(args, "anchorId");
+        var revisionId = OptStr(args, "revisionId");
+        var hasSpan = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("span", out _);
+        if ((anchorId is null) == (revisionId is null) || (revisionId is not null && hasSpan))
+            throw new McpToolException(
+                "docxodus_comment add requires exactly one target: anchorId (with optional span) or revisionId");
+
+        return revisionId is not null
+            ? DocxSessionOps.AddCommentToRevision(
+                session.Handle, revisionId, Str(args, "author"), OptStr(args, "initials"),
+                OptStr(args, "date"), OptStr(args, "markdown") ?? "")
+            : DocxSessionOps.AddComment(
+                session.Handle, anchorId!, ParseSpan(args, "span"), Str(args, "author"),
+                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown") ?? "");
+    }
 
     // ─── Annotate (annotation overlay) ─────────────────────────────────
 

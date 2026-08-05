@@ -1120,6 +1120,32 @@ class DocxSession:
             args["date"] = date
         return EditResult._from_wire(self._call("add_comment", args))
 
+    def add_comment_to_revision(
+        self,
+        revision_id: str,
+        author: str,
+        markdown: str,
+        initials: str | None = None,
+        date: str | None = None,
+    ) -> EditResult:
+        """Add a native Word comment around a tracked revision's exact live extent.
+
+        ``revision_id`` comes from :meth:`list_revisions`. Accepting or rejecting the
+        revision keeps the comment anchored to surviving text, or collapses its range to
+        a point when the targeted content vanishes. Unknown and already-resolved ids fail
+        with ``REVISION_NOT_FOUND``.
+        """
+        args: dict[str, Any] = {
+            "revisionId": revision_id,
+            "author": author,
+            "markdown": markdown,
+        }
+        if initials is not None:
+            args["initials"] = initials
+        if date is not None:
+            args["date"] = date
+        return EditResult._from_wire(self._call("add_comment", args))
+
     def update_comment(self, comment_anchor_id: str, markdown: str) -> EditResult:
         """Replace a comment's body text, addressed by its definition anchor (kind
         ``cmt``); the comment's author/initials/date are preserved, as is the last

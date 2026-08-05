@@ -56,6 +56,15 @@ public class DocxSessionSurgicalTrackedChangesTests
         return new XElement(document.MainDocumentPart!.GetXDocument().Root!);
     }
 
+    private static XElement? SettingsRoot(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return document.MainDocumentPart!.DocumentSettingsPart?.GetXDocument().Root is { } root
+            ? new XElement(root)
+            : null;
+    }
+
     private static string AcceptedText(byte[] bytes)
     {
         var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("accepted.docx", bytes));
@@ -122,6 +131,7 @@ public class DocxSessionSurgicalTrackedChangesTests
 
         Assert.Equal("Prefix replacement suffix", AcceptedText(tracked));
         Assert.Equal("Prefix target suffix", RejectedText(tracked));
+        Assert.NotNull(SettingsRoot(tracked)?.Element(W.trackRevisions));
         AssertSchemaValid(tracked);
 
         using (var selectiveAccept = new DocxSession(tracked))
@@ -137,6 +147,32 @@ public class DocxSessionSurgicalTrackedChangesTests
                 Assert.True(selectiveReject.RejectRevision(revision.Id).Success);
             Assert.Equal("Prefix target suffix", Text(MainRoot(selectiveReject.Save())));
         }
+    }
+
+    [Fact]
+    public void DS408_TrackedEdit_CreatesMissingSettingsPartWithTrackRevisions()
+    {
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(
+                   stream, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("before")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.Document.Save();
+        }
+
+        using var session = new DocxSession(stream.ToArray(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = session.ReplaceText(anchor, "after");
+
+        Assert.True(result.Success, result.Error?.Message);
+        var tracked = session.Save();
+        var settings = Assert.IsType<XElement>(SettingsRoot(tracked));
+        Assert.Single(settings.Elements(W.trackRevisions));
+        AssertSchemaValid(tracked);
     }
 
     [Fact]

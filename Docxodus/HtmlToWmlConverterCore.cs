@@ -4540,7 +4540,7 @@ namespace Docxodus.HtmlToWml
                     if (list.Name == XhtmlNoNamespace.ul)
                     {
                         XElement bulletAbstract = XElement.Parse(String.Format(BulletAbstractXml, currentAbstractId++));
-                        numberingXDoc.Root.Add(bulletAbstract);
+                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root, bulletAbstract);
                     }
                     if (list.Name == XhtmlNoNamespace.ol)
                     {
@@ -4592,16 +4592,16 @@ namespace Docxodus.HtmlToWml
 
                         XElement simpleNumAbstract = XElement.Parse(String.Format(OrderedListAbstractXml, currentAbstractId++,
                             numFmt[0], just[0], numFmt[1], just[1], numFmt[2], just[2], numFmt[3], just[3], numFmt[4], just[4], numFmt[5], just[5], numFmt[6], just[6], numFmt[7], just[7], numFmt[8], just[8]));
-                        numberingXDoc.Root.Add(simpleNumAbstract);
+                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root, simpleNumAbstract);
                     }
                 }
             }
 
             foreach (var list in numToAbstractNum)
             {
-                numberingXDoc.Root.Add(
+                WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root,
                     new XElement(W.num, new XAttribute(W.numId, list.Key),
-                    new XElement(W.abstractNumId, new XAttribute(W.val, list.Value))));
+                        new XElement(W.abstractNumId, new XAttribute(W.val, list.Value))));
             }
 
             wDoc.MainDocumentPart.NumberingDefinitionsPart.PutXDocument();

@@ -31,6 +31,23 @@ public class DocxSessionS1FeaturesTests
         return doc.MainDocumentPart!.GetXDocument().Root!;
     }
 
+    private static byte[] BuildDocumentWithLateRunProperties()
+    {
+        using var ms = new MemoryStream();
+        var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        ms.Write(source);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var run = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W + "r").First();
+            run.AddFirst(new XElement(W + "rPr",
+                new XElement(W + "szCs", new XAttribute(W + "val", "22")),
+                new XElement(W + "u", new XAttribute(W + "val", "single"))));
+            doc.MainDocumentPart.PutXDocument();
+        }
+        return ms.ToArray();
+    }
+
     // ─── F1: font size ──────────────────────────────────────────────────
 
     [Fact]
@@ -111,6 +128,43 @@ public class DocxSessionS1FeaturesTests
         using var ms = new MemoryStream(bytes);
         using var doc = WordprocessingDocument.Open(ms, false);
         var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
+        Assert.Empty(errors);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS223_ApplyFormat_InsertsRunPropertiesInSchemaOrder(bool tracked)
+    {
+        using var session = new DocxSession(BuildDocumentWithLateRunProperties(),
+            new DocxSessionSettings
+            {
+                TrackedChanges = tracked ? TrackedChangeMode.RenderInline : TrackedChangeMode.Accept,
+            });
+        var anchor = FirstBodyParagraph(session);
+
+        var result = session.ApplyFormatToSubstring(anchor, "paragraph", new FormatOp
+        {
+            Italic = true,
+            Strike = true,
+            Color = "336699",
+            Underline = true,
+        });
+        Assert.True(result.Success, result.Error?.Message);
+
+        var bytes = session.Save();
+        var changedRun = DocumentXml(bytes).Descendants(W + "r")
+            .Single(r => (string?)r.Element(W + "t") == "paragraph");
+        var expected = new[] { "i", "strike", "color", "szCs", "u" }
+            .Concat(tracked ? new[] { "rPrChange" } : Array.Empty<string>());
+        Assert.Equal(expected, changedRun.Element(W + "rPr")!.Elements().Select(e => e.Name.LocalName));
+
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                DocumentFormat.OpenXml.FileFormatVersions.Office2019)
+            .Validate(doc)
+            .ToList();
         Assert.Empty(errors);
     }
 

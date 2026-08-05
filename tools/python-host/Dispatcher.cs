@@ -89,9 +89,7 @@ internal static class Dispatcher
         "insert_endnote" => DocxSessionOps.InsertEndnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
 
-        "add_comment" => DocxSessionOps.AddComment(
-            Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"),
-            Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
+        "add_comment" => AddComment(args),
         "add_comment_reply" => DocxSessionOps.AddCommentReply(
             Handle(args), Str(args, "parentAnchorId"), Str(args, "author"),
             OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
@@ -387,6 +385,24 @@ internal static class Dispatcher
         return crossBlock
             ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary)
             : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary);
+    }
+
+    private static string AddComment(JsonElement args)
+    {
+        var anchorId = OptStr(args, "anchorId");
+        var revisionId = OptStr(args, "revisionId");
+        var hasSpan = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("span", out _);
+        if ((anchorId is null) == (revisionId is null) || (revisionId is not null && hasSpan))
+            throw new FormatException(
+                "add_comment requires exactly one target: anchorId (with optional span) or revisionId");
+
+        return revisionId is not null
+            ? DocxSessionOps.AddCommentToRevision(
+                Handle(args), revisionId, Str(args, "author"), OptStr(args, "initials"),
+                OptStr(args, "date"), Str(args, "markdown"))
+            : DocxSessionOps.AddComment(
+                Handle(args), anchorId!, ParseOptionalSpan(args, "span"), Str(args, "author"),
+                OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown"));
     }
 
     // ─── Arg helpers ────────────────────────────────────────────────────

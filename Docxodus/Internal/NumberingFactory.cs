@@ -71,15 +71,7 @@ internal static class NumberingFactory
         {
             int absId = NextId(root, "abstractNum", "abstractNumId");
             abstractNum = BuildAbstractNum(fmt, absId, nsid);
-            // CT_Numbering order: numPicBullet*, abstractNum*, num* — keep abstractNums grouped.
-            var lastAbstract = root.Elements(W + "abstractNum").LastOrDefault();
-            if (lastAbstract is not null) lastAbstract.AddAfterSelf(abstractNum);
-            else
-            {
-                var firstNum = root.Elements(W + "num").FirstOrDefault();
-                if (firstNum is not null) firstNum.AddBeforeSelf(abstractNum);
-                else root.Add(abstractNum);
-            }
+            WordprocessingMLUtil.InsertNumberingChildInOrder(root, abstractNum);
         }
 
         var abstractId = (string)abstractNum.Attribute(W + "abstractNumId")!;
@@ -93,7 +85,7 @@ internal static class NumberingFactory
             num = new XElement(W + "num",
                 new XAttribute(W + "numId", numId),
                 new XElement(W + "abstractNumId", new XAttribute(W + "val", abstractId)));
-            root.Add(num); // nums come after abstractNums
+            WordprocessingMLUtil.InsertNumberingChildInOrder(root, num);
         }
 
         // Flush the numbering part to its stream — the session's Save only persists the
@@ -275,7 +267,7 @@ internal static class NumberingFactory
             if (!ovr.Elements().Any()) ovr.Remove();
         }
 
-        root.Add(clone); // nums come after abstractNums; appending keeps the group intact
+        WordprocessingMLUtil.InsertNumberingChildInOrder(root, clone);
         part.PutXDocument();
         return newNumId;
     }

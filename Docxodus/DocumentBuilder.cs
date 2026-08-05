@@ -1670,10 +1670,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                             newAbstractElement = new XElement(abstractElement);
                                             newAbstractElement.Attribute(W.abstractNumId).Value = abstractNumber.ToString();
                                             abstractNumber++;
-                                            if (newNumbering.Root.Elements(W.abstractNum).Any())
-                                                newNumbering.Root.Elements(W.abstractNum).Last().AddAfterSelf(newAbstractElement);
-                                            else
-                                                newNumbering.Root.Add(newAbstractElement);
+                                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                                newNumbering.Root, newAbstractElement);
 
                                             foreach (XElement pictId in newAbstractElement.Descendants(W.lvlPicBulletId))
                                             {
@@ -1689,7 +1687,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                                 XElement newNumPicBullet = new XElement(numPicBullet);
                                                 newNumPicBullet.Attribute(W.numPicBulletId).Value = maxNumPicBulletId.ToString();
                                                 pictId.Attribute(W.val).Value = maxNumPicBulletId.ToString();
-                                                newNumbering.Root.AddFirst(newNumPicBullet);
+                                                WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                                    newNumbering.Root, newNumPicBullet);
                                             }
                                         }
                                         string newAbstractId = newAbstractElement.Attribute(W.abstractNumId).Value;
@@ -1712,7 +1711,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                                 .Attribute(W.val).Value = newAbstractId;
                                             newElement.Attribute(W.numId).Value = number.ToString();
                                             number++;
-                                            newNumbering.Root.Add(newElement);
+                                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                                newNumbering.Root, newElement);
                                         }
                                         idElement.Attribute(W.val).Value = newElement.Attribute(W.numId).Value;
                                     }
@@ -2701,10 +2701,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newAbstractElement = new XElement(abstractElement);
                             newAbstractElement.Attribute(W.abstractNumId).Value = abstractNumber.ToString();
                             abstractNumber++;
-                            if (newNumbering.Root.Elements(W.abstractNum).Any())
-                                newNumbering.Root.Elements(W.abstractNum).Last().AddAfterSelf(newAbstractElement);
-                            else
-                                newNumbering.Root.Add(newAbstractElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newAbstractElement);
 
                             foreach (XElement pictId in newAbstractElement.Descendants(W.lvlPicBulletId))
                             {
@@ -2720,7 +2718,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                 XElement newNumPicBullet = new XElement(numPicBullet);
                                 newNumPicBullet.Attribute(W.numPicBulletId).Value = maxNumPicBulletId.ToString();
                                 pictId.Attribute(W.val).Value = maxNumPicBulletId.ToString();
-                                newNumbering.Root.AddFirst(newNumPicBullet);
+                                WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                    newNumbering.Root, newNumPicBullet);
                             }
                         }
                         string newAbstractId = newAbstractElement.Attribute(W.abstractNumId).Value;
@@ -2746,7 +2745,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newElement.Attribute(W.numId).Value = number.ToString();
                             numIdMap.Add(numId, number);
                             number++;
-                            newNumbering.Root.Add(newElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newElement);
                         }
                         idElement.Attribute(W.val).Value = newElement.Attribute(W.numId).Value;
                     }
@@ -2862,10 +2862,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newAbstractElement = new XElement(abstractElement);
                             newAbstractElement.Attribute(W.abstractNumId).Value = abstractNumber.ToString();
                             abstractNumber++;
-                            if (newNumbering.Root.Elements(W.abstractNum).Any())
-                                newNumbering.Root.Elements(W.abstractNum).Last().AddAfterSelf(newAbstractElement);
-                            else
-                                newNumbering.Root.Add(newAbstractElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newAbstractElement);
 
                             foreach (XElement pictId in newAbstractElement.Descendants(W.lvlPicBulletId))
                             {
@@ -2881,7 +2879,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                 XElement newNumPicBullet = new XElement(numPicBullet);
                                 newNumPicBullet.Attribute(W.numPicBulletId).Value = maxNumPicBulletId.ToString();
                                 pictId.Attribute(W.val).Value = maxNumPicBulletId.ToString();
-                                newNumbering.Root.AddFirst(newNumPicBullet);
+                                WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                    newNumbering.Root, newNumPicBullet);
                             }
                         }
                         string newAbstractId = newAbstractElement.Attribute(W.abstractNumId).Value;
@@ -2907,7 +2906,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newElement.Attribute(W.numId).Value = number.ToString();
                             numIdMap.Add(numId, number);
                             number++;
-                            newNumbering.Root.Add(newElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newElement);
                         }
                         idElement.Attribute(W.val).Value = newElement.Attribute(W.numId).Value;
                     }
@@ -3024,10 +3024,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newAbstractElement = new XElement(abstractElement);
                             newAbstractElement.Attribute(W.abstractNumId).Value = abstractNumber.ToString();
                             abstractNumber++;
-                            if (newNumbering.Root.Elements(W.abstractNum).Any())
-                                newNumbering.Root.Elements(W.abstractNum).Last().AddAfterSelf(newAbstractElement);
-                            else
-                                newNumbering.Root.Add(newAbstractElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newAbstractElement);
 
                             foreach (XElement pictId in newAbstractElement.Descendants(W.lvlPicBulletId))
                             {
@@ -3043,7 +3041,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                                 XElement newNumPicBullet = new XElement(numPicBullet);
                                 newNumPicBullet.Attribute(W.numPicBulletId).Value = maxNumPicBulletId.ToString();
                                 pictId.Attribute(W.val).Value = maxNumPicBulletId.ToString();
-                                newNumbering.Root.AddFirst(newNumPicBullet);
+                                WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                    newNumbering.Root, newNumPicBullet);
                             }
                         }
                         string newAbstractId = newAbstractElement.Attribute(W.abstractNumId).Value;
@@ -3069,7 +3068,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                             newElement.Attribute(W.numId).Value = number.ToString();
                             numIdMap.Add(numId, number);
                             number++;
-                            newNumbering.Root.Add(newElement);
+                            WordprocessingMLUtil.InsertNumberingChildInOrder(
+                                newNumbering.Root, newElement);
                         }
                         idElement.Attribute(W.val).Value = newElement.Attribute(W.numId).Value;
                     }

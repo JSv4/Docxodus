@@ -11,7 +11,7 @@ from typing import Iterator
 
 import pytest
 
-from docx_scalpel import CharSpan, DocxSession, open_session
+from docx_scalpel import CharSpan, DocxSession, TrackedChangeMode, open_session
 from docx_scalpel.enums import EditErrorCode
 
 
@@ -47,6 +47,29 @@ def test_add_comment_creates_and_projects_it(session: DocxSession) -> None:
     markdown = session.project().markdown
     assert "# Comments" in markdown
     assert "Needs review." in markdown
+
+
+def test_add_comment_to_revision_survives_resolution(session: DocxSession) -> None:
+    host = _first_body_paragraph(session)
+    session.set_tracked_changes(TrackedChangeMode.RENDER_INLINE)
+    assert session.replace_text(host, "Tracked replacement.").success
+    insertion = next(r for r in session.list_revisions() if r.type == "insert")
+
+    made = session.add_comment_to_revision(
+        insertion.id, "Alice", "Keep this revision.", initials="AL"
+    )
+    assert made.success, made.error
+    assert any(a.kind == "cmt" for a in made.created)
+
+    assert session.reject_revision(insertion.id).success
+    comment = session.list_comments()[0]
+    assert comment.text == "Keep this revision."
+    assert comment.initials == "AL"
+
+    stale = session.add_comment_to_revision(insertion.id, "Alice", "Too late.")
+    assert not stale.success
+    assert stale.error is not None
+    assert stale.error.code is EditErrorCode.REVISION_NOT_FOUND
 
 
 def test_list_comments_returns_metadata(session: DocxSession) -> None:
