@@ -6,8 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **The live demo now opens a purpose-built Docxodus product guide instead of a generic test
-  fixture.** The four-page, branded DOCX teaches users through editable practice copy, control
-  walkthroughs, a feature-preservation matrix, architecture/privacy callouts, and copyable embed
+  fixture.** The four-page, branded DOCX opens with the literal “Edit this document. It’s real.”
+  and teaches through precise editable exercises, control walkthroughs, a preservation matrix, and
+  architecture/privacy callouts plus copyable embed
   examples while showcasing styles, shaded tables, lists, links, headers, footers, and pagination.
   `tools/generate-demo-guide.py` keeps the committed binary reproducible, and both demo surfaces
   load the guide from their own GitHub Pages origin.

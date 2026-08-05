@@ -40,7 +40,7 @@ async function selectPracticeBlock(page: Page) {
   return page.evaluate(() => {
     const block = Array.from(
       document.querySelectorAll<HTMLElement>('#doc [data-anchor][contenteditable="true"]'),
-    ).find((candidate) => candidate.textContent?.includes('Design is not decoration'));
+    ).find((candidate) => candidate.textContent?.includes('This is a real Word document'));
     if (!block) throw new Error('The editable style-playground block was not rendered');
     const range = document.createRange();
     range.selectNodeContents(block);
@@ -77,13 +77,16 @@ test.describe('social demo pages', () => {
     await page.click('#start');
     await expect(page.locator('#app')).toBeVisible({ timeout: 45000 });
     expect(await page.locator('#doc [data-anchor]').count()).toBeGreaterThan(0);
-    await expect(page.locator('#doc')).toContainText('Welcome to Docxodus');
+    await expect(page.locator('#doc')).toContainText('Edit this document');
 
     // The toolbar drives the real editor: select an initially-normal block,
     // click Bold through the actual button handler, and verify the remounted
     // block now carries bold computed styling.
     const result = await selectPracticeBlock(page);
     expect(result.text.length).toBeGreaterThan(0);
+    expect(await formattingState(page, result.anchor, result.text)).toMatchObject({
+      found: true, bold: false, textPreserved: true,
+    });
 
     await page.locator('#bar [data-fmt="bold"]').click();
     expect(await formattingState(page, result.anchor, result.text)).toMatchObject({
@@ -117,7 +120,7 @@ test.describe('social demo pages', () => {
     await expect(page.locator('#status')).toContainText(/live/i, { timeout: 45000 });
     await expect(page.locator('#loader')).toBeHidden();
     expect(await page.locator('#doc [data-anchor]').count()).toBeGreaterThan(0);
-    await expect(page.locator('#doc')).toContainText('Welcome to Docxodus');
+    await expect(page.locator('#doc')).toContainText('Edit this document');
 
     // Main-page controls are not decorative: formatting, page view, and save all
     // call the live DocxEditor instance.

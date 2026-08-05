@@ -164,9 +164,13 @@ def add_hyperlink(paragraph, label: str, url: str, color=BLUE):
     properties = OxmlElement("w:rPr")
     run_color = OxmlElement("w:color")
     run_color.set(qn("w:val"), color)
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:ascii"), "Arial")
+    fonts.set(qn("w:hAnsi"), "Arial")
+    fonts.set(qn("w:eastAsia"), "Arial")
     underline = OxmlElement("w:u")
     underline.set(qn("w:val"), "single")
-    properties.extend((run_color, underline))
+    properties.extend((fonts, run_color, underline))
     text = OxmlElement("w:t")
     text.text = label
     run.extend((properties, text))
@@ -175,7 +179,7 @@ def add_hyperlink(paragraph, label: str, url: str, color=BLUE):
     return hyperlink
 
 
-def add_run(paragraph, text: str, *, bold=False, color=INK, size=None, font=None, italic=False):
+def add_run(paragraph, text: str, *, bold=False, color=INK, size=None, font="Arial", italic=False):
     run = paragraph.add_run(text)
     run.bold = bold
     run.italic = italic
@@ -215,9 +219,9 @@ def add_pill_row(document) -> None:
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     labels = (
-        ("LOCAL FIRST", "Your file never uploads", PALE_CYAN, CYAN),
-        ("WORD NATIVE", "OOXML stays editable", PALE_BLUE, BLUE),
-        ("LOSSLESS OUT", "Save a real .docx", PALE_VIOLET, VIOLET),
+        ("1 / SELECT", "Highlight text on this page", PALE_CYAN, CYAN),
+        ("2 / EDIT", "Use the live toolbar above", PALE_BLUE, BLUE),
+        ("3 / DOWNLOAD", "Open the result in Word", PALE_VIOLET, VIOLET),
     )
     for index, (title, copy, fill, accent) in enumerate(labels):
         cell = table.cell(0, index)
@@ -253,12 +257,33 @@ def add_callout(document, label: str, title: str, copy: str, *, fill=PALE_BLUE, 
     add_run(paragraph, copy, color=MUTED, size=9.5)
 
 
+def add_practice_paragraph(document, label: str, text: str, *, fill=PALE_VIOLET, accent=VIOLET):
+    label_paragraph = document.add_paragraph()
+    label_paragraph.paragraph_format.left_indent = Inches(.16)
+    label_paragraph.paragraph_format.right_indent = Inches(.16)
+    label_paragraph.paragraph_format.space_before = Pt(5)
+    label_paragraph.paragraph_format.space_after = Pt(0)
+    set_paragraph_shading(label_paragraph, fill)
+    set_paragraph_border(label_paragraph, "left", accent, size=26, space=10)
+    add_run(label_paragraph, label.upper(), bold=True, color=accent, size=8)
+
+    practice_paragraph = document.add_paragraph()
+    practice_paragraph.paragraph_format.left_indent = Inches(.16)
+    practice_paragraph.paragraph_format.right_indent = Inches(.16)
+    practice_paragraph.paragraph_format.space_before = Pt(0)
+    practice_paragraph.paragraph_format.space_after = Pt(5)
+    set_paragraph_shading(practice_paragraph, fill)
+    set_paragraph_border(practice_paragraph, "left", accent, size=26, space=10)
+    add_run(practice_paragraph, text, color=INK, size=13)
+    return practice_paragraph
+
+
 def add_step_table(document) -> None:
     table = document.add_table(rows=1, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
-    widths = (Inches(.62), Inches(1.5), Inches(4.65))
-    headers = ("STEP", "CONTROL", "WHAT TO TRY")
+    widths = (Inches(.62), Inches(2.38), Inches(3.77))
+    headers = ("STEP", "DO THIS", "YOU SHOULD SEE")
     for cell, width, label in zip(table.rows[0].cells, widths, headers):
         cell.width = width
         set_cell_shading(cell, NAVY_2)
@@ -267,10 +292,10 @@ def add_step_table(document) -> None:
         add_run(cell.paragraphs[0], label, bold=True, color=WHITE, size=8)
     set_repeat_table_header(table.rows[0])
     steps = (
-        ("01", "B  I  U  S", "Select the practice sentence below, then combine inline styles."),
-        ("02", "12 pt  ↕", "Change font size, alignment, and indentation. Undo it. Redo it."),
-        ("03", "•≡  1≡  ▦", "Turn a paragraph into a list, then insert a table or horizontal rule."),
-        ("04", "▱  ↓", "Switch to Pages, inspect the layout, then download the edited DOCX."),
+        ("01", "Select the purple sentence", "A blue text selection appears."),
+        ("02", "Click B in the toolbar", "The sentence becomes bold."),
+        ("03", "Click Undo, then Redo", "The formatting disappears and returns."),
+        ("04", "Click Download .docx", "A real Word file saves to your device."),
     )
     for row_index, values in enumerate(steps):
         cells = table.add_row().cells
@@ -285,8 +310,7 @@ def add_step_table(document) -> None:
                 value,
                 bold=cell is cells[0] or cell is cells[1],
                 color=BLUE if cell is cells[0] else INK,
-                size=8.5 if cell is cells[1] else 9,
-                font="Aptos Mono" if cell is cells[1] else None,
+                size=8.7 if cell is cells[1] else 9,
             )
 
 
@@ -332,10 +356,10 @@ def add_bullet(container, title: str, copy: str, color=BLUE):
 def configure_styles(document: Document) -> None:
     styles = document.styles
     normal = styles["Normal"]
-    normal.font.name = "Aptos"
+    normal.font.name = "Arial"
     normal.font.size = Pt(10.5)
     normal.font.color.rgb = rgb(INK)
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Aptos")
+    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
     normal.paragraph_format.space_after = Pt(7)
     normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
 
@@ -347,16 +371,16 @@ def configure_styles(document: Document) -> None:
         ("Heading 3", 11, BLUE, 8, 4),
     ):
         style = styles[name]
-        style.font.name = "Aptos Display"
+        style.font.name = "Arial"
         style.font.size = Pt(size)
         style.font.bold = name != "Subtitle"
         style.font.color.rgb = rgb(color)
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Aptos Display")
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
         style.paragraph_format.space_before = Pt(before)
         style.paragraph_format.space_after = Pt(after)
 
     kicker = styles.add_style("Kicker", 1)
-    kicker.font.name = "Aptos"
+    kicker.font.name = "Arial"
     kicker.font.size = Pt(9)
     kicker.font.bold = True
     kicker.font.color.rgb = rgb(CYAN)
@@ -365,7 +389,7 @@ def configure_styles(document: Document) -> None:
     keep_with_next(kicker)
 
     code = styles.add_style("Demo Code", 1)
-    code.font.name = "Aptos Mono"
+    code.font.name = "Courier New"
     code.font.size = Pt(8.5)
     code.font.color.rgb = rgb("D7EBFF")
     code.paragraph_format.left_indent = Inches(.18)
@@ -412,87 +436,104 @@ def add_cover(document: Document) -> None:
 
     paragraph = cell.paragraphs[0]
     paragraph.paragraph_format.space_after = Pt(10)
-    add_run(paragraph, "LIVE PRODUCT GUIDE  •  9.1", bold=True, color=CYAN, size=9)
+    add_run(paragraph, "LIVE DOCX  •  CLICK INTO THE PAGE", bold=True, color=CYAN, size=9)
     paragraph = cell.add_paragraph(style="Title")
-    paragraph.add_run("Your document just\nbecame an interface.")
+    add_run(paragraph, "Edit this document.\nIt’s real.", bold=True, color=WHITE, size=34)
     paragraph = cell.add_paragraph(style="Subtitle")
-    paragraph.add_run("Render. Edit. Redline. Save. All inside this browser tab.")
+    add_run(paragraph, "Select text. Change it. Download the same Word file.", color="BED7F5", size=14, italic=True)
 
     document.add_paragraph().paragraph_format.space_after = Pt(0)
     add_pill_row(document)
     document.add_paragraph().paragraph_format.space_after = Pt(0)
 
-    add_kicker(document, "This file is the tour", BLUE)
-    title = document.add_paragraph("Welcome to Docxodus.", style="Heading 1")
+    add_kicker(document, "Try it now  •  20-second proof", BLUE)
+    title = document.add_paragraph("Make the sentence below bold.", style="Heading 1")
     title.paragraph_format.space_before = Pt(0)
     add_body(
         document,
-        "You are looking at a real Word document, rendered and editable without sending it to a server. Use the toolbar above on the content below; every change is written back to native DOCX structure.",
+        "Drag across the purple sentence to select it, then click B in the toolbar above.",
     )
 
+    add_practice_paragraph(
+        document,
+        "Select only this sentence",
+        "This is a real Word document. Make this sentence bold.",
+        fill=PALE_VIOLET,
+        accent=VIOLET,
+    )
+
+    document.add_paragraph().paragraph_format.space_after = Pt(0)
+    add_kicker(document, "What to do", VIOLET)
+    add_step_table(document)
+
+    document.add_paragraph().paragraph_format.space_after = Pt(0)
     add_callout(
         document,
-        "Start here",
-        "Select this sentence and make it unmistakably yours.",
-        "Try bold, italic, underline, strike, 18 pt, and centered alignment—then use Undo and Redo to watch the document model follow along.",
+        "The proof",
+        "Open the download in Word or LibreOffice.",
+        "Your sentence is still bold because the browser edited the DOCX itself—not a screenshot, canvas, or HTML copy.",
         fill=PALE_CYAN,
         accent=CYAN,
     )
 
-    document.add_paragraph().paragraph_format.space_after = Pt(0)
-    add_kicker(document, "Four quick wins", VIOLET)
-    add_step_table(document)
-
 
 def add_controls_page(document: Document) -> None:
     document.add_page_break()
-    add_heading(document, "Make the toolbar prove itself.", 1, "01 / HANDS-ON LAB")
-    add_body(document, "Every exercise below targets actual WordprocessingML. The visual change you see is the same change that survives in the downloaded file.")
+    add_heading(document, "Now try the rest.", 1, "01 / GUIDED TUTORIAL")
+    add_body(document, "Work straight down this page. Each exercise takes a few seconds and changes real WordprocessingML in the open document.")
 
-    add_heading(document, "Inline style playground", 2)
-    paragraph = document.add_paragraph()
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    paragraph.paragraph_format.left_indent = Inches(.12)
-    paragraph.paragraph_format.right_indent = Inches(.12)
-    paragraph.paragraph_format.space_before = Pt(8)
-    paragraph.paragraph_format.space_after = Pt(8)
-    set_paragraph_shading(paragraph, PALE_VIOLET)
-    for side in ("top", "bottom", "left", "right"):
-        set_paragraph_border(paragraph, side, VIOLET, size=7, space=8)
-    add_run(paragraph, "SELECT ME → Design is not decoration; it is clarity made visible.", color=VIOLET, size=12)
-    paragraph = document.add_paragraph()
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    add_run(paragraph, "Combine B / I / U / S, then try superscript, subscript, and a different point size.", color=MUTED, size=9)
+    add_heading(document, "1. Mix inline styles", 2)
+    add_practice_paragraph(
+        document,
+        "Practice line",
+        "A real Word document is editable in this browser.",
+        fill=PALE_BLUE,
+        accent=BLUE,
+    )
+    add_body(document, "Select a few words. Try italic, underline, strike, superscript, subscript, and a different point size.")
 
-    add_heading(document, "Shape paragraphs", 2)
-    add_bullet(document, "Alignment", "Move a paragraph left, center, right, or justify it.", CYAN)
-    add_bullet(document, "Lists", "Toggle bullets or numbering without flattening the paragraph.", BLUE)
-    add_bullet(document, "Indentation", "Nudge structure in or out by one clean step.", VIOLET)
+    add_heading(document, "2. Change a whole paragraph", 2)
+    add_practice_paragraph(
+        document,
+        "Click anywhere in this paragraph",
+        "Center this paragraph, set it to 18 pt, then increase its indent.",
+        fill=PALE_CYAN,
+        accent=CYAN,
+    )
+    add_body(document, "Use the alignment and font-size menus, then the indent arrows. Undo each step if you want to start over.")
 
+    add_heading(document, "3. Add real structure", 2)
     add_callout(
         document,
-        "Try a structural edit",
-        "Place your cursor here, then insert something new.",
-        "Add a 2 × 2 table, a horizontal rule, or a footnote. Structural controls create native document parts—not visual approximations.",
+        "Put the caret at the end of this sentence",
+        "Insert a table, rule, or footnote.",
+        "Use ▦ for a 2 × 2 table, ― for a horizontal rule, or ¹ for a footnote. Each one becomes native document structure.",
         fill=PALE_GREEN,
         accent=GREEN,
     )
 
-    add_heading(document, "A table worth preserving", 2)
-    add_feature_matrix(document)
+    add_heading(document, "4. Make a list", 2)
+    add_body(document, "Click this paragraph, then press •≡ for bullets or 1≡ for numbering. Use the indent arrows to change its level.")
 
-    add_heading(document, "History without fear", 2)
-    paragraph = document.add_paragraph()
-    add_run(paragraph, "Make a change. ", bold=True, color=INK)
-    add_run(paragraph, "Undo it. ", bold=True, color=VIOLET)
-    add_run(paragraph, "Redo it. ", bold=True, color=BLUE)
-    add_run(paragraph, "The editor remounts only what changed, so the rest of the document stays stable.", color=MUTED)
+    add_callout(
+        document,
+        "Safe to experiment",
+        "Undo and Redo are real history.",
+        "Make a mess. Reverse it. Restore it. The editor keeps the rest of the document stable while the active block changes.",
+        fill=PALE_VIOLET,
+        accent=VIOLET,
+    )
 
 
 def add_architecture_page(document: Document) -> None:
     document.add_page_break()
-    add_heading(document, "A Word engine, not an upload form.", 1, "02 / UNDER THE HOOD")
-    add_body(document, "Docxodus brings a trimmed .NET WebAssembly runtime and structure-aware OOXML editing into the browser. The source bytes stay local; the result remains a Word file.")
+    add_heading(document, "Open the download. Inspect the proof.", 1, "02 / WHAT SURVIVES")
+    add_body(document, "The edited file is still a structured DOCX. Text stays text, tables stay tables, and document relationships remain document relationships.")
+
+    add_heading(document, "What Docxodus preserves", 2)
+    add_feature_matrix(document)
+
+    add_heading(document, "What happened in the browser", 2)
 
     table = document.add_table(rows=1, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -514,7 +555,7 @@ def add_architecture_page(document: Document) -> None:
         paragraph = cell.add_paragraph()
         add_run(paragraph, copy, color=MUTED, size=8.5)
 
-    add_heading(document, "What never crosses the wire", 2)
+    add_heading(document, "What never leaves this tab", 2)
     add_bullet(document, "Your source document", "the browser reads it directly into memory.", GREEN)
     add_bullet(document, "Your edits", "formatting and structural mutations happen in the local session.", GREEN)
     add_bullet(document, "Your exported file", "Save produces bytes locally and the browser downloads them.", GREEN)
@@ -528,13 +569,9 @@ def add_architecture_page(document: Document) -> None:
         accent=GREEN,
     )
 
-    add_heading(document, "Continuous or page-aware", 2)
-    add_body(document, "Use Pages in the toolbar to switch from a continuous editing surface to document page boxes. The source file stays open and every edit remains available in either view.")
-
-    add_heading(document, "One final proof", 2)
-    paragraph = document.add_paragraph()
-    add_run(paragraph, "Download this guide, open it in Word or LibreOffice, and inspect your edits. ", bold=True, color=INK)
-    add_run(paragraph, "That round trip is the product.", bold=True, color=BLUE)
+    add_heading(document, "See the real page", 2)
+    paragraph = add_body(document, "Click Pages in the toolbar. The continuous editor becomes four Word-style page boxes without reopening the file or losing your edits.")
+    add_run(paragraph, " That round trip is the product.", bold=True, color=BLUE)
 
 
 def add_embed_page(document: Document) -> None:
@@ -559,7 +596,7 @@ def add_embed_page(document: Document) -> None:
     for index, line in enumerate(lines):
         paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
         paragraph.style = "Demo Code"
-        add_run(paragraph, line, color="D7EBFF", size=8.5, font="Aptos Mono")
+        add_run(paragraph, line, color="D7EBFF", size=8.5, font="Courier New")
 
     add_heading(document, "B. Native module", 2)
     add_body(document, "Import the pinned ESM bundle, then point createEditor at a container and any CORS-readable DOCX URL.")
@@ -578,7 +615,7 @@ def add_embed_page(document: Document) -> None:
     for index, line in enumerate(lines):
         paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
         paragraph.style = "Demo Code"
-        add_run(paragraph, line or " ", color="D7EBFF", size=8.5, font="Aptos Mono")
+        add_run(paragraph, line or " ", color="D7EBFF", size=8.5, font="Courier New")
 
     add_callout(
         document,
@@ -616,8 +653,8 @@ def build(output: Path) -> None:
     add_embed_page(document)
 
     properties = document.core_properties
-    properties.title = "Docxodus Live Product Guide"
-    properties.subject = "Interactive guide for the Docxodus browser DOCX editor"
+    properties.title = "Edit This Document — Docxodus Live Tutorial"
+    properties.subject = "Hands-on tutorial for the Docxodus browser DOCX editor"
     properties.author = "Docxodus"
     properties.keywords = "Docxodus, DOCX, OOXML, WebAssembly, browser editor"
     properties.comments = "Generated by tools/generate-demo-guide.py"
