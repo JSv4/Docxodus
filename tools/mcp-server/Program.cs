@@ -42,6 +42,12 @@ internal static class Program
             return 1;
         }
 
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--http" && int.TryParse(args[i + 1], out var port))
+                return HttpTransport.Run(store, documents, port);
+        }
+
         using var stdin = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
         using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
         {
@@ -56,55 +62,66 @@ internal static class Program
         while ((line = stdin.ReadLine()) is not null)
         {
             if (line.Length == 0) continue;
-
-            JsonRpcRequest request;
-            try
-            {
-                var parsed = JsonRpcIo.ParseRequest(line);
-                if (parsed is null) continue;
-                request = parsed.Value;
-            }
-            catch (JsonException ex)
-            {
-                JsonRpcIo.WriteError(stdout, null, JsonRpcErrorCodes.ParseError, ex.Message);
-                stdout.Flush();
-                continue;
-            }
-
-            // Notifications carry no "id" and expect no response.
-            bool isNotification = request.Id is null;
-
-            try
-            {
-                var resultJson = HandleMethod(store, request, out var shouldExit);
-                if (!isNotification)
-                    JsonRpcIo.WriteResult(stdout, request.Id!.Value, resultJson);
-                stdout.Flush();
-                if (shouldExit) break;
-            }
-            catch (MethodNotFoundException ex)
-            {
-                if (!isNotification)
-                    JsonRpcIo.WriteError(stdout, request.Id, JsonRpcErrorCodes.MethodNotFound, ex.Message);
-                stdout.Flush();
-            }
-            catch (InvalidParamsException ex)
-            {
-                if (!isNotification)
-                    JsonRpcIo.WriteError(stdout, request.Id, JsonRpcErrorCodes.InvalidParams, ex.Message);
-                stdout.Flush();
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[mcp:error] {request.Method}: {ex}");
-                if (!isNotification)
-                    JsonRpcIo.WriteError(stdout, request.Id, JsonRpcErrorCodes.InternalError, ex.Message);
-                stdout.Flush();
-            }
+            var response = ProcessMessage(store, line, out var shouldExit);
+            if (response is not null)
+                stdout.Write(response);
+            stdout.Flush();
+            if (shouldExit) break;
         }
 
         store.CloseAll();
         return 0;
+    }
+
+    /// <summary>
+    /// Process one JSON-RPC message and return the complete response line (newline-terminated),
+    /// or null for a notification/unparseable-empty input. Shared by the stdio loop and the
+    /// streamable-HTTP transport so both speak byte-identical protocol.
+    /// </summary>
+    internal static string? ProcessMessage(SessionStore store, string message, out bool shouldExit)
+    {
+        shouldExit = false;
+        using var buffer = new StringWriter();
+
+        JsonRpcRequest request;
+        try
+        {
+            var parsed = JsonRpcIo.ParseRequest(message);
+            if (parsed is null) return null;
+            request = parsed.Value;
+        }
+        catch (JsonException ex)
+        {
+            JsonRpcIo.WriteError(buffer, null, JsonRpcErrorCodes.ParseError, ex.Message);
+            return buffer.ToString();
+        }
+
+        // Notifications carry no "id" and expect no response.
+        bool isNotification = request.Id is null;
+
+        try
+        {
+            var resultJson = HandleMethod(store, request, out shouldExit);
+            if (isNotification) return null;
+            JsonRpcIo.WriteResult(buffer, request.Id!.Value, resultJson);
+        }
+        catch (MethodNotFoundException ex)
+        {
+            if (isNotification) return null;
+            JsonRpcIo.WriteError(buffer, request.Id, JsonRpcErrorCodes.MethodNotFound, ex.Message);
+        }
+        catch (InvalidParamsException ex)
+        {
+            if (isNotification) return null;
+            JsonRpcIo.WriteError(buffer, request.Id, JsonRpcErrorCodes.InvalidParams, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[mcp:error] {request.Method}: {ex}");
+            if (isNotification) return null;
+            JsonRpcIo.WriteError(buffer, request.Id, JsonRpcErrorCodes.InternalError, ex.Message);
+        }
+        return buffer.ToString();
     }
 
     private static string HandleMethod(SessionStore store, JsonRpcRequest request, out bool shouldExit)
@@ -113,8 +130,7 @@ internal static class Program
         switch (request.Method)
         {
             case "initialize":
-                return "{\"protocolVersion\":\"" + ProtocolVersion
-                    + "\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"docxodus-mcp\",\"version\":\"1.0.0\"}}";
+                return BuildInitializeResult(request.Params);
 
             case "notifications/initialized":
                 return "null"; // notification; response is discarded by the caller anyway
@@ -128,6 +144,15 @@ internal static class Program
             case "tools/call":
                 return HandleToolsCall(store, request.Params);
 
+            case "resources/list":
+                return UiResources.BuildResourcesListResult();
+
+            case "resources/read":
+                return UiResources.BuildResourcesReadResult(request.Params);
+
+            case "resources/templates/list":
+                return "{\"resourceTemplates\":[]}";
+
             case "shutdown":
                 shouldExit = true;
                 return "null";
@@ -135,6 +160,26 @@ internal static class Program
             default:
                 throw new MethodNotFoundException($"method not found: {request.Method}");
         }
+    }
+
+    private static string BuildInitializeResult(JsonElement initParams)
+    {
+        // Echo the client's requested protocol revision when it names one: every method this
+        // server implements (tools/*, resources/*, ping) is shape-stable across the published
+        // revisions, and MCP Apps hosts negotiate the UI extension via capabilities.extensions,
+        // not the protocol version. Clients that omit the field get the original baseline.
+        var version = initParams.ValueKind == JsonValueKind.Object
+            && initParams.TryGetProperty("protocolVersion", out var pv)
+            && pv.ValueKind == JsonValueKind.String
+            && !string.IsNullOrEmpty(pv.GetString())
+                ? pv.GetString()!
+                : ProtocolVersion;
+
+        return "{\"protocolVersion\":" + JsonRpcIo.JsonString(version)
+            + ",\"capabilities\":{\"tools\":{},\"resources\":{}"
+            + ",\"extensions\":{\"" + UiResources.ExtensionId
+            + "\":{\"mimeTypes\":[\"" + UiResources.ViewerMimeType + "\"]}}}"
+            + ",\"serverInfo\":{\"name\":\"docxodus-mcp\",\"version\":\"1.0.0\"}}";
     }
 
     internal static string BuildToolsListResult()
@@ -147,8 +192,10 @@ internal static class Program
             var t = ToolCatalog.Tools[i];
             sb.Append("{\"name\":").Append(JsonRpcIo.JsonString(t.Name))
               .Append(",\"description\":").Append(JsonRpcIo.JsonString(t.Description))
-              .Append(",\"inputSchema\":").Append(JsonSerializer.Serialize(JsonDocument.Parse(t.InputSchemaJson).RootElement))
-              .Append('}');
+              .Append(",\"inputSchema\":").Append(JsonSerializer.Serialize(JsonDocument.Parse(t.InputSchemaJson).RootElement));
+            if (UiResources.ToolMetaJson(t.Name) is { } uiMeta)
+                sb.Append(",\"_meta\":").Append(uiMeta);
+            sb.Append('}');
         }
         sb.Append("]}");
         return sb.ToString();
@@ -166,7 +213,7 @@ internal static class Program
         {
             var resultJson = Dispatcher.Call(store, toolName, arguments);
             var isError = LooksLikeFailure(resultJson);
-            return $"{{\"content\":[{{\"type\":\"text\",\"text\":{JsonRpcIo.JsonString(resultJson)}}}],\"isError\":{(isError ? "true" : "false")}}}";
+            return UiResources.WrapToolResult(toolName, resultJson, isError);
         }
         catch (Exception ex)
         {
