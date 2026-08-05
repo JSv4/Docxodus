@@ -371,7 +371,12 @@ export async function initialize(basePath?: string): Promise<void> {
     setWasmBasePath(basePath);
   }
 
-  initPromise = loadWasm();
+  // Clear the cached promise on failure so a caller can retry with a
+  // different base path (a rejected initialize() used to be permanent).
+  initPromise = loadWasm().catch((e) => {
+    initPromise = null;
+    throw e;
+  });
   return initPromise;
 }
 
@@ -1357,6 +1362,18 @@ export function getVersion(): VersionInfo {
  */
 export function isInitialized(): boolean {
   return wasmExports !== null;
+}
+
+/**
+ * The raw WASM bridge exports (DocumentConverter, DocxSessionBridge, ...).
+ *
+ * For consumers that drive a bridge class directly — most notably
+ * `DocxEditor.open(container, bytes, exports)`, which needs the exports object
+ * rather than the wrapped functions in this module. Requires `initialize()` to
+ * have completed; throws otherwise.
+ */
+export function getWasmExports(): DocxodusWasmExports {
+  return ensureInitialized();
 }
 
 /**

@@ -49,6 +49,24 @@ const editor = DocxEditor.open(container, docxBytes, exports);
 See [`examples/editor.html`](https://github.com/JSv4/Docxodus/blob/main/npm/examples/editor.html) for
 a complete ribbon implementation.
 
+## Embed it with one script tag
+
+The `embed` entry packages the viewer and editor behind two one-call factories, with the WASM
+runtime location auto-detected — no build step, no configuration:
+
+```html
+<div id="doc"></div>
+<script type="module">
+  import { createEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js';
+  const editor = await createEditor('#doc', './contract.docx'); // or bytes / Blob / File
+  // ...later: const editedBytes = editor.save();
+</script>
+```
+
+`createViewer('#doc', source, options?)` is the read-only counterpart. Bundler users get the same
+API from `docxodus/embed`; classic-script pages can load `dist/embed.iife.js` for a global
+`Docxodus`. See [Embedding via CDN](#embedding-via-cdn) below.
+
 ## Project it for an LLM
 
 `convertWmlToMarkdown()` renders the document as markdown where **every block carries a stable id**,
@@ -398,6 +416,69 @@ Hook for managing custom annotations on documents.
 #### `useDocumentStructure(wasmBasePath?: string)`
 Hook for document structure analysis and element-based targeting.
 
+## Embedding via CDN
+
+Everything in the published package — the JS wrappers AND the WASM runtime — is served by npm CDNs
+(jsDelivr, unpkg) with `Access-Control-Allow-Origin: *` and correct `application/wasm` MIME types,
+so a page can embed a full viewer or editor without hosting anything itself.
+
+### One-tag viewer / editor (recommended)
+
+```html
+<div id="viewer"></div>
+<div id="editor"></div>
+<script type="module">
+  import { createViewer, createEditor }
+    from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js';
+
+  // Choose either factory, or render both into separate containers as shown.
+  // Source may be a URL, Uint8Array, ArrayBuffer, Blob, or File.
+  const viewer = await createViewer('#viewer', './contract.docx');
+
+  // No source opens a blank "New document"; returns a DocxEditor.
+  const editor = await createEditor('#editor', './contract.docx', { paginated: false });
+  const bytes = editor.save(); // lossless DOCX bytes
+</script>
+```
+
+`dist/embed.bundle.js` is a self-contained ESM bundle re-exporting the entire main API
+(convert, compare, diff, sessions, annotations) plus `createViewer`/`createEditor`/`DocxEditor`,
+so it also works as a no-build way to use any other function.
+
+For pages that can't use modules, `dist/embed.iife.js` exposes the same surface as a global:
+
+```html
+<div id="doc"></div>
+<script src="https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.iife.js"></script>
+<script>
+  Docxodus.createEditor('#doc').then((editor) => { /* ... */ });
+</script>
+```
+
+### How WASM resolution works
+
+The ~18 MB runtime request set in `dist/wasm/` loads lazily from the same directory the bundle
+was loaded from (`import.meta.url` for module scripts, `document.currentScript` for the IIFE):
+first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that resolves to
+`.../dist/wasm/_framework/...` automatically. To serve the WASM assets from somewhere else, pass
+`{ wasmBasePath: 'https://your.host/wasm/' }` to either factory (or call `initialize(path)` first).
+
+### CDN caveats
+
+- **Pin an exact version in production** (`docxodus@9.1.0`, not `@latest`) — CDN responses are
+  cached as immutable, and the wire shapes between the JS wrappers and the WASM assemblies must
+  come from the same release.
+- The build patches the .NET loader to fetch with `credentials: "omit"` — required because the
+  CDN's `Access-Control-Allow-Origin: *` cannot be combined with credentialed requests.
+- The Web Worker entry (`docxodus/worker`) is not CDN-loadable cross-origin (browsers require
+  same-origin worker scripts); embed runs the engine on the main thread. Self-host the package
+  if you need the worker.
+- Converter CSS is scoped to a private inner mount so `body`, `span`, and document-class rules
+  cannot restyle the host page. Document-global `@import` and `@page` rules are omitted; use the
+  full-document conversion/print path rather than an embed factory if those rules are required.
+- First load fetches ~18 MB uncompressed across about 49 requests; subsequent loads hit the
+  browser cache.
+
 ## Hosting WASM Files
 
 The WASM files need to be served from your web server. After building:
@@ -416,15 +497,18 @@ public/
     main.js
 ```
 
-## Bundle Size
+## Package and Runtime Size
 
-| Component | Size (uncompressed) | Size (Brotli) |
-|-----------|---------------------|---------------|
-| dotnet.native.wasm | ~8 MB | ~3 MB |
-| Managed assemblies | ~15 MB | ~5 MB |
-| Total | ~37 MB | ~10-12 MB |
+| Component | Approx. uncompressed size |
+|-----------|---------------------------:|
+| dotnet.native.wasm | 1.5 MB |
+| Managed/runtime WASM modules | 15.5 MB |
+| WASM payload total | 17.0 MB |
+| Published package (all bundles, types, maps, and WASM) | 20.0 MB |
 
-The WASM files are loaded on-demand and cached by the browser.
+Only the runtime request set (~18 MB including loader JavaScript) is fetched during first
+initialization; source maps, declarations, and unrelated entry bundles are not. Runtime files are
+loaded on demand and cached by the browser.
 
 ## Browser Support
 
