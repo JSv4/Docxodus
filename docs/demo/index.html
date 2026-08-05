@@ -37,47 +37,371 @@
   <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
 
   <style>
+    :root {
+      color-scheme: dark;
+      --ink: #07111f;
+      --ink-2: #0d1b2f;
+      --panel: rgba(12, 26, 45, .82);
+      --line: rgba(160, 186, 218, .17);
+      --muted: #9cb0c8;
+      --text: #f7fbff;
+      --cyan: #52e5ff;
+      --blue: #5c7cff;
+      --violet: #b26cff;
+      --green: #52e0a2;
+      --danger: #ff7f91;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: #f2f4f7; color: #17202a; }
-    header { padding: 34px 24px 26px; text-align: center; background: #101418; color: #e8ecf1; }
-    header h1 { font-size: 26px; margin: 0 0 8px; }
-    header p { margin: 0 auto; max-width: 560px; color: #9aa7b4; font-size: 15px; line-height: 1.5; }
-    header nav { margin-top: 14px; display: flex; gap: 10px; justify-content: center; }
-    header a { color: #8db4f2; font-size: 13px; text-decoration: none; }
-    header a:hover { text-decoration: underline; }
-    #stage { max-width: 880px; margin: 22px auto 40px; padding: 0 16px; }
-    #frame { background: #fff; border: 1px solid #d6dce4; border-radius: 10px;
-      box-shadow: 0 8px 28px rgba(16, 20, 24, .08); overflow: hidden; }
-    #statusbar { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
-      border-bottom: 1px solid #e2e7ee; background: #f8fafc; font-size: 12.5px; color: #5d6975; }
-    #statusbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #e2a93b; }
-    #statusbar .dot.ready { background: #2f9e62; }
-    #doc { min-height: 480px; max-height: 74vh; overflow: auto; padding: 26px 34px; }
-    footer { text-align: center; font-size: 12px; color: #7c8894; padding-bottom: 30px; }
-    footer a { color: inherit; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(42, 116, 255, .18), transparent 34rem),
+        radial-gradient(circle at 90% 4%, rgba(178, 108, 255, .16), transparent 32rem),
+        var(--ink);
+      color: var(--text);
+    }
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      content: "";
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(to bottom, #000 0, transparent 72%);
+    }
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+    .hero::after {
+      position: absolute;
+      width: 34rem;
+      height: 34rem;
+      right: -14rem;
+      top: -20rem;
+      border-radius: 50%;
+      content: "";
+      background: rgba(82, 229, 255, .12);
+      filter: blur(80px);
+      pointer-events: none;
+    }
+    .hero-inner { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar { height: 76px; display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: inline-flex; align-items: center; gap: 12px; font-weight: 760;
+      letter-spacing: -.02em; text-decoration: none; }
+    .brand-mark { position: relative; width: 31px; height: 36px; border: 1px solid rgba(255,255,255,.5);
+      border-radius: 7px; background: linear-gradient(145deg, rgba(82,229,255,.3), rgba(92,124,255,.25));
+      box-shadow: 0 0 30px rgba(82,229,255,.24); transform: rotate(-4deg); }
+    .brand-mark::before, .brand-mark::after { position: absolute; left: 7px; content: "";
+      height: 2px; border-radius: 2px; background: #fff; opacity: .85; }
+    .brand-mark::before { top: 11px; width: 15px; box-shadow: 0 7px 0 rgba(255,255,255,.65); }
+    .brand-mark::after { top: 25px; width: 10px; background: var(--cyan); }
+    nav { display: flex; align-items: center; gap: 8px; }
+    nav a { color: var(--muted); padding: 8px 11px; border-radius: 9px; font-size: 13px;
+      text-decoration: none; transition: color .2s, background .2s; }
+    nav a:hover { color: #fff; background: rgba(255,255,255,.07); }
+    nav .nav-cta { color: #07111f; background: var(--cyan); font-weight: 750; }
+    nav .nav-cta:hover { color: #07111f; background: #8eedff; }
+
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
+      align-items: center; gap: clamp(36px, 7vw, 92px); padding: 68px 0 82px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 20px; color: var(--cyan);
+      font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .eyebrow::before { width: 28px; height: 1px; content: ""; background: currentColor; box-shadow: 0 0 12px currentColor; }
+    h1 { max-width: 760px; margin: 0; font-size: clamp(44px, 7vw, 78px); line-height: .98;
+      letter-spacing: -.064em; font-weight: 820; }
+    h1 span { color: transparent; background: linear-gradient(95deg, var(--cyan), #9ab2ff 48%, #d99aff);
+      background-clip: text; -webkit-background-clip: text; }
+    .hero-copy { max-width: 650px; margin: 25px 0 0; color: #afc0d4; font-size: clamp(16px, 2vw, 19px);
+      line-height: 1.65; }
+    .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+    .hero-button { display: inline-flex; align-items: center; gap: 10px; padding: 12px 17px;
+      border: 1px solid rgba(255,255,255,.16); border-radius: 12px; background: rgba(255,255,255,.055);
+      font-size: 13px; font-weight: 730; text-decoration: none; transition: transform .2s, border-color .2s; }
+    .hero-button:hover { transform: translateY(-2px); border-color: rgba(82,229,255,.55); }
+    .hero-button.primary { color: #07111f; border-color: transparent; background: linear-gradient(135deg, var(--cyan), #88f7df);
+      box-shadow: 0 12px 34px rgba(82,229,255,.18); }
+    .proof-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 28px; color: #8299b4; font-size: 12px; }
+    .proof-row span { display: inline-flex; align-items: center; gap: 7px; }
+    .proof-row span::before { width: 6px; height: 6px; border-radius: 50%; content: ""; background: var(--green);
+      box-shadow: 0 0 12px rgba(82,224,162,.7); }
+
+    .capability-stack { position: relative; min-height: 350px; perspective: 900px; }
+    .capability-card { position: absolute; width: min(100%, 360px); padding: 22px; border: 1px solid var(--line);
+      border-radius: 19px; background: linear-gradient(145deg, rgba(18,40,66,.94), rgba(8,19,34,.88));
+      box-shadow: 0 24px 60px rgba(0,0,0,.3); backdrop-filter: blur(18px); }
+    .capability-card:nth-child(1) { right: 0; top: 0; transform: rotate(2deg); }
+    .capability-card:nth-child(2) { left: 0; top: 116px; transform: rotate(-3deg); }
+    .capability-card:nth-child(3) { right: 8px; top: 235px; transform: rotate(1deg); }
+    .capability-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+    .capability-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px;
+      color: var(--cyan); background: rgba(82,229,255,.1); border: 1px solid rgba(82,229,255,.2); }
+    .capability-tag { color: #7f96b1; font-size: 10px; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
+    .capability-card strong { display: block; font-size: 15px; }
+    .capability-card p { margin: 7px 0 0; color: #8fa5bd; font-size: 12.5px; line-height: 1.5; }
+
+    #stage { width: min(1220px, calc(100% - 32px)); margin: 54px auto 70px; }
+    .section-kicker { margin: 0 0 10px; color: var(--cyan); font-size: 11px; font-weight: 800;
+      letter-spacing: .14em; text-transform: uppercase; }
+    .section-title { margin: 0 0 23px; font-size: clamp(26px, 4vw, 42px); letter-spacing: -.045em; }
+    #frame { overflow: hidden; border: 1px solid rgba(159,185,216,.2); border-radius: 22px;
+      background: #f4f7fb; box-shadow: 0 32px 90px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.025) inset; }
+    .workspace-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
+      padding: 10px 16px; color: #a9bad0; background: #0e1a2a; border-bottom: 1px solid rgba(255,255,255,.08); }
+    #statusbar { min-width: 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+    #statusbar .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #ffc65d;
+      box-shadow: 0 0 0 5px rgba(255,198,93,.1), 0 0 14px rgba(255,198,93,.4); }
+    #statusbar[data-state="ready"] .dot { background: var(--green);
+      box-shadow: 0 0 0 5px rgba(82,224,162,.1), 0 0 14px rgba(82,224,162,.45); }
+    #statusbar[data-state="error"] .dot { background: var(--danger);
+      box-shadow: 0 0 0 5px rgba(255,127,145,.1), 0 0 14px rgba(255,127,145,.45); }
+    #status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .privacy-chip { flex: 0 0 auto; padding: 6px 9px; border: 1px solid rgba(82,224,162,.18); border-radius: 999px;
+      color: #9be9c7; background: rgba(82,224,162,.07); font-size: 10.5px; font-weight: 720; }
+
+    #bar { display: flex; align-items: center; gap: 5px; min-height: 52px; padding: 7px 10px;
+      color: #27374a; background: rgba(255,255,255,.96); border-bottom: 1px solid #dce4ed; }
+    .tool-group { display: flex; align-items: center; gap: 4px; }
+    .tool-divider { width: 1px; height: 25px; margin: 0 4px; background: #dce4ed; }
+    .tool { min-width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 0 10px; border: 1px solid transparent; border-radius: 9px; color: #33465b; background: transparent;
+      font-size: 12px; font-weight: 720; cursor: pointer; transition: color .16s, background .16s, border-color .16s, transform .16s; }
+    .tool:hover:not(:disabled) { color: #14263b; background: #edf3fa; border-color: #d8e3ef; transform: translateY(-1px); }
+    .tool:focus-visible { outline: 3px solid rgba(61,132,255,.24); outline-offset: 1px; }
+    .tool[aria-pressed="true"] { color: #174ca7; background: #e5efff; border-color: #bfd4ff; }
+    .tool:disabled { opacity: .38; cursor: wait; }
+    .tool.primary { margin-left: auto; padding: 0 15px; color: #fff; background: linear-gradient(135deg, #255fe8, #794fe9);
+      border-color: transparent; box-shadow: 0 8px 20px rgba(64,78,218,.2); }
+    .tool.primary:hover:not(:disabled) { color: #fff; background: linear-gradient(135deg, #3470fa, #8a61f7); border-color: transparent; }
+    #actionStatus { margin-left: auto; color: #65809c; font-size: 11px; opacity: 0; transform: translateY(3px);
+      transition: opacity .2s, transform .2s; white-space: nowrap; }
+    #actionStatus.show { opacity: 1; transform: translateY(0); }
+    #actionStatus + .tool.primary { margin-left: 0; }
+
+    #canvas { position: relative; min-height: 650px; background: #e9eef5; }
+    #doc { min-height: 650px; max-height: 78vh; overflow: auto; padding: 38px 44px; color: #111; background: #fff; }
+    #doc:focus-within { outline: none; }
+
+    #loader { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 28px;
+      color: #f4f9ff; background:
+        radial-gradient(circle at 20% 20%, rgba(63,128,255,.24), transparent 22rem),
+        radial-gradient(circle at 82% 80%, rgba(176,91,255,.22), transparent 24rem),
+        linear-gradient(145deg, #071221 0%, #0b1930 52%, #101426 100%);
+      transition: opacity .55s ease, visibility .55s ease; }
+    #loader.done { opacity: 0; visibility: hidden; }
+    .loader-grid { width: min(850px, 100%); display: grid; grid-template-columns: minmax(250px, .8fr) minmax(300px, 1.2fr);
+      align-items: center; gap: clamp(28px, 7vw, 76px); }
+    .loader-visual { position: relative; width: min(280px, 75vw); aspect-ratio: 1; margin: auto; }
+    .orbit { position: absolute; inset: 7%; border: 1px solid rgba(115,204,255,.22); border-radius: 50%;
+      animation: orbit-spin 9s linear infinite; }
+    .orbit.two { inset: 20%; border-style: dashed; border-color: rgba(196,128,255,.32); animation-duration: 6s; animation-direction: reverse; }
+    .orbit::before, .orbit::after { position: absolute; width: 10px; height: 10px; border-radius: 50%; content: "";
+      background: var(--cyan); box-shadow: 0 0 18px var(--cyan); }
+    .orbit::before { top: -5px; left: 50%; }
+    .orbit::after { right: 7%; bottom: 12%; background: var(--violet); box-shadow: 0 0 18px var(--violet); }
+    .document-card { position: absolute; inset: 24% 28%; padding: 20px 15px; border: 1px solid rgba(255,255,255,.33);
+      border-radius: 14px; background: linear-gradient(150deg, rgba(255,255,255,.18), rgba(255,255,255,.06));
+      box-shadow: 0 22px 50px rgba(0,0,0,.35), 0 0 45px rgba(71,150,255,.13); backdrop-filter: blur(10px);
+      animation: document-float 3.6s ease-in-out infinite; }
+    .document-card::before { position: absolute; top: -9px; right: -9px; padding: 4px 7px; border-radius: 6px;
+      color: #06111d; background: var(--cyan); content: "DOCX"; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+    .doc-line { display: block; height: 4px; margin-bottom: 10px; border-radius: 4px; background: rgba(255,255,255,.56);
+      transform-origin: left; animation: line-pulse 2.2s ease-in-out infinite; }
+    .doc-line:nth-child(2) { width: 76%; animation-delay: -.45s; }
+    .doc-line:nth-child(3) { width: 88%; animation-delay: -.85s; }
+    .doc-line:nth-child(4) { width: 58%; background: rgba(255,111,139,.75); animation-delay: -1.2s; }
+    .format-chip { position: absolute; display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid rgba(255,255,255,.17);
+      border-radius: 11px; background: rgba(12,28,49,.88); box-shadow: 0 12px 30px rgba(0,0,0,.28); font-size: 12px; font-weight: 850; }
+    .format-chip.bold { left: 4%; top: 30%; color: var(--cyan); animation: chip-float 3s ease-in-out infinite; }
+    .format-chip.redline { right: 0; bottom: 24%; color: #ff8da0; animation: chip-float 3s -1.4s ease-in-out infinite; }
+    .format-chip.save { left: 21%; bottom: 2%; color: var(--green); animation: chip-float 3s -.7s ease-in-out infinite; }
+    .loader-eyebrow { color: var(--cyan); font-size: 10px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+    .loader-copy h2 { margin: 11px 0 11px; max-width: 520px; font-size: clamp(27px, 4vw, 43px); line-height: 1.04;
+      letter-spacing: -.045em; }
+    .loader-copy > p { min-height: 48px; margin: 0; color: #9eb2c9; font-size: 14px; line-height: 1.65; }
+    .feature-ad { min-height: 70px; display: flex; gap: 12px; margin-top: 24px; padding: 14px; border: 1px solid rgba(126,160,200,.16);
+      border-radius: 13px; background: rgba(255,255,255,.04); }
+    .feature-number { color: var(--violet); font: 800 10px/1.4 ui-monospace, monospace; }
+    .feature-ad strong { display: block; font-size: 12.5px; }
+    .feature-ad span:last-child { display: block; margin-top: 4px; color: #849bb5; font-size: 11.5px; line-height: 1.45; }
+    .feature-ad.swap { animation: feature-swap .4s ease; }
+    .progress-track { height: 3px; margin-top: 24px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.09); }
+    #progress { width: 12%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--blue), var(--violet));
+      box-shadow: 0 0 16px rgba(82,229,255,.55); transition: width .65s cubic-bezier(.22,.8,.28,1); }
+    .progress-meta { display: flex; justify-content: space-between; margin-top: 9px; color: #647e9c; font: 700 9px/1 ui-monospace, monospace;
+      letter-spacing: .09em; text-transform: uppercase; }
+    #retry { display: none; margin-top: 18px; padding: 9px 14px; border: 1px solid rgba(255,127,145,.4); border-radius: 9px;
+      color: #fff; background: rgba(255,127,145,.12); cursor: pointer; }
+    #loader.error #retry { display: inline-flex; }
+
+    .feature-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 18px; overflow: hidden;
+      border: 1px solid var(--line); border-radius: 16px; background: var(--line); }
+    .feature-strip article { padding: 20px; background: #0a1728; }
+    .feature-strip small { color: var(--cyan); font: 750 9px/1 ui-monospace, monospace; letter-spacing: .12em; }
+    .feature-strip strong { display: block; margin-top: 10px; font-size: 14px; }
+    .feature-strip p { margin: 7px 0 0; color: #8299b4; font-size: 12px; line-height: 1.55; }
+    footer { padding: 0 20px 44px; text-align: center; color: #667f9b; font-size: 11px; }
+    footer a { color: #91a9c5; }
+
+    @keyframes orbit-spin { to { transform: rotate(360deg); } }
+    @keyframes document-float { 0%,100% { transform: translateY(-5px) rotate(-2deg); } 50% { transform: translateY(7px) rotate(1deg); } }
+    @keyframes chip-float { 0%,100% { transform: translateY(-4px); } 50% { transform: translateY(5px); } }
+    @keyframes line-pulse { 0%,100% { transform: scaleX(.65); opacity: .45; } 50% { transform: scaleX(1); opacity: .95; } }
+    @keyframes feature-swap { from { opacity: .1; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (max-width: 820px) {
+      .hero-grid { grid-template-columns: 1fr; padding-top: 48px; }
+      .capability-stack { min-height: 310px; }
+      .capability-card { width: min(88%, 390px); }
+      .loader-grid { grid-template-columns: 1fr; text-align: center; }
+      .loader-visual { width: 190px; }
+      .loader-copy > p { min-height: 0; }
+      .feature-ad { text-align: left; }
+      .feature-strip { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .hero-inner { width: min(100% - 26px, 1180px); }
+      .topbar { height: 64px; }
+      nav a:not(.nav-cta) { display: none; }
+      .hero-grid { padding: 42px 0 62px; }
+      h1 { font-size: clamp(40px, 14vw, 62px); }
+      .capability-stack { min-height: 290px; }
+      .workspace-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .privacy-chip { display: none; }
+      #bar { overflow-x: auto; }
+      .tool-label, #actionStatus { display: none; }
+      .tool.primary { margin-left: auto; }
+      #canvas, #doc { min-height: 560px; }
+      #doc { padding: 24px 18px; }
+      #loader { padding: 20px; }
+      .loader-visual { width: 160px; }
+      .loader-copy h2 { font-size: 27px; }
+      .feature-ad { margin-top: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Docxodus</h1>
-    <p>Render, edit, and redline Word documents entirely in the browser — .NET-grade OOXML
-       fidelity compiled to WebAssembly. The document below is live: click into it and type.</p>
-    <nav>
-      <a href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://www.npmjs.com/package/docxodus" target="_blank" rel="noopener">npm</a>
-      <a href="./player.html">compact demo</a>
-    </nav>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="topbar">
+        <a class="brand" href="./" aria-label="Docxodus home"><span class="brand-mark" aria-hidden="true"></span>Docxodus</a>
+        <nav aria-label="Primary navigation">
+          <a href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://www.npmjs.com/package/docxodus" target="_blank" rel="noopener">npm</a>
+          <a href="./player.html">Compact player</a>
+          <a class="nav-cta" href="#live-editor">Launch demo ↓</a>
+        </nav>
+      </div>
+
+      <div class="hero-grid">
+        <div>
+          <div class="eyebrow">The document engine for the browser</div>
+          <h1>Word files.<br><span>No server required.</span></h1>
+          <p class="hero-copy">Render, edit, redline, and save real DOCX documents with .NET-grade OOXML fidelity—entirely inside the browser via WebAssembly.</p>
+          <div class="hero-actions">
+            <a class="hero-button primary" href="#live-editor">Try the live editor <span aria-hidden="true">↘</span></a>
+            <a class="hero-button" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">View source <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="proof-row" aria-label="Key guarantees">
+            <span>Nothing uploaded</span><span>Real DOCX output</span><span>Open source</span>
+          </div>
+        </div>
+
+        <div class="capability-stack" aria-label="Docxodus capabilities">
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">⌁</span><span class="capability-tag">Faithful render</span></div>
+            <strong>Word-grade document structure</strong>
+            <p>Tables, numbering, footnotes, headers, styles, and tracked changes stay document-native.</p>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">✦</span><span class="capability-tag">Surgical edit</span></div>
+            <strong>Edit without flattening</strong>
+            <p>Formatting and text edits flow back into OOXML—not a canvas, screenshot, or lossy HTML export.</p>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">↓</span><span class="capability-tag">Private by design</span></div>
+            <strong>Save locally as .docx</strong>
+            <p>The source document and every edit remain in your browser session.</p>
+          </article>
+        </div>
+      </div>
+    </div>
   </header>
 
-  <div id="stage">
-    <div id="frame">
-      <div id="statusbar"><span class="dot" id="dot"></span><span id="status">loading engine…</span></div>
-      <div id="doc"></div>
+  <main id="stage">
+    <p class="section-kicker">Not a screenshot</p>
+    <h2 class="section-title" id="live-editor">The document below is live.</h2>
+
+    <section id="frame" aria-label="Live Docxodus editor">
+      <div class="workspace-head">
+        <div id="statusbar" data-state="loading" role="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span><span id="status">Streaming the WebAssembly engine…</span>
+        </div>
+        <span class="privacy-chip">● Local session · zero upload</span>
+      </div>
+
+      <div id="bar" role="toolbar" aria-label="Document formatting controls">
+        <div class="tool-group">
+          <button class="tool" data-fmt="bold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false" disabled><strong>B</strong></button>
+          <button class="tool" data-fmt="italic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false" disabled><em>I</em></button>
+          <button class="tool" data-fmt="underline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false" disabled><u>U</u></button>
+        </div>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <div class="tool-group">
+          <button class="tool" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><span aria-hidden="true">↶</span><span class="tool-label">Undo</span></button>
+          <button class="tool" id="redo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><span aria-hidden="true">↷</span><span class="tool-label">Redo</span></button>
+        </div>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <button class="tool" id="pages" title="Toggle paginated view" aria-label="Toggle paginated view" aria-pressed="false" disabled><span aria-hidden="true">▱</span><span class="tool-label">Pages</span></button>
+        <span id="actionStatus" role="status" aria-live="polite"></span>
+        <button class="tool primary" id="dl" title="Download the edited DOCX" disabled><span aria-hidden="true">↓</span><span class="tool-label">Download .docx</span></button>
+      </div>
+
+      <div id="canvas">
+        <div id="loader" aria-live="polite">
+          <div class="loader-grid">
+            <div class="loader-visual" aria-hidden="true">
+              <div class="orbit"></div><div class="orbit two"></div>
+              <div class="document-card"><span class="doc-line"></span><span class="doc-line"></span><span class="doc-line"></span><span class="doc-line"></span></div>
+              <span class="format-chip bold">B</span><span class="format-chip redline">±</span><span class="format-chip save">↓</span>
+            </div>
+            <div class="loader-copy">
+              <div class="loader-eyebrow">Running locally in this tab</div>
+              <h2 id="loaderTitle">Booting .NET inside your browser</h2>
+              <p id="loaderCopy">Streaming the trimmed WebAssembly runtime. No document bytes are sent to a server.</p>
+              <div class="feature-ad" id="featureAd">
+                <span class="feature-number" id="featureNumber">01</span>
+                <div><strong id="featureTitle">Zero-upload architecture</strong><span id="featureCopy">Your source file and edits never leave this browser session.</span></div>
+              </div>
+              <div class="progress-track" aria-hidden="true"><div id="progress"></div></div>
+              <div class="progress-meta"><span id="progressLabel">Loading engine</span><span>DOCX → WASM → DOCX</span></div>
+              <button id="retry" type="button">Retry loading</button>
+            </div>
+          </div>
+        </div>
+        <div id="doc"></div>
+      </div>
+    </section>
+
+    <div class="feature-strip" aria-label="Editor feature summary">
+      <article><small>01 / EDIT</small><strong>Real editing controls</strong><p>Select text, apply formatting, undo, redo, and keep working in the original document model.</p></article>
+      <article><small>02 / VIEW</small><strong>Continuous or paginated</strong><p>Switch to page boxes without reopening the file or losing your session edits.</p></article>
+      <article><small>03 / SAVE</small><strong>Lossless DOCX download</strong><p>Export the edited Office file locally. There is no conversion server in the middle.</p></article>
     </div>
-  </div>
-  <footer>Engine served from <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a>;
-    everything runs client-side — the document never leaves this page.</footer>
+  </main>
+
+  <footer>Engine delivered by <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a> from
+    <a href="https://www.npmjs.com/package/docxodus">docxodus@9.1.0</a>. Everything runs client-side.</footer>
 
   <script type="module">
     const params = new URLSearchParams(location.search);
@@ -86,20 +410,141 @@
     const DOC = params.get("doc")
       ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
 
-    const status = (t, ready) => {
-      document.getElementById("status").textContent = t;
-      document.getElementById("dot").classList.toggle("ready", !!ready);
+    const $ = (id) => document.getElementById(id);
+    const statusbar = $("statusbar");
+    const loader = $("loader");
+    const controls = Array.from(document.querySelectorAll("#bar button"));
+    const formatButtons = Array.from(document.querySelectorAll("#bar [data-fmt]"));
+    let editor = null;
+    let paginated = false;
+    let featureTimer = 0;
+    let actionTimer = 0;
+    let selectionFrame = 0;
+
+    const loadingStages = [
+      ["Booting .NET inside your browser", "Streaming the trimmed WebAssembly runtime. No document bytes are sent to a server.", 16, "Loading engine"],
+      ["Opening the original DOCX", "Parsing OOXML parts, styles, numbering, tables, notes, and tracked revisions locally.", 54, "Reading document"],
+      ["Wiring lossless editing", "Connecting every editable block to its native WordprocessingML anchor.", 84, "Mounting editor"],
+      ["Your local editor is ready", "Select text, use the toolbar, switch page view, and download a real DOCX.", 100, "Ready"],
+    ];
+    const features = [
+      ["01", "Zero-upload architecture", "Your source file and edits never leave this browser session."],
+      ["02", "Word-grade OOXML fidelity", "Tables, numbering, footnotes, redlines, comments, and styles stay native."],
+      ["03", "Surgical editing", "Formatting and text edits target real document anchors instead of flattening the file."],
+      ["04", "Lossless DOCX out", "Undo, redo, edit, and save a Word document that remains a Word document."],
+    ];
+
+    const setStatus = (text, state = "loading") => {
+      $("status").textContent = text;
+      statusbar.dataset.state = state;
     };
-    try {
-      const mod = await import(ENGINE);
-      status("opening document…");
-      const t0 = performance.now();
-      const editor = await mod.createEditor("#doc", DOC);
-      status(`live — engine booted in ${Math.round(performance.now() - t0)} ms. Edit away; it's all local.`, true);
-      window.__editor = editor; // console plaything
-    } catch (err) {
-      status(String(err).slice(0, 200));
+    const setLoadStage = (index) => {
+      const [title, copy, progress, label] = loadingStages[index];
+      $("loaderTitle").textContent = title;
+      $("loaderCopy").textContent = copy;
+      $("progress").style.width = `${progress}%`;
+      $("progressLabel").textContent = label;
+    };
+    const rotateFeature = () => {
+      const next = (Number($("featureNumber").textContent) % features.length);
+      const [number, title, copy] = features[next];
+      const card = $("featureAd");
+      card.classList.remove("swap");
+      void card.offsetWidth;
+      $("featureNumber").textContent = number;
+      $("featureTitle").textContent = title;
+      $("featureCopy").textContent = copy;
+      card.classList.add("swap");
+    };
+    const flashAction = (text) => {
+      const el = $("actionStatus");
+      clearTimeout(actionTimer);
+      el.textContent = text;
+      el.classList.add("show");
+      actionTimer = setTimeout(() => el.classList.remove("show"), 1900);
+    };
+    const syncFormatState = () => {
+      if (!editor) return;
+      const state = editor.queryFormatState();
+      for (const button of formatButtons) {
+        button.setAttribute("aria-pressed", String(!!state[button.dataset.fmt]));
+      }
+    };
+    const download = () => {
+      if (!editor) return;
+      const bytes = editor.save();
+      const url = URL.createObjectURL(new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }));
+      const link = Object.assign(document.createElement("a"), {
+        href: url,
+        download: "docxodus-demo.docx",
+      });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      flashAction("DOCX downloaded locally");
+    };
+
+    for (const button of document.querySelectorAll("#bar button")) {
+      button.addEventListener("mousedown", (event) => event.preventDefault());
     }
+    for (const button of formatButtons) {
+      button.addEventListener("click", () => {
+        editor?.format(button.dataset.fmt);
+        syncFormatState();
+        flashAction(`${button.getAttribute("aria-label")} toggled`);
+      });
+    }
+    $("undo").addEventListener("click", () => { editor?.undo(); syncFormatState(); flashAction("Last edit undone"); });
+    $("redo").addEventListener("click", () => { editor?.redo(); syncFormatState(); flashAction("Edit restored"); });
+    $("pages").addEventListener("click", () => {
+      if (!editor) return;
+      paginated = !paginated;
+      editor.setPaginated(paginated);
+      $("pages").setAttribute("aria-pressed", String(paginated));
+      flashAction(paginated ? "Paginated view on" : "Continuous view on");
+    });
+    $("dl").addEventListener("click", download);
+    $("retry").addEventListener("click", () => location.reload());
+    document.addEventListener("selectionchange", () => {
+      cancelAnimationFrame(selectionFrame);
+      selectionFrame = requestAnimationFrame(syncFormatState);
+    });
+
+    const boot = async () => {
+      const t0 = performance.now();
+      featureTimer = setInterval(rotateFeature, 1750);
+      try {
+        setLoadStage(0);
+        const mod = await import(ENGINE);
+        setLoadStage(1);
+        setStatus("Opening the sample document locally…");
+        const response = await fetch(DOC, { credentials: "omit" });
+        if (!response.ok) throw new Error(`Could not load document (${response.status})`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        setLoadStage(2);
+        editor = await mod.createEditor("#doc", bytes, {
+          onEdit: () => flashAction("Edit committed to the local session"),
+        });
+        window.__editor = editor;
+        controls.forEach((control) => { control.disabled = false; });
+        setLoadStage(3);
+        setStatus(`Live — engine and document ready in ${Math.round(performance.now() - t0)} ms.`, "ready");
+        syncFormatState();
+        clearInterval(featureTimer);
+        setTimeout(() => loader.classList.add("done"), 420);
+        setTimeout(() => { loader.hidden = true; }, 1050);
+      } catch (error) {
+        clearInterval(featureTimer);
+        loader.classList.add("error");
+        $("loaderTitle").textContent = "The local engine did not start";
+        $("loaderCopy").textContent = String(error).slice(0, 220);
+        $("progressLabel").textContent = "Load failed";
+        setStatus(String(error).slice(0, 180), "error");
+      }
+    };
+
+    boot();
   </script>
 </body>
 </html>

@@ -17,54 +17,113 @@
       ?doc=<docx URL>                        default: repo sample via raw.githubusercontent
   -->
   <style>
+    :root { color-scheme: dark; --cyan: #52e5ff; --blue: #5c7cff; --violet: #b26cff;
+      --green: #52e0a2; --muted: #91a8c2; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
-    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: #101418; color: #e8ecf1; display: flex; flex-direction: column; }
+    body { position: relative; margin: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui,
+      -apple-system, "Segoe UI", sans-serif; background: #07111f; color: #f5f9ff; display: flex; flex-direction: column; }
+    body::before { position: absolute; inset: 0; content: ""; pointer-events: none; background:
+      radial-gradient(circle at 15% 14%, rgba(54,126,255,.28), transparent 52%),
+      radial-gradient(circle at 86% 82%, rgba(178,108,255,.22), transparent 48%),
+      linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: auto, auto, 30px 30px, 30px 30px; }
 
-    /* ── Boot panel (the "poster" state until the user taps) ─────────────── */
-    #boot { flex: 1; display: flex; flex-direction: column; align-items: center;
-      justify-content: center; gap: 14px; text-align: center; padding: 24px; }
-    #boot .mark { width: 26px; height: 26px; background: #4d8df0;
-      clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
-    #boot h1 { font-size: 17px; margin: 0; font-weight: 650; }
-    #boot p { font-size: 13px; margin: 0; color: #9aa7b4; max-width: 320px; line-height: 1.45; }
-    #start { font: inherit; font-size: 14px; font-weight: 600; color: #fff;
-      background: #2f6fe0; border: none; border-radius: 999px; padding: 10px 26px;
-      cursor: pointer; }
-    #start:hover { background: #3d7ded; }
-    #start:disabled { opacity: .6; cursor: default; }
-    #bootStatus { font-size: 12px; color: #7c8894; min-height: 1.2em; }
+    /* ── Animated poster / loader ────────────────────────────────────────── */
+    #boot { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; text-align: center; padding: 22px; }
+    .boot-art { position: relative; width: 126px; height: 126px; margin-bottom: 14px; }
+    .ring { position: absolute; inset: 2px; border: 1px solid rgba(82,229,255,.25); border-radius: 50%;
+      animation: spin 7s linear infinite; }
+    .ring.two { inset: 17px; border-style: dashed; border-color: rgba(178,108,255,.4);
+      animation-duration: 4.5s; animation-direction: reverse; }
+    .ring::before { position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; border-radius: 50%;
+      content: ""; background: var(--cyan); box-shadow: 0 0 14px var(--cyan); }
+    .mark { position: absolute; inset: 30px 37px; padding: 17px 11px; border: 1px solid rgba(255,255,255,.35);
+      border-radius: 10px; background: linear-gradient(150deg, rgba(255,255,255,.2), rgba(255,255,255,.06));
+      box-shadow: 0 17px 35px rgba(0,0,0,.35); animation: float 3s ease-in-out infinite; }
+    .mark::before { position: absolute; top: -7px; right: -8px; padding: 3px 5px; border-radius: 5px;
+      color: #07111f; background: var(--cyan); content: "DOCX"; font-size: 6px; font-weight: 900; letter-spacing: .1em; }
+    .mark span { display: block; height: 3px; margin-bottom: 7px; border-radius: 2px; background: rgba(255,255,255,.7);
+      transform-origin: left; animation: pulse-line 1.9s ease-in-out infinite; }
+    .mark span:nth-child(2) { width: 74%; animation-delay: -.5s; }
+    .mark span:nth-child(3) { width: 88%; background: #ff8298; animation-delay: -1s; }
+    .boot-kicker { color: var(--cyan); font-size: 9px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+    #boot h1 { margin: 7px 0 9px; font-size: clamp(25px, 7vw, 34px); line-height: 1; letter-spacing: -.045em; }
+    #boot h1 span { color: transparent; background: linear-gradient(90deg, var(--cyan), #c48cff);
+      background-clip: text; -webkit-background-clip: text; }
+    #boot > p { max-width: 340px; margin: 0; color: #9ab0c9; font-size: 12.5px; line-height: 1.5; }
+    .feature-ticker { width: min(340px, 100%); min-height: 51px; display: flex; align-items: center; gap: 10px;
+      margin: 15px 0; padding: 10px 12px; border: 1px solid rgba(136,166,201,.15); border-radius: 11px;
+      background: rgba(255,255,255,.045); text-align: left; }
+    .feature-ticker .number { color: var(--violet); font: 800 9px ui-monospace, monospace; }
+    .feature-ticker strong { display: block; font-size: 10.5px; }
+    .feature-ticker span:last-child { display: block; margin-top: 2px; color: #7890ab; font-size: 9.5px; line-height: 1.35; }
+    .feature-ticker.swap { animation: swap .35s ease; }
+    #start { min-width: 196px; padding: 10px 20px; border: 0; border-radius: 999px; color: #07111f;
+      background: linear-gradient(135deg, var(--cyan), #89f7dd); box-shadow: 0 11px 28px rgba(82,229,255,.18);
+      font-size: 12px; font-weight: 820; cursor: pointer; transition: transform .2s, box-shadow .2s; }
+    #start:hover { transform: translateY(-2px); box-shadow: 0 15px 34px rgba(82,229,255,.25); }
+    #start:disabled { color: #c1d1e2; background: rgba(255,255,255,.08); box-shadow: none; cursor: wait; transform: none; }
+    .boot-progress { width: min(265px, 75%); height: 2px; margin-top: 13px; overflow: hidden; border-radius: 2px;
+      background: rgba(255,255,255,.08); opacity: 0; transition: opacity .2s; }
+    #boot.loading .boot-progress { opacity: 1; }
+    #bootProgress { width: 10%; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--violet));
+      box-shadow: 0 0 13px var(--cyan); transition: width .55s ease; }
+    #bootStatus { min-height: 16px; margin-top: 8px; color: #7991ac; font-size: 9.5px; }
 
     /* ── Editor state ────────────────────────────────────────────────────── */
-    #app { display: none; flex: 1; min-height: 0; flex-direction: column; }
-    #bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px;
-      background: #1a2028; border-bottom: 1px solid #29323d; }
-    #bar button { font: inherit; font-size: 13px; color: #dfe6ee; background: none;
-      border: 1px solid transparent; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
-    #bar button:hover { background: #29323d; }
-    #bar .brand { margin-left: auto; font-size: 11px; color: #7c8894; text-decoration: none; }
-    #bar .brand:hover { color: #b9c4d0; }
-    #doc { flex: 1; overflow: auto; background: #fff; color: #111; padding: 18px 22px; }
+    #app { position: relative; z-index: 1; display: none; flex: 1; min-height: 0; flex-direction: column; background: #eef3f8; }
+    #bar { display: flex; align-items: center; gap: 3px; min-height: 44px; padding: 5px 7px;
+      color: #2d4055; background: rgba(255,255,255,.97); border-bottom: 1px solid #d8e2ed; }
+    #bar button { min-width: 31px; height: 31px; display: inline-grid; place-items: center; padding: 0 7px;
+      border: 1px solid transparent; border-radius: 7px; color: #344b63; background: transparent;
+      font-size: 11px; font-weight: 760; cursor: pointer; }
+    #bar button:hover { background: #eaf1f8; border-color: #d3e0ed; }
+    #bar button[aria-pressed="true"] { color: #174ca7; background: #e3edff; border-color: #bcd1ff; }
+    #bar .divider { width: 1px; height: 21px; margin: 0 2px; background: #dce5ee; }
+    #bar #dl { padding: 0 10px; color: #fff; background: linear-gradient(135deg, #2c63e8, #784fe7); }
+    #bar .brand { margin-left: auto; padding: 6px; color: #71869c; font-size: 9px; font-weight: 750; text-decoration: none; }
+    #bar .brand:hover { color: #31485f; }
+    #doc { flex: 1; overflow: auto; background: #fff; color: #111; padding: 18px 20px; }
     #doc:focus-within { outline: none; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes float { 0%,100% { transform: translateY(-3px) rotate(-2deg); } 50% { transform: translateY(4px) rotate(1deg); } }
+    @keyframes pulse-line { 0%,100% { transform: scaleX(.6); opacity: .45; } 50% { transform: scaleX(1); opacity: 1; } }
+    @keyframes swap { from { opacity: .15; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-height: 520px) { .boot-art { width: 96px; height: 96px; margin-bottom: 6px; }
+      .mark { inset: 23px 28px; padding-top: 13px; } .feature-ticker { margin: 10px 0; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
   </style>
 </head>
 <body>
   <div id="boot">
-    <div class="mark"></div>
-    <h1>Docxodus</h1>
-    <p>A real Word-document editor, running entirely in this box via WebAssembly.
-       No server. Lossless .docx out.</p>
-    <button id="start">▶&nbsp; Try the live editor</button>
-    <div id="bootStatus"></div>
+    <div class="boot-art" aria-hidden="true"><div class="ring"></div><div class="ring two"></div>
+      <div class="mark"><span></span><span></span><span></span></div></div>
+    <div class="boot-kicker">Private · local · WebAssembly</div>
+    <h1>Word editing.<br><span>Inside this box.</span></h1>
+    <p>A real DOCX engine—not a screenshot. Edit native document content and save the Word file locally.</p>
+    <div class="feature-ticker" id="featureTicker">
+      <span class="number" id="featureNumber">01</span>
+      <div><strong id="featureTitle">Zero uploads</strong><span id="featureCopy">Your document never leaves this browser.</span></div>
+    </div>
+    <button id="start">▶&nbsp; Launch the live editor</button>
+    <div class="boot-progress" aria-hidden="true"><div id="bootProgress"></div></div>
+    <div id="bootStatus" role="status" aria-live="polite">Ready when you are</div>
   </div>
 
   <div id="app">
     <div id="bar">
-      <button data-fmt="bold" title="Bold"><b>B</b></button>
-      <button data-fmt="italic" title="Italic"><i>I</i></button>
-      <button data-fmt="underline" title="Underline"><u>U</u></button>
-      <button id="dl" title="Download the edited .docx">Save .docx</button>
+      <button data-fmt="bold" title="Bold" aria-label="Bold" aria-pressed="false"><b>B</b></button>
+      <button data-fmt="italic" title="Italic" aria-label="Italic" aria-pressed="false"><i>I</i></button>
+      <button data-fmt="underline" title="Underline" aria-label="Underline" aria-pressed="false"><u>U</u></button>
+      <span class="divider" aria-hidden="true"></span>
+      <button id="undo" title="Undo" aria-label="Undo">↶</button>
+      <button id="redo" title="Redo" aria-label="Redo">↷</button>
+      <button id="dl" title="Download the edited DOCX">Save</button>
       <a class="brand" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">Docxodus ↗</a>
     </div>
     <div id="doc"></div>
@@ -78,29 +137,77 @@
       ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
 
     const $ = (id) => document.getElementById(id);
-    const status = (t) => ($("bootStatus").textContent = t);
+    const status = (text, progress) => {
+      $("bootStatus").textContent = text;
+      if (progress != null) $("bootProgress").style.width = `${progress}%`;
+    };
     let editor = null;
+    let featureIndex = 0;
+    let selectionFrame = 0;
+    const formatButtons = Array.from(document.querySelectorAll("#bar [data-fmt]"));
+    const features = [
+      ["01", "Zero uploads", "Your document never leaves this browser."],
+      ["02", "Native DOCX editing", "Formatting changes stay in real OOXML."],
+      ["03", "Word-grade fidelity", "Tables, lists, notes, and redlines survive."],
+      ["04", "Lossless save", "Download the edited Word file locally."],
+    ];
+
+    setInterval(() => {
+      featureIndex = (featureIndex + 1) % features.length;
+      const [number, title, copy] = features[featureIndex];
+      const ticker = $("featureTicker");
+      ticker.classList.remove("swap");
+      void ticker.offsetWidth;
+      $("featureNumber").textContent = number;
+      $("featureTitle").textContent = title;
+      $("featureCopy").textContent = copy;
+      ticker.classList.add("swap");
+    }, 1800);
+
+    const syncFormatState = () => {
+      if (!editor) return;
+      const state = editor.queryFormatState();
+      for (const button of formatButtons) {
+        button.setAttribute("aria-pressed", String(!!state[button.dataset.fmt]));
+      }
+    };
 
     $("start").addEventListener("click", async () => {
       $("start").disabled = true;
+      $("boot").classList.add("loading");
       try {
-        status("loading engine…");
+        status("Loading the .NET WebAssembly engine…", 18);
         const mod = await import(ENGINE);
-        status("opening document…");
-        editor = await mod.createEditor("#doc", DOC);
+        status("Opening the DOCX locally…", 52);
+        const response = await fetch(DOC, { credentials: "omit" });
+        if (!response.ok) throw new Error(`Could not load document (${response.status})`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        status("Wiring lossless editing controls…", 84);
+        editor = await mod.createEditor("#doc", bytes);
+        window.__editor = editor;
+        status("Live editor ready", 100);
         $("boot").style.display = "none";
         $("app").style.display = "flex";
       } catch (err) {
         status(String(err).slice(0, 160));
         $("start").disabled = false;
+        $("boot").classList.remove("loading");
       }
     });
 
-    for (const btn of document.querySelectorAll("#bar [data-fmt]")) {
+    for (const btn of document.querySelectorAll("#bar button")) {
       // mousedown + preventDefault keeps the text selection alive in the block.
       btn.addEventListener("mousedown", (e) => e.preventDefault());
-      btn.addEventListener("click", () => editor?.format(btn.dataset.fmt));
     }
+    for (const btn of formatButtons) {
+      btn.addEventListener("click", () => { editor?.format(btn.dataset.fmt); syncFormatState(); });
+    }
+    $("undo").addEventListener("click", () => { editor?.undo(); syncFormatState(); });
+    $("redo").addEventListener("click", () => { editor?.redo(); syncFormatState(); });
+    document.addEventListener("selectionchange", () => {
+      cancelAnimationFrame(selectionFrame);
+      selectionFrame = requestAnimationFrame(syncFormatState);
+    });
 
     $("dl").addEventListener("click", () => {
       if (!editor) return;
@@ -110,7 +217,7 @@
       const a = Object.assign(document.createElement("a"),
         { href: url, download: "docxodus-demo.docx" });
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
   </script>
 </body>
