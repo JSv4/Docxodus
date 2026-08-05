@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.1.0] - 2026-08-04
+
 ### Changed
 - **WASM payload trimmed and precompressed: ~3.2 MB over the wire (was 16.7 MB raw with
   no compression story).** The browser build now IL-trims `Docxodus` and
