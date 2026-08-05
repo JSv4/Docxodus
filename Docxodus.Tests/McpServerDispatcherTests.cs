@@ -887,9 +887,9 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]
-    public void MCP100_ToolCatalog_HasFourteenDistinctNamedToolsWithValidSchemas()
+    public void MCP100_ToolCatalog_HasFifteenDistinctNamedToolsWithValidSchemas()
     {
-        Assert.Equal(14, ToolCatalog.Tools.Count);
+        Assert.Equal(15, ToolCatalog.Tools.Count);
         var names = new System.Collections.Generic.HashSet<string>();
         foreach (var tool in ToolCatalog.Tools)
         {
@@ -923,6 +923,101 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Contains("headers", scopes);
         Assert.Contains("footers", scopes);
         Assert.Contains("header_footer", scopes);
+    }
+
+    // ─── Inline preview (MCP Apps / ChatGPT Apps) ──────────────────────
+
+    [Fact]
+    public void MCP140_Preview_RendersDocumentAndSingleBlock()
+    {
+        var sessionId = OpenSession();
+        InsertParagraph(sessionId, "Preview me");
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+
+        var whole = Parse(Dispatcher.Call(_store, "docxodus_preview",
+            J($$"""{"sessionId":{{sessionArg}}}""")));
+        Assert.Equal(sessionId, whole.GetProperty("sessionId").GetString());
+        var html = whole.GetProperty("html").GetString()!;
+        Assert.Contains("Preview me", html);
+        Assert.Contains("<style", html); // whole-document renders carry the converter stylesheet
+
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var block = Parse(Dispatcher.Call(_store, "docxodus_preview",
+            J($$"""{"sessionId":{{sessionArg}},"anchorId":"{{anchor}}"}""")));
+        Assert.Equal(anchor, block.GetProperty("anchorId").GetString());
+        Assert.False(string.IsNullOrEmpty(block.GetProperty("html").GetString()));
+    }
+
+    [Fact]
+    public void MCP141_WrapToolResult_RoutesHtmlToMetaNotModelContent()
+    {
+        var wrapped = Parse(UiResources.WrapToolResult("docxodus_preview",
+            """{"sessionId":"s1","anchorId":"p:body:abc","html":"<html><body>big</body></html>"}""",
+            isError: false));
+        var text = wrapped.GetProperty("content")[0].GetProperty("text").GetString()!;
+        Assert.DoesNotContain("<html", text);
+        Assert.Equal("<html><body>big</body></html>",
+            wrapped.GetProperty("_meta").GetProperty(UiResources.HtmlMetaKey).GetString());
+        var structured = wrapped.GetProperty("structuredContent");
+        Assert.Equal("s1", structured.GetProperty("sessionId").GetString());
+        Assert.Equal("p:body:abc", structured.GetProperty("anchorId").GetString());
+        Assert.Equal("<html><body>big</body></html>".Length,
+            structured.GetProperty("htmlLength").GetInt32());
+
+        // docxodus_open mirrors its result as structuredContent for the widget…
+        var open = Parse(UiResources.WrapToolResult("docxodus_open",
+            """{"sessionId":"s1","path":"a.docx"}""", isError: false));
+        Assert.Equal("s1", open.GetProperty("structuredContent").GetProperty("sessionId").GetString());
+
+        // …while every other tool keeps the original envelope, and errors are never rewrapped.
+        var plain = Parse(UiResources.WrapToolResult("docxodus_save", """{"path":"a.docx"}""", isError: false));
+        Assert.False(plain.TryGetProperty("structuredContent", out _));
+        var error = Parse(UiResources.WrapToolResult("docxodus_preview", """{"success":false}""", isError: true));
+        Assert.True(error.GetProperty("isError").GetBoolean());
+        Assert.False(error.TryGetProperty("_meta", out _));
+    }
+
+    [Fact]
+    public void MCP142_UiResources_ServeViewerTemplate()
+    {
+        var list = Parse(UiResources.BuildResourcesListResult());
+        var resource = Assert.Single(list.GetProperty("resources").EnumerateArray());
+        Assert.Equal(UiResources.ViewerUri, resource.GetProperty("uri").GetString());
+        Assert.Equal(UiResources.ViewerMimeType, resource.GetProperty("mimeType").GetString());
+
+        var read = Parse(UiResources.BuildResourcesReadResult(
+            J($$"""{"uri":"{{UiResources.ViewerUri}}"}""")));
+        var contents = Assert.Single(read.GetProperty("contents").EnumerateArray());
+        var htmlText = contents.GetProperty("text").GetString()!;
+        Assert.StartsWith("<!DOCTYPE html>", htmlText.TrimStart());
+        Assert.Contains("docxodus_preview", htmlText); // the widget's refresh path
+        Assert.True(contents.GetProperty("_meta").TryGetProperty("ui", out _));
+
+        Assert.Throws<InvalidParamsException>(() =>
+            UiResources.BuildResourcesReadResult(J("""{"uri":"ui://docxodus/nope.html"}""")));
+    }
+
+    [Fact]
+    public void MCP143_ToolsList_StampsUiMetaOnWidgetToolsOnly()
+    {
+        var tools = Parse(Program.BuildToolsListResult()).GetProperty("tools");
+        foreach (var tool in tools.EnumerateArray())
+        {
+            var name = tool.GetProperty("name").GetString();
+            var hasMeta = tool.TryGetProperty("_meta", out var meta);
+            if (name is "docxodus_open" or "docxodus_preview")
+            {
+                Assert.True(hasMeta, $"{name} should carry UI _meta");
+                Assert.Equal(UiResources.ViewerUri,
+                    meta.GetProperty("ui").GetProperty("resourceUri").GetString());
+                Assert.Equal(UiResources.ViewerUri,
+                    meta.GetProperty("openai/outputTemplate").GetString());
+            }
+            else
+            {
+                Assert.False(hasMeta, $"{name} should not carry _meta");
+            }
+        }
     }
 
     // ─── Document store: scoping and isolation ─────────────────────────

@@ -30,6 +30,23 @@ All notable changes to this project will be documented in this file.
   subsequent interactive edits. Coverage: DS408 and MCP140.
 
 ### Added
+- **Inline document preview in MCP Apps hosts (Claude, ChatGPT) — `docxodus-mcp` now speaks the
+  MCP Apps extension** (`io.modelcontextprotocol/ui`, spec 2026-01-26). The server advertises the
+  extension capability plus `resources` support, serves a self-contained `ui://docxodus/viewer.html`
+  widget template (`text/html;profile=mcp-app`; renders under the spec's default no-network CSP),
+  and stamps `_meta.ui.resourceUri` — with the documented `openai/*` compatibility aliases for
+  ChatGPT's Apps SDK — onto `docxodus_open` and the new **`docxodus_preview`** tool. `docxodus_preview`
+  renders a session (or a single block, by anchor id) through the same converter profile as
+  `docxodus_get_content format:"html"`, but routes the markup to the widget via result `_meta`
+  (`docxodus/html`) so the model-visible result stays a short summary; `docxodus_open` mirrors its
+  `{sessionId, path}` result as `structuredContent` so the widget can fetch its first render and
+  refresh after edits via widget-initiated `tools/call`. The viewer is dual-host: MCP Apps
+  JSON-RPC-over-postMessage (`ui/initialize` handshake, `ui/notifications/tool-*`) and ChatGPT's
+  `window.openai` bridge. Also new: a minimal streamable-HTTP transport (`docxodus-mcp --http PORT`,
+  single-response `application/json` shape) so the stdio server can sit behind a tunnel for
+  remote-MCP / ChatGPT Apps development. Smoke coverage: `tools/mcp-server/smoke/apps_probe.py`
+  (both transports, 23 checks) plus a Chromium harness validating the widget against a
+  spec-faithful fake host. See `docs/architecture/docx_agent_server.md` ("Inline preview").
 - **Embeddable viewer/editor via CDN — `docxodus/embed` (npm).** The published package was
   already CDN-servable (jsDelivr/unpkg expose `dist/` with CORS `*`, `application/wasm` MIME, and
   the `credentials:"omit"` loader patch), but embedding the *editor* still required hand-booting

@@ -32,6 +32,7 @@ internal static class Dispatcher
         "docxodus_save" => Save(store, args),
         "docxodus_close" => Close(store, args),
         "docxodus_get_content" => GetContent(store, args),
+        "docxodus_preview" => Preview(store, args),
         "docxodus_search" => Search(store, args),
         "docxodus_edit" => Edit(store, args),
         "docxodus_format" => Format(store, args),
@@ -163,6 +164,21 @@ internal static class Dispatcher
             default:
                 throw new McpToolException($"unknown format: {format}");
         }
+    }
+
+    /// <summary>Render for the inline preview widget (MCP Apps / ChatGPT). Same converter
+    /// profile as get_content's html format; the html field is lifted out of the model-visible
+    /// result by <see cref="UiResources.WrapToolResult"/>, so its size here is harmless.</summary>
+    private static string Preview(SessionStore store, JsonElement args)
+    {
+        var session = Session(store, args);
+        var anchorId = OptStr(args, "anchorId");
+        var html = anchorId is null
+            ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
+            : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false);
+        return $"{{\"sessionId\":{JsonRpcIo.JsonString(session.Id)}"
+            + (anchorId is null ? "" : $",\"anchorId\":{JsonRpcIo.JsonString(anchorId)}")
+            + $",\"html\":{JsonRpcIo.JsonString(html)}}}";
     }
 
     /// <summary>
