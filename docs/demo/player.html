@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docxodus — live DOCX editor</title>
+  <!--
+    Experimental X/Twitter Player Card target. The page is sized for the
+    historical ~480x480 player iframe and boots on tap, but X no longer
+    documents Player Cards and may ignore `twitter:player` entirely. Treat the
+    ordinary landing-page link as the supported path. Hosting remains just
+    GitHub Pages: the engine streams from jsDelivr and the sample document from
+    raw.githubusercontent.com (both serve CORS `*`).
+
+    Query overrides (used by tests and local dev):
+      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.1.0
+      ?doc=<docx URL>                        default: repo sample via raw.githubusercontent
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #101418; color: #e8ecf1; display: flex; flex-direction: column; }
+
+    /* ── Boot panel (the "poster" state until the user taps) ─────────────── */
+    #boot { flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 14px; text-align: center; padding: 24px; }
+    #boot .mark { width: 26px; height: 26px; background: #4d8df0;
+      clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+    #boot h1 { font-size: 17px; margin: 0; font-weight: 650; }
+    #boot p { font-size: 13px; margin: 0; color: #9aa7b4; max-width: 320px; line-height: 1.45; }
+    #start { font: inherit; font-size: 14px; font-weight: 600; color: #fff;
+      background: #2f6fe0; border: none; border-radius: 999px; padding: 10px 26px;
+      cursor: pointer; }
+    #start:hover { background: #3d7ded; }
+    #start:disabled { opacity: .6; cursor: default; }
+    #bootStatus { font-size: 12px; color: #7c8894; min-height: 1.2em; }
+
+    /* ── Editor state ────────────────────────────────────────────────────── */
+    #app { display: none; flex: 1; min-height: 0; flex-direction: column; }
+    #bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px;
+      background: #1a2028; border-bottom: 1px solid #29323d; }
+    #bar button { font: inherit; font-size: 13px; color: #dfe6ee; background: none;
+      border: 1px solid transparent; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+    #bar button:hover { background: #29323d; }
+    #bar .brand { margin-left: auto; font-size: 11px; color: #7c8894; text-decoration: none; }
+    #bar .brand:hover { color: #b9c4d0; }
+    #doc { flex: 1; overflow: auto; background: #fff; color: #111; padding: 18px 22px; }
+    #doc:focus-within { outline: none; }
+  </style>
+</head>
+<body>
+  <div id="boot">
+    <div class="mark"></div>
+    <h1>Docxodus</h1>
+    <p>A real Word-document editor, running entirely in this box via WebAssembly.
+       No server. Lossless .docx out.</p>
+    <button id="start">▶&nbsp; Try the live editor</button>
+    <div id="bootStatus"></div>
+  </div>
+
+  <div id="app">
+    <div id="bar">
+      <button data-fmt="bold" title="Bold"><b>B</b></button>
+      <button data-fmt="italic" title="Italic"><i>I</i></button>
+      <button data-fmt="underline" title="Underline"><u>U</u></button>
+      <button id="dl" title="Download the edited .docx">Save .docx</button>
+      <a class="brand" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">Docxodus ↗</a>
+    </div>
+    <div id="doc"></div>
+  </div>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const ENGINE = params.get("engine")
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js";
+    const DOC = params.get("doc")
+      ?? "https://raw.githubusercontent.com/JSv4/Docxodus/main/TestFiles/HC031-Complicated-Document.docx";
+
+    const $ = (id) => document.getElementById(id);
+    const status = (t) => ($("bootStatus").textContent = t);
+    let editor = null;
+
+    $("start").addEventListener("click", async () => {
+      $("start").disabled = true;
+      try {
+        status("loading engine…");
+        const mod = await import(ENGINE);
+        status("opening document…");
+        editor = await mod.createEditor("#doc", DOC);
+        $("boot").style.display = "none";
+        $("app").style.display = "flex";
+      } catch (err) {
+        status(String(err).slice(0, 160));
+        $("start").disabled = false;
+      }
+    });
+
+    for (const btn of document.querySelectorAll("#bar [data-fmt]")) {
+      // mousedown + preventDefault keeps the text selection alive in the block.
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => editor?.format(btn.dataset.fmt));
+    }
+
+    $("dl").addEventListener("click", () => {
+      if (!editor) return;
+      const bytes = editor.save();
+      const url = URL.createObjectURL(new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+      const a = Object.assign(document.createElement("a"),
+        { href: url, download: "docxodus-demo.docx" });
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>

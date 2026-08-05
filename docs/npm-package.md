@@ -933,7 +933,7 @@ public/
       ... (other framework files)
 ```
 
-## Bundle Size
+## Package and Runtime Size
 
 The WASM runtime payload is IL-trimmed to the API surface the package actually exposes
 (see `docs/architecture/wasm-packaging.md`):
@@ -963,7 +963,38 @@ Requires WebAssembly SIMD support.
 
 ## CDN Usage
 
-You can use Docxodus directly from a CDN without npm:
+You can use Docxodus directly from a CDN without npm. For an embeddable viewer or
+editor, the `embed` bundle is the one-tag path — it packages the whole stack
+(converter, editor, sessions) with WASM location auto-detection:
+
+```html
+<div id="viewer"></div>
+<div id="editor"></div>
+<script type="module">
+  import { createViewer, createEditor }
+    from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.0/dist/embed.bundle.js';
+
+  // Choose either factory, or render both into separate containers as shown.
+  // Source: URL string, Uint8Array, ArrayBuffer, Blob, or File.
+  await createViewer('#viewer', './document.docx');
+
+  // Editable document; omit the source for a blank document.
+  const editor = await createEditor('#editor', './document.docx');
+  const editedBytes = editor.save();
+</script>
+```
+
+Pages that can't use module scripts load `dist/embed.iife.js` instead, which exposes
+the same surface as a `Docxodus` global and resolves the WASM assets from the script's
+own URL. Pin an exact version in production — the JS wrappers and WASM assemblies must
+come from the same release, and CDN responses are cached as immutable.
+
+Both factories scope converter selectors to a private inner mount, so document rules such as
+`body` and `span` cannot restyle the host page. Document-global `@import` and `@page` rules are
+omitted because they cannot be safely container-scoped; use the full-document conversion/print
+path instead when those rules are required.
+
+Individual ESM entries also work directly, exactly as when self-hosted:
 
 ```html
 <script type="module">
@@ -981,6 +1012,10 @@ You can use Docxodus directly from a CDN without npm:
   document.getElementById('content').innerHTML = html;
 </script>
 ```
+
+Limitation: the Web Worker entry (`docxodus/worker`) cannot be loaded cross-origin
+(browsers require same-origin worker scripts), so the embed bundle runs the engine on
+the main thread. Self-host the package if you need off-main-thread execution.
 
 ## Related Documentation
 

@@ -27,10 +27,20 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'python3 -m http.server 8082 --directory dist/wasm',
-    url: 'http://localhost:8082',
-    reuseExistingServer: !process.env.CI,
-    timeout: 30000,
-  },
+  webServer: [
+    {
+      command: 'python3 -m http.server 8082 --directory dist/wasm',
+      url: 'http://localhost:8082',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+    },
+    {
+      // Second origin with CORS headers — emulates a CDN (jsDelivr/unpkg) so
+      // the cdn-embed spec exercises genuinely cross-origin module + WASM loads.
+      command: 'python3 tests/cors-server.py 8083 dist',
+      url: 'http://localhost:8083/embed.bundle.js',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+    },
+  ],
 });
