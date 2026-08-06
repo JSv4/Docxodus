@@ -222,6 +222,69 @@ What am I editing?
           session.Undo() restores prior state.
 ```
 
+## Block reordering — `MoveBlock` and `ValidMoveTargets`
+
+```csharp
+EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos);
+IReadOnlyList<MoveTarget> ValidMoveTargets(string sourceAnchorId);  // record(AnchorId, Before, After)
+```
+
+`MoveBlock` reorders ONE top-level body block relative to another — the model half of the
+editor's drag handle. Source and target must be block kinds (`p`, `h`, `li`, `tbl`), live in
+the same part, and share a direct XML parent (so a block-level `w:sdt` boundary is never
+crossed: that would change content-control membership). Moving a block to where it already
+is succeeds as a no-op **and records no undo snapshot**.
+
+| Tracking | Behaviour |
+|---|---|
+| Off (`Accept`) | Detaches and re-inserts the EXISTING element. Descendant Unids, hyperlink/image/comment/note relationship ids all stay valid — v1 only moves within one part. |
+| `RenderInline` | Keeps a revision-marked source and adds a revision-marked destination. A paragraph-like block uses one named `w:moveFrom`/`w:moveTo` pair (`ListRevisions` reports it as a single `move` revision that resolves both sides); a table lowers to Word's row delete + insert, which Word may present as two revisions. `EditResult.Created` carries the destination anchor so focus can follow the moved block. |
+
+`accept ≡ the requested order` and `reject ≡ the original order` hold for both shapes.
+
+**Two live copies, so ids must be split.** A tracked move duplicates the block, and the clone's
+id-bearing markers would otherwise collide:
+
+- bookmarks — the destination clone takes fresh document-unique ids; **both copies keep the
+  NAME**, so each survives its own resolution and cross-references resolve either way;
+- comments — the move SOURCE takes a fresh comment id and a cloned definition (fresh
+  `w14:paraId`, entries in both threading parts, cloned replies re-pointed at cloned parents),
+  leaving the destination on the original comment and its thread;
+- footnote/endnote references — deliberately duplicated: a note cited at both the old and new
+  position is a faithful pending move, and exactly one citation survives either resolution.
+
+### Refusals
+
+`InvalidPosition` for: a different parent or part; a source owning an inline `w:pPr/w:sectPr`
+(a section boundary, not an ordinary visual block); a move that would change or invert a
+cross-block comment, bookmark, permission or native-move range; a move whose span crosses a
+section-break paragraph; a source already inside a native move range; and — in tracked mode
+only — a source that already contains revision markup a move would have to re-wrap.
+`AnchorWrongKind` for a non-block kind or a non-top-level block (a table cell paragraph: move
+the whole table instead).
+
+### `ValidMoveTargets` — ask before offering
+
+Returns the blocks `sourceAnchorId` may legally move next to, in document order; empty when the
+block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a listed
+`(target, side)` pair is one `MoveBlock` accepts.
+
+**The two sides are reported separately, and that distinction is load-bearing.** Landing *into* a
+cross-block bookmark/comment/permission range changes its membership while landing outside it does
+not, so a target is routinely legal `Before` and refused `After` (or the reverse) — a caller that
+knows only "this target is reachable" will pick the refused side half the time. The editor gates
+its drop indicator on the side, snaps a drop to the legal side when only one is, and resolves each
+move-menu command against `(target, side)` pairs. Because a section break partitions the body,
+"move to top/bottom" means the ends of the source's own region.
+
+Note the practical consequence on real documents: a heavily cross-referenced contract can restrict
+moves far more than its section breaks alone would suggest, because most blocks sit inside some
+range. That is the confirmed v1 safety policy (reject rather than silently re-scope a range), not a
+defect — and it is why the UI must ask rather than offer everything and fail on drop.
+
+`MoveBlock` stays authoritative: the gate is advisory, and a caller that bypasses it still gets the
+typed error. WASM/npm only, like the other editor-support endpoints.
+
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 
 ### `DeleteRange` — bulk sibling removal

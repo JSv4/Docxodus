@@ -1054,6 +1054,7 @@ export interface DocxodusWasmExports {
      *  what the editor's incremental reconciler diffs its DOM against. Optional:
      *  absent on older WASM bundles. */
     ListBlocks?: (handle: number) => string;
+    ListRenderedBlocks?: (handle: number, renderTrackedChanges: boolean) => string;
     /** Citation-ordered footnotes/endnotes (JSON {@link NoteListEntry}[]) — the
      *  id↔ordinal authority for renumbering rendered note chrome. Optional:
      *  absent on older WASM bundles. */
@@ -1073,11 +1074,25 @@ export interface DocxodusWasmExports {
       cssPrefix: string,
       fabricateClasses: boolean
     ) => string;
+    RenderBlocksHtmlForReview?: (
+      handle: number,
+      anchorIdsJson: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      renderTrackedChanges: boolean
+    ) => string;
     RenderBlockHtml: (
       handle: number,
       anchorId: string,
       cssPrefix: string,
       fabricateClasses: boolean
+    ) => string;
+    RenderBlockHtmlForReview?: (
+      handle: number,
+      anchorId: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      renderTrackedChanges: boolean
     ) => string;
     RenderHtml: (
       handle: number,
@@ -1086,8 +1101,22 @@ export interface DocxodusWasmExports {
       paginated: boolean,
       scale: number
     ) => string;
+    RenderHtmlForReview?: (
+      handle: number,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      paginated: boolean,
+      scale: number,
+      renderTrackedChanges: boolean
+    ) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
+    MoveBlock: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    /** JSON `{anchorId, before, after}[]` — the blocks a block may legally be moved next to and
+     *  on which side, which is what a drag UI gates its drop targets on. The two sides are
+     *  reported separately because a cross-block range or a section break between the blocks can
+     *  make one legal and the other not. Optional: absent on older WASM bundles. */
+    ValidMoveTargets?: (handle: number, sourceAnchor: string) => string;
     DeleteRange: (handle: number, fromAnchorId: string, toAnchorIdExclusive: string) => string;
     DeleteSection: (handle: number, headingAnchorId: string) => string;
     InsertParagraph: (handle: number, anchor: string, pos: string, md: string) => string;

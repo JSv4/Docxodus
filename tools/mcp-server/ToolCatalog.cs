@@ -102,15 +102,15 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_edit",
-            "Insert, replace, delete, or undo/redo text and blocks, addressed by anchor id.",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "delete_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
-                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph only." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
                 "find": { "type": "string", "description": "replace_text_range: literal text to find within the block." },
                 "replace": { "type": "string", "description": "replace_text_range: replacement text." },
@@ -119,7 +119,9 @@ internal static class ToolCatalog
                 "fromAnchorId": { "type": "string", "description": "delete_range: start boundary (use anchorId as the field name for the start would be ambiguous with toAnchorIdExclusive; both are required together)." },
                 "headingAnchorId": { "type": "string", "description": "delete_section: heading whose section (heading + everything until the next same-or-higher heading) should be removed." },
                 "characterOffset": { "type": "integer", "description": "split_paragraph: character offset to split at." },
-                "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." }
+                "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." },
+                "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
+                "targetAnchorId": { "type": "string", "description": "move_block: reference block used with position." }
               },
               "required": ["sessionId", "action"]
             }

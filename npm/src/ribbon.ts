@@ -480,8 +480,12 @@ class RibbonSurface implements RibbonEditor {
       editable: this.options.editable,
       scale: this.options.scale,
       onEdit: this.options.onEdit,
+      onMove: this.options.onMove,
       paginated,
       headerFooter: this.headerFooter,
+      blockDrag: this.options.blockDrag ?? true,
+      trackedChanges: this.options.trackedChanges,
+      revisionAuthor: this.options.revisionAuthor,
     });
     this.require<HTMLButtonElement>("save").disabled = false;
     this.require("ribbon").setAttribute("aria-disabled", "false");

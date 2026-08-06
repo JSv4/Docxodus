@@ -1016,6 +1016,13 @@ public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 public sealed record RenderUnit(string Id, string Kind, string? Sig = null);
 
 /// <summary>
+/// A block a move source may legally land against, and on which side. The two positions are
+/// reported separately because a cross-block range or a section break BETWEEN the blocks can
+/// make one side legal and the other not — see <see cref="DocxSession.ValidMoveTargets"/>.
+/// </summary>
+public sealed record MoveTarget(string AnchorId, bool Before, bool After);
+
+/// <summary>
 /// The ordered top-level render units per scope container — the authority for "what
 /// blocks exist, in what order" that an incremental renderer diffs its DOM against.
 /// The projection's flat <c>AnchorIndex</c> cannot express table containment (a cell
@@ -1478,7 +1485,7 @@ public sealed class DocxSession : IDisposable
     /// paragraphs are ALWAYS listed — the plan mirrors the rendered DOM, which contains
     /// every block regardless of <see cref="EmptyParagraphMode"/>.
     /// </summary>
-    public RenderPlan ListBlocks()
+    public RenderPlan ListBlocks(bool renderTrackedChanges = true)
     {
         ThrowIfDisposed();
         _ = AnchorIndex(); // guarantees Unids are assigned on every projected part
@@ -1505,6 +1512,8 @@ public sealed class DocxSession : IDisposable
                     string? kind =
                         el.Name == W.tbl ? "tbl" :
                         el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                    if (!renderTrackedChanges && IsRemovedInAcceptedRevisionView(el))
+                        continue;
                     var unid = (string?)el.Attribute(PtOpenXml.Unid);
                     if (kind is null || unid is null) continue;
                     body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
@@ -1550,6 +1559,21 @@ public sealed class DocxSession : IDisposable
             body,
             Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, endnotes: false, "fn"),
             Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, endnotes: true, "en"));
+    }
+
+    private static bool IsRemovedInAcceptedRevisionView(XElement block)
+    {
+        if (block.Name == W.p)
+        {
+            var mark = block.Element(W.pPr)?.Element(W.rPr);
+            return mark?.Element(W.del) is not null || mark?.Element(W.moveFrom) is not null;
+        }
+        if (block.Name == W.tbl)
+        {
+            var rows = block.Elements(W.tr).ToList();
+            return rows.Count > 0 && rows.All(r => r.Element(W.trPr)?.Element(W.del) is not null);
+        }
+        return false;
     }
 
     /// <summary>
@@ -4426,6 +4450,454 @@ public sealed class DocxSession : IDisposable
     }
 
     // ─── Tier B: structural ops ──────────────────────────────────────────
+
+    /// <summary>
+    /// Reorder one top-level body block relative to another. Paragraphs, headings,
+    /// list items, and whole tables are supported. A direct edit moves the existing
+    /// XML element; <see cref="TrackedChangeMode.RenderInline"/> emits a native named
+    /// paragraph move or a Word-native deleted/inserted table pair.
+    /// </summary>
+    public EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var sourceTarget = FindAnchor(sourceAnchorId);
+        if (sourceTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"source anchor not found: {sourceAnchorId}", sourceAnchorId);
+        var targetTarget = FindAnchor(targetAnchorId);
+        if (targetTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"target anchor not found: {targetAnchorId}", targetAnchorId);
+
+        if (sourceTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"MoveBlock requires a paragraph/heading/list/table source; got kind={sourceTarget.Anchor.Kind}",
+                sourceAnchorId);
+        if (targetTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"MoveBlock requires a paragraph/heading/list/table target; got kind={targetTarget.Anchor.Kind}",
+                targetAnchorId);
+        if (sourceTarget.Anchor.Scope != targetTarget.Anchor.Scope)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "MoveBlock source and target must be in the same package part", sourceAnchorId);
+
+        var source = sourceTarget.Resolve(_doc!);
+        var target = targetTarget.Resolve(_doc!);
+        if (source is null || target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "source or target element resolved null", sourceAnchorId);
+        if (ReferenceEquals(source, target))
+            return new EditResult { Success = true };
+        if (!ReferenceEquals(source.Parent, target.Parent) || source.Parent is not { } parent)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "MoveBlock source and target must share a direct XML parent", sourceAnchorId);
+        if (!IsEditorBodyBlock(source, parent) || !IsEditorBodyBlock(target, parent))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "MoveBlock only supports top-level body blocks (including flattened body content controls)",
+                sourceAnchorId);
+
+        // A source already in the requested slot is a true no-op: do not consume undo.
+        if ((pos == Position.Before && ReferenceEquals(source.NextNode, target)) ||
+            (pos == Position.After && ReferenceEquals(target.NextNode, source)))
+            return new EditResult { Success = true };
+
+        if (MoveSourceRejection(source) is { } sourceRejection)
+            return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
+        if (BlockMoveSafetyError(parent, source, target, pos) is { } safetyError)
+            return EditResult.Fail(EditErrorCode.InvalidPosition, safetyError, sourceAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (_trackedChanges != TrackedChangeMode.RenderInline)
+            {
+                source.Remove();
+                if (pos == Position.Before) target.AddBeforeSelf(source);
+                else target.AddAfterSelf(source);
+
+                InvalidateProjectionCache();
+                return new EditResult
+                {
+                    Success = true,
+                    Modified = new[] { sourceTarget.Anchor },
+                    Patch = PatchFor(sourceTarget),
+                };
+            }
+
+            var destination = new XElement(source);
+            foreach (var el in destination.DescendantsAndSelf())
+                el.Attributes(PtOpenXml.Unid).Remove();
+            RenumberClonedBookmarks(destination);
+
+            // Both copies are live while the revision is pending, so the shared comment ids have to
+            // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
+            // the destination wired to the original comments and their threads.
+            if (_doc!.MainDocumentPart is { } commentHost)
+                Internal.CommentOps.CloneCommentsForMoveSource(commentHost, source);
+
+            var author = _revisionAuthor ?? "docxodus";
+            var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            if (source.Name == W.p)
+            {
+                var moveName = $"move{NextRevisionId()}";
+                MarkParagraphAsTrackedMove(source, from: true, moveName, author, date);
+                MarkParagraphAsTrackedMove(destination, from: false, moveName, author, date);
+            }
+            else
+            {
+                MarkTableRowsAsTrackedRevision(source, inserted: false, author, date);
+                MarkTableRowsAsTrackedRevision(destination, inserted: true, author, date);
+            }
+
+            UnidHelper.AssignToSelfAndDescendants(destination);
+            if (pos == Position.Before) target.AddBeforeSelf(destination);
+            else target.AddAfterSelf(destination);
+
+            var destinationUnid = (string)destination.Attribute(PtOpenXml.Unid)!;
+            var destinationAnchor = new Anchor(
+                $"{sourceTarget.Anchor.Kind}:{sourceTarget.Anchor.Scope}:{destinationUnid}",
+                sourceTarget.Anchor.Kind, sourceTarget.Anchor.Scope, destinationUnid);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { sourceTarget.Anchor },
+                Created = new[] { destinationAnchor },
+                Patch = PatchFor(sourceTarget),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, sourceAnchorId);
+        }
+    }
+
+    /// <summary>Reject reasons that depend only on the SOURCE block — if one applies, the block
+    /// cannot be moved anywhere, so <see cref="ValidMoveTargets"/> can answer with an empty set
+    /// without testing a single target. Shared with <see cref="MoveBlock"/> so the drag UI and the
+    /// engine can never disagree about what is movable.</summary>
+    private string? MoveSourceRejection(XElement source)
+    {
+        if (source.Name == W.p && source.Element(W.pPr)?.Element(W.sectPr) is not null)
+            return "cannot move a paragraph that owns a section break";
+
+        // Re-wrapping an existing revision can create illegal nested move markup. Direct
+        // mode can carry ordinary ins/del content safely, but an existing named move range
+        // is tied to its current document-order location and is intentionally immovable.
+        if (source.DescendantsAndSelf().Any(e =>
+                e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
+                e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd))
+            return "cannot move a block that is already part of a native move range";
+        if (_trackedChanges == TrackedChangeMode.RenderInline &&
+            source.DescendantsAndSelf().Any(e =>
+                e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
+            return "cannot create a tracked move around a block that already contains revisions";
+        return null;
+    }
+
+    /// <summary>
+    /// The anchors this block may legally be moved next to, in document order — the drop targets a
+    /// drag UI should offer. Empty when the block cannot move at all (it owns a section break, or
+    /// it already carries revision markup a move would have to re-wrap).
+    /// </summary>
+    /// <remarks>
+    /// One query answers a whole drag: the UI asks on drag start / menu open and gates its drop
+    /// indicators and menu items on the result, instead of drawing an indicator over a target the
+    /// engine will refuse. <see cref="MoveBlock"/> stays authoritative — this shares its guards
+    /// rather than restating them, so a target listed here is one <c>MoveBlock</c> accepts.
+    /// Each entry reports the two positions SEPARATELY: a cross-block range or a section break
+    /// between the blocks can make one side legal and the other not, so a caller that knows only
+    /// "this target is reachable" can still pick the refused side.
+    /// </remarks>
+    public IReadOnlyList<MoveTarget> ValidMoveTargets(string sourceAnchorId)
+    {
+        ThrowIfDisposed();
+        var empty = Array.Empty<MoveTarget>();
+
+        var sourceTarget = FindAnchor(sourceAnchorId);
+        if (sourceTarget is null || sourceTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
+            return empty;
+        var source = sourceTarget.Resolve(_doc!);
+        if (source?.Parent is not { } parent)
+            return empty;
+        if (!IsEditorBodyBlock(source, parent) || MoveSourceRejection(source) is not null)
+            return empty;
+
+        var targets = new List<MoveTarget>();
+        foreach (var candidate in parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+        {
+            if (ReferenceEquals(candidate, source) || !IsEditorBodyBlock(candidate, parent))
+                continue;
+            var unid = (string?)candidate.Attribute(PtOpenXml.Unid);
+            if (unid is null) continue;
+            var kind = candidate.Name == W.tbl ? "tbl" : WmlToMarkdownConverter.KindFor(candidate);
+            if (kind is null) continue;
+
+            bool before = BlockMoveSafetyError(parent, source, candidate, Position.Before) is null;
+            bool after = BlockMoveSafetyError(parent, source, candidate, Position.After) is null;
+            if (before || after)
+                targets.Add(new MoveTarget($"{kind}:{sourceTarget.Anchor.Scope}:{unid}", before, after));
+        }
+        return targets;
+    }
+
+    private static bool IsEditorBodyBlock(XElement block, XElement parent)
+    {
+        if (block.Name != W.p && block.Name != W.tbl) return false;
+        if (parent.Name == W.body) return true;
+        if (parent.Name != W.sdtContent) return false;
+        // The renderer flattens a body-level content control. A content control inside
+        // a table cell/text box is not one of the editor's top-level body units.
+        return parent.Ancestors(W.body).Any() &&
+               !parent.Ancestors(W.tc).Any() &&
+               !parent.Ancestors(W.txbxContent).Any();
+    }
+
+    /// <summary>Reject a move when it would change the membership/order of a cross-block
+    /// comment, bookmark, permission, or native-move range, or cross a section break.</summary>
+    private static string? BlockMoveSafetyError(
+        XElement parent, XElement source, XElement target, Position pos)
+    {
+        var blocks = parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).ToList();
+        int sourceIndex = blocks.IndexOf(source);
+        int targetIndex = blocks.IndexOf(target);
+        if (sourceIndex < 0 || targetIndex < 0) return "source or target is not a body render unit";
+
+        var reordered = blocks.ToList();
+        reordered.RemoveAt(sourceIndex);
+        int targetAfterRemoval = reordered.IndexOf(target);
+        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
+        reordered.Insert(insertAt, source);
+
+        int lo = Math.Min(sourceIndex, targetIndex);
+        int hi = Math.Max(sourceIndex, targetIndex);
+        if (blocks.Skip(lo).Take(hi - lo + 1)
+            .Any(e => e.Name == W.p && e.Element(W.pPr)?.Element(W.sectPr) is not null))
+            return "cannot move a block across a section-break paragraph";
+
+        var pairs = new (XName Start, XName End, string Label)[]
+        {
+            (W.commentRangeStart, W.commentRangeEnd, "comment"),
+            (W.bookmarkStart, W.bookmarkEnd, "bookmark"),
+            (W.permStart, W.permEnd, "permission"),
+            (W.moveFromRangeStart, W.moveFromRangeEnd, "move-source"),
+            (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
+        };
+
+        foreach (var (startName, endName, label) in pairs)
+        {
+            var starts = parent.Descendants(startName)
+                .GroupBy(e => (string?)e.Attribute(W.id) ?? "")
+                .ToDictionary(g => g.Key, g => g.First());
+            foreach (var end in parent.Descendants(endName))
+            {
+                var id = (string?)end.Attribute(W.id) ?? "";
+                if (!starts.TryGetValue(id, out var start)) continue;
+                var startBlock = TopLevelOwner(start, parent);
+                var endBlock = TopLevelOwner(end, parent);
+                if (startBlock is null || endBlock is null || ReferenceEquals(startBlock, endBlock))
+                    continue;
+
+                var before = RangeMembers(blocks, startBlock, endBlock);
+                var after = RangeMembers(reordered, startBlock, endBlock);
+                if (before is null || after is null || !before.SetEquals(after))
+                    return $"move would change or invert a cross-block {label} range";
+            }
+        }
+        return null;
+    }
+
+    private static XElement? TopLevelOwner(XElement marker, XElement parent) =>
+        marker.Ancestors().FirstOrDefault(e => ReferenceEquals(e.Parent, parent) &&
+            (e.Name == W.p || e.Name == W.tbl));
+
+    private static HashSet<XElement>? RangeMembers(
+        IReadOnlyList<XElement> order, XElement start, XElement end)
+    {
+        int a = -1;
+        int b = -1;
+        for (int i = 0; i < order.Count; i++)
+        {
+            if (ReferenceEquals(order[i], start)) a = i;
+            if (ReferenceEquals(order[i], end)) b = i;
+        }
+        if (a < 0 || b < a) return null;
+        return order.Skip(a).Take(b - a + 1).ToHashSet();
+    }
+
+    /// <summary>
+    /// Give a tracked-move destination clone's bookmarks fresh, document-unique ids, preserving
+    /// each start↔end pairing and both copies' NAME.
+    /// </summary>
+    /// <remarks>
+    /// A tracked move keeps the source and the destination live at the same time, so every
+    /// id-bearing marker in the clone is a second copy. <c>w:bookmarkStart/@w:id</c> is
+    /// uniqueness-constrained, so leaving the clone's ids alone makes the document schema-invalid
+    /// for as long as the revision is pending — the state a redline is sent out in.
+    /// <para>
+    /// The NAME is deliberately duplicated: this mirrors
+    /// <c>IrMarkupRenderer.NormalizeBookmarks</c> step (B), whose rule for a whole-block-revised
+    /// paragraph is that the del copy and the ins copy each carry the name into their own
+    /// resolution. Accepting keeps the destination's bookmark, rejecting keeps the source's, so
+    /// every <c>REF</c>/<c>PAGEREF</c>/<c>HYPERLINK \l</c> still resolves either way.
+    /// </para>
+    /// </remarks>
+    private void RenumberClonedBookmarks(XElement destination)
+    {
+        var starts = destination.DescendantsAndSelf(W.bookmarkStart).ToList();
+        var ends = destination.DescendantsAndSelf(W.bookmarkEnd).ToList();
+        if (starts.Count == 0 && ends.Count == 0)
+            return;
+
+        int next = GlobalMaxBookmarkId() + 1;
+        foreach (var start in starts)
+        {
+            var oldId = (string?)start.Attribute(W.id);
+            var fresh = (next++).ToString();
+            start.SetAttributeValue(W.id, fresh);
+            // Re-pair: the matching end is the clone's own end with the same original id.
+            foreach (var end in ends.Where(e => (string?)e.Attribute(W.id) == oldId).Take(1))
+                end.SetAttributeValue(W.id, fresh);
+        }
+    }
+
+    /// <summary>Highest <c>w:bookmarkStart</c>/<c>w:bookmarkEnd</c> id across every story in the
+    /// package, so a fresh id collides with nothing. Mirrors
+    /// <c>IrMarkupRenderer.GlobalMaxBookmarkId</c>.</summary>
+    private int GlobalMaxBookmarkId()
+    {
+        int max = 0;
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return max;
+
+        void Scan(XElement? root)
+        {
+            if (root is null) return;
+            foreach (var m in root.DescendantsAndSelf()
+                         .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+                if (int.TryParse((string?)m.Attribute(W.id), out var v) && v > max)
+                    max = v;
+        }
+
+        Scan(main.GetXDocument().Root);
+        foreach (var header in main.HeaderParts) Scan(header.GetXDocument().Root);
+        foreach (var footer in main.FooterParts) Scan(footer.GetXDocument().Root);
+        if (main.FootnotesPart is not null) Scan(main.FootnotesPart.GetXDocument().Root);
+        if (main.EndnotesPart is not null) Scan(main.EndnotesPart.GetXDocument().Root);
+        return max;
+    }
+
+    /// <summary>
+    /// Wrap every not-already-revised run of <paramref name="paragraph"/> in a
+    /// <paramref name="wrapperName"/> revision envelope and mark the paragraph mark to match.
+    /// </summary>
+    /// <remarks>
+    /// The single owner of "this whole paragraph is one revision" for <see cref="MoveBlock"/> —
+    /// used for a paragraph move (<c>w:moveFrom</c>/<c>w:moveTo</c>) and for the cell paragraphs
+    /// of a moved table (<c>w:del</c>/<c>w:ins</c>). A DELETING wrapper also converts
+    /// <c>w:t</c>→<c>w:delText</c> (and <c>w:instrText</c>→<c>w:delInstrText</c>), which is what
+    /// Word writes, what <c>IrMarkupRenderer.ConvertTextToDelText</c> produces, and what
+    /// <see cref="RevisionProcessor"/>'s reject path swaps back. Without the paragraph mark,
+    /// accepting the move leaves an empty source paragraph and rejecting leaves an empty
+    /// destination one; <c>RevisionOps</c> associates the mark with the named range.
+    /// </remarks>
+    private XElement MarkParagraphContentAndMark(
+        XElement paragraph, XName wrapperName, string author, string date)
+    {
+        bool deleting = wrapperName == W.del || wrapperName == W.moveFrom;
+
+        // Keep hyperlink/SDT/field containers in place and revision-wrap their runs.
+        // This is the schema-safe shape (w:hyperlink > w:moveFrom|moveTo > w:r).
+        foreach (var run in paragraph.Descendants(W.r).ToList())
+        {
+            if (run.Ancestors().Any(e =>
+                    e.Name == W.ins || e.Name == W.del ||
+                    e.Name == W.moveFrom || e.Name == W.moveTo))
+                continue;
+            var envelope = CreateRevisionEnvelope(wrapperName, author, date);
+            run.ReplaceWith(envelope);
+            envelope.Add(run);
+            if (deleting) ConvertTextToDeletedText(run);
+        }
+
+        var pPr = paragraph.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            paragraph.AddFirst(pPr);
+        }
+        var rPr = pPr.Element(W.rPr);
+        if (rPr is null)
+        {
+            rPr = new XElement(W.rPr);
+            var sectPr = pPr.Element(W.sectPr);
+            var pPrChange = pPr.Element(W.pPrChange);
+            if (sectPr is not null) sectPr.AddBeforeSelf(rPr);
+            else if (pPrChange is not null) pPrChange.AddBeforeSelf(rPr);
+            else pPr.Add(rPr);
+        }
+        rPr.AddFirst(CreateRevisionEnvelope(wrapperName, author, date));
+        return pPr;
+    }
+
+    /// <summary>Convert a deleted run-level element's text to its deleted spelling in place.
+    /// Mirrors <c>IrMarkupRenderer.ConvertTextToDelText</c>.</summary>
+    private static void ConvertTextToDeletedText(XElement runLevel)
+    {
+        foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
+            t.Name = W.delText;
+        foreach (var instr in runLevel.DescendantsAndSelf(W.instrText).ToList())
+            instr.Name = W.delInstrText;
+    }
+
+    private void MarkParagraphAsTrackedMove(
+        XElement paragraph, bool from, string moveName, string author, string date)
+    {
+        EnsureTrackRevisionsEnabled();
+        var pPr = MarkParagraphContentAndMark(
+            paragraph, from ? W.moveFrom : W.moveTo, author, date);
+
+        int rangeId = NextRevisionId();
+        var start = new XElement(from ? W.moveFromRangeStart : W.moveToRangeStart,
+            new XAttribute(W.id, rangeId),
+            new XAttribute(W.name, moveName),
+            new XAttribute(W.author, author),
+            new XAttribute(W.date, date));
+        var end = new XElement(from ? W.moveFromRangeEnd : W.moveToRangeEnd,
+            new XAttribute(W.id, rangeId));
+        pPr.AddAfterSelf(start);
+        paragraph.Add(end);
+    }
+
+    /// <summary>
+    /// Mark a whole table as inserted or deleted: the row-existence revision on every
+    /// <c>w:trPr</c> AND the cell content, matching the design's whole-table lowering ("every
+    /// source row <em>and its content</em> is deleted"). Row marks alone leave the moved-away
+    /// table's text rendering as ordinary body text inside a row Word believes is deleted.
+    /// </summary>
+    private void MarkTableRowsAsTrackedRevision(
+        XElement table, bool inserted, string author, string date)
+    {
+        EnsureTrackRevisionsEnabled();
+        var wrapperName = inserted ? W.ins : W.del;
+        foreach (var row in table.Descendants(W.tr).ToList())
+        {
+            var trPr = row.Element(W.trPr);
+            if (trPr is null)
+            {
+                trPr = new XElement(W.trPr);
+                row.AddFirst(trPr);
+            }
+            trPr.Add(CreateRevisionEnvelope(wrapperName, author, date));
+            foreach (var paragraph in row.Descendants(W.p).ToList())
+                MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
+        }
+    }
 
     public EditResult InsertParagraph(string anchorId, Position pos, string markdownPayload)
     {

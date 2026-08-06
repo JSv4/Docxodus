@@ -51,6 +51,8 @@ export interface UnitDiff {
    * siblings and may reconcile where a pure li insert/remove may not.
    */
   substituted: Array<{ oldIndex: number; newIndex: number }>;
+  /** Exact-token units whose existing DOM node moves to a new document slot. */
+  moved: Array<{ oldIndex: number; newIndex: number }>;
 }
 
 /** unid ("a1b2…") from a full anchor id ("p:body:a1b2…"). */
@@ -113,15 +115,36 @@ export function diffUnits(oldUnids: string[], newUnits: RenderUnit[]): UnitDiff 
     const bar = token.indexOf("|");
     return bar < 0 ? token : token.slice(0, bar);
   };
-  const substituted: Array<{ oldIndex: number; newIndex: number }> = [];
+  const moved: Array<{ oldIndex: number; newIndex: number }> = [];
   const usedRemoved = new Set<number>();
+  const usedAdded = new Set<number>();
+
+  // An exact token on both sides is a relocation, not a replacement. Pair these
+  // before same-unid substitutions so a pure reorder preserves its live DOM node.
+  const removedByToken = new Map<string, number[]>();
+  for (const oi of removed) {
+    (removedByToken.get(oldUnids[oi]) ?? removedByToken.set(oldUnids[oi], []).get(oldUnids[oi])!).push(oi);
+  }
+  for (const nj of added) {
+    const candidates = removedByToken.get(newUnids[nj]);
+    const oi = candidates?.find((i) => !usedRemoved.has(i));
+    if (oi !== undefined) {
+      moved.push({ oldIndex: oi, newIndex: nj });
+      usedRemoved.add(oi);
+      usedAdded.add(nj);
+    }
+  }
+
+  const substituted: Array<{ oldIndex: number; newIndex: number }> = [];
   const removedByUnid = new Map<string, number[]>();
   for (const oi of removed) {
+    if (usedRemoved.has(oi)) continue;
     const u = bareUnid(oldUnids[oi]);
     (removedByUnid.get(u) ?? removedByUnid.set(u, []).get(u)!).push(oi);
   }
   const unmatchedAdded: number[] = [];
   for (const nj of added) {
+    if (usedAdded.has(nj)) continue;
     const candidates = removedByUnid.get(bareUnid(newUnids[nj]));
     const oi = candidates?.find((i) => !usedRemoved.has(i));
     if (oi !== undefined) {
@@ -153,7 +176,7 @@ export function diffUnits(oldUnids: string[], newUnits: RenderUnit[]): UnitDiff 
     }
   }
 
-  return { keep, removed, added, substituted };
+  return { keep, removed, added, substituted, moved };
 }
 
 /**

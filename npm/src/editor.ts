@@ -20,6 +20,16 @@
 import { paginateHtml } from "./pagination.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
+import {
+  draggable,
+  dropTargetForElements,
+  monitorForElements,
+} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import {
+  autoScrollForElements,
+  autoScrollWindowForElements,
+} from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import { TrackedChangeMode } from "./types.js";
 import type { HeaderFooterKind, NumberFormat } from "./types.js";
 import { diffUnits, needsRemount, tokenOf, unidOf } from "./editor-reconcile.js";
 import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
@@ -42,6 +52,10 @@ export interface DocxEditorExports {
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
+    MoveBlock?: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    /** JSON `{anchorId, before, after}[]`: where a block may legally move, per side. Optional —
+     *  without it the drag UI offers every block and lets the engine refuse, as it did before. */
+    ValidMoveTargets?: (handle: number, sourceAnchor: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
     InsertTable: (
       handle: number,
@@ -67,6 +81,13 @@ export interface DocxEditorExports {
       cssPrefix: string,
       fabricateClasses: boolean,
     ) => string;
+    RenderBlockHtmlForReview?: (
+      handle: number,
+      anchorId: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      renderTrackedChanges: boolean,
+    ) => string;
     /** Session-attached full-document render (optional: older WASM bundles lack it). */
     RenderHtml?: (
       handle: number,
@@ -74,6 +95,14 @@ export interface DocxEditorExports {
       fabricateClasses: boolean,
       paginated: boolean,
       scale: number,
+    ) => string;
+    RenderHtmlForReview?: (
+      handle: number,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      paginated: boolean,
+      scale: number,
+      renderTrackedChanges: boolean,
     ) => string;
     Save: (handle: number) => Uint8Array;
     /** Save keeping the projector's Unid bookkeeping — remount only, never a user download.
@@ -105,6 +134,7 @@ export interface DocxEditorExports {
     /** Incremental-reconcile endpoints (optional: older WASM bundles predate them;
      *  the editor falls back to full remounts / full projections without them). */
     ListBlocks?: (handle: number) => string;
+    ListRenderedBlocks?: (handle: number, renderTrackedChanges: boolean) => string;
     ListNotes?: (handle: number, endnotes: boolean) => string;
     ListAnchors?: (handle: number) => string;
     RenderBlocksHtml?: (
@@ -112,6 +142,13 @@ export interface DocxEditorExports {
       anchorIdsJson: string,
       cssPrefix: string,
       fabricateClasses: boolean,
+    ) => string;
+    RenderBlocksHtmlForReview?: (
+      handle: number,
+      anchorIdsJson: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      renderTrackedChanges: boolean,
     ) => string;
   };
   DocumentConverter: {
@@ -142,8 +179,16 @@ export interface DocxEditorOptions {
    * of the body's block list (which indexes remount focus).
    */
   headerFooter?: boolean;
+  /** Enable the editor-owned block drag handle. Default false (the ribbon defaults it to true). */
+  blockDrag?: boolean;
+  /** How editor mutations are recorded. RenderInline enables native Word revisions. */
+  trackedChanges?: TrackedChangeMode;
+  /** Author stamped on native Word revisions. Default "docxodus". */
+  revisionAuthor?: string;
   /** Called after a block edit commits (with the affected anchor). */
   onEdit?: (info: { anchorId: string; unid: string }) => void;
+  /** Called after a successful block move. */
+  onMove?: (info: { sourceAnchorId: string; destinationAnchorId: string }) => void;
 }
 
 interface AnchorTargetLite {
@@ -154,6 +199,49 @@ interface AnchorTargetLite {
 }
 
 const EDITABLE_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
+
+const BLOCK_DRAG_TYPE = "docxodus-block";
+const blockDragStyledDocuments = new WeakSet<Document>();
+
+function ensureBlockDragStyles(doc: Document): void {
+  if (blockDragStyledDocuments.has(doc)) return;
+  blockDragStyledDocuments.add(doc);
+  const style = doc.createElement("style");
+  style.dataset.docxodusBlockDrag = "true";
+  style.textContent = `
+.docx-block-handle {
+  position: fixed; z-index: 2147483000; display: none; width: 26px; height: 28px;
+  align-items: center; justify-content: center; padding: 0; border: 1px solid #d0d5dd;
+  border-radius: 6px; background: #fff; color: #667085; box-shadow: 0 1px 3px rgba(16,24,40,.12);
+  cursor: grab; font: 700 17px/1 system-ui, sans-serif; user-select: none; touch-action: none;
+}
+.docx-block-handle:hover, .docx-block-handle:focus-visible { color: #344054; border-color: #98a2b3; outline: none; }
+.docx-block-handle[aria-pressed="true"] { color: #175cd3; border-color: #84adff; background: #eff8ff; }
+.docx-block-handle.docx-block-dragging { cursor: grabbing; opacity: .78; }
+.docx-block-drop-indicator {
+  position: fixed; z-index: 2147482999; display: none; height: 3px; pointer-events: none;
+  border-radius: 999px; background: #2e90fa; box-shadow: 0 0 0 1px rgba(255,255,255,.85);
+}
+.docx-block-move-menu {
+  position: fixed; z-index: 2147483001; display: none; min-width: 150px; padding: 5px;
+  border: 1px solid #d0d5dd; border-radius: 8px; background: #fff;
+  box-shadow: 0 8px 24px rgba(16,24,40,.18); font: 13px/1.35 system-ui, sans-serif;
+}
+.docx-block-move-menu button { display: block; width: 100%; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: #344054; text-align: left; }
+.docx-block-move-menu button:hover, .docx-block-move-menu button:focus-visible { background: #f2f4f7; outline: none; }
+.docx-block-move-menu button:disabled { color: #98a2b3; background: transparent; }
+.docx-block-move-flash { animation: docx-block-move-flash 800ms ease-out; }
+@keyframes docx-block-move-flash { from { box-shadow: 0 0 0 3px rgba(46,144,250,.55); } to { box-shadow: none; } }
+.docx-block-live-region { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+`;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+function trackedChangeWireName(mode: TrackedChangeMode): "accept" | "render_inline" | "strip_deletions" {
+  if (mode === TrackedChangeMode.RenderInline) return "render_inline";
+  if (mode === TrackedChangeMode.StripDeletions) return "strip_deletions";
+  return "accept";
+}
 
 // ─── M1: inline HTML → markdown (preserve formatting on edit) ───────────────
 
@@ -668,6 +756,7 @@ function completeArgs(
   fabricate: boolean,
   paginated: boolean,
   scale: number,
+  renderTrackedChanges: boolean,
 ): any[] {
   return [
     bytes, "Document", cssPrefix, fabricate, "", -1, "comment-",
@@ -677,7 +766,7 @@ function completeArgs(
     // paragraphs editable. Must stay in step with DocxSessionOps.RenderHtml (the remount path),
     // whose output has to match this first paint byte-for-byte.
     /* renderFootnotesAndEndnotes */ true, /* renderHeadersAndFooters */ paginated,
-    false, true, true, false, null, /* stampAnchors */ true,
+    renderTrackedChanges, true, true, false, null, /* stampAnchors */ true,
   ];
 }
 
@@ -685,7 +774,8 @@ export class DocxEditor {
   private readonly exports: DocxEditorExports;
   private readonly container: HTMLElement;
   private readonly handle: number;
-  private readonly options: Required<Omit<DocxEditorOptions, "onEdit">> & Pick<DocxEditorOptions, "onEdit">;
+  private readonly options: Required<Omit<DocxEditorOptions, "onEdit" | "onMove">> &
+    Pick<DocxEditorOptions, "onEdit" | "onMove">;
   /** Map a block's current bare unid → its full kind:scope:unid (DocxSession anchor). */
   private readonly unidToFullId = new Map<string, string>();
   /** The element whose [data-anchor] descendants are the editable blocks (container or page container). */
@@ -700,6 +790,22 @@ export class DocxEditor {
    * structural edit (split/merge/format) is lost. While this flag is set, commitBlock no-ops.
    */
   private replacing = false;
+
+  /** Editor-owned block-move chrome. It is deliberately outside the rendered unit tree. */
+  private blockDragHandle: HTMLElement | null = null;
+  private blockDropIndicator: HTMLElement | null = null;
+  private blockMoveMenu: HTMLElement | null = null;
+  private blockMoveLive: HTMLElement | null = null;
+  private blockDragSource: HTMLElement | null = null;
+  private blockDragCleanup: Array<() => void> = [];
+  private blockDragTargetCleanup: Array<() => void> = [];
+  private blockDragging = false;
+  private blockDragPointerDown = false;
+  /** Anchors the current drag source may legally move next to, per the engine's own rules.
+   *  Null when the bridge predates ValidMoveTargets — then every block is offered, as before. */
+  private blockMoveTargets: Map<string, { before: boolean; after: boolean }> | null = null;
+  /** Why the last move was refused, verbatim from the engine — diagnostics, not announcement copy. */
+  lastMoveError: string | null = null;
 
   /**
    * The last real (non-collapsed) text selection inside an editable block. A toolbar control that
@@ -929,7 +1035,11 @@ export class DocxEditor {
       paginated: options.paginated ?? false,
       scale: options.scale ?? 1,
       headerFooter: options.headerFooter ?? false,
+      blockDrag: options.blockDrag ?? false,
+      trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
+      revisionAuthor: options.revisionAuthor ?? "docxodus",
       onEdit: options.onEdit,
+      onMove: options.onMove,
     };
     // NOT persistAnchorIds: that setting applies to every Save on the session, so it put the
     // projector's Unid bookkeeping into the bytes the USER downloads — ~6x the file size for
@@ -937,16 +1047,24 @@ export class DocxEditor {
     // save/re-render hop, and it asks for that per call via SaveWithAnchorIds.
     // emitMarkdownPatch off: the editor re-renders from HTML, never from markdown patches,
     // so paying a whole-document re-projection per op would be dead weight.
-    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{"emitMarkdownPatch":false}');
+    const handle = exports.DocxSessionBridge.OpenSession(bytes, JSON.stringify({
+      emitMarkdownPatch: false,
+      trackedChanges: trackedChangeWireName(opts.trackedChanges),
+      revisionAuthor: opts.revisionAuthor,
+    }));
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
     if (opts.headerFooter) editor.createRegion();
     const fullHtml = exports.DocumentConverter.ConvertDocxToHtmlComplete(
-      ...completeArgs(bytes, opts.cssPrefix, opts.fabricateClasses, opts.paginated, opts.scale),
+      ...completeArgs(
+        bytes, opts.cssPrefix, opts.fabricateClasses, opts.paginated, opts.scale,
+        opts.trackedChanges === TrackedChangeMode.RenderInline,
+      ),
     );
     if (opts.paginated) editor.mountPaginated(fullHtml);
     else editor.mountHtml(fullHtml);
     editor.syncRegionToBody();
+    editor.setupBlockDrag();
     return editor;
   }
 
@@ -980,6 +1098,7 @@ export class DocxEditor {
       document.removeEventListener("mouseup", this.onMouseUp, true);
     }
     this.clearDragSelection();
+    this.teardownBlockDrag();
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
@@ -1009,6 +1128,484 @@ export class DocxEditor {
    */
   get sessionHandle(): number {
     return this.handle;
+  }
+
+  /** Move one top-level body block relative to another and repaint from the live session. */
+  moveBlock(
+    sourceAnchorId: string,
+    targetAnchorId: string,
+    position: "before" | "after",
+  ): boolean {
+    this.assertOpen();
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.MoveBlock !== "function") return false;
+    const res = this.parseEdit(
+      bridge.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
+    );
+    if (!res.success) {
+      // The engine's message names an OOXML construct ("a section-break paragraph"); the live
+      // region is read aloud, so announce the outcome and keep the raw reason for debugging.
+      this.lastMoveError = res.error?.message ?? null;
+      this.announceBlockMove("This block cannot be moved there.");
+      return false;
+    }
+    if (
+      (res.created?.length ?? 0) === 0 &&
+      (res.modified?.length ?? 0) === 0 &&
+      (res.removed?.length ?? 0) === 0
+    ) {
+      this.announceBlockMove("The block is already in that position.");
+      return true;
+    }
+
+    const destination = res.created?.[0] ?? res.modified?.[0];
+    // Review rendering creates a visible move-from and move-to pair. A full remount keeps
+    // their revision wrappers and table-row styling canonical; direct moves use the ordered
+    // incremental reconciler and retain the exact existing DOM node.
+    if (this.renderTrackedChanges) this.remount();
+    else this.reconcile();
+
+    const moved = destination
+      ? this.bodyUnitNodes().find((el) => el.getAttribute("data-anchor") === destination.unid)
+      : null;
+    if (moved) {
+      moved.classList.add("docx-block-move-flash");
+      moved.addEventListener("animationend", () => moved.classList.remove("docx-block-move-flash"), {
+        once: true,
+      });
+      const focusTarget = EDITABLE_TAGS.has(moved.tagName)
+        ? moved
+        : moved.querySelector<HTMLElement>('[data-anchor][contenteditable="true"]');
+      if (focusTarget) {
+        this.activeBlock = focusTarget;
+        focusTarget.focus({ preventScroll: true });
+      }
+    }
+    this.options.onMove?.({
+      sourceAnchorId,
+      destinationAnchorId: destination?.id ?? sourceAnchorId,
+    });
+    this.announceBlockMove("Block moved.");
+    return true;
+  }
+
+  /** Resolve any rendered descendant to its top-level body move unit (tables stay whole). */
+  private blockUnitOf(target: EventTarget | Node | null): HTMLElement | null {
+    const node = target instanceof Node ? target : null;
+    const el = node?.nodeType === Node.ELEMENT_NODE
+      ? node as HTMLElement
+      : node?.parentElement;
+    if (!el || !this.editRoot.contains(el)) return null;
+    return this.bodyUnitNodes().find((unit) => unit === el || unit.contains(el)) ?? null;
+  }
+
+  private isMovableBlockUnit(unit: HTMLElement | null): unit is HTMLElement {
+    if (!unit || !this.anchorIdOf(unit)) return false;
+    // A source representation of an existing tracked move/deletion is evidence, not a new
+    // editable block. Its accepted counterpart remains draggable.
+    if (unit.matches("[class$='row-del'], [class*='row-del ']") ||
+        unit.querySelector("tr[class$='row-del'], tr[class*='row-del '], del[class$='move-from'], del[class*='move-from ']")
+    ) return false;
+    return unit.tagName === "TABLE" || EDITABLE_TAGS.has(unit.tagName);
+  }
+
+  private currentBlockDragSource(): HTMLElement | null {
+    if (this.isMovableBlockUnit(this.blockDragSource) && this.blockDragSource.isConnected)
+      return this.blockDragSource;
+    const fromActive = this.blockUnitOf(this.activeBlock);
+    if (this.isMovableBlockUnit(fromActive)) {
+      this.blockDragSource = fromActive;
+      return fromActive;
+    }
+    return null;
+  }
+
+  private showBlockHandle(unit: HTMLElement): void {
+    const handle = this.blockDragHandle;
+    if (!handle || !this.isMovableBlockUnit(unit)) return;
+    const changed = unit !== this.blockDragSource;
+    this.blockDragSource = unit;
+    if (changed) this.refreshBlockMoveTargets(unit);
+    // A block the engine will not move anywhere — one owning a section break, or already carrying
+    // revision markup a tracked move would have to re-wrap — gets no handle rather than a handle
+    // that always fails.
+    if (this.blockMoveTargets?.size === 0) {
+      handle.style.display = "none";
+      return;
+    }
+    const rect = unit.getBoundingClientRect();
+    handle.style.display = "flex";
+    handle.style.left = `${Math.max(4, rect.left - 32)}px`;
+    handle.style.top = `${Math.max(4, rect.top + (unit.tagName === "TABLE" ? 6 : Math.max(0, (rect.height - 28) / 2)))}px`;
+    const preview = (unit.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 48);
+    handle.setAttribute("aria-label", preview ? `Move block: ${preview}` : "Move block");
+    if (changed) this.refreshBlockDropTargets();
+  }
+
+  private hideBlockHandle(): void {
+    if (this.blockDragging || this.blockMoveMenu?.style.display === "block") return;
+    if (this.blockDragHandle) this.blockDragHandle.style.display = "none";
+  }
+
+  private positionBlockHandle(): void {
+    const source = this.currentBlockDragSource();
+    if (source && this.blockDragHandle?.style.display !== "none") this.showBlockHandle(source);
+  }
+
+  private showDropIndicator(target: HTMLElement, position: "before" | "after"): void {
+    const indicator = this.blockDropIndicator;
+    if (!indicator) return;
+    const rect = this.unitWrapperOf(target).getBoundingClientRect();
+    indicator.style.display = "block";
+    indicator.style.left = `${rect.left}px`;
+    indicator.style.top = `${position === "before" ? rect.top - 1 : rect.bottom - 1}px`;
+    indicator.style.width = `${Math.max(24, rect.width)}px`;
+  }
+
+  private hideDropIndicator(): void {
+    if (this.blockDropIndicator) this.blockDropIndicator.style.display = "none";
+  }
+
+  private announceBlockMove(message: string): void {
+    const live = this.blockMoveLive;
+    if (!live) return;
+    live.textContent = "";
+    this.container.ownerDocument.defaultView?.setTimeout(() => { live.textContent = message; }, 0);
+  }
+
+  /**
+   * Ask the engine which anchors the current source may move next to. One call per drag source,
+   * so the UI offers only drops MoveBlock will accept — a document with section breaks is
+   * partitioned into regions, and drawing an indicator across one only to fail the drop was the
+   * behaviour this replaces. Null (no bridge support) keeps the previous offer-everything path.
+   */
+  private refreshBlockMoveTargets(source: HTMLElement | null): void {
+    const bridge = this.exports.DocxSessionBridge;
+    const sourceId = source ? this.anchorIdOf(source) : null;
+    if (!sourceId || typeof bridge.ValidMoveTargets !== "function") {
+      this.blockMoveTargets = null;
+      return;
+    }
+    try {
+      const targets = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as Array<
+        { anchorId: string; before: boolean; after: boolean }
+      >;
+      this.blockMoveTargets = new Map(
+        targets.map((t) => [t.anchorId, { before: t.before, after: t.after }]),
+      );
+    } catch {
+      this.blockMoveTargets = null;
+    }
+  }
+
+  /**
+   * Whether `unit` is a legal destination for the current drag source — for a SPECIFIC side when
+   * one is given. A cross-block range or a section break between the blocks can make one side
+   * legal and the other not, so "this target is reachable" is not enough to pick a position.
+   */
+  private isValidMoveTarget(unit: HTMLElement, position?: "before" | "after"): boolean {
+    if (!this.blockMoveTargets) return true; // no bridge support: engine stays the only gate
+    const id = this.anchorIdOf(unit);
+    const sides = id ? this.blockMoveTargets.get(id) : undefined;
+    if (!sides) return false;
+    return position ? sides[position] : sides.before || sides.after;
+  }
+
+  /**
+   * The side of `unit` a drop at `clientY` should land on: the half the pointer is in, snapped to
+   * the other side when only that one is legal. Snapping rather than refusing keeps a reachable
+   * target usable — the illegal side is usually illegal only because a section break or a
+   * cross-block range sits between the two blocks on that side.
+   */
+  private dropPositionFor(unit: HTMLElement, clientY: number): "before" | "after" {
+    const rect = unit.getBoundingClientRect();
+    const preferred = clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (this.isValidMoveTarget(unit, preferred)) return preferred;
+    const other = preferred === "before" ? "after" : "before";
+    return this.isValidMoveTarget(unit, other) ? other : preferred;
+  }
+
+  private refreshBlockDropTargets(): void {
+    for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
+    if (!this.blockDragHandle || this.options.paginated) return;
+    for (const unit of this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el))) {
+      this.blockDragTargetCleanup.push(dropTargetForElements({
+        element: unit,
+        // A target the engine would refuse is not a drop target at all, so Pragmatic never
+        // fires onDragEnter for it and no indicator is drawn over it.
+        canDrop: ({ source }) =>
+          source.data.type === BLOCK_DRAG_TYPE && source.data.sourceAnchorId !== this.anchorIdOf(unit) &&
+          this.isValidMoveTarget(unit),
+        getData: ({ input }) => ({
+          type: BLOCK_DRAG_TYPE,
+          targetAnchorId: this.anchorIdOf(unit),
+          position: this.dropPositionFor(unit, input.clientY),
+          targetElement: unit,
+        }),
+        onDragEnter: ({ self }) => {
+          const pos = self.data.position === "after" ? "after" : "before";
+          this.showDropIndicator(unit, pos);
+        },
+        onDrag: ({ self }) => {
+          const pos = self.data.position === "after" ? "after" : "before";
+          this.showDropIndicator(unit, pos);
+        },
+        onDragLeave: () => this.hideDropIndicator(),
+      }));
+    }
+  }
+
+  private closeBlockMoveMenu(restoreFocus = false): void {
+    if (!this.blockMoveMenu || !this.blockDragHandle) return;
+    this.blockMoveMenu.style.display = "none";
+    this.blockDragHandle.setAttribute("aria-expanded", "false");
+    this.blockDragHandle.setAttribute("aria-pressed", "false");
+    if (restoreFocus) this.blockDragHandle.focus({ preventScroll: true });
+  }
+
+  private openBlockMoveMenu(): void {
+    const menu = this.blockMoveMenu;
+    const handle = this.blockDragHandle;
+    const source = this.currentBlockDragSource();
+    if (!menu || !handle || !source) return;
+    this.refreshBlockMoveTargets(source);
+    menu.querySelectorAll<HTMLButtonElement>("button[data-move]").forEach((button) => {
+      button.disabled = !this.blockMoveDestination(source, button.dataset.move ?? "");
+    });
+    const rect = handle.getBoundingClientRect();
+    menu.style.display = "block";
+    menu.style.left = `${Math.max(4, rect.right + 6)}px`;
+    menu.style.top = `${Math.max(4, rect.top)}px`;
+    handle.setAttribute("aria-expanded", "true");
+    handle.setAttribute("aria-pressed", "true");
+    menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+  }
+
+  /**
+   * Resolve a move-menu action to the block it should land against, considering only destinations
+   * the engine accepts. "Top"/"bottom" therefore mean the ends of the source's own movable region
+   * — on a document with section breaks that is the section, not the document, which is what makes
+   * the commands work at all there instead of always failing.
+   */
+  private blockMoveDestination(
+    source: HTMLElement,
+    action: string,
+  ): { target: HTMLElement; position: "before" | "after" } | null {
+    const units = this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el));
+    const index = units.indexOf(source);
+    if (index < 0) return null;
+
+    // Only pairs the engine accepts: a target can be reachable on one side and refused on the
+    // other, so the SIDE is part of what makes a candidate valid.
+    const position: "before" | "after" = action === "up" || action === "top" ? "before" : "after";
+    const candidates = units
+      .filter((el) => el !== source && this.isValidMoveTarget(el, position))
+      .filter((el) => (position === "before"
+        ? units.indexOf(el) < index
+        : units.indexOf(el) > index));
+    if (candidates.length === 0) return null;
+
+    if (action === "up") return { target: candidates[candidates.length - 1], position };
+    if (action === "down") return { target: candidates[0], position };
+    if (action === "top") return { target: candidates[0], position };
+    if (action === "bottom") return { target: candidates[candidates.length - 1], position };
+    return null;
+  }
+
+  private runBlockMoveMenuAction(action: string): void {
+    const source = this.currentBlockDragSource();
+    if (!source) return;
+    const destination = this.blockMoveDestination(source, action);
+    this.closeBlockMoveMenu();
+    if (!destination) return;
+    const sourceId = this.anchorIdOf(source);
+    const targetId = this.anchorIdOf(destination.target);
+    if (sourceId && targetId) this.moveBlock(sourceId, targetId, destination.position);
+  }
+
+  /** The nearest ancestor that actually scrolls the document flow, for drag autoscroll. */
+  private scrollContainer(): HTMLElement | null {
+    const view = this.container.ownerDocument.defaultView;
+    for (let el: HTMLElement | null = this.editRoot; el; el = el.parentElement) {
+      const overflowY = view?.getComputedStyle(el).overflowY ?? "visible";
+      if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight)
+        return el;
+    }
+    return null;
+  }
+
+  /** Mount one floating handle; PDD owns pointer dragging while the menu owns keyboard moves. */
+  private setupBlockDrag(): void {
+    if (!this.options.blockDrag || this.options.paginated || this.closed || this.blockDragHandle)
+      return;
+    const doc = this.container.ownerDocument;
+    ensureBlockDragStyles(doc);
+
+    const handle = doc.createElement("div");
+    handle.className = "docx-block-handle";
+    handle.textContent = "⠿";
+    handle.tabIndex = 0;
+    handle.setAttribute("role", "button");
+    handle.setAttribute("contenteditable", "false");
+    handle.setAttribute("aria-haspopup", "menu");
+    handle.setAttribute("aria-expanded", "false");
+    handle.setAttribute("aria-pressed", "false");
+
+    const indicator = doc.createElement("div");
+    indicator.className = "docx-block-drop-indicator";
+    const menu = doc.createElement("div");
+    menu.className = "docx-block-move-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `
+      <button type="button" role="menuitem" data-move="up">Move up</button>
+      <button type="button" role="menuitem" data-move="down">Move down</button>
+      <button type="button" role="menuitem" data-move="top">Move to top</button>
+      <button type="button" role="menuitem" data-move="bottom">Move to bottom</button>`;
+    const live = doc.createElement("div");
+    live.className = "docx-block-live-region";
+    live.setAttribute("role", "status");
+    live.setAttribute("aria-live", "polite");
+    this.container.append(handle, indicator, menu, live);
+    this.blockDragHandle = handle;
+    this.blockDropIndicator = indicator;
+    this.blockMoveMenu = menu;
+    this.blockMoveLive = live;
+
+    const onPointerMove = (event: PointerEvent): void => {
+      // Keep the floating draggable stationary between pointerdown and native dragstart.
+      // Repositioning it under the pointer during the browser's drag threshold cancels
+      // drag initiation before PDD can receive dragstart.
+      if (this.blockDragging || this.blockDragPointerDown) return;
+      const unit = this.blockUnitOf(event.target);
+      if (this.isMovableBlockUnit(unit)) this.showBlockHandle(unit);
+    };
+    const onFocusIn = (event: FocusEvent): void => {
+      const unit = this.blockUnitOf(event.target);
+      if (this.isMovableBlockUnit(unit)) this.showBlockHandle(unit);
+    };
+    const onPointerLeave = (event: PointerEvent): void => {
+      const next = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+      if (next && (handle.contains(next) || menu.contains(next))) return;
+      this.hideBlockHandle();
+    };
+    const onViewportChange = (): void => this.positionBlockHandle();
+    this.container.addEventListener("pointermove", onPointerMove);
+    this.container.addEventListener("focusin", onFocusIn);
+    this.container.addEventListener("pointerleave", onPointerLeave);
+    doc.addEventListener("scroll", onViewportChange, true);
+    doc.defaultView?.addEventListener("resize", onViewportChange);
+    this.blockDragCleanup.push(
+      () => this.container.removeEventListener("pointermove", onPointerMove),
+      () => this.container.removeEventListener("focusin", onFocusIn),
+      () => this.container.removeEventListener("pointerleave", onPointerLeave),
+      () => doc.removeEventListener("scroll", onViewportChange, true),
+      () => doc.defaultView?.removeEventListener("resize", onViewportChange),
+    );
+
+    const onHandleClick = (): void => {
+      if (menu.style.display === "block") this.closeBlockMoveMenu();
+      else this.openBlockMoveMenu();
+    };
+    const onHandlePointerDown = (): void => { this.blockDragPointerDown = true; };
+    const onPointerUp = (): void => { this.blockDragPointerDown = false; };
+    const onHandleKeydown = (event: KeyboardEvent): void => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onHandleClick();
+    };
+    const onMenuClick = (event: MouseEvent): void => {
+      const button = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-move]");
+      if (button && !button.disabled) this.runBlockMoveMenuAction(button.dataset.move ?? "");
+    };
+    const onMenuKeydown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") { event.preventDefault(); this.closeBlockMoveMenu(true); }
+    };
+    handle.addEventListener("click", onHandleClick);
+    handle.addEventListener("pointerdown", onHandlePointerDown);
+    handle.addEventListener("keydown", onHandleKeydown);
+    menu.addEventListener("click", onMenuClick);
+    menu.addEventListener("keydown", onMenuKeydown);
+    doc.addEventListener("pointerup", onPointerUp, true);
+    doc.addEventListener("pointercancel", onPointerUp, true);
+    this.blockDragCleanup.push(
+      () => handle.removeEventListener("click", onHandleClick),
+      () => handle.removeEventListener("pointerdown", onHandlePointerDown),
+      () => handle.removeEventListener("keydown", onHandleKeydown),
+      () => menu.removeEventListener("click", onMenuClick),
+      () => menu.removeEventListener("keydown", onMenuKeydown),
+      () => doc.removeEventListener("pointerup", onPointerUp, true),
+      () => doc.removeEventListener("pointercancel", onPointerUp, true),
+    );
+
+    this.blockDragCleanup.push(draggable({
+      element: handle,
+      canDrag: () => !!this.currentBlockDragSource(),
+      getInitialData: () => {
+        const source = this.currentBlockDragSource();
+        return { type: BLOCK_DRAG_TYPE, sourceAnchorId: source ? this.anchorIdOf(source) : undefined };
+      },
+      onDragStart: () => {
+        this.blockDragging = true;
+        handle.classList.add("docx-block-dragging");
+        this.closeBlockMoveMenu();
+        this.refreshBlockMoveTargets(this.currentBlockDragSource());
+        this.refreshBlockDropTargets();
+      },
+      onDrop: () => {
+        this.blockDragging = false;
+        this.blockDragPointerDown = false;
+        handle.classList.remove("docx-block-dragging");
+        this.hideDropIndicator();
+      },
+    }));
+    this.blockDragCleanup.push(monitorForElements({
+      canMonitor: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
+      onDrop: ({ source, location }) => {
+        this.hideDropIndicator();
+        const drop = location.current.dropTargets[0]?.data;
+        const sourceId = source.data.sourceAnchorId;
+        const targetId = drop?.targetAnchorId;
+        const position = drop?.position === "after" ? "after" : "before";
+        if (typeof sourceId === "string" && typeof targetId === "string")
+          this.moveBlock(sourceId, targetId, position);
+        else
+          // Released outside any valid target. Say so — a silent no-op reads as a broken drag.
+          this.announceBlockMove("Move cancelled — the block was not dropped on a valid position.");
+      },
+    }));
+    // Register on the element that actually scrolls. editRoot is the document flow — in the
+    // ribbon surface the scroller is an ancestor of it, and registering the flow made Pragmatic
+    // log "attached to an element that appears not to be scrollable" on every document open
+    // while doing nothing.
+    const scroller = this.scrollContainer();
+    if (scroller) {
+      this.blockDragCleanup.push(autoScrollForElements({
+        element: scroller,
+        canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
+        getAllowedAxis: () => "vertical",
+      }));
+    }
+    this.blockDragCleanup.push(autoScrollWindowForElements({
+      canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
+      getAllowedAxis: () => "vertical",
+    }));
+    this.refreshBlockDropTargets();
+  }
+
+  private teardownBlockDrag(): void {
+    for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
+    for (const cleanup of this.blockDragCleanup.splice(0)) cleanup();
+    this.blockDragHandle?.remove();
+    this.blockDropIndicator?.remove();
+    this.blockMoveMenu?.remove();
+    this.blockMoveLive?.remove();
+    this.blockDragHandle = null;
+    this.blockDropIndicator = null;
+    this.blockMoveMenu = null;
+    this.blockMoveLive = null;
+    this.blockDragSource = null;
+    this.blockDragging = false;
+    this.blockDragPointerDown = false;
   }
 
   // ─── internals ───────────────────────────────────────────────────────
@@ -1166,6 +1763,13 @@ export class DocxEditor {
 
   private wireBlock(el: HTMLElement): void {
     if (!EDITABLE_TAGS.has(el.tagName)) return;
+    if (
+      el.closest("tr[class$='row-del'], tr[class*='row-del ']") ||
+      el.querySelector(":scope > del[class$='move-from'], :scope > del[class*='move-from ']")
+    ) {
+      el.setAttribute("contenteditable", "false");
+      return;
+    }
     const unid = el.getAttribute("data-anchor");
     // Only blocks the markdown projection addresses are editable via the text path. This INCLUDES
     // table-cell paragraphs (the projection indexes them), so cell text IS editable. Table-aware
@@ -1257,12 +1861,7 @@ export class DocxEditor {
 
     // Plain block: re-render ONLY this block from the live session for canonical HTML. Swapping the
     // just-blurred node here is safe (verified — focus stays on the newly-clicked block).
-    const html = this.exports.DocxSessionBridge.RenderBlockHtml(
-      this.handle,
-      newAnchor,
-      this.options.cssPrefix,
-      this.options.fabricateClasses,
-    );
+    const html = this.renderBlockHtml(newAnchor);
     if (html.charCodeAt(0) !== 0x7b /* not an error object */) {
       const fresh = new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
       const inBand = this.isBandBlock(el);
@@ -1559,14 +2158,33 @@ export class DocxEditor {
 
   /** Render a block by anchor and parse it into a detached element (null on error). */
   private renderInto(anchorId: string): HTMLElement | null {
-    const html = this.exports.DocxSessionBridge.RenderBlockHtml(
-      this.handle,
-      anchorId,
-      this.options.cssPrefix,
-      this.options.fabricateClasses,
-    );
+    const html = this.renderBlockHtml(anchorId);
     if (html.charCodeAt(0) === 0x7b /* error object */) return null;
     return new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
+  }
+
+  private get renderTrackedChanges(): boolean {
+    return this.options.trackedChanges === TrackedChangeMode.RenderInline;
+  }
+
+  private renderBlockHtml(anchorId: string): string {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderBlockHtmlForReview === "function") {
+      return bridge.RenderBlockHtmlForReview(
+        this.handle, anchorId, this.options.cssPrefix, this.options.fabricateClasses,
+        this.renderTrackedChanges,
+      );
+    }
+    return bridge.RenderBlockHtml(
+      this.handle, anchorId, this.options.cssPrefix, this.options.fabricateClasses,
+    );
+  }
+
+  private renderPlanJson(): string {
+    const bridge = this.exports.DocxSessionBridge;
+    return typeof bridge.ListRenderedBlocks === "function"
+      ? bridge.ListRenderedBlocks(this.handle, this.renderTrackedChanges)
+      : bridge.ListBlocks!(this.handle);
   }
 
   /** Render two blocks in ONE batched bridge call when the bundle carries RenderBlocksHtml —
@@ -1578,14 +2196,19 @@ export class DocxEditor {
     const bridge = this.exports.DocxSessionBridge;
     if (typeof bridge.RenderBlocksHtml === "function") {
       try {
-        const map = JSON.parse(
-          bridge.RenderBlocksHtml(
+        const idsJson = JSON.stringify([a, b]);
+        const json = typeof bridge.RenderBlocksHtmlForReview === "function"
+          ? bridge.RenderBlocksHtmlForReview(
+              this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
+              this.renderTrackedChanges,
+            )
+          : bridge.RenderBlocksHtml(
             this.handle,
-            JSON.stringify([a, b]),
+            idsJson,
             this.options.cssPrefix,
             this.options.fabricateClasses,
-          ),
-        ) as Record<string, string | null> & { error?: string };
+          );
+        const map = JSON.parse(json) as Record<string, string | null> & { error?: string };
         if (!map.error) {
           const parse = (h: string | null | undefined): HTMLElement | null =>
             h
@@ -2363,6 +2986,17 @@ export class DocxEditor {
    */
   private renderFullHtml(): string {
     const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderHtmlForReview === "function") {
+      const html = bridge.RenderHtmlForReview(
+        this.handle,
+        this.options.cssPrefix,
+        this.options.fabricateClasses,
+        this.options.paginated,
+        this.options.scale,
+        this.renderTrackedChanges,
+      );
+      if (html.charCodeAt(0) !== 0x7b) return html;
+    }
     if (typeof bridge.RenderHtml === "function") {
       const html = bridge.RenderHtml(
         this.handle,
@@ -2382,7 +3016,10 @@ export class DocxEditor {
         ? bridge.SaveWithAnchorIds(this.handle)
         : bridge.Save(this.handle);
     return this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
-      ...completeArgs(bytes, this.options.cssPrefix, this.options.fabricateClasses, this.options.paginated, this.options.scale),
+      ...completeArgs(
+        bytes, this.options.cssPrefix, this.options.fabricateClasses,
+        this.options.paginated, this.options.scale, this.renderTrackedChanges,
+      ),
     );
   }
 
@@ -2494,7 +3131,7 @@ export class DocxEditor {
     // Refresh the unid → anchor map FIRST: wiring freshly rendered nodes (wireBlock)
     // resolves through it, and the map must reflect the post-op session.
     this.refreshAnchorMap();
-    const plan = JSON.parse(bridge.ListBlocks!(this.handle)) as RenderPlan & { error?: string };
+    const plan = JSON.parse(this.renderPlanJson()) as RenderPlan & { error?: string };
     if (plan.error) return this.bail(`plan error: ${plan.error}`);
 
     const oldNodes = this.bodyUnitNodes();
@@ -2508,21 +3145,26 @@ export class DocxEditor {
     if (fnState === null || enState === null) return this.bail("notes container unstampable/missing");
 
     // One batch render for everything that needs fresh HTML.
-    const addedBodyIds = bodyDiff.added.map((j) => plan.body[j].id);
+    const movedBodyNew = new Set(bodyDiff.moved.map((m) => m.newIndex));
+    const addedBodyIds = bodyDiff.added
+      .filter((j) => !movedBodyNew.has(j))
+      .map((j) => plan.body[j].id);
     const addedNoteIds = fnState.diff.added
       .map((j) => plan.footnotes[j].id)
       .concat(enState.diff.added.map((j) => plan.endnotes[j].id));
     const allIds = addedBodyIds.concat(addedNoteIds);
     let rendered: Record<string, string | null> = {};
     if (allIds.length > 0) {
-      rendered = JSON.parse(
-        bridge.RenderBlocksHtml!(
-          this.handle,
-          JSON.stringify(allIds),
-          this.options.cssPrefix,
-          this.options.fabricateClasses,
-        ),
-      );
+      const idsJson = JSON.stringify(allIds);
+      const renderedJson = typeof bridge.RenderBlocksHtmlForReview === "function"
+        ? bridge.RenderBlocksHtmlForReview(
+            this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
+            this.renderTrackedChanges,
+          )
+        : bridge.RenderBlocksHtml!(
+            this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
+          );
+      rendered = JSON.parse(renderedJson);
       if ((rendered as { error?: string }).error) return this.bail(`render error: ${(rendered as { error?: string }).error}`);
       for (const id of allIds) if (!rendered[id]) return this.bail(`unrenderable: ${id}`);
     }
@@ -2539,7 +3181,7 @@ export class DocxEditor {
       return el;
     };
     const freshBody = new Map<number, HTMLElement>();
-    for (const j of bodyDiff.added) {
+    for (const j of bodyDiff.added.filter((j) => !movedBodyNew.has(j))) {
       const el = parse(rendered[plan.body[j].id]!);
       if (!el) return this.bail(`unparseable render: ${plan.body[j].id}`);
       freshBody.set(j, el);
@@ -2611,15 +3253,6 @@ export class DocxEditor {
     diff: UnitDiff,
     fresh: Map<number, HTMLElement>,
   ): true | string {
-    // Kept nodes must appear in increasing old order (no move support in v1).
-    let lastOld = -1;
-    for (let j = 0; j < units.length; j++) {
-      const oi = diff.keep.get(j);
-      if (oi === undefined) continue;
-      if (oi < lastOld) return "kept order violation";
-      lastOld = oi;
-    }
-
     // In-place substitutions first: replace at WRAPPER level so a table swaps with its
     // alignment div. A LEAF render replacing a wrapped node would break the wrapper's
     // semantics (border <div> grouping) — that is remount territory.
@@ -2650,42 +3283,72 @@ export class DocxEditor {
       this.wireUnit(freshRoot, units[nj]);
     }
 
-    // Pure inserts against kept/substituted neighbors (at wrapper level).
-    const pureAdded = diff.added.filter((j) => !subOldByNew.has(j));
+    const movedOldByNew = new Map(diff.moved.map((m) => [m.newIndex, m.oldIndex]));
+    const movedNew = new Set(diff.moved.map((m) => m.newIndex));
+    const movedOld = new Set(diff.moved.map((m) => m.oldIndex));
+    const pureAdded = diff.added.filter((j) => !subOldByNew.has(j) && !movedNew.has(j));
     const pureRemoved = diff.removed.filter(
-      (i) => !diff.substituted.some((s) => s.oldIndex === i),
+      (i) => !diff.substituted.some((s) => s.oldIndex === i) && !movedOld.has(i),
     );
     const nodeAt = (j: number): HTMLElement | null => {
       const oi = diff.keep.get(j);
       if (oi !== undefined) return oldNodes[oi];
+      const movedOi = movedOldByNew.get(j);
+      if (movedOi !== undefined) return oldNodes[movedOi];
       if (subOldByNew.has(j)) return fresh.get(j)!;
       const f = fresh.get(j);
       return f && f.isConnected ? f : null;
     };
+
+    // Preserve the established incremental insertion path: body render output may
+    // legitimately use several wrapper parents (for example border groups), so it is
+    // not valid to normalize the whole body against one common parent.
     for (const j of pureAdded) {
       const el = fresh.get(j)!;
       let prev: HTMLElement | null = null;
       for (let k = j - 1; k >= 0 && !prev; k--) prev = nodeAt(k);
       let next: HTMLElement | null = null;
-      for (let k = j + 1; k < units.length && !next; k++) {
-        const oi = diff.keep.get(k);
-        if (oi !== undefined) next = oldNodes[oi];
-        else if (subOldByNew.has(k)) next = fresh.get(k)!;
-      }
+      for (let k = j + 1; k < units.length && !next; k++) next = nodeAt(k);
       const prevW = prev ? this.unitWrapperOf(prev) : null;
       const nextW = next ? this.unitWrapperOf(next) : null;
       if (prevW && nextW && prevW.parentElement !== nextW.parentElement)
         return "insert neighbors in different parents";
       if (prevW) prevW.after(el);
       else if (nextW) nextW.before(el);
-      else return "insert with no anchored neighbor"; // empty container — nowhere provably correct
+      else return "insert with no anchored neighbor";
       this.wireUnit(el, units[j]);
     }
 
-    // Pure removals last, taking now-empty generated wrappers with them.
+    // Pure removals take their now-empty generated wrappers with them. Exact-token
+    // move sources remain live even though the LCS also reports them as removed.
     for (const i of pureRemoved) {
-      const wrapper = this.unitWrapperOf(oldNodes[i]);
-      wrapper.remove();
+      this.unitWrapperOf(oldNodes[i]).remove();
+    }
+
+    // A block move changes one exact-token unit's slot. Move only that existing
+    // wrapper beside its final neighbor; this preserves identity without disturbing
+    // unrelated nodes or assuming every rendered unit shares one DOM parent.
+    for (const { newIndex } of [...diff.moved].sort((a, b) => a.newIndex - b.newIndex)) {
+      const moving = nodeAt(newIndex);
+      if (!moving?.isConnected) return "move source is not connected";
+      const movingW = this.unitWrapperOf(moving);
+      let prevW: HTMLElement | null = null;
+      for (let k = newIndex - 1; k >= 0 && !prevW; k--) {
+        const n = nodeAt(k);
+        if (n?.isConnected) prevW = this.unitWrapperOf(n);
+      }
+      let nextW: HTMLElement | null = null;
+      for (let k = newIndex + 1; k < units.length && !nextW; k++) {
+        const n = nodeAt(k);
+        if (n?.isConnected) nextW = this.unitWrapperOf(n);
+      }
+      if (prevW && prevW !== movingW && prevW.parentElement === movingW.parentElement) {
+        prevW.after(movingW);
+      } else if (nextW && nextW !== movingW && nextW.parentElement === movingW.parentElement) {
+        nextW.before(movingW);
+      } else {
+        return "move neighbors in different parents";
+      }
     }
     return true;
   }
@@ -2830,7 +3493,7 @@ export class DocxEditor {
     const bridge = this.exports.DocxSessionBridge;
     if (typeof bridge.ListBlocks !== "function") return;
     try {
-      const plan = JSON.parse(bridge.ListBlocks(this.handle)) as RenderPlan & { error?: string };
+      const plan = JSON.parse(this.renderPlanJson()) as RenderPlan & { error?: string };
       if (plan.error) return;
       // Positional pairing: a fresh full mount renders exactly the plan's units in
       // order (verified invariant). On any mismatch, leave unstamped — an unstamped
@@ -2864,6 +3527,7 @@ export class DocxEditor {
    * block's content-hashed unid changes across the save/reproject a remount performs.
    */
   private remount(focusIndex = -1, caretAtEnd = false): void {
+    this.teardownBlockDrag();
     this.refreshAnchorMap();
     const fullHtml = this.renderFullHtml();
     this.activeBlock = null;
@@ -2880,5 +3544,6 @@ export class DocxEditor {
     // A remount rebuilds the body from the live session; re-resolve the section so undo/redo of a
     // section-affecting edit (or a pagination toggle) leaves the bands describing the right one.
     this.syncRegionToBody(this.activeBlock ?? undefined);
+    this.setupBlockDrag();
   }
 }

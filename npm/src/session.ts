@@ -126,6 +126,13 @@ export class DocxSession {
     return JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
   }
 
+  /** Reorder one top-level paragraph/heading/list/table block relative to another. */
+  moveBlock(sourceAnchorId: string, targetAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(
+      this.wasm.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
+    ) as EditResult;
+  }
+
   /**
    * Delete every top-level block-level sibling between `fromAnchorId` (inclusive)
    * and `toAnchorIdExclusive` (exclusive). Both anchors must share a direct

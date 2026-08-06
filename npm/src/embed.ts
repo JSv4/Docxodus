@@ -273,9 +273,18 @@ function createScopedEditorExports(
 ): DocxEditorExports {
   const convert = exports.DocumentConverter.ConvertDocxToHtmlComplete;
   const bridge = { ...exports.DocxSessionBridge };
+  // EVERY whole-document render has to be scoped, not just the first one the editor happened to
+  // use: the converter's stylesheet contains `body`/`span` rules, so one unwrapped path is enough
+  // to restyle the host page. `RenderHtmlForReview` is the revision-view twin of `RenderHtml` and
+  // is what remount prefers when it exists.
   const renderHtml = bridge.RenderHtml;
   if (renderHtml) {
     bridge.RenderHtml = (...args) => scopeDocumentStyles(renderHtml(...args), rootSelector);
+  }
+  const renderHtmlForReview = bridge.RenderHtmlForReview;
+  if (renderHtmlForReview) {
+    bridge.RenderHtmlForReview = (...args) =>
+      scopeDocumentStyles(renderHtmlForReview(...args), rootSelector);
   }
   return {
     DocxSessionBridge: bridge,

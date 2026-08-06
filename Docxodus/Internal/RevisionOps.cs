@@ -326,6 +326,16 @@ internal static class RevisionOps
         string? moveName = null;
         if (n == W.moveFrom && ctx.MoveFromStack.Count > 0) moveName = ctx.MoveFromStack[^1].Name;
         else if (n == W.moveTo && ctx.MoveToStack.Count > 0) moveName = ctx.MoveToStack[^1].Name;
+        else if (kind == UnitKind.ParaMark && paragraph is not null &&
+                 (n == W.moveFrom || n == W.moveTo))
+        {
+            // Whole-paragraph moves revise the paragraph mark in pPr/rPr. The named
+            // range lives in the paragraph body and its stack has closed by the time
+            // WalkParagraph emits this final pilcrow unit, so recover the name from
+            // the sibling range start and keep the whole move one selectable revision.
+            var startName = n == W.moveFrom ? W.moveFromRangeStart : W.moveToRangeStart;
+            moveName = (string?)paragraph.Elements(startName).FirstOrDefault()?.Attribute(W.name);
+        }
         return new RevisionUnit
         {
             Element = el,

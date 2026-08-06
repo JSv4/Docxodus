@@ -1,0 +1,203 @@
+import { test, expect, Page } from '@playwright/test';
+
+async function waitForDocxodus(page: Page) {
+  await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
+}
+
+async function openParagraphDocument(page: Page, names: string[], options: Record<string, unknown> = {}) {
+  await page.evaluate((options) => {
+    const D = (window as any).Docxodus;
+    const container = document.createElement('div');
+    container.id = 'block-drag-host';
+    container.style.cssText = 'width:700px;margin:40px auto;padding:32px;background:white';
+    document.body.appendChild(container);
+    const moves: unknown[] = [];
+    const editor = D.DocxEditor.open(container, D.DocxSessionBridge.CreateBlankDocx(), D, {
+      blockDrag: true,
+      onMove: (info: unknown) => moves.push(info),
+      ...options,
+    });
+    (window as any).__drag = { editor, container, moves };
+    (container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement).focus();
+  }, options);
+  for (let i = 0; i < names.length; i++) {
+    if (i > 0) await page.keyboard.press('Enter');
+    await page.keyboard.type(names[i]);
+  }
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement)?.blur();
+    // Canonical full paint gives every unit a signature and recreates the drag targets.
+    (window as any).__drag.editor['remount']();
+  });
+}
+
+const unitState = (page: Page) => page.evaluate(() => {
+  const { editor } = (window as any).__drag;
+  return (editor['bodyUnitNodes']() as HTMLElement[]).map((el) => ({
+    tag: el.tagName,
+    text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    editable: el.getAttribute('contenteditable'),
+  }));
+});
+
+test.describe('DocxEditor — block drag handle', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/test-harness.html');
+    await waitForDocxodus(page);
+  });
+
+  test('click menu moves a block accessibly and preserves its DOM node', async ({ page }) => {
+    await openParagraphDocument(page, ['Alpha', 'Beta', 'Gamma']);
+    await page.evaluate(() => {
+      const beta = Array.from(document.querySelectorAll<HTMLElement>('#block-drag-host p[data-anchor]'))
+        .find((el) => el.textContent?.includes('Beta'))!;
+      (beta as any).__identity = 'same-node';
+    });
+
+    const beta = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Beta' });
+    await beta.hover();
+    const handle = page.locator('.docx-block-handle');
+    await expect(handle).toBeVisible();
+    await expect(handle).toHaveAttribute('aria-haspopup', 'menu');
+    await handle.click();
+    await expect(page.getByRole('menuitem', { name: 'Move to top' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Move to top' }).click();
+
+    expect((await unitState(page)).map((x) => x.text)).toEqual(['Beta', 'Alpha', 'Gamma']);
+    const result = await page.evaluate(() => {
+      const { moves } = (window as any).__drag;
+      const beta = Array.from(document.querySelectorAll<HTMLElement>('#block-drag-host p[data-anchor]'))
+        .find((el) => el.textContent?.includes('Beta'))!;
+      return { sameNode: (beta as any).__identity, moves: moves.length };
+    });
+    expect(result).toEqual({ sameNode: 'same-node', moves: 1 });
+  });
+
+  test('dragging uses before/after drop zones and reorders the live session', async ({ page }) => {
+    await openParagraphDocument(page, ['One', 'Two', 'Three']);
+    const one = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'One' });
+    const three = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Three' });
+    await one.hover();
+    const handle = page.locator('.docx-block-handle');
+    const handleBox = await handle.boundingBox();
+    const targetBox = await three.boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await handle.dragTo(three, {
+      targetPosition: { x: targetBox!.width / 2, y: targetBox!.height - 2 },
+    });
+    expect((await unitState(page)).map((x) => x.text)).toEqual(['Two', 'Three', 'One']);
+  });
+
+  test('a cell hover selects and moves its whole table', async ({ page }) => {
+    await openParagraphDocument(page, ['Before', 'After']);
+    await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
+      const first = editor['editableList']()[0] as HTMLElement;
+      first.focus();
+      editor.insertTable(2, 2);
+    });
+    const cell = page.locator('#block-drag-host table td p[contenteditable="true"]').first();
+    await cell.hover();
+    await page.locator('.docx-block-handle').click();
+    await page.getByRole('menuitem', { name: 'Move to bottom' }).click();
+    const units = await unitState(page);
+    expect(units.at(-1)?.tag).toBe('TABLE');
+    expect(units.filter((x) => x.tag === 'TABLE')).toHaveLength(1);
+  });
+
+  // A section break partitions the body into regions a block cannot move between. The engine has
+  // always refused those moves; the UI used to draw a drop indicator over them anyway and only
+  // fail on release, and "move to top/bottom" always targeted the document ends — so on a document
+  // with section breaks those commands could never succeed.
+  test('a section break partitions the document into move regions', async ({ page }) => {
+    await openParagraphDocument(page, ['Alpha', 'Beta', 'Gamma']);
+    await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const afterBeta = editor['anchorIdOf'](units[1]);
+      D.DocxSessionBridge.RawInsertXml(editor.sessionHandle, afterBeta, 'after',
+        '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+        '<w:pPr><w:sectPr/></w:pPr></w:p>');
+      editor['remount']();
+    });
+
+    // The section-break paragraph itself can never be moved, so it gets no handle at all.
+    const state = await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const breakUnit = units.find((el) => (el.textContent ?? '').trim() === '')!;
+      editor['showBlockHandle'](breakUnit);
+      const handleHidden = document.querySelector<HTMLElement>('.docx-block-handle')!.style.display === 'none';
+      // Alpha may reach Beta (same region) but not Gamma (across the break).
+      const alpha = units.find((el) => el.textContent?.includes('Alpha'))!;
+      editor['refreshBlockMoveTargets'](alpha);
+      const targets: Map<string, { before: boolean; after: boolean }> = editor['blockMoveTargets'];
+      const idOf = (text: string) =>
+        editor['anchorIdOf'](units.find((el: HTMLElement) => el.textContent?.includes(text))!);
+      return {
+        handleHidden,
+        canReachBeta: targets.has(idOf('Beta')),
+        canReachGamma: targets.has(idOf('Gamma')),
+      };
+    });
+    expect(state).toEqual({ handleHidden: true, canReachBeta: true, canReachGamma: false });
+
+    // Dragging Alpha onto Gamma must not even offer a drop: no indicator, no reorder.
+    const alpha = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Alpha' });
+    const gamma = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Gamma' });
+    await alpha.hover();
+    await page.evaluate(() => {
+      const indicator = document.querySelector<HTMLElement>('.docx-block-drop-indicator')!;
+      (window as any).__shown = [];
+      new MutationObserver(() => {
+        if (indicator.style.display === 'block') (window as any).__shown.push(1);
+      }).observe(indicator, { attributes: true, attributeFilter: ['style'] });
+    });
+    const gammaBox = (await gamma.boundingBox())!;
+    await page.locator('.docx-block-handle').dragTo(gamma, {
+      targetPosition: { x: gammaBox.width / 2, y: gammaBox.height - 2 },
+    });
+    expect(await page.evaluate(() => (window as any).__shown.length)).toBe(0);
+    expect((await unitState(page)).map((x) => x.text).filter(Boolean)).toEqual(['Alpha', 'Beta', 'Gamma']);
+
+    // "Move to bottom" means the end of Alpha's OWN region — Beta — not the document end.
+    await alpha.hover();
+    await page.locator('.docx-block-handle').click();
+    await page.getByRole('menuitem', { name: 'Move to bottom' }).click();
+    expect((await unitState(page)).map((x) => x.text).filter(Boolean)).toEqual(['Beta', 'Alpha', 'Gamma']);
+  });
+
+  test('review mode renders a native move pair and keeps the source read-only', async ({ page }) => {
+    await openParagraphDocument(page, ['North', 'Middle', 'South']);
+    await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const state = (window as any).__drag;
+      const saved = state.editor.save();
+      state.editor.close();
+      state.container.replaceChildren();
+      const editor = D.DocxEditor.open(state.container, saved, D, {
+        blockDrag: true,
+        trackedChanges: 1, // TrackedChangeMode.RenderInline
+        revisionAuthor: 'Drag Tester',
+      });
+      (window as any).__drag.editor = editor;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      editor.moveBlock(editor['anchorIdOf'](units[0]), editor['anchorIdOf'](units[2]), 'after');
+    });
+    const review = await page.evaluate(() => {
+      const host = document.querySelector('#block-drag-host')!;
+      const from = host.querySelector<HTMLElement>("del[class$='move-from'], del[class*='move-from ']");
+      const to = host.querySelector<HTMLElement>("ins[class$='move-to'], ins[class*='move-to ']");
+      return {
+        from: from?.textContent,
+        to: to?.textContent,
+        sourceEditable: from?.closest('[data-anchor]')?.getAttribute('contenteditable'),
+      };
+    });
+    expect(review.from).toContain('North');
+    expect(review.to).toContain('North');
+    expect(review.sourceEditable).toBe('false');
+  });
+});
