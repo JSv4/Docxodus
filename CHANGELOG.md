@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`WmlComparerSettings.CompareTables` — Word's "Tables" compare checkbox (default `true`, so
+  existing callers are unaffected).** When false, body-level tables take no part in the comparison:
+  an edited, added or removed table produces no revision, and the result carries the original
+  document's tables unmarked — so, as with any ignored scope, accept and reject no longer reproduce
+  the revised document's tables. Each of the original's body-level tables is swapped for a marker
+  paragraph before hashing so it lands back in place afterwards; the atom/LCS core is untouched, so
+  nothing changes when the option is left on. v1 scope: tables that are direct children of
+  `w:body` — one nested in a content control or a textbox is still compared. Coverage:
+  `WmlComparerCompareTablesTests`.
+
 ## [9.3.0] - 2026-08-06
 
 ### Added

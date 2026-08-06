@@ -106,7 +106,8 @@ public static class DocxCompare
 
     /// <summary>
     /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh
-    /// <see cref="DocxDiffSettings"/>. WmlComparer-only knobs are intentionally dropped: <c>DetailThreshold</c>
+    /// <see cref="DocxDiffSettings"/>. WmlComparer-only knobs are intentionally dropped: <c>CompareTables</c>
+    /// (DocxDiff always compares tables), <c>DetailThreshold</c>
     /// (an LCS-granularity knob with no IR equivalent), <c>SimplifyMoveMarkup</c> (DocxDiff renders moves
     /// natively), and <c>DetectFormatChanges</c> (DocxDiff uses <see cref="DocxDiffSettings.FormatComparison"/>,
     /// left at its default). DocxDiff-specific settings keep their defaults. An explicit

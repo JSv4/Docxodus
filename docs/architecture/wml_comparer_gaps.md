@@ -78,6 +78,33 @@ Add a `FormatChange` revision type that captures:
 - The old formatting properties
 - The new formatting properties
 
+## 3b. Scope toggles — Tables ✅ IMPLEMENTED
+
+Word's Compare dialog can exclude whole categories of content. `WmlComparerSettings.CompareTables`
+(default `true`) mirrors its **Tables** checkbox: set it false and body-level tables take no part in
+the comparison — an edited, added or removed table yields no revision and the result keeps the left
+document's tables unmarked (with their own pre-existing tracked changes accepted, as the comparer
+does throughout).
+
+Mechanics: each LEFT body-level table is replaced by a marker paragraph before hashing, so the marker
+is aligned by the ordinary LCS and the table is laid back into its place afterwards (before footnote
+rectification and the docPr/shape id fixups). The right document's tables are dropped, because an
+ignored table is never carried over and marking both sides would let a table count difference disturb
+how the surrounding prose matches.
+
+Consequences worth knowing:
+
+- Ignoring a scope necessarily breaks the round trip for it: `accept` no longer reproduces the revised
+  document's tables. This mirrors `DocxDiffSettings.CompareHeadersFooters = false`.
+- v1 covers tables that are direct children of `w:body`. A table nested inside a content control or a
+  textbox is still compared.
+- WmlComparer-only: `DocxCompare` drops the knob on the `ComparisonEngine.DocxDiff` branch, and the
+  WASM/npm bridges do not expose it (nor do they expose `DetectFormatChanges`).
+
+Word's remaining Compare categories (Formatting is `DetectFormatChanges`; Moves is `DetectMoves`;
+Comments, Fields, Footnotes/endnotes, Headers/footers, Textboxes, Case changes, White space have no
+`WmlComparer` equivalent) are still unimplemented as scope toggles.
+
 ## 4. Revision Metadata Limitations
 
 **Location:** `WmlComparerRevision` class

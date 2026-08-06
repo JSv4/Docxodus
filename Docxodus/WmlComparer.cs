@@ -100,6 +100,19 @@ namespace Docxodus
         public bool DetectFormatChanges = true;
 
         /// <summary>
+        /// Compare tables. Mirrors the "Tables" checkbox in Word's Compare Documents dialog.
+        /// Default: true.
+        /// <para>When false, body-level tables take no part in the comparison: a table that was
+        /// edited, added or removed produces no revision, and the result carries the ORIGINAL
+        /// (left) document's tables verbatim and unmarked. Consequently accept/reject do not
+        /// reproduce the revised document's tables — that is what ignoring a scope means, and it
+        /// mirrors DocxDiff's <c>CompareHeadersFooters = false</c>.</para>
+        /// <para>v1 scope: tables that are direct children of <c>w:body</c>. A table nested in a
+        /// content control or a textbox is still compared.</para>
+        /// </summary>
+        public bool CompareTables = true;
+
+        /// <summary>
         /// Optional log to collect warnings and errors during comparison.
         /// When provided, the comparison will attempt to continue past recoverable errors
         /// (like orphaned footnote references) and log them instead of throwing exceptions.
@@ -297,6 +310,70 @@ namespace Docxodus
                 }
 
                 return producedDocument;
+            }
+        }
+
+        // Only the LEFT tables get a marker paragraph; the right's are dropped. Marking both sides
+        // would let a table count difference perturb how the surrounding prose matches.
+        // Letters and digits only: any WordSeparator (e.g. '-') would split the marker into several
+        // comparison words whose prefix could match real prose. Guid "N" is 32 hex chars, no separators.
+        private static string NewTableMarker() => "DocxodusIgnoredTable" + Guid.NewGuid().ToString("N");
+
+        private static List<XElement> TakeBodyTables(XElement body, string marker)
+        {
+            var tables = new List<XElement>();
+            foreach (var tbl in body.Elements(W.tbl).ToList())
+            {
+                tables.Add(new XElement(tbl));
+                if (marker == null)
+                    tbl.Remove();
+                else
+                    tbl.ReplaceWith(new XElement(W.p, new XElement(W.r, new XElement(W.t, marker))));
+            }
+
+            // A table that was the body's only block-level content leaves nothing to align.
+            if (tables.Count > 0 && !body.Elements().Any(e => e.Name == W.p || e.Name == W.tbl))
+                body.Add(new XElement(W.p));
+
+            return tables;
+        }
+
+        private static void RestoreIgnoredTables(
+            XDocument newXDoc, List<XElement> leftTables, string marker, WmlComparerSettings settings)
+        {
+            if (leftTables == null)
+                return;
+
+            var body = newXDoc.Root.Element(W.body);
+            var restored = 0;
+
+            // Work per marker RUN, not per paragraph: the comparer can pair a marker paragraph with a
+            // real one, leaving the marker's text sitting beside prose in a single paragraph.
+            foreach (var markerText in body.Descendants()
+                .Where(e => (e.Name == W.t || e.Name == W.delText) && e.Value == marker)
+                .ToList())
+            {
+                var block = markerText.AncestorsAndSelf().FirstOrDefault(a => a.Parent == body);
+                var run = markerText.Ancestors(W.r).FirstOrDefault();
+
+                if (block != null && restored < leftTables.Count)
+                    block.AddBeforeSelf(leftTables[restored++]);
+
+                var wrapper = run?.Parent;
+                run?.Remove();
+                if (wrapper != null && wrapper != block && !wrapper.HasElements)
+                    wrapper.Remove();
+
+                // Drop the paragraph only if the marker run was all it held: a drawing or a break on
+                // a paired right paragraph is content, and it lives in a run with no w:t.
+                if (block != null && block.Name == W.p && !block.Descendants(W.r).Any())
+                    block.Remove();
+            }
+
+            if (restored != leftTables.Count)
+            {
+                settings.Log?.AddWarning("CompareTables",
+                    $"Restored {restored} of {leftTables.Count} ignored tables.");
             }
         }
 
@@ -1739,8 +1816,18 @@ namespace Docxodus
                 .Element(W.sectPr);
 
             var contentParent1 = wDoc1.MainDocumentPart.GetXDocument().Root.Element(W.body);
-            AddSha1HashToBlockLevelContent(wDoc1.MainDocumentPart, contentParent1, settings);
             var contentParent2 = wDoc2.MainDocumentPart.GetXDocument().Root.Element(W.body);
+
+            List<XElement> ignoredTables = null;
+            string tableMarker = null;
+            if (!settings.CompareTables)
+            {
+                tableMarker = NewTableMarker();
+                ignoredTables = TakeBodyTables(contentParent1, tableMarker);
+                TakeBodyTables(contentParent2, null);
+            }
+
+            AddSha1HashToBlockLevelContent(wDoc1.MainDocumentPart, contentParent1, settings);
             AddSha1HashToBlockLevelContent(wDoc2.MainDocumentPart, contentParent2, settings);
 
             var cal1 = WmlComparer.CreateComparisonUnitAtomList(wDoc1.MainDocumentPart, wDoc1.MainDocumentPart.GetXDocument().Root.Element(W.body), settings);
@@ -1877,6 +1964,8 @@ namespace Docxodus
                     MarkContentAsDeletedOrInserted(newXDoc, settings);
                     CoalesceAdjacentRunsWithIdenticalFormatting(newXDoc);
                     IgnorePt14Namespace(newXDoc.Root);
+
+                    RestoreIgnoredTables(newXDoc, ignoredTables, tableMarker, settings);
 
                     ProcessFootnoteEndnote(settings,
                         listOfComparisonUnitAtoms,
