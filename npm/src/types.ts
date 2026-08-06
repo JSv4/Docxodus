@@ -1112,6 +1112,9 @@ export interface DocxodusWasmExports {
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    /** JSON `string[]` of the anchors a block may legally be moved next to — what a drag UI
+     *  gates its drop targets on. Optional: absent on older WASM bundles. */
+    ValidMoveTargets?: (handle: number, sourceAnchor: string) => string;
     DeleteRange: (handle: number, fromAnchorId: string, toAnchorIdExclusive: string) => string;
     DeleteSection: (handle: number, headingAnchorId: string) => string;
     InsertParagraph: (handle: number, anchor: string, pos: string, md: string) => string;

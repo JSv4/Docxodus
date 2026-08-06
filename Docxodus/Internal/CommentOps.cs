@@ -366,6 +366,96 @@ internal static class CommentOps
     }
 
     /// <summary>
+    /// Re-home the comment markers inside a tracked-move SOURCE block onto freshly cloned comment
+    /// definitions, so the source copy and the destination clone no longer share comment ids.
+    /// </summary>
+    /// <remarks>
+    /// A tracked move leaves two live copies of the block. Copying the markers verbatim would give
+    /// one comment two ranges and two references — a schema violation (<c>w:id</c> is
+    /// uniqueness-constrained) and a visible defect: the comment shows twice in the Reviewing
+    /// pane. This mirrors <c>IrMarkupRenderer.NormalizeComments</c> step (B): the DELETED copy —
+    /// here the <c>w:moveFrom</c> source — takes the fresh id and a cloned definition, so
+    /// accepting keeps the destination's original comment (with its thread intact) and rejecting
+    /// keeps the source's clone.
+    /// <para>
+    /// Every comment referenced from the block is cloned, so a whole thread (a root plus the
+    /// replies whose references live in the same paragraph) is cloned together and the clones'
+    /// <c>w15:paraIdParent</c> links are re-pointed at the cloned parents rather than at the
+    /// originals.
+    /// </para>
+    /// </remarks>
+    internal static void CloneCommentsForMoveSource(MainDocumentPart main, XElement source)
+    {
+        static bool IsMarker(XElement e) =>
+            e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference;
+
+        var markers = source.DescendantsAndSelf().Where(IsMarker).ToList();
+        if (markers.Count == 0) return;
+
+        var commentsRoot = main.WordprocessingCommentsPart?.GetXDocument().Root;
+        if (commentsRoot is null) return;
+
+        var oldIds = markers.Select(m => (string?)m.Attribute(W.id))
+            .Where(id => id is not null).Distinct().ToList();
+
+        // Original last-paragraph paraId → the clone's, so cloned replies re-point at cloned parents.
+        var paraIdMap = new Dictionary<string, string>();
+        var clonedParents = new List<(XElement Clone, string OldParentParaId)>();
+        var exRoot = main.WordprocessingCommentsExPart?.GetXDocument().Root;
+
+        foreach (var oldId in oldIds)
+        {
+            var definition = commentsRoot.Elements(W.comment)
+                .FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
+            if (definition is null) continue; // dangling marker: nothing to clone, id stays put
+
+            var oldParaId = (string?)definition.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+            var oldEx = oldParaId is null || exRoot is null
+                ? null
+                : exRoot.Elements(W15 + "commentEx")
+                    .FirstOrDefault(e => (string?)e.Attribute(W15 + "paraId") == oldParaId);
+
+            var clone = new XElement(definition);
+            clone.SetAttributeValue(W.id, NextCommentId(main).ToString(CultureInfo.InvariantCulture));
+            // Strip the identities the clone must not share: paraId keys the threading parts and
+            // Unid keys the projection index. EnsureThreadingMetadata mints a fresh paraId below.
+            foreach (var el in clone.DescendantsAndSelf())
+            {
+                el.Attributes(W14.paraId).Remove();
+                el.Attributes(PtOpenXml.Unid).Remove();
+            }
+            commentsRoot.Add(clone);
+
+            var newId = (string)clone.Attribute(W.id)!;
+            foreach (var marker in markers.Where(m => (string?)m.Attribute(W.id) == oldId))
+                marker.SetAttributeValue(W.id, newId);
+
+            var newParaId = EnsureThreadingMetadata(
+                main, clone, resolved: ParseDone((string?)oldEx?.Attribute(W15 + "done")));
+            if (oldParaId is not null) paraIdMap[oldParaId] = newParaId;
+            if ((string?)oldEx?.Attribute(W15 + "paraIdParent") is { } oldParent)
+                clonedParents.Add((clone, oldParent));
+        }
+
+        // Re-point cloned replies at their cloned parent. A parent outside the moved block was not
+        // cloned — the reply then becomes top-level rather than dangling, matching the teardown
+        // policy in PruneThreadingMetadata.
+        foreach (var (clone, oldParent) in clonedParents)
+        {
+            var paraId = (string?)clone.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+            var entry = paraId is null ? null : main.WordprocessingCommentsExPart?.GetXDocument().Root?
+                .Elements(W15 + "commentEx")
+                .FirstOrDefault(e => (string?)e.Attribute(W15 + "paraId") == paraId);
+            if (entry is null) continue;
+            if (paraIdMap.TryGetValue(oldParent, out var newParent))
+                entry.SetAttributeValue(W15 + "paraIdParent", newParent);
+            else
+                entry.Attributes(W15 + "paraIdParent").Remove();
+        }
+        main.WordprocessingCommentsExPart?.PutXDocument();
+    }
+
+    /// <summary>
     /// Prune Word's comment-threading metadata for removed comment definitions:
     /// <c>commentsExtended.xml</c> (<c>w15:commentEx</c>) and <c>commentsIds.xml</c>
     /// (<c>w16cid:commentId</c>) entries key on a definition paragraph's <c>w14:paraId</c>, so a

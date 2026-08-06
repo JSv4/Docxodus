@@ -695,6 +695,20 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>A bare JSON array of anchor ids — the wire shape for
+    /// <see cref="DocxSession.ValidMoveTargets"/>.</summary>
+    public static string SerializeAnchorIds(IReadOnlyList<string> anchorIds)
+    {
+        var sb = new StringBuilder(2 + anchorIds.Count * 48);
+        sb.Append('[');
+        for (int i = 0; i < anchorIds.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(JsonString(anchorIds[i]));
+        }
+        return sb.Append(']').ToString();
+    }
+
     /// <summary>
     /// The projection's anchor index WITHOUT the markdown payload — the shape the
     /// editor's anchor-map refresh needs. Emits the same <c>{"anchorIndex":{…}}</c>

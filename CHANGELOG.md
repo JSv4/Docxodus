@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Draggable editor blocks with native tracked moves.** A floating drag handle reorders
+  top-level body blocks (paragraphs, headings, list items, and a whole table as one unit) in
+  the editor's continuous view, via Atlassian's Pragmatic drag-and-drop. The handle doubles as
+  a button opening an accessible move menu (up / down / to top / to bottom) with an
+  `aria-live` announcement, so pointer dragging is never the only way to move a block. Enabled
+  by default in `mountRibbon`; opt-in as `blockDrag` on `DocxEditor`. Paginated dragging is
+  deferred — the handle is not mounted there.
+- **`DocxSession.MoveBlock(sourceAnchorId, targetAnchorId, position)`** — one atomic,
+  anchor-addressed OOXML mutation per move, one undo snapshot. With tracking off it relocates
+  the existing element (descendant Unids and relationship ids untouched); with
+  `TrackedChangeMode.RenderInline` it emits a named `w:moveFrom`/`w:moveTo` pair for a
+  paragraph and Word's row insert/delete vocabulary for a table. `accept ≡ the moved order`
+  and `reject ≡ the original order` hold for both, and `ListRevisions` reports a paragraph
+  move as ONE selectable `move` revision resolving both sides. Rippled through
+  `DocxSessionOps`, the WASM bridge, npm, the stdio host, docx-scalpel and MCP.
+- **`DocxSession.ValidMoveTargets(sourceAnchorId)`** — the anchors a block may legally move
+  next to, sharing `MoveBlock`'s own guards. The drag UI registers only these as drop targets,
+  disables move-menu items with no destination, withholds the handle from a block that can
+  move nowhere, and resolves "move to top/bottom" **within the source's own region** — a
+  document with section breaks is partitioned into move regions, where targeting the document
+  ends could never succeed. WASM/npm only, like the other editor-support endpoints.
+
+### Fixed
+- **A tracked move no longer duplicates identity-bearing markers.** The destination clone's
+  bookmarks get fresh document-unique ids (both copies keep the NAME, so each survives its own
+  resolution and every `REF`/`PAGEREF` still resolves), and the move source takes a fresh
+  comment id plus a cloned definition — with fresh `w14:paraId`, entries in both threading
+  parts, and cloned replies re-pointed at cloned parents. Previously a pending redline over a
+  document with bookmarks or comments was schema-invalid (`Sem_UniqueAttributeValue`) and the
+  comment appeared twice in Word's Reviewing pane. Mirrors `IrMarkupRenderer`'s
+  `NormalizeBookmarks`/`NormalizeComments` step (B) rather than inventing a second dialect.
+- **Whole-block revisions mark content, not just structure.** `w:moveFrom` runs now carry
+  `w:delText`/`w:delInstrText` (Word's spelling, and what reject swaps back), and a tracked
+  table move marks every cell paragraph's content and mark instead of only `w:trPr` — row
+  marks alone left the moved-away table's text rendering as ordinary body text.
+- **`RevisionProcessor` keeps a coalesced paragraph's identity.** The paragraph built when a
+  deleted or moved-away paragraph mark merges two blocks was constructed without its
+  attributes, dropping `pt:Unid`; an anchor-stamped render of the resolved document then
+  emitted a block with no `data-anchor` — unaddressable, and invisible to the editor's
+  incremental reconciler, which diffs the rendered DOM against `ListBlocks`. Identity now
+  comes from the same member the paragraph properties do.
+- **Drag autoscroll is registered on the element that actually scrolls** rather than on the
+  document flow, which did nothing and logged "Auto scrolling has been attached to an element
+  that appears not to be scrollable" on every document open. A drop released outside any valid
+  target is now announced instead of failing silently, and a refused move announces an
+  outcome rather than the engine's OOXML-worded reason.
+- **The CDN embed scopes every whole-document render, not just the first.**
+  `createScopedEditorExports` wrapped `ConvertDocxToHtmlComplete` and `RenderHtml` but not the
+  new `RenderHtmlForReview`, which is what a remount prefers — so a remount inside
+  `createEditor`/`createViewer` inserted the converter's unscoped stylesheet and its `body`
+  rules restyled the host page (a host `body { margin: 7px }` became `0px`).
+
 ## [9.2.0] - 2026-08-06
 
 ### Added

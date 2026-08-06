@@ -2611,6 +2611,12 @@ namespace Docxodus
                                     // in the sequence of coalesced paragraph.  It is possible that we should take Last when accepting revisions, but First when rejecting revisions.
                                     g.First().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
 #endif
+                                    // Identity comes from the SAME member the properties do. Building the
+                                    // coalesced paragraph without its attributes dropped pt:Unid, so an
+                                    // anchor-stamped render of the resolved document emitted a block with no
+                                    // data-anchor — unaddressable, and invisible to the editor's reconciler,
+                                    // which diffs the rendered DOM against ListBlocks.
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Attributes(),
                                     paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
                                     paragraphMembers.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement)));
 

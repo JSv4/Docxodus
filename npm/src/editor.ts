@@ -53,6 +53,9 @@ export interface DocxEditorExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock?: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
+    /** JSON `string[]`: the anchors a block may legally move next to. Optional — without it the
+     *  drag UI offers every block and lets the engine refuse, as it did before. */
+    ValidMoveTargets?: (handle: number, sourceAnchor: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
     InsertTable: (
       handle: number,
@@ -798,6 +801,11 @@ export class DocxEditor {
   private blockDragTargetCleanup: Array<() => void> = [];
   private blockDragging = false;
   private blockDragPointerDown = false;
+  /** Anchors the current drag source may legally move next to, per the engine's own rules.
+   *  Null when the bridge predates ValidMoveTargets — then every block is offered, as before. */
+  private blockMoveTargets: Set<string> | null = null;
+  /** Why the last move was refused, verbatim from the engine — diagnostics, not announcement copy. */
+  lastMoveError: string | null = null;
 
   /**
    * The last real (non-collapsed) text selection inside an editable block. A toolbar control that
@@ -1135,7 +1143,10 @@ export class DocxEditor {
       bridge.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
     );
     if (!res.success) {
-      this.announceBlockMove(res.error?.message ?? "This block cannot be moved there.");
+      // The engine's message names an OOXML construct ("a section-break paragraph"); the live
+      // region is read aloud, so announce the outcome and keep the raw reason for debugging.
+      this.lastMoveError = res.error?.message ?? null;
+      this.announceBlockMove("This block cannot be moved there.");
       return false;
     }
     if (
@@ -1214,6 +1225,14 @@ export class DocxEditor {
     if (!handle || !this.isMovableBlockUnit(unit)) return;
     const changed = unit !== this.blockDragSource;
     this.blockDragSource = unit;
+    if (changed) this.refreshBlockMoveTargets(unit);
+    // A block the engine will not move anywhere — one owning a section break, or already carrying
+    // revision markup a tracked move would have to re-wrap — gets no handle rather than a handle
+    // that always fails.
+    if (this.blockMoveTargets?.size === 0) {
+      handle.style.display = "none";
+      return;
+    }
     const rect = unit.getBoundingClientRect();
     handle.style.display = "flex";
     handle.style.left = `${Math.max(4, rect.left - 32)}px`;
@@ -1254,14 +1273,45 @@ export class DocxEditor {
     this.container.ownerDocument.defaultView?.setTimeout(() => { live.textContent = message; }, 0);
   }
 
+  /**
+   * Ask the engine which anchors the current source may move next to. One call per drag source,
+   * so the UI offers only drops MoveBlock will accept — a document with section breaks is
+   * partitioned into regions, and drawing an indicator across one only to fail the drop was the
+   * behaviour this replaces. Null (no bridge support) keeps the previous offer-everything path.
+   */
+  private refreshBlockMoveTargets(source: HTMLElement | null): void {
+    const bridge = this.exports.DocxSessionBridge;
+    const sourceId = source ? this.anchorIdOf(source) : null;
+    if (!sourceId || typeof bridge.ValidMoveTargets !== "function") {
+      this.blockMoveTargets = null;
+      return;
+    }
+    try {
+      const ids = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as string[];
+      this.blockMoveTargets = new Set(ids);
+    } catch {
+      this.blockMoveTargets = null;
+    }
+  }
+
+  /** Whether `unit` is a legal destination for the current drag source. */
+  private isValidMoveTarget(unit: HTMLElement): boolean {
+    if (!this.blockMoveTargets) return true; // no bridge support: engine stays the only gate
+    const id = this.anchorIdOf(unit);
+    return !!id && this.blockMoveTargets.has(id);
+  }
+
   private refreshBlockDropTargets(): void {
     for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
     if (!this.blockDragHandle || this.options.paginated) return;
     for (const unit of this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el))) {
       this.blockDragTargetCleanup.push(dropTargetForElements({
         element: unit,
+        // A target the engine would refuse is not a drop target at all, so Pragmatic never
+        // fires onDragEnter for it and no indicator is drawn over it.
         canDrop: ({ source }) =>
-          source.data.type === BLOCK_DRAG_TYPE && source.data.sourceAnchorId !== this.anchorIdOf(unit),
+          source.data.type === BLOCK_DRAG_TYPE && source.data.sourceAnchorId !== this.anchorIdOf(unit) &&
+          this.isValidMoveTarget(unit),
         getData: ({ input }) => ({
           type: BLOCK_DRAG_TYPE,
           targetAnchorId: this.anchorIdOf(unit),
@@ -1296,13 +1346,9 @@ export class DocxEditor {
     const handle = this.blockDragHandle;
     const source = this.currentBlockDragSource();
     if (!menu || !handle || !source) return;
-    const units = this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el));
-    const index = units.indexOf(source);
+    this.refreshBlockMoveTargets(source);
     menu.querySelectorAll<HTMLButtonElement>("button[data-move]").forEach((button) => {
-      const action = button.dataset.move;
-      button.disabled = index < 0 ||
-        ((action === "up" || action === "top") && index === 0) ||
-        ((action === "down" || action === "bottom") && index === units.length - 1);
+      button.disabled = !this.blockMoveDestination(source, button.dataset.move ?? "");
     });
     const rect = handle.getBoundingClientRect();
     menu.style.display = "block";
@@ -1313,23 +1359,51 @@ export class DocxEditor {
     menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
   }
 
+  /**
+   * Resolve a move-menu action to the block it should land against, considering only destinations
+   * the engine accepts. "Top"/"bottom" therefore mean the ends of the source's own movable region
+   * — on a document with section breaks that is the section, not the document, which is what makes
+   * the commands work at all there instead of always failing.
+   */
+  private blockMoveDestination(
+    source: HTMLElement,
+    action: string,
+  ): { target: HTMLElement; position: "before" | "after" } | null {
+    const units = this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el));
+    const index = units.indexOf(source);
+    if (index < 0) return null;
+    const valid = units.filter((el) => el !== source && this.isValidMoveTarget(el));
+    if (valid.length === 0) return null;
+
+    const before = valid.filter((el) => units.indexOf(el) < index);
+    const after = valid.filter((el) => units.indexOf(el) > index);
+    if (action === "up") return before.length ? { target: before[before.length - 1], position: "before" } : null;
+    if (action === "down") return after.length ? { target: after[0], position: "after" } : null;
+    if (action === "top") return before.length ? { target: before[0], position: "before" } : null;
+    if (action === "bottom") return after.length ? { target: after[after.length - 1], position: "after" } : null;
+    return null;
+  }
+
   private runBlockMoveMenuAction(action: string): void {
     const source = this.currentBlockDragSource();
     if (!source) return;
-    const units = this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el));
-    const index = units.indexOf(source);
-    if (index < 0) return;
-    let target: HTMLElement | undefined;
-    let position: "before" | "after" = "before";
-    if (action === "up") target = units[index - 1];
-    else if (action === "down") { target = units[index + 1]; position = "after"; }
-    else if (action === "top") target = units[0];
-    else if (action === "bottom") { target = units[units.length - 1]; position = "after"; }
-    if (!target || target === source) return;
-    const sourceId = this.anchorIdOf(source);
-    const targetId = this.anchorIdOf(target);
+    const destination = this.blockMoveDestination(source, action);
     this.closeBlockMoveMenu();
-    if (sourceId && targetId) this.moveBlock(sourceId, targetId, position);
+    if (!destination) return;
+    const sourceId = this.anchorIdOf(source);
+    const targetId = this.anchorIdOf(destination.target);
+    if (sourceId && targetId) this.moveBlock(sourceId, targetId, destination.position);
+  }
+
+  /** The nearest ancestor that actually scrolls the document flow, for drag autoscroll. */
+  private scrollContainer(): HTMLElement | null {
+    const view = this.container.ownerDocument.defaultView;
+    for (let el: HTMLElement | null = this.editRoot; el; el = el.parentElement) {
+      const overflowY = view?.getComputedStyle(el).overflowY ?? "visible";
+      if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight)
+        return el;
+    }
+    return null;
   }
 
   /** Mount one floating handle; PDD owns pointer dragging while the menu owns keyboard moves. */
@@ -1446,6 +1520,7 @@ export class DocxEditor {
         this.blockDragging = true;
         handle.classList.add("docx-block-dragging");
         this.closeBlockMoveMenu();
+        this.refreshBlockMoveTargets(this.currentBlockDragSource());
         this.refreshBlockDropTargets();
       },
       onDrop: () => {
@@ -1465,13 +1540,23 @@ export class DocxEditor {
         const position = drop?.position === "after" ? "after" : "before";
         if (typeof sourceId === "string" && typeof targetId === "string")
           this.moveBlock(sourceId, targetId, position);
+        else
+          // Released outside any valid target. Say so — a silent no-op reads as a broken drag.
+          this.announceBlockMove("Move cancelled — the block was not dropped on a valid position.");
       },
     }));
-    this.blockDragCleanup.push(autoScrollForElements({
-      element: this.editRoot,
-      canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
-      getAllowedAxis: () => "vertical",
-    }));
+    // Register on the element that actually scrolls. editRoot is the document flow — in the
+    // ribbon surface the scroller is an ancestor of it, and registering the flow made Pragmatic
+    // log "attached to an element that appears not to be scrollable" on every document open
+    // while doing nothing.
+    const scroller = this.scrollContainer();
+    if (scroller) {
+      this.blockDragCleanup.push(autoScrollForElements({
+        element: scroller,
+        canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
+        getAllowedAxis: () => "vertical",
+      }));
+    }
     this.blockDragCleanup.push(autoScrollWindowForElements({
       canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
       getAllowedAxis: () => "vertical",

@@ -184,6 +184,15 @@ public static partial class DocxSessionBridge
         DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParsePos(posStr));
 
     /// <summary>
+    /// Bridge for <see cref="DocxSession.ValidMoveTargets"/>. Returns a JSON array of the anchor
+    /// ids <paramref name="sourceAnchor"/> may legally be moved next to, so the editor's drag UI
+    /// can gate its drop indicators and move-menu items on the engine's own rules.
+    /// </summary>
+    [JSExport]
+    public static string ValidMoveTargets(int h, string sourceAnchor) =>
+        DocxSessionOps.ValidMoveTargets(h, sourceAnchor);
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.DeleteRange"/>. Deletes every top-level
     /// block-level sibling between <paramref name="fromAnchorId"/> (inclusive) and
     /// <paramref name="toAnchorIdExclusive"/> (exclusive). Both anchors must share a

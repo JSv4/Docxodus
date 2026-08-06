@@ -106,6 +106,69 @@ test.describe('DocxEditor — block drag handle', () => {
     expect(units.filter((x) => x.tag === 'TABLE')).toHaveLength(1);
   });
 
+  // A section break partitions the body into regions a block cannot move between. The engine has
+  // always refused those moves; the UI used to draw a drop indicator over them anyway and only
+  // fail on release, and "move to top/bottom" always targeted the document ends — so on a document
+  // with section breaks those commands could never succeed.
+  test('a section break partitions the document into move regions', async ({ page }) => {
+    await openParagraphDocument(page, ['Alpha', 'Beta', 'Gamma']);
+    await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const afterBeta = editor['anchorIdOf'](units[1]);
+      D.DocxSessionBridge.RawInsertXml(editor.sessionHandle, afterBeta, 'after',
+        '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+        '<w:pPr><w:sectPr/></w:pPr></w:p>');
+      editor['remount']();
+    });
+
+    // The section-break paragraph itself can never be moved, so it gets no handle at all.
+    const state = await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const breakUnit = units.find((el) => (el.textContent ?? '').trim() === '')!;
+      editor['showBlockHandle'](breakUnit);
+      const handleHidden = document.querySelector<HTMLElement>('.docx-block-handle')!.style.display === 'none';
+      // Alpha may reach Beta (same region) but not Gamma (across the break).
+      const alpha = units.find((el) => el.textContent?.includes('Alpha'))!;
+      editor['refreshBlockMoveTargets'](alpha);
+      const targets: Set<string> = editor['blockMoveTargets'];
+      const idOf = (text: string) =>
+        editor['anchorIdOf'](units.find((el: HTMLElement) => el.textContent?.includes(text))!);
+      return {
+        handleHidden,
+        canReachBeta: targets.has(idOf('Beta')),
+        canReachGamma: targets.has(idOf('Gamma')),
+      };
+    });
+    expect(state).toEqual({ handleHidden: true, canReachBeta: true, canReachGamma: false });
+
+    // Dragging Alpha onto Gamma must not even offer a drop: no indicator, no reorder.
+    const alpha = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Alpha' });
+    const gamma = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Gamma' });
+    await alpha.hover();
+    await page.evaluate(() => {
+      const indicator = document.querySelector<HTMLElement>('.docx-block-drop-indicator')!;
+      (window as any).__shown = [];
+      new MutationObserver(() => {
+        if (indicator.style.display === 'block') (window as any).__shown.push(1);
+      }).observe(indicator, { attributes: true, attributeFilter: ['style'] });
+    });
+    const gammaBox = (await gamma.boundingBox())!;
+    await page.locator('.docx-block-handle').dragTo(gamma, {
+      targetPosition: { x: gammaBox.width / 2, y: gammaBox.height - 2 },
+    });
+    expect(await page.evaluate(() => (window as any).__shown.length)).toBe(0);
+    expect((await unitState(page)).map((x) => x.text).filter(Boolean)).toEqual(['Alpha', 'Beta', 'Gamma']);
+
+    // "Move to bottom" means the end of Alpha's OWN region — Beta — not the document end.
+    await alpha.hover();
+    await page.locator('.docx-block-handle').click();
+    await page.getByRole('menuitem', { name: 'Move to bottom' }).click();
+    expect((await unitState(page)).map((x) => x.text).filter(Boolean)).toEqual(['Beta', 'Alpha', 'Gamma']);
+  });
+
   test('review mode renders a native move pair and keeps the source read-only', async ({ page }) => {
     await openParagraphDocument(page, ['North', 'Middle', 'South']);
     await page.evaluate(() => {

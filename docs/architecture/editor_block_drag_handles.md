@@ -1,10 +1,12 @@
-# Editor block drag handles — feasibility and implementation plan
+# Editor block drag handles — design and shipped behaviour
 
-Status: **investigation / design; product direction confirmed** (no feature
-implementation yet).
+Status: **shipped** — direct and tracked moves in continuous view, with the
+accessible move menu. Paginated dragging remains deferred.
 
-Investigation branch: `investigate/block-drag-handles`, based on `origin/main`
-`f290c23` (2026-08-05).
+Branch: `investigate/block-drag-handles`, based on `origin/main` `f290c23`
+(2026-08-05). The sections below are the design as built; "Shipped deviations
+and follow-ups" at the end records where the implementation went further than,
+or stopped short of, this plan.
 
 ## Verdict
 
@@ -457,3 +459,68 @@ the human drag duration.
 All investigation-stage decisions are resolved. Production v1 is whole-table capable,
 continuous-view first, emits native Word revisions when track changes is active, uses
 Pragmatic drag-and-drop plus autoscroll, and rejects unsafe cross-block range moves.
+
+## Shipped deviations and follow-ups
+
+Found by smoke-testing the shipped surface against the NVCA Model Certificate of
+Incorporation (234 body blocks, 392 bookmarks, 94 footnotes, 3 inline section breaks)
+and fixed on this branch.
+
+### Identity-bearing markers in the tracked clone
+
+A tracked move keeps the source and the destination live simultaneously, so every
+id-bearing marker the clone copies is a second live copy:
+
+| Marker | Policy | Owner |
+|---|---|---|
+| `w:bookmarkStart`/`w:bookmarkEnd` | Destination clone gets fresh document-unique ids; **both copies keep the NAME**, so each survives its own resolution and every `REF`/`PAGEREF`/`HYPERLINK \l` still resolves | `DocxSession.RenumberClonedBookmarks`, mirroring `IrMarkupRenderer.NormalizeBookmarks` (B) |
+| `w:commentRangeStart`/`End`/`Reference` | The **move source** takes a fresh comment id + a cloned definition (fresh `w14:paraId`, threading entries in both metadata parts, cloned replies re-pointed at cloned parents), leaving the destination on the original comment and its thread | `CommentOps.CloneCommentsForMoveSource`, mirroring `IrMarkupRenderer.NormalizeComments` (B) |
+| `w:footnoteReference`/`w:endnoteReference` | **Deliberately duplicated.** A note cited at both the old and the new position is a faithful depiction of a pending move, it is not uniqueness-constrained, and exactly one citation survives either resolution | — |
+
+Without the first two the pending redline is schema-invalid (`Sem_UniqueAttributeValue`)
+and the comment shows twice in Word's Reviewing pane. Both resolve to a valid single-copy
+document on accept and on reject. One residue is accepted: the resolved-away copy's comment
+*definition* stays in `comments.xml` unreferenced — `RevisionProcessor` prunes no orphaned
+definition, for any resolved comment, and Word ignores an unanchored one.
+
+### Whole-block revisions mark content, not just structure
+
+`w:moveFrom` is a deletion, so its runs carry `w:delText`/`w:delInstrText` — as Word writes
+them and as `RevisionProcessor`'s reject path swaps back. The whole-table lowering marks
+**every cell paragraph's content and mark**, not only `w:trPr`; row marks alone left a
+moved-away table's text rendering as ordinary body text inside a row Word believes is
+deleted. Both go through one owner, `DocxSession.MarkParagraphContentAndMark`.
+
+### Move validity is a query, not a failed attempt
+
+`DocxSession.ValidMoveTargets(sourceAnchorId)` returns the anchors a block may legally move
+next to, sharing `MoveBlock`'s own guards (`MoveSourceRejection` + `BlockMoveSafetyError`)
+so the UI and the engine cannot disagree. The editor asks once per drag source and once per
+menu open, and uses the answer to:
+
+- register only valid blocks as drop targets, so no indicator is drawn over a doomed drop
+  (confirmed direction #7);
+- disable move-menu items with no destination;
+- withhold the handle entirely from a block that can move nowhere (a section-break paragraph);
+- resolve **"move to top/bottom" within the source's own region**. On a document with N
+  section breaks the body is partitioned into N+1 move regions; targeting the document ends
+  meant those two commands could never succeed anywhere but the first and last region.
+
+The engine remains authoritative — the UI gate is advisory, and a caller bypassing it still
+gets the typed error.
+
+### Editor projection
+
+`ListBlocks(renderTrackedChanges)` mirrors the rendered DOM in both views. The accepted view
+previously disagreed by one unit after a tracked move: `RevisionProcessor` built the
+paragraph it coalesces for a deleted/moved-away paragraph mark **without its attributes**, so
+the surviving block lost its `pt:Unid` and rendered with no `data-anchor` — unaddressable,
+and invisible to the reconciler. Identity now comes from the same member the properties do.
+
+### Still open
+
+- Paginated dragging (handle is not mounted in paginated mode).
+- Tracked moves repaint via full remount (~5–6 s on the NVCA charter) where a direct move
+  reconciles incrementally (~0.8 s).
+- No ribbon control toggles track changes; `trackedChanges`/`revisionAuthor` are mount-time
+  options on `DocxEditor`/`mountRibbon`.
