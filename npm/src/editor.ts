@@ -1168,9 +1168,9 @@ export class DocxEditor {
     if (!EDITABLE_TAGS.has(el.tagName)) return;
     const unid = el.getAttribute("data-anchor");
     // Only blocks the markdown projection addresses are editable via the text path. This INCLUDES
-    // table-cell paragraphs (the projection indexes them), so cell text IS editable — but structural
-    // keys are kept inert inside a cell (see onKeydown / GAP3) so single-block editing can't corrupt
-    // table structure. Anything the projection does not index (unstamped content) stays read-only.
+    // table-cell paragraphs (the projection indexes them), so cell text IS editable. Table-aware
+    // key handling keeps structural edits safe while still providing Word-style cell navigation
+    // (see onKeydown). Anything the projection does not index (unstamped content) stays read-only.
     // A band block is authoritative via its stamped `data-hf-anchor` even when the unid map
     // resolves that unid to a different part (content-addressed unids collide across parts).
     if (!unid || !this.anchorIdOf(el)) return;
@@ -1297,19 +1297,21 @@ export class DocxEditor {
       if (k === "z") { ev.preventDefault(); ev.shiftKey ? this.redo() : this.undo(); return; }
       if (k === "y") { ev.preventDefault(); this.redo(); return; }
     }
-    // Inside a table cell, structural ops that change the TABLE GRID (cross-cell merge,
-    // list-nest, focus-jumping Tab) stay INERT — the single-block model can't give them
-    // whole-table context. Tab is swallowed (no focus escape / literal tab); Backspace at
-    // the cell's start does not merge across the cell boundary (mid-text Backspace still
-    // deletes normally). Enter, however, splits the cell paragraph into two paragraphs
-    // WITHIN the same cell — the engine keeps the new w:p in the w:tc, the grid is
-    // unchanged, so it's safe (it's how a cell holds stacked lines: value over a smaller
-    // label, multi-line addresses). (GAP3.)
+    // Inside a table cell, Backspace at the cell's start does not merge across the cell
+    // boundary (mid-text Backspace still deletes normally). Enter splits the cell paragraph
+    // WITHIN the same cell — the engine keeps the new w:p in the w:tc, so the grid is unchanged.
+    // Tab navigation is handled explicitly below; at the final cell it uses the existing safe
+    // whole-table row insertion path to match Word's add-a-row behavior.
     const inTableCell = !!el.closest("table");
 
-    // Tab / Shift+Tab on a list item nests / un-nests it (changes list level).
-    if (ev.key === "Tab") {
-      if (inTableCell) { ev.preventDefault(); return; }
+    // Plain Tab / Shift+Tab moves between table cells. Outside tables it retains list
+    // nest/un-nest behavior. Modified Tab chords remain available to the browser/platform.
+    if (ev.key === "Tab" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.isComposing) {
+      if (inTableCell) {
+        ev.preventDefault();
+        this.navigateTableCell(el, ev.shiftKey);
+        return;
+      }
       if (isListBlock(el)) {
         ev.preventDefault();
         this.activeBlock = el;
@@ -1340,6 +1342,50 @@ export class DocxEditor {
         }
       }
     }
+  }
+
+  /** Editable cells in visual document order, excluding cells from any nested table. */
+  private tableCellsFor(el: HTMLElement): { cells: HTMLElement[]; index: number } | null {
+    const cell = el.closest<HTMLElement>("td, th");
+    const table = cell?.closest<HTMLTableElement>("table");
+    if (!cell || !table) return null;
+    const cells = Array.from(table.querySelectorAll<HTMLElement>("td, th"))
+      .filter((candidate) => candidate.closest("table") === table);
+    const index = cells.indexOf(cell);
+    return index >= 0 ? { cells, index } : null;
+  }
+
+  /** First addressable paragraph in a cell, fenced against nested-table descendants. */
+  private editableInCell(cell: HTMLElement): HTMLElement | null {
+    return Array.from(
+      cell.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+    ).find((block) => block.closest("td, th") === cell) ?? null;
+  }
+
+  /** Word-style cell navigation: Shift+Tab goes back, Tab goes forward, and Tab at the
+   *  final cell appends a row before entering its first cell. The first cell is a hard
+   *  boundary for Shift+Tab so focus never leaks out of the editor table. */
+  private navigateTableCell(el: HTMLElement, backwards: boolean): void {
+    const state = this.tableCellsFor(el);
+    if (!state) return;
+    const adjacent = state.cells[state.index + (backwards ? -1 : 1)];
+    if (adjacent) {
+      const target = this.editableInCell(adjacent);
+      if (target) placeCaretAtOffset(target, 0);
+      return;
+    }
+    if (backwards) return;
+
+    // The current block may contain uncommitted typing. insertTableRow flushes it before the
+    // structural edit, then reconcile/remount restores focus by block index. Resolve the new
+    // adjacent cell from that fresh DOM rather than retaining a node from the replaced table.
+    this.activeBlock = el;
+    this.insertTableRow("below");
+    const fresh = this.activeBlock ? this.tableCellsFor(this.activeBlock) : null;
+    if (!fresh) return;
+    const target = fresh.cells[fresh.index + 1];
+    const block = target ? this.editableInCell(target) : null;
+    if (block) placeCaretAtOffset(block, 0);
   }
 
   /** Shift+Enter: insert an intra-paragraph line break at the caret. Delegates to the
