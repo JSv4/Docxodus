@@ -255,6 +255,26 @@ namespace Docxodus
             part.AddAnnotation(document);
         }
 
+        /// <summary>
+        /// Make <paramref name="document"/> the part's cached XML WITHOUT serializing it to the
+        /// package stream — the in-memory half of <see cref="PutXDocument(OpenXmlPart, XDocument)"/>.
+        /// </summary>
+        /// <remarks>
+        /// For a caller that only ever reads back through <see cref="GetXDocument"/> and flushes
+        /// explicitly before serializing the package (<c>DocxSession</c>'s undo/redo, whose
+        /// <c>Save</c> writes every projected part first), the stream write is pure cost: a full
+        /// XML serialization of every part on every restore, which on a real document is the bulk
+        /// of an undo. Anything that reads the part's STREAM must use the flushing overload.
+        /// </remarks>
+        public static void SetXDocumentCache(this OpenXmlPart part, XDocument document)
+        {
+            if (part == null) throw new ArgumentNullException("part");
+            if (document == null) throw new ArgumentNullException("document");
+
+            part.RemoveAnnotations<XDocument>();
+            part.AddAnnotation(document);
+        }
+
         private static XmlNamespaceManager GetManagerFromXDocument(XDocument xDocument)
         {
             XmlReader reader = xDocument.CreateReader();

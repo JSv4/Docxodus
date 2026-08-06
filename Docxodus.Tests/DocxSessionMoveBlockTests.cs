@@ -493,4 +493,235 @@ public class DocxSessionMoveBlockTests
             Docxodus.Internal.DocxSessionOps.CloseSession(handle);
         }
     }
+
+    // ─── Differential: the fast guard vs. the literal set-membership definition ───────────
+
+    /// <summary>
+    /// The ORIGINAL, deliberately naive move guard: rebuild the reordered block sequence and
+    /// compare the actual member SETS of every cross-block range. This is the definition the
+    /// index-arithmetic guard in <c>DocxSession.BlockMoveSafetyError</c> has to reproduce, kept
+    /// here as an independent oracle so the optimization cannot quietly change which moves the
+    /// engine accepts.
+    /// </summary>
+    private static bool ReferenceMoveAllowed(XElement body, int sourceIndex, int targetIndex, Position pos)
+    {
+        var blocks = body.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).ToList();
+        var source = blocks[sourceIndex];
+        var target = blocks[targetIndex];
+
+        // Source-level rejections, which make a block immovable everywhere.
+        if (source.Element(W.pPr)?.Element(W.sectPr) is not null) return false;
+        if (source.DescendantsAndSelf().Any(e =>
+                e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
+                e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd))
+            return false;
+
+        var reordered = blocks.ToList();
+        reordered.RemoveAt(sourceIndex);
+        int targetAfterRemoval = reordered.IndexOf(target);
+        reordered.Insert(pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1, source);
+
+        int lo = System.Math.Min(sourceIndex, targetIndex);
+        int hi = System.Math.Max(sourceIndex, targetIndex);
+        if (blocks.Skip(lo).Take(hi - lo + 1)
+            .Any(e => e.Name == W.p && e.Element(W.pPr)?.Element(W.sectPr) is not null))
+            return false;
+
+        System.Collections.Generic.HashSet<XElement>? Members(
+            System.Collections.Generic.IReadOnlyList<XElement> order, XElement start, XElement end)
+        {
+            int a = -1, b = -1;
+            for (int i = 0; i < order.Count; i++)
+            {
+                if (ReferenceEquals(order[i], start)) a = i;
+                if (ReferenceEquals(order[i], end)) b = i;
+            }
+            if (a < 0 || b < a) return null;
+            return order.Skip(a).Take(b - a + 1).ToHashSet();
+        }
+
+        XElement? Owner(XElement marker) => marker.Ancestors()
+            .FirstOrDefault(e => ReferenceEquals(e.Parent, body) && (e.Name == W.p || e.Name == W.tbl));
+
+        var pairs = new[]
+        {
+            (Start: W.commentRangeStart, End: W.commentRangeEnd),
+            (Start: W.bookmarkStart, End: W.bookmarkEnd),
+            (Start: W.permStart, End: W.permEnd),
+            (Start: W.moveFromRangeStart, End: W.moveFromRangeEnd),
+            (Start: W.moveToRangeStart, End: W.moveToRangeEnd),
+        };
+        foreach (var (startName, endName) in pairs)
+        {
+            var starts = body.Descendants(startName)
+                .GroupBy(e => (string?)e.Attribute(W.id) ?? "")
+                .ToDictionary(g => g.Key, g => g.First());
+            foreach (var end in body.Descendants(endName))
+            {
+                if (!starts.TryGetValue((string?)end.Attribute(W.id) ?? "", out var start)) continue;
+                var startBlock = Owner(start);
+                var endBlock = Owner(end);
+                if (startBlock is null || endBlock is null || ReferenceEquals(startBlock, endBlock))
+                    continue;
+                var before = Members(blocks, startBlock, endBlock);
+                var after = Members(reordered, startBlock, endBlock);
+                if (before is null || after is null || !before.SetEquals(after)) return false;
+            }
+        }
+        return true;
+    }
+
+    private static XElement BookmarkStart(int id) =>
+        new(W.bookmarkStart, new XAttribute(W.id, id), new XAttribute(W.name, $"_r{id}"));
+
+    private static XElement BookmarkEnd(int id) => new(W.bookmarkEnd, new XAttribute(W.id, id));
+
+    /// <summary>
+    /// Bodies that put the guard through every shape that matters: a range the source sits
+    /// inside, ranges the source is an ENDPOINT of, nested and overlapping ranges, ranges
+    /// spanning a table, a single-block range (which constrains nothing), a dangling end
+    /// marker, and section breaks that partition the document.
+    /// </summary>
+    public static TheoryData<string, object[]> MoveGuardBodies()
+    {
+        var sectionBreak = new XElement(W.pPr, new XElement(W.sectPr));
+        return new TheoryData<string, object[]>
+        {
+            {
+                "nested and overlapping bookmark ranges",
+                new object[]
+                {
+                    P("A", BookmarkStart(1)),
+                    P("B", BookmarkStart(2)),
+                    P("C"),
+                    P("D", BookmarkEnd(2)),
+                    P("E", BookmarkEnd(1)),
+                    P("F", BookmarkStart(3)),
+                    P("G"),
+                    P("H", BookmarkEnd(3)),
+                }
+            },
+            {
+                "source is a range endpoint, plus a single-block range",
+                new object[]
+                {
+                    P("A", BookmarkStart(1)),
+                    P("B"),
+                    P("C", BookmarkEnd(1)),
+                    P("D", BookmarkStart(2), BookmarkEnd(2)),
+                    P("E"),
+                }
+            },
+            {
+                "comment and permission ranges spanning a table",
+                new object[]
+                {
+                    P("A"),
+                    P("B", new XElement(W.commentRangeStart, new XAttribute(W.id, 7))),
+                    Table("T"),
+                    P("D", new XElement(W.commentRangeEnd, new XAttribute(W.id, 7))),
+                    P("E", new XElement(W.permStart, new XAttribute(W.id, 9))),
+                    P("F"),
+                    P("G", new XElement(W.permEnd, new XAttribute(W.id, 9))),
+                }
+            },
+            {
+                "section breaks partition a bookmarked body",
+                new object[]
+                {
+                    P("A"),
+                    P("B", BookmarkStart(1)),
+                    P("C"),
+                    P("BREAK", sectionBreak),
+                    P("D"),
+                    P("E", BookmarkEnd(1)),
+                    P("F"),
+                }
+            },
+            {
+                "dangling end marker and a duplicated start id",
+                new object[]
+                {
+                    P("A", BookmarkStart(1)),
+                    P("B", BookmarkStart(1)),
+                    P("C", BookmarkEnd(1)),
+                    P("D", BookmarkEnd(5)),
+                    P("E"),
+                }
+            },
+        };
+    }
+
+    // The optimization that made ValidMoveTargets answer a whole drag in one pass replaced set
+    // comparison with index arithmetic. That is only sound if it decides EVERY (source, target,
+    // side) triple the same way, so assert exactly that against the literal definition — for the
+    // reported targets AND for the ones left out, which is where an over-eager guard would hide.
+    [Theory]
+    [MemberData(nameof(MoveGuardBodies))]
+    public void ValidMoveTargets_MatchesTheSetMembershipDefinitionForEveryPair(
+        string scenario, object[] bodyChildren)
+    {
+        Assert.NotEmpty(scenario);
+        var body = new XElement(W.body, bodyChildren);
+        using var session = new DocxSession(Document(body.Elements().ToArray()));
+        var ordered = session.ListBlocks().Body.Select(u => u.Id).ToArray();
+        int n = ordered.Length;
+        Assert.Equal(body.Elements().Count(e => e.Name == W.p || e.Name == W.tbl), n);
+
+        for (int s = 0; s < n; s++)
+        {
+            var reported = session.ValidMoveTargets(ordered[s]).ToDictionary(t => t.AnchorId, t => t);
+            for (int t = 0; t < n; t++)
+            {
+                if (t == s) continue;
+                reported.TryGetValue(ordered[t], out var entry);
+                foreach (var (pos, actual) in new[]
+                         {
+                             (Position.Before, entry?.Before ?? false),
+                             (Position.After, entry?.After ?? false),
+                         })
+                {
+                    Assert.Equal(ReferenceMoveAllowed(body, s, t, pos), actual);
+                }
+            }
+        }
+    }
+
+    // ValidMoveTargets is only useful if MoveBlock agrees with it. Probe the engine itself for
+    // every pair on a fresh session, so a listed pair MoveBlock rejects (or an omitted pair it
+    // would have accepted) fails here rather than as a drag that mysteriously does nothing.
+    [Theory]
+    [MemberData(nameof(MoveGuardBodies))]
+    public void ValidMoveTargets_AgreesWithMoveBlockForEveryPair(string scenario, object[] bodyChildren)
+    {
+        Assert.NotEmpty(scenario);
+        var body = new XElement(W.body, bodyChildren);
+        var bytes = Document(body.Elements().ToArray());
+        using var session = new DocxSession(bytes);
+        var ordered = session.ListBlocks().Body.Select(u => u.Id).ToArray();
+
+        for (int s = 0; s < ordered.Length; s++)
+        {
+            var reported = session.ValidMoveTargets(ordered[s]).ToDictionary(t => t.AnchorId, t => t);
+            for (int t = 0; t < ordered.Length; t++)
+            {
+                if (t == s) continue;
+                reported.TryGetValue(ordered[t], out var entry);
+                foreach (var (pos, expected) in new[]
+                         {
+                             (Position.Before, entry?.Before ?? false),
+                             (Position.After, entry?.After ?? false),
+                         })
+                {
+                    // A source already in the requested slot is a no-op the guard never sees; it
+                    // succeeds regardless of whether the pair was offered.
+                    if ((pos == Position.Before && t == s + 1) ||
+                        (pos == Position.After && t == s - 1)) continue;
+                    using var probe = new DocxSession(bytes);
+                    var probeAnchors = probe.ListBlocks().Body.Select(u => u.Id).ToArray();
+                    Assert.Equal(expected, probe.MoveBlock(probeAnchors[s], probeAnchors[t], pos).Success);
+                }
+            }
+        }
+    }
 }

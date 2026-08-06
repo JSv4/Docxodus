@@ -123,13 +123,20 @@ test.describe('DocxEditor — block drag handle', () => {
       editor['remount']();
     });
 
-    // The section-break paragraph itself can never be moved, so it gets no handle at all.
-    const state = await page.evaluate(() => {
+    // The section-break paragraph itself can never be moved, so it ends up with no handle.
+    // Hovering does not ask the engine — that query is document-scale work and hovering happens
+    // on every pointer move — so the handle withdraws on the idle callback that follows.
+    await page.evaluate(() => {
       const { editor } = (window as any).__drag;
       const units = editor['bodyUnitNodes']() as HTMLElement[];
       const breakUnit = units.find((el) => (el.textContent ?? '').trim() === '')!;
       editor['showBlockHandle'](breakUnit);
-      const handleHidden = document.querySelector<HTMLElement>('.docx-block-handle')!.style.display === 'none';
+    });
+    await expect(page.locator('.docx-block-handle')).toBeHidden();
+
+    const state = await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
       // Alpha may reach Beta (same region) but not Gamma (across the break).
       const alpha = units.find((el) => el.textContent?.includes('Alpha'))!;
       editor['refreshBlockMoveTargets'](alpha);
@@ -137,12 +144,11 @@ test.describe('DocxEditor — block drag handle', () => {
       const idOf = (text: string) =>
         editor['anchorIdOf'](units.find((el: HTMLElement) => el.textContent?.includes(text))!);
       return {
-        handleHidden,
         canReachBeta: targets.has(idOf('Beta')),
         canReachGamma: targets.has(idOf('Gamma')),
       };
     });
-    expect(state).toEqual({ handleHidden: true, canReachBeta: true, canReachGamma: false });
+    expect(state).toEqual({ canReachBeta: true, canReachGamma: false });
 
     // Dragging Alpha onto Gamma must not even offer a drop: no indicator, no reorder.
     const alpha = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Alpha' });
@@ -187,6 +193,7 @@ test.describe('DocxEditor — block drag handle', () => {
       editor.moveBlock(editor['anchorIdOf'](units[0]), editor['anchorIdOf'](units[2]), 'after');
     });
     const review = await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
       const host = document.querySelector('#block-drag-host')!;
       const from = host.querySelector<HTMLElement>("del[class$='move-from'], del[class*='move-from ']");
       const to = host.querySelector<HTMLElement>("ins[class$='move-to'], ins[class*='move-to ']");
@@ -194,10 +201,15 @@ test.describe('DocxEditor — block drag handle', () => {
         from: from?.textContent,
         to: to?.textContent,
         sourceEditable: from?.closest('[data-anchor]')?.getAttribute('contenteditable'),
+        fallback: editor.lastReconcileFallback,
       };
     });
     expect(review.from).toContain('North');
     expect(review.to).toContain('North');
     expect(review.sourceEditable).toBe('false');
+    // A tracked move repaints INCREMENTALLY. The move-from source keeps its unid, so only the
+    // plan's per-unit content signature makes it diff as changed; if that ever stops holding the
+    // op falls back to a whole-document remount, which is seconds on a real document.
+    expect(review.fallback).toBeNull();
   });
 });

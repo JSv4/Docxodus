@@ -804,6 +804,12 @@ export class DocxEditor {
   /** Anchors the current drag source may legally move next to, per the engine's own rules.
    *  Null when the bridge predates ValidMoveTargets — then every block is offered, as before. */
   private blockMoveTargets: Map<string, { before: boolean; after: boolean }> | null = null;
+  /** Memoized `ValidMoveTargets` answers, keyed by source anchor and dropped whenever an edit
+   *  lands. The legal-target set is a property of the document, so hovering back and forth over
+   *  the same blocks between edits must not re-ask the engine. */
+  private blockMoveTargetCache = new Map<string, Map<string, { before: boolean; after: boolean }> | null>();
+  /** Cancels the pending idle prefetch of the hovered block's targets — see `showBlockHandle`. */
+  private blockMoveTargetPrefetch: (() => void) | null = null;
   /** Why the last move was refused, verbatim from the engine — diagnostics, not announcement copy. */
   lastMoveError: string | null = null;
 
@@ -1159,11 +1165,12 @@ export class DocxEditor {
     }
 
     const destination = res.created?.[0] ?? res.modified?.[0];
-    // Review rendering creates a visible move-from and move-to pair. A full remount keeps
-    // their revision wrappers and table-row styling canonical; direct moves use the ordered
-    // incremental reconciler and retain the exact existing DOM node.
-    if (this.renderTrackedChanges) this.remount();
-    else this.reconcile();
+    // Both modes reconcile. A direct move relocates the existing element, so the reconciler moves
+    // the exact DOM node it already has. Review rendering additionally rewrites the SOURCE in
+    // place — it becomes the move-from half — and that is visible to the diff because the plan
+    // signs every unit with a content hash, so the source diffs as an in-place substitution.
+    // This used to remount, which on a real charter is seconds for a one-block change.
+    this.reconcile();
 
     const moved = destination
       ? this.bodyUnitNodes().find((el) => el.getAttribute("data-anchor") === destination.unid)
@@ -1196,7 +1203,18 @@ export class DocxEditor {
       ? node as HTMLElement
       : node?.parentElement;
     if (!el || !this.editRoot.contains(el)) return null;
-    return this.bodyUnitNodes().find((unit) => unit === el || unit.contains(el)) ?? null;
+    // Climb rather than scan: this runs on every pointer move over the document, and listing
+    // every anchored node to find the one containing the pointer is linear in the document.
+    let unit: HTMLElement | null = null;
+    for (
+      let candidate = el.closest<HTMLElement>("[data-anchor]");
+      candidate && this.editRoot.contains(candidate);
+      candidate = candidate.parentElement?.closest<HTMLElement>("[data-anchor]") ?? null
+    ) {
+      unit = candidate;
+    }
+    if (!unit || unit.closest("section.footnotes, section.endnotes")) return null;
+    return unit;
   }
 
   private isMovableBlockUnit(unit: HTMLElement | null): unit is HTMLElement {
@@ -1225,21 +1243,26 @@ export class DocxEditor {
     if (!handle || !this.isMovableBlockUnit(unit)) return;
     const changed = unit !== this.blockDragSource;
     this.blockDragSource = unit;
-    if (changed) this.refreshBlockMoveTargets(unit);
     // A block the engine will not move anywhere — one owning a section break, or already carrying
     // revision markup a tracked move would have to re-wrap — gets no handle rather than a handle
-    // that always fails.
-    if (this.blockMoveTargets?.size === 0) {
+    // that always fails. Asking costs an engine round trip, so hovering only ever CONSUMES a
+    // cached answer and schedules the ask for idle time; the drag start and the menu ask for
+    // real. Merely moving the pointer across the document must not run document-scale work.
+    const known = this.blockMoveTargetsFor(unit, { cachedOnly: true });
+    if (known?.size === 0) {
       handle.style.display = "none";
       return;
     }
+    if (changed && known === undefined) this.prefetchBlockMoveTargets(unit);
     const rect = unit.getBoundingClientRect();
     handle.style.display = "flex";
     handle.style.left = `${Math.max(4, rect.left - 32)}px`;
     handle.style.top = `${Math.max(4, rect.top + (unit.tagName === "TABLE" ? 6 : Math.max(0, (rect.height - 28) / 2)))}px`;
     const preview = (unit.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 48);
     handle.setAttribute("aria-label", preview ? `Move block: ${preview}` : "Move block");
-    if (changed) this.refreshBlockDropTargets();
+    // Drop targets are registered when a drag actually begins (and once at mount), not on
+    // hover: re-registering one listener per body block every time the pointer crosses a
+    // paragraph boundary is work no drop can use.
   }
 
   private hideBlockHandle(): void {
@@ -1280,21 +1303,64 @@ export class DocxEditor {
    * behaviour this replaces. Null (no bridge support) keeps the previous offer-everything path.
    */
   private refreshBlockMoveTargets(source: HTMLElement | null): void {
+    this.blockMoveTargets = source ? this.blockMoveTargetsFor(source) ?? null : null;
+  }
+
+  /**
+   * This block's legal destinations, from the memo when it is there. Returns `undefined` — not
+   * `null` — for "not asked yet", so a caller can tell an unknown answer from the engine's
+   * "no bridge support, offer everything" one.
+   */
+  private blockMoveTargetsFor(
+    source: HTMLElement,
+    options: { cachedOnly?: boolean } = {},
+  ): Map<string, { before: boolean; after: boolean }> | null | undefined {
     const bridge = this.exports.DocxSessionBridge;
-    const sourceId = source ? this.anchorIdOf(source) : null;
-    if (!sourceId || typeof bridge.ValidMoveTargets !== "function") {
-      this.blockMoveTargets = null;
-      return;
-    }
+    const sourceId = this.anchorIdOf(source);
+    if (!sourceId || typeof bridge.ValidMoveTargets !== "function") return null;
+    if (this.blockMoveTargetCache.has(sourceId)) return this.blockMoveTargetCache.get(sourceId);
+    if (options.cachedOnly) return undefined;
+
+    let targets: Map<string, { before: boolean; after: boolean }> | null;
     try {
-      const targets = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as Array<
+      const parsed = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as Array<
         { anchorId: string; before: boolean; after: boolean }
       >;
-      this.blockMoveTargets = new Map(
-        targets.map((t) => [t.anchorId, { before: t.before, after: t.after }]),
-      );
+      targets = new Map(parsed.map((t) => [t.anchorId, { before: t.before, after: t.after }]));
     } catch {
-      this.blockMoveTargets = null;
+      targets = null;
+    }
+    this.blockMoveTargetCache.set(sourceId, targets);
+    return targets;
+  }
+
+  /**
+   * Ask for the hovered block's destinations off the interaction path, and hide the handle if
+   * the answer comes back empty and that block is still the one under the pointer. The handle
+   * therefore appears immediately on hover and withdraws a beat later on the rare immovable
+   * block, instead of every hover paying for the query up front.
+   */
+  private prefetchBlockMoveTargets(source: HTMLElement): void {
+    const view = this.container.ownerDocument.defaultView;
+    if (!view) return;
+    this.blockMoveTargetPrefetch?.();
+    const run = (): void => {
+      this.blockMoveTargetPrefetch = null;
+      // The pointer has moved on (or the DOM was repainted) — the answer is no longer wanted.
+      if (this.closed || !source.isConnected || this.blockDragSource !== source) return;
+      if (this.blockMoveTargetsFor(source)?.size === 0 && this.blockDragHandle)
+        this.blockDragHandle.style.display = "none";
+    };
+    const idle = (view as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    });
+    if (idle.requestIdleCallback && idle.cancelIdleCallback) {
+      const id = idle.requestIdleCallback(run, { timeout: 500 });
+      this.blockMoveTargetPrefetch = () => idle.cancelIdleCallback!(id);
+    } else {
+      const id = view.setTimeout(run, 0);
+      this.blockMoveTargetPrefetch = () => view.clearTimeout(id);
     }
   }
 
@@ -1398,11 +1464,8 @@ export class DocxEditor {
     // Only pairs the engine accepts: a target can be reachable on one side and refused on the
     // other, so the SIDE is part of what makes a candidate valid.
     const position: "before" | "after" = action === "up" || action === "top" ? "before" : "after";
-    const candidates = units
-      .filter((el) => el !== source && this.isValidMoveTarget(el, position))
-      .filter((el) => (position === "before"
-        ? units.indexOf(el) < index
-        : units.indexOf(el) > index));
+    const side = position === "before" ? units.slice(0, index) : units.slice(index + 1);
+    const candidates = side.filter((el) => this.isValidMoveTarget(el, position));
     if (candidates.length === 0) return null;
 
     if (action === "up") return { target: candidates[candidates.length - 1], position };
@@ -1593,6 +1656,9 @@ export class DocxEditor {
   }
 
   private teardownBlockDrag(): void {
+    this.blockMoveTargetPrefetch?.();
+    this.blockMoveTargetPrefetch = null;
+    this.blockMoveTargetCache.clear();
     for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
     for (const cleanup of this.blockDragCleanup.splice(0)) cleanup();
     this.blockDragHandle?.remove();
@@ -2237,10 +2303,22 @@ export class DocxEditor {
 
   private parseEdit(json: string): EditResultLite {
     try {
-      return JSON.parse(json) as EditResultLite;
+      const result = JSON.parse(json) as EditResultLite;
+      if (result.success) this.invalidateBlockMoveTargets();
+      return result;
     } catch {
       return { success: false };
     }
+  }
+
+  /**
+   * Drop the memoized `ValidMoveTargets` answers. Which blocks a block may move next to is a
+   * fact about the DOCUMENT, so it survives hovering but not editing — and the two places a
+   * document changes are `parseEdit` (every mutation that returns an `EditResult`) and
+   * undo/redo, which return a bare boolean and so cannot go through it.
+   */
+  private invalidateBlockMoveTargets(): void {
+    this.blockMoveTargetCache.clear();
   }
 
   // ─── M5: formatting commands (ribbon) ────────────────────────────────
@@ -2866,13 +2944,17 @@ export class DocxEditor {
   /** Undo the last edit (incremental repaint; falls back to a full re-render). */
   undo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Undo(this.handle)) this.reconcile();
+    if (!this.exports.DocxSessionBridge.Undo(this.handle)) return;
+    this.invalidateBlockMoveTargets();
+    this.reconcile();
   }
 
   /** Redo the last undone edit (incremental repaint; falls back to a full re-render). */
   redo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Redo(this.handle)) this.reconcile();
+    if (!this.exports.DocxSessionBridge.Redo(this.handle)) return;
+    this.invalidateBlockMoveTargets();
+    this.reconcile();
   }
 
   // ─── Header/footer region commands (no-ops unless `headerFooter` is on) ───────────────
@@ -3138,7 +3220,14 @@ export class DocxEditor {
     const oldTokens = oldNodes.map(DocxEditor.domTokenOf);
     const oldKinds = oldNodes.map(DocxEditor.domKindOf);
     const bodyDiff = diffUnits(oldTokens, plan.body);
-    if (needsRemount(bodyDiff, plan.body, oldKinds)) return this.bail("needsRemount (li change or churn)");
+    if (needsRemount(bodyDiff, plan.body, oldKinds)) {
+      // Name the shape, not just the verdict: "churn" and "a list item moved in or out" are very
+      // different findings when a repaint unexpectedly costs a whole-document render.
+      return this.bail(
+        `needsRemount (li change or churn): +${bodyDiff.added.length} -${bodyDiff.removed.length} ` +
+          `~${bodyDiff.substituted.length} moved=${bodyDiff.moved.length} of ${plan.body.length}`,
+      );
+    }
 
     const fnState = this.notesDiff("footnotes", plan.footnotes);
     const enState = this.notesDiff("endnotes", plan.endnotes);
