@@ -64,8 +64,10 @@ Each document block remains an independent `contenteditable` host so edits can b
 its stable OOXML anchor without replacing the surrounding document. Browsers normally fence a
 physical mouse drag at that host boundary, so `DocxEditor` takes over only after the pointer enters
 another editable block in the same OOXML story and exposes the gesture as one normalized DOM
-`Range`. Intra-block selection remains native, and body/header/footer story boundaries remain
-uncrossable.
+`Range`. Cross-block updates are coalesced into the next animation frame, after the browser's own
+mousemove selection update but before paint; this keeps Firefox's highlight live instead of
+snapping to the complete range only on mouseup. Intra-block selection remains native, and
+body/header/footer story boundaries remain uncrossable.
 
 Size and font controls cache the last real selection, because a combobox steals focus when clicked.
 Single-block selections are bookmarked as one anchor plus a span; multi-block selections use two

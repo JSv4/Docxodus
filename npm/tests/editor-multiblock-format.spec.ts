@@ -19,13 +19,13 @@ async function textPoint(block: Locator, fraction: number) {
   }, fraction);
 }
 
-async function mouseDragAcross(page: Page, first: Locator, last: Locator) {
+async function mouseDragAcross(page: Page, first: Locator, last: Locator, release = true) {
   const start = await textPoint(first, 0.2);
   const end = await textPoint(last, 0.8);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 24 });
-  await page.mouse.up();
+  if (release) await page.mouse.up();
 }
 
 // Issue 7 — multi-block formatting. A selection spanning multiple paragraphs applies
@@ -155,7 +155,13 @@ test.describe('DocxEditor — multi-block formatting', () => {
     const blocks = page.locator('#editor p[data-anchor][contenteditable="true"]');
     const first = blocks.filter({ hasText: 'AAA' }).first();
     const last = blocks.filter({ hasText: 'CCC' }).first();
-    await mouseDragAcross(page, first, last);
+    // Assert while the primary button is still held. Firefox's native selection machinery used to
+    // reset the Range to the first contenteditable after every mousemove, so the correct larger
+    // selection appeared only on mouseup even though commands ultimately affected all blocks.
+    await mouseDragAcross(page, first, last, false);
+    await page.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    ));
 
     const selection = await page.evaluate(() => {
       const current = window.getSelection()!;
@@ -173,6 +179,7 @@ test.describe('DocxEditor — multi-block formatting', () => {
     });
     expect(selection.anchorBlock).not.toBe(selection.focusBlock);
     expect(selection.text).toContain('BBB');
+    await page.mouse.up();
 
     // The real ribbon button retains and formats the cross-block selection.
     await page.locator('#ribbon button[data-cmd="bold"]').click();

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Cross-block drag selection now highlights continuously in Firefox.** The browser reapplied its
+  native per-`contenteditable` selection after each `mousemove`, visually fencing the highlight to
+  the first block until mouseup even though the final range and formatting were correct. The core
+  editor now coalesces bridged range updates into the pre-paint animation frame, preserving native
+  live highlighting without overlays or surface-specific patches. The physical-drag regression is
+  exercised in both Chromium and a dedicated Firefox Playwright project while the button is held.
+
 ## [9.1.1] - 2026-08-05
 
 ### Changed
