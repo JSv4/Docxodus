@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.2.0] - 2026-08-06
+
 ### Added
 - **`mountRibbon` / `createRibbonEditor` — the editor's UI surface is now shipped, not
   hand-written per page.** `DocxEditor` remains the chrome-less engine; the tabbed ribbon,
