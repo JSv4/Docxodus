@@ -280,6 +280,14 @@ interface CrossBlockSelectionBookmark {
   endOffset: number;
 }
 
+interface CrossBlockDragSelection {
+  anchor: DomSelectionPoint;
+  origin: HTMLElement;
+  crossedBlockBoundary: boolean;
+  focus: DomSelectionPoint | null;
+  frame: number | null;
+}
+
 /** True if `block` renders as a list item (has a generated marker as its first child). */
 function isListBlock(block: HTMLElement): boolean {
   return !!block.querySelector(":scope > [data-list-marker]");
@@ -711,11 +719,7 @@ export class DocxEditor {
   private lastCrossBlockSelection: CrossBlockSelectionBookmark | null = null;
 
   /** State for the mouse-selection bridge between independent contenteditable block hosts. */
-  private dragSelection: {
-    anchor: DomSelectionPoint;
-    origin: HTMLElement;
-    crossedBlockBoundary: boolean;
-  } | null = null;
+  private dragSelection: CrossBlockDragSelection | null = null;
 
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
@@ -790,8 +794,46 @@ export class DocxEditor {
     if (!origin || isInMarker(target)) return;
     const anchor = caretPointFromClient(document, event.clientX, event.clientY);
     if (!anchor || this.editableBlockOf(anchor.node) !== origin) return;
-    this.dragSelection = { anchor, origin, crossedBlockBoundary: false };
+    this.clearDragSelection();
+    this.dragSelection = {
+      anchor,
+      origin,
+      crossedBlockBoundary: false,
+      focus: null,
+      frame: null,
+    };
   };
+
+  /**
+   * Apply the latest cross-block endpoint after the browser finishes its native mousemove
+   * selection update. Firefox rewrites Selection back into the originating contenteditable after
+   * event dispatch even when mousemove is cancelled; writing in requestAnimationFrame wins that
+   * race and happens before paint. Coalescing also avoids rebuilding a Range for every raw pointer
+   * event when the mouse is moving faster than the display can refresh.
+   */
+  private queueDragSelection(drag: CrossBlockDragSelection, focus: DomSelectionPoint): void {
+    drag.focus = focus;
+    if (drag.frame !== null) return;
+    const view = this.container.ownerDocument.defaultView;
+    if (!view) {
+      setSelectionBetween(drag.anchor, focus);
+      return;
+    }
+    drag.frame = view.requestAnimationFrame(() => {
+      drag.frame = null;
+      if (this.dragSelection !== drag || !drag.focus) return;
+      setSelectionBetween(drag.anchor, drag.focus);
+    });
+  }
+
+  /** Cancel a queued repaint and discard the current gesture. */
+  private clearDragSelection(): void {
+    const drag = this.dragSelection;
+    if (drag && drag.frame !== null) {
+      this.container.ownerDocument.defaultView?.cancelAnimationFrame(drag.frame);
+    }
+    this.dragSelection = null;
+  }
 
   /**
    * Browsers fence native mouse selection at a contenteditable host boundary. Once a drag reaches
@@ -803,7 +845,7 @@ export class DocxEditor {
     const drag = this.dragSelection;
     if (!drag) return;
     if ((event.buttons & 1) === 0) {
-      this.dragSelection = null;
+      this.clearDragSelection();
       return;
     }
     const focus = caretPointFromClient(document, event.clientX, event.clientY);
@@ -813,7 +855,7 @@ export class DocxEditor {
     if (focusBlock !== drag.origin) drag.crossedBlockBoundary = true;
     if (!drag.crossedBlockBoundary) return;
     event.preventDefault();
-    setSelectionBetween(drag.anchor, focus);
+    this.queueDragSelection(drag, focus);
   };
 
   /** Commit the final cross-block endpoint before releasing the gesture state. */
@@ -828,7 +870,7 @@ export class DocxEditor {
         setSelectionBetween(drag.anchor, focus);
       }
     }
-    this.dragSelection = null;
+    this.clearDragSelection();
   };
 
   /** The editable block (contenteditable [data-anchor]) containing `node`, if any, within this editor.
@@ -937,7 +979,7 @@ export class DocxEditor {
       document.removeEventListener("mousemove", this.onMouseMove, true);
       document.removeEventListener("mouseup", this.onMouseUp, true);
     }
-    this.dragSelection = null;
+    this.clearDragSelection();
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
