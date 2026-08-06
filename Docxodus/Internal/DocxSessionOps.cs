@@ -405,6 +405,18 @@ internal static class DocxSessionOps
     public static string DeleteTableColumn(int handle, string cellAnchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableColumn(cellAnchorId));
 
+    // ─── Cell merge / unmerge (issue #340 Stage B) ──────────────────────
+
+    /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
+    /// what happens to the content of the cells the merge absorbs.</summary>
+    public static string MergeCells(int handle, string cellAnchorId, int rowSpan, int colSpan,
+        string? content) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MergeCells(cellAnchorId, rowSpan, colSpan,
+            new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) }));
+
+    public static string UnmergeCells(int handle, string cellAnchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UnmergeCells(cellAnchorId));
+
     // ─── Table styling (issue #315 Stage A) ─────────────────────────────
 
     /// <summary><paramref name="widthsJson"/> is a JSON array of per-column twip widths

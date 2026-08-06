@@ -692,6 +692,10 @@ internal static class Dispatcher
         "delete_column" => DocxSessionOps.DeleteTableColumn(session.Handle, Str(args, "cellAnchorId")),
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             session.Handle, Str(args, "cellAnchorId"), Str(args, "markdown")),
+        "merge_cells" => DocxSessionOps.MergeCells(
+            session.Handle, Str(args, "cellAnchorId"), OptInt(args, "rowSpan") ?? 1,
+            OptInt(args, "colSpan") ?? 1, OptStr(args, "mergeContent")),
+        "unmerge_cells" => DocxSessionOps.UnmergeCells(session.Handle, Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             session.Handle, Str(args, "cellAnchorId"), RawArray(args, "widths")),
         "set_borders" => DocxSessionOps.SetTableBorders(

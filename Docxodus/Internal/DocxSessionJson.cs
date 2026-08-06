@@ -319,6 +319,16 @@ internal static class DocxSessionJson
         string.Equals(scope, "row", System.StringComparison.OrdinalIgnoreCase)
             ? TableShadingScope.Row : TableShadingScope.Cell;
 
+    /// <summary>Parse the absorbed-content policy token for <see cref="DocxSession.MergeCells"/>:
+    /// "discard" | "reject"; anything else (including null) keeps the lossless default.</summary>
+    public static TableMergeContent ParseTableMergeContent(string? content) =>
+        content?.ToLowerInvariant() switch
+        {
+            "discard" => TableMergeContent.Discard,
+            "reject" => TableMergeContent.Reject,
+            _ => TableMergeContent.Append,
+        };
+
     /// <summary>Parse the OOXML row-height rule token used by the bridge.</summary>
     public static TableRowHeightRule ParseTableRowHeightRule(string? rule) =>
         rule?.ToLowerInvariant() switch

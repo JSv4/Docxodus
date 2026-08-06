@@ -1208,11 +1208,13 @@ internal static class IrMarkdownEmitter
 
     private static void EmitOpaqueTable(IrTable tbl, string anchor, StringBuilder sb)
     {
-        // rows/cols mirror the oracle's tbl.Elements(w:tr).Count() and the first direct row's direct
-        // cell count — SDT-delivered rows/cells are excluded from both.
+        // rows/cols mirror the oracle's tbl.Elements(w:tr).Count() and its widest row's grid
+        // extent (sum of w:gridSpan) — SDT-delivered rows/cells are excluded from both.
         var visibleRows = OracleVisibleRows(tbl).ToList();
         var rows = visibleRows.Count;
-        var cols = visibleRows.FirstOrDefault() is { } first ? OracleVisibleCells(first).Count() : 0;
+        var cols = visibleRows
+            .Select(r => OracleVisibleCells(r).Sum(c => Math.Max(1, c.GridSpan)))
+            .DefaultIfEmpty(0).Max();
         if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
         sb.AppendLine("```table");
         sb.Append("rows: ").Append(rows).AppendLine();
