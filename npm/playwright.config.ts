@@ -26,6 +26,13 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      // Firefox is the canary for cross-contenteditable drag feedback: its native selection
+      // update runs after mousemove dispatch and used to erase the bridged Range until mouseup.
+      name: 'firefox-cross-block-selection',
+      testMatch: /editor-multiblock-format\.spec\.ts/,
+      use: { ...devices['Desktop Firefox'] },
+    },
   ],
   webServer: [
     {

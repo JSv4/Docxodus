@@ -38,7 +38,7 @@ jobs:
         run: cd npm && npm run build
 
       - name: Install Playwright browsers
-        run: cd npm && npx playwright install --with-deps chromium
+        run: cd npm && npx playwright install --with-deps chromium firefox
 
       - name: Run Playwright tests
         run: cd npm && npm test
