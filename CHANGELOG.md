@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.3.0] - 2026-08-06
+
 ### Added
 - **Draggable editor blocks with native tracked moves.** A floating drag handle reorders
   top-level body blocks (paragraphs, headings, list items, and a whole table as one unit) in
