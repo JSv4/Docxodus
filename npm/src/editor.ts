@@ -53,8 +53,8 @@ export interface DocxEditorExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock?: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
-    /** JSON `string[]`: the anchors a block may legally move next to. Optional — without it the
-     *  drag UI offers every block and lets the engine refuse, as it did before. */
+    /** JSON `{anchorId, before, after}[]`: where a block may legally move, per side. Optional —
+     *  without it the drag UI offers every block and lets the engine refuse, as it did before. */
     ValidMoveTargets?: (handle: number, sourceAnchor: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
     InsertTable: (
@@ -803,7 +803,7 @@ export class DocxEditor {
   private blockDragPointerDown = false;
   /** Anchors the current drag source may legally move next to, per the engine's own rules.
    *  Null when the bridge predates ValidMoveTargets — then every block is offered, as before. */
-  private blockMoveTargets: Set<string> | null = null;
+  private blockMoveTargets: Map<string, { before: boolean; after: boolean }> | null = null;
   /** Why the last move was refused, verbatim from the engine — diagnostics, not announcement copy. */
   lastMoveError: string | null = null;
 
@@ -1287,18 +1287,42 @@ export class DocxEditor {
       return;
     }
     try {
-      const ids = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as string[];
-      this.blockMoveTargets = new Set(ids);
+      const targets = JSON.parse(bridge.ValidMoveTargets(this.handle, sourceId)) as Array<
+        { anchorId: string; before: boolean; after: boolean }
+      >;
+      this.blockMoveTargets = new Map(
+        targets.map((t) => [t.anchorId, { before: t.before, after: t.after }]),
+      );
     } catch {
       this.blockMoveTargets = null;
     }
   }
 
-  /** Whether `unit` is a legal destination for the current drag source. */
-  private isValidMoveTarget(unit: HTMLElement): boolean {
+  /**
+   * Whether `unit` is a legal destination for the current drag source — for a SPECIFIC side when
+   * one is given. A cross-block range or a section break between the blocks can make one side
+   * legal and the other not, so "this target is reachable" is not enough to pick a position.
+   */
+  private isValidMoveTarget(unit: HTMLElement, position?: "before" | "after"): boolean {
     if (!this.blockMoveTargets) return true; // no bridge support: engine stays the only gate
     const id = this.anchorIdOf(unit);
-    return !!id && this.blockMoveTargets.has(id);
+    const sides = id ? this.blockMoveTargets.get(id) : undefined;
+    if (!sides) return false;
+    return position ? sides[position] : sides.before || sides.after;
+  }
+
+  /**
+   * The side of `unit` a drop at `clientY` should land on: the half the pointer is in, snapped to
+   * the other side when only that one is legal. Snapping rather than refusing keeps a reachable
+   * target usable — the illegal side is usually illegal only because a section break or a
+   * cross-block range sits between the two blocks on that side.
+   */
+  private dropPositionFor(unit: HTMLElement, clientY: number): "before" | "after" {
+    const rect = unit.getBoundingClientRect();
+    const preferred = clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (this.isValidMoveTarget(unit, preferred)) return preferred;
+    const other = preferred === "before" ? "after" : "before";
+    return this.isValidMoveTarget(unit, other) ? other : preferred;
   }
 
   private refreshBlockDropTargets(): void {
@@ -1315,9 +1339,7 @@ export class DocxEditor {
         getData: ({ input }) => ({
           type: BLOCK_DRAG_TYPE,
           targetAnchorId: this.anchorIdOf(unit),
-          position: input.clientY < unit.getBoundingClientRect().top + unit.getBoundingClientRect().height / 2
-            ? "before"
-            : "after",
+          position: this.dropPositionFor(unit, input.clientY),
           targetElement: unit,
         }),
         onDragEnter: ({ self }) => {
@@ -1372,15 +1394,21 @@ export class DocxEditor {
     const units = this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el));
     const index = units.indexOf(source);
     if (index < 0) return null;
-    const valid = units.filter((el) => el !== source && this.isValidMoveTarget(el));
-    if (valid.length === 0) return null;
 
-    const before = valid.filter((el) => units.indexOf(el) < index);
-    const after = valid.filter((el) => units.indexOf(el) > index);
-    if (action === "up") return before.length ? { target: before[before.length - 1], position: "before" } : null;
-    if (action === "down") return after.length ? { target: after[0], position: "after" } : null;
-    if (action === "top") return before.length ? { target: before[0], position: "before" } : null;
-    if (action === "bottom") return after.length ? { target: after[after.length - 1], position: "after" } : null;
+    // Only pairs the engine accepts: a target can be reachable on one side and refused on the
+    // other, so the SIDE is part of what makes a candidate valid.
+    const position: "before" | "after" = action === "up" || action === "top" ? "before" : "after";
+    const candidates = units
+      .filter((el) => el !== source && this.isValidMoveTarget(el, position))
+      .filter((el) => (position === "before"
+        ? units.indexOf(el) < index
+        : units.indexOf(el) > index));
+    if (candidates.length === 0) return null;
+
+    if (action === "up") return { target: candidates[candidates.length - 1], position };
+    if (action === "down") return { target: candidates[0], position };
+    if (action === "top") return { target: candidates[0], position };
+    if (action === "bottom") return { target: candidates[candidates.length - 1], position };
     return null;
   }
 

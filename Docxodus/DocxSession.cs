@@ -1016,6 +1016,13 @@ public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 public sealed record RenderUnit(string Id, string Kind, string? Sig = null);
 
 /// <summary>
+/// A block a move source may legally land against, and on which side. The two positions are
+/// reported separately because a cross-block range or a section break BETWEEN the blocks can
+/// make one side legal and the other not — see <see cref="DocxSession.ValidMoveTargets"/>.
+/// </summary>
+public sealed record MoveTarget(string AnchorId, bool Before, bool After);
+
+/// <summary>
 /// The ordered top-level render units per scope container — the authority for "what
 /// blocks exist, in what order" that an incremental renderer diffs its DOM against.
 /// The projection's flat <c>AnchorIndex</c> cannot express table containment (a cell
@@ -4602,13 +4609,14 @@ public sealed class DocxSession : IDisposable
     /// indicators and menu items on the result, instead of drawing an indicator over a target the
     /// engine will refuse. <see cref="MoveBlock"/> stays authoritative — this shares its guards
     /// rather than restating them, so a target listed here is one <c>MoveBlock</c> accepts.
-    /// A target is listed when EITHER <see cref="Position.Before"/> or <see cref="Position.After"/>
-    /// is legal; the two differ only where a section break sits between the blocks.
+    /// Each entry reports the two positions SEPARATELY: a cross-block range or a section break
+    /// between the blocks can make one side legal and the other not, so a caller that knows only
+    /// "this target is reachable" can still pick the refused side.
     /// </remarks>
-    public IReadOnlyList<string> ValidMoveTargets(string sourceAnchorId)
+    public IReadOnlyList<MoveTarget> ValidMoveTargets(string sourceAnchorId)
     {
         ThrowIfDisposed();
-        var empty = Array.Empty<string>();
+        var empty = Array.Empty<MoveTarget>();
 
         var sourceTarget = FindAnchor(sourceAnchorId);
         if (sourceTarget is null || sourceTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
@@ -4619,7 +4627,7 @@ public sealed class DocxSession : IDisposable
         if (!IsEditorBodyBlock(source, parent) || MoveSourceRejection(source) is not null)
             return empty;
 
-        var targets = new List<string>();
+        var targets = new List<MoveTarget>();
         foreach (var candidate in parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
         {
             if (ReferenceEquals(candidate, source) || !IsEditorBodyBlock(candidate, parent))
@@ -4629,9 +4637,10 @@ public sealed class DocxSession : IDisposable
             var kind = candidate.Name == W.tbl ? "tbl" : WmlToMarkdownConverter.KindFor(candidate);
             if (kind is null) continue;
 
-            if (BlockMoveSafetyError(parent, source, candidate, Position.Before) is null ||
-                BlockMoveSafetyError(parent, source, candidate, Position.After) is null)
-                targets.Add($"{kind}:{sourceTarget.Anchor.Scope}:{unid}");
+            bool before = BlockMoveSafetyError(parent, source, candidate, Position.Before) is null;
+            bool after = BlockMoveSafetyError(parent, source, candidate, Position.After) is null;
+            if (before || after)
+                targets.Add(new MoveTarget($"{kind}:{sourceTarget.Anchor.Scope}:{unid}", before, after));
         }
         return targets;
     }

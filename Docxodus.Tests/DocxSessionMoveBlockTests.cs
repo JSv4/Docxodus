@@ -249,18 +249,44 @@ public class DocxSessionMoveBlockTests
         var valid = session.ValidMoveTargets(anchors[0]);
 
         // A and B are on one side of the break; C and D on the other.
-        Assert.Contains(anchors[1], valid);
-        Assert.DoesNotContain(anchors[3], valid);
-        Assert.DoesNotContain(anchors[4], valid);
+        Assert.Contains(valid, t => t.AnchorId == anchors[1]);
+        Assert.DoesNotContain(valid, t => t.AnchorId == anchors[3]);
+        Assert.DoesNotContain(valid, t => t.AnchorId == anchors[4]);
 
-        // Every listed target really is accepted, and an omitted one really is refused.
+        // Every listed (target, side) pair really is accepted — a target can be reachable on one
+        // side and refused on the other, so the side is part of the claim.
         foreach (var target in valid)
         {
-            using var probe = new DocxSession(session.Save());
-            var probeAnchors = ParagraphAnchors(probe);
-            Assert.True(probe.MoveBlock(probeAnchors[0], target, Position.After).Success);
+            foreach (var (allowed, pos) in new[] { (target.Before, Position.Before), (target.After, Position.After) })
+            {
+                using var probe = new DocxSession(session.Save());
+                var probeAnchors = ParagraphAnchors(probe);
+                Assert.Equal(allowed, probe.MoveBlock(probeAnchors[0], target.AnchorId, pos).Success);
+            }
         }
         Assert.False(session.MoveBlock(anchors[0], anchors[3], Position.After).Success);
+    }
+
+    // A target can be legal on one side and refused on the other: moving a block INTO a
+    // cross-block range changes that range's membership, while landing outside it does not. A
+    // caller told only "this target is reachable" would still pick the refused side.
+    [Fact]
+    public void ValidMoveTargets_ReportsEachSideOfATargetSeparately()
+    {
+        // The bookmark spans B..C, so A may land before B but not between B and C.
+        using var session = new DocxSession(Document(
+            P("A"),
+            P("B", new XElement(W.bookmarkStart, new XAttribute(W.id, 3), new XAttribute(W.name, "_span"))),
+            P("C", new XElement(W.bookmarkEnd, new XAttribute(W.id, 3))),
+            P("D")));
+        var anchors = ParagraphAnchors(session);
+
+        var target = Assert.Single(session.ValidMoveTargets(anchors[0]).Where(t => t.AnchorId == anchors[1]));
+
+        Assert.True(target.Before);
+        Assert.False(target.After);
+        Assert.False(session.MoveBlock(anchors[0], anchors[1], Position.After).Success);
+        Assert.True(session.MoveBlock(anchors[0], anchors[1], Position.Before).Success);
     }
 
     // A block already carrying revision markup cannot become a TRACKED move (re-wrapping would

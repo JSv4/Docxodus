@@ -20,12 +20,16 @@ All notable changes to this project will be documented in this file.
   and `reject ≡ the original order` hold for both, and `ListRevisions` reports a paragraph
   move as ONE selectable `move` revision resolving both sides. Rippled through
   `DocxSessionOps`, the WASM bridge, npm, the stdio host, docx-scalpel and MCP.
-- **`DocxSession.ValidMoveTargets(sourceAnchorId)`** — the anchors a block may legally move
-  next to, sharing `MoveBlock`'s own guards. The drag UI registers only these as drop targets,
-  disables move-menu items with no destination, withholds the handle from a block that can
-  move nowhere, and resolves "move to top/bottom" **within the source's own region** — a
-  document with section breaks is partitioned into move regions, where targeting the document
-  ends could never succeed. WASM/npm only, like the other editor-support endpoints.
+- **`DocxSession.ValidMoveTargets(sourceAnchorId)`** — the blocks a block may legally move next
+  to **and on which side** (`MoveTarget(AnchorId, Before, After)`), sharing `MoveBlock`'s own
+  guards. The sides are separate because landing *into* a cross-block bookmark/comment range
+  changes its membership while landing outside it does not, so a target is routinely legal on
+  one side and refused on the other. The drag UI registers only valid targets, snaps a drop to
+  the legal side when only one is, disables move-menu items with no destination, withholds the
+  handle from a block that can move nowhere, and resolves "move to top/bottom" **within the
+  source's own region** — a document with section breaks is partitioned into move regions,
+  where targeting the document ends could never succeed. WASM/npm only, like the other
+  editor-support endpoints.
 
 ### Fixed
 - **A tracked move no longer duplicates identity-bearing markers.** The destination clone's

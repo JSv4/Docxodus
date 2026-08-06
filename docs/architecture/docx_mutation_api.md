@@ -226,7 +226,7 @@ What am I editing?
 
 ```csharp
 EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos);
-IReadOnlyList<string> ValidMoveTargets(string sourceAnchorId);
+IReadOnlyList<MoveTarget> ValidMoveTargets(string sourceAnchorId);  // record(AnchorId, Before, After)
 ```
 
 `MoveBlock` reorders ONE top-level body block relative to another — the model half of the
@@ -265,13 +265,25 @@ the whole table instead).
 
 ### `ValidMoveTargets` — ask before offering
 
-Returns the anchors `sourceAnchorId` may legally move next to, in document order; empty when
-the block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a
-listed target is one `MoveBlock` accepts. A drag UI calls it once per drag source instead of
-drawing a drop indicator over a target the engine will refuse — and because a section break
-partitions the body into regions, "move to top/bottom" means the ends of the source's own
-region. `MoveBlock` stays authoritative: the gate is advisory, and a caller that bypasses it
-still gets the typed error. WASM/npm only, like the other editor-support endpoints.
+Returns the blocks `sourceAnchorId` may legally move next to, in document order; empty when the
+block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a listed
+`(target, side)` pair is one `MoveBlock` accepts.
+
+**The two sides are reported separately, and that distinction is load-bearing.** Landing *into* a
+cross-block bookmark/comment/permission range changes its membership while landing outside it does
+not, so a target is routinely legal `Before` and refused `After` (or the reverse) — a caller that
+knows only "this target is reachable" will pick the refused side half the time. The editor gates
+its drop indicator on the side, snaps a drop to the legal side when only one is, and resolves each
+move-menu command against `(target, side)` pairs. Because a section break partitions the body,
+"move to top/bottom" means the ends of the source's own region.
+
+Note the practical consequence on real documents: a heavily cross-referenced contract can restrict
+moves far more than its section breaks alone would suggest, because most blocks sit inside some
+range. That is the confirmed v1 safety policy (reject rather than silently re-scope a range), not a
+defect — and it is why the UI must ask rather than offer everything and fail on drop.
+
+`MoveBlock` stays authoritative: the gate is advisory, and a caller that bypasses it still gets the
+typed error. WASM/npm only, like the other editor-support endpoints.
 
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 

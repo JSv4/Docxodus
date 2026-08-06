@@ -265,10 +265,11 @@ internal static class DocxSessionOps
         DocxSessionJson.Serialize(
             SessionRegistry.Get(handle).MoveBlock(sourceAnchorId, targetAnchorId, position));
 
-    /// <summary>The anchors <paramref name="sourceAnchorId"/> may legally move next to — what a
-    /// drag UI gates its drop targets on, so it never offers a drop the engine will refuse.</summary>
+    /// <summary>The blocks <paramref name="sourceAnchorId"/> may legally move next to, and on which
+    /// side — what a drag UI gates its drop targets on, so it never offers a drop the engine
+    /// will refuse.</summary>
     public static string ValidMoveTargets(int handle, string sourceAnchorId) =>
-        DocxSessionJson.SerializeAnchorIds(
+        DocxSessionJson.SerializeMoveTargets(
             SessionRegistry.Get(handle).ValidMoveTargets(sourceAnchorId));
 
     public static string InsertParagraph(int handle, string anchorId, Position position, string markdown) =>

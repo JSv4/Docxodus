@@ -133,7 +133,7 @@ test.describe('DocxEditor — block drag handle', () => {
       // Alpha may reach Beta (same region) but not Gamma (across the break).
       const alpha = units.find((el) => el.textContent?.includes('Alpha'))!;
       editor['refreshBlockMoveTargets'](alpha);
-      const targets: Set<string> = editor['blockMoveTargets'];
+      const targets: Map<string, { before: boolean; after: boolean }> = editor['blockMoveTargets'];
       const idOf = (text: string) =>
         editor['anchorIdOf'](units.find((el: HTMLElement) => el.textContent?.includes(text))!);
       return {

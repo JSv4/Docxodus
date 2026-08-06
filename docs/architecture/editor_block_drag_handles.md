@@ -493,13 +493,20 @@ deleted. Both go through one owner, `DocxSession.MarkParagraphContentAndMark`.
 
 ### Move validity is a query, not a failed attempt
 
-`DocxSession.ValidMoveTargets(sourceAnchorId)` returns the anchors a block may legally move
-next to, sharing `MoveBlock`'s own guards (`MoveSourceRejection` + `BlockMoveSafetyError`)
-so the UI and the engine cannot disagree. The editor asks once per drag source and once per
-menu open, and uses the answer to:
+`DocxSession.ValidMoveTargets(sourceAnchorId)` returns the blocks a block may legally move next
+to **and on which side** (`MoveTarget(AnchorId, Before, After)`), sharing `MoveBlock`'s own guards
+(`MoveSourceRejection` + `BlockMoveSafetyError`) so the UI and the engine cannot disagree.
+
+The two sides are reported separately because landing *into* a cross-block range changes its
+membership while landing outside it does not — the asymmetry is the common case, not an edge one.
+Measured on the NVCA charter, a mid-document block had three reachable targets and **two of them
+were legal on only one side** (`before:false/after:true` and `before:true/after:false`). A UI told
+only "this target is reachable" picks the refused side about half the time.
+
+The editor asks once per drag source and once per menu open, and uses the answer to:
 
 - register only valid blocks as drop targets, so no indicator is drawn over a doomed drop
-  (confirmed direction #7);
+  (confirmed direction #7), snapping a drop to the legal side when only one is;
 - disable move-menu items with no destination;
 - withhold the handle entirely from a block that can move nowhere (a section-break paragraph);
 - resolve **"move to top/bottom" within the source's own region**. On a document with N
@@ -508,6 +515,13 @@ menu open, and uses the answer to:
 
 The engine remains authoritative — the UI gate is advisory, and a caller bypassing it still
 gets the typed error.
+
+Worth stating plainly for anyone measuring the feature on a real contract: a heavily
+cross-referenced document restricts moves far more than its section breaks alone suggest, because
+most blocks sit inside some bookmark range. On the NVCA charter a mid-document block could reach
+only its immediate neighbours. That is the confirmed v1 safety policy (reject rather than silently
+re-scope a range) doing its job — and it is precisely why the UI has to ask rather than offer
+everything and fail on drop.
 
 ### Editor projection
 

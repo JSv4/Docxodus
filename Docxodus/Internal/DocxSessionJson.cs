@@ -695,16 +695,19 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
-    /// <summary>A bare JSON array of anchor ids — the wire shape for
-    /// <see cref="DocxSession.ValidMoveTargets"/>.</summary>
-    public static string SerializeAnchorIds(IReadOnlyList<string> anchorIds)
+    /// <summary>The wire shape for <see cref="DocxSession.ValidMoveTargets"/>:
+    /// <c>[{"anchorId":…,"before":true,"after":false}]</c>.</summary>
+    public static string SerializeMoveTargets(IReadOnlyList<MoveTarget> targets)
     {
-        var sb = new StringBuilder(2 + anchorIds.Count * 48);
+        var sb = new StringBuilder(2 + targets.Count * 72);
         sb.Append('[');
-        for (int i = 0; i < anchorIds.Count; i++)
+        for (int i = 0; i < targets.Count; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(JsonString(anchorIds[i]));
+            sb.Append("{\"anchorId\":").Append(JsonString(targets[i].AnchorId))
+              .Append(",\"before\":").Append(targets[i].Before ? "true" : "false")
+              .Append(",\"after\":").Append(targets[i].After ? "true" : "false")
+              .Append('}');
         }
         return sb.Append(']').ToString();
     }
