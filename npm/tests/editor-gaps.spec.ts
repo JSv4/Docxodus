@@ -107,10 +107,10 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
 
   // GAP 3: table cells are editable for TEXT and Enter now SPLITS the cell paragraph into two
   // paragraphs within the SAME cell (the engine keeps the new w:p in the w:tc — the grid is
-  // unchanged), so a cell can hold stacked lines. Grid-changing ops (cross-cell Backspace-merge,
-  // Tab focus-jump / list-nest) still need whole-table context the single-block model lacks, so
-  // they stay inert.
-  test('GAP3: Enter splits within a cell (grid unchanged); Tab stays inert; text editing works', async ({ page }) => {
+  // unchanged), so a cell can hold stacked lines. Cross-cell Backspace-merge stays inert. Tab now
+  // performs cell navigation without changing the grid except for its separately tested
+  // Word-style behavior at the final cell.
+  test('GAP3: Enter splits within a cell; Tab navigates without reshaping; text editing works', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(String(e)));
 
@@ -167,7 +167,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
     await page.keyboard.press('Enter');
     const afterEnter = await tableStats();
 
-    // Tab must be inert (no list nesting / marker, no focus jump that re-shapes the table).
+    // Tab must not nest a list or reshape the table while another cell follows.
     await caretToEndOfCell();
     await page.keyboard.press('Tab');
     const afterTab = await tableStats();
@@ -186,7 +186,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
     expect(afterEnter.tableParagraphs).toBe(before.tableParagraphs + 1);
     expect(afterEnter.tableCells).toBe(before.tableCells);
     expect(afterEnter.listMarkers).toBe(before.listMarkers);
-    // Tab stays inert: nothing changes from the post-Enter state.
+    // Tab navigation leaves the post-Enter table structure unchanged.
     expect(afterTab.tableParagraphs).toBe(afterEnter.tableParagraphs);
     expect(afterTab.tableCells).toBe(before.tableCells);
     expect(afterTab.listMarkers).toBe(before.listMarkers);
