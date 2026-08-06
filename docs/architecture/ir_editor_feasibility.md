@@ -160,8 +160,9 @@ npm run demo       # builds + serves; open http://localhost:8088/editor.html
 ```
 
 Click a paragraph/heading to edit; Enter splits a block, Backspace at the start merges;
-toggle "Paginated" for page boxes; "Save .docx" downloads a lossless document. Source:
-`npm/examples/editor.html`.
+toggle "Paginated" for page boxes; "Save .docx" downloads a lossless document. The UI is
+`mountRibbon` (`npm/src/ribbon.ts`), the shipped surface over `DocxEditor`;
+`npm/examples/editor.html` is a host that supplies WASM exports and nothing else.
 
 **Browser editor (npm).**
 

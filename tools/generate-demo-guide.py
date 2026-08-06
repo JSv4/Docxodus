@@ -220,7 +220,7 @@ def add_pill_row(document) -> None:
     table.autofit = False
     labels = (
         ("1 / SELECT", "Highlight text on this page", PALE_CYAN, CYAN),
-        ("2 / EDIT", "Use the live toolbar above", PALE_BLUE, BLUE),
+        ("2 / EDIT", "Use the live ribbon above", PALE_BLUE, BLUE),
         ("3 / DOWNLOAD", "Open the result in Word", PALE_VIOLET, VIOLET),
     )
     for index, (title, copy, fill, accent) in enumerate(labels):
@@ -293,9 +293,9 @@ def add_step_table(document) -> None:
     set_repeat_table_header(table.rows[0])
     steps = (
         ("01", "Select the purple sentence", "A blue text selection appears."),
-        ("02", "Click B in the toolbar", "The sentence becomes bold."),
+        ("02", "Click B on the Home tab", "The sentence becomes bold."),
         ("03", "Click Undo, then Redo", "The formatting disappears and returns."),
-        ("04", "Click Download .docx", "A real Word file saves to your device."),
+        ("04", "Click Save", "A real Word file saves to your device."),
     )
     for row_index, values in enumerate(steps):
         cells = table.add_row().cells
@@ -440,7 +440,7 @@ def add_cover(document: Document) -> None:
     paragraph = cell.add_paragraph(style="Title")
     add_run(paragraph, "Edit this document.\nIt’s real.", bold=True, color=WHITE, size=34)
     paragraph = cell.add_paragraph(style="Subtitle")
-    add_run(paragraph, "Select text. Change it. Download the same Word file.", color="BED7F5", size=14, italic=True)
+    add_run(paragraph, "Select text. Change it. Save the same Word file.", color="BED7F5", size=14, italic=True)
 
     document.add_paragraph().paragraph_format.space_after = Pt(0)
     add_pill_row(document)
@@ -451,7 +451,7 @@ def add_cover(document: Document) -> None:
     title.paragraph_format.space_before = Pt(0)
     add_body(
         document,
-        "Drag across the purple sentence to select it, then click B in the toolbar above.",
+        "Drag across the purple sentence to select it, then click B on the Home tab above.",
     )
 
     add_practice_paragraph(
@@ -570,7 +570,7 @@ def add_architecture_page(document: Document) -> None:
     )
 
     add_heading(document, "See the real page", 2)
-    paragraph = add_body(document, "Click Pages in the toolbar. The continuous editor becomes four Word-style page boxes without reopening the file or losing your edits.")
+    paragraph = add_body(document, "Open the Layout tab and tick Page view. The continuous editor becomes four Word-style page boxes without reopening the file or losing your edits.")
     add_run(paragraph, " That round trip is the product.", bold=True, color=BLUE)
 
 

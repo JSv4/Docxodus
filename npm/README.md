@@ -41,31 +41,41 @@ a 346-block, 94-footnote filing template. `save()` returns lossless bytes.
 
 ![The in-browser DOCX editor](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png)
 
+Two layers, so you can take as much UI as you want:
+
 ```ts
+// The engine, with no chrome — bring your own UI.
 import { DocxEditor } from 'docxodus';
 const editor = DocxEditor.open(container, docxBytes, exports);
+
+// Or the whole surface: tabbed ribbon, anchor rail, table picker, loading overlay.
+import { mountRibbon } from 'docxodus';
+const ribbon = mountRibbon(container, { exports });
+ribbon.open(docxBytes, 'contract.docx');
 ```
 
-See [`examples/editor.html`](https://github.com/JSv4/Docxodus/blob/main/npm/examples/editor.html) for
-a complete ribbon implementation.
+The ribbon picks its layout from the width of the element you give it, so the same call serves a
+full-page editor and a narrow embedded panel. [`examples/editor.html`](https://github.com/JSv4/Docxodus/blob/main/npm/examples/editor.html)
+is a host for it in ~60 lines.
 
 ## Embed it with one script tag
 
-The `embed` entry packages the viewer and editor behind two one-call factories, with the WASM
+The `embed` entry packages the viewer and editor behind one-call factories, with the WASM
 runtime location auto-detected — no build step, no configuration:
 
 ```html
-<div id="doc"></div>
+<div id="doc" style="height: 100dvh"></div>
 <script type="module">
-  import { createEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js';
-  const editor = await createEditor('#doc', './contract.docx'); // or bytes / Blob / File
-  // ...later: const editedBytes = editor.save();
+  import { createRibbonEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js';
+  const ribbon = await createRibbonEditor('#doc', './contract.docx'); // or bytes / Blob / File
+  // ...later: const editedBytes = ribbon.save();
 </script>
 ```
 
-`createViewer('#doc', source, options?)` is the read-only counterpart. Bundler users get the same
-API from `docxodus/embed`; classic-script pages can load `dist/embed.iife.js` for a global
-`Docxodus`. See [Embedding via CDN](#embedding-via-cdn) below.
+That gives you the full editor UI. `createEditor('#doc', source, options?)` is the same document
+without the chrome, and `createViewer('#doc', source, options?)` is the read-only counterpart.
+Bundler users get the same API from `docxodus/embed`; classic-script pages can load
+`dist/embed.iife.js` for a global `Docxodus`. See [Embedding via CDN](#embedding-via-cdn) below.
 
 ## Project it for an LLM
 
@@ -427,31 +437,42 @@ so a page can embed a full viewer or editor without hosting anything itself.
 ```html
 <div id="viewer"></div>
 <div id="editor"></div>
+<div id="app" style="height: 100dvh"></div>
 <script type="module">
-  import { createViewer, createEditor }
-    from 'https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js';
+  import { createViewer, createEditor, createRibbonEditor }
+    from 'https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js';
 
-  // Choose either factory, or render both into separate containers as shown.
+  // Choose a factory, or render several into separate containers as shown.
   // Source may be a URL, Uint8Array, ArrayBuffer, Blob, or File.
   const viewer = await createViewer('#viewer', './contract.docx');
 
   // No source opens a blank "New document"; returns a DocxEditor.
   const editor = await createEditor('#editor', './contract.docx', { paginated: false });
   const bytes = editor.save(); // lossless DOCX bytes
+
+  // The whole editor UI in one call — ribbon, rail, table picker, loading overlay.
+  // Density follows the CONTAINER's width, so this is also the mobile answer.
+  const ribbon = await createRibbonEditor('#app', './contract.docx', {
+    chrome: 'auto',       // 'full' | 'compact' | 'auto' (default)
+    rail: true,           // the live kind:scope:unid / session / last-op readout
+    hint: true,           // the editing hint above the document
+    loader: true,         // the staged loading overlay; false removes it
+  });
 </script>
 ```
 
 `dist/embed.bundle.js` is a self-contained ESM bundle re-exporting the entire main API
-(convert, compare, diff, sessions, annotations) plus `createViewer`/`createEditor`/`DocxEditor`,
-so it also works as a no-build way to use any other function.
+(convert, compare, diff, sessions, annotations) plus
+`createViewer`/`createEditor`/`createRibbonEditor`/`mountRibbon`/`DocxEditor`, so it also works as
+a no-build way to use any other function.
 
 For pages that can't use modules, `dist/embed.iife.js` exposes the same surface as a global:
 
 ```html
 <div id="doc"></div>
-<script src="https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.iife.js"></script>
 <script>
-  Docxodus.createEditor('#doc').then((editor) => { /* ... */ });
+  Docxodus.createRibbonEditor('#doc').then((ribbon) => { /* ... */ });
 </script>
 ```
 
@@ -465,7 +486,7 @@ first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that re
 
 ### CDN caveats
 
-- **Pin an exact version in production** (`docxodus@9.1.1`, not `@latest`) — CDN responses are
+- **Pin an exact version in production** (`docxodus@9.2.0`, not `@latest`) — CDN responses are
   cached as immutable, and the wire shapes between the JS wrappers and the WASM assemblies must
   come from the same release.
 - The build patches the .NET loader to fetch with `credentials: "omit"` — required because the

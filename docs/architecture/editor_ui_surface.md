@@ -8,12 +8,25 @@ This is the **UI reference**. For *why* the editor is built the way it is (Optio
 lifecycle, error catalog, supported markdown subset — read
 [`docx_mutation_api.md`](docx_mutation_api.md).
 
-Two layers are described here, and they are not the same thing:
+Three layers are described here, and they are not the same thing:
 
 | Layer | Path | What it is |
 |-------|------|------------|
-| `DocxEditor` | `npm/src/editor.ts` | The framework-agnostic editor. **This is the product** — a consumer builds their own chrome on it. |
-| The demo chrome | `npm/examples/editor.html` | A reference implementation of a ribbon over `DocxEditor`. Not shipped in the npm package; it is what the screenshots below show. |
+| `DocxEditor` | `npm/src/editor.ts` | The framework-agnostic editor **engine**: the live `DocxSession`, block wiring, every command. Deliberately no chrome. A consumer who wants their own UI builds on this. |
+| `mountRibbon` | `npm/src/ribbon.ts` (+ `ribbon-chrome.ts`) | The **surface**: tabbed ribbon, anchor rail, table picker, loading overlay, responsive layout. Shipped in the npm package; it is what the screenshots below show. |
+| `createRibbonEditor` | `npm/src/embed.ts` | The one-call CDN form of the surface — boots WASM, scopes the document CSS, mounts the ribbon, narrates the wait. |
+
+`mountRibbon` used to be three hand-written copies (`npm/examples/editor.html`, the GitHub Pages
+landing page, the compact player), which drifted until the demo advertised a smaller editor than
+the one that shipped. It now has one owner, and the hosts differ only in how they obtain the WASM
+exports and how much chrome they turn on:
+
+| Host | Obtains exports | Chrome |
+|------|-----------------|--------|
+| `npm/examples/editor.html` | boots `./_framework/dotnet.js` itself | full, bands on |
+| `docs/demo/app.html` | `createRibbonEditor` from jsDelivr | `auto`, full-bleed |
+| `docs/demo/index.html` | `createRibbonEditor` from jsDelivr | `auto`, inside the landing page's frame |
+| `docs/demo/player.html` | `createRibbonEditor` from jsDelivr, on tap | pinned `compact`, no hint |
 
 Every screenshot is the [NVCA Model Certificate of Incorporation](https://nvca.org/model-legal-documents/)
 (346 blocks, 94 footnote citations, 4 sections, 48 rendered pages) opened unmodified.
@@ -264,14 +277,73 @@ of per keystroke.
 
 - Blocks are addressable in the DOM as `#editor [data-anchor]`; editable ones carry
   `contenteditable="true"`.
-- `window.__demo` exposes `{ exports, openDoc(bytes, name), getEditor() }`.
-- `window.__selectTab(name)` activates a ribbon tab without pointer geometry.
+- `window.__demo` exposes `{ ribbon, exports, openDoc(bytes, name), getEditor() }` — and only once
+  the engine is usable, so its appearance is the "surface is live" signal.
+- `window.__selectTab(name)` activates a ribbon tab without pointer geometry; `window.__ribbon` is
+  the `RibbonEditor` itself (`selectTab`, `setChrome`, `loader`, `open`, `destroy`).
 
 **A control on a non-active tab is `display:none` and therefore not clickable.** A spec that touches
 one must activate its tab first — `npm/tests/editor-demo-grid.spec.ts` calls `__selectTab('insert')`
-before clicking `#table`. Stable ids the specs bind to: `#editor`, `#fontsize`, `#new`, `#table`,
-`#gridpicker`, `#gridcells`, `#gridalign`.
+before clicking `#table`.
+
+Every control carries `data-dxr="<name>"`, and the surface *also* stamps `id = idPrefix + name`.
+With no explicit `idPrefix` it uses bare ids when they are free on the page and generates
+`dxr<N>-` the moment any of them is taken — so the historical spec selectors keep working and a
+second ribbon on the same page cannot collide with the first. Stable ids the specs bind to:
+`#editor`, `#fontsize`, `#new`, `#save`, `#undo`, `#redo`, `#table`, `#gridpicker`, `#gridcells`,
+`#gridalign`, `#paginated`, `#loader`. Behavioural attributes are the delegation contract:
+`data-cmd`, `data-align`, `data-indent`, `data-list`, `data-tt`.
+
+The root reports its own state: `.dxr[data-state]` is `idle` | `loading` | `ready` | `error`, and
+`.dxr[data-chrome]` is `full` | `compact`.
 
 Serving the demo: `npm run build`, then copy `examples/editor.html` + the bundles into `dist/wasm/`
 (this is what `pretest` does) and serve that directory. After a WASM rebuild, serve on a **new port** —
 a warm browser blocks the new payload with an SRI integrity error that looks like a build failure.
+
+---
+
+## 11. Responsive behaviour
+
+![The compact layout on a phone](../images/editor/ribbon-compact.png)
+
+Density is measured from the **root element**, not the viewport, via a `ResizeObserver` — a narrow
+embed inside a wide desktop page is narrow, and a viewport media query gets that wrong. Below
+`compactBreakpoint` (default 720 px) the surface switches to `compact`:
+
+| | `full` | `compact` |
+|---|---|---|
+| Ribbon panel | multi-row groups with labels | one horizontally-scrolling strip, labels dropped |
+| Anchor rail | shown | hidden |
+| Editing hint | shown | hidden |
+| Title bar | brand + doc name + status | brand + doc name, status dropped |
+| Table picker | popover under its button | docked to the bottom edge, within thumb reach |
+| Sheet padding | 56 × 72 px | 22 × 18 px |
+| Touch targets | 30 px | 40 px on coarse pointers |
+
+**No command is removed in compact** — the strip scrolls instead. That is the one rule the previous
+hand-rolled mini toolbar broke, and the reason the compact player kept falling behind the editor.
+
+`chrome: "compact"` or `"full"` pins the density (what `player.html` does, since a host site may
+size its iframe wide enough to trip the roomy layout); `"auto"` is the default.
+
+Options the host controls: `chrome`, `compactBreakpoint`, `rail`, `fileActions`, `hint`, `loader`,
+`documentName`, `idPrefix`, `onSave`, `onOpen`, `onStatus`, `onCommand`, plus every
+`DocxEditorOptions` field.
+
+---
+
+## 12. The loading overlay
+
+Opening a document in the browser means streaming a trimmed .NET runtime. The wait is real, so the
+surface spends it explaining what is being built rather than showing a spinner: a staged narrative
+(engine → document → wiring → ready) with a progress bar, and a rotating capability card.
+
+The overlay paints **before** any runtime exists, which is what lets a host that boots its own
+runtime narrate the gap: `mountRibbon` returns immediately with `ribbon.loader`, and the host calls
+`stage(n)` / `progress(pct, label)` / `done()` / `fail(err)` as it goes. `createRibbonEditor` drives
+those four stages itself. `fail()` shows the error with a Retry button instead of leaving a dead
+surface; `loader: false` removes the overlay entirely and every method becomes a no-op.
+
+It covers the whole instrument, so half-built chrome never flashes, and drops `pointer-events` the
+instant the fade starts — the surface underneath is already live by then.

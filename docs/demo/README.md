@@ -1,26 +1,41 @@
-# Social demo setup
+# GitHub Pages demo
 
-These pages are static and require no application server. They load the pinned
-`docxodus@9.1.1` embed bundle from jsDelivr and the branded product guide from
-the same GitHub Pages directory. Regenerate that document with
-`python tools/generate-demo-guide.py` from the repository root.
+Three static pages, no application server. All three host the **same** editor
+surface — `createRibbonEditor` from the pinned `docxodus@9.2.0` embed bundle on
+jsDelivr — and differ only in how much of the page belongs to the editor:
+
+| Page | What it is |
+|------|------------|
+| `index.html` | The landing page. Hero, capability cards, the embed dialog, and the live editor inside its frame. This is the URL to share; its Open Graph metadata is what social platforms read. |
+| `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
+| `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
+
+The surface itself is **not** written here — it ships in the npm package
+(`npm/src/ribbon.ts`). These pages used to carry a hand-written toolbar each,
+which drifted until the demo advertised a smaller editor than the one that
+shipped. Changing the editor's UI means changing the module, not these files.
+
+The sample document is the branded product guide in this directory; regenerate
+it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
-1. Publish `docxodus@9.1.1` and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js` returns JavaScript.
+1. Publish `docxodus@9.2.0` and confirm
+   `https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
    running Jekyll.
-3. Open `https://jsv4.github.io/Docxodus/demo/` and verify the status becomes `live`.
+3. Open `https://jsv4.github.io/Docxodus/demo/` and verify the status chip becomes `Live`.
 4. If the site is hosted anywhere else, update the absolute `og:url`, `og:image`,
-   and `twitter:image` values in `index.html` before sharing.
+   and `twitter:image` values in `index.html` and `app.html` before sharing.
 
-Both pages accept query overrides for local or preview testing:
+All three pages accept query overrides for local or preview testing:
 
 ```text
 ?engine=<module URL of embed.bundle.js>&doc=<CORS-readable DOCX URL>
 ```
+
+`app.html` also takes `?blank=1` to start from a new empty document.
 
 ## Social-platform expectations
 
@@ -29,5 +44,6 @@ Both pages accept query overrides for local or preview testing:
 - X receives a `summary_large_image` link card. Its current developer docs no
   longer document historical Player Cards, so the page does not promise an
   interactive editor inside a post. `player.html` is for iframe-capable sites.
-- The Playwright specs validate the static metadata, boot-on-tap behavior, and
-  live editor locally. They cannot prove how an external social client will render a post.
+- The Playwright specs (`npm/tests/social-demo.spec.ts`) validate the static
+  metadata, boot-on-tap behaviour, the live editor, and the responsive collapse —
+  locally. They cannot prove how an external social client will render a post.

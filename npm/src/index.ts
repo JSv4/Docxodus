@@ -177,6 +177,21 @@ export { PaginationEngine, paginateHtml } from "./pagination.js";
 export { DocxEditor } from "./editor.js";
 export type { DocxEditorOptions, DocxEditorExports } from "./editor.js";
 
+// The ribbon is the editor's UI shell: tabbed chrome, anchor rail, table picker and
+// loading overlay wired onto DocxEditor's command surface. `createRibbonEditor`
+// (docxodus/embed) is the one-call version that also boots WASM.
+export { mountRibbon } from "./ribbon.js";
+export type {
+  RibbonEditor,
+  RibbonOptions,
+  RibbonChromeMode,
+  RibbonState,
+  RibbonLoader,
+  RibbonLoaderOptions,
+  RibbonLoaderStage,
+  RibbonLoaderFeature,
+} from "./ribbon.js";
+
 export type {
   ConversionOptions,
   CompareOptions,

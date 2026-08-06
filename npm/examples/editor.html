@@ -2,739 +2,86 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Docxodus — document editor</title>
   <style>
-    /* ── Design tokens ────────────────────────────────────────────────────────────
-       A control surface for an OOXML engine, not an office suite: cool graphite
-       chrome, one ink-blue accent reserved for interactive state, and a teal used
-       ONLY for machine data (anchors, counts, timings). Personality comes from the
-       type treatment — wide-tracked micro-caps against true monospace data — because
-       the page must stay self-contained (no webfonts; a strict offline demo). */
-    :root {
-      color-scheme: light;
-      --ink: #101418;
-      --sheet: #ffffff;
-      --chrome: #eef1f6;
-      --chrome-sunk: #e3e8f0;
-      --rule: #d3dae4;
-      --accent: #1f5fd0;
-      --wash: #dde8fb;
-      --muted: #5d6975;
-      --data: #0b6f6a;
-      --danger: #a3341f;
-      --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: var(--ui); background: #dfe3ea; color: var(--ink); }
+    /* This page is a HOST, not a design.
+       The whole editor surface — ribbon chrome, anchor rail, table picker, loading
+       overlay and its responsive behaviour — ships in `mountRibbon` (npm/src/ribbon.ts),
+       which is also what the GitHub Pages demo and the compact iframe player use. All
+       this page does is boot the .NET runtime from ./_framework and hand the exports
+       over, which is the one thing a CDN embed does differently.
 
-    /* ── Chrome shell ─────────────────────────────────────────────────────────── */
-    .chrome { position: sticky; top: 0; z-index: 10; background: var(--chrome);
-      border-bottom: 1px solid var(--rule); }
-
-    /* Title bar: identity, always-available document actions, then the tab strip.
-       New/Open/Save/Undo/Redo never hide behind a tab — they are used constantly. */
-    .titlebar { display: flex; align-items: center; gap: 14px; padding: 7px 14px 0; }
-    .brand { display: flex; align-items: baseline; gap: 7px; font-size: 13px; font-weight: 600;
-      letter-spacing: -.01em; }
-    .brand .mark { width: 9px; height: 9px; background: var(--accent);
-      clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
-    .brand .doc { font-weight: 400; color: var(--muted); font-size: 12px; }
-    .quick { display: flex; gap: 3px; align-items: center; }
-    .titlebar .spacer { flex: 1; }
-
-    /* ── Tab strip ─────────────────────────────────────────────────────────────── */
-    .tabs { display: flex; gap: 1px; padding: 6px 14px 0; }
-    .tab { font: inherit; font-size: 12.5px; padding: 6px 15px 7px; border: 1px solid transparent;
-      border-bottom: none; border-radius: 5px 5px 0 0; background: none; color: var(--muted);
-      cursor: pointer; }
-    .tab:hover { color: var(--ink); background: #e6ebf3; }
-    .tab[aria-selected="true"] { background: var(--chrome-sunk); color: var(--ink); font-weight: 600;
-      border-color: var(--rule); box-shadow: inset 0 2px 0 var(--accent); }
-    /* Contextual tab — present only while the caret is inside a table. */
-    .tab[data-contextual] { color: var(--accent); }
-    .tab[hidden] { display: none; }
-
-    /* ── Ribbon ────────────────────────────────────────────────────────────────── */
-    #ribbon { background: var(--chrome-sunk); border-top: 1px solid var(--rule); }
-    #ribbon[aria-disabled="true"] { opacity: .45; pointer-events: none; }
-    .panel { display: none; align-items: stretch; gap: 0; padding: 7px 14px 8px; overflow-x: auto; }
-    .panel[data-active] { display: flex; }
-    /* Group label sits ABOVE its controls (a spec-sheet reading), with hairline
-       dividers rather than boxes — lighter than the boxed, label-under convention. */
-    .group { display: flex; flex-direction: column; gap: 5px; padding: 0 13px;
-      border-right: 1px solid var(--rule); }
-    .group:last-child { border-right: none; }
-    .group:first-child { padding-left: 0; }
-    .glabel { font-size: 9.5px; text-transform: uppercase; letter-spacing: .11em;
-      color: var(--muted); font-weight: 600; }
-    .row { display: flex; gap: 3px; align-items: center; }
-
-    /* ── Controls ──────────────────────────────────────────────────────────────── */
-    button, label.btn { font: inherit; font-size: 13px; padding: 5px 9px; border: 1px solid transparent;
-      border-radius: 4px; background: none; color: var(--ink); cursor: pointer; line-height: 1.15; }
-    button:hover, label.btn:hover { background: #d6deea; }
-    button:active { background: #c8d3e3; }
-    button:disabled { opacity: .38; cursor: default; background: none; }
-    button.active { background: var(--wash); border-color: #b3ccf2; color: var(--accent); }
-    .quick button, .quick label.btn { border-color: var(--rule); background: #f7f9fc; padding: 4px 10px;
-      font-size: 12.5px; }
-    .quick button:hover, .quick label.btn:hover { background: #fff; border-color: #b9c4d4; }
-    .quick button:disabled:hover { background: #f7f9fc; border-color: var(--rule); }
-    button.icon { min-width: 30px; text-align: center; }
-    /* Icons are inline SVG drawn from the same shapes the control acts on (text lines,
-       rules), so alignment and indent read at a glance instead of relying on arrow
-       glyphs that collide with undo/redo. currentColor keeps them in step with state. */
-    button svg { display: block; margin: 0 auto; fill: currentColor; }
-    button.wide { display: inline-flex; align-items: center; gap: 6px; }
-    button.danger:hover { background: #f6dcd6; color: var(--danger); }
-    select, input[type="number"], input[type="text"] { font: inherit; font-size: 12.5px;
-      padding: 4px 6px; border: 1px solid var(--rule); border-radius: 4px; background: #f7f9fc;
-      color: var(--ink); }
-    select:focus-visible, input:focus-visible, button:focus-visible, .tab:focus-visible,
-    label.btn:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
-    #fontsize { width: 58px; }
-    #fontfamily { max-width: 132px; }
-    .toggle { font-size: 12.5px; display: inline-flex; gap: 5px; align-items: center;
-      cursor: pointer; color: var(--ink); white-space: nowrap; }
-
-    /* ── Anchor rail (the signature) ───────────────────────────────────────────────
-       The addressing spine made permanent chrome. Every block in this editor is
-       addressable as kind:scope:unid, and the model of record is a live WASM session —
-       so the demo states both, live, instead of hiding them behind devtools. It also
-       reports each command's real cost, which is what a smoke test needs to see. */
-    .rail { display: flex; align-items: center; gap: 0; padding: 0 14px; height: 25px;
-      background: #f7f9fc; border-top: 1px solid var(--rule); font-family: var(--mono);
-      font-size: 11.5px; color: var(--muted); overflow-x: auto; }
-    .rail .cell { display: flex; align-items: baseline; gap: 6px; padding: 0 13px;
-      border-right: 1px solid var(--rule); white-space: nowrap; }
-    .rail .cell:first-child { padding-left: 0; }
-    .rail .cell:last-child { border-right: none; }
-    .rail .k { font-size: 9.5px; font-family: var(--ui); text-transform: uppercase;
-      letter-spacing: .1em; color: #8b96a3; }
-    .rail .v { color: var(--data); }
-    .rail .v.flash { animation: railflash .45s ease-out; }
-    @keyframes railflash { from { background: #b9ecdf; } to { background: transparent; } }
-    @media (prefers-reduced-motion: reduce) { .rail .v.flash { animation: none; } }
-    .rail .spacer { flex: 1; border: none; }
-    #status { color: var(--muted); }
-
-    /* ── Document ──────────────────────────────────────────────────────────────── */
-    #editor { max-width: 920px; margin: 26px auto; padding: 0 16px 96px; }
-    #editor.continuous > * { background: var(--sheet); }
-    #editor.continuous { background: var(--sheet); padding: 56px 72px; border-radius: 3px;
-      box-shadow: 0 1px 3px rgba(16,20,24,.14), 0 8px 24px rgba(16,20,24,.05); }
-    [contenteditable="true"]:focus { outline: 2px solid var(--accent); outline-offset: 2px;
-      border-radius: 2px; }
-    [contenteditable="true"]:hover { background: #f2f7ff; }
-    .hint { max-width: 920px; margin: 0 auto; padding: 9px 16px 0; font-size: 12px;
-      color: var(--muted); line-height: 1.5; }
-    .hint kbd { font-family: var(--mono); font-size: 11px; background: #e8ecf3;
-      border: 1px solid var(--rule); border-radius: 3px; padding: 0 4px; }
-
-    /* ── Popovers ──────────────────────────────────────────────────────────────── */
-    .pop { display: none; position: absolute; z-index: 30; background: #fff;
-      border: 1px solid var(--rule); border-radius: 6px; padding: 9px;
-      box-shadow: 0 4px 16px rgba(16,20,24,.18); }
-    #gridcells { display: grid; grid-template-columns: repeat(10, 16px); gap: 2px; }
-    #gridcells div { width: 16px; height: 16px; border: 1px solid var(--rule); border-radius: 2px;
-      background: #f2f5f9; cursor: pointer; }
-    #gridcells div[data-on] { background: var(--wash); border-color: var(--accent); }
-    .popfoot { margin-top: 8px; font-size: 12px; display: flex; justify-content: space-between;
-      align-items: center; gap: 14px; }
-
-    /* ── Header/footer bands ──────────────────────────────────────────────────────
-       Stories live in their own OOXML parts outside the body, so they dock as their
-       own regions. Restyled to the same token system as the ribbon so the page reads
-       as one instrument rather than two apps. */
-    .docx-hf-band { background: var(--sheet); border: 1px solid var(--rule);
-      border-left: 2px solid #c2ccd9; border-radius: 3px; padding: 9px 72px 13px; margin: 0 0 14px; }
-    #editor .docx-hf-band + .docx-body-flow { margin-top: 0; }
-    .docx-hf-band[data-hf-band="footer"] { margin: 14px 0 0; }
-    .docx-hf-chrome { display: flex; gap: 8px; align-items: center; margin: 0 0 7px -60px;
-      font-size: 9.5px; text-transform: uppercase; letter-spacing: .11em; color: var(--muted);
-      font-weight: 600; }
-    .docx-hf-chrome select, .docx-hf-chrome input { font: inherit; font-family: var(--ui);
-      font-size: 12.5px; text-transform: none; letter-spacing: normal; font-weight: 400;
-      padding: 3px 5px; border: 1px solid var(--rule); border-radius: 4px; background: #f7f9fc;
-      color: var(--ink); }
-    .docx-hf-chrome input[data-hf-pagestart] { width: 64px; }
-    .docx-hf-label { font-weight: 600; }
-    .docx-hf-warning { margin: 0 0 8px -60px; padding: 7px 9px; font-size: 12px; line-height: 1.45;
-      background: #fdf6e3; border: 1px solid #e8d9a8; border-left: 2px solid #c9a227;
-      border-radius: 3px; color: #6b5310; }
-    .docx-hf-warning button { margin-left: 6px; padding: 2px 8px; font-size: 12px;
-      border-color: #e8d9a8; background: #fff; }
-    .docx-hf-placeholder { font-style: italic; color: #9aa4b1; }
-    .docx-hf-inherited { text-transform: none; letter-spacing: normal; font-style: italic;
-      font-weight: 400; color: var(--muted); }
-    .docx-hf-band[data-hf-inherited] { border-style: dashed; }
-    #editor.continuous:has(.docx-body-flow) { padding: 0; background: transparent; box-shadow: none; }
-    #editor.continuous .docx-body-flow { background: var(--sheet); padding: 56px 72px;
-      border-radius: 3px; box-shadow: 0 1px 3px rgba(16,20,24,.14), 0 8px 24px rgba(16,20,24,.05); }
+       Everything below is page framing: fill the viewport so the surface manages its
+       own scrolling (the ribbon stays put on a phone instead of scrolling away). */
+    html, body { height: 100%; }
+    body { margin: 0; }
+    #app { height: 100%; }
   </style>
 </head>
 <body>
-  <div class="chrome">
-    <div class="titlebar">
-      <span class="brand"><span class="mark"></span>Docxodus <span class="doc" id="docname">no document</span></span>
-      <div class="quick">
-        <button id="new" title="Start a new blank document">New</button>
-        <label class="btn" tabindex="0">Open<input id="file" type="file" accept=".docx" hidden /></label>
-        <button id="save" disabled>Save</button>
-      </div>
-      <div class="quick">
-        <button id="undo" class="icon" title="Undo (Ctrl+Z)">&#8630;</button>
-        <button id="redo" class="icon" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
-      </div>
-      <span class="spacer"></span>
-      <span id="status" style="font-family: var(--mono); font-size: 11.5px;">Booting WASM…</span>
-    </div>
-
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="home" aria-selected="true">Home</button>
-      <button class="tab" role="tab" data-tab="insert" aria-selected="false">Insert</button>
-      <button class="tab" role="tab" data-tab="layout" aria-selected="false">Layout</button>
-      <button class="tab" role="tab" data-tab="table" data-contextual aria-selected="false" hidden>Table</button>
-    </div>
-
-    <div id="ribbon" aria-disabled="true">
-      <!-- HOME ────────────────────────────────────────────────────────────────── -->
-      <div class="panel" data-panel="home" data-active>
-        <div class="group">
-          <span class="glabel">Text</span>
-          <div class="row">
-            <button class="icon" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-            <button class="icon" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-            <button class="icon" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-            <button class="icon" data-cmd="strike" title="Strikethrough"><s>S</s></button>
-            <button class="icon" data-cmd="code" title="Inline code">&lt;/&gt;</button>
-            <button class="icon" data-cmd="superscript" title="Superscript">x&#178;</button>
-            <button class="icon" data-cmd="subscript" title="Subscript">x&#8322;</button>
-          </div>
-          <div class="row">
-            <input id="fontsize" type="number" min="1" max="1638" step="0.5" list="fontsizes"
-                   placeholder="pt" title="Font size in points — type any value or pick a preset" />
-            <datalist id="fontsizes">
-              <option>8</option><option>9</option><option>10</option><option>11</option>
-              <option>12</option><option>14</option><option>16</option><option>18</option>
-              <option>20</option><option>24</option><option>28</option><option>36</option>
-              <option>48</option><option>72</option><option>96</option>
-            </datalist>
-            <select id="fontfamily" title="Font family — applies to the selection">
-              <option value="">Font…</option>
-              <option>Calibri</option><option>Times New Roman</option><option>Arial</option>
-              <option>Georgia</option><option>Cambria</option><option>Courier New</option>
-              <option>Verdana</option><option>Garamond</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="glabel">Paragraph</span>
-          <div class="row">
-            <button class="icon" data-align="left" title="Align left"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="9" height="1.6"/></svg></button>
-            <button class="icon" data-align="center" title="Align center"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="3" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="3" y="11.4" width="9" height="1.6"/></svg></button>
-            <button class="icon" data-align="right" title="Align right"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="6" y="11.4" width="9" height="1.6"/></svg></button>
-            <button class="icon" data-align="justify" title="Justify"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="15" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/></svg></button>
-            <button class="icon" data-indent="-720" title="Decrease indent"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="6" y="7.6" width="9" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/><path d="M4.6 4.2v4.6L0.6 6.5z"/></svg></button>
-            <button class="icon" data-indent="720" title="Increase indent"><svg width="15" height="13" viewBox="0 0 15 13"><rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="6" y="7.6" width="9" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/><path d="M0.6 4.2v4.6l4-2.3z"/></svg></button>
-          </div>
-          <div class="row">
-            <button data-list="bullet" title="Bullet list">&#8226; List</button>
-            <button data-list="decimal" title="Numbered list">1. List</button>
-            <button data-pagebreak title="Start this block on a new page">Page break</button>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="glabel">Block</span>
-          <div class="row">
-            <select id="style" title="Paragraph style">
-              <option value="">Style…</option>
-              <option value="Normal">Normal</option>
-              <option value="Heading1">Heading 1</option>
-              <option value="Heading2">Heading 2</option>
-              <option value="Heading3">Heading 3</option>
-              <option value="Title">Title</option>
-            </select>
-          </div>
-          <div class="row">
-            <button id="delblock" class="danger" title="Delete the block the caret is in">Delete block</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- INSERT ──────────────────────────────────────────────────────────────── -->
-      <div class="panel" data-panel="insert">
-        <div class="group">
-          <span class="glabel">Table</span>
-          <div class="row">
-            <button id="table" title="Insert a table — pick its size on the grid">&#9638; Table</button>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="glabel">Rules</span>
-          <div class="row">
-            <button id="hr" class="wide" title="Insert a single rule"><svg width="22" height="8" viewBox="0 0 22 8"><rect x="0" y="3.2" width="22" height="1.4"/></svg>Single</button>
-            <button id="hrThick" class="wide" title="Insert a thick rule"><svg width="22" height="8" viewBox="0 0 22 8"><rect x="0" y="2.4" width="22" height="3.2"/></svg>Thick</button>
-            <button id="hrDouble" class="wide" title="Insert a double rule"><svg width="22" height="8" viewBox="0 0 22 8"><rect x="0" y="1.6" width="22" height="1.3"/><rect x="0" y="5" width="22" height="1.3"/></svg>Double</button>
-          </div>
-          <div class="row">
-            <select id="rulepos" title="Where the rule lands relative to the current block">
-              <option value="below">Below block</option>
-              <option value="above">Above block</option>
-            </select>
-            <button id="hrClear" title="Remove the rule or paragraph border">Clear</button>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="glabel">References</span>
-          <div class="row">
-            <button id="footnote" title="Cite a new footnote at the caret">Footnote</button>
-            <button id="endnote" title="Cite a new endnote at the caret">Endnote</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- LAYOUT ──────────────────────────────────────────────────────────────── -->
-      <div class="panel" data-panel="layout">
-        <div class="group">
-          <span class="glabel">View</span>
-          <div class="row">
-            <label class="toggle"><input id="paginated" type="checkbox" /> Page view</label>
-          </div>
-          <div class="row">
-            <label class="toggle"><input id="headerfooter" type="checkbox" checked /> Header &amp; footer bands</label>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="glabel">Page numbers</span>
-          <div class="row">
-            <select id="pgfmt" title="Number format for this section">
-              <option value="">Format…</option>
-              <option value="decimal">1, 2, 3</option>
-              <option value="lowerLetter">a, b, c</option>
-              <option value="upperLetter">A, B, C</option>
-              <option value="lowerRoman">i, ii, iii</option>
-              <option value="upperRoman">I, II, III</option>
-            </select>
-            <label class="toggle">Start at
-              <input id="pgstart" type="number" min="1" step="1" style="width:64px"
-                     title="Restart this section's numbering at this value" />
-            </label>
-            <button id="pgclear" title="Continue the previous section's numbering">Clear</button>
-          </div>
-          <div class="row">
-            <span style="font-size:11.5px; color:var(--muted);">Applies to the section holding the caret.</span>
-          </div>
-        </div>
-
-        <!-- The field lands in the running footer (Word's convention, and where the band
-             puts it), so it belongs with the section's numbering rather than under Insert,
-             whose controls all act at the caret. -->
-        <div class="group">
-          <span class="glabel">Footer fields</span>
-          <div class="row">
-            <button id="pagenum" title="Add a page-number field to the footer">Page number</button>
-            <button id="totalpages" title="Add a total-pages field to the footer">Total pages</button>
-          </div>
-          <div class="row">
-            <span style="font-size:11.5px; color:var(--muted);">Added to the footer story.</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- TABLE (contextual) ──────────────────────────────────────────────────────
-           Row/column editing lives here rather than in a floating toolbar: a docked
-           contextual tab cannot overlap the cell you are editing. -->
-      <div class="panel" data-panel="table">
-        <div class="group">
-          <span class="glabel">Rows</span>
-          <div class="row">
-            <button data-tt="rowAbove" title="Insert a row above this one">Insert above</button>
-            <button data-tt="rowBelow" title="Insert a row below this one">Insert below</button>
-            <button data-tt="delRow" class="danger" title="Delete this row">Delete row</button>
-          </div>
-        </div>
-        <div class="group">
-          <span class="glabel">Columns</span>
-          <div class="row">
-            <button data-tt="colLeft" title="Insert a column to the left">Insert left</button>
-            <button data-tt="colRight" title="Insert a column to the right">Insert right</button>
-            <button data-tt="delCol" class="danger" title="Delete this column">Delete column</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Anchor rail — live engine state, not decoration. -->
-    <div class="rail">
-      <span class="cell"><span class="k">anchor</span><span class="v" id="railAnchor">—</span></span>
-      <span class="cell"><span class="k">blocks</span><span class="v" id="railBlocks">—</span></span>
-      <span class="cell"><span class="k">session</span><span class="v" id="railSession">—</span></span>
-      <span class="cell"><span class="k">last op</span><span class="v" id="railOp">—</span></span>
-      <span class="spacer"></span>
-    </div>
-  </div>
-
-  <p class="hint">
-    Click any paragraph, heading, table cell, footnote or header/footer line to edit it.
-    <kbd>Enter</kbd> splits a block, <kbd>Backspace</kbd> at the start merges it into the previous one,
-    <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes. Only the block you changed re-renders — everything else keeps
-    full fidelity, and <b>Save</b> writes a lossless .docx.
-  </p>
-
-  <div id="editor" class="continuous"></div>
-
-  <!-- Table size picker, anchored to the Insert tab's Table button. -->
-  <div id="gridpicker" class="pop">
-    <div id="gridcells"></div>
-    <div class="popfoot">
-      <span id="gridlabel">0 × 0</span>
-      <span style="display:inline-flex; align-items:center; gap:10px;">
-        <label class="toggle">Align
-          <select id="gridalign">
-            <option value="left">Left</option>
-            <option value="center">Center</option>
-            <option value="right">Right</option>
-          </select>
-        </label>
-        <label class="toggle"><input id="gridborderless" type="checkbox" checked /> Borderless</label>
-      </span>
-    </div>
-  </div>
+  <div id="app"></div>
 
   <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
   <script type="module">
     import { dotnet } from './_framework/dotnet.js';
 
-    const $ = (id) => document.getElementById(id);
-    const statusEl = $('status'), fileEl = $('file'), saveEl = $('save');
-    const paginatedEl = $('paginated'), headerFooterEl = $('headerfooter');
-    const editorEl = $('editor'), ribbonEl = $('ribbon'), styleEl = $('style');
-    const setStatus = (s) => { statusEl.textContent = s; };
+    const { mountRibbon } = window.DocxodusEditor;
 
-    let editor = null;
-    let currentBytes = null;
-
-    // ── Anchor rail ───────────────────────────────────────────────────────────────
-    // Every ribbon command routes through run(), so the rail reports the real cost of
-    // each operation instead of the demo quietly absorbing it.
-    function run(label, fn) {
-      if (!editor) return;
-      const t0 = performance.now();
-      try { fn(); }
-      finally {
-        const ms = performance.now() - t0;
-        $('railOp').textContent = `${label} ${ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms'}`;
-        refreshRail();
-      }
-    }
-    // Scope is read from where the block actually lives, which is what the anchor system
-    // encodes: hdr/ftr for band stories, fn/en for note bodies, body for the main story.
-    function scopeOf(el) {
-      const band = el.closest('.docx-hf-band');
-      if (band) return band.getAttribute('data-hf-band') === 'header' ? 'hdr' : 'ftr';
-      if (el.closest('.footnotes')) return 'fn';
-      if (el.closest('.endnotes')) return 'en';
-      return 'body';
-    }
-    function kindOf(el) {
-      const t = el.tagName;
-      if (/^H[1-6]$/.test(t)) return 'h';
-      if (t === 'LI' || el.hasAttribute('data-list-marker') || el.querySelector('[data-list-marker]')) return 'li';
-      return 'p';
-    }
-    let lastAnchor = '';
-    function refreshRail() {
-      $('railBlocks').textContent = editor
-        ? String(document.querySelectorAll('#editor [data-anchor]').length) : '—';
-      $('railSession').textContent = editor && editor.handle != null ? '#' + editor.handle : '—';
-      const sel = document.getSelection();
-      const node = sel && sel.anchorNode;
-      const start = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
-      const block = start && start.closest ? start.closest('#editor [data-anchor]') : null;
-      const el = $('railAnchor');
-      if (!block) { el.textContent = editor ? 'none' : '—'; lastAnchor = ''; return; }
-      const unid = block.getAttribute('data-anchor') || '';
-      const text = `${kindOf(block)}:${scopeOf(block)}:${unid.slice(0, 10)}…`;
-      if (text !== lastAnchor) {
-        el.textContent = text;
-        lastAnchor = text;
-        el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
-      }
-    }
-
-    // ── Tabs ──────────────────────────────────────────────────────────────────────
-    const tabs = [...document.querySelectorAll('.tab')];
-    function selectTab(name) {
-      for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.tab === name));
-      for (const p of document.querySelectorAll('.panel')) {
-        if (p.dataset.panel === name) p.setAttribute('data-active', '');
-        else p.removeAttribute('data-active');
-      }
-      if (name === 'layout') syncPageNumbering();
-    }
-    for (const t of tabs) {
-      // Keep the document selection while switching tabs, so a tab click never
-      // costs you the range you were about to format.
-      t.addEventListener('mousedown', (e) => e.preventDefault());
-      t.addEventListener('click', () => selectTab(t.dataset.tab));
-    }
-    // Test hook: activate a tab by name without depending on pointer geometry.
-    window.__selectTab = selectTab;
-
-    // ── Command wiring ────────────────────────────────────────────────────────────
-    // Format controls preventDefault on mousedown so the editor keeps its text selection.
-    const keepSelection = (el) => el.addEventListener('mousedown', (e) => e.preventDefault());
-
-    ribbonEl.querySelectorAll('button[data-cmd]').forEach((b) => {
-      keepSelection(b);
-      b.addEventListener('click', () => run(b.dataset.cmd, () => editor.format(b.dataset.cmd)));
-    });
-    ribbonEl.querySelectorAll('button[data-align]').forEach((b) => {
-      keepSelection(b);
-      b.addEventListener('click', () => run('align ' + b.dataset.align, () => editor.setAlignment(b.dataset.align)));
-    });
-    ribbonEl.querySelectorAll('button[data-indent]').forEach((b) => {
-      keepSelection(b);
-      b.addEventListener('click', () => run('indent', () => editor.indent(parseInt(b.dataset.indent, 10))));
-    });
-    ribbonEl.querySelectorAll('button[data-list]').forEach((b) => {
-      keepSelection(b);
-      b.addEventListener('click', () => run('list ' + b.dataset.list, () => editor.toggleList(b.dataset.list)));
-    });
-    const pbBtn = ribbonEl.querySelector('button[data-pagebreak]');
-    keepSelection(pbBtn);
-    pbBtn.addEventListener('click', () => run('page break', () => editor.pageBreakBefore(true)));
-
-    for (const [id, label, fn] of [
-      ['undo', 'undo', () => editor.undo()],
-      ['redo', 'redo', () => editor.redo()],
-      ['hr', 'rule', () => editor.insertHorizontalRule(12, 'single', $('rulepos').value)],
-      ['hrThick', 'thick rule', () => editor.insertHorizontalRule(24, 'single', $('rulepos').value)],
-      ['hrDouble', 'double rule', () => editor.insertHorizontalRule(12, 'double', $('rulepos').value)],
-      ['hrClear', 'clear border', () => editor.clearParagraphBorders()],
-      ['delblock', 'delete block', () => editor.deleteBlock()],
-      ['footnote', 'footnote', () => editor.insertFootnote()],
-      ['endnote', 'endnote', () => editor.insertEndnote()],
-      ['pagenum', 'page number', () => editor.insertPageNumber('currentPage')],
-      ['totalpages', 'total pages', () => editor.insertPageNumber('totalPages')],
-    ]) {
-      const b = $(id);
-      keepSelection(b);
-      b.addEventListener('click', () => run(label, fn));
-    }
-
-    // Font size. `change` only (fires on Enter and on blur) — binding to keydown as well
-    // fired it twice and stacked two undo snapshots for one size change.
-    const fontsizeEl = $('fontsize');
-    fontsizeEl.addEventListener('change', () => {
-      const pts = parseFloat(fontsizeEl.value);
-      if (editor && pts > 0) run('font size', () => editor.setFontSize(pts));
-    });
-    fontsizeEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); fontsizeEl.blur(); }
-    });
-    const fontFamilyEl = $('fontfamily');
-    fontFamilyEl.addEventListener('change', () => {
-      if (editor && fontFamilyEl.value) run('font family', () => editor.setFontFamily(fontFamilyEl.value));
-      fontFamilyEl.value = '';
-    });
-    styleEl.addEventListener('change', () => {
-      if (editor && styleEl.value) run('style', () => editor.setParagraphStyle(styleEl.value));
-      styleEl.value = '';
+    // Bands on by default here: this page is where header/footer editing is exercised.
+    const ribbon = mountRibbon('#app', {
+      headerFooter: true,
+      documentName: 'no document',
+      loader: {
+        eyebrow: 'Local .NET runtime',
+        meta: 'DOCX → WASM → DOCX',
+        onRetry: () => location.reload(),
+      },
     });
 
-    // Section page numbering (w:pgNumType). The bands own the same setting, and both read
-    // the live session, so changing it here keeps them in step.
-    function syncPageNumbering() {
-      if (!editor || !editor.pageNumbering) return;
-      const pn = editor.pageNumbering() || {};
-      $('pgfmt').value = pn.format || '';
-      $('pgstart').value = pn.start != null ? String(pn.start) : '';
-    }
-    $('pgfmt').addEventListener('change', () => {
-      if (!editor || !$('pgfmt').value) return;
-      run('page format', () => editor.setPageNumbering({ format: $('pgfmt').value }));
-      syncPageNumbering();
-    });
-    $('pgstart').addEventListener('change', () => {
-      const n = parseInt($('pgstart').value, 10);
-      if (!editor || !(n > 0)) return;
-      run('page start', () => editor.setPageNumbering({ start: n }));
-      syncPageNumbering();
-    });
-    $('pgclear').addEventListener('click', () => {
-      run('clear numbering', () => editor.clearPageNumbering());
-      syncPageNumbering();
-    });
+    // `__selectTab` reaches a control on a non-active tab without depending on pointer
+    // geometry, so it is available from the first paint.
+    window.__selectTab = (name) => ribbon.selectTab(name);
+    window.__ribbon = ribbon;
 
-    // Contextual table tab: row/column CRUD, docked so it never covers the cell.
-    document.querySelectorAll('.panel[data-panel="table"] button[data-tt]').forEach((b) => {
-      keepSelection(b);
-      b.addEventListener('click', () => {
-        const ops = {
-          rowAbove: () => editor.insertTableRow('above'), rowBelow: () => editor.insertTableRow('below'),
-          colLeft: () => editor.insertTableColumn('left'), colRight: () => editor.insertTableColumn('right'),
-          delRow: () => editor.deleteTableRow(), delCol: () => editor.deleteTableColumn(),
-        };
-        run(b.dataset.tt, ops[b.dataset.tt]);
-      });
-    });
-
-    // ── Table size picker ─────────────────────────────────────────────────────────
-    const tableBtn = $('table'), gridPicker = $('gridpicker'), gridCells = $('gridcells');
-    const GRID_ROWS = 8, GRID_COLS = 10;
-    for (let r = 0; r < GRID_ROWS; r++) {
-      for (let c = 0; c < GRID_COLS; c++) {
-        const cell = document.createElement('div');
-        cell.dataset.r = r; cell.dataset.c = c;
-        gridCells.appendChild(cell);
-      }
-    }
-    const cellEls = [...gridCells.children];
-    const hi = (rows, cols) => {
-      for (const cell of cellEls) {
-        const on = (+cell.dataset.r) < rows && (+cell.dataset.c) < cols;
-        if (on) cell.setAttribute('data-on', ''); else cell.removeAttribute('data-on');
-      }
-      $('gridlabel').textContent = `${rows} × ${cols}`;
-    };
-    const closePicker = () => { gridPicker.style.display = 'none'; };
-    gridCells.addEventListener('mouseover', (e) => {
-      const cell = e.target.closest('[data-r]');
-      if (cell) hi((+cell.dataset.r) + 1, (+cell.dataset.c) + 1);
-    });
-    gridCells.addEventListener('mousedown', (e) => {
-      const cell = e.target.closest('[data-r]');
-      if (!cell || !editor) return;
-      e.preventDefault();
-      const rows = (+cell.dataset.r) + 1, cols = (+cell.dataset.c) + 1;
-      closePicker();
-      run(`table ${rows}×${cols}`, () => editor.insertTable(rows, cols, {
-        borderless: $('gridborderless').checked, cellAlignment: $('gridalign').value,
-      }));
-    });
-    keepSelection(tableBtn);
-    tableBtn.addEventListener('click', () => {
-      if (!editor) return;
-      if (gridPicker.style.display === 'block') { closePicker(); return; }
-      hi(0, 0);
-      const r = tableBtn.getBoundingClientRect();
-      gridPicker.style.display = 'block';
-      gridPicker.style.left = (window.scrollX + r.left) + 'px';
-      gridPicker.style.top = (window.scrollY + r.bottom + 5) + 'px';
-    });
-    document.addEventListener('mousedown', (e) => {
-      if (gridPicker.style.display === 'block' && !gridPicker.contains(e.target) && e.target !== tableBtn) {
-        closePicker();
-      }
-    });
-
-    // ── Selection-driven state ────────────────────────────────────────────────────
-    document.addEventListener('selectionchange', () => {
-      if (!editor) return;
-      const st = editor.queryFormatState();
-      ribbonEl.querySelectorAll('button[data-cmd]').forEach((b) => {
-        b.classList.toggle('active', !!st[b.dataset.cmd]);
-      });
-      // Reflect the caret's font size, unless the field itself is being edited.
-      const sel = document.getSelection();
-      const node = sel && sel.anchorNode;
-      const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
-      if (el && el.closest && el.closest('#editor') && document.activeElement !== fontsizeEl) {
-        const px = parseFloat(getComputedStyle(el).fontSize);
-        if (px) fontsizeEl.value = String(Math.round(px * 0.75 * 2) / 2);
-      }
-      // Reveal the contextual Table tab only while the caret is inside a table.
-      const inTable = !!(el && el.closest && el.closest('#editor table'));
-      const tableTab = document.querySelector('.tab[data-tab="table"]');
-      tableTab.hidden = !inTable;
-      if (!inTable && tableTab.getAttribute('aria-selected') === 'true') selectTab('home');
-      refreshRail();
-    });
-
-    // ── Boot ──────────────────────────────────────────────────────────────────────
-    setStatus('Booting WASM…');
-    const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
-    const config = getConfig();
-    const wasm = await getAssemblyExports(config.mainAssemblyName);
-    const exports = {
-      DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
-      DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
-    };
-
-    window.__demo = { exports, openDoc: (b, name) => openDoc(b, name), getEditor: () => editor };
-
-    function openDoc(bytes, name) {
-      currentBytes = bytes;
-      if (editor) { try { editor.close(); } catch {} editor = null; }
-      const paginated = paginatedEl.checked;
-      editorEl.className = paginated ? 'paginated' : 'continuous';
-      editorEl.innerHTML = '';
-      const t0 = performance.now();
-      editor = window.DocxodusEditor.DocxEditor.open(editorEl, bytes, exports, {
-        paginated, headerFooter: headerFooterEl.checked,
-      });
-      saveEl.disabled = false;
-      ribbonEl.setAttribute('aria-disabled', 'false');
-      if (name) $('docname').textContent = name;
-      setStatus(`Rendered in ${Math.round(performance.now() - t0)} ms`);
-      syncPageNumbering();
-      refreshRail();
-    }
-
-    fileEl.addEventListener('change', async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      setStatus(`Loading ${f.name}…`);
-      openDoc(new Uint8Array(await f.arrayBuffer()), f.name);
-    });
-    $('new').addEventListener('click', () => {
-      openDoc(exports.DocxSessionBridge.CreateBlankDocx(), 'untitled.docx');
-    });
-
-    // Pagination toggles re-render the LIVE session, so edits survive the switch.
-    paginatedEl.addEventListener('change', () => {
-      if (!editor) { if (currentBytes) openDoc(currentBytes); return; }
-      editorEl.className = paginatedEl.checked ? 'paginated' : 'continuous';
-      run(paginatedEl.checked ? 'page view' : 'continuous view',
-          () => editor.setPaginated(paginatedEl.checked));
-    });
-    // The band region is chosen at open time, so toggling it re-opens the live session's
-    // bytes rather than the originally loaded file — edits so far survive.
-    headerFooterEl.addEventListener('change', () => {
-      if (!editor) { if (currentBytes) openDoc(currentBytes); return; }
-      openDoc(editor.save(), $('docname').textContent);
-    });
-
-    saveEl.addEventListener('click', () => {
-      if (!editor) return;
-      const out = editor.save();
-      const blob = new Blob([out], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'edited.docx';
-      a.click();
-      URL.revokeObjectURL(a.href);
-      setStatus('Saved edited.docx');
-    });
-
-    // Load the bundled sample when there is one, so there is something to edit immediately.
     try {
-      const res = await fetch('./sample.docx');
-      if (res.ok) openDoc(new Uint8Array(await res.arrayBuffer()), 'sample.docx');
-      else setStatus('Ready — open a .docx');
-    } catch {
-      setStatus('Ready — open a .docx');
+      ribbon.loader.stage(0);
+      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
+      const config = getConfig();
+      const wasm = await getAssemblyExports(config.mainAssemblyName);
+      const exports = {
+        DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
+        DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
+      };
+      ribbon.setExports(exports);
+
+      // Load the bundled sample when there is one, so there is something to edit immediately.
+      ribbon.loader.stage(1);
+      let sample = null;
+      try {
+        const response = await fetch('./sample.docx');
+        if (response.ok) sample = new Uint8Array(await response.arrayBuffer());
+      } catch {
+        /* no sample in this webroot — start empty */
+      }
+
+      ribbon.loader.stage(2);
+      if (sample) ribbon.open(sample, 'sample.docx');
+      else ribbon.setStatus('Ready — open a .docx');
+
+      ribbon.loader.stage(3);
+      ribbon.loader.done();
+
+      // Published only once the engine is usable: specs treat `__demo` as the
+      // "surface is live" signal and drive the ribbon the moment it appears.
+      window.__demo = {
+        ribbon,
+        exports,
+        openDoc: (bytes, name) => ribbon.open(bytes, name),
+        getEditor: () => ribbon.editor,
+      };
+    } catch (error) {
+      ribbon.loader.fail(error);
     }
   </script>
 </body>

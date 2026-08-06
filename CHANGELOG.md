@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.2.0] - 2026-08-06
+
+### Added
+- **`mountRibbon` / `createRibbonEditor` — the editor's UI surface is now shipped, not
+  hand-written per page.** `DocxEditor` remains the chrome-less engine; the tabbed ribbon,
+  anchor rail, table picker and loading overlay that the demo page carried are now
+  `npm/src/ribbon.ts` (+ `ribbon-chrome.ts`, which holds the markup and stylesheet), exported
+  from `docxodus` as `mountRibbon(container, options)` and from `docxodus/embed` as the
+  one-call `createRibbonEditor(container, source?, options?)` — which also boots WASM, scopes
+  the converter's document CSS to the surface, and narrates the boot. The three demo pages had
+  each grown their own toolbar and drifted; the GitHub Pages demo was advertising a smaller
+  editor than the one that ships.
+- **Responsive, container-measured chrome.** Density comes from a `ResizeObserver` on the
+  surface's own root (`compactBreakpoint`, default 720 px), not a viewport media query — a
+  narrow embed in a wide page is narrow. `compact` turns the ribbon into one horizontally
+  scrolling strip, hides the rail and hint, docks the table picker to the bottom edge within
+  thumb reach, and grows touch targets to 40 px on coarse pointers. **No command is dropped in
+  compact.** `chrome: "full" | "compact" | "auto"` pins or measures it.
+- **The loading overlay is part of the surface.** It paints before any runtime exists, so a host
+  that boots its own .NET runtime can narrate the gap through `ribbon.loader`
+  (`stage`/`progress`/`done`/`fail`); `createRibbonEditor` drives its four stages itself.
+  `fail()` shows the error with Retry instead of leaving a dead surface. `loader: false`
+  removes it.
+- **`docs/demo/app.html`** — the full-bleed editor on GitHub Pages, mobile-first, alongside the
+  existing landing page.
+- **`DocxEditor.sessionHandle`** — the live `DocxSession` handle as a public getter, so chrome
+  can report engine state without reaching into a private field.
+
+### Changed
+- `npm/examples/editor.html`, `docs/demo/index.html` and `docs/demo/player.html` are now thin
+  hosts of the shared surface. The landing page keeps its hero, capability cards, embed dialog
+  and Open Graph metadata but its workspace is the real editor; `player.html` pins the compact
+  layout and retires its hand-rolled overflow palette (every command is reachable by scrolling
+  the strip). `dist/editor.bundle.js` is now built from `ribbon.ts`, so `window.DocxodusEditor`
+  exposes `mountRibbon` alongside `DocxEditor`.
+- Controls are addressable as `data-dxr="<name>"` and *also* get `id = idPrefix + name`. With no
+  explicit `idPrefix` the surface uses bare ids when they are free and generates `dxr<N>-` when
+  they are not, so existing selectors keep working and two ribbons on one page cannot collide.
+
 ### Fixed
 - **Cross-block drag selection now highlights continuously in Firefox.** The browser reapplied its
   native per-`contenteditable` selection after each `mousemove`, visually fencing the highlight to

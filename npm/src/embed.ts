@@ -33,6 +33,8 @@ import {
 } from "./index.js";
 import { DocxEditor } from "./editor.js";
 import type { DocxEditorExports, DocxEditorOptions } from "./editor.js";
+import { mountRibbon } from "./ribbon.js";
+import type { RibbonEditor, RibbonOptions } from "./ribbon.js";
 import type { ConversionOptions } from "./types.js";
 
 // Everything the main entry exports is re-exported so the CDN bundle is a
@@ -405,6 +407,89 @@ export async function createEditor(
       : DocxEditor.open(mount.root, await toDocumentBytes(source), exports, editorOptions);
   } catch (error) {
     el.replaceChildren();
+    throw error;
+  }
+}
+
+export interface CreateRibbonEditorOptions extends RibbonOptions {
+  /** Explicit URL of the wasm assets directory; omit to auto-detect. */
+  wasmBasePath?: string;
+}
+
+/** Best-effort file name from a URL source, so the title bar says something useful. */
+function nameFromSource(source: DocumentSource | null | undefined): string | undefined {
+  if (typeof source !== "string") return undefined;
+  try {
+    const path = new URL(source, typeof location === "undefined" ? undefined : location.href).pathname;
+    return decodeURIComponent(path.split("/").pop() ?? "") || undefined;
+  } catch {
+    return source.split("/").pop() || undefined;
+  }
+}
+
+/**
+ * Open the FULL editor surface — ribbon chrome, anchor rail and all — in one call.
+ *
+ * `createEditor` gives you a bare editable document and leaves the UI to you.
+ * This gives you the whole instrument, which is what the shipped demo pages use:
+ *
+ * ```html
+ * <div id="app" style="height:100dvh"></div>
+ * <script type="module">
+ *   import { createRibbonEditor } from "https://cdn.jsdelivr.net/npm/docxodus/dist/embed.bundle.js";
+ *   await createRibbonEditor("#app", "./contract.docx");
+ * </script>
+ * ```
+ *
+ * The chrome (and its loading overlay) paint immediately; the .NET runtime streams
+ * behind them, and the overlay narrates that wait instead of hiding it. Density
+ * follows the CONTAINER's width, so the same call serves a full-page editor and a
+ * narrow embedded panel.
+ */
+export async function createRibbonEditor(
+  container: string | HTMLElement,
+  source?: DocumentSource | null,
+  options: CreateRibbonEditorOptions = {},
+): Promise<RibbonEditor> {
+  const el = resolveContainer(container);
+  const { wasmBasePath, ...ribbonOptions } = options;
+  const mount = createScopedMount(el);
+  // The CSS-scoping wrapper sits between the caller's element and the surface, so
+  // it has to pass the container's height through — otherwise a full-height mount
+  // (`height:100dvh`) collapses to content height and the surface never scrolls.
+  mount.root.style.height = "100%";
+  mount.root.style.minHeight = "0";
+  const ribbon = mountRibbon(mount.root, {
+    documentName: ribbonOptions.documentName ?? nameFromSource(source),
+    ...ribbonOptions,
+    // Exports arrive after the runtime boots; the loader covers that gap.
+    exports: undefined,
+  });
+
+  try {
+    ribbon.loader.stage(0);
+    await ensureWasm(wasmBasePath);
+    // The document renders inside the ribbon's surface, so that — not the mount
+    // root — is the scope the converter's document CSS must be confined to.
+    ribbon.setExports(
+      createScopedEditorExports(
+        getWasmExports() as unknown as DocxEditorExports,
+        `${mount.selector} [data-dxr-surface]`,
+      ),
+    );
+
+    ribbon.loader.stage(1);
+    const bytes = source == null ? null : await toDocumentBytes(source);
+
+    ribbon.loader.stage(2);
+    if (bytes == null) ribbon.openBlank(ribbonOptions.documentName);
+    else ribbon.open(bytes, ribbonOptions.documentName ?? nameFromSource(source));
+
+    ribbon.loader.stage(3);
+    ribbon.loader.done();
+    return ribbon;
+  } catch (error) {
+    ribbon.loader.fail(error);
     throw error;
   }
 }
