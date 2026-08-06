@@ -2,7 +2,11 @@
 
 > **Status: IMPLEMENTED** (November 2025)
 >
-> **Scope note.** This document describes format-change detection in the **`WmlComparer`** engine, where it is run-level only (`w:rPrChange`). The IR diff engine (`DocxDiff`) tracks the full **block-format-change family** — `w:pPrChange`/`w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:sectPrChange` in addition to `w:rPrChange` — see the "Paragraph-and-above formatting changes" section of [`ir_diff_engine.md`](ir_diff_engine.md). The paragraph/section/table extension sketched at the end of this document was NOT implemented in `WmlComparer`; it was implemented in `DocxDiff` instead.
+> **Scope note.** This document describes run-level format-change detection (`w:rPrChange`, `DetectFormatChanges`, default true) in the **`WmlComparer`** engine.
+>
+> `WmlComparer` now also tracks **paragraph** properties as `w:pPrChange` via `DetectParagraphFormatChanges` (default **false**) — alignment, indent, spacing, style and list membership. That pass mirrors the algorithm below on the paragraph mark; see the "Paragraph properties" section of [`wml_comparer_gaps.md`](wml_comparer_gaps.md) for its mechanics and limits. The table/section part of the extension sketched at the end of this document remains unimplemented in `WmlComparer`.
+>
+> The IR diff engine (`DocxDiff`) tracks the full **block-format-change family** — `w:pPrChange`/`w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:sectPrChange` in addition to `w:rPrChange` — see the "Paragraph-and-above formatting changes" section of [`ir_diff_engine.md`](ir_diff_engine.md).
 
 ## Overview
 

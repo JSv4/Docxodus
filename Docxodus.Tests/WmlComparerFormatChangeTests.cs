@@ -568,6 +568,44 @@ namespace OxPt
             Assert.NotEmpty(textRevisions);
         }
 
+        /// <summary>
+        /// Only the run properties that actually differ are reported. A property with no w:val is
+        /// compared by its serialized form, so an untouched w:rFonts must not read as changed just
+        /// because the two copies carry different internal ids.
+        /// </summary>
+        [Fact]
+        public void GetRevisions_FormatChange_ShouldReportOnlyThePropertiesThatDiffer()
+        {
+            static WmlDocument Build(bool bold)
+            {
+                using var stream = new MemoryStream();
+                using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+                {
+                    var mainPart = doc.AddMainDocumentPart();
+                    var runProperties = new RunProperties(
+                        new RunFonts { Ascii = "Georgia", HighAnsi = "Georgia" });
+                    if (bold)
+                        runProperties.AppendChild(new Bold());
+
+                    mainPart.Document = new Document(new Body(
+                        new Paragraph(new Run(runProperties, new Text("Hello")))));
+                    mainPart.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+                    mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                }
+                return new WmlDocument("test.docx", stream.ToArray());
+            }
+
+            var settings = new WmlComparerSettings { DateTimeForRevisions = "2000-01-01T00:00:00Z" };
+            var compared = WmlComparer.Compare(Build(false), Build(true), settings);
+
+            var formatRevisions = WmlComparer.GetRevisions(compared, settings)
+                .Where(r => r.RevisionType == WmlComparerRevisionType.FormatChanged)
+                .ToList();
+
+            var revision = Assert.Single(formatRevisions);
+            Assert.Equal(new[] { "bold" }, revision.FormatChange.ChangedPropertyNames);
+        }
+
         #endregion
     }
 }

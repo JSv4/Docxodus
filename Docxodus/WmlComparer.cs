@@ -100,6 +100,23 @@ namespace Docxodus
         public bool DetectFormatChanges = true;
 
         /// <summary>
+        /// Enable detection of paragraph-level formatting changes: alignment, indentation, spacing,
+        /// paragraph style, and list membership (<c>w:numPr</c>). When enabled, an Equal paragraph
+        /// mark whose <c>w:pPr</c> differs between the two documents is marked as FormatChanged and
+        /// emits native <c>w:pPrChange</c> markup.
+        /// Default: false.
+        /// <para>Off by default because enabling it changes the output of comparisons that produce
+        /// none today: without it the revised document's paragraph properties are applied to the
+        /// result silently and the original's are lost, so reject cannot restore them.</para>
+        /// <para>Independent of <see cref="DetectFormatChanges"/>, which covers run properties
+        /// (<c>w:rPr</c>) only.</para>
+        /// <para>Out of scope: an inline <c>w:sectPr</c> (a section change is <c>w:sectPrChange</c>,
+        /// and <c>w:sectPr</c> is not permitted inside <c>w:pPrChange</c>, whose stored <c>w:pPr</c>
+        /// is a CT_PPrBase) and the paragraph mark's own run properties (<c>w:pPr/w:rPr</c>).</para>
+        /// </summary>
+        public bool DetectParagraphFormatChanges = false;
+
+        /// <summary>
         /// Optional log to collect warnings and errors during comparison.
         /// When provided, the comparison will attempt to continue past recoverable errors
         /// (like orphaned footnote references) and log them instead of throwing exceptions.
@@ -2879,22 +2896,9 @@ namespace Docxodus
                         }
 
                         // Add w:rPrChange with the old properties
-                        XElement oldRPr = null;
-                        if (oldRPrAttr != null)
-                        {
-                            try
-                            {
-                                oldRPr = XElement.Parse((string)oldRPrAttr);
-                            }
-                            catch
-                            {
-                                oldRPr = new XElement(W.rPr);
-                            }
-                        }
-                        else
-                        {
-                            oldRPr = new XElement(W.rPr);
-                        }
+                        var oldRPr = oldRPrAttr != null
+                            ? ParseArchivedProperties((string)oldRPrAttr, W.rPr)
+                            : new XElement(W.rPr);
 
                         rPr.Add(new XElement(W.rPrChange,
                             new XAttribute(W.id, s_MaxId++),
@@ -2945,6 +2949,23 @@ namespace Docxodus
                         else
                             pPr.AddFirst(rPr);
                     }
+                    else if (status == "FormatChanged")
+                    {
+                        var oldPPrAttr = pPr.Attribute(PtOpenXml.pt + "OldPPr");
+                        var oldPPr = oldPPrAttr != null
+                            ? ParseArchivedProperties((string)oldPPrAttr, W.pPr)
+                            : new XElement(W.pPr);
+
+                        // The archived copy is a whole serialized element; leaving the hand-off
+                        // attribute behind would bloat every reformatted paragraph.
+                        pPr.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
+
+                        pPr.Add(new XElement(W.pPrChange,
+                            new XAttribute(W.id, s_MaxId++),
+                            new XAttribute(W.author, settings.AuthorForRevisions),
+                            new XAttribute(W.date, settings.DateTimeForRevisions),
+                            oldPPr));
+                    }
                     else
                         throw new DocxodusException("Internal error - unknown status: " + status);
                     return pPr;
@@ -2962,7 +2983,7 @@ namespace Docxodus
             // Include move elements and format change elements in revision ID tracking
             var revisionElements = new[] { W.ins, W.del, W.moveFrom, W.moveTo,
                 W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd,
-                W.rPrChange };
+                W.rPrChange, W.pPrChange };
 
             IEnumerable<XElement> footnoteRevisions = Enumerable.Empty<XElement>();
             if (wDocWithRevisions.MainDocumentPart.FootnotesPart != null)
@@ -3701,7 +3722,11 @@ namespace Docxodus
                 {
                     if (cua.AncestorElements.Any(ae => ae.Name == W.txbxContent))
                         doSet = true;
-                    if (cua.CorrelationStatus == CorrelationStatus.Equal)
+
+                    // FormatChanged is Equal with differing properties — the paragraph is present on
+                    // both sides either way, so it must still take the before document's unids.
+                    if (cua.CorrelationStatus == CorrelationStatus.Equal ||
+                        cua.CorrelationStatus == CorrelationStatus.FormatChanged)
                         doSet = true;
                 }
                 if (doSet)
@@ -4078,6 +4103,13 @@ namespace Docxodus
             /// List of property names that changed (e.g., "bold", "italic", "fontSize").
             /// </summary>
             public List<string> ChangedProperties { get; set; } = new List<string>();
+
+            /// <summary>
+            /// Paragraph properties from the original document, already reduced to what a
+            /// <c>w:pPrChange</c> may carry. Set instead of <see cref="OldRunProperties"/> when the
+            /// changed atom is a paragraph mark.
+            /// </summary>
+            public XElement OldParagraphProperties { get; set; }
         }
 
         /// <summary>
@@ -4338,77 +4370,43 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Extracts format change revisions from w:rPrChange elements in the document.
+        /// Extracts format change revisions from the w:rPrChange (run properties) and w:pPrChange
+        /// (paragraph properties) elements in the document. Both report as
+        /// <see cref="WmlComparerRevisionType.FormatChanged"/>.
         /// </summary>
         private static IEnumerable<WmlComparerRevision> GetFormatChangeRevisions(WordprocessingDocument wDoc)
         {
-            var revisions = new List<WmlComparerRevision>();
-
-            // Get all rPrChange elements from the main document part
-            var mainXDoc = wDoc.MainDocumentPart.GetXDocument();
-            var rPrChanges = mainXDoc.Descendants(W.rPrChange);
-
-            foreach (var rPrChange in rPrChanges)
+            var parts = new[]
             {
-                var revision = new WmlComparerRevision
-                {
-                    RevisionType = WmlComparerRevisionType.FormatChanged,
-                    Author = (string)rPrChange.Attribute(W.author) ?? "",
-                    Date = (string)rPrChange.Attribute(W.date) ?? "",
-                    RevisionXElement = rPrChange,
-                    PartUri = wDoc.MainDocumentPart.Uri,
-                    PartContentType = wDoc.MainDocumentPart.ContentType,
-                    Text = GetTextFromAncestorRun(rPrChange),
-                    FormatChange = ExtractFormatChangeDetails(rPrChange)
-                };
-                revisions.Add(revision);
-            }
+                (OpenXmlPart)wDoc.MainDocumentPart,
+                wDoc.MainDocumentPart.FootnotesPart,
+                wDoc.MainDocumentPart.EndnotesPart,
+            };
 
-            // Get rPrChange elements from footnotes
-            if (wDoc.MainDocumentPart.FootnotesPart != null)
-            {
-                var fnXDoc = wDoc.MainDocumentPart.FootnotesPart.GetXDocument();
-                var fnRPrChanges = fnXDoc.Descendants(W.rPrChange);
-                foreach (var rPrChange in fnRPrChanges)
-                {
-                    var revision = new WmlComparerRevision
+            return parts
+                .Where(part => part != null)
+                .SelectMany(part => part
+                    .GetXDocument()
+                    .Descendants()
+                    .Where(d => d.Name == W.rPrChange || d.Name == W.pPrChange)
+                    .Select(change =>
                     {
-                        RevisionType = WmlComparerRevisionType.FormatChanged,
-                        Author = (string)rPrChange.Attribute(W.author) ?? "",
-                        Date = (string)rPrChange.Attribute(W.date) ?? "",
-                        RevisionXElement = rPrChange,
-                        PartUri = wDoc.MainDocumentPart.FootnotesPart.Uri,
-                        PartContentType = wDoc.MainDocumentPart.FootnotesPart.ContentType,
-                        Text = GetTextFromAncestorRun(rPrChange),
-                        FormatChange = ExtractFormatChangeDetails(rPrChange)
-                    };
-                    revisions.Add(revision);
-                }
-            }
-
-            // Get rPrChange elements from endnotes
-            if (wDoc.MainDocumentPart.EndnotesPart != null)
-            {
-                var enXDoc = wDoc.MainDocumentPart.EndnotesPart.GetXDocument();
-                var enRPrChanges = enXDoc.Descendants(W.rPrChange);
-                foreach (var rPrChange in enRPrChanges)
-                {
-                    var revision = new WmlComparerRevision
-                    {
-                        RevisionType = WmlComparerRevisionType.FormatChanged,
-                        Author = (string)rPrChange.Attribute(W.author) ?? "",
-                        Date = (string)rPrChange.Attribute(W.date) ?? "",
-                        RevisionXElement = rPrChange,
-                        PartUri = wDoc.MainDocumentPart.EndnotesPart.Uri,
-                        PartContentType = wDoc.MainDocumentPart.EndnotesPart.ContentType,
-                        Text = GetTextFromAncestorRun(rPrChange),
-                        FormatChange = ExtractFormatChangeDetails(rPrChange)
-                    };
-                    revisions.Add(revision);
-                }
-            }
-
-            return revisions;
+                        var isParagraph = change.Name == W.pPrChange;
+                        return new WmlComparerRevision
+                        {
+                            RevisionType = WmlComparerRevisionType.FormatChanged,
+                            Author = (string)change.Attribute(W.author) ?? "",
+                            Date = (string)change.Attribute(W.date) ?? "",
+                            RevisionXElement = change,
+                            PartUri = part.Uri,
+                            PartContentType = part.ContentType,
+                            Text = isParagraph
+                                ? GetTextFromAncestorParagraph(change)
+                                : GetTextFromAncestorRun(change),
+                            FormatChange = ExtractFormatChangeDetails(change, isParagraph ? W.pPr : W.rPr),
+                        };
+                    }))
+                .ToList();
         }
 
         /// <summary>
@@ -4426,17 +4424,34 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Extracts format change details from an rPrChange element.
+        /// Gets the text of the paragraph a pPrChange belongs to. A paragraph-properties change has
+        /// no run of its own, so the paragraph's text is what identifies it to a caller.
         /// </summary>
-        private static FormatChangeDetails ExtractFormatChangeDetails(XElement rPrChange)
+        private static string GetTextFromAncestorParagraph(XElement pPrChange)
         {
-            var oldRPr = rPrChange.Element(W.rPr);
-            var newRPr = rPrChange.Parent; // The parent is w:rPr which contains the new properties
+            var para = pPrChange.Ancestors(W.p).FirstOrDefault();
+            if (para == null)
+                return "";
+
+            return para.Descendants(W.t)
+                .Select(t => t.Value)
+                .StringConcatenate();
+        }
+
+        /// <summary>
+        /// Extracts format change details from an rPrChange or pPrChange element.
+        /// <paramref name="innerName"/> is the properties element the change archives — w:rPr or
+        /// w:pPr — which is also the name of the live element the change hangs off.
+        /// </summary>
+        private static FormatChangeDetails ExtractFormatChangeDetails(XElement change, XName innerName)
+        {
+            var oldProperties = change.Element(innerName);
+            var newProperties = change.Parent; // The parent is the live properties element
 
             var details = new FormatChangeDetails
             {
-                OldProperties = ExtractPropertyDictionary(oldRPr),
-                NewProperties = ExtractPropertyDictionary(newRPr),
+                OldProperties = ExtractPropertyDictionary(oldProperties),
+                NewProperties = ExtractPropertyDictionary(newProperties),
                 ChangedPropertyNames = new List<string>()
             };
 
@@ -4457,22 +4472,30 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Extracts a dictionary of property names and values from an rPr element.
+        /// Extracts a dictionary of property names and values from a w:rPr or w:pPr element.
         /// </summary>
-        private static Dictionary<string, string> ExtractPropertyDictionary(XElement rPr)
+        private static Dictionary<string, string> ExtractPropertyDictionary(XElement properties)
         {
             var dict = new Dictionary<string, string>();
-            if (rPr == null)
+            if (properties == null)
                 return dict;
 
-            foreach (var elem in rPr.Elements())
+            var paragraphScope = properties.Name == W.pPr;
+
+            foreach (var elem in properties.Elements())
             {
-                // Skip the rPrChange element itself
-                if (elem.Name == W.rPrChange)
+                // Skip the change element itself, and — reading a live w:pPr — the parts a
+                // w:pPrChange cannot describe.
+                if (elem.Name == W.rPrChange || elem.Name == W.pPrChange)
+                    continue;
+                if (paragraphScope && (elem.Name == W.rPr || elem.Name == W.sectPr))
                     continue;
 
-                var propName = GetFriendlyPropertyName(elem.Name);
-                var propValue = GetPropertyValue(elem);
+                // A property with no w:val is compared by its serialized form, so revision-save ids
+                // and this library's bookkeeping attributes have to go first — two identical w:ind
+                // carrying different unids are not a formatting change.
+                var propName = GetFriendlyPropertyName(elem.Name, paragraphScope);
+                var propValue = GetPropertyValue((XElement)CleanPartTransform(elem));
                 dict[propName] = propValue;
             }
 
@@ -4752,12 +4775,12 @@ namespace Docxodus
 
         /// <summary>
         /// Analyzes Equal atoms for formatting differences.
-        /// Converts atoms with different rPr to FormatChanged status.
-        /// Called after move detection but before markup emission.
+        /// Converts atoms with different rPr — or, for a paragraph mark, a different pPr — to
+        /// FormatChanged status. Called after move detection but before markup emission.
         /// </summary>
         private static void DetectFormatChangesInAtomList(List<ComparisonUnitAtom> atoms, WmlComparerSettings settings)
         {
-            if (!settings.DetectFormatChanges)
+            if (!settings.DetectFormatChanges && !settings.DetectParagraphFormatChanges)
                 return;
 
             foreach (var atom in atoms)
@@ -4766,6 +4789,28 @@ namespace Docxodus
                 if (atom.CorrelationStatus != CorrelationStatus.Equal)
                     continue;
                 if (atom.ComparisonUnitAtomBefore == null)
+                    continue;
+
+                if (atom.ContentElement.Name == W.pPr)
+                {
+                    if (!settings.DetectParagraphFormatChanges)
+                        continue;
+
+                    var oldPPr = ReduceToParagraphPropertiesChange(atom.ComparisonUnitAtomBefore.ContentElement);
+                    var newPPr = ReduceToParagraphPropertiesChange(atom.ContentElement);
+
+                    if (!XNode.DeepEquals(oldPPr, newPPr))
+                    {
+                        atom.CorrelationStatus = CorrelationStatus.FormatChanged;
+                        atom.FormatChange = new FormatChangeInfo
+                        {
+                            OldParagraphProperties = oldPPr,
+                        };
+                    }
+                    continue;
+                }
+
+                if (!settings.DetectFormatChanges)
                     continue;
 
                 // Extract rPr from both documents
@@ -4841,6 +4886,68 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// Reduces a <c>w:pPr</c> to the form a <c>w:pPrChange</c> may carry, which is also the form
+        /// the two sides are compared in — so what is compared is exactly what is archived.
+        /// <para>Dropped: <c>w:rPr</c> (the paragraph mark's run properties, tracked separately by
+        /// Word), <c>w:sectPr</c> (excluded from CT_PPrBase; a section change is
+        /// <c>w:sectPrChange</c>), and any pre-existing <c>w:pPrChange</c>.</para>
+        /// <para>Sorted at every level so that the same properties written in a different source
+        /// order compare equal — <see cref="XNode.DeepEquals"/> is order-sensitive, and a
+        /// <c>w:numPr</c> holding <c>w:numId</c> before <c>w:ilvl</c> is the same numbering. The
+        /// sort is not the schema sequence; the writer's element ordering puts the archived
+        /// properties back into it (pinned by PF004b).</para>
+        /// </summary>
+        internal static XElement ReduceToParagraphPropertiesChange(XElement pPr)
+        {
+            if (pPr == null)
+                return new XElement(W.pPr);
+
+            return SortPropertyTree(new XElement(W.pPr,
+                pPr.Elements()
+                   .Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)
+                   .Select(e => (XElement)CleanPartTransform(e))));
+        }
+
+        /// <summary>Orders an element's descendants by name. Stable, so repeated siblings such as
+        /// <c>w:tab</c> keep their relative order, which is significant.</summary>
+        private static XElement SortPropertyTree(XElement element) =>
+            new XElement(element.Name,
+                element.Attributes(),
+                element.Elements().OrderBy(e => e.Name.LocalName).Select(SortPropertyTree));
+
+        /// <summary>
+        /// Serializes archived properties for their round trip through a bookkeeping attribute. The
+        /// namespace declaration is written explicitly: without it XLinq emits a bare
+        /// <c>&lt;pPr xmlns="..."&gt;</c> and re-declares the namespace on every child, which
+        /// survives into the produced document.
+        /// </summary>
+        private static string SerializeArchivedProperties(XElement properties)
+        {
+            var copy = new XElement(properties);
+            copy.SetAttributeValue(XNamespace.Xmlns + "w", W.w.NamespaceName);
+            return copy.ToString(SaveOptions.DisableFormatting);
+        }
+
+        /// <summary>
+        /// Reads back what <see cref="SerializeArchivedProperties"/> wrote, dropping the namespace
+        /// declaration it carried so the element inherits the prefix already in scope where it lands.
+        /// Falls back to empty properties rather than failing the comparison.
+        /// </summary>
+        private static XElement ParseArchivedProperties(string xml, XName fallbackName)
+        {
+            try
+            {
+                var parsed = XElement.Parse(xml);
+                parsed.Attributes().Where(a => a.IsNamespaceDeclaration).Remove();
+                return parsed;
+            }
+            catch
+            {
+                return new XElement(fallbackName);
+            }
+        }
+
+        /// <summary>
         /// Returns a list of property names that differ between two rPr elements.
         /// </summary>
         private static List<string> GetChangedPropertyNames(XElement oldRPr, XElement newRPr)
@@ -4885,10 +4992,27 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Converts OpenXML property names to friendly display names.
+        /// Converts OpenXML property names to friendly display names. A handful of local names mean
+        /// different things in a w:pPr than in a w:rPr, so <paramref name="paragraphScope"/> selects
+        /// the paragraph reading — notably w:spacing, which is character spacing in a run and line
+        /// spacing in a paragraph.
         /// </summary>
-        private static string GetFriendlyPropertyName(XName propName)
+        private static string GetFriendlyPropertyName(XName propName, bool paragraphScope = false)
         {
+            if (paragraphScope)
+            {
+                return propName.LocalName switch
+                {
+                    "jc" => "alignment",
+                    "ind" => "indent",
+                    "spacing" => "paragraphSpacing",
+                    "pStyle" => "style",
+                    "numPr" => "numbering",
+                    "shd" => "shading",
+                    _ => propName.LocalName
+                };
+            }
+
             return propName.LocalName switch
             {
                 "b" => "bold",
@@ -6036,10 +6160,18 @@ namespace Docxodus
                                         else if (spl[1] == "FormatChanged")
                                         {
                                             dup.Add(new XAttribute(PtOpenXml.Status, "FormatChanged"));
-                                            if (gcc.FormatChange?.OldRunProperties != null)
+                                            if (gcc.ContentElement.Name == W.pPr)
+                                            {
+                                                if (gcc.FormatChange?.OldParagraphProperties != null)
+                                                {
+                                                    dup.Add(new XAttribute(PtOpenXml.pt + "OldPPr",
+                                                        SerializeArchivedProperties(gcc.FormatChange.OldParagraphProperties)));
+                                                }
+                                            }
+                                            else if (gcc.FormatChange?.OldRunProperties != null)
                                             {
                                                 dup.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
-                                                    gcc.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
+                                                    SerializeArchivedProperties(gcc.FormatChange.OldRunProperties)));
                                             }
                                         }
                                         return dup;
@@ -6097,7 +6229,7 @@ namespace Docxodus
                                             if (gcc.FormatChange?.OldRunProperties != null)
                                             {
                                                 dup.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
-                                                    gcc.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
+                                                    SerializeArchivedProperties(gcc.FormatChange.OldRunProperties)));
                                             }
                                         }
                                         return dup;
@@ -6173,7 +6305,7 @@ namespace Docxodus
                                     if (firstAtom.FormatChange?.OldRunProperties != null)
                                     {
                                         elem.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
-                                            firstAtom.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
+                                            SerializeArchivedProperties(firstAtom.FormatChange.OldRunProperties)));
                                     }
                                     return (object)elem;
                                 }

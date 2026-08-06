@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`WmlComparerSettings.DetectParagraphFormatChanges` — paragraph-level format tracking as native
+  `w:pPrChange` markup (default `false`, so existing callers are unaffected).** Covers alignment,
+  indentation, spacing, paragraph style and list membership (`w:numPr`), and is independent of
+  `DetectFormatChanges`, which stays run-level (`w:rPrChange`) and stays on.
+  What it fixes is a silent loss rather than a missing feature: a paragraph mark hashes as its element
+  name plus its text value, and every `w:pPr` child is attribute-only, so a paragraph whose formatting
+  alone changed hashes identically on both sides, correlates as Equal, and is rebuilt from the RIGHT
+  document. The revised formatting was therefore already being applied to the result, the original's
+  discarded, and nothing reported — leaving reject unable to restore it. Detection mirrors the
+  run-level pass; `ReduceToParagraphPropertiesChange` produces both the comparison key and the archived
+  copy, so what is compared is exactly what is stored. It drops what a `w:pPrChange` may not carry —
+  its inner `w:pPr` is a CT_PPrBase, so the mark's own `w:rPr` and an inline `w:sectPr` are excluded —
+  and strips revision-save ids and internal bookkeeping at every level so they neither trip a false
+  positive nor leak into the archive. Accept/reject needed no new code: `RevisionProcessor` already
+  handles `w:pPrChange`. Adding the emission branch also closed a crash reachable without this option:
+  run-level detection can stamp `FormatChanged` on a paragraph mark inside a text box (a paragraph
+  there hangs off the run carrying the drawing, so unlike an ordinary paragraph mark it has a run
+  ancestor whose properties the run pass reads), and the paragraph-properties transform had no branch
+  for that status, throwing `Internal error - unknown status: FormatChanged` on text-box documents
+  under the default settings. `GetRevisions()` reports these as `FormatChanged` alongside run changes,
+  carrying the paragraph's text; the revision type enum is unchanged, and reporting is not gated by the
+  setting — a document that already contains a `w:pPrChange` is reported either way, exactly as
+  `w:rPrChange` already was. Lists ride the same path for free, though renumbering caused by editing
+  `numbering.xml` is not a `w:pPr` change and is not tracked (nor is it by Word). Body scope only: no
+  formatting change inside a footnote or endnote is detected, a pre-existing limitation the run-level
+  pass shares exactly. CLI: `redline --detect-paragraph-format-changes`. Coverage:
+  `WmlComparerParagraphFormatTests`.
+  Two rode-along fixes on the default-on run-level path, both pre-existing: archived properties are
+  serialized into an internal attribute and parsed back, and without an explicit namespace declaration
+  XLinq wrote them as a default-namespace `<rPr xmlns="…">` that re-declared the namespace on every
+  child and survived into the produced document; and a property with no `w:val` is compared by its
+  serialized form when reporting changed property names, so an untouched `w:rFonts` counted as changed
+  whenever the two copies carried different internal ids.
 - **Table cell merge/unmerge — `DocxSession.MergeCells`/`UnmergeCells` (issue #340, the
   deferred Stage B of post-insert table editing).** `MergeCells(cellAnchor, rowSpan, colSpan,
   TableMergeOptions?)` writes native `w:gridSpan` for the horizontal extent and

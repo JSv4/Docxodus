@@ -108,8 +108,10 @@ public static class DocxCompare
     /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh
     /// <see cref="DocxDiffSettings"/>. WmlComparer-only knobs are intentionally dropped: <c>DetailThreshold</c>
     /// (an LCS-granularity knob with no IR equivalent), <c>SimplifyMoveMarkup</c> (DocxDiff renders moves
-    /// natively), and <c>DetectFormatChanges</c> (DocxDiff uses <see cref="DocxDiffSettings.FormatComparison"/>,
-    /// left at its default). DocxDiff-specific settings keep their defaults. An explicit
+    /// natively), <c>DetectFormatChanges</c> (DocxDiff uses <see cref="DocxDiffSettings.FormatComparison"/>,
+    /// left at its default), and <c>DetectParagraphFormatChanges</c> (DocxDiff tracks the whole
+    /// block-format-change family under <see cref="DocxDiffSettings.TrackBlockFormatChanges"/>, on by
+    /// default and far wider in scope). DocxDiff-specific settings keep their defaults. An explicit
     /// <c>DateTimeForRevisions</c> is carried through and wins over <see cref="DocxDiffSettings.Deterministic"/>.
     /// </summary>
     internal static DocxDiffSettings ToDocxDiffSettings(WmlComparerSettings settings) => new()

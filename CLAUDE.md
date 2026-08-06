@@ -243,7 +243,8 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 - `SimplifyMoveMarkup` - Convert move markup to del/ins (default: false)
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
 - `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
-- `DetectFormatChanges` - Enable format change detection (default: true)
+- `DetectFormatChanges` - Enable run-level (`w:rPrChange`) format change detection (default: true)
+- `DetectParagraphFormatChanges` - Enable paragraph-level (`w:pPrChange`) format change detection — alignment, indent, spacing, style, list membership (default: **false**)
 
 Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) when `DetectMoves` is enabled:
 - The comparer analyzes deleted/inserted content blocks for similarity after LCS comparison
@@ -260,6 +261,14 @@ Format change detection produces **native Word format change markup** (`w:rPrCha
 - The output document contains `w:rPrChange` elements inside `w:rPr` with the old formatting properties
 - `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.FormatChanged` revisions
 - `WmlComparerRevision.FormatChange` contains details about what changed (old/new properties, changed property names)
+
+Paragraph-level format change detection (`DetectParagraphFormatChanges`, default **false**) mirrors that pass on the paragraph mark, emitting `w:pPrChange`:
+- A paragraph mark hashes as element name + text value, and every `w:pPr` child is attribute-only — so a format-only change correlates as Equal and the result is rebuilt from the right document. Without this option the revised formatting is applied silently and the original is lost, so reject cannot restore it
+- `ReduceToParagraphPropertiesChange` produces both the comparison key and the archived copy. It excludes what `w:pPrChange`'s CT_PPrBase forbids (the mark's `w:rPr`, an inline `w:sectPr`) and strips rsids/`pt14:` bookkeeping at every level
+- Lists come free — `w:numPr` is an ordinary `w:pPr` child. Editing `numbering.xml` is not a `w:pPr` change and is not tracked
+- Accept/reject needed no new code; `RevisionProcessor` already handles `w:pPrChange`. `GetRevisions()` reports these as `FormatChanged` (enum unchanged), with the paragraph's text
+- Body scope only — no format change inside a footnote/endnote is detected. Pre-existing and shared with the run-level pass (a *text* change in the same note IS detected); pinned by `PF022`
+- Not on the WASM/npm bridges (same as `DetectFormatChanges`). CLI: `redline --detect-paragraph-format-changes`
 
 **DocxCompare.cs** - The shared comparison-engine selector (M-B). One public `enum ComparisonEngine { WmlComparer = 0, DocxDiff = 1 }` + `DocxCompare.Compare(left, right, engine, WmlComparerSettings)` — the single `WmlComparer`-vs-`DocxDiff` dispatch owner that the CLI (`tools/redline` `--engine=`), the WASM bridge (`DocumentComparer`'s four primary redline methods, via a trailing `engine` int), and — transitively — the npm wrappers (`CompareOptions.engine`) all route through (mirrors the `DocxDiffOps`/`HtmlConversionOps` single-owner pattern). Takes the incumbent `WmlComparerSettings` and maps the common option set to `DocxDiffSettings` on the `DocxDiff` branch via `ToDocxDiffSettings` (drops the WmlComparer-only knobs `DetailThreshold`/`SimplifyMoveMarkup`/`DetectFormatChanges`). **Seeded to `WmlComparer` — the default is NOT flipped** (that remains gated on decision D4); omitting the selector reproduces today's behavior exactly. `DocxCompare.TryParseEngine` is the CLI name↔enum mapper. Note: python-host/docx-scalpel are out of M-B scope.
 

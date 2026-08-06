@@ -140,6 +140,10 @@ class Program
             {
                 settings.DetectFormatChanges = false;
             }
+            else if (flag == "--detect-paragraph-format-changes")
+            {
+                settings.DetectParagraphFormatChanges = true;
+            }
             else if (flag == "--no-conflate-spaces")
             {
                 settings.ConflateBreakingAndNonbreakingSpaces = false;
@@ -224,7 +228,8 @@ class Program
         Console.WriteLine("  --simplify-move-markup             Convert moves to del/ins for Word compatibility");
         Console.WriteLine("  --move-similarity-threshold=<val>  Jaccard threshold for move matching (default: 0.8)");
         Console.WriteLine("  --move-minimum-word-count=<val>    Min words for move detection (default: 3)");
-        Console.WriteLine("  --no-detect-format-changes         Disable formatting change detection");
+        Console.WriteLine("  --no-detect-format-changes         Disable run formatting change detection");
+        Console.WriteLine("  --detect-paragraph-format-changes  Track paragraph formatting and list changes (wmlcomparer only)");
         Console.WriteLine("  --no-conflate-spaces               Distinguish breaking/non-breaking spaces");
         Console.WriteLine("  --date-time=<ISO8601>              Custom timestamp for revisions");
         Console.WriteLine("  -h, --help                         Show this help message");

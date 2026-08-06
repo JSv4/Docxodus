@@ -65,18 +65,62 @@ The implementation uses word-level Jaccard similarity to match deletions with in
 
 **Status (corrected, v6.x):** Implemented. Earlier revisions called this a gap; **that is stale.** `WmlComparer` exposes a `FormatChanged` revision type with `DetectFormatChanges` (default true): when text is identical but modeled run formatting differs, it produces native `w:rPrChange` markup and `GetRevisions()` returns a `FormatChanged` revision whose `FormatChange` carries old/new properties and changed names (see CLAUDE.md "WmlComparer.cs" and `docs/architecture/format_change_detection.md`). The new `DocxDiff` IR engine surfaces the same via `DocxDiffRevisionType.FormatChanged` + `DocxDiffFormatChange`, with a `FormatComparison` (ModeledOnly | Full) policy ([`ir_diff_engine.md`](./ir_diff_engine.md)).
 
-The original (now-closed) description follows for history. Word documents can track formatting changes via:
-- `w:rPrChange` - Run property changes (font, size, bold, etc.)
-- `w:pPrChange` - Paragraph property changes (alignment, spacing, etc.)
-- `w:sectPrChange` - Section property changes
-- `w:tblPrChange` - Table property changes
+Word documents can track formatting changes via:
 
-### Recommendation
+| Markup | Scope | WmlComparer |
+|--------|-------|-------------|
+| `w:rPrChange` | run properties | ✅ `DetectFormatChanges` (default **true**) |
+| `w:pPrChange` | paragraph properties — alignment, indent, spacing, style, numbering | ✅ `DetectParagraphFormatChanges` (default **false**) |
+| `w:sectPrChange` | section properties | ✗ |
+| `w:tblPrChange` | table properties | ✗ |
 
-Add a `FormatChange` revision type that captures:
-- The element affected
-- The old formatting properties
-- The new formatting properties
+### 3a. Paragraph properties ✅ IMPLEMENTED
+
+`WmlComparerSettings.DetectParagraphFormatChanges` extends the run-level pass to the paragraph mark.
+Off by default: enabling it changes the output of comparisons that produce no revision today.
+
+Why it is worth having on: without it a paragraph-format-only change is *silently lossy*. The
+paragraph mark hashes as `"pPr"` regardless of its contents (the hash is element name + text value,
+and every `w:pPr` child is attribute-only), so such a paragraph correlates as Equal and the result
+is rebuilt from the RIGHT side. The revised formatting is therefore already applied to the output,
+the original's is discarded, and nothing is reported — so reject cannot put it back.
+
+Mechanics, mirroring the run-level pass exactly:
+
+- `DetectFormatChangesInAtomList` branches on a `w:pPr` atom and compares the two sides through
+  `ReduceToParagraphPropertiesChange`, which also produces the archived copy — what is compared is
+  precisely what is stored.
+- The reduction drops what a `w:pPrChange` may not carry: its inner `w:pPr` is a **CT_PPrBase**, so
+  `w:rPr` (the mark's own run properties, which Word tracks separately) and `w:sectPr` are excluded,
+  along with any pre-existing `w:pPrChange`. Revision-save ids and `pt14:` bookkeeping are stripped
+  at every level, so they can neither cause a false positive nor leak into the archive.
+- The reduction sorts properties at every level, so the same properties written in a different
+  source order — including a `w:numPr` holding `w:numId` before `w:ilvl` — do not read as a change;
+  `XNode.DeepEquals` is order-sensitive. That sort is not the schema sequence, but the writer's
+  element ordering restores it in the emitted archive (pinned by `PF004b`).
+- Accept/reject needed no new code — `RevisionProcessor` already handles `w:pPrChange`, including
+  carrying an inline `w:sectPr` across a reject.
+
+**Lists come free.** `w:numPr` is an ordinary `w:pPr` child, so list membership, level and format
+changes are tracked by the same path. Renumbering caused by editing `numbering.xml` — changing what
+a `numId` *means* rather than which one a paragraph points at — is not a `w:pPr` change and is not
+tracked. Word does not track that either.
+
+Known limits:
+
+- The paragraph mark's own run properties (`w:pPr/w:rPr`) are not tracked, and neither is a section
+  change.
+- **Body scope only.** No formatting change inside a footnote or endnote is detected — and this is
+  pre-existing, not a property of the new option: the run-level pass misses note-scope `w:rPr`
+  changes in exactly the same way, while a *text* change in the same note is detected normally, so
+  notes are compared and it is the format passes that do not reach them. `GetFormatChangeRevisions`
+  scans the note parts, so the reporting side is ready if detection is ever extended. Pinned by
+  `PF022`, which fails if that changes.
+- WmlComparer discards a mid-document inline `w:sectPr` altogether — again pre-existing and
+  unrelated to this option, and the reason the CT_PPrBase exclusion is covered by a direct unit test
+  rather than through `Compare`.
+
+Coverage: `WmlComparerParagraphFormatTests`. CLI: `redline --detect-paragraph-format-changes`.
 
 ## 4. Revision Metadata Limitations
 
