@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`WmlComparer.Compare` and `GetRevisions` no longer throw `NullReferenceException` when a document
+  body contains no paragraphs.** `MoveLastSectPrIntoLastParagraph` looked for the paragraph to move the
+  trailing `w:sectPr` into and dereferenced the result without checking it found one, so a body holding
+  only a `w:sectPr` — which Word's UI cannot produce but a generator can — crashed as either side of the
+  comparison. The section is now left as a body child, which is where the produced document puts it back
+  regardless. The same three lines added the `w:pPr` XName rather than the element just created, leaving
+  it detached, so the section appended to it was dropped and the name became a text node; that branch is
+  reached routinely but was output-neutral, since the stray node is never read and the section is
+  re-added from the original document at the end.
+
 ## [9.3.0] - 2026-08-06
 
 ### Added

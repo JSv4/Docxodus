@@ -8973,7 +8973,7 @@ namespace Docxodus
             return reconstructedElement;
         }
 
-        private static void MoveLastSectPrIntoLastParagraph(XElement contentParent)
+        internal static void MoveLastSectPrIntoLastParagraph(XElement contentParent)
         {
             var lastSectPrList = contentParent.Elements(W.sectPr).ToList();
             if (lastSectPrList.Count() > 1)
@@ -8984,11 +8984,18 @@ namespace Docxodus
                 var lastParagraph = contentParent.Elements(W.p).LastOrDefault();
                 if (lastParagraph == null)
                     lastParagraph = contentParent.Descendants(W.p).LastOrDefault();
+
+                // A generated document can have a body with no paragraph at all. There is nowhere to move
+                // the section to; leave it as a body child, which is where the produced document puts it
+                // back anyway.
+                if (lastParagraph == null)
+                    return;
+
                 var pPr = lastParagraph.Element(W.pPr);
                 if (pPr == null)
                 {
                     pPr = new XElement(W.pPr);
-                    lastParagraph.AddFirst(W.pPr);
+                    lastParagraph.AddFirst(pPr);
                 }
                 pPr.Add(lastSectPr);
                 contentParent.Elements(W.sectPr).Remove();
