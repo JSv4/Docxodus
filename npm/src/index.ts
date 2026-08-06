@@ -90,6 +90,7 @@ export type {
   TableBorderScope,
   TableBorderSpec,
   TableInsertOptions,
+  TableMergeContent,
   TableShadingScope,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";

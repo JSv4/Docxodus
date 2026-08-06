@@ -71,7 +71,7 @@ When you pass markdown into `ReplaceText`, `InsertParagraph`, or `ReplaceCellCon
 This is symmetric by design: anything the projector can emit, the parser can accept, so an agent can read markdown out and write markdown in. Anything outside the subset is rejected with a typed error that names either the v1 op to use instead or the v2 op planned to address it. The full table of accepted and rejected syntax is in the spec — the practical shorthand:
 
 - If you can see it in the projection output, you can write it in a payload.
-- If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`). Style it after insert (issue #315 Stage A, same cell-paragraph addressing): `SetColumnWidths(cellAnchor, widthsTwips)` retunes `w:tblGrid` + every `w:tcW` and pins fixed layout; `SetTableBorders(cellAnchor, TableBorderSpec?)` writes `w:tblPr/w:tblBorders` for the spec's scope (`All`/`Outside`/`Inside`) only, style `"none"` removing those edges; `SetCellShading(cellAnchor, fill, TableShadingScope)` writes `w:tcPr/w:shd` (`val="clear"`) on the cell or its whole row (header-row banding; null fill clears); `SetRepeatHeaderRow(cellAnchor, bool)` toggles `w:trPr/w:tblHeader` (Word honors it on a run of rows starting at row 1). Bad widths/fill/size → `InvalidTableStyling`. Cell merge (`w:gridSpan`/`w:vMerge`) is Stage B — design first, not yet implemented.
+- If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`). Style it after insert (issue #315 Stage A, same cell-paragraph addressing): `SetColumnWidths(cellAnchor, widthsTwips)` retunes `w:tblGrid` + every `w:tcW` and pins fixed layout; `SetTableBorders(cellAnchor, TableBorderSpec?)` writes `w:tblPr/w:tblBorders` for the spec's scope (`All`/`Outside`/`Inside`) only, style `"none"` removing those edges; `SetCellShading(cellAnchor, fill, TableShadingScope)` writes `w:tcPr/w:shd` (`val="clear"`) on the cell or its whole row (header-row banding; null fill clears); `SetRepeatHeaderRow(cellAnchor, bool)` toggles `w:trPr/w:tblHeader` (Word honors it on a run of rows starting at row 1). Bad widths/fill/size → `InvalidTableStyling`. Merge cells with `MergeCells(cellAnchor, rowSpan, colSpan, TableMergeOptions?)` / `UnmergeCells(cellAnchor)` (issue #340 Stage B — see [the grid model](#table-cell-merge-the-grid-model) below).
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
 - If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`, or target a tracked change from `ListRevisions()` with `AddCommentToRevision(revisionId, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
@@ -1359,6 +1359,77 @@ const result = session.raw.replaceXml(anchor, modified);
 
 Starting from a known-valid XML fragment and modifying it locally is dramatically less error-prone than constructing OOXML from scratch — namespace declarations, attribute ordering, and child-element validity are all preserved from the original.
 
+## Table cell merge: the grid model
+
+`MergeCells`/`UnmergeCells` (issue #340 Stage B) and the row/column CRUD around them share one
+model, and every rule below falls out of it.
+
+**Geometry.** A row's cells tile `w:tblGrid` columns left→right. Each cell covers `w:gridSpan`
+columns (default 1), starting from an origin shifted by `w:trPr/w:gridBefore`. A vertical merge is
+a *column-aligned run of rows* whose lead cell carries `w:vMerge w:val="restart"` and whose
+followers carry a bare `w:vMerge`. So a cell has a grid rectangle, and "which cell is in column
+N" is a lookup over that geometry — never an index into `w:tr`'s children. That distinction is the
+whole fix: the pre-#340 CRUD indexed cells positionally, which silently tore the grid the moment a
+span existed.
+
+**`MergeCells(cellAnchor, rowSpan, colSpan, options?)`.** The rectangle starts at the anchor's cell
+and runs `rowSpan` rows down × `colSpan` *cells* right (measured in the anchor row, so it composes
+with spans already there). It is applied only if:
+
+- it stays inside the table (`rowSpan`/`colSpan` in range) and covers ≥ 2 cells;
+- every covered row tiles *exactly* the same grid columns `[c0, c1)` — otherwise an existing
+  `w:gridSpan` straddles the rectangle's edge and merging would leave the grid ragged;
+- its first row is not itself a `w:vMerge` continuation, and no continuation follows its last row.
+
+Each violation is `InvalidTableMerge` with a message naming which one. Nothing is half-applied —
+validation runs before the undo snapshot is taken.
+
+The result: each covered row keeps its first cell, drops the rest, and gets
+`w:gridSpan = c1 - c0` plus a `w:tcW` summed over the grid columns it now covers. With `rowSpan > 1`
+the lead cell gets `w:vMerge w:val="restart"` and the rows below a bare `w:vMerge`.
+
+**`UnmergeCells(cellAnchor)`** is the inverse: drop `w:gridSpan`/`w:vMerge`, restore one cell per
+grid column (cloning the merged cell's shell — borders, shading, valign — minus the merge markup)
+and give each its `w:tblGrid` width. Addressing a *continuation* cell unmerges the whole run: the
+op walks up to the restart and back down through every column-aligned continuation. A cell with no
+merge markup is `InvalidTableMerge`, not a silent no-op.
+
+**Anchor semantics.** A merge never invents or hides anchors:
+
+| Cell | What happens to its paragraphs |
+|---|---|
+| The surviving (lead) cell | Untouched; its anchor is returned in `Modified` |
+| An absorbed cell, `Content = Append` (default) | Non-empty blocks are **moved** into the lead cell — same elements, same unids, so their anchors survive and nothing appears in `Removed` |
+| An absorbed cell, `Content = Discard` | Removed; their anchors come back in `Removed` |
+| An absorbed cell, `Content = Reject` | Nothing happens — a non-empty absorbed cell fails the whole op |
+| A vertical-merge continuation | Reduced to exactly one empty `w:p` (CT_Tc requires a block child). A cell that was *already* one empty paragraph keeps it — and keeps its anchor. Otherwise the fresh paragraph's anchor is reported in `Created` |
+
+A continuation cell's paragraph stays addressable even though Word renders nothing for it: writing
+to it is legal but invisible, so unmerge first. `Created`/`Removed` always describe reality — an
+`Append` merge of a filled 3×1 column reports neither, because every paragraph is still there.
+
+**Projection.** A table carrying any merge fails the projector's GFM-simplicity predicate (any
+`w:gridSpan > 1` or any `w:vMerge` disqualifies), so it renders as the opaque ` ```table ` block
+with its `{#tbl:…}` anchor — and every cell paragraph stays individually addressable in the anchor
+index, so `ReplaceText`/`ApplyFormat` on a merged table's cells work unchanged.
+
+**Span-aware CRUD.** The four reshaping ops each have one defined behavior where a merge is in the
+way — extend, narrow, or repair, never tear:
+
+| Op | Against a merge |
+|---|---|
+| `InsertTableRow` | Mirrors the reference row's grid shape (widths + `w:gridSpan`), never its merge markup. Where a vertical merge *crosses* the insertion boundary — the row on the far side of it carries a continuation — the new row joins the run as a continuation, so the merge extends instead of being punched through |
+| `DeleteTableRow` | Deleting a merge's lead row promotes the next row's continuation to the new `w:vMerge w:val="restart"`, so the run is never left headless |
+| `InsertTableColumn` | A cell straddling the new boundary widens by one column (`gridSpan + 1`, width grown by the new `w:gridCol`) instead of gaining a sibling; rows whose cells end at the boundary get an ordinary new cell |
+| `DeleteTableColumn` | A cell spanning the doomed column narrows by one (`gridSpan - 1`, width shrunk by the column) instead of disappearing; unit cells covering it are removed as before |
+
+`SetColumnWidths` follows the same rule: a merged cell's `w:tcW` is the **sum** of the grid columns
+it spans, not the width at its position in the row.
+
+**Downstream.** `IrReader` already models `gridSpan`/`vMerge` (`IrCell.GridSpan`/`IrVMerge`, folded
+into `IrCell.ShellDigest`), so merged documents flow through `DocxDiff` with the usual round-trip
+contract — accept ≡ right, reject ≡ left (test `DT240`).
+
 ## Error catalog (by remediation)
 
 Errors are grouped by what the agent should do in response, not by where in the code they're raised. The `EditErrorCode` enum lives in `Docxodus/DocxSession.cs`; the snake-case TypeScript union is in `npm/src/types.ts`.
@@ -1371,7 +1442,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |
-| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling` |
+| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling`, `InvalidTableMerge` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |

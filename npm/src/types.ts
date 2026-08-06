@@ -1128,6 +1128,8 @@ export interface DocxodusWasmExports {
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
     DeleteTableRow: (handle: number, cellAnchor: string) => string;
     DeleteTableColumn: (handle: number, cellAnchor: string) => string;
+    MergeCells: (handle: number, cellAnchor: string, rowSpan: number, colSpan: number, content: string) => string;
+    UnmergeCells: (handle: number, cellAnchor: string) => string;
     SetColumnWidths: (handle: number, cellAnchor: string, widthsJson: string) => string;
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
@@ -1273,6 +1275,7 @@ export type EditErrorCode =
   | "invalid_page_numbering"
   | "invalid_paragraph_format"
   | "invalid_table_styling"
+  | "invalid_table_merge"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1509,6 +1512,12 @@ export type TableBorderScope = "all" | "outside" | "inside";
 /** Shading granularity for `DocxSession.setCellShading`: the one cell the anchor sits in, or
  * every cell of its row (header-row banding). */
 export type TableShadingScope = "cell" | "row";
+
+/** What `DocxSession.mergeCells` does with the content of the cells a merge absorbs:
+ * `"append"` (default) moves their non-empty blocks into the surviving cell — lossless;
+ * `"discard"` drops them; `"reject"` fails the merge (`invalid_table_merge`) when any absorbed
+ * cell is non-empty. */
+export type TableMergeContent = "append" | "discard" | "reject";
 
 /** Border specification for `DocxSession.setTableBorders`. Written as explicit `w:tblBorders`
  * edges (overriding style-inherited borders); edges outside `scope` are left untouched. */

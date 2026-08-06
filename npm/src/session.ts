@@ -30,6 +30,7 @@ import type {
   ParagraphFormatOp,
   TableBorderSpec,
   TableInsertOptions,
+  TableMergeContent,
   TableShadingScope,
   ListFormat,
   GrepOptions,
@@ -211,7 +212,9 @@ export class DocxSession {
    * Table row/column editing, addressed by a cell-paragraph anchor (e.g. one returned from
    * {@link insertTable}'s `created`). Insert clones the reference row/column's widths and starts
    * empty (`created` lists the new cell-paragraph anchors); delete of the last row/column removes
-   * the whole table. v1 assumes a rectangular grid (no horizontal cell merges).
+   * the whole table. All four are grid-aware: inserting across a merge extends it, deleting
+   * through one narrows it, and deleting a vertical merge's lead row promotes the next row to
+   * carry it — the grid is never left ragged.
    */
   insertTableRow(cellAnchorId: string, position: "before" | "after"): EditResult {
     return JSON.parse(this.wasm.InsertTableRow(this.handle, cellAnchorId, position)) as EditResult;
@@ -227,6 +230,35 @@ export class DocxSession {
 
   deleteTableColumn(cellAnchorId: string): EditResult {
     return JSON.parse(this.wasm.DeleteTableColumn(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  /**
+   * Merge the rectangle of cells anchored at `cellAnchorId` running `rowSpan` rows down ×
+   * `colSpan` cells right (Word's *Merge Cells*): `w:gridSpan` for the horizontal extent,
+   * `w:vMerge` restart/continue for the vertical one. The rectangle must tile the same whole grid
+   * columns in every row it covers and must not clip a vertical merge entering from above or
+   * continuing below — a partial overlap fails with `invalid_table_merge` instead of tearing the
+   * grid. `content` decides what happens to the absorbed cells' content (default `"append"`).
+   */
+  mergeCells(
+    cellAnchorId: string,
+    rowSpan: number,
+    colSpan: number,
+    content: TableMergeContent = "append",
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.MergeCells(this.handle, cellAnchorId, rowSpan, colSpan, content),
+    ) as EditResult;
+  }
+
+  /**
+   * Split the merged cell at `cellAnchorId` back into unit cells, dropping its `w:gridSpan` and
+   * `w:vMerge` markup and restoring one cell per grid column (each taking its `w:tblGrid` width).
+   * Addressing a vertical-merge continuation unmerges the whole run. A cell with no merge markup
+   * fails with `invalid_table_merge`.
+   */
+  unmergeCells(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.UnmergeCells(this.handle, cellAnchorId)) as EditResult;
   }
 
   /**
