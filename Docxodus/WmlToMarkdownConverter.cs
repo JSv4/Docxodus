@@ -1346,7 +1346,12 @@ public static class WmlToMarkdownConverter
     private static void EmitOpaqueTable(XElement tbl, string anchor, EmitContext ctx)
     {
         var rows = tbl.Elements(W.tr).Count();
-        var cols = tbl.Elements(W.tr).FirstOrDefault()?.Elements(W.tc).Count() ?? 0;
+        // The table's WIDTH is its grid extent, not the first row's cell count — a merged header
+        // row has fewer cells than columns, and a merge is precisely what lands a table here.
+        var cols = tbl.Elements(W.tr)
+            .Select(tr => tr.Elements(W.tc)
+                .Sum(tc => Math.Max(1, (int?)tc.Element(W.tcPr)?.Element(W.gridSpan)?.Attribute(W.val) ?? 1)))
+            .DefaultIfEmpty(0).Max();
         if (anchor.Length > 0) { ctx.Sb.Append(anchor); ctx.Sb.AppendLine(); }
         ctx.Sb.AppendLine("```table");
         ctx.Sb.Append("rows: ").Append(rows).AppendLine();

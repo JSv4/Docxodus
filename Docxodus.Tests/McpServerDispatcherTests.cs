@@ -610,6 +610,40 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("invalid_table_styling", bad.GetProperty("error").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public void MCP062_Table_MergeAndUnmergeCells()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert","anchorId":"{{anchor}}","position":"after","rows":3,"columns":3}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean());
+        var topLeft = inserted.GetProperty("created")[0].GetProperty("id").GetString()!;
+
+        // A 2×2 header block: w:gridSpan across, w:vMerge down.
+        var mergedJson = Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"merge_cells","cellAnchorId":"{{topLeft}}","rowSpan":2,"colSpan":2}"""));
+        Assert.True(Parse(mergedJson).GetProperty("success").GetBoolean(), mergedJson);
+
+        // Merging the same rectangle again would now clip the vertical run it just created.
+        var clipped = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"merge_cells","cellAnchorId":"{{topLeft}}","rowSpan":1,"colSpan":2}""")));
+        Assert.False(clipped.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_table_merge", clipped.GetProperty("error").GetProperty("code").GetString());
+
+        var unmerged = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"unmerge_cells","cellAnchorId":"{{topLeft}}"}""")));
+        Assert.True(unmerged.GetProperty("success").GetBoolean());
+
+        // Back to unit cells: unmerging a cell that carries no merge markup is now an error.
+        var again = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"unmerge_cells","cellAnchorId":"{{topLeft}}"}""")));
+        Assert.False(again.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_table_merge", again.GetProperty("error").GetProperty("code").GetString());
+    }
+
     // ─── Annotate (annotation overlay) ─────────────────────────────────
 
     [Fact]

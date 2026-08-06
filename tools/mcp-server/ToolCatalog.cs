@@ -337,13 +337,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_table",
-            "Create tables, edit their rows/columns/cell content, and style them after insert (column widths, borders, shading, and row layout).",
+            "Create tables, edit their rows/columns/cell content, merge/unmerge cells, and style them after insert (column widths, borders, shading, and row layout).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
+                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
@@ -353,6 +353,9 @@ internal static class ToolCatalog
                 "borderless": { "type": "boolean" },
                 "cellAnchorId": { "type": "string", "description": "insert_row/insert_column/delete_row/delete_column/set_*: a 'p' (paragraph-inside-the-cell) anchor in the target cell/row/table, e.g. from docxodus_table's own insert result or docxodus_search. replace_cell_content: the cell's own 'tc' anchor instead (e.g. from docxodus_search with mode kind, query 'tc') — these two anchor kinds are not interchangeable." },
                 "markdown": { "type": "string", "description": "replace_cell_content payload." },
+                "rowSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many rows down the merged rectangle runs from the anchor's cell (default 1). Becomes w:vMerge restart/continue." },
+                "colSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many cells right the rectangle runs from the anchor's cell (default 1). Becomes w:gridSpan. rowSpan x colSpan must be > 1." },
+                "mergeContent": { "type": "string", "enum": ["append", "discard", "reject"], "description": "merge_cells: what to do with the absorbed cells' content — append it to the surviving cell (default, lossless), discard it, or refuse the merge when any absorbed cell is non-empty." },
                 "widths": { "type": "array", "items": { "type": "integer" }, "description": "set_column_widths: one positive twip width per column, left→right (1440 = 1 inch). Rewrites w:tblGrid + every cell width and pins the table to fixed layout." },
                 "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders: which edges to write (default all). Untargeted edges are left unchanged." },
                 "borderStyle": { "type": "string", "description": "set_borders: OOXML border style — single (default), double, thick, dotted, dashed, …, or none to remove the targeted edges." },

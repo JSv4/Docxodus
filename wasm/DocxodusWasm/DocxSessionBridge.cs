@@ -258,6 +258,20 @@ public static partial class DocxSessionBridge
     public static string DeleteTableColumn(int h, string cellAnchor) =>
         DocxSessionOps.DeleteTableColumn(h, cellAnchor);
 
+    /// <summary>Merge the rectangle of cells anchored at <paramref name="cellAnchor"/> running
+    /// <paramref name="rowSpan"/> rows down × <paramref name="colSpan"/> cells right (w:gridSpan +
+    /// w:vMerge). <paramref name="content"/> is "append" (default) | "discard" | "reject" — what
+    /// happens to the absorbed cells' content.</summary>
+    [JSExport]
+    public static string MergeCells(int h, string cellAnchor, int rowSpan, int colSpan, string content) =>
+        DocxSessionOps.MergeCells(h, cellAnchor, rowSpan, colSpan, content);
+
+    /// <summary>Split the merged cell at <paramref name="cellAnchor"/> back into unit cells;
+    /// addressing a vertical-merge continuation unmerges the whole run.</summary>
+    [JSExport]
+    public static string UnmergeCells(int h, string cellAnchor) =>
+        DocxSessionOps.UnmergeCells(h, cellAnchor);
+
     /// <summary>Retune the column widths of the table containing <paramref name="cellAnchor"/>.
     /// <paramref name="widthsJson"/> is a JSON array of per-column twip widths (one positive
     /// value per column, left→right).</summary>

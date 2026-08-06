@@ -412,4 +412,54 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.hasInlineIns).toBe(true);
     expect(result.hasInlineDel).toBe(true);
   });
+  test('mergeCells / unmergeCells across the bridge (#340)', async ({ page }) => {
+    const bytes = readTestFile('HC001-5DayTourPlanTemplate.docx');
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        const proj = JSON.parse(bridge.Project(handle));
+        const anchorId = (Object.entries(proj.anchorIndex) as [string, any][])
+          .filter(([, t]) => t.scope === 'body' && ['p', 'h', 'li'].includes(t.kind))
+          .map(([id]) => id)[0];
+
+        const inserted = JSON.parse(bridge.InsertTable(handle, anchorId, 'after', 3, 3, ''));
+        const topLeft = inserted.created[0].id;   // row-major cell paragraphs
+        const midRight = inserted.created[5].id;  // row 1, column 2 — outside the rectangle
+
+        // A 2x2 header block: w:gridSpan across, w:vMerge down.
+        const merged = JSON.parse(bridge.MergeCells(handle, topLeft, 2, 2, 'append'));
+        // A merged table can no longer render as a GFM pipe table.
+        const mergedMd = JSON.parse(bridge.Project(handle)).markdown;
+
+        // Merging the same rectangle 1 row deep would strand row 1's continuation.
+        const clipped = JSON.parse(bridge.MergeCells(handle, topLeft, 1, 2, 'append'));
+
+        const unmerged = JSON.parse(bridge.UnmergeCells(handle, topLeft));
+        const again = JSON.parse(bridge.UnmergeCells(handle, topLeft));
+
+        return {
+          mergedOk: merged.success,
+          survivingAnchorAddressable:
+            JSON.parse(bridge.ReplaceText(handle, midRight, 'still editable')).success,
+          opaque: mergedMd.includes('```table'),
+          clippedCode: clipped.error?.code,
+          unmergedOk: unmerged.success,
+          againCode: again.error?.code,
+        };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, Array.from(bytes));
+
+    expect(result.mergedOk).toBe(true);
+    expect(result.survivingAnchorAddressable).toBe(true);
+    expect(result.opaque).toBe(true);
+    expect(result.clippedCode).toBe('invalid_table_merge');
+    expect(result.unmergedOk).toBe(true);
+    // Back to unit cells — a cell with no merge markup is a loud error, not a no-op.
+    expect(result.againCode).toBe('invalid_table_merge');
+  });
 });

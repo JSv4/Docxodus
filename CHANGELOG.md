@@ -4,7 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Table cell merge/unmerge — `DocxSession.MergeCells`/`UnmergeCells` (issue #340, the
+  deferred Stage B of post-insert table editing).** `MergeCells(cellAnchor, rowSpan, colSpan,
+  TableMergeOptions?)` writes native `w:gridSpan` for the horizontal extent and
+  `w:vMerge` restart/continue for the vertical one, so a title cell spanning a header row or a
+  label cell spanning several data rows is finally expressible; `UnmergeCells(cellAnchor)` is the
+  exact inverse, restoring one cell per grid column at its `w:tblGrid` width (addressing a
+  continuation cell unmerges the whole run). The rectangle must tile the same whole grid columns
+  in every row it covers and must not clip a vertical merge entering from above or continuing
+  below — a partial overlap is rejected with the new `EditErrorCode.InvalidTableMerge` before any
+  snapshot is taken, never silently tearing the grid. Absorbed cells' content is moved into the
+  surviving cell by default (`TableMergeContent.Append`, lossless — the paragraphs keep their
+  anchors), with `Discard`/`Reject` as explicit alternatives. Wired through
+  `DocxSessionOps` → WASM/npm (`mergeCells`/`unmergeCells`) → MCP `docxodus_table`
+  (`merge_cells`/`unmerge_cells`); the grid model, anchor semantics for continuation cells and
+  the CRUD rules are documented in `docs/architecture/docx_mutation_api.md`.
+
 ### Fixed
+- **Table row/column CRUD is now grid-aware instead of cell-index-aware.** `InsertTableRow`,
+  `InsertTableColumn`, `DeleteTableColumn` and `SetColumnWidths` addressed cells by their position
+  in `w:tr`, which silently corrupted any table containing a merge. They now resolve cells through
+  the grid: inserting a row inside a vertical merge extends the run (and never clones someone
+  else's merge markup into a fresh row), deleting a merge's lead row promotes the next
+  continuation to the new restart, inserting a column through a horizontal span widens it rather
+  than splitting the row, deleting a column through one narrows it rather than dropping the cell,
+  and a merged cell's `w:tcW` is the sum of the grid columns it spans. `InsertTableRow` also
+  carries the reference row's `w:gridBefore`/`w:gridAfter` shape so the new row still lines up
+  with `w:tblGrid`.
+- **The opaque-table projection reported the wrong column count for merged tables.** A merge is
+  precisely what forces the ` ```table ` fallback, and its `cols:` line read the first row's cell
+  count — so a 3-column table with a merged header row told the reader `cols: 2`. It is now the
+  table's grid extent (the widest row's summed `w:gridSpan`), mirrored identically in
+  `WmlToMarkdownConverter` and `IrMarkdownEmitter` so the equivalence contract holds.
 - **The block-move surface no longer does document-scale work on every mouse move.**
   Measured on NVCA's published Model Certificate of Incorporation (234 body blocks, 392
   bookmarks, 94 footnotes, 3 section breaks), hovering across a paragraph boundary cost
@@ -152,7 +184,6 @@ All notable changes to this project will be documented in this file.
   editor now coalesces bridged range updates into the pre-paint animation frame, preserving native
   live highlighting without overlays or surface-specific patches. The physical-drag regression is
   exercised in both Chromium and a dedicated Firefox Playwright project while the button is held.
-
 ## [9.1.1] - 2026-08-05
 
 ### Changed
