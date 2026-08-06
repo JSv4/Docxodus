@@ -54,6 +54,10 @@ internal static class DocxSessionOps
     public static string ListBlocks(int handle) =>
         DocxSessionJson.SerializeRenderPlan(SessionRegistry.Get(handle).ListBlocks());
 
+    public static string ListRenderedBlocks(int handle, bool renderTrackedChanges) =>
+        DocxSessionJson.SerializeRenderPlan(
+            SessionRegistry.Get(handle).ListBlocks(renderTrackedChanges));
+
     /// <summary>Citation-ordered footnotes/endnotes — the id↔ordinal authority a client
     /// renumbering rendered note chrome walks. See <see cref="NoteListEntry"/>.</summary>
     public static string ListNotes(int handle, bool endnotes) =>
@@ -255,6 +259,11 @@ internal static class DocxSessionOps
     }
 
     // ─── Tier B: structural ─────────────────────────────────────────────
+
+    public static string MoveBlock(int handle, string sourceAnchorId, string targetAnchorId,
+        Position position) =>
+        DocxSessionJson.Serialize(
+            SessionRegistry.Get(handle).MoveBlock(sourceAnchorId, targetAnchorId, position));
 
     public static string InsertParagraph(int handle, string anchorId, Position position, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertParagraph(anchorId, position, markdown));

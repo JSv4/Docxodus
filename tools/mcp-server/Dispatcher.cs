@@ -274,6 +274,8 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
             new ReplaceOptions { IgnoreCase = !BoolOpt(args, "caseSensitive", false) }),
         "delete_block" => DocxSessionOps.DeleteBlock(session.Handle, Str(args, "anchorId")),
+        "move_block" => DocxSessionOps.MoveBlock(
+            session.Handle, Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"), ParsePos(args)),
         "delete_range" => DocxSessionOps.DeleteRange(
             session.Handle, Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(session.Handle, Str(args, "headingAnchorId")),

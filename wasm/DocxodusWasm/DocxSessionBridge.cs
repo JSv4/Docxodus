@@ -46,6 +46,11 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListBlocks(int handle) => DocxSessionOps.ListBlocks(handle);
 
+    /// <summary>Render-plan variant whose units match the requested revision view.</summary>
+    [JSExport]
+    public static string ListRenderedBlocks(int handle, bool renderTrackedChanges) =>
+        DocxSessionOps.ListRenderedBlocks(handle, renderTrackedChanges);
+
     /// <summary>
     /// Citation-ordered footnotes (or endnotes) as JSON
     /// <c>[{"id","defAnchorId","ordinal"},…]</c> — the id↔ordinal authority the
@@ -79,6 +84,22 @@ public static partial class DocxSessionBridge
         catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
     }
 
+    [JSExport]
+    public static string RenderBlocksHtmlForReview(
+        int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderBlocksHtml(
+                handle, anchorIdsJson, cssPrefix, fabricateClasses, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.ProjectAnchor"/>. <paramref name="depth"/>
     /// uses the numeric layout of <see cref="ProjectionDepth"/> (SelfOnly=0,
@@ -105,6 +126,22 @@ public static partial class DocxSessionBridge
         catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
     }
 
+    [JSExport]
+    public static string RenderBlockHtmlForReview(
+        int h, string anchorId, string cssPrefix, bool fabricateClasses,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderBlockHtml(
+                h, anchorId, cssPrefix, fabricateClasses, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
     /// <summary>
     /// Render the live session's current state to a complete anchor-stamped HTML document —
     /// the editor's full re-render (remount) without marshaling the saved bytes out to JS
@@ -119,12 +156,32 @@ public static partial class DocxSessionBridge
     }
 
     [JSExport]
+    public static string RenderHtmlForReview(
+        int h, string cssPrefix, bool fabricateClasses, bool paginated, double scale,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderHtml(
+                h, cssPrefix, fabricateClasses, paginated, scale, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    [JSExport]
     public static string ReplaceText(int h, string anchor, string md) =>
         DocxSessionOps.ReplaceText(h, anchor, md);
 
     [JSExport]
     public static string DeleteBlock(int h, string anchor) =>
         DocxSessionOps.DeleteBlock(h, anchor);
+
+    [JSExport]
+    public static string MoveBlock(int h, string sourceAnchor, string targetAnchor, string posStr) =>
+        DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParsePos(posStr));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.DeleteRange"/>. Deletes every top-level

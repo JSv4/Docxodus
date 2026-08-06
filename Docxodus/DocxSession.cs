@@ -1478,7 +1478,7 @@ public sealed class DocxSession : IDisposable
     /// paragraphs are ALWAYS listed — the plan mirrors the rendered DOM, which contains
     /// every block regardless of <see cref="EmptyParagraphMode"/>.
     /// </summary>
-    public RenderPlan ListBlocks()
+    public RenderPlan ListBlocks(bool renderTrackedChanges = true)
     {
         ThrowIfDisposed();
         _ = AnchorIndex(); // guarantees Unids are assigned on every projected part
@@ -1505,6 +1505,8 @@ public sealed class DocxSession : IDisposable
                     string? kind =
                         el.Name == W.tbl ? "tbl" :
                         el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                    if (!renderTrackedChanges && IsRemovedInAcceptedRevisionView(el))
+                        continue;
                     var unid = (string?)el.Attribute(PtOpenXml.Unid);
                     if (kind is null || unid is null) continue;
                     body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
@@ -1550,6 +1552,21 @@ public sealed class DocxSession : IDisposable
             body,
             Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, endnotes: false, "fn"),
             Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, endnotes: true, "en"));
+    }
+
+    private static bool IsRemovedInAcceptedRevisionView(XElement block)
+    {
+        if (block.Name == W.p)
+        {
+            var mark = block.Element(W.pPr)?.Element(W.rPr);
+            return mark?.Element(W.del) is not null || mark?.Element(W.moveFrom) is not null;
+        }
+        if (block.Name == W.tbl)
+        {
+            var rows = block.Elements(W.tr).ToList();
+            return rows.Count > 0 && rows.All(r => r.Element(W.trPr)?.Element(W.del) is not null);
+        }
+        return false;
     }
 
     /// <summary>
@@ -4426,6 +4443,293 @@ public sealed class DocxSession : IDisposable
     }
 
     // ─── Tier B: structural ops ──────────────────────────────────────────
+
+    /// <summary>
+    /// Reorder one top-level body block relative to another. Paragraphs, headings,
+    /// list items, and whole tables are supported. A direct edit moves the existing
+    /// XML element; <see cref="TrackedChangeMode.RenderInline"/> emits a native named
+    /// paragraph move or a Word-native deleted/inserted table pair.
+    /// </summary>
+    public EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var sourceTarget = FindAnchor(sourceAnchorId);
+        if (sourceTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"source anchor not found: {sourceAnchorId}", sourceAnchorId);
+        var targetTarget = FindAnchor(targetAnchorId);
+        if (targetTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"target anchor not found: {targetAnchorId}", targetAnchorId);
+
+        if (sourceTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"MoveBlock requires a paragraph/heading/list/table source; got kind={sourceTarget.Anchor.Kind}",
+                sourceAnchorId);
+        if (targetTarget.Anchor.Kind is not ("p" or "h" or "li" or "tbl"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"MoveBlock requires a paragraph/heading/list/table target; got kind={targetTarget.Anchor.Kind}",
+                targetAnchorId);
+        if (sourceTarget.Anchor.Scope != targetTarget.Anchor.Scope)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "MoveBlock source and target must be in the same package part", sourceAnchorId);
+
+        var source = sourceTarget.Resolve(_doc!);
+        var target = targetTarget.Resolve(_doc!);
+        if (source is null || target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "source or target element resolved null", sourceAnchorId);
+        if (ReferenceEquals(source, target))
+            return new EditResult { Success = true };
+        if (!ReferenceEquals(source.Parent, target.Parent) || source.Parent is not { } parent)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "MoveBlock source and target must share a direct XML parent", sourceAnchorId);
+        if (!IsEditorBodyBlock(source, parent) || !IsEditorBodyBlock(target, parent))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "MoveBlock only supports top-level body blocks (including flattened body content controls)",
+                sourceAnchorId);
+
+        // A source already in the requested slot is a true no-op: do not consume undo.
+        if ((pos == Position.Before && ReferenceEquals(source.NextNode, target)) ||
+            (pos == Position.After && ReferenceEquals(target.NextNode, source)))
+            return new EditResult { Success = true };
+
+        if (source.Name == W.p && source.Element(W.pPr)?.Element(W.sectPr) is not null)
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "cannot move a paragraph that owns a section break", sourceAnchorId);
+
+        if (BlockMoveSafetyError(parent, source, target, pos) is { } safetyError)
+            return EditResult.Fail(EditErrorCode.InvalidPosition, safetyError, sourceAnchorId);
+
+        // Re-wrapping an existing revision can create illegal nested move markup. Direct
+        // mode can carry ordinary ins/del content safely, but an existing named move range
+        // is tied to its current document-order location and is intentionally immovable.
+        if (source.DescendantsAndSelf().Any(e =>
+                e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
+                e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd))
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "cannot move a block that is already part of a native move range", sourceAnchorId);
+        if (_trackedChanges == TrackedChangeMode.RenderInline &&
+            source.DescendantsAndSelf().Any(e =>
+                e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
+            return EditResult.Fail(EditErrorCode.InvalidPosition,
+                "cannot create a tracked move around a block that already contains revisions",
+                sourceAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (_trackedChanges != TrackedChangeMode.RenderInline)
+            {
+                source.Remove();
+                if (pos == Position.Before) target.AddBeforeSelf(source);
+                else target.AddAfterSelf(source);
+
+                InvalidateProjectionCache();
+                return new EditResult
+                {
+                    Success = true,
+                    Modified = new[] { sourceTarget.Anchor },
+                    Patch = PatchFor(sourceTarget),
+                };
+            }
+
+            var destination = new XElement(source);
+            foreach (var el in destination.DescendantsAndSelf())
+                el.Attributes(PtOpenXml.Unid).Remove();
+
+            var author = _revisionAuthor ?? "docxodus";
+            var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            if (source.Name == W.p)
+            {
+                var moveName = $"move{NextRevisionId()}";
+                MarkParagraphAsTrackedMove(source, from: true, moveName, author, date);
+                MarkParagraphAsTrackedMove(destination, from: false, moveName, author, date);
+            }
+            else
+            {
+                MarkTableRowsAsTrackedRevision(source, inserted: false, author, date);
+                MarkTableRowsAsTrackedRevision(destination, inserted: true, author, date);
+            }
+
+            UnidHelper.AssignToSelfAndDescendants(destination);
+            if (pos == Position.Before) target.AddBeforeSelf(destination);
+            else target.AddAfterSelf(destination);
+
+            var destinationUnid = (string)destination.Attribute(PtOpenXml.Unid)!;
+            var destinationAnchor = new Anchor(
+                $"{sourceTarget.Anchor.Kind}:{sourceTarget.Anchor.Scope}:{destinationUnid}",
+                sourceTarget.Anchor.Kind, sourceTarget.Anchor.Scope, destinationUnid);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { sourceTarget.Anchor },
+                Created = new[] { destinationAnchor },
+                Patch = PatchFor(sourceTarget),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, sourceAnchorId);
+        }
+    }
+
+    private static bool IsEditorBodyBlock(XElement block, XElement parent)
+    {
+        if (block.Name != W.p && block.Name != W.tbl) return false;
+        if (parent.Name == W.body) return true;
+        if (parent.Name != W.sdtContent) return false;
+        // The renderer flattens a body-level content control. A content control inside
+        // a table cell/text box is not one of the editor's top-level body units.
+        return parent.Ancestors(W.body).Any() &&
+               !parent.Ancestors(W.tc).Any() &&
+               !parent.Ancestors(W.txbxContent).Any();
+    }
+
+    /// <summary>Reject a move when it would change the membership/order of a cross-block
+    /// comment, bookmark, permission, or native-move range, or cross a section break.</summary>
+    private static string? BlockMoveSafetyError(
+        XElement parent, XElement source, XElement target, Position pos)
+    {
+        var blocks = parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).ToList();
+        int sourceIndex = blocks.IndexOf(source);
+        int targetIndex = blocks.IndexOf(target);
+        if (sourceIndex < 0 || targetIndex < 0) return "source or target is not a body render unit";
+
+        var reordered = blocks.ToList();
+        reordered.RemoveAt(sourceIndex);
+        int targetAfterRemoval = reordered.IndexOf(target);
+        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
+        reordered.Insert(insertAt, source);
+
+        int lo = Math.Min(sourceIndex, targetIndex);
+        int hi = Math.Max(sourceIndex, targetIndex);
+        if (blocks.Skip(lo).Take(hi - lo + 1)
+            .Any(e => e.Name == W.p && e.Element(W.pPr)?.Element(W.sectPr) is not null))
+            return "cannot move a block across a section-break paragraph";
+
+        var pairs = new (XName Start, XName End, string Label)[]
+        {
+            (W.commentRangeStart, W.commentRangeEnd, "comment"),
+            (W.bookmarkStart, W.bookmarkEnd, "bookmark"),
+            (W.permStart, W.permEnd, "permission"),
+            (W.moveFromRangeStart, W.moveFromRangeEnd, "move-source"),
+            (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
+        };
+
+        foreach (var (startName, endName, label) in pairs)
+        {
+            var starts = parent.Descendants(startName)
+                .GroupBy(e => (string?)e.Attribute(W.id) ?? "")
+                .ToDictionary(g => g.Key, g => g.First());
+            foreach (var end in parent.Descendants(endName))
+            {
+                var id = (string?)end.Attribute(W.id) ?? "";
+                if (!starts.TryGetValue(id, out var start)) continue;
+                var startBlock = TopLevelOwner(start, parent);
+                var endBlock = TopLevelOwner(end, parent);
+                if (startBlock is null || endBlock is null || ReferenceEquals(startBlock, endBlock))
+                    continue;
+
+                var before = RangeMembers(blocks, startBlock, endBlock);
+                var after = RangeMembers(reordered, startBlock, endBlock);
+                if (before is null || after is null || !before.SetEquals(after))
+                    return $"move would change or invert a cross-block {label} range";
+            }
+        }
+        return null;
+    }
+
+    private static XElement? TopLevelOwner(XElement marker, XElement parent) =>
+        marker.Ancestors().FirstOrDefault(e => ReferenceEquals(e.Parent, parent) &&
+            (e.Name == W.p || e.Name == W.tbl));
+
+    private static HashSet<XElement>? RangeMembers(
+        IReadOnlyList<XElement> order, XElement start, XElement end)
+    {
+        int a = -1;
+        int b = -1;
+        for (int i = 0; i < order.Count; i++)
+        {
+            if (ReferenceEquals(order[i], start)) a = i;
+            if (ReferenceEquals(order[i], end)) b = i;
+        }
+        if (a < 0 || b < a) return null;
+        return order.Skip(a).Take(b - a + 1).ToHashSet();
+    }
+
+    private void MarkParagraphAsTrackedMove(
+        XElement paragraph, bool from, string moveName, string author, string date)
+    {
+        EnsureTrackRevisionsEnabled();
+        var wrapperName = from ? W.moveFrom : W.moveTo;
+
+        // Keep hyperlink/SDT/field containers in place and revision-wrap their runs.
+        // This is the schema-safe shape (w:hyperlink > w:moveFrom|moveTo > w:r).
+        foreach (var run in paragraph.Descendants(W.r).ToList())
+        {
+            if (run.Ancestors().Any(e =>
+                    e.Name == W.ins || e.Name == W.del ||
+                    e.Name == W.moveFrom || e.Name == W.moveTo))
+                continue;
+            var envelope = CreateRevisionEnvelope(wrapperName, author, date);
+            run.ReplaceWith(envelope);
+            envelope.Add(run);
+        }
+
+        // Revise the paragraph mark as well as its runs. Without this mark, accepting
+        // the move leaves an empty source paragraph and rejecting it leaves an empty
+        // destination paragraph. RevisionOps associates the mark with the named range.
+        var pPr = paragraph.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            paragraph.AddFirst(pPr);
+        }
+        var rPr = pPr.Element(W.rPr);
+        if (rPr is null)
+        {
+            rPr = new XElement(W.rPr);
+            var sectPr = pPr.Element(W.sectPr);
+            var pPrChange = pPr.Element(W.pPrChange);
+            if (sectPr is not null) sectPr.AddBeforeSelf(rPr);
+            else if (pPrChange is not null) pPrChange.AddBeforeSelf(rPr);
+            else pPr.Add(rPr);
+        }
+        rPr.AddFirst(CreateRevisionEnvelope(wrapperName, author, date));
+
+        int rangeId = NextRevisionId();
+        var start = new XElement(from ? W.moveFromRangeStart : W.moveToRangeStart,
+            new XAttribute(W.id, rangeId),
+            new XAttribute(W.name, moveName),
+            new XAttribute(W.author, author),
+            new XAttribute(W.date, date));
+        var end = new XElement(from ? W.moveFromRangeEnd : W.moveToRangeEnd,
+            new XAttribute(W.id, rangeId));
+        pPr.AddAfterSelf(start);
+        paragraph.Add(end);
+    }
+
+    private void MarkTableRowsAsTrackedRevision(
+        XElement table, bool inserted, string author, string date)
+    {
+        EnsureTrackRevisionsEnabled();
+        foreach (var row in table.Descendants(W.tr))
+        {
+            var trPr = row.Element(W.trPr);
+            if (trPr is null)
+            {
+                trPr = new XElement(W.trPr);
+                row.AddFirst(trPr);
+            }
+            trPr.Add(CreateRevisionEnvelope(inserted ? W.ins : W.del, author, date));
+        }
+    }
 
     public EditResult InsertParagraph(string anchorId, Position pos, string markdownPayload)
     {

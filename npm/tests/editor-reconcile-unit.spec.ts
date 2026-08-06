@@ -32,6 +32,30 @@ test.describe("editor-reconcile unit diff", () => {
     expect(d.keep.size).toBe(2);
   });
 
+  test("exact-token reorder is a move, not a substitution", () => {
+    const d = diffUnits(U("a b c"), P("b c a"));
+    expect(d.moved).toEqual([{ oldIndex: 0, newIndex: 2 }]);
+    expect(d.substituted).toEqual([]);
+  });
+
+  test("backward exact-token reorder preserves the moved identity", () => {
+    const d = diffUnits(U("a b c d"), P("a d b c"));
+    expect(d.moved).toEqual([{ oldIndex: 3, newIndex: 1 }]);
+    expect(d.substituted).toEqual([]);
+  });
+
+  test("moving a list item requests remount so numbering can recalculate", () => {
+    const old = U("a b c");
+    const next: RenderUnit[] = [
+      { id: "li:body:b", kind: "li" },
+      { id: "li:body:c", kind: "li" },
+      { id: "li:body:a", kind: "li" },
+    ];
+    const d = diffUnits(old, next);
+    expect(d.moved).toEqual([{ oldIndex: 0, newIndex: 2 }]);
+    expect(needsRemount(d, next, ["li", "li", "li"])).toBe(true);
+  });
+
   test("duplicate unids treated positionally", () => {
     const d = diffUnits(U("a x x b"), P("a x b"));
     expect(d.removed.length).toBe(1);

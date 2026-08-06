@@ -61,6 +61,21 @@ block(s), insert/remove nodes, update the `unid → fullId` map, place the caret
 restored exactly), and round-trips through save. Insert-at-doc-start and block delete/reorder
 remain follow-ups (Enter-split + Backspace-merge cover the core authoring loop).
 
+### M2.8 — Block drag handles / reorder  · effort L · ○ **DESIGNED**
+**Problem:** blocks can be split, merged, inserted, and deleted, but the session has no atomic
+move primitive and the editor has no direct manipulation affordance for reordering them.
+**Plan:** add one undoable `DocxSession.MoveBlock(source, target, before|after)` operation,
+ripple it through the session transports, teach the ordered-unit reconciler to relocate an
+existing node, and add a floating (non-contenteditable) drag handle plus accessible move menu.
+Confirmed product scope is whole-table support, continuous view first, and native Word revisions
+when track changes is active. Paragraph-like blocks use named `moveFrom`/`moveTo` pairs; whole
+tables use Word-native row/content deletion plus insertion unless a desktop-Word fixture proves a
+conformant named whole-table move representation. This also requires revision-view-aware rendering
+and render plans. Pragmatic drag-and-drop core plus autoscroll is approved. Content controls and
+section breaks remain immovable; moves that would disrupt cross-block ranges are rejected. Full
+investigation and test matrix:
+[`editor_block_drag_handles.md`](editor_block_drag_handles.md).
+
 ### M2.7 — Latency pass: persistent render shell + reconcile on real documents  · effort M · ✅ **DONE**
 **Problem:** interactive ops were still visibly laggy. Two causes: (1) every single-block
 re-render re-opened the render shell from bytes — package open + styles/numbering parse +

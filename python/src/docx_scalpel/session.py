@@ -879,6 +879,24 @@ class DocxSession:
     def delete_block(self, anchor_id: str) -> EditResult:
         return EditResult._from_wire(self._call("delete_block", {"anchorId": anchor_id}))
 
+    def move_block(
+        self,
+        source_anchor_id: str,
+        target_anchor_id: str,
+        position: Position,
+    ) -> EditResult:
+        """Move one top-level paragraph/list/table block before or after another."""
+        return EditResult._from_wire(
+            self._call(
+                "move_block",
+                {
+                    "sourceAnchorId": source_anchor_id,
+                    "targetAnchorId": target_anchor_id,
+                    "position": position.value,
+                },
+            )
+        )
+
     def delete_range(self, from_anchor_id: str, to_anchor_id_exclusive: str) -> EditResult:
         return EditResult._from_wire(
             self._call(
