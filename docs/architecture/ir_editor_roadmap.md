@@ -7,8 +7,10 @@ foundation + MVP into a complete editor. Supersedes the scattered "Still Plan 2"
 Status (branch `feat/ir-editor-feasibility-poc`, PR #234): **foundation + MVP shipped and
 proven; M1 (rich in-block editing), M2 (structural editing), M5 + M5b (formatting controls:
 bold/italic/underline/strike/code, super/sub, alignment, indent, page break, paragraph style,
-undo/redo) done; runnable demo with a full ribbon at `npm/examples/editor.html` (`npm run
-demo`); Mlists (bullets/numbered) done — all 7 requested controls shipped.** M3 (worker
+undo/redo) done; the full ribbon now SHIPS as `mountRibbon` (`npm/src/ribbon.ts`) /
+`createRibbonEditor` (`docxodus/embed`), hosted by `npm/examples/editor.html` (`npm run
+demo`) and by all three GitHub Pages demo pages; Mlists (bullets/numbered) done — all 7
+requested controls shipped.** M3 (worker
 offload) / M4 (re-paginate-on-edit) are next.
 
 ## Architecture invariants (do not break)

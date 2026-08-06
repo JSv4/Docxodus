@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Docxodus — Word editor in your browser</title>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+  <meta name="description" content="The full Docxodus editor — ribbon, tables, footnotes, headers and lossless .docx save — running entirely in your browser via WebAssembly." />
+
+  <!--
+    The full-bleed editor. `index.html` is the landing page that explains the
+    project; this page is the product with nothing around it, which is also what
+    makes it the useful thing to open on a phone.
+
+    Everything here is framing. The surface itself — ribbon chrome, anchor rail,
+    table picker, loading overlay, and the density switch between the roomy and
+    compact layouts — ships in the npm package as `createRibbonEditor`, so this
+    page and the landing page cannot drift apart.
+
+    Query overrides (used by tests and local dev):
+      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.2.0
+      ?doc=<docx URL>                        default: local branded product guide
+      ?blank=1                               start from a new empty document
+  -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Docxodus — Word editor in your browser" />
+  <meta property="og:description" content="Open, edit and save a real .docx with no server. Runs on WebAssembly, entirely client-side." />
+  <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/app.html" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Docxodus — Word editor in your browser" />
+  <meta name="twitter:description" content="Open, edit and save a real .docx with no server." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+
+  <style>
+    html, body { height: 100%; }
+    /* 100dvh, not 100vh: on mobile browsers the URL bar collapses and 100vh leaves a
+       dead strip the surface can never scroll into. */
+    body { margin: 0; height: 100dvh; background: #dfe3ea; overscroll-behavior: none; }
+    #app { height: 100%; }
+
+    /* A single "back to the landing page" affordance, docked over the ribbon's own
+       title bar so it costs no vertical space on a phone. */
+    #home {
+      position: fixed;
+      z-index: 50;
+      right: max(8px, env(safe-area-inset-right));
+      top: 7px;
+      padding: 4px 10px;
+      border: 1px solid #d3dae4;
+      border-radius: 999px;
+      background: #f7f9fc;
+      color: #5d6975;
+      font: 600 11.5px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      text-decoration: none;
+    }
+    #home:hover { color: #101418; background: #fff; border-color: #b9c4d4; }
+    /* Reserve the pill's corner. The compact title bar scrolls horizontally and ends
+       with Undo/Redo, which a floating pill would otherwise sit on top of. */
+    #app .dxr-titlebar { padding-right: 84px; }
+    /* While the dark loading overlay is up, the light pill would float on nothing. */
+    body:has(.dxr[data-state="loading"]) #home,
+    body:has(.dxr[data-state="error"]) #home { display: none; }
+  </style>
+</head>
+<body>
+  <a id="home" href="./" title="Back to the Docxodus overview">About ↗</a>
+  <div id="app"></div>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const ENGINE = params.get("engine")
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js";
+    const DOC = params.get("doc") ?? "./docxodus-demo-guide.docx";
+    const BLANK = params.get("blank") === "1";
+
+    try {
+      const { createRibbonEditor } = await import(ENGINE);
+
+      // createRibbonEditor paints the chrome and its loading overlay first, then
+      // streams the runtime behind them — so it also owns the failure state from
+      // here on. Only the module import above can fail with nothing on screen.
+      window.__ribbon = await createRibbonEditor("#app", BLANK ? null : DOC, {
+        documentName: BLANK ? "untitled.docx" : "docxodus-demo-guide.docx",
+        // Bands are a Word-authoring feature rather than a first-30-seconds one; the
+        // Layout tab turns them on without reloading.
+        headerFooter: false,
+        loader: {
+          eyebrow: "Running locally in this tab",
+          meta: "DOCX → WASM → DOCX",
+        },
+      });
+    } catch (error) {
+      document.getElementById("app").innerHTML =
+        '<div style="display:grid;place-items:center;height:100%;padding:24px;text-align:center;'
+        + 'font:14px/1.6 system-ui,sans-serif;color:#33465b"><div><strong>The editor could not start.</strong>'
+        + '<p id="bootError" style="margin:8px 0 16px;color:#5d6975"></p>'
+        + '<button onclick="location.reload()" style="font:inherit;padding:8px 14px;border:1px solid #d3dae4;'
+        + 'border-radius:8px;background:#fff;cursor:pointer">Retry</button></div></div>';
+      document.getElementById("bootError").textContent = String(error).slice(0, 220);
+    }
+  </script>
+</body>
+</html>

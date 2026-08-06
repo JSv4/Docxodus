@@ -15,6 +15,9 @@
     section { background: #fff; border: 1px solid #d6dce4; border-radius: 8px; overflow: hidden; }
     section > h2 { font-size: 13px; margin: 0; padding: 10px 14px; background: #f6f8fb;
       border-bottom: 1px solid #e2e7ee; }
+    section.wide { grid-column: 1 / -1; }
+    /* The ribbon fills whatever box it is given and scrolls the document inside it. */
+    #ribbon { height: 70vh; }
     .pane { min-height: 320px; max-height: 70vh; overflow: auto; padding: 20px; }
     button, label.btn { font: inherit; font-size: 13px; padding: 5px 12px; border: 1px solid #c7cfda;
       border-radius: 5px; background: #f8fafc; cursor: pointer; }
@@ -33,25 +36,28 @@
       <div id="viewer" class="pane"></div></section>
     <section><h2>Editor — <code>createEditor(el, source)</code></h2>
       <div id="editor" class="pane"></div></section>
+    <section class="wide"><h2>Full surface — <code>createRibbonEditor(el, source)</code></h2>
+      <div id="ribbon"></div></section>
   </main>
 
   <!--
     This demo is served from the repo's test webroot, so it imports the embed
     bundle relatively. From a CDN the ONLY line that changes is the import:
 
-      import { createViewer, createEditor }
-        from "https://cdn.jsdelivr.net/npm/docxodus@9.1.1/dist/embed.bundle.js";
+      import { createViewer, createEditor, createRibbonEditor }
+        from "https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js";
 
     WASM assets auto-resolve from the wasm/ directory next to the bundle —
     no other configuration needed. Pin an exact version in production so the
     immutable CDN cache works for you, not against you.
   -->
   <script type="module">
-    import { createViewer, createEditor } from "./embed.bundle.js";
+    import { createViewer, createEditor, createRibbonEditor } from "./embed.bundle.js";
 
     const status = (t) => (document.getElementById("status").textContent = t);
     let editor = null;
     let viewer = null;
+    let ribbon = null;
 
     async function openDoc(source) {
       status("rendering…");
@@ -62,6 +68,10 @@
       editor?.close();
       document.getElementById("editor").innerHTML = "";
       editor = await createEditor("#editor", source);
+      ribbon?.destroy();
+      // An explicit idPrefix because this page already owns #editor and #viewer;
+      // without one the surface would detect the clash and generate its own.
+      ribbon = await createRibbonEditor("#ribbon", source, { idPrefix: "rib-" });
       document.getElementById("save").disabled = false;
       status(`ready in ${Math.round(performance.now() - t0)} ms — edit on the right, then Save`);
     }
@@ -83,8 +93,9 @@
     // Blank editor on load so the page is immediately interactive.
     try {
       editor = await createEditor("#editor");
+      ribbon = await createRibbonEditor("#ribbon", null, { idPrefix: "rib-" });
       document.getElementById("save").disabled = false;
-      status("ready — open a .docx, or type into the blank document on the right");
+      status("ready — open a .docx, or type into the blank documents below");
     } catch (err) { status(String(err)); }
   </script>
 </body>

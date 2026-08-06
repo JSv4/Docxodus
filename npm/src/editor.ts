@@ -958,6 +958,17 @@ export class DocxEditor {
     return this.container;
   }
 
+  /**
+   * The live `DocxSession` handle backing this editor — the model of record.
+   *
+   * Surfaced because chrome around the editor (the anchor rail) reports it as engine
+   * state, and reaching into the private field from a host page only worked because
+   * the bundle erases TypeScript's visibility.
+   */
+  get sessionHandle(): number {
+    return this.handle;
+  }
+
   // ─── internals ───────────────────────────────────────────────────────
 
   private assertOpen(): void {
