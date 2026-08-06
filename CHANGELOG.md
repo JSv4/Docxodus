@@ -22,6 +22,18 @@ All notable changes to this project will be documented in this file.
   the CRUD rules are documented in `docs/architecture/docx_mutation_api.md`.
 
 ### Fixed
+- **`WmlComparer.Compare` no longer hangs forever comparing a document containing a table against
+  one containing a text box.** The structural walk in `DoLcsAlgorithm` groups each side into adjacent
+  runs of Word / Row / Textbox and advances a counter per side, but every branch required one side to
+  be a `Word`. Two *different non-word* kinds facing each other — a row against a text box — therefore
+  matched no branch and advanced neither counter: a loop that allocated nothing and never terminated,
+  pegging one core with flat memory until the caller gave up. The left group of such a pair is now
+  retired as a deletion, restoring the invariant that makes the walk terminate at all (every branch
+  advances at least one counter) while leaving the right group free to pair with a later group of its
+  own kind. Found by fuzzing a 1,925-document corpus: 7 of 400 random pairs hung past 600 s, every one
+  of them mixing tables with text boxes; all now complete in milliseconds. The sibling
+  table-vs-paragraph walk is unaffected — its key space is only `Table`/`Para` and all four
+  combinations already advance. Coverage: `WmlComparerRowVersusTextboxTests`.
 - **Table row/column CRUD is now grid-aware instead of cell-index-aware.** `InsertTableRow`,
   `InsertTableColumn`, `DeleteTableColumn` and `SetColumnWidths` addressed cells by their position
   in `w:tr`, which silently corrupted any table containing a merge. They now resolve cells through

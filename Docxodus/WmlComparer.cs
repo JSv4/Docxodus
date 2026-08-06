@@ -7482,6 +7482,20 @@ namespace Docxodus
                             ++iRight;
                         }
 
+                        // Two different non-word kinds, a row against a text box. Every branch above
+                        // needs one side to be a word, so this pair advanced neither counter and the
+                        // walk spun forever. Retire the left one only: the right group may still pair
+                        // with a later group of its own kind.
+                        else
+                        {
+                            var deletedCorrelatedSequence = new CorrelatedSequence();
+                            deletedCorrelatedSequence.ComparisonUnitArray1 = leftGrouped[iLeft].ToArray();
+                            deletedCorrelatedSequence.ComparisonUnitArray2 = null;
+                            deletedCorrelatedSequence.CorrelationStatus = CorrelationStatus.Deleted;
+                            newListOfCorrelatedSequence.Add(deletedCorrelatedSequence);
+                            ++iLeft;
+                        }
+
                         if (iLeft == leftGrouped.Length && iRight == rightGrouped.Length)
                             return newListOfCorrelatedSequence;
 
