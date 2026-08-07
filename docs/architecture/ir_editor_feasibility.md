@@ -512,6 +512,28 @@ adversarial than a synthesized one:
   with the new `DocxSession.EnsureHeaderFooterVisible`, which the band calls on kind selection. See
   `docs/ooxml_corner_cases.md`.
 
+## 7b. Page geometry (the document's width, the view's zoom)
+
+The mounted document is laid out at the width its `w:sectPr` defines, not at the host's. The
+converter stamps that geometry on every section wrapper in **every** render mode — it is a
+property of the document, and withholding it outside `PaginationMode.Paginated` is what left the
+continuous view sizing its text column from the device.
+
+| Unit | Owns |
+|------|------|
+| `npm/src/page-geometry.ts` | Reading the stamped geometry (`parseSectionDimensions`), pt↔px, `fitScale`, `applyZoom` (CSS `zoom`, `transform` fallback). Consumed by both views. |
+| `npm/src/viewport.ts` — `DocumentViewport` | Stamping section wrappers with column + margins, computing the fit zoom against the container, re-computing on `ResizeObserver`, publishing `--docx-sheet-width` for chrome docked outside the sheet. |
+| `editor.ts` `mountHtml` / `mountPaginated` | Handing the viewport the mounted root. Continuous mode asks for section geometry; paginated mode only for the fit zoom, since `pagination.ts` already builds page-sized boxes. |
+
+`mountHtml` now always wraps the body in `.docx-body-flow` — previously only when header/footer
+bands were docked. The sheet and the scrolling host are different boxes (one is zoomed, the other
+is not), so the editor needs both; making the wrapper unconditional also collapsed two mount
+shapes into one.
+
+A window narrower than the page is zoomed, never reflowed — the invariant a word processor holds
+and the reason the same document breaks its lines identically on a phone, a desktop, and in the
+editor's own page view. `columnWidth: "fluid"` opts out for embeds that want ordinary web reflow.
+
 ## 8. Risks & unknowns the PoC will settle
 
 - **Single-block faithful render out of whole-doc context** (the big one —

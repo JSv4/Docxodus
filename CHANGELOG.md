@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The editor's continuous view lays the document out at its own page width, and zooms to fit a
+  narrow window instead of letting content run off the page.** Enlarging a block's font size on a
+  phone pushed text and tables past the sheet, where the window clipped them. Three layers were
+  missing Word's actual layout model, and all three are now supplied:
+  - **Page geometry is emitted in every render mode.** `WmlToHtmlConverter` stamped a section's
+    page setup (`data-page-width`/`data-content-width`/margins) only when `RenderPagination` was
+    `Paginated`. A section's page setup is a property of the DOCUMENT, so it is now stamped
+    always — the continuous view had no way to know the text column its line breaking was
+    authored against, and sized the column from the device instead.
+  - **Word's table layout is mapped to the CSS one that behaves the same way.** A table with
+    `w:tblLayout` fixed (or a `dxa` width plus a `w:tblGrid`) now renders `table-layout: fixed`
+    with a `<colgroup>` carrying the grid's column widths, so content wraps INSIDE a column
+    instead of widening it. Every table also gets `max-width: 100%` and cells
+    `overflow-wrap: anywhere`, because a Word table never exceeds the text column while CSS's
+    auto layout grows one to fit its widest unbreakable word.
+  - **A word wider than its column breaks rather than overflows** (`overflow-wrap: break-word`
+    in the converter's new always-emitted document-layout stylesheet), as Word and LibreOffice
+    do and CSS's `overflow-wrap: normal` default does not.
+
+### Added
+- **`DocumentViewport` (npm `docxodus`) — the page-view zoom the editor was missing.** It stamps
+  each section wrapper with its `w:sectPr` geometry and applies a fit-to-width zoom, so a phone
+  shows a whole smaller page rather than a narrower one that breaks its lines somewhere Word
+  never would. New `DocxEditorOptions.fitToWidth` (default true) and `columnWidth`
+  (`"section"` default | `"fluid"` for the previous host-width behavior), both also accepted by
+  `mountRibbon`/`createRibbonEditor`; `DocxEditor.zoom` reports the applied scale. The shared
+  geometry primitives live in the new `page-geometry` module (`parseSectionDimensions`,
+  `fitScale`, `ptToPx`/`pxToPt`), which `pagination.ts` now also consumes instead of its own
+  private copies.
+
+### Changed
+- The editor's continuous view renders a sheet exactly one page wide (`.docx-body-flow`, always
+  present now — previously created only when header/footer bands were docked) with the
+  document's own `w:sectPr` margins as its gutters, replacing the fixed 920px/72px chrome
+  padding. Hosts that want the old reflow-to-the-container behavior can pass
+  `columnWidth: "fluid"`.
+
 ## [9.4.0] - 2026-08-07
 
 ### Added

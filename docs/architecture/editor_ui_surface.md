@@ -227,6 +227,40 @@ above shows `Last Updated October 2025 i` on page 1 of a section formatted `lowe
 
 ---
 
+## 8a. Page geometry: the column is the document's, the zoom is the view's
+
+Both views lay the document out at ONE width — the text column its `w:sectPr` defines (page size
+minus margins), which the converter stamps on every section wrapper (`data-content-width`,
+`data-page-width`, the four margins) in **every** render mode. `DocumentViewport`
+(`npm/src/viewport.ts`) applies it: each section wrapper gets the authored column plus the
+authored margins as gutters, so `.docx-body-flow` measures exactly one page wide and *is* the
+sheet the chrome paints.
+
+A window narrower than that page is handled the way a word processor handles it — by zooming the
+page to fit, never by reflowing the column:
+
+| | continuous | paginated |
+|---|---|---|
+| Column width | section's `contentWidth` (pt) | page boxes, already page-sized by `pagination.ts` |
+| Fit | zoom on `.docx-body-flow` | zoom on `#pagination-container` |
+| Recomputed | `ResizeObserver` on the editor container | same |
+
+`DocxEditor.zoom` reports the applied scale, and the viewport publishes the page's on-screen
+width as `--docx-sheet-width` so chrome docked *outside* the zoomed sheet — the header/footer
+bands — lines up with it at any zoom. `fitToWidth: false` opts out (an oversized page then
+overflows and the surface scrolls); `columnWidth: "fluid"` restores the pre-geometry behavior of
+sizing the column from the host.
+
+Why it matters beyond aesthetics: with a device-sized column, line breaking differed on every
+screen and matched neither Word nor the editor's own page view, and content the document sizes in
+absolute units — a full-width table above all — could not fit at all. A table box never shrinks
+below its content's minimum, so it overflowed the sheet and was clipped by the window; enlarging a
+run's font size made that minimum grow, so the damage peaked exactly while the user was editing.
+The converter's side of the same fix (Word's table layout and word-breaking rules, which CSS's
+defaults invert) is in `docs/ooxml_corner_cases.md`.
+
+---
+
 ## 9. What operations cost
 
 Measured on a real document (`HC031-Complicated-Document.docx`, Chromium, WASM, warm) by
@@ -359,8 +393,13 @@ embed inside a wide desktop page is narrow, and a viewport media query gets that
 | Editing hint | shown | hidden |
 | Title bar | brand + doc name + status | brand + doc name, status dropped |
 | Table picker | popover under its button | docked to the bottom edge, within thumb reach |
-| Sheet padding | 56 × 72 px | 22 × 18 px |
+| Sheet padding | 56 px vertical | 22 px vertical (gutters come from `w:sectPr`, not from chrome) |
 | Touch targets | 30 px | 40 px on coarse pointers |
+
+**Compact trims the chrome, never the page.** The document's text column is the width its
+`w:sectPr` defines at every density; a window too narrow for it is handled by the viewport's
+fit-to-width zoom (§8a), not by reflowing the column. A phone therefore shows a whole smaller
+page rather than a narrower one whose lines break where Word's never would.
 
 **No command is removed in compact** — the strip scrolls instead. That is the one rule the previous
 hand-rolled mini toolbar broke, and the reason the compact player kept falling behind the editor.

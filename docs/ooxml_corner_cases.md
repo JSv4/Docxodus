@@ -1010,6 +1010,85 @@ saved package.
 
 ---
 
+## Layout: Word's line breaking and table sizing have no matching CSS default
+
+### The behavior
+
+Two of Word's layout invariants are the OPPOSITE of what CSS does by default, so an HTML
+rendering of a DOCX gets them wrong unless the converter says otherwise.
+
+1. **A word wider than its column is broken, not overflowed.** Word and LibreOffice put as much
+   of an over-long word on the line as fits and break the rest. CSS's initial
+   `overflow-wrap: normal` never breaks inside a word, so it runs past the margin instead.
+
+2. **A table never exceeds the text column.** Word's table layout — fixed or AutoFit — keeps the
+   table inside the column, narrowing columns when it must. CSS's `table-layout: auto` does the
+   reverse: a cell's widest unbreakable word is a min-content floor, and the table is GROWN until
+   that floor is satisfied, container be damned. A table box is not shrinkable below it.
+
+The two compound. Enlarging a run inside a fixed-width cell raises the cell's min-content, which
+widens the table, which overflows the page — the visible symptom being document text painted
+outside the sheet and clipped by the window.
+
+### Minimal reproducer
+
+```xml
+<w:tbl>
+  <w:tblPr>
+    <w:tblW w:w="9936" w:type="dxa"/>   <!-- 496.8pt: a full-width US Letter table -->
+  </w:tblPr>
+  <w:tblGrid><w:gridCol w:w="9936"/></w:tblGrid>
+  <w:tr><w:tc><w:p><w:r>
+    <w:rPr><w:sz w:val="132"/></w:rPr>   <!-- 66pt -->
+    <w:t>Edit this document.</w:t>
+  </w:r></w:p></w:tc></w:tr>
+</w:tbl>
+```
+
+Rendered into a 354pt-wide container (a phone):
+
+| Renderer | Result |
+|----------|--------|
+| Word | Table at the text column width; "document." breaks or wraps inside it |
+| LibreOffice | Same; the page is zoomed to fit the window, never reflowed narrower |
+| Docxodus (before) | `<table>` grown to ~462pt by the cell's min-content; text clipped by the window |
+| Docxodus (after) | Table at the column width, word wrapped, page zoomed to fit |
+
+### Analysis
+
+CSS has no single property for "lay out like a word processor". The behaviors have to be
+assembled:
+
+- `overflow-wrap: break-word` gives Word's line breaking, but deliberately does NOT change
+  intrinsic sizing — which is why it alone does not stop the table from growing. (Chrome's UA
+  stylesheet sets it on `[contenteditable]`, which is why an editable paragraph appears to break
+  correctly while the table around it still overflows.)
+- `overflow-wrap: anywhere` DOES lower min-content, so it is the right rule for table cells.
+- `table-layout: fixed` (with the column widths in a `colgroup`) is the analogue of Word's
+  `w:tblLayout` fixed: authored widths become binding and content wraps inside them.
+- `max-width: 100%` enforces "a table never exceeds the text column" for the AutoFit case.
+
+None of it helps if the container is the wrong width to begin with: the text column must come
+from `w:sectPr`, and a window narrower than the page must ZOOM, the way every word processor
+does, rather than reflow.
+
+### Relevant code
+
+`Docxodus/WmlToHtmlConverter.cs` — `GenerateDocumentLayoutCss` (always emitted, ahead of the
+caller's `GeneralCss` so a consumer can still override), `IsFixedLayoutTable`/`CreateColGroup`
+(`ProcessTable`), and `CreateSectionDivs`, which stamps section geometry in every render mode
+rather than only under `PaginationMode.Paginated`. `npm/src/page-geometry.ts` reads that geometry;
+`npm/src/viewport.ts` (`DocumentViewport`) applies the column width and the fit-to-width zoom.
+
+### Tests
+
+`Docxodus.Tests/HtmlConverterTests.cs` — `HC056` (layout CSS always emitted), `HC057` (section
+geometry outside Paginated mode), `HC058`/`HC059` (fixed vs AutoFit table layout);
+`npm/tests/editor-page-geometry.spec.ts` — the end-to-end assertion that a 66pt heading on a
+390px viewport leaves nothing overflowing the sheet.
+
+---
+
 ## Package Output
 
 ### Misleading Deflate Hints Cause Compression Loss

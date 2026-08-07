@@ -4108,6 +4108,130 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Document Layout Tests
+
+        /// <summary>
+        /// Builds a one-paragraph US Letter document, optionally holding a table, so the layout
+        /// tests can assert on the converter's geometry and table-layout output.
+        /// </summary>
+        private static string ConvertLayoutFixture(
+            PaginationMode pagination = PaginationMode.None,
+            DocumentFormat.OpenXml.Wordprocessing.Table table = null)
+        {
+            using var ms = new MemoryStream();
+            using var wDoc = WordprocessingDocument.Create(
+                ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document);
+            var mainPart = wDoc.AddMainDocumentPart();
+
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles();
+            stylesPart.Styles.Save();
+
+            var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings();
+            settingsPart.Settings.Save();
+
+            var body = new Body();
+            if (table != null)
+                body.AppendChild(table);
+            body.AppendChild(new Paragraph(new Run(new Text("Test content"))));
+            body.AppendChild(new SectionProperties(
+                new PageSize { Width = 12240, Height = 15840 },
+                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }));
+
+            mainPart.Document = new Document(body);
+            mainPart.Document.Save();
+
+            var settings = new WmlToHtmlConverterSettings { RenderPagination = pagination };
+            return WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+        }
+
+        /// <summary>
+        /// A word wider than its column must break rather than overflow, and a table must never
+        /// exceed the text column. CSS's defaults do the opposite of Word on both counts, so the
+        /// converter emits the rules that restore Word's behavior in EVERY render mode.
+        /// </summary>
+        [Fact]
+        public void HC056_DocumentLayoutCss_IsAlwaysEmitted()
+        {
+            var htmlString = ConvertLayoutFixture();
+
+            Assert.Contains("overflow-wrap: break-word;", htmlString);
+            Assert.Contains("max-width: 100%;", htmlString);
+            Assert.Contains("overflow-wrap: anywhere;", htmlString);
+        }
+
+        /// <summary>
+        /// A section's page setup is a property of the DOCUMENT, so it is stamped on the section
+        /// wrapper whether or not the caller asked for pagination — a continuous renderer needs
+        /// the same text-column width a paginated one does. It used to be Paginated-only, which
+        /// left continuous views sizing their column from the device.
+        /// </summary>
+        [Fact]
+        public void HC057_SectionGeometry_StampedInContinuousMode()
+        {
+            var htmlString = ConvertLayoutFixture();
+
+            Assert.Contains("data-section-index=\"0\"", htmlString);
+            Assert.Contains("data-page-width=\"612.0\"", htmlString);
+            // 8.5in - 2 x 1in of margin = 6.5in = 468pt.
+            Assert.Contains("data-content-width=\"468.0\"", htmlString);
+            Assert.Contains("data-margin-left=\"72.0\"", htmlString);
+        }
+
+        /// <summary>
+        /// Word's fixed table layout makes the authored column widths binding: content wraps
+        /// inside a column instead of widening it. Map it to CSS's fixed layout, with the grid
+        /// (not the first row) supplying the widths, exactly as Word records them.
+        /// </summary>
+        [Fact]
+        public void HC058_FixedLayoutTable_EmitsTableLayoutAndColGroup()
+        {
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table(
+                new TableProperties(
+                    new TableWidth { Width = "9360", Type = TableWidthUnitValues.Dxa },
+                    new TableLayout { Type = TableLayoutValues.Fixed }),
+                new TableGrid(
+                    new GridColumn { Width = "3120" },
+                    new GridColumn { Width = "6240" }),
+                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("a")))),
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("b"))))));
+
+            var htmlString = ConvertLayoutFixture(table: table);
+
+            Assert.Contains("table-layout: fixed", htmlString);
+            Assert.Contains("<colgroup>", htmlString);
+            Assert.Contains("width: 156pt;", htmlString);
+            Assert.Contains("width: 312pt;", htmlString);
+        }
+
+        /// <summary>
+        /// An AutoFit table keeps CSS's auto layout — the grid still ships as a colgroup, since
+        /// auto layout treats those widths as preferences rather than as binding.
+        /// </summary>
+        [Fact]
+        public void HC059_AutoFitTable_KeepsAutoLayout()
+        {
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table(
+                new TableProperties(
+                    new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto },
+                    new TableLayout { Type = TableLayoutValues.Autofit }),
+                new TableGrid(
+                    new GridColumn { Width = "3120" },
+                    new GridColumn { Width = "6240" }),
+                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("a")))),
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("b"))))));
+
+            var htmlString = ConvertLayoutFixture(table: table);
+
+            Assert.DoesNotContain("table-layout: fixed", htmlString);
+            Assert.Contains("<colgroup>", htmlString);
+        }
+
+        #endregion
     }
 }
 

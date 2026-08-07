@@ -160,7 +160,10 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(res.bandOutsideBody).toBe(true);
   });
 
-  test('renders no bands and no body wrapper when the option is omitted (default off)', async ({
+  // The body wrapper is no longer conditional: `.docx-body-flow` is the sheet the viewport gives
+  // page geometry to and zooms, so every mount has one. What the option still governs is the
+  // BANDS — which is what "default off" has to mean now.
+  test('renders no bands when the option is omitted (default off)', async ({
     page,
   }) => {
     const res = await page.evaluate(() => {
@@ -178,7 +181,7 @@ test.describe('DocxEditor — header/footer region', () => {
       return out;
     });
     expect(res.bands).toBe(0);
-    expect(res.wrappers).toBe(0);
+    expect(res.wrappers).toBe(1);
   });
 
   test('typing in the header band commits and survives save + reopen', async ({ page }) => {

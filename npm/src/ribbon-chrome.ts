@@ -314,14 +314,7 @@ export const RIBBON_CSS = `
    SHOULD win.
    (No backticks in this file's comments: the stylesheet is a template literal.) */
 .dxr-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
-.dxr[data-chrome] .dxr-surface { max-width: 920px; margin: 26px auto; padding: 0 16px 96px; }
-.dxr-surface[data-view="continuous"] > * { background: var(--dxr-sheet); }
-.dxr[data-chrome] .dxr-surface[data-view="continuous"] {
-  padding: 56px 72px;
-  border-radius: 3px;
-  background: var(--dxr-sheet);
-  box-shadow: 0 1px 3px rgba(16, 20, 24, .14), 0 8px 24px rgba(16, 20, 24, .05);
-}
+.dxr[data-chrome] .dxr-surface { margin: 26px auto; padding: 0 16px 96px; }
 .dxr-surface [contenteditable="true"]:focus {
   outline: 2px solid var(--dxr-accent);
   outline-offset: 2px;
@@ -333,7 +326,10 @@ export const RIBBON_CSS = `
    so they dock as their own regions. Styled from the same tokens as the ribbon
    so the surface reads as one instrument rather than two apps. */
 .dxr-surface .docx-hf-band {
-  margin: 0 0 14px;
+  /* Docked outside the zoomed sheet, so it takes the page's on-screen width from the
+     custom property the viewport publishes rather than stretching to the whole surface. */
+  width: min(100%, var(--docx-sheet-width, 100%));
+  margin: 0 auto 14px;
   padding: 9px 72px 13px;
   border: 1px solid var(--dxr-rule);
   border-left: 2px solid #c2ccd9;
@@ -341,7 +337,7 @@ export const RIBBON_CSS = `
   background: var(--dxr-sheet);
 }
 .dxr-surface .docx-hf-band + .docx-body-flow { margin-top: 0; }
-.dxr-surface .docx-hf-band[data-hf-band="footer"] { margin: 14px 0 0; }
+.dxr-surface .docx-hf-band[data-hf-band="footer"] { margin: 14px auto 0; }
 .dxr-surface .docx-hf-chrome {
   display: flex;
   gap: 8px;
@@ -396,13 +392,15 @@ export const RIBBON_CSS = `
   text-transform: none;
 }
 .dxr-surface .docx-hf-band[data-hf-inherited] { border-style: dashed; }
-.dxr[data-chrome] .dxr-surface[data-view="continuous"]:has(.docx-body-flow) {
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-}
+/* The sheet IS the page. The editor's viewport sizes .docx-body-flow to the section's page
+   width and its section wrappers to the authored text column, so the horizontal gutters here
+   are the document's own w:sectPr margins, not a padding this chrome invents; only the
+   vertical breathing room is ours. Centering is left to margin:auto so a page the viewport
+   has zoomed to fit stays centered at its scaled width. */
 .dxr[data-chrome] .dxr-surface[data-view="continuous"] .docx-body-flow {
-  padding: 56px 72px;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 56px 0;
   border-radius: 3px;
   background: var(--dxr-sheet);
   box-shadow: 0 1px 3px rgba(16, 20, 24, .14), 0 8px 24px rgba(16, 20, 24, .05);
@@ -481,9 +479,11 @@ export const RIBBON_CSS = `
 .dxr[data-chrome="compact"] .dxr-note { display: none; }
 .dxr[data-chrome="compact"] .dxr-rail { display: none; }
 .dxr[data-chrome="compact"] .dxr-hint { display: none; }
+/* Compact trims the chrome around the page, never the page: the document's own column width
+   is what the viewport's fit-to-width zoom scales, so a phone shows a whole smaller page
+   instead of a narrower one that breaks its lines somewhere Word never would. */
 .dxr[data-chrome="compact"] .dxr-surface { margin: 12px auto; padding: 0 10px 64px; }
-.dxr[data-chrome="compact"] .dxr-surface[data-view="continuous"] { padding: 22px 18px; }
-.dxr[data-chrome="compact"] .dxr-surface[data-view="continuous"] .docx-body-flow { padding: 22px 18px; }
+.dxr[data-chrome="compact"] .dxr-surface[data-view="continuous"] .docx-body-flow { padding: 22px 0; }
 .dxr[data-chrome="compact"] .dxr-surface .docx-hf-band { padding: 9px 18px 13px; }
 .dxr[data-chrome="compact"] .dxr-surface .docx-hf-chrome,
 .dxr[data-chrome="compact"] .dxr-surface .docx-hf-warning { margin-left: 0; }
