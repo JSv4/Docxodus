@@ -70,13 +70,14 @@ cites are the final document's.
 
 Two engines ship, and they are not peers going forward:
 
-- **`DocxDiff`** — structure-aware, anchor-addressed, diff-as-data. This is where all active
+- **`DocxDiff`** — structure-aware, anchor-addressed, diff-as-data, and **the default** on every
+  surface that doesn't explicitly pick an engine (CLI, WASM, npm). This is where all active
   development happens: N-way consolidate, header/footer diffing, block-format-change tracking, and
   everything else new lands here first.
-- **`WmlComparer`** — the incumbent engine, still the default while `DocxDiff` completes Word
-  manual-verification and burn-in. **`WmlComparer` will not be enhanced going forward** — no new
-  capabilities, ever. Treat it as legacy: fine to keep using today, but new integrations should
-  target `DocxDiff`.
+- **`WmlComparer`** — the older engine, kept available via an explicit `ComparisonEngine.WmlComparer`
+  selector (wire value `0`) for callers that need its historical behavior. **`WmlComparer` will not
+  be enhanced going forward** — no new capabilities, ever. Treat it as legacy: fine to keep using
+  today, but new integrations should target `DocxDiff`.
 
 See [`docs/architecture/ir_diff_engine.md`](docs/architecture/ir_diff_engine.md).
 
