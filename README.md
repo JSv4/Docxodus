@@ -68,7 +68,17 @@ cites are the final document's.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
   the way `WmlComparer` never did.
 
-Two engines ship: the incumbent `WmlComparer` and the newer structure-aware `DocxDiff`.
+Two engines ship, and they are not peers going forward:
+
+- **`DocxDiff`** — structure-aware, anchor-addressed, diff-as-data, and **the default** on every
+  surface that doesn't explicitly pick an engine (CLI, WASM, npm). This is where all active
+  development happens: N-way consolidate, header/footer diffing, block-format-change tracking, and
+  everything else new lands here first.
+- **`WmlComparer`** — the older engine, kept available via an explicit `ComparisonEngine.WmlComparer`
+  selector (wire value `0`) for callers that need its historical behavior. **`WmlComparer` will not
+  be enhanced going forward** — no new capabilities, ever. Treat it as legacy: fine to keep using
+  today, but new integrations should target `DocxDiff`.
+
 See [`docs/architecture/ir_diff_engine.md`](docs/architecture/ir_diff_engine.md).
 
 ---

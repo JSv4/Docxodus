@@ -156,9 +156,9 @@ public class DocxDiffStrictOoxmlTests
         Assert.Equal(new List<string> { "Alpha bravo charlie.", "Tail." }, BodyTexts(rejected));
     }
 
-    // The legacy engine remains the default behind DocxCompare / WASM / npm. It therefore needs
-    // the same Strict-OOXML open normalization as the opt-in IR engine; otherwise public callers
-    // can only compare a Strict input by knowing to select DocxDiff.
+    // The legacy engine stays reachable behind DocxCompare / WASM / npm via an explicit selector.
+    // It therefore needs the same Strict-OOXML open normalization as the default IR engine;
+    // otherwise public callers can only compare a Strict input by knowing to select DocxDiff.
     [Fact]
     public void Compare_WmlComparer_StrictLeft_TransitionalRight_RoundTrips()
     {
