@@ -16,14 +16,16 @@ namespace Docxodus;
 /// (<c>IrReader → IrEditScriptBuilder → IrMarkupRenderer / IrRevisionRenderer / IrEditScriptJson</c>).
 /// </summary>
 /// <remarks>
-/// <para><b>Relationship to <see cref="WmlComparer"/>.</b> <see cref="WmlComparer"/> remains the
-/// default, blessed comparison API. <see cref="DocxDiff"/> is the NEW engine: it is built on an
-/// intermediate document representation (IR) with anchor-addressed blocks, so its revisions carry
-/// stable anchors (<see cref="DocxDiffRevision.LeftAnchor"/>/<see cref="DocxDiffRevision.RightAnchor"/>)
-/// and it can emit its edit script as data (<see cref="GetEditScriptJson"/>) — neither of which
-/// <see cref="WmlComparer"/> offers. It is shipped as a <b>production-candidate</b> pending the Word
-/// manual-verification checklist and burn-in; prefer <see cref="WmlComparer"/> for production redlines
-/// until that swap is ratified (decision D4). See <c>docs/architecture/ir_diff_engine.md</c>.</para>
+/// <para><b>Relationship to <see cref="WmlComparer"/>.</b> <see cref="DocxDiff"/> is the default
+/// comparison engine (since v8.0.0) on every surface that doesn't explicitly select one — CLI, WASM,
+/// and npm all route an omitted engine selector here. It is built on an intermediate document
+/// representation (IR) with anchor-addressed blocks, so its revisions carry stable anchors
+/// (<see cref="DocxDiffRevision.LeftAnchor"/>/<see cref="DocxDiffRevision.RightAnchor"/>) and it can
+/// emit its edit script as data (<see cref="GetEditScriptJson"/>) — neither of which
+/// <see cref="WmlComparer"/> offers. <see cref="WmlComparer"/> is the older engine, retained via an
+/// explicit <see cref="ComparisonEngine.WmlComparer"/> selector (wire value 0) for callers that need
+/// its historical behavior; it is feature-frozen and will not gain new capabilities. See
+/// <c>docs/architecture/ir_diff_engine.md</c>.</para>
 ///
 /// <para><b>Multi-author / consolidate-forward stance.</b> Nothing here is static or process-global:
 /// the author stamped on revisions flows per call via <see cref="DocxDiffSettings.AuthorForRevisions"/>,

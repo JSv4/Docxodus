@@ -143,8 +143,8 @@ public class ZipUnixPermissionFixerTests
     [Fact]
     public void DS350_WmlComparerCompareOutput_HasNonZeroUnixPermissions()
     {
-        // WmlComparer.Compare (the default/blessed comparison engine, per CLAUDE.md) manages its own
-        // open/dispose/ToArray() pipeline independent of both DocxSession and
+        // WmlComparer.Compare (the legacy comparison engine, still the most-used save path) manages
+        // its own open/dispose/ToArray() pipeline independent of both DocxSession and
         // OpenXmlMemoryStreamDocument. Its dispose-based pattern happens not to reproduce #302 on the
         // currently-targeted SDK, but had no code-level defense the way the other two save paths now
         // do — this closes that gap and guards against a future SDK behavior change regressing it

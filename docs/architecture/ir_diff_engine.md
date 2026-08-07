@@ -1,8 +1,8 @@
 # IR Diff Engine
 
-> **Status:** Public surface shipped (M2.5). The engine ships as `DocxDiff` (`Docxodus/DocxDiff.cs`) — a **production-candidate**, NOT yet the blessed default. `WmlComparer` remains the default comparison API. The IR engine becomes the default only after the Word manual-verification checklist clears and a burn-in period (decision **D4**, still open). See the decision log in `docs/superpowers/specs/2026-06-11-ir-diff-layout-program-plan.md`.
+> **Status:** Public surface shipped (M2.5). `DocxDiff` (`Docxodus/DocxDiff.cs`) is **the default comparison engine as of v8.0.0** (2026-07-29) — decision D4 is resolved. `WmlComparer` (`Docxodus/WmlComparer.cs`) is the older engine: still available, but feature-frozen — it will not gain new capabilities going forward. See `CHANGELOG.md` under `[8.0.0]` for the flip itself.
 >
-> **Engine selector (M-B):** a shared `ComparisonEngine` selector (`WmlComparer = 0` default, `DocxDiff = 1`) now lets a caller pick the engine on the CLI (`redline --engine=`), WASM, and npm surfaces, routed through the single `DocxCompare.Compare` dispatch owner (`Docxodus/DocxCompare.cs`). It is **seeded to `WmlComparer`** — the default is deliberately NOT flipped; the selector is the seam D4 flips in one line.
+> **Engine selector (M-B):** a shared `ComparisonEngine` selector (`WmlComparer = 0`, `DocxDiff = 1`) lets a caller pick the engine on the CLI (`redline --engine=`), WASM, and npm surfaces, routed through the single `DocxCompare.Compare` dispatch owner (`Docxodus/DocxCompare.cs`). `WmlComparer` keeps wire value `0` for backward compatibility, but an **omitted** selector now resolves to `DocxDiff` on every surface (CLI, WASM, npm/worker) — `WmlComparer` requires an explicit selector.
 
 The IR diff engine is a structure-aware DOCX comparison engine built on Docxodus' intermediate document representation (IR). It is the write-side analogue of the read-only IR pipeline that backs the markdown projection: it reads two documents into anchor-addressed IR snapshots, computes an **edit script** between them, and renders that script three ways — native tracked-changes markup, a consumer revision list, or the script itself as JSON (diff-as-data).
 
@@ -334,7 +334,7 @@ One before-paragraph whose content migrates across N after-paragraphs (the user 
 
 | | `WmlComparer` | `DocxDiff` (IR engine) |
 |---|---|---|
-| Status | Default / blessed | Production-candidate (D4 open) |
+| Status | Legacy, feature-frozen (kept via explicit selector) | **Default** (since v8.0.0) |
 | Comparison substrate | Atom streams | Modeled IR (blocks/runs/format records) |
 | Revisions | `WmlComparerRevision` (OOXML members, no anchors) | `DocxDiffRevision` (anchor-addressed; no OOXML members) |
 | Move markup | `GetRevisions`-only post-process; **native `w:moveFrom`/`w:moveTo` IS produced** by the IR markup renderer | native `w:moveFrom`/`w:moveTo` |
