@@ -253,6 +253,47 @@ render plan missed the sdt's content blocks, the plan/DOM diff read as 100 % chu
 structural op silently fell back to the multi-second full remount. `ListBlocks` now flattens
 `w:sdtContent` exactly as the renderer does, so the diff actually engages.
 
+### The move surface
+
+Block drag/reorder has its own instrument, `npm/tests/editor-move-latency-bench.spec.ts`, run
+against `TestFiles/NVCA-Model-COI.docx` — 234 body blocks, **392 bookmarks**, 94 footnotes, 3
+section breaks. The fixture is chosen, not incidental: the move guards are driven by cross-block
+ranges and section breaks, and HC031's six bookmarks cannot exercise them at all.
+
+| Operation | Cost | Before the 2026-08 move pass | Why |
+|-----------|------|------------------------------|-----|
+| Hover (pointer crosses a block) | ~8 ms | ~620 ms | Hover no longer asks the engine anything |
+| Drag start / `ValidMoveTargets` | ~20–30 ms | ~4.3 s | One precomputed context per sweep, not per candidate |
+| Move menu open | ~12 ms | ~4.4 s | Same query, plus memoization |
+| Move a block (tracking off) | ~150 ms | ~780 ms | Incremental reconcile; undo restores the XML cache, not the package |
+| Undo a move | ~165 ms | ~410 ms | Same |
+| Move a block (review mode) | ~390–640 ms | ~8.4 s | Reconciles instead of remounting |
+
+What made the move surface slow was not the move. `ValidMoveTargets` rebuilt the whole block
+sequence and re-scanned the story for every marker pair, **per candidate and per side** — 2N
+passes over the document, each materializing a member set per cross-block range — and the drag
+UI called it (plus a re-registration of one drop listener per block) every time the pointer
+crossed a paragraph boundary. On this charter that was seconds of work to move the mouse.
+
+The guard now precomputes what is a property of the CONTAINER — block order, which blocks own a
+section break (as a prefix sum), and each cross-block range as an index pair — once per sweep,
+and answers each candidate with index arithmetic. `DocxSessionMoveBlockTests` pins the rewrite
+against the original set-membership definition for every (source, target, side) triple, because
+"faster" is only interesting if it decides identically. On the UI side, hovering consumes a
+memoized answer and schedules the ask for idle time (so the handle withdraws from an immovable
+block a beat later rather than the pointer paying for the query), and drop targets are
+registered when a drag begins rather than on every hover.
+
+A review-mode move used to force a full remount, on the reasoning that the move-from/move-to
+pair had to stay canonical. It does not: the render plan signs every unit with a content hash,
+so the source — which keeps its unid while gaining the `w:moveFrom` wrapper — diffs as an
+ordinary in-place substitution. Both bench and `editor-block-drag.spec.ts` assert
+`lastReconcileFallback === null` after a tracked move, since a silent return to remounting would
+show up only as a number.
+
+Open on this document is ~10–12 s and is dominated by the full HTML conversion (~9 s of it),
+which no part of this pass touches — see the M3 worker offload item.
+
 Structural operations reconcile: `DocxEditor.reconcile()` diffs the DOM's top-level unit
 sequence against the session's render plan (`ListBlocks` — LCS over `unid|contentHash` tokens),
 keeps unchanged units' DOM nodes, renders changed/created units in one batched WASM call

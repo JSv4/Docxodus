@@ -4,6 +4,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
@@ -288,14 +289,30 @@ internal static class UnidHelper
         return ShortHash(input, hexChars: 32);
     }
 
+    /// <remarks>
+    /// Allocation-free apart from the returned string. Same bytes in, same lowercase-hex digest
+    /// prefix out as the <c>SHA256.Create()</c> + <c>GetBytes</c> + <c>StringBuilder</c> version
+    /// it replaces. This runs once per block for every render plan and once per element for every
+    /// Unid derivation — hundreds of calls per interactive operation — so the per-call garbage was
+    /// worth removing even though it does not dominate on a JIT-ed desktop runtime.
+    /// </remarks>
     internal static string ShortHash(string input, int hexChars)
     {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
-        var byteCount = hexChars / 2;
-        var sb = new StringBuilder(hexChars);
-        for (int i = 0; i < byteCount; i++)
-            sb.Append(bytes[i].ToString("x2", System.Globalization.CultureInfo.InvariantCulture));
-        return sb.ToString();
+        Span<byte> digest = stackalloc byte[32];
+        Span<byte> inline = stackalloc byte[1024];
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(input.Length);
+        byte[]? rented = maxBytes <= inline.Length ? null : ArrayPool<byte>.Shared.Rent(maxBytes);
+        Span<byte> buffer = rented is null ? inline : rented;
+
+        try
+        {
+            int written = Encoding.UTF8.GetBytes(input, buffer);
+            SHA256.HashData(buffer[..written], digest);
+            return Convert.ToHexStringLower(digest[..(hexChars / 2)]);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 }

@@ -37,6 +37,47 @@ All notable changes to this project will be documented in this file.
   count — so a 3-column table with a merged header row told the reader `cols: 2`. It is now the
   table's grid extent (the widest row's summed `w:gridSpan`), mirrored identically in
   `WmlToMarkdownConverter` and `IrMarkdownEmitter` so the equivalence contract holds.
+- **The block-move surface no longer does document-scale work on every mouse move.**
+  Measured on NVCA's published Model Certificate of Incorporation (234 body blocks, 392
+  bookmarks, 94 footnotes, 3 section breaks), hovering across a paragraph boundary cost
+  **624 ms → 8 ms**, starting a drag (`ValidMoveTargets`) **4.3 s → 20–30 ms**, opening the
+  move menu **4.4 s → 12 ms**, and a review-mode tracked move **8.4 s → ~390–640 ms**. A
+  direct move is ~150 ms and undoing one ~165 ms, both from ~780/410 ms. New standing
+  instrument: `npm/tests/editor-move-latency-bench.spec.ts`.
+  - `DocxSession.ValidMoveTargets` rebuilt the block sequence and re-scanned the story for
+    every marker pair **per candidate and per side**, materializing a member set per
+    cross-block range — quadratic in the block count and linear again in the marker count.
+    It now precomputes what is a property of the container (block order, section-break prefix
+    sums, each cross-block range as an index pair) once per sweep and decides each candidate
+    with index arithmetic. A range survives a move iff its endpoints still bound a window of
+    the same width, which is equivalent to the old set comparison because only one element
+    moves. `DocxSessionMoveBlockTests` pins that equivalence against the original
+    set-membership definition for every (source, target, side) triple.
+  - The editor asked the engine for a block's legal destinations, and re-registered one drop
+    listener per body block, every time the pointer crossed a block boundary. Hovering now
+    consumes a memoized answer and schedules the query for idle time (an immovable block's
+    handle withdraws a beat later instead of every hover paying for the query up front);
+    drop targets are registered when a drag actually begins. `blockUnitOf` climbs from the
+    pointer's element instead of listing every anchored node in the document.
+  - A tracked (review-mode) move forced a full remount. It now reconciles: the render plan
+    signs every unit with a content hash, so the move source — which keeps its unid while
+    gaining the `w:moveFrom` wrapper — diffs as an ordinary in-place substitution. The bench
+    and `editor-block-drag.spec.ts` both assert no remount fallback, since a silent return to
+    remounting would only show up as a number.
+- **Undo/redo no longer re-serializes the whole document.** `RestoreSnapshot` wrote every
+  snapshot-scoped part back to its package stream, an XML serialization of the entire document
+  per undo; the session reads parts through their cached `XDocument` and both `Save` paths
+  flush every projected part before serializing, so restoring the cache is enough. Undo on the
+  charter above went from ~270 ms to ~5 ms of engine time. The comment-threading parts
+  (`commentsExtended`/`commentsIds`) are snapshot-scoped but *not* in `Save`'s flush scope —
+  their ops persist them directly — so they keep the flushing restore; the split is derived
+  from the two part enumerations rather than hard-coded, so it stays true if either changes.
+  New `OpenXmlPart.SetXDocumentCache` extension is the in-memory half of `PutXDocument`.
+- `UnidHelper.ShortHash` no longer allocates a `SHA256` instance, an input byte array, and a
+  `StringBuilder` per call. It runs once per block for every render plan and once per element
+  for every Unid derivation — hundreds of calls per interactive operation — so the per-call
+  garbage was worth removing, though it does not dominate on a desktop runtime. Same bytes in,
+  same digest out.
 
 ## [9.3.0] - 2026-08-06
 

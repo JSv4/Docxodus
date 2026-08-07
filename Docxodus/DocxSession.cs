@@ -4524,7 +4524,7 @@ public sealed class DocxSession : IDisposable
 
         if (MoveSourceRejection(source) is { } sourceRejection)
             return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
-        if (BlockMoveSafetyError(parent, source, target, pos) is { } safetyError)
+        if (BlockMoveSafetyError(BuildBlockMoveContext(parent), source, target, pos) is { } safetyError)
             return EditResult.Fail(EditErrorCode.InvalidPosition, safetyError, sourceAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
@@ -4648,8 +4648,13 @@ public sealed class DocxSession : IDisposable
         if (!IsEditorBodyBlock(source, parent) || MoveSourceRejection(source) is not null)
             return empty;
 
+        // One context for the whole sweep: each candidate then costs index arithmetic over the
+        // container's cross-block ranges instead of its own pass over the story.
+        var context = BuildBlockMoveContext(parent);
+        if (context.UniversalRejection is not null) return empty;
+
         var targets = new List<MoveTarget>();
-        foreach (var candidate in parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+        foreach (var candidate in context.Blocks)
         {
             if (ReferenceEquals(candidate, source) || !IsEditorBodyBlock(candidate, parent))
                 continue;
@@ -4658,8 +4663,8 @@ public sealed class DocxSession : IDisposable
             var kind = candidate.Name == W.tbl ? "tbl" : WmlToMarkdownConverter.KindFor(candidate);
             if (kind is null) continue;
 
-            bool before = BlockMoveSafetyError(parent, source, candidate, Position.Before) is null;
-            bool after = BlockMoveSafetyError(parent, source, candidate, Position.After) is null;
+            bool before = BlockMoveSafetyError(context, source, candidate, Position.Before) is null;
+            bool after = BlockMoveSafetyError(context, source, candidate, Position.After) is null;
             if (before || after)
                 targets.Add(new MoveTarget($"{kind}:{sourceTarget.Anchor.Scope}:{unid}", before, after));
         }
@@ -4678,56 +4683,167 @@ public sealed class DocxSession : IDisposable
                !parent.Ancestors(W.txbxContent).Any();
     }
 
-    /// <summary>Reject a move when it would change the membership/order of a cross-block
-    /// comment, bookmark, permission, or native-move range, or cross a section break.</summary>
-    private static string? BlockMoveSafetyError(
-        XElement parent, XElement source, XElement target, Position pos)
+    /// <summary>
+    /// The move-independent facts about one block container: the body render units in document
+    /// order, which of them own a section break, and where each cross-block comment/bookmark/
+    /// permission/native-move range starts and ends.
+    /// </summary>
+    /// <remarks>
+    /// Everything here is a property of the CONTAINER, not of a particular move, so a whole
+    /// <see cref="ValidMoveTargets"/> sweep builds it once and then answers each of its 2N
+    /// candidate questions with index arithmetic. Recomputing it per question — five
+    /// <c>Descendants</c> passes over the story and a materialized member set per range — made
+    /// the sweep quadratic in the block count and linear again in the marker count on top:
+    /// on a 234-block charter carrying 392 bookmarks it cost seconds, which the drag UI paid
+    /// on every drag start and menu open.
+    /// </remarks>
+    private sealed class BlockMoveContext
+    {
+        /// <summary>Body render units in document order.</summary>
+        public required IReadOnlyList<XElement> Blocks { get; init; }
+
+        /// <summary>Position of each block in <see cref="Blocks"/>, by reference.</summary>
+        public required Dictionary<XElement, int> Index { get; init; }
+
+        /// <summary>Number of section-break-owning blocks in <c>Blocks[0..i)</c>, so
+        /// "is there one between these two blocks" is a subtraction.</summary>
+        public required int[] SectionBreaksBefore { get; init; }
+
+        /// <summary>Every range whose start and end sit in DIFFERENT blocks, as the
+        /// index pair the move has to leave intact.</summary>
+        public required IReadOnlyList<(int Start, int End, string Label)> CrossBlockRanges { get; init; }
+
+        /// <summary>Set when the container holds an inverted range (its end precedes its
+        /// start): that rejects every move, so no candidate needs testing.</summary>
+        public string? UniversalRejection { get; init; }
+    }
+
+    private static readonly (XName Start, XName End, string Label)[] CrossBlockRangePairs =
+    {
+        (W.commentRangeStart, W.commentRangeEnd, "comment"),
+        (W.bookmarkStart, W.bookmarkEnd, "bookmark"),
+        (W.permStart, W.permEnd, "permission"),
+        (W.moveFromRangeStart, W.moveFromRangeEnd, "move-source"),
+        (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
+    };
+
+    private static BlockMoveContext BuildBlockMoveContext(XElement parent)
     {
         var blocks = parent.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).ToList();
-        int sourceIndex = blocks.IndexOf(source);
-        int targetIndex = blocks.IndexOf(target);
-        if (sourceIndex < 0 || targetIndex < 0) return "source or target is not a body render unit";
+        // XElement does not override Equals, so the default comparer IS reference identity —
+        // the same relation the previous List.IndexOf lookups used.
+        var index = new Dictionary<XElement, int>(blocks.Count);
+        for (int i = 0; i < blocks.Count; i++) index[blocks[i]] = i;
 
-        var reordered = blocks.ToList();
-        reordered.RemoveAt(sourceIndex);
-        int targetAfterRemoval = reordered.IndexOf(target);
-        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
-        reordered.Insert(insertAt, source);
-
-        int lo = Math.Min(sourceIndex, targetIndex);
-        int hi = Math.Max(sourceIndex, targetIndex);
-        if (blocks.Skip(lo).Take(hi - lo + 1)
-            .Any(e => e.Name == W.p && e.Element(W.pPr)?.Element(W.sectPr) is not null))
-            return "cannot move a block across a section-break paragraph";
-
-        var pairs = new (XName Start, XName End, string Label)[]
+        var sectionBreaksBefore = new int[blocks.Count + 1];
+        for (int i = 0; i < blocks.Count; i++)
         {
-            (W.commentRangeStart, W.commentRangeEnd, "comment"),
-            (W.bookmarkStart, W.bookmarkEnd, "bookmark"),
-            (W.permStart, W.permEnd, "permission"),
-            (W.moveFromRangeStart, W.moveFromRangeEnd, "move-source"),
-            (W.moveToRangeStart, W.moveToRangeEnd, "move-destination"),
-        };
+            bool owns = blocks[i].Name == W.p &&
+                blocks[i].Element(W.pPr)?.Element(W.sectPr) is not null;
+            sectionBreaksBefore[i + 1] = sectionBreaksBefore[i] + (owns ? 1 : 0);
+        }
 
-        foreach (var (startName, endName, label) in pairs)
+        // One traversal collects every marker of interest; the five names are matched
+        // against each element rather than walking the story once per name.
+        var starts = new Dictionary<XName, Dictionary<string, XElement>>();
+        var ends = new Dictionary<XName, List<XElement>>();
+        foreach (var (startName, endName, _) in CrossBlockRangePairs)
         {
-            var starts = parent.Descendants(startName)
-                .GroupBy(e => (string?)e.Attribute(W.id) ?? "")
-                .ToDictionary(g => g.Key, g => g.First());
-            foreach (var end in parent.Descendants(endName))
+            starts[startName] = new Dictionary<string, XElement>();
+            ends[endName] = new List<XElement>();
+        }
+        foreach (var el in parent.Descendants())
+        {
+            if (starts.TryGetValue(el.Name, out var byId))
+            {
+                // First start wins for a duplicated id, matching the previous grouping.
+                var id = (string?)el.Attribute(W.id) ?? "";
+                if (!byId.ContainsKey(id)) byId[id] = el;
+            }
+            else if (ends.TryGetValue(el.Name, out var list))
+            {
+                list.Add(el);
+            }
+        }
+
+        var ranges = new List<(int, int, string)>();
+        string? universalRejection = null;
+        foreach (var (startName, endName, label) in CrossBlockRangePairs)
+        {
+            var byId = starts[startName];
+            foreach (var end in ends[endName])
             {
                 var id = (string?)end.Attribute(W.id) ?? "";
-                if (!starts.TryGetValue(id, out var start)) continue;
+                if (!byId.TryGetValue(id, out var start)) continue;
                 var startBlock = TopLevelOwner(start, parent);
                 var endBlock = TopLevelOwner(end, parent);
                 if (startBlock is null || endBlock is null || ReferenceEquals(startBlock, endBlock))
                     continue;
-
-                var before = RangeMembers(blocks, startBlock, endBlock);
-                var after = RangeMembers(reordered, startBlock, endBlock);
-                if (before is null || after is null || !before.SetEquals(after))
-                    return $"move would change or invert a cross-block {label} range";
+                if (!index.TryGetValue(startBlock, out var a) || !index.TryGetValue(endBlock, out var b))
+                    continue;
+                if (b < a)
+                {
+                    // An inverted range was `before is null` for every candidate before.
+                    universalRejection ??= $"move would change or invert a cross-block {label} range";
+                    continue;
+                }
+                ranges.Add((a, b, label));
             }
+        }
+
+        return new BlockMoveContext
+        {
+            Blocks = blocks,
+            Index = index,
+            SectionBreaksBefore = sectionBreaksBefore,
+            CrossBlockRanges = ranges,
+            UniversalRejection = universalRejection,
+        };
+    }
+
+    /// <summary>Reject a move when it would change the membership/order of a cross-block
+    /// comment, bookmark, permission, or native-move range, or cross a section break.</summary>
+    /// <remarks>
+    /// A move relocates exactly ONE element, so the reordered document order is a function of
+    /// three indices and needs no second list. A range survives iff its two endpoints still
+    /// bound a window of the same width: the elements strictly between them can only change by
+    /// the source entering or leaving, so equal width and equal membership are the same
+    /// condition — including when the source IS an endpoint, where any relocation but the
+    /// identity one changes the width.
+    /// </remarks>
+    private static string? BlockMoveSafetyError(
+        BlockMoveContext ctx, XElement source, XElement target, Position pos)
+    {
+        if (!ctx.Index.TryGetValue(source, out var sourceIndex) ||
+            !ctx.Index.TryGetValue(target, out var targetIndex))
+            return "source or target is not a body render unit";
+
+        int lo = Math.Min(sourceIndex, targetIndex);
+        int hi = Math.Max(sourceIndex, targetIndex);
+        if (ctx.SectionBreaksBefore[hi + 1] - ctx.SectionBreaksBefore[lo] > 0)
+            return "cannot move a block across a section-break paragraph";
+
+        // Checked after the section break, matching the order the messages were produced in
+        // when the range scan ran per candidate.
+        if (ctx.UniversalRejection is { } universal) return universal;
+
+        // Where the source lands once it has been lifted out of the sequence.
+        int targetAfterRemoval = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex;
+        int insertAt = pos == Position.Before ? targetAfterRemoval : targetAfterRemoval + 1;
+
+        int Reordered(int i)
+        {
+            if (i == sourceIndex) return insertAt;
+            int afterRemoval = i > sourceIndex ? i - 1 : i;
+            return afterRemoval >= insertAt ? afterRemoval + 1 : afterRemoval;
+        }
+
+        foreach (var (start, end, label) in ctx.CrossBlockRanges)
+        {
+            int a = Reordered(start);
+            int b = Reordered(end);
+            if (b < a || b - a != end - start)
+                return $"move would change or invert a cross-block {label} range";
         }
         return null;
     }
@@ -4735,20 +4851,6 @@ public sealed class DocxSession : IDisposable
     private static XElement? TopLevelOwner(XElement marker, XElement parent) =>
         marker.Ancestors().FirstOrDefault(e => ReferenceEquals(e.Parent, parent) &&
             (e.Name == W.p || e.Name == W.tbl));
-
-    private static HashSet<XElement>? RangeMembers(
-        IReadOnlyList<XElement> order, XElement start, XElement end)
-    {
-        int a = -1;
-        int b = -1;
-        for (int i = 0; i < order.Count; i++)
-        {
-            if (ReferenceEquals(order[i], start)) a = i;
-            if (ReferenceEquals(order[i], end)) b = i;
-        }
-        if (a < 0 || b < a) return null;
-        return order.Skip(a).Take(b - a + 1).ToHashSet();
-    }
 
     /// <summary>
     /// Give a tracked-move destination clone's bookmarks fresh, document-unique ids, preserving
@@ -9170,10 +9272,24 @@ public sealed class DocxSession : IDisposable
         // CustomXmlPart participates here; other CustomXmlParts (SharePoint
         // metadata, SDT data-binding parts, inkml, …) are intentionally outside
         // the snapshot scope.
+        // A part that Save flushes from its cached XDocument needs only its cache restored: the
+        // session itself reads through GetXDocument, and the stream is rewritten before the
+        // package is serialized. Writing every part's stream here instead re-serialized the whole
+        // document on every undo/redo, which on a real file is the bulk of an undo.
+        //
+        // The snapshot scope is deliberately WIDER than Save's flush scope — the comment-threading
+        // parts are snapshot-scoped so reply/resolve/prune are undoable, but their ops persist
+        // them themselves rather than relying on Save. For those the stream IS the source of
+        // truth at save time, so they keep the flushing restore. Deriving the split from the two
+        // enumerations keeps it true if either one changes.
+        var flushedBySave = new HashSet<string>(
+            EnumerateProjectedParts().Select(p => p.Uri.ToString()), StringComparer.Ordinal);
         foreach (var part in EnumerateProjectedPartsForSnapshot())
         {
-            if (!byUri.TryGetValue(part.Uri.ToString(), out var xml)) continue;
-            part.PutXDocument(new XDocument(xml));
+            var uri = part.Uri.ToString();
+            if (!byUri.TryGetValue(uri, out var xml)) continue;
+            if (flushedBySave.Contains(uri)) part.SetXDocumentCache(new XDocument(xml));
+            else part.PutXDocument(new XDocument(xml));
         }
 
         var main = _doc!.MainDocumentPart;

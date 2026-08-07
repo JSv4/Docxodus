@@ -285,6 +285,21 @@ defect — and it is why the UI must ask rather than offer everything and fail o
 `MoveBlock` stays authoritative: the gate is advisory, and a caller that bypasses it still gets the
 typed error. WASM/npm only, like the other editor-support endpoints.
 
+**Cost.** One call answers a whole drag, so it is built that way: the facts that belong to the
+CONTAINER — block order, which blocks own a section break (kept as a prefix sum), and each
+cross-block range as a pair of block indices — are computed once, and each of the 2N candidate
+questions is then index arithmetic. A move relocates exactly one element, so the reordered
+sequence is a function of three indices and needs no second list; a range survives iff its two
+endpoints still bound a window of the same width, which is equivalent to comparing the member
+sets because the only element that can enter or leave is the source (including when the source IS
+an endpoint, where any relocation but the identity one changes the width).
+
+That equivalence is not obvious, so it is tested rather than argued: `DocxSessionMoveBlockTests`
+carries the original set-membership implementation as an oracle and asserts the two agree for
+every (source, target, side) triple over documents with nested, overlapping, table-spanning,
+single-block, inverted, and dangling ranges plus section breaks. The naive version cost seconds
+on a 234-block charter with 392 bookmarks, which the drag UI paid on every drag start.
+
 ## Bulk block removal — `DeleteRange` and `DeleteSection`
 
 ### `DeleteRange` — bulk sibling removal
