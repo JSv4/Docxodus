@@ -93,6 +93,15 @@ The `IrEditScript` is an ordered list of block operations (`IrEditOpKind`), plus
 | `SplitBlock` | One left paragraph split across N≥2 right paragraphs (M2.6) | left + `splitMergeAnchors` (the N rights) |
 | `MergeBlock` | N≥2 left paragraphs fused into one right paragraph (M2.6) | right + `splitMergeAnchors` (the N lefts) |
 
+**Edited-move markup boundary.** A `MoveModifyBlock` remains rich in the edit-script and revisions
+surfaces: its destination carries the token diff describing the edit within the relocation. Produced
+OOXML deliberately does not nest that token diff inside the move range. It emits the complete left
+paragraph as `w:moveFrom` and the complete right paragraph as `w:moveTo`, paired by `w:name`. Word-class
+consumers process ordinary `w:ins`/`w:del` nested among destination `w:moveTo` fragments as independent
+revisions; Reject All can therefore restore a nested deletion after rejecting the destination move and
+leave an orphaned old word. Complete move halves make accept/reject atomic while preserving the detailed
+change in the non-markup APIs (issue #359).
+
 **Footnote/endnote structural fidelity.** The `noteOps` carry per-note block diffs that the markup renderer applies *inside* the produced footnotes/endnotes part, after which `IrMarkupRenderer.RenumberNoteIds` re-sequences every reference + definition into body-reference document order (mirroring `WmlComparer`'s `ChangeFootnoteEndnoteReferencesToUniqueRange`). The invariants this path guarantees — verified by `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` (every edit×feature scenario) and `DocxDiffFootnoteRobustnessTests`, with a headless-LibreOffice load backstop:
 - **Definition ids are unique** and every body reference resolves to exactly one definition. A `continuationNotice` (or any typed) reserved note at a *positive* id keeps its id and leads the part; real notes renumber to a range disjoint from the kept reserved ids (the counter seeds above the highest positive reserved id), so a reserved note never collides with a renumbered real note.
 - **A reference is never dropped.** A footnote/endnote reference is a zero-width inline; the token-diff run rebuilder (`SourceRunModel.Slice`) attributes a boundary zero-width to exactly the op whose token range owns it (`ZeroWidthBoundaries`), so a reference at the tail of an edited paragraph survives and is never double-counted.

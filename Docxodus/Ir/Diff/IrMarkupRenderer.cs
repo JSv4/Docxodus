@@ -771,21 +771,7 @@ internal static class IrMarkupRenderer
     internal static void RenderBlockOpsWordShaped(
         IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
     {
-        // A MoveModify destination deliberately owns only its RIGHT anchor: its paired LEFT anchor lives on
-        // the separately emitted source op.  Resolve that pairing for THIS operation list before rendering.
-        // Scoping matters because note/header/cell projections allocate move-group ids locally; a nested cell
-        // render must not replace the body scope's source lookup once it returns.
         var opList = ops as IReadOnlyList<IrEditOp> ?? ops.ToList();
-        var previousMoveSources = state.ActiveMoveSourceAnchors;
-        var moveSources = new Dictionary<int, string>();
-        foreach (var candidate in opList)
-            if (candidate.IsMoveSource == true && candidate.MoveGroupId is { } groupId &&
-                candidate.LeftAnchor is { } leftAnchor)
-                moveSources[groupId] = leftAnchor;
-        state.ActiveMoveSourceAnchors = moveSources;
-
-        try
-        {
         var pendingInserts = new List<IrEditOp>();
         var pendingDeletes = new List<IrEditOp>();
 
@@ -825,11 +811,6 @@ internal static class IrMarkupRenderer
             RenderBlockOp(op, state, sink);
         }
         FlushGap(storyEnd: true);
-        }
-        finally
-        {
-            state.ActiveMoveSourceAnchors = previousMoveSources;
-        }
     }
 
     /// <summary>One gap op's rendered elements plus the facts the arrangement grammar keys on.</summary>
@@ -1255,9 +1236,12 @@ internal static class IrMarkupRenderer
                 // When move rendering is OFF (the DetectMoves=false analogue), a move is projected as a plain
                 // delete-here + insert-there pair: the SOURCE op (left anchor) emits a whole-block del, the
                 // DESTINATION op (right anchor) a whole-block ins. With move rendering ON, emit NATIVE move
-                // markup: source → moveFromRange + w:moveFrom; destination → moveToRange + w:moveTo (a
-                // MoveModify destination nests ins/del inside the moveTo for the in-move edits). Both halves
-                // share a deterministic w:name keyed by MoveGroupId.
+                // markup: source → moveFromRange + w:moveFrom; destination → moveToRange + w:moveTo.
+                // A MoveModify uses the COMPLETE left and right paragraphs for those halves. Its token diff
+                // remains available through the edit-script and revisions surfaces, but fragmenting the moveTo
+                // around nested ins/del is not interoperable: office consumers reject those nested revisions
+                // independently and can leave deleted destination text behind (issue #359). Both halves share
+                // a deterministic w:name keyed by MoveGroupId.
                 if (!state.Settings.RenderMoves)
                 {
                     if (op.IsMoveSource == true)
@@ -3930,12 +3914,12 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>
-    /// Emit the DESTINATION half of a move: the RIGHT paragraph bracketed by <c>w:moveToRangeStart</c>/
-    /// <c>w:moveToRangeEnd</c> with content wrapped in <c>w:moveTo</c> and the paragraph mark marked inserted.
-    /// A plain <see cref="IrEditOpKind.MoveBlock"/> wraps every run in <c>w:moveTo</c>; a
-    /// <see cref="IrEditOpKind.MoveModifyBlock"/> (the destination carries a token diff) renders the in-move
-    /// edits as NESTED <c>w:ins</c>/<c>w:del</c> inside the moveTo range — moved-and-unchanged text in
-    /// <c>w:moveTo</c>, newly-inserted text in <c>w:ins</c>, removed text in <c>w:del</c>.
+    /// Emit the DESTINATION half of a move: the complete RIGHT paragraph bracketed by
+    /// <c>w:moveToRangeStart</c>/<c>w:moveToRangeEnd</c>, with every run wrapped in <c>w:moveTo</c> and the
+    /// paragraph mark marked moved-to. This atomic shape is required for both <see cref="IrEditOpKind.MoveBlock"/>
+    /// and <see cref="IrEditOpKind.MoveModifyBlock"/>. The latter's token diff remains part of the edit-script and
+    /// revisions surfaces; nesting ordinary <c>w:ins</c>/<c>w:del</c> inside the destination move range makes
+    /// office consumers reject the nested changes separately and can strand old text at the destination.
     /// </summary>
     private static void EmitMoveDestination(IrEditOp op, RenderState state, List<XElement> sink)
     {
@@ -3946,66 +3930,12 @@ internal static class IrMarkupRenderer
             return;
         }
         string moveName = state.MoveName(gid);
-        string? leftAnchor = state.MoveSourceAnchor(gid);
-        var leftMovedPara = SourceElement(leftAnchor, state.Left);
-
-        if (!op.RequiresWholeParagraphReplace &&
-            op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
-            op.TextboxDiffs is null && leftMovedPara?.Name == W.p && leftAnchor is not null)
-        {
-            // Build the destination paragraph from the token diff, like RenderModifiedParagraph, but with the
-            // moved-and-equal spans wrapped in w:moveTo (instead of left unwrapped) so the whole relocated
-            // content vanishes on reject and appears on accept. Insert spans → w:ins, Delete spans → w:del.
-            var para = BuildMoveModifyDestination(op, tokenDiff, leftAnchor, state);
-            if (para != null)
-            {
-                MarkParagraphMark(para, RevKind.MoveTo, state);
-                BracketParagraphWithMoveRange(para, isFrom: false, moveName, state);
-                sink.Add(para);
-                return;
-            }
-        }
 
         var dest = StripUnids(new XElement(src));
         state.RegisterMediaReferences(dest);
-        // A moved paragraph whose pPr also changed tracks the property change at the DESTINATION
-        // (Word's own shape: moveTo content + pPrChange). Source/reject keeps the left paragraph verbatim.
-        if (leftMovedPara?.Name == W.p)
-            ApplyBlockFormatChanges(dest, leftMovedPara, src, state);
         MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
         BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
         sink.Add(dest);
-    }
-
-    /// <summary>Build a MoveModify destination paragraph from its token diff: Equal/FormatChanged spans →
-    /// <c>w:moveTo</c> (moved-and-unchanged), Insert spans → <c>w:ins</c>, Delete spans → <c>w:del</c>. Returns
-    /// null if the source elements are unexpectedly missing (caller falls back to a plain whole-paragraph
-    /// moveTo).</summary>
-    private static XElement? BuildMoveModifyDestination(
-        IrEditOp op, IrTokenDiff tokenDiff, string leftAnchor, RenderState state)
-    {
-        var leftPara = SourceElement(leftAnchor, state.Left);
-        var rightPara = SourceElement(op.RightAnchor, state.RightSource);
-        if (leftPara == null || rightPara == null)
-            return null;
-
-        var leftRuns = new SourceRunModel(leftPara);
-        var rightRuns = new SourceRunModel(rightPara);
-        var leftTokens = ParagraphTokens(leftAnchor, state.Left, state.Settings);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
-
-        var newPara = new XElement(W.p);
-        var rightPPr = rightPara.Element(W.pPr);
-        if (rightPPr != null)
-            newPara.Add(StripUnids(new XElement(rightPPr)));
-        ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
-
-        // The regular fine renderer already knows how to produce both FormatChanged rPrChange markers and
-        // the field-safe insert/delete projection. Its optional stable-span wrapper gives this move destination
-        // the one additional shape it needs: unchanged and format-changed right spans live in w:moveTo.
-        newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state,
-            stableSpanKind: RevKind.MoveTo));
-        return newPara;
     }
 
     /// <summary>Wrap every run-level child of a paragraph in the given move/revision kind (like
@@ -5105,21 +5035,14 @@ internal static class IrMarkupRenderer
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
-        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
-        RevKind? stableSpanKind = null)
+        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
     {
         var content = new List<XElement>();
 
-        // Fine paragraph changes normally leave equal/format-changed spans bare. A MoveModify destination
-        // supplies MoveTo here instead: the spans still receive their ordinary rPrChange history first, then
-        // the resulting run-level element is wrapped as relocated content.
         void AddStableSpan(XElement runLevel)
         {
             state.RegisterMediaReferences(runLevel);
-            if (stableSpanKind is { } kind)
-                content.AddRange(WrapFieldAware(runLevel, kind, state));
-            else
-                content.Add(runLevel);
+            content.Add(runLevel);
         }
 
         foreach (var tokenOp in CoalesceTokenOpsWordShaped(
@@ -8087,16 +8010,6 @@ internal static class IrMarkupRenderer
         public IrDocument Left { get; }
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
-
-        /// <summary>LEFT source anchor by move-group id for the operation list currently being rendered.
-        /// Move destinations intentionally carry only their RIGHT anchor; nested render scopes replace this
-        /// map temporarily because cell, note, and header projections each use local move-group ids.</summary>
-        public IReadOnlyDictionary<int, string> ActiveMoveSourceAnchors { get; set; } =
-            new Dictionary<int, string>();
-
-        /// <summary>Resolve the LEFT source anchor for the active move-group scope, if present.</summary>
-        public string? MoveSourceAnchor(int moveGroupId) =>
-            ActiveMoveSourceAnchors.TryGetValue(moveGroupId, out var anchor) ? anchor : null;
 
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
