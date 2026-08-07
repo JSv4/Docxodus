@@ -22,6 +22,15 @@ All notable changes to this project will be documented in this file.
   the CRUD rules are documented in `docs/architecture/docx_mutation_api.md`.
 
 ### Fixed
+- **`DocxDiff` edited moves no longer leave replaced text behind after Reject All in Word-compatible
+  consumers (issue #359).** `MoveModifyBlock` destinations were fragmented into `w:moveTo` spans around
+  nested `w:ins`/`w:del` edits. Docxodus's own revision processor accepted and rejected that shape, but
+  Word-class consumers treat the nested revisions independently: rejecting the move restored its nested
+  deletion at the destination, stranding the old word after the source paragraph was restored. Produced
+  OOXML now represents an edited move as one complete left `w:moveFrom` and one complete right `w:moveTo`,
+  so the destination is accepted or rejected atomically. The edit script and revisions APIs still expose
+  the `MoveModifyBlock` token-level change; `RenderMoves=false` and `SimplifyMoveMarkup` retain their
+  deliberate whole-block delete/insert projections.
 - **Table row/column CRUD is now grid-aware instead of cell-index-aware.** `InsertTableRow`,
   `InsertTableColumn`, `DeleteTableColumn` and `SetColumnWidths` addressed cells by their position
   in `w:tr`, which silently corrupted any table containing a merge. They now resolve cells through

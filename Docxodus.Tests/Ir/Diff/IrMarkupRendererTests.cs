@@ -1294,11 +1294,11 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
-    public void Render_move_and_edit_nests_ins_del_inside_moveTo_and_round_trips()
+    public void Render_move_and_edit_uses_complete_atomic_move_pair_and_round_trips()
     {
-        // Paragraph A is relocated AND edited (one word changed): a MoveModify. The destination moveTo range
-        // must carry nested ins/del for the in-move edit, and RevisionProcessor (the oracle) must accept it to
-        // the right and reject it to the left.
+        // Paragraph A is relocated AND edited (one word changed): a MoveModify. Keep its rich token diff in the
+        // data surface, but encode the document as complete old/new move halves. Word and LibreOffice process
+        // ordinary ins/del nested in a moveTo range independently; on Reject All that strands the nested del.
         var left = MoveDoc(
             "This is paragraph A with enough words for move detection here.",
             "This is paragraph B with sufficient content to anchor it firmly.");
@@ -1311,22 +1311,27 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        // The destination's move range contains the relocated unchanged spans plus the separate in-move edit
-        // revisions.  A plain right-side moveTo clone would accept/reject correctly but hide this edit.
+        var source = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveFromRangeStart).Any());
         var destination = Assert.Single(body.Elements(W.p),
             p => p.Descendants(W.moveToRangeStart).Any());
         Assert.NotEmpty(destination.Descendants(W.moveTo));
-        Assert.NotEmpty(destination.Descendants(W.ins));
-        Assert.NotEmpty(destination.Descendants(W.del));
+        Assert.DoesNotContain(destination.Descendants(W.ins), e => !e.Ancestors(W.pPr).Any());
+        Assert.DoesNotContain(destination.Descendants(W.del), e => !e.Ancestors(W.pPr).Any());
+        Assert.Equal("This is paragraph A with enough words for move detection here.",
+            string.Concat(source.Descendants(W.moveFrom).Descendants()
+                .Where(e => e.Name == W.t || e.Name == W.delText).Select(e => (string?)e)));
+        Assert.Equal("This is paragraph A with PLENTY words for move detection here.",
+            string.Concat(destination.Descendants(W.moveTo).Descendants(W.t).Select(t => (string?)t)));
         AssertRoundTrip(left, right, settings, label: "move-modify");
     }
 
     [Fact]
-    public void Render_moved_format_change_is_tracked_at_destination()
+    public void Render_moved_format_change_is_preserved_by_complete_move_halves()
     {
-        // Exact text relocation with a bold change is a MoveModify: its destination must carry both the native
-        // move wrapper and the old run formatting. Without that projection, reviewers see only a move and reject
-        // cannot reconstruct the left formatting.
+        // Exact text relocation with a bold change is a MoveModify. The source and destination move halves
+        // already carry the complete old and new formatting, so no independently-rejectable nested format
+        // revision is needed to reconstruct either side.
         const string anchor = "Anchor paragraph holds the document spine steady.";
         const string moved = "Moved paragraph contains enough distinct words for move detection today.";
         const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
@@ -1353,11 +1358,14 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var source = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveFromRangeStart).Any());
         var destination = Assert.Single(body.Elements(W.p),
             p => p.Descendants(W.moveToRangeStart).Any());
         Assert.NotEmpty(destination.Descendants(W.moveTo));
-        var oldRunFormat = Assert.Single(destination.Descendants(W.rPrChange));
-        Assert.Null(oldRunFormat.Element(W.rPr)!.Element(W.b));
+        Assert.Empty(destination.Descendants(W.rPrChange));
+        Assert.Empty(source.Descendants(W.b));
+        Assert.NotEmpty(destination.Descendants(W.b));
         AssertRoundTrip(left, right, settings, label: "move-format");
     }
 
@@ -1402,6 +1410,55 @@ public class IrMarkupRendererTests
         Assert.Empty(body.Descendants(W.moveTo));
         Assert.True(body.Descendants(W.ins).Any() || body.Descendants(W.del).Any(), "demoted move must use ins/del");
         AssertRoundTrip(left, right, settings, label: "move-demoted");
+    }
+
+    [Fact]
+    public void Render_issue_359_move_and_edit_keeps_the_destination_atomic()
+    {
+        const string movedLeft =
+            "The governing law of this Agreement is the law of Delaware without regard to conflicts principles.";
+        const string movedRight =
+            "The governing law of this Agreement is the law of California without regard to conflicts principles.";
+        var left = MoveDoc(
+            "Introduction paragraph with some length to it.",
+            movedLeft,
+            "Payment terms are net thirty days from invoice.",
+            "Closing paragraph with final remarks.");
+        var right = MoveDoc(
+            "Introduction paragraph with some length to it.",
+            "Payment terms are net thirty days from invoice.",
+            "Closing paragraph with final remarks.",
+            movedRight);
+        var settings = new IrDiffSettings();
+
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), settings);
+        Assert.Equal(2, script.Operations.Count(op => op.Kind == IrEditOpKind.MoveModifyBlock));
+
+        // Exercise the public facade as reported, including its package-normalization/backfill passes.
+        var rendered = DocxDiff.Compare(left, right);
+        var revisions = DocxDiff.GetRevisions(left, right);
+        Assert.Equal(2, revisions.Count(revision => revision.Type == DocxDiffRevisionType.Moved));
+        Assert.Contains(revisions,
+            revision => revision.Type == DocxDiffRevisionType.Inserted && revision.Text.Contains("California"));
+        Assert.Contains(revisions,
+            revision => revision.Type == DocxDiffRevisionType.Deleted && revision.Text.Contains("Delaware"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var source = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveFromRangeStart).Any());
+        var destination = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.DoesNotContain(destination.Descendants(W.ins), e => !e.Ancestors(W.pPr).Any());
+        Assert.DoesNotContain(destination.Descendants(W.del), e => !e.Ancestors(W.pPr).Any());
+        Assert.Equal(movedLeft,
+            string.Concat(source.Descendants(W.moveFrom).Descendants()
+                .Where(e => e.Name == W.t || e.Name == W.delText).Select(e => (string?)e)));
+        Assert.Equal(movedRight,
+            string.Concat(destination.Descendants(W.moveTo).Descendants(W.t).Select(t => (string?)t)));
+        AssertRoundTrip(left, right, settings, label: "issue-359");
     }
 
     [Fact]
