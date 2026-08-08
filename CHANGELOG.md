@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.6.0] - 2026-08-08
+
 ### Added
 - **ASCII-animation demo: DOCX as a rendering canvas** (`npm/examples/ascii-animation.html`,
   served with the Playwright webroot). Four procedurally generated natural phenomena — ocean
