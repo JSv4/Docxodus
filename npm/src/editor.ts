@@ -27,6 +27,8 @@ import {
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { setCustomNativeDragPreview } from "@atlaskit/pragmatic-drag-and-drop/element/set-custom-native-drag-preview";
+import { pointerOutsideOfPreview } from "@atlaskit/pragmatic-drag-and-drop/element/pointer-outside-of-preview";
 import {
   autoScrollForElements,
   autoScrollWindowForElements,
@@ -216,6 +218,34 @@ const EDITABLE_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
 const BLOCK_DRAG_TYPE = "docxodus-block";
 const blockDragStyledDocuments = new WeakSet<Document>();
 
+/** One-line description of a block, for the handle's label and the drag preview chip. */
+function blockPreviewText(unit: HTMLElement): string {
+  if (unit.tagName === "TABLE") return "Table";
+  const text = (unit.textContent ?? "").trim().replace(/\s+/g, " ");
+  return text.length > 48 ? `${text.slice(0, 48)}…` : text;
+}
+
+/**
+ * A capture-time snapshot of one movable block's box, in viewport coordinates.
+ *
+ * Taken once per drag: nothing reflows while a drag is in flight, so re-measuring every block on
+ * every `dragover` would buy nothing. Scrolling (including drag autoscroll) moves the whole flow
+ * rigidly, which `dropZoneShift` corrects for with one subtraction.
+ */
+interface BlockDropZone {
+  unit: HTMLElement;
+  anchorId: string;
+  /** Position in `dropZones`, so a neighbour is one index away — see `dropEdgeY`. */
+  index: number;
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+  /** Own outer margin, read only for the first/last zone — see `dropEdgeY`. */
+  marginBefore: number;
+  marginAfter: number;
+}
+
 function ensureBlockDragStyles(doc: Document): void {
   if (blockDragStyledDocuments.has(doc)) return;
   blockDragStyledDocuments.add(doc);
@@ -230,10 +260,28 @@ function ensureBlockDragStyles(doc: Document): void {
 }
 .docx-block-handle:hover, .docx-block-handle:focus-visible { color: #344054; border-color: #98a2b3; outline: none; }
 .docx-block-handle[aria-pressed="true"] { color: #175cd3; border-color: #84adff; background: #eff8ff; }
-.docx-block-handle.docx-block-dragging { cursor: grabbing; opacity: .78; }
+.docx-block-handle.docx-block-dragging { cursor: grabbing; opacity: .35; }
+/* The block being carried. Dimming it is the "a drag is happening" signal that survives the
+   pointer being anywhere on screen — the drop line only says where, not what. */
+.docx-block-drag-source { opacity: .38; transition: opacity 120ms ease-out; }
+/* Positioned by transform so tracking the pointer costs no layout. Flipping display none→block
+   restarts the fade — one cheap entry animation per appearance, none while it tracks. */
 .docx-block-drop-indicator {
-  position: fixed; z-index: 2147482999; display: none; height: 3px; pointer-events: none;
-  border-radius: 999px; background: #2e90fa; box-shadow: 0 0 0 1px rgba(255,255,255,.85);
+  position: fixed; top: 0; left: 0; z-index: 2147482999; display: none; height: 0;
+  pointer-events: none; border-top: 2px solid #2e90fa;
+  filter: drop-shadow(0 1px 2px rgba(46,144,250,.5));
+  animation: docx-block-drop-in 110ms ease-out;
+}
+.docx-block-drop-indicator::before {
+  content: ""; position: absolute; top: -5px; left: -2px; width: 8px; height: 8px;
+  border-radius: 50%; background: #2e90fa;
+}
+@keyframes docx-block-drop-in { from { opacity: 0; } to { opacity: 1; } }
+.docx-block-drag-preview {
+  max-width: 320px; padding: 6px 10px; border: 1px solid #b2ddff; border-radius: 6px;
+  background: #eff8ff; color: #175cd3; box-shadow: 0 6px 16px rgba(16,24,40,.18);
+  font: 500 13px/1.35 system-ui, sans-serif; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
 }
 .docx-block-move-menu {
   position: fixed; z-index: 2147483001; display: none; min-width: 150px; padding: 5px;
@@ -811,7 +859,11 @@ export class DocxEditor {
   private blockMoveLive: HTMLElement | null = null;
   private blockDragSource: HTMLElement | null = null;
   private blockDragCleanup: Array<() => void> = [];
-  private blockDragTargetCleanup: Array<() => void> = [];
+  /** Block boxes measured at drag start — see `BlockDropZone`. Empty when no drag is in flight. */
+  private dropZones: BlockDropZone[] = [];
+  /** Combined scroll offset when `dropZones` was measured, and the scroller measured against. */
+  private dropZoneOrigin = 0;
+  private dropZoneScroller: HTMLElement | null = null;
   private blockDragging = false;
   private blockDragPointerDown = false;
   /** Anchors the current drag source may legally move next to, per the engine's own rules.
@@ -1291,11 +1343,8 @@ export class DocxEditor {
     handle.style.display = "flex";
     handle.style.left = `${Math.max(4, rect.left - 32)}px`;
     handle.style.top = `${Math.max(4, rect.top + (unit.tagName === "TABLE" ? 6 : Math.max(0, (rect.height - 28) / 2)))}px`;
-    const preview = (unit.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 48);
+    const preview = blockPreviewText(unit);
     handle.setAttribute("aria-label", preview ? `Move block: ${preview}` : "Move block");
-    // Drop targets are registered when a drag actually begins (and once at mount), not on
-    // hover: re-registering one listener per body block every time the pointer crosses a
-    // paragraph boundary is work no drop can use.
   }
 
   private hideBlockHandle(): void {
@@ -1308,14 +1357,42 @@ export class DocxEditor {
     if (source && this.blockDragHandle?.style.display !== "none") this.showBlockHandle(source);
   }
 
-  private showDropIndicator(target: HTMLElement, position: "before" | "after"): void {
+  /** Draw the drop line on `zone`'s requested edge, or take it away when there is no target. */
+  private paintDropIndicator(data: Record<string | symbol, unknown>): void {
     const indicator = this.blockDropIndicator;
+    const zone = data.zone as BlockDropZone | undefined;
     if (!indicator) return;
-    const rect = this.unitWrapperOf(target).getBoundingClientRect();
+    if (!zone) {
+      this.hideDropIndicator();
+      return;
+    }
+    const y = Math.round(this.dropEdgeY(zone, data.position === "after" ? "after" : "before")
+      + this.dropZoneShift()) - 1;
+    // Position before revealing, so the entry fade never plays at a stale spot.
+    indicator.style.transform = `translate3d(${Math.round(zone.left)}px, ${y}px, 0)`;
+    indicator.style.width = `${Math.max(24, Math.round(zone.width))}px`;
     indicator.style.display = "block";
-    indicator.style.left = `${rect.left}px`;
-    indicator.style.top = `${position === "before" ? rect.top - 1 : rect.bottom - 1}px`;
-    indicator.style.width = `${Math.max(24, rect.width)}px`;
+  }
+
+  /**
+   * Where to draw the line for an insertion on `position` of `zone` — the MIDDLE of the gap to
+   * the neighbour on that side, not the zone's own border-box edge. A paragraph's `w:spacing`
+   * becomes a CSS margin, which sits outside the box, so drawing on the edge underlines the
+   * block's last line instead of reading as a gap between two blocks. Falls back to the raw edge
+   * at the ends of the flow, and degrades to the same value when blocks are contiguous.
+   */
+  private dropEdgeY(zone: BlockDropZone, position: "before" | "after"): number {
+    const neighbour = this.dropZones[zone.index + (position === "after" ? 1 : -1)];
+    // At the ends of the flow there is nothing to bisect against, so half the block's own
+    // margin stands in for half the gap — the same position, one contributor instead of two.
+    if (!neighbour) {
+      return position === "after"
+        ? zone.bottom + zone.marginAfter / 2
+        : zone.top - zone.marginBefore / 2;
+    }
+    return position === "after"
+      ? (zone.bottom + neighbour.top) / 2
+      : (neighbour.bottom + zone.top) / 2;
   }
 
   private hideDropIndicator(): void {
@@ -1410,48 +1487,73 @@ export class DocxEditor {
     return position ? sides[position] : sides.before || sides.after;
   }
 
-  /**
-   * The side of `unit` a drop at `clientY` should land on: the half the pointer is in, snapped to
-   * the other side when only that one is legal. Snapping rather than refusing keeps a reachable
-   * target usable — the illegal side is usually illegal only because a section break or a
-   * cross-block range sits between the two blocks on that side.
-   */
-  private dropPositionFor(unit: HTMLElement, clientY: number): "before" | "after" {
-    const rect = unit.getBoundingClientRect();
-    const preferred = clientY < rect.top + rect.height / 2 ? "before" : "after";
-    if (this.isValidMoveTarget(unit, preferred)) return preferred;
-    const other = preferred === "before" ? "after" : "before";
-    return this.isValidMoveTarget(unit, other) ? other : preferred;
+  /** Measure every movable block once, at drag start. See `BlockDropZone`. */
+  private captureDropZones(): void {
+    const view = this.container.ownerDocument.defaultView;
+    this.dropZoneScroller = this.scrollContainer();
+    this.dropZoneOrigin = this.scrollOffsetSum();
+    this.dropZones = [];
+    const boxes: HTMLElement[] = [];
+    for (const unit of this.bodyUnitNodes()) {
+      const anchorId = this.isMovableBlockUnit(unit) ? this.anchorIdOf(unit) : null;
+      if (!anchorId) continue;
+      const box = this.unitWrapperOf(unit);
+      const rect = box.getBoundingClientRect();
+      boxes.push(box);
+      this.dropZones.push({
+        unit, anchorId, index: this.dropZones.length,
+        top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width,
+        marginBefore: 0, marginAfter: 0,
+      });
+    }
+    // Only the flow's two ends ever consult a margin, so only they are worth a style read.
+    const ends = new Set([0, this.dropZones.length - 1].filter((i) => i >= 0 && i < boxes.length));
+    for (const i of ends) {
+      const style = view?.getComputedStyle(boxes[i]);
+      this.dropZones[i].marginBefore = parseFloat(style?.marginTop ?? "0") || 0;
+      this.dropZones[i].marginAfter = parseFloat(style?.marginBottom ?? "0") || 0;
+    }
   }
 
-  private refreshBlockDropTargets(): void {
-    for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
-    if (!this.blockDragHandle || this.options.paginated) return;
-    for (const unit of this.bodyUnitNodes().filter((el) => this.isMovableBlockUnit(el))) {
-      this.blockDragTargetCleanup.push(dropTargetForElements({
-        element: unit,
-        // A target the engine would refuse is not a drop target at all, so Pragmatic never
-        // fires onDragEnter for it and no indicator is drawn over it.
-        canDrop: ({ source }) =>
-          source.data.type === BLOCK_DRAG_TYPE && source.data.sourceAnchorId !== this.anchorIdOf(unit) &&
-          this.isValidMoveTarget(unit),
-        getData: ({ input }) => ({
-          type: BLOCK_DRAG_TYPE,
-          targetAnchorId: this.anchorIdOf(unit),
-          position: this.dropPositionFor(unit, input.clientY),
-          targetElement: unit,
-        }),
-        onDragEnter: ({ self }) => {
-          const pos = self.data.position === "after" ? "after" : "before";
-          this.showDropIndicator(unit, pos);
-        },
-        onDrag: ({ self }) => {
-          const pos = self.data.position === "after" ? "after" : "before";
-          this.showDropIndicator(unit, pos);
-        },
-        onDragLeave: () => this.hideDropIndicator(),
-      }));
+  private scrollOffsetSum(): number {
+    const view = this.container.ownerDocument.defaultView;
+    return (view?.scrollY ?? 0) + (this.dropZoneScroller?.scrollTop ?? 0);
+  }
+
+  /** How far the measured boxes have travelled since capture, from scrolling (drag autoscroll). */
+  private dropZoneShift(): number {
+    return this.dropZoneOrigin - this.scrollOffsetSum();
+  }
+
+  /**
+   * Where a drop at `clientY` lands, or null when nothing there is legal.
+   *
+   * Resolution is by VERTICAL GEOMETRY over the measured blocks, not by which element the pointer
+   * is over: the drag handle floats in the page margin, so a drag straight down the gutter — the
+   * natural gesture — never crosses a paragraph box, and element hit testing gave those drags no
+   * indicator and no drop at all. The nearest block by vertical distance is the target; the half
+   * the pointer is in picks the side, snapped to the other side when only that one is legal
+   * (a section break or a cross-block range usually makes exactly one side illegal). When neither
+   * side is legal — the pointer is in a region this block cannot reach — there is no drop, and
+   * nothing is drawn.
+   */
+  private resolveDropAt(clientY: number): { zone: BlockDropZone; position: "before" | "after" } | null {
+    const y = clientY - this.dropZoneShift();
+    let best: BlockDropZone | null = null;
+    let bestGap = Infinity;
+    for (const zone of this.dropZones) {
+      const gap = y < zone.top ? zone.top - y : y > zone.bottom ? y - zone.bottom : 0;
+      if (gap < bestGap) {
+        best = zone;
+        bestGap = gap;
+      }
+      if (gap === 0) break; // inside this block; zones are in document order and never overlap
     }
+    if (!best || best.unit === this.blockDragSource) return null;
+    const preferred = y < (best.top + best.bottom) / 2 ? "before" : "after";
+    if (this.isValidMoveTarget(best.unit, preferred)) return { zone: best, position: preferred };
+    const other = preferred === "before" ? "after" : "before";
+    return this.isValidMoveTarget(best.unit, other) ? { zone: best, position: other } : null;
   }
 
   private closeBlockMoveMenu(restoreFocus = false): void {
@@ -1640,19 +1742,58 @@ export class DocxEditor {
         const source = this.currentBlockDragSource();
         return { type: BLOCK_DRAG_TYPE, sourceAnchorId: source ? this.anchorIdOf(source) : undefined };
       },
+      // The browser would otherwise ghost the 26px grip, which says nothing about what is moving.
+      onGenerateDragPreview: ({ nativeSetDragImage }) => {
+        const source = this.currentBlockDragSource();
+        setCustomNativeDragPreview({
+          nativeSetDragImage,
+          getOffset: pointerOutsideOfPreview({ x: "14px", y: "10px" }),
+          render: ({ container }) => {
+            const chip = doc.createElement("div");
+            chip.className = "docx-block-drag-preview";
+            chip.textContent = (source && blockPreviewText(source)) || "Move block";
+            container.appendChild(chip);
+            return () => chip.remove();
+          },
+        });
+      },
       onDragStart: () => {
+        const source = this.currentBlockDragSource();
         this.blockDragging = true;
         handle.classList.add("docx-block-dragging");
+        // After the preview snapshot, so the chip is not dimmed too.
+        source?.classList.add("docx-block-drag-source");
         this.closeBlockMoveMenu();
-        this.refreshBlockMoveTargets(this.currentBlockDragSource());
-        this.refreshBlockDropTargets();
+        this.refreshBlockMoveTargets(source);
+        this.captureDropZones();
       },
       onDrop: () => {
         this.blockDragging = false;
         this.blockDragPointerDown = false;
+        this.dropZones = [];
         handle.classList.remove("docx-block-dragging");
+        // Cleared by selector rather than from a captured reference: a completed move may have
+        // re-rendered the block, and the node that carries the class outlives either handle on it.
+        doc.querySelectorAll(".docx-block-drag-source")
+          .forEach((el) => el.classList.remove("docx-block-drag-source"));
         this.hideDropIndicator();
       },
+    }));
+    // ONE drop target for the whole flow. Which block a drop belongs to is decided by
+    // `resolveDropAt` from the pointer's vertical position, so the gutter the handle is dragged
+    // down counts as being over the document — see that method.
+    this.blockDragCleanup.push(dropTargetForElements({
+      element: this.editRoot,
+      canDrop: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
+      getData: ({ input }) => {
+        const hit = this.resolveDropAt(input.clientY);
+        return hit
+          ? { type: BLOCK_DRAG_TYPE, targetAnchorId: hit.zone.anchorId, position: hit.position, zone: hit.zone }
+          : { type: BLOCK_DRAG_TYPE };
+      },
+      onDragEnter: ({ self }) => this.paintDropIndicator(self.data),
+      onDrag: ({ self }) => this.paintDropIndicator(self.data),
+      onDragLeave: () => this.hideDropIndicator(),
     }));
     this.blockDragCleanup.push(monitorForElements({
       canMonitor: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
@@ -1685,14 +1826,14 @@ export class DocxEditor {
       canScroll: ({ source }) => source.data.type === BLOCK_DRAG_TYPE,
       getAllowedAxis: () => "vertical",
     }));
-    this.refreshBlockDropTargets();
   }
 
   private teardownBlockDrag(): void {
     this.blockMoveTargetPrefetch?.();
     this.blockMoveTargetPrefetch = null;
     this.blockMoveTargetCache.clear();
-    for (const cleanup of this.blockDragTargetCleanup.splice(0)) cleanup();
+    this.dropZones = [];
+    this.dropZoneScroller = null;
     for (const cleanup of this.blockDragCleanup.splice(0)) cleanup();
     this.blockDragHandle?.remove();
     this.blockDropIndicator?.remove();

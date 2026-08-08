@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Dragging a block in the editor now shows what is moving and where it will land.** The drag
+  handle floats in the page margin, so the natural gesture — press it and pull straight down —
+  keeps the pointer in the gutter, where it never crosses a paragraph box. Because the drop
+  target was resolved by asking which element the pointer was over, that gesture found no target
+  for its whole duration: no drop line, and a release that silently did nothing. Only a drag
+  steered into the text column worked, which is why drops appeared to succeed with no preceding
+  feedback at all.
+  - Drop position is now resolved from the pointer's **vertical position** against the blocks
+    (`resolveDropAt`), not from element hit testing, so the gutter counts as being over the
+    document. Blocks are measured once per drag; scrolling is corrected by one subtraction.
+    Cost is 0.0 ms per `dragover` on a 234-block charter, and the flow no longer carries one
+    registered drop listener per block.
+  - A block the source cannot legally reach (across a section break, say) still offers no drop
+    and draws nothing — the line never snaps to a distant legal boundary the user did not point at.
+  - Three signals now run for the whole gesture: the source block dims, a preview chip naming the
+    block follows the cursor (replacing the browser's ghost of the 26 px grip), and a 2 px accent
+    line with a leading dot marks the insertion point, positioned by `transform` so tracking the
+    pointer costs no layout.
+  - The line is drawn in the MIDDLE of the gap between two blocks, not on the target's border-box
+    edge. A paragraph's `w:spacing` becomes a CSS margin, which sits outside the box, so an
+    edge-drawn line underlined the block's last line instead of reading as a gap between blocks.
 - **The editor's continuous view lays the document out at its own page width, and zooms to fit a
   narrow window instead of letting content run off the page.** Enlarging a block's font size on a
   phone pushed text and tables past the sheet, where the window clipped them. Three layers were

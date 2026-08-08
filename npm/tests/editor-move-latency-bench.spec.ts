@@ -35,7 +35,8 @@ const BUDGETS: Record<string, number> = {
   // must not touch the engine at document scale.
   'hover (block boundary crossed)': 100,
   'blockUnitOf (DOM resolve)': 20,
-  'refreshBlockDropTargets': 100,
+  'resolveDropAt (per dragover)': 5,
+  'captureDropZones': 100,
   // One-per-gesture engine queries.
   'ValidMoveTargets (bridge)': 250,
   'ValidMoveTargets review (bridge)': 250,
@@ -121,8 +122,16 @@ test.describe('DocxEditor — block-move latency benchmark', () => {
         editor['closeBlockMoveMenu']();
       });
 
-      // ── 5. Drop-target registration (one per body unit). ───────────────
-      measure('refreshBlockDropTargets', 3, () => { editor['refreshBlockDropTargets'](); });
+      // ── 5. Drag-start block measurement, and the per-dragover resolve it
+      //       buys: the latter runs on every pointer move during a drag, so it
+      //       is the one that decides whether the drop line tracks smoothly.
+      measure('captureDropZones', 3, () => { editor['captureDropZones'](); });
+      editor['blockDragSource'] = src;
+      editor['refreshBlockMoveTargets'](src);
+      measure('resolveDropAt (per dragover)', 60, (() => {
+        let i = 0;
+        return () => { editor['resolveDropAt'](100 + ((i++ * 37) % 600)); };
+      })());
 
       // ── 6. The move itself, direct mode (reconcile repaint). ───────────
       const a = movable[10];

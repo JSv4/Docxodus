@@ -315,8 +315,52 @@ and answers each candidate with index arithmetic. `DocxSessionMoveBlockTests` pi
 against the original set-membership definition for every (source, target, side) triple, because
 "faster" is only interesting if it decides identically. On the UI side, hovering consumes a
 memoized answer and schedules the ask for idle time (so the handle withdraws from an immovable
-block a beat later rather than the pointer paying for the query), and drop targets are
-registered when a drag begins rather than on every hover.
+block a beat later rather than the pointer paying for the query).
+
+#### Drag feedback, and why drop position is geometry
+
+The handle floats in the page MARGIN, 32 px left of the block's text column. So the natural
+gesture — press it and pull straight down — keeps the pointer in the gutter, where it never
+crosses a paragraph box. Resolving the drop target by asking which element the pointer is over
+therefore found nothing for the entire gesture: no drop line, and a release that silently did
+nothing. Drops only worked if the user happened to steer into the text.
+
+There is now **one** drop target, on the document flow, and `DocxEditor.resolveDropAt` decides
+where a release lands from the pointer's vertical position:
+
+- every movable block is measured once at drag start (`captureDropZones`, ~1.4 ms on the
+  charter; nothing reflows mid-drag, and scrolling — including drag autoscroll — moves the flow
+  rigidly, which `dropZoneShift` corrects with one subtraction);
+- the nearest block by vertical distance is the target, the half the pointer is in picks the
+  side, snapped to the other side when only that one is legal;
+- when neither side is legal — the pointer is in a region this block cannot reach, e.g. across a
+  section break — there is no drop and nothing is drawn. Snapping to a distant legal boundary
+  would move the block somewhere the user never pointed at.
+
+Resolution costs **0.0 ms** per `dragover` on the charter, and the flow no longer carries one
+registered drop listener per block (234 of them, re-registered at every drag start).
+
+Three signals, each answering a different question:
+
+| Signal | Answers | Mechanism |
+|--------|---------|-----------|
+| Source block dimmed to 38 % | *what* is moving | `.docx-block-drag-source`, added after the preview snapshot so the chip is not dimmed too |
+| Preview chip naming the block | *what* is under the cursor | `setCustomNativeDragPreview`; the browser would otherwise ghost the 26 px grip |
+| 2 px accent line with a leading dot | *where* it will land | `.docx-block-drop-indicator`, positioned by `transform` (no layout) with a one-shot 110 ms fade on each appearance |
+
+The line is drawn at the MIDDLE of the gap between the two blocks (`dropEdgeY`), not on the
+target's border-box edge: a paragraph's `w:spacing` becomes a CSS margin, which sits OUTSIDE the
+box, so an edge-drawn line underlines the block's last line rather than reading as a boundary
+between two blocks. At the ends of the flow there is no neighbour to bisect against, so half the
+block's own margin stands in — the only place a computed style is read, and only for those two
+blocks.
+
+`editor-block-drag.spec.ts` drags down the gutter without ever entering the text column and
+asserts all three, sampled per pointer step rather than only at the end. A second test pins the
+line's POSITION on a document with real `w:spacing` — strictly inside the gap, on neither block's
+edge, and clear of the last block past the end of the flow. That is a separate test on purpose:
+every DOM-level assertion in the first one passes while the line is drawn in the wrong place,
+because it is shown, is the right width, and tracks the pointer either way.
 
 A review-mode move used to force a full remount, on the reasoning that the move-from/move-to
 pair had to stay canonical. It does not: the render plan signs every unit with a content hash,
