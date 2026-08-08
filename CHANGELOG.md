@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.5.0] - 2026-08-08
+
 ### Fixed
 - **Dragging a block in the editor now shows what is moving and where it will land.** The drag
   handle floats in the page margin, so the natural gesture — press it and pull straight down —
