@@ -6,32 +6,17 @@
  */
 
 import { formatPageNumber } from "./page-number-format.js";
+import {
+  DEFAULT_MARGIN,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
+  parseSectionDimensions,
+  ptToPx,
+  pxToPt,
+} from "./page-geometry.js";
+import type { PageDimensions } from "./page-geometry.js";
 
-/**
- * Page dimensions extracted from HTML data attributes (in points).
- */
-export interface PageDimensions {
-  /** Page width in points */
-  pageWidth: number;
-  /** Page height in points */
-  pageHeight: number;
-  /** Content area width (page minus margins) in points */
-  contentWidth: number;
-  /** Content area height (page minus margins) in points */
-  contentHeight: number;
-  /** Top margin in points */
-  marginTop: number;
-  /** Right margin in points */
-  marginRight: number;
-  /** Bottom margin in points */
-  marginBottom: number;
-  /** Left margin in points */
-  marginLeft: number;
-  /** Header distance from top of page in points */
-  headerHeight: number;
-  /** Footer distance from bottom of page in points */
-  footerHeight: number;
-}
+export type { PageDimensions } from "./page-geometry.js";
 
 /**
  * Headers and footers for a specific section.
@@ -137,62 +122,12 @@ export interface PaginationOptions {
 }
 
 // Default letter size in points (612 x 792 = 8.5" x 11")
-const DEFAULT_PAGE_WIDTH = 612;
-const DEFAULT_PAGE_HEIGHT = 792;
-const DEFAULT_MARGIN = 72; // 1 inch
-
 // Maximum percentage of content height that footnotes can occupy
 // This allows footnotes to expand upward into body content space when needed
 const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
 
 // Minimum body content height per page (to avoid pages with only footnotes)
 const MIN_BODY_CONTENT_HEIGHT = 72; // 1 inch minimum body content
-
-/**
- * Converts pixels to points (assuming 96 DPI screen).
- */
-function pxToPt(px: number): number {
-  return px * 0.75; // 72 points / 96 pixels
-}
-
-/**
- * Converts points to pixels (assuming 96 DPI screen).
- */
-function ptToPx(pt: number): number {
-  return pt / 0.75;
-}
-
-// Default header/footer distance (0.5 inch)
-const DEFAULT_HEADER_FOOTER_HEIGHT = 36;
-
-/**
- * Parses page dimensions from a section element's data attributes.
- */
-function parseDimensions(section: HTMLElement): PageDimensions {
-  const pageWidth = parseFloat(section.dataset.pageWidth || "") || DEFAULT_PAGE_WIDTH;
-  const pageHeight = parseFloat(section.dataset.pageHeight || "") || DEFAULT_PAGE_HEIGHT;
-  const contentWidth = parseFloat(section.dataset.contentWidth || "") || pageWidth - 2 * DEFAULT_MARGIN;
-  const contentHeight = parseFloat(section.dataset.contentHeight || "") || pageHeight - 2 * DEFAULT_MARGIN;
-  const marginTop = parseFloat(section.dataset.marginTop || "") || DEFAULT_MARGIN;
-  const marginRight = parseFloat(section.dataset.marginRight || "") || DEFAULT_MARGIN;
-  const marginBottom = parseFloat(section.dataset.marginBottom || "") || DEFAULT_MARGIN;
-  const marginLeft = parseFloat(section.dataset.marginLeft || "") || DEFAULT_MARGIN;
-  const headerHeight = parseFloat(section.dataset.headerHeight || "") || DEFAULT_HEADER_FOOTER_HEIGHT;
-  const footerHeight = parseFloat(section.dataset.footerHeight || "") || DEFAULT_HEADER_FOOTER_HEIGHT;
-
-  return {
-    pageWidth,
-    pageHeight,
-    contentWidth,
-    contentHeight,
-    marginTop,
-    marginRight,
-    marginBottom,
-    marginLeft,
-    headerHeight,
-    footerHeight,
-  };
-}
 
 /**
  * Pagination engine that converts HTML with pagination metadata
@@ -312,7 +247,7 @@ export class PaginationEngine {
 
     for (const section of sectionsToProcess) {
       const sectionIndex = parseInt(section.dataset.sectionIndex || "0", 10);
-      const dims = parseDimensions(section);
+      const dims = parseSectionDimensions(section);
 
       // Make staging visible for measurement
       this.stagingElement.style.visibility = "hidden";

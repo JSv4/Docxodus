@@ -175,6 +175,21 @@ export type {
 
 export { PaginationEngine, paginateHtml } from "./pagination.js";
 
+// Page geometry is the document's own page setup (w:sectPr), read off the section wrappers
+// the converter stamps in every render mode, plus the fit-to-width zoom a view applies to it.
+export {
+  DEFAULT_MARGIN,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
+  fitScale,
+  parseSectionDimensions,
+  ptToPx,
+  pxToPt,
+} from "./page-geometry.js";
+
+export { DocumentViewport } from "./viewport.js";
+export type { ColumnWidth, DocumentViewportOptions } from "./viewport.js";
+
 export { DocxEditor } from "./editor.js";
 export type { DocxEditorOptions, DocxEditorExports } from "./editor.js";
 

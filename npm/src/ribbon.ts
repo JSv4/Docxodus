@@ -479,6 +479,8 @@ class RibbonSurface implements RibbonEditor {
       fabricateClasses: this.options.fabricateClasses,
       editable: this.options.editable,
       scale: this.options.scale,
+      columnWidth: this.options.columnWidth,
+      fitToWidth: this.options.fitToWidth,
       onEdit: this.options.onEdit,
       onMove: this.options.onMove,
       paginated,

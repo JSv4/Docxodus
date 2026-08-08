@@ -18,6 +18,8 @@
  */
 
 import { paginateHtml } from "./pagination.js";
+import { DocumentViewport } from "./viewport.js";
+import type { ColumnWidth } from "./viewport.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
 import {
@@ -170,8 +172,19 @@ export interface DocxEditorOptions {
   editable?: boolean;
   /** Render block-flow pages (page boxes via pagination.ts) vs a continuous view. Default false. */
   paginated?: boolean;
-  /** Page render scale for paginated mode (1.0 = 100%). Default 1. */
+  /** Author-pinned page render scale (1.0 = 100%). Default 1. */
   scale?: number;
+  /**
+   * How the continuous view sizes its text column. `"section"` (default) uses the width the
+   * document's `w:sectPr` defines, so line breaking matches Word on every screen; `"fluid"`
+   * lets the column follow the host, the pre-geometry behavior.
+   */
+  columnWidth?: ColumnWidth;
+  /**
+   * Zoom the page down to fit a host narrower than it, the way a word processor's
+   * fit-to-width does, instead of letting it overflow. Default true.
+   */
+  fitToWidth?: boolean;
   /**
    * Render docked Header/Footer editing bands around the body flow. Default FALSE — with it off
    * the editor's DOM is unchanged, so existing consumers are unaffected. When on, the body flow
@@ -836,6 +849,9 @@ export class DocxEditor {
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
 
+  /** Page geometry + fit-to-width zoom for the mounted document. Re-attached on every mount. */
+  private readonly viewport: DocumentViewport;
+
   /** Why the last reconcile() fell back to a full remount (null = it patched). For
    *  diagnostics/specs; not part of the public API. */
   private lastReconcileFallback: string | null = null;
@@ -851,6 +867,11 @@ export class DocxEditor {
     this.handle = handle;
     this.options = options;
     this.editRoot = container;
+    this.viewport = new DocumentViewport(container, {
+      columnWidth: options.columnWidth,
+      fitToWidth: options.fitToWidth,
+      scale: options.scale,
+    });
     if (typeof document !== "undefined") {
       document.addEventListener("selectionchange", this.onSelectionChange);
       document.addEventListener("mousedown", this.onMouseDown, true);
@@ -1040,6 +1061,8 @@ export class DocxEditor {
       editable: options.editable ?? true,
       paginated: options.paginated ?? false,
       scale: options.scale ?? 1,
+      columnWidth: options.columnWidth ?? "section",
+      fitToWidth: options.fitToWidth ?? true,
       headerFooter: options.headerFooter ?? false,
       blockDrag: options.blockDrag ?? false,
       trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
@@ -1105,6 +1128,7 @@ export class DocxEditor {
     }
     this.clearDragSelection();
     this.teardownBlockDrag();
+    this.viewport.dispose();
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
@@ -1123,6 +1147,15 @@ export class DocxEditor {
   /** The editor's current DOM (for inspection/tests). */
   get root(): HTMLElement {
     return this.container;
+  }
+
+  /**
+   * The zoom the viewport is currently applying (1 = 100%). Below 1 the page is wider than the
+   * host and has been scaled to fit rather than reflowed — the honest thing to show a user who
+   * is wondering why a phone shows the whole page.
+   */
+  get zoom(): number {
+    return this.viewport.scale;
   }
 
   /**
@@ -1764,20 +1797,19 @@ export class DocxEditor {
     this.region.refreshAll();
   }
 
-  /** Continuous (non-paginated) mount: inject the converter's styles + body, wire blocks. */
+  /**
+   * Continuous (non-paginated) mount: inject the converter's styles + body, wire blocks.
+   *
+   * The body always gets its own `.docx-body-flow` wrapper — not only when bands are docked.
+   * It is the sheet: the element the viewport gives page geometry to and zooms, and the one
+   * the bands dock around. Without it the container would have to be both the scrolling host
+   * and the scaled page, which are different boxes.
+   */
   private mountHtml(fullHtml: string): void {
     const parsed = new DOMParser().parseFromString(fullHtml, "text/html");
     const styles = Array.from(parsed.querySelectorAll("style"))
       .map((s) => s.outerHTML)
       .join("");
-    if (!this.region) {
-      this.container.innerHTML = styles + parsed.body.innerHTML;
-      this.editRoot = this.container;
-      if (this.options.editable) this.wireBlocks(this.container);
-      this.stampPlanState();
-      return;
-    }
-    // With bands docked, the body flow needs its own wrapper to be the edit root.
     this.container.innerHTML = styles;
     const flow = document.createElement("div");
     flow.className = "docx-body-flow";
@@ -1786,7 +1818,8 @@ export class DocxEditor {
     this.editRoot = flow;
     if (this.options.editable) this.wireBlocks(flow);
     this.stampPlanState();
-    this.dockBands(flow);
+    if (this.region) this.dockBands(flow);
+    this.viewport.attach(flow, true);
   }
 
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
@@ -1821,6 +1854,9 @@ export class DocxEditor {
     // The page boxes render their own (read-only) header/footer margins; the editable bands dock
     // around the page stack, so there is still exactly one addressable node per story paragraph.
     if (this.region) this.dockBands(target);
+    // Page boxes already carry the section's dimensions, so the viewport contributes only the
+    // fit zoom — a full page is far wider than a phone, and clipping it is not an option.
+    this.viewport.attach(pageRoot, false);
   }
 
   private wireBlocks(root: HTMLElement): void {

@@ -6139,6 +6139,8 @@ listSeparator
         public static readonly XName b = xhtml + "b";
         public static readonly XName body = xhtml + "body";
         public static readonly XName br = xhtml + "br";
+        public static readonly XName col = xhtml + "col";
+        public static readonly XName colgroup = xhtml + "colgroup";
         public static readonly XName del = xhtml + "del";
         public static readonly XName div = xhtml + "div";
         public static readonly XName h1 = xhtml + "h1";

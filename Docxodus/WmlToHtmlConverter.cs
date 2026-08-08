@@ -1543,7 +1543,7 @@ namespace Docxodus
                 var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
                 var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
+                var styleValue = GenerateDocumentLayoutCss() + htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -1559,7 +1559,7 @@ namespace Docxodus
                 var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
                 var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
+                SetStyleElementValue(xhtml, GenerateDocumentLayoutCss() + htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -2374,6 +2374,43 @@ namespace Docxodus
             sb.AppendLine("    top: -3.2em;");
             sb.AppendLine("}");
 
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The always-emitted stylesheet that makes the converter's own HTML lay out the way a
+        /// word processor lays out the source document. It carries only rules that encode Word's
+        /// layout model, never presentation choices — a consumer's <c>GeneralCss</c>/<c>AdditionalCss</c>
+        /// both follow it in the style element and therefore win a specificity tie.
+        /// </summary>
+        /// <remarks>
+        /// Two of Word's layout invariants have no CSS default that matches them:
+        ///
+        /// 1. <b>A word wider than its column is broken, not overflowed.</b> Word and LibreOffice
+        ///    break an over-long word at the column edge. CSS's initial <c>overflow-wrap: normal</c>
+        ///    instead lets it run past the margin, which is what a reader sees as text escaping the
+        ///    page — most visibly after enlarging a run's font size.
+        /// 2. <b>A table never exceeds the text column.</b> Word's layout — fixed or AutoFit —
+        ///    keeps the table inside the column, shrinking columns when it must. CSS's
+        ///    <c>table-layout: auto</c> does the opposite: a cell's widest unbreakable word sets a
+        ///    min-content floor the table is grown to satisfy, so an enlarged run pushes the whole
+        ///    table past its container. <c>max-width: 100%</c> plus <c>overflow-wrap: anywhere</c>
+        ///    on cells (which, unlike <c>break-word</c>, lowers min-content) restores Word's rule.
+        ///    Fixed-layout tables additionally get <c>table-layout: fixed</c> in <c>ProcessTable</c>.
+        /// </remarks>
+        private static string GenerateDocumentLayoutCss()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
+            sb.AppendLine("body {");
+            sb.AppendLine("    overflow-wrap: break-word;");
+            sb.AppendLine("}");
+            sb.AppendLine("table {");
+            sb.AppendLine("    max-width: 100%;");
+            sb.AppendLine("}");
+            sb.AppendLine("td, th {");
+            sb.AppendLine("    overflow-wrap: anywhere;");
+            sb.AppendLine("}");
             return sb.ToString();
         }
 
@@ -4647,6 +4684,17 @@ namespace Docxodus
                 }
                 // type == "auto" or type == "nil" means no fixed width (browser default)
             }
+
+            // Word's table layout algorithm, mapped to the CSS one that behaves the same way.
+            // With w:tblLayout fixed ("AutoFit" off in Word's UI) the authored column widths are
+            // binding: content WRAPS inside a column instead of widening it. CSS's default
+            // table-layout:auto does the opposite — it grows a column to fit its widest
+            // unbreakable word — so a fixed-layout table rendered as auto silently becomes wider
+            // than the document's text column as soon as a run's font size is enlarged.
+            // Only meaningful alongside a table width: fixed layout with width:auto degrades to
+            // auto layout, so pairing them is what makes the declaration load-bearing.
+            if (IsFixedLayoutTable(element) && style.ContainsKey("width"))
+                style.AddIfMissing("table-layout", "fixed");
             var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
             if (tblInd != null)
             {
@@ -4724,6 +4772,7 @@ namespace Docxodus
                 settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
                     ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
                     : null,
+                CreateColGroup(element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
             var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
@@ -4748,6 +4797,61 @@ namespace Docxodus
                 jcToUse,
                 table);
             return tableDiv;
+        }
+
+        /// <summary>
+        /// Whether Word lays this table out with binding column widths ("AutoFit" off).
+        /// </summary>
+        /// <remarks>
+        /// <c>w:tblLayout</c> is authoritative when present. When it is absent the spec's default
+        /// is AutoFit — but an absent <c>w:tblLayout</c> alongside an explicit <c>dxa</c> table
+        /// width is Word's own shape for a table sized by its grid, and treating it as AutoFit is
+        /// what lets the browser widen it past the text column. The <c>w:tblGrid</c> requirement
+        /// keeps that inference to tables that actually declare the widths it would honor.
+        /// </remarks>
+        private static bool IsFixedLayoutTable(XElement tableElement)
+        {
+            var layout = (string)tableElement
+                .Elements(W.tblPr)
+                .Elements(W.tblLayout)
+                .Attributes(W.type)
+                .FirstOrDefault();
+            if (layout == "fixed")
+                return true;
+            if (layout == "autofit")
+                return false;
+
+            var tblW = tableElement.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
+            var widthType = (string)tblW?.Attribute(W.type);
+            if (widthType != "dxa")
+                return false;
+            return tableElement.Elements(W.tblGrid).Elements(W.gridCol).Any();
+        }
+
+        /// <summary>
+        /// Projects <c>w:tblGrid</c> to an HTML <c>colgroup</c>.
+        /// </summary>
+        /// <remarks>
+        /// The grid — not the first row's cells — is where Word records a table's column widths,
+        /// and the two disagree whenever row 1 carries a <c>w:gridSpan</c> or a vertical merge.
+        /// CSS's fixed table layout reads its column widths from a <c>colgroup</c> in preference
+        /// to the first row, so emitting the grid is what makes <c>table-layout: fixed</c> mean
+        /// the same thing here as in Word.
+        /// </remarks>
+        private static XElement CreateColGroup(XElement tableElement)
+        {
+            var cols = tableElement
+                .Elements(W.tblGrid)
+                .Elements(W.gridCol)
+                .Select(gc => WordprocessingMLUtil.AttributeToTwips(gc.Attribute(W._w)))
+                .ToList();
+            if (cols.Count == 0 || cols.Any(w => w == null || w <= 0m))
+                return null;
+
+            return new XElement(Xhtml.colgroup,
+                cols.Select(w => new XElement(Xhtml.col,
+                    new XAttribute("style", string.Format(
+                        NumberFormatInfo.InvariantInfo, "width: {0}pt;", w.Value / 20m)))));
         }
 
         /// <summary>
@@ -5055,45 +5159,43 @@ namespace Docxodus
                             .Elements(W.bidi)
                             .FirstOrDefault(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
 
-                        // Parse page dimensions for pagination mode
-                        if (settings.RenderPagination == PaginationMode.Paginated)
-                        {
-                            dims = PageDimensions.FromSectionProperties(sectAnnotation.SectionElement);
-                        }
+                        dims = PageDimensions.FromSectionProperties(sectAnnotation.SectionElement);
                     }
 
                     var div = new XElement(Xhtml.div,
                         bidi != null ? new XAttribute("dir", "rtl") : null,
                         CreateBorderDivs(wordDoc, settings, g));
 
-                    // Add pagination data attributes when enabled
-                    if (settings.RenderPagination == PaginationMode.Paginated)
+                    // The section's page setup, emitted in EVERY render mode. It is a property of
+                    // the document, not of the view: a continuous renderer needs the same page
+                    // width and margins a paginated one does, because the text column they define
+                    // is what the document's line breaking was authored against. Withholding it
+                    // outside Paginated mode is what left the continuous view sizing its column
+                    // from the device instead of from w:sectPr.
+                    div.Add(new XAttribute("data-section-index", sectionIndex));
+
+                    if (dims != null)
                     {
-                        div.Add(new XAttribute("data-section-index", sectionIndex));
-
-                        if (dims != null)
-                        {
-                            div.Add(new XAttribute("data-page-width", dims.PageWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-page-height", dims.PageHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-content-width", dims.ContentWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-content-height", dims.ContentHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-margin-top", dims.MarginTopPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                            div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
-                        }
-
-                        // The section's page numbering (w:pgNumType), which is what an unswitched
-                        // PAGE field renders through. Emitted per attribute: absent means "continue
-                        // the previous section" / "Word's default format", not a value.
-                        var pgNumType = sectAnnotation?.SectionElement.Element(W.pgNumType);
-                        if ((string)pgNumType?.Attribute(W.start) is { } pgStart)
-                            div.Add(new XAttribute("data-page-num-start", pgStart));
-                        if ((string)pgNumType?.Attribute(W.fmt) is { } pgFmt)
-                            div.Add(new XAttribute("data-page-num-fmt", pgFmt));
+                        div.Add(new XAttribute("data-page-width", dims.PageWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-page-height", dims.PageHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-content-width", dims.ContentWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-content-height", dims.ContentHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-top", dims.MarginTopPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                     }
+
+                    // The section's page numbering (w:pgNumType), which is what an unswitched
+                    // PAGE field renders through. Emitted per attribute: absent means "continue
+                    // the previous section" / "Word's default format", not a value.
+                    var pgNumType = sectAnnotation?.SectionElement.Element(W.pgNumType);
+                    if ((string)pgNumType?.Attribute(W.start) is { } pgStart)
+                        div.Add(new XAttribute("data-page-num-start", pgStart));
+                    if ((string)pgNumType?.Attribute(W.fmt) is { } pgFmt)
+                        div.Add(new XAttribute("data-page-num-fmt", pgFmt));
 
                     sectionIndex++;
                     return div;
