@@ -21,6 +21,23 @@ All notable changes to this project will be documented in this file.
   detail (an unbanded fire frame costs ~1300 runs ≈ 550 ms renders; banded it sits nearer 150).
   Spec: `npm/tests/ascii-animation.spec.ts` (boots, frames advance on a stable anchor, every
   scene draws, saved bytes round-trip through a fresh session).
+- **`DocxEditor.refresh()` — repaint after external session mutations** (npm). Public method for
+  hosts that drive the editor's `sessionHandle` directly (an agent pipeline, `raw.replaceXml`, a
+  batch import): "the session changed behind the editor's back — reconcile the DOM." Continuous
+  mode patches incrementally from the render plan (a Unid-preserving single-block mutation
+  repaints just that block); paginated mode, or anything the reconciler cannot prove, remounts.
+- **The Observatory inside the real editor surface** (`npm/examples/ascii-animation-editor.html`).
+  The same four phenomena animated in the SHIPPED ribbon editor rather than a bespoke exhibit
+  page: the loop mutates the editor's own session (`raw.replaceXml` on the canvas paragraph's
+  stable anchor) and repaints through `editor.refresh()`, so pausing needs no mode switch — the
+  sea is an ordinary editable block, the whole ribbon works on the document mid-frame, Undo
+  rewinds the animation frame by frame (every frame is an undoable mutation), and the ribbon's
+  own *Save* downloads the caught wave. Clicking the water pauses the loop and drops the caret
+  in. Scene generators, frame→OOXML builder, and document seeding moved to the shared
+  `npm/examples/ascii-scenes.js` module both pages import. Spec:
+  `npm/tests/ascii-animation-editor.spec.ts` (frames advance incrementally — never a per-frame
+  remount — on a stable anchor; pause → type via real editing gestures → one saved DOCX holds
+  both the frozen frame and the human's edit; every scene draws).
 
 ## [9.5.0] - 2026-08-08
 

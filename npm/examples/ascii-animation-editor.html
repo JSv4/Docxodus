@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Docxodus — the Observatory inside the real editor</title>
+  <style>
+    /* This page is a HOST. The whole editor surface — ribbon, rail, loader — ships in
+       `mountRibbon`; the phenomena ship in `ascii-scenes.js`. The page's only original
+       chrome is the observatory dock pinned under the document: scene switcher,
+       play/pause/step, pacing, live frame telemetry.
+
+       The money shot: the animation drives the EDITOR'S OWN session (raw.replaceXml on
+       the canvas paragraph's stable anchor + editor.refresh(), which reconciles exactly
+       one block). Pause — or just click the sea — and there is no mode switch: the
+       caret lands in an ordinary editable paragraph, the whole ribbon works, Ctrl+Z
+       rewinds frame by frame (each frame is an undoable mutation), and the ribbon's own
+       Save downloads the caught frame as a real .docx. */
+    html, body { height: 100%; }
+    body { margin: 0; }
+    #app { height: 100%; }
+    #dock {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 60; max-width: min(960px, calc(100vw - 24px));
+      display: flex; flex-direction: column; gap: 5px; align-items: center;
+      background: rgba(11, 15, 26, 0.94); color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 10px;
+      padding: 8px 14px 7px;
+      font: 12px/1.4 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    #dock .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+    #dock button, #dock select {
+      appearance: none; background: #111827; color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 6px;
+      font: inherit; font-size: 11.5px; padding: 4px 10px; cursor: pointer;
+    }
+    #dock button:hover { background: #18233a; }
+    #dock button[aria-pressed="true"] { background: #123a34; color: #5eead4; }
+    #dock button:disabled { opacity: 0.4; cursor: default; }
+    #dockstats { color: #7a8699; font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
+    #dockstats b { color: #d5dce8; font-weight: 600; }
+    #dockstats .inc { color: #5eead4; }
+    #dockhint { color: #7a8699; font-size: 10.5px; }
+    #dockhint b { color: #d5dce8; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="dock" hidden>
+    <div class="row" id="dockscenes"></div>
+    <div class="row">
+      <button id="playpause">Pause</button>
+      <button id="step" disabled>Step</button>
+      <select id="pace" title="Target frame pacing">
+        <option value="125" selected>8 fps</option>
+        <option value="83">12 fps</option>
+        <option value="0">unthrottled</option>
+      </select>
+      <span id="dockstats">warming up…</span>
+    </div>
+    <div id="dockhint">Click the sea to catch it — then it is only a document: type into it, use the ribbon,
+      <b>Undo rewinds frame by frame</b>, and the ribbon's <b>Save</b> downloads the caught wave.</div>
+  </div>
+
+  <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
+  <script>document.write('<script src="./session.bundle.js?t=' + Date.now() + '"><\/script>');</script>
+  <script type="module">
+    import { dotnet } from './_framework/dotnet.js';
+    import { SCENES, frameXml, seedObservatory } from './ascii-scenes.js';
+
+    const { mountRibbon } = window.DocxodusEditor;
+    const $ = (id) => document.getElementById(id);
+
+    const ribbon = mountRibbon('#app', {
+      documentName: 'docx-observatory.docx',
+      hint: 'The sea below is a Word paragraph. Pause the animation (or click the water) and edit it like any other document.',
+      loader: {
+        eyebrow: 'Local .NET runtime',
+        meta: 'a live DOCX as the framebuffer',
+        onRetry: () => location.reload(),
+      },
+    });
+    window.__selectTab = (name) => ribbon.selectTab(name);
+
+    try {
+      ribbon.loader.stage(0);
+      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
+      const wasm = await getAssemblyExports(getConfig().mainAssemblyName);
+      const exports = {
+        DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
+        DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
+      };
+      ribbon.setExports(exports);
+
+      // ─── A blank document, opened in the REAL editor, seeded through the
+      //     agentic surface, repainted with the public refresh() ──────────
+      ribbon.loader.stage(1);
+      const editor = ribbon.openBlank('docx-observatory.docx');
+      const session = new window.DocxodusSession.DocxSession(editor.sessionHandle, exports.DocxSessionBridge);
+      const seeded = seedObservatory(session);
+      let canvasAnchor = seeded.canvasAnchor;
+      const openTag = seeded.openTag;
+      editor.refresh();
+
+      ribbon.loader.stage(3);
+      ribbon.loader.done();
+      $('dock').hidden = false;
+
+      const unidOf = (anchor) => anchor.split(':')[2];
+      const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
+
+      // ─── Animation loop: mutate the editor's session, then reconcile ────
+      let scene = SCENES[0];
+      let playing = true;
+      let timer = 0;
+      let t = 0;
+      let lastWall = performance.now();
+      let frames = 0;
+      let fps = 0;
+      let lastRuns = 0;
+      let lastFrameEnd = performance.now();
+      const timings = { mutate: 0, refresh: 0 };
+      let interval = Number($('pace').value);
+
+      function drawFrame() {
+        const wall = performance.now();
+        t += Math.min(0.25, (wall - lastWall) / 1000);
+        lastWall = wall;
+
+        const grid = scene.gen(t);
+        const { xml, runs } = frameXml(openTag, grid, scene.bg);
+        lastRuns = runs;
+
+        const t0 = performance.now();
+        const res = session.raw.replaceXml(canvasAnchor, xml);
+        const t1 = performance.now();
+        if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
+        canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+
+        // The one line that makes the editor a render target: "the session changed
+        // behind your back — repaint". Continuous mode reconciles exactly one block.
+        editor.refresh();
+        const t2 = performance.now();
+
+        const mix = (a, b) => a === 0 ? b : a * 0.9 + b * 0.1;
+        timings.mutate = mix(timings.mutate, t1 - t0);
+        timings.refresh = mix(timings.refresh, t2 - t1);
+        fps = mix(fps, 1000 / Math.max(1, t2 - wall + (wall - lastFrameEnd)));
+        lastFrameEnd = t2;
+        frames++;
+
+        const fb = editor.lastReconcileFallback;
+        $('dockstats').innerHTML =
+          `<b>${scene.label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+          `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · editor.refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
+          `<b>${lastRuns}</b> runs · ` +
+          (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+      }
+
+      function loop() {
+        if (!playing) return;
+        const started = performance.now();
+        try { drawFrame(); }
+        catch (e) { playing = false; $('dockstats').textContent = 'halted: ' + e.message; throw e; }
+        timer = setTimeout(loop, Math.max(0, interval - (performance.now() - started)));
+      }
+
+      // ─── Dock controls ──────────────────────────────────────────────────
+      const sceneBtns = new Map();
+      for (const s of SCENES) {
+        const b = document.createElement('button');
+        b.textContent = s.label;
+        b.setAttribute('aria-pressed', String(s === scene));
+        b.addEventListener('click', () => setScene(s.name));
+        sceneBtns.set(s.name, b);
+        $('dockscenes').appendChild(b);
+      }
+      function setScene(name) {
+        const next = SCENES.find((s) => s.name === name);
+        if (!next) return;
+        scene = next;
+        scene.reset?.();
+        sceneBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
+        if (!playing) drawFrame();
+      }
+      function setPlaying(next) {
+        if (playing === next) return;
+        playing = next;
+        $('playpause').textContent = playing ? 'Pause' : 'Play';
+        $('step').disabled = playing;
+        if (playing) { lastWall = performance.now(); loop(); }
+        else clearTimeout(timer);
+      }
+      $('playpause').addEventListener('click', () => setPlaying(!playing));
+      $('step').addEventListener('click', () => { if (!playing) drawFrame(); });
+      $('pace').addEventListener('change', () => { interval = Number($('pace').value); });
+
+      // Click the water (or any block) while it plays: catch the frame and start
+      // editing. No mode switch — the document was editable the whole time.
+      editor.root.addEventListener('pointerdown', () => setPlaying(false), true);
+
+      // First frame + loop.
+      drawFrame();
+      loop();
+
+      // Published only once the first frame has landed: specs treat __moneyshot
+      // as the "editor-hosted canvas is live" signal.
+      window.__moneyshot = {
+        editor,
+        ribbon,
+        session,
+        bridge: exports.DocxSessionBridge,
+        canvasAnchor: () => canvasAnchor,
+        canvasText: () => canvasEl()?.textContent ?? '',
+        frames: () => frames,
+        fps: () => fps,
+        timings: () => ({ ...timings, runs: lastRuns }),
+        scene: () => scene.name,
+        setScene,
+        playing: () => playing,
+        pause: () => setPlaying(false),
+        play: () => setPlaying(true),
+        step: () => { if (!playing) drawFrame(); },
+        save: () => editor.save(),
+      };
+    } catch (error) {
+      console.error(error);
+      ribbon.loader.fail(error);
+      window.__moneyshotError = String(error?.stack ?? error);
+    }
+  </script>
+</body>
+</html>
