@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
     block follows the cursor (replacing the browser's ghost of the 26 px grip), and a 2 px accent
     line with a leading dot marks the insertion point, positioned by `transform` so tracking the
     pointer costs no layout.
+  - The line is drawn in the MIDDLE of the gap between two blocks, not on the target's border-box
+    edge. A paragraph's `w:spacing` becomes a CSS margin, which sits outside the box, so an
+    edge-drawn line underlined the block's last line instead of reading as a gap between blocks.
 - **The editor's continuous view lays the document out at its own page width, and zooms to fit a
   narrow window instead of letting content run off the page.** Enlarging a block's font size on a
   phone pushed text and tables past the sheet, where the window clipped them. Three layers were

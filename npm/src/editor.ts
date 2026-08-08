@@ -235,10 +235,15 @@ function blockPreviewText(unit: HTMLElement): string {
 interface BlockDropZone {
   unit: HTMLElement;
   anchorId: string;
+  /** Position in `dropZones`, so a neighbour is one index away — see `dropEdgeY`. */
+  index: number;
   top: number;
   bottom: number;
   left: number;
   width: number;
+  /** Own outer margin, read only for the first/last zone — see `dropEdgeY`. */
+  marginBefore: number;
+  marginAfter: number;
 }
 
 function ensureBlockDragStyles(doc: Document): void {
@@ -1361,12 +1366,33 @@ export class DocxEditor {
       this.hideDropIndicator();
       return;
     }
-    const edge = data.position === "after" ? zone.bottom : zone.top;
-    const y = Math.round(edge + this.dropZoneShift()) - 1;
+    const y = Math.round(this.dropEdgeY(zone, data.position === "after" ? "after" : "before")
+      + this.dropZoneShift()) - 1;
     // Position before revealing, so the entry fade never plays at a stale spot.
     indicator.style.transform = `translate3d(${Math.round(zone.left)}px, ${y}px, 0)`;
     indicator.style.width = `${Math.max(24, Math.round(zone.width))}px`;
     indicator.style.display = "block";
+  }
+
+  /**
+   * Where to draw the line for an insertion on `position` of `zone` — the MIDDLE of the gap to
+   * the neighbour on that side, not the zone's own border-box edge. A paragraph's `w:spacing`
+   * becomes a CSS margin, which sits outside the box, so drawing on the edge underlines the
+   * block's last line instead of reading as a gap between two blocks. Falls back to the raw edge
+   * at the ends of the flow, and degrades to the same value when blocks are contiguous.
+   */
+  private dropEdgeY(zone: BlockDropZone, position: "before" | "after"): number {
+    const neighbour = this.dropZones[zone.index + (position === "after" ? 1 : -1)];
+    // At the ends of the flow there is nothing to bisect against, so half the block's own
+    // margin stands in for half the gap — the same position, one contributor instead of two.
+    if (!neighbour) {
+      return position === "after"
+        ? zone.bottom + zone.marginAfter / 2
+        : zone.top - zone.marginBefore / 2;
+    }
+    return position === "after"
+      ? (zone.bottom + neighbour.top) / 2
+      : (neighbour.bottom + zone.top) / 2;
   }
 
   private hideDropIndicator(): void {
@@ -1463,16 +1489,29 @@ export class DocxEditor {
 
   /** Measure every movable block once, at drag start. See `BlockDropZone`. */
   private captureDropZones(): void {
+    const view = this.container.ownerDocument.defaultView;
     this.dropZoneScroller = this.scrollContainer();
     this.dropZoneOrigin = this.scrollOffsetSum();
     this.dropZones = [];
+    const boxes: HTMLElement[] = [];
     for (const unit of this.bodyUnitNodes()) {
       const anchorId = this.isMovableBlockUnit(unit) ? this.anchorIdOf(unit) : null;
       if (!anchorId) continue;
-      const rect = this.unitWrapperOf(unit).getBoundingClientRect();
+      const box = this.unitWrapperOf(unit);
+      const rect = box.getBoundingClientRect();
+      boxes.push(box);
       this.dropZones.push({
-        unit, anchorId, top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width,
+        unit, anchorId, index: this.dropZones.length,
+        top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width,
+        marginBefore: 0, marginAfter: 0,
       });
+    }
+    // Only the flow's two ends ever consult a margin, so only they are worth a style read.
+    const ends = new Set([0, this.dropZones.length - 1].filter((i) => i >= 0 && i < boxes.length));
+    for (const i of ends) {
+      const style = view?.getComputedStyle(boxes[i]);
+      this.dropZones[i].marginBefore = parseFloat(style?.marginTop ?? "0") || 0;
+      this.dropZones[i].marginAfter = parseFloat(style?.marginBottom ?? "0") || 0;
     }
   }
 

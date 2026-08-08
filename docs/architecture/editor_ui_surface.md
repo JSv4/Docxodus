@@ -348,6 +348,13 @@ Three signals, each answering a different question:
 | Preview chip naming the block | *what* is under the cursor | `setCustomNativeDragPreview`; the browser would otherwise ghost the 26 px grip |
 | 2 px accent line with a leading dot | *where* it will land | `.docx-block-drop-indicator`, positioned by `transform` (no layout) with a one-shot 110 ms fade on each appearance |
 
+The line is drawn at the MIDDLE of the gap between the two blocks (`dropEdgeY`), not on the
+target's border-box edge: a paragraph's `w:spacing` becomes a CSS margin, which sits OUTSIDE the
+box, so an edge-drawn line underlines the block's last line rather than reading as a boundary
+between two blocks. At the ends of the flow there is no neighbour to bisect against, so half the
+block's own margin stands in — the only place a computed style is read, and only for those two
+blocks.
+
 `editor-block-drag.spec.ts` drags down the gutter without ever entering the text column and
 asserts all three, sampled per pointer step rather than only at the end.
 
