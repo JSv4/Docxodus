@@ -1221,6 +1221,20 @@ export class DocxEditor {
     return this.handle;
   }
 
+  /**
+   * Repaint from the live session after it was mutated OUTSIDE the editor's own
+   * commands — a host driving {@link sessionHandle} directly (an agent pipeline,
+   * `raw.replaceXml`, a batch import). Continuous mode patches incrementally from
+   * the render plan (a Unid-preserving single-block mutation repaints just that
+   * block); paginated mode — or anything the reconciler cannot prove — remounts.
+   * The editor cannot observe external mutations, so the host owns calling this
+   * once per mutation batch.
+   */
+  refresh(): void {
+    this.assertOpen();
+    this.reconcile();
+  }
+
   /** Move one top-level body block relative to another and repaint from the live session. */
   moveBlock(
     sourceAnchorId: string,

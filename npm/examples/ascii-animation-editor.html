@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Docxodus — the Observatory inside the real editor</title>
+  <style>
+    /* This page is a HOST. The whole editor surface — ribbon, rail, loader — ships in
+       `mountRibbon`; the phenomena ship in `ascii-scenes.js`. The page's only original
+       chrome is the observatory dock pinned under the document: scene switcher,
+       play/pause/step, pacing, live frame telemetry.
+
+       The money shot: the animation drives the EDITOR'S OWN session (raw.replaceXml on
+       the canvas paragraph's stable anchor + editor.refresh(), which reconciles exactly
+       one block). Pause — or just click the sea — and there is no mode switch: the
+       caret lands in an ordinary editable paragraph, the whole ribbon works, Ctrl+Z
+       rewinds frame by frame (each frame is an undoable mutation), and the ribbon's own
+       Save downloads the caught frame as a real .docx. */
+    html, body { height: 100%; }
+    body { margin: 0; }
+    #app { height: 100%; }
+    #dock {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 60; max-width: min(960px, calc(100vw - 24px));
+      display: flex; flex-direction: column; gap: 5px; align-items: center;
+      background: rgba(11, 15, 26, 0.94); color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 10px;
+      padding: 8px 14px 7px;
+      font: 12px/1.4 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    #dock .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+    #dock button, #dock select {
+      appearance: none; background: #111827; color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 6px;
+      font: inherit; font-size: 11.5px; padding: 4px 10px; cursor: pointer;
+    }
+    #dock button:hover { background: #18233a; }
+    #dock button[aria-pressed="true"] { background: #123a34; color: #5eead4; }
+    #dock button:disabled { opacity: 0.4; cursor: default; }
+    #dockstats { color: #7a8699; font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
+    #dockstats b { color: #d5dce8; font-weight: 600; }
+    #dockstats .inc { color: #5eead4; }
+    #dockhint { color: #7a8699; font-size: 10.5px; }
+    #dockhint b { color: #d5dce8; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="dock" hidden>
+    <div class="row" id="dockscenes"></div>
+    <div class="row">
+      <button id="playpause">Pause</button>
+      <button id="step" disabled>Step</button>
+      <select id="pace" title="Target frame pacing">
+        <option value="125" selected>8 fps</option>
+        <option value="83">12 fps</option>
+        <option value="0">unthrottled</option>
+      </select>
+      <span id="dockstats">warming up…</span>
+    </div>
+    <div id="dockhint">Click the sea to catch it — then it is only a document: type into it, use the ribbon,
+      <b>Undo rewinds frame by frame</b>, and the ribbon's <b>Save</b> downloads the caught wave.</div>
+  </div>
+
+  <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
+  <script>document.write('<script src="./session.bundle.js?t=' + Date.now() + '"><\/script>');</script>
+  <script type="module">
+    import { dotnet } from './_framework/dotnet.js';
+    // ascii-scenes.js lives in docs/demo/ (the Pages deploy needs the physical
+    // copy); pretest copies it into this webroot beside the page.
+    import { startObservatory } from './ascii-scenes.js';
+
+    const { mountRibbon } = window.DocxodusEditor;
+    const $ = (id) => document.getElementById(id);
+
+    const ribbon = mountRibbon('#app', {
+      documentName: 'docx-observatory.docx',
+      hint: 'The sea below is a Word paragraph. Pause the animation (or click the water) and edit it like any other document.',
+      loader: {
+        eyebrow: 'Local .NET runtime',
+        meta: 'a live DOCX as the framebuffer',
+        onRetry: () => location.reload(),
+      },
+    });
+    window.__selectTab = (name) => ribbon.selectTab(name);
+
+    try {
+      ribbon.loader.stage(0);
+      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
+      const wasm = await getAssemblyExports(getConfig().mainAssemblyName);
+      const exports = {
+        DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
+        DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
+      };
+      ribbon.setExports(exports);
+
+      // ─── A blank document, opened in the REAL editor, seeded through the
+      //     agentic surface, animated by the shared driver ────────────────
+      ribbon.loader.stage(1);
+      const editor = ribbon.openBlank('docx-observatory.docx');
+      const session = new window.DocxodusSession.DocxSession(editor.sessionHandle, exports.DocxSessionBridge);
+      const controller = startObservatory({
+        editor,
+        session,
+        ui: {
+          scenes: $('dockscenes'),
+          playpause: $('playpause'),
+          step: $('step'),
+          pace: $('pace'),
+          stats: $('dockstats'),
+        },
+      });
+
+      ribbon.loader.stage(3);
+      ribbon.loader.done();
+      $('dock').hidden = false;
+
+      // Published only once the first frame has landed: specs treat __moneyshot
+      // as the "editor-hosted canvas is live" signal.
+      window.__moneyshot = {
+        ...controller,
+        editor,
+        ribbon,
+        session,
+        bridge: exports.DocxSessionBridge,
+      };
+    } catch (error) {
+      console.error(error);
+      ribbon.loader.fail(error);
+      window.__moneyshotError = String(error?.stack ?? error);
+    }
+  </script>
+</body>
+</html>

@@ -4,6 +4,53 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **ASCII-animation demo: DOCX as a rendering canvas** (`npm/examples/ascii-animation.html`,
+  served with the Playwright webroot). Four procedurally generated natural phenomena — ocean
+  swell, pond ripples, a rain squall, and a hearth fire — animate inside a live Word document:
+  one paragraph is the framebuffer, each frame is that paragraph's OOXML (colored monospace runs
+  plus `w:br` line breaks, paragraph `w:shd` as the sky) swapped in with
+  `DocxSession.raw.replaceXml` and re-rendered incrementally with `session.renderBlock`. The
+  replacement XML keeps the paragraph's Unid, so the anchor — and therefore the `data-anchor`
+  DOM identity — survives every frame; *Save .docx* mid-animation downloads a real Word document
+  holding the caught frame. The page seeds its document through the agentic surface
+  (`CreateBlankDocx`, `replaceText`, `insertParagraph`, `applyFormat`, `insertFootnote`) and
+  reports live per-frame telemetry (replaceXml / renderBlock / DOM-swap ms, run count, fps).
+  Scene generators budget color changes deliberately: every color change inside a row is its own
+  `w:r` and the converter pays ~1 ms per run, so ink follows smooth bands while glyphs carry the
+  detail (an unbanded fire frame costs ~1300 runs ≈ 550 ms renders; banded it sits nearer 150).
+  Spec: `npm/tests/ascii-animation.spec.ts` (boots, frames advance on a stable anchor, every
+  scene draws, saved bytes round-trip through a fresh session).
+- **`DocxEditor.refresh()` — repaint after external session mutations** (npm). Public method for
+  hosts that drive the editor's `sessionHandle` directly (an agent pipeline, `raw.replaceXml`, a
+  batch import): "the session changed behind the editor's back — reconcile the DOM." Continuous
+  mode patches incrementally from the render plan (a Unid-preserving single-block mutation
+  repaints just that block); paginated mode, or anything the reconciler cannot prove, remounts.
+- **The Observatory inside the real editor surface** (`npm/examples/ascii-animation-editor.html`).
+  The same four phenomena animated in the SHIPPED ribbon editor rather than a bespoke exhibit
+  page: the loop mutates the editor's own session (`raw.replaceXml` on the canvas paragraph's
+  stable anchor) and repaints through `editor.refresh()`, so pausing needs no mode switch — the
+  sea is an ordinary editable block, the whole ribbon works on the document mid-frame, Undo
+  rewinds the animation frame by frame (every frame is an undoable mutation), and the ribbon's
+  own *Save* downloads the caught wave. Clicking the water pauses the loop and drops the caret
+  in. Scene generators, frame→OOXML builder, and document seeding moved to the shared
+  `npm/examples/ascii-scenes.js` module both pages import. Spec:
+  `npm/tests/ascii-animation-editor.spec.ts` (frames advance incrementally — never a per-frame
+  remount — on a stable anchor; pause → type via real editing gestures → one saved DOCX holds
+  both the frozen frame and the human's edit; every scene draws).
+- **Observatory on the GitHub Pages demo** (`docs/demo/observatory.html`, linked from the landing
+  nav). A fourth Pages page hosting the same effect through the *published* package: it imports
+  `createRibbonEditor`/`DocxSession`/`getWasmExports` from the pinned CDN embed bundle. The
+  phenomena are demo content, not library machinery, and are deliberately NOT shipped in the npm
+  package: `ascii-scenes.js` lives canonically in `docs/demo/` (the one place Pages needs a
+  physical copy — it deploys `docs/` verbatim, no build step), and pretest copies that single
+  file into the test webroot for the two `npm/examples/ascii-animation*` pages. The frame loop +
+  dock wiring moved into `startObservatory()` in that module, shared by all three hosts.
+  Pinned to `docxodus@9.6.0` — the page needs `DocxEditor.refresh()`, which 9.5.0 predates — so
+  it shows its boot-failure card until that release publishes, then heals with no further change.
+  Spec: `npm/tests/demo-observatory.spec.ts` drives the page fully locally via the `?engine=`
+  override (boots the shipped surface, animates incrementally, save round-trips).
+
 ## [9.5.0] - 2026-08-08
 
 ### Fixed
