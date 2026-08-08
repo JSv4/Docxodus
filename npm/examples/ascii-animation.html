@@ -127,6 +127,8 @@
   <script src="./session.bundle.js"></script>
   <script type="module">
     import { dotnet } from './_framework/dotnet.js';
+    // ascii-scenes.js lives in docs/demo/ (the Pages deploy needs the physical
+    // copy); pretest copies it into this webroot beside the page.
     import { COLS, ROWS, SCENES, frameXml, seedObservatory } from './ascii-scenes.js';
 
     const $ = (id) => document.getElementById(id);

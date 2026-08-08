@@ -68,6 +68,8 @@
   <script>document.write('<script src="./session.bundle.js?t=' + Date.now() + '"><\/script>');</script>
   <script type="module">
     import { dotnet } from './_framework/dotnet.js';
+    // ascii-scenes.js lives in docs/demo/ (the Pages deploy needs the physical
+    // copy); pretest copies it into this webroot beside the page.
     import { startObservatory } from './ascii-scenes.js';
 
     const { mountRibbon } = window.DocxodusEditor;

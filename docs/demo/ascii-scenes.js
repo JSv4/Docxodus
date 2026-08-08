@@ -1,6 +1,15 @@
-// The DOCX Observatory's phenomena, shared by both host pages:
-// ascii-animation.html (bespoke exhibit chrome, renderBlock + replaceWith) and
-// ascii-animation-editor.html (the shipped ribbon editor, editor.refresh()).
+// The DOCX Observatory's phenomena, shared by its three host pages:
+// npm/examples/ascii-animation.html (bespoke exhibit chrome, renderBlock +
+// replaceWith), npm/examples/ascii-animation-editor.html (the shipped ribbon
+// editor, editor.refresh()), and docs/demo/observatory.html (the GitHub Pages
+// host of the same editor surface from the pinned CDN package).
+//
+// This file's home is docs/demo/ because that is the one place that must hold
+// a physical copy — GitHub Pages deploys docs/ verbatim, with no build step.
+// It is deliberately NOT shipped in the npm package: it is demo content, not
+// library machinery. The npm example pages get it via pretest, which copies it
+// into the Playwright webroot beside them.
+//
 // A scene fills a COLS×ROWS cell grid — chars[row][col] + colors[row][col]
 // (hex RRGGBB, ignored for spaces) — and `bg` becomes the canvas paragraph's
 // w:shd fill. frameXml() turns a grid into the canvas paragraph's OOXML;

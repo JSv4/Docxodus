@@ -2,9 +2,10 @@ import { test, expect, Page } from '@playwright/test';
 
 // docs/demo/observatory.html — the GitHub Pages observatory page (copied into
 // the webroot as demo-observatory.html by pretest). In production it imports
-// the pinned CDN engine AND the phenomena module from the same docxodus
-// package; `?engine=` retargets both (ascii-scenes.js is resolved beside the
-// engine bundle), which is how this spec drives the page fully locally.
+// the pinned CDN engine, while the phenomena (`ascii-scenes.js`) are demo
+// content living beside the page — in docs/demo/ on Pages, and in the webroot
+// here (pretest copies the same file). `?engine=./embed.bundle.js` therefore
+// retargets only the library, which is how this spec drives the page locally.
 // Deep animation/editing behavior is pinned by ascii-animation-editor.spec.ts;
 // this spec guards the PAGE wiring: the createRibbonEditor boot path, the
 // scenes-URL derivation, the dock, and the observatory running in the surface.

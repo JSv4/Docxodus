@@ -9,8 +9,8 @@
   <meta name="description" content="Procedural ASCII phenomena animated inside a real Word document, hosted by the in-browser Docxodus editor. Pause anywhere: it is only a document — edit it, undo frame by frame, save the caught wave as .docx." />
   <style>
     /* A HOST page, like app.html: the editor surface ships in the npm package
-       (`createRibbonEditor`), the phenomena and the frame loop ship beside it
-       (`ascii-scenes.js`, same pinned version). The page's only original chrome
+       (`createRibbonEditor`); the phenomena and frame loop are demo content and
+       live beside this page (`ascii-scenes.js`). The page's only original chrome
        is the observatory dock pinned under the document. */
     html, body { height: 100%; }
     body { margin: 0; background: #e8ecf2; }
@@ -80,9 +80,10 @@
     const ENGINE = params.get("engine")
       ?? "https://cdn.jsdelivr.net/npm/docxodus@9.6.0/dist/embed.bundle.js";
     const engineUrl = new URL(ENGINE, location.href);
-    // The phenomena ship in the same package as the engine, so one ?engine=
-    // override retargets both (ascii-scenes.js sits beside embed.bundle.js).
-    const SCENES_URL = params.get("scenes") ?? new URL("ascii-scenes.js", engineUrl).href;
+    // The phenomena are demo content, not library machinery: they live beside this
+    // page (docs/demo/ deploys verbatim; pretest copies the same file into the local
+    // webroot), so ?engine= pins the library alone and the scenes version with the site.
+    const SCENES_URL = params.get("scenes") ?? "./ascii-scenes.js";
 
     try {
       const [{ createRibbonEditor, DocxSession, getWasmExports }, { startObservatory }] =
