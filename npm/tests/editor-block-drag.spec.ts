@@ -89,6 +89,89 @@ test.describe('DocxEditor — block drag handle', () => {
     expect((await unitState(page)).map((x) => x.text)).toEqual(['Two', 'Three', 'One']);
   });
 
+  // The handle floats in the page margin, so the natural gesture — press it and pull straight
+  // down — never crosses a paragraph box. Element hit testing therefore found no drop target for
+  // the whole gesture: no drop line, and a release that silently did nothing. Drop position is
+  // resolved from the pointer's vertical position against the blocks instead.
+  test('a drag down the left gutter shows the drop line and lands', async ({ page }) => {
+    const names = ['One', 'Two', 'Three', 'Four', 'Five', 'Six'];
+    await openParagraphDocument(page, names);
+    await page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'One' }).hover();
+    const handle = page.locator('.docx-block-handle');
+    await expect(handle).toBeVisible();
+
+    // The custom drag preview is mounted only for the browser's snapshot and torn down again,
+    // so it has to be observed rather than queried.
+    await page.evaluate(() => {
+      (window as any).__previews = [];
+      new MutationObserver((records) => {
+        for (const r of records)
+          for (const node of Array.from(r.addedNodes))
+            if (node instanceof HTMLElement)
+              (window as any).__previews.push(
+                ...Array.from(node.querySelectorAll('.docx-block-drag-preview')).map(
+                  (el) => el.textContent,
+                ),
+              );
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    const sample = () => page.evaluate(() => {
+      const line = document.querySelector<HTMLElement>('.docx-block-drop-indicator')!;
+      const rect = line.getBoundingClientRect();
+      return {
+        shown: getComputedStyle(line).display !== 'none',
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        dimmed: document.querySelector('.docx-block-drag-source')?.textContent?.trim() ?? null,
+      };
+    });
+
+    const hb = (await handle.boundingBox())!;
+    const last = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'Six' });
+    const lb = (await last.boundingBox())!;
+    const gutterX = hb.x + hb.width / 2;
+    expect(gutterX).toBeLessThan(lb.x); // the pointer never enters the text column
+
+    await page.mouse.move(gutterX, hb.y + hb.height / 2);
+    await page.mouse.down();
+    const endY = lb.y + lb.height - 2;
+    const steps = [];
+    for (let i = 1; i <= 6; i++) {
+      await page.mouse.move(gutterX, hb.y + ((endY - hb.y) * i) / 6, { steps: 4 });
+      steps.push(await sample());
+    }
+    // Chromium dispatches drag events asynchronously from the synthetic mouse move, so the line
+    // can trail a step. Nudge until it settles on the edge the release will actually use.
+    await expect.poll(async () => {
+      await page.mouse.move(gutterX, endY - 2);
+      await page.mouse.move(gutterX, endY);
+      return (await sample()).top;
+    }).toBeGreaterThan(lb.y + lb.height / 2);
+    const previews = await page.evaluate(() => (window as any).__previews as string[]);
+    await page.mouse.up();
+
+    // The line appears as soon as the pointer clears the block being dragged (over that block
+    // there is no drop position to show), and then tracks continuously to the end of the gesture.
+    const firstShown = steps.findIndex((s) => s.shown);
+    expect(firstShown).toBeGreaterThanOrEqual(0);
+    expect(firstShown).toBeLessThanOrEqual(2);
+    const shown = steps.slice(firstShown);
+    expect(shown.every((s) => s.shown)).toBe(true);
+    expect(new Set(shown.map((s) => s.top)).size).toBeGreaterThan(1);
+    expect(shown.map((s) => s.width)).toEqual(shown.map(() => Math.round(lb.width)));
+    // The block being carried is dimmed for the whole gesture, and the preview names it.
+    // (Sampled from `firstShown`: the browser needs a few pixels of travel before it starts a
+    // native drag at all, so the opening sample can precede dragstart.)
+    expect(shown.map((s) => s.dimmed)).toEqual(shown.map(() => 'One'));
+    expect(previews).toContain('One');
+
+    // What the line predicted is where the block lands.
+    expect((await unitState(page)).map((x) => x.text)).toEqual([...names.slice(1), 'One']);
+    // Nothing is left dimmed once the move lands.
+    expect(await page.locator('.docx-block-drag-source').count()).toBe(0);
+    await expect(page.locator('.docx-block-drop-indicator')).toBeHidden();
+  });
+
   test('a cell hover selects and moves its whole table', async ({ page }) => {
     await openParagraphDocument(page, ['Before', 'After']);
     await page.evaluate(() => {
