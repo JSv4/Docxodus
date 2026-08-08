@@ -23,7 +23,7 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "6";
+export const RIBBON_STYLE_VERSION = "7";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
 
 /**
@@ -47,7 +47,7 @@ export const RIBBON_CSS = `
   --dxr-accent-hover: #0d9488;
   --dxr-accent-active: #115e59;
   --dxr-wash: #f0fdfa;
-  --dxr-wash-edge: #99f6e4;
+  --dxr-wash-on: #ccfbf1;
   --dxr-muted: #475569;
   --dxr-faint: #94a3b8;
   --dxr-data: #0f766e;
@@ -143,26 +143,25 @@ export const RIBBON_CSS = `
   scrollbar-width: none;
 }
 .dxr-tabs::-webkit-scrollbar { display: none; }
+/* Line-variant tabs (the house Tabs default): no boxes, no fills — the selected
+   tab is a 2px accent underline sitting on the panel's own hairline. */
 .dxr-tab {
   flex: 0 0 auto;
-  padding: 6px 15px 7px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  padding: 7px 14px 8px;
+  border: none;
   background: none;
   color: var(--dxr-muted);
   font: inherit;
   font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background-color .15s var(--dxr-ease), color .15s var(--dxr-ease);
+  transition: color .15s var(--dxr-ease), box-shadow .15s var(--dxr-ease);
 }
-.dxr-tab:hover { color: var(--dxr-ink); background: #f1f5f9; }
+.dxr-tab:hover { color: var(--dxr-ink); }
 .dxr-tab[aria-selected="true"] {
   color: var(--dxr-ink);
   font-weight: 600;
-  background: var(--dxr-chrome-sunk);
-  border-color: var(--dxr-rule);
-  box-shadow: inset 0 2px 0 var(--dxr-accent);
+  box-shadow: inset 0 -2px 0 var(--dxr-accent);
 }
 /* Contextual tab — present only while the caret is inside a table. */
 .dxr-tab[data-contextual] { color: var(--dxr-accent); }
@@ -201,46 +200,52 @@ export const RIBBON_CSS = `
 .dxr-row { display: flex; gap: 3px; align-items: center; }
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
+/* One button family, house-style: every control is a ghost — no borders, no
+   fills, no per-button boxes. Hover paints a quiet slate wash; the active
+   (toggled) state paints a teal one. Save alone is the flat primary, so the
+   surface has exactly one accent-colored action. */
 .dxr button, .dxr label.dxr-btn {
   min-height: var(--dxr-tap);
   padding: 5px 9px;
-  border: 1px solid transparent;
+  border: none;
   border-radius: 6px;
   background: none;
   color: var(--dxr-ink);
   font: inherit;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.15;
   cursor: pointer;
-  transition: background-color .15s var(--dxr-ease), border-color .15s var(--dxr-ease),
-    color .15s var(--dxr-ease);
+  transition: background-color .15s var(--dxr-ease), color .15s var(--dxr-ease),
+    box-shadow .15s var(--dxr-ease), transform .15s var(--dxr-ease);
 }
 .dxr label.dxr-btn { display: inline-flex; align-items: center; }
 .dxr button:hover, .dxr label.dxr-btn:hover { background: #f1f5f9; }
 .dxr button:active { background: #e2e8f0; }
 .dxr button:disabled { opacity: .38; cursor: default; background: none; }
-.dxr button.dxr-on { color: var(--dxr-accent); background: var(--dxr-wash); border-color: var(--dxr-wash-edge); }
-.dxr-quick button, .dxr-quick label.dxr-btn {
-  padding: 4px 10px;
-  border-color: var(--dxr-rule);
-  background: var(--dxr-sheet);
-  box-shadow: var(--dxr-shadow-sm);
-  font-size: 12.5px;
-}
-.dxr-quick button:hover, .dxr-quick label.dxr-btn:hover { background: var(--dxr-chrome-sunk); border-color: var(--dxr-rule-strong); }
-.dxr-quick button:disabled { box-shadow: none; }
-.dxr-quick button:disabled:hover { background: var(--dxr-sheet); border-color: var(--dxr-rule); }
-/* Save is the surface's one primary action — the house accent button. */
+.dxr button.dxr-on { color: var(--dxr-accent); background: var(--dxr-wash-on); }
+.dxr-quick button, .dxr-quick label.dxr-btn { padding: 4px 10px; font-size: 12.5px; }
+/* Save — the house primary: flat accent, sm shadow, the 1px lift on hover. */
 .dxr-quick button[data-dxr="save"]:not(:disabled) {
-  border-color: transparent;
   background: var(--dxr-accent);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(15, 118, 110, .2);
+  box-shadow: var(--dxr-shadow-sm);
 }
-.dxr-quick button[data-dxr="save"]:not(:disabled):hover { background: var(--dxr-accent-hover); }
-.dxr-quick button[data-dxr="save"]:not(:disabled):active { background: var(--dxr-accent-active); }
-.dxr button.dxr-icon { min-width: var(--dxr-tap); text-align: center; }
+.dxr-quick button[data-dxr="save"]:not(:disabled):hover {
+  background: var(--dxr-accent-hover);
+  box-shadow: var(--dxr-shadow-md);
+  transform: translateY(-1px);
+}
+.dxr-quick button[data-dxr="save"]:not(:disabled):active {
+  background: var(--dxr-accent-active);
+  box-shadow: var(--dxr-shadow-sm);
+  transform: translateY(0);
+}
+/* Icon controls sit quieter than text ones until touched (house IconButton). */
+.dxr button.dxr-icon { min-width: var(--dxr-tap); text-align: center; color: var(--dxr-muted); }
+.dxr button.dxr-icon:hover:not(:disabled) { color: var(--dxr-ink); }
+.dxr button.dxr-icon.dxr-on { color: var(--dxr-accent); }
 /* Icons are inline SVG drawn from the same shapes the control acts on (text lines,
    rules), so alignment and indent read at a glance instead of relying on arrow
    glyphs that collide with undo/redo. currentColor keeps them in step with state. */
@@ -387,7 +392,7 @@ export const RIBBON_CSS = `
   padding: 3px 5px;
   border: 1px solid var(--dxr-rule);
   border-radius: 6px;
-  background: var(--dxr-chrome-sunk);
+  background: var(--dxr-sheet);
   color: var(--dxr-ink);
   font: inherit;
   font-family: var(--dxr-ui);
@@ -826,8 +831,8 @@ export const RIBBON_HTML = `
           )}</button>
         </div>
         <div class="dxr-row">
-          <button type="button" data-list="bullet" title="Bullet list">&#8226; List</button>
-          <button type="button" data-list="decimal" title="Numbered list">1. List</button>
+          <button type="button" data-list="bullet" title="Bullet list">Bullets</button>
+          <button type="button" data-list="decimal" title="Numbered list">Numbered</button>
           <button type="button" data-pagebreak title="Start this block on a new page">Page break</button>
         </div>
       </div>
