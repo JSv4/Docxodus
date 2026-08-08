@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **ASCII-animation demo: DOCX as a rendering canvas** (`npm/examples/ascii-animation.html`,
+  served with the Playwright webroot). Four procedurally generated natural phenomena — ocean
+  swell, pond ripples, a rain squall, and a hearth fire — animate inside a live Word document:
+  one paragraph is the framebuffer, each frame is that paragraph's OOXML (colored monospace runs
+  plus `w:br` line breaks, paragraph `w:shd` as the sky) swapped in with
+  `DocxSession.raw.replaceXml` and re-rendered incrementally with `session.renderBlock`. The
+  replacement XML keeps the paragraph's Unid, so the anchor — and therefore the `data-anchor`
+  DOM identity — survives every frame; *Save .docx* mid-animation downloads a real Word document
+  holding the caught frame. The page seeds its document through the agentic surface
+  (`CreateBlankDocx`, `replaceText`, `insertParagraph`, `applyFormat`, `insertFootnote`) and
+  reports live per-frame telemetry (replaceXml / renderBlock / DOM-swap ms, run count, fps).
+  Scene generators budget color changes deliberately: every color change inside a row is its own
+  `w:r` and the converter pays ~1 ms per run, so ink follows smooth bands while glyphs carry the
+  detail (an unbanded fire frame costs ~1300 runs ≈ 550 ms renders; banded it sits nearer 150).
+  Spec: `npm/tests/ascii-animation.spec.ts` (boots, frames advance on a stable anchor, every
+  scene draws, saved bytes round-trip through a fresh session).
+
 ## [9.5.0] - 2026-08-08
 
 ### Fixed

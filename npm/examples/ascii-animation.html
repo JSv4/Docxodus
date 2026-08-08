@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docxodus — ASCII animations on a DOCX canvas</title>
+  <style>
+    /* Page chrome only. The animated "screen" is NOT a <canvas> — it is a real Word
+       paragraph inside a live DocxSession, re-rendered per frame by the converter.
+       Everything below just frames that document like an exhibit. */
+    :root {
+      --bg: #0b0f1a;
+      --panel: #111827;
+      --edge: #1f2a3f;
+      --ink: #d5dce8;
+      --dim: #7a8699;
+      --accent: #5eead4;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 500px at 50% -10%, #16213a 0%, var(--bg) 60%);
+      color: var(--ink);
+      font: 13px/1.45 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+    }
+    header {
+      display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline;
+      padding: 14px 20px 10px;
+    }
+    header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
+    header h1 .accent { color: var(--accent); }
+    header .sub { color: var(--dim); font-size: 12px; }
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 0 20px 10px;
+    }
+    .controls .group {
+      display: flex; gap: 0; border: 1px solid var(--edge); border-radius: 7px; overflow: hidden;
+    }
+    button, select {
+      appearance: none; background: var(--panel); color: var(--ink);
+      border: 1px solid var(--edge); border-radius: 7px;
+      font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer;
+    }
+    .group button { border: none; border-right: 1px solid var(--edge); border-radius: 0; }
+    .group button:last-child { border-right: none; }
+    button:hover { background: #18233a; }
+    button[aria-pressed="true"] { background: #123a34; color: var(--accent); }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #stats {
+      padding: 4px 20px 10px; color: var(--dim); font-size: 11.5px;
+      white-space: nowrap; overflow-x: auto;
+    }
+    #stats b { color: var(--ink); font-weight: 600; }
+    main { display: flex; justify-content: center; padding: 6px 16px 40px; }
+    /* The Word sheet. The converter's own document CSS runs inside; this is just paper. */
+    #doc {
+      width: min(860px, 100%);
+      background: #ffffff; color: #111;
+      border-radius: 3px;
+      box-shadow: 0 22px 60px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4);
+      padding: 56px 64px;
+      min-height: 480px;
+    }
+    #boot {
+      color: #555; font-size: 13px; text-align: center; padding-top: 180px;
+    }
+    #boot .err { color: #b91c1c; white-space: pre-wrap; text-align: left; }
+    #xmlpanel {
+      margin: 0 auto 40px; width: min(860px, calc(100% - 32px));
+      background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+      padding: 10px 14px; font-size: 11px; color: var(--dim);
+    }
+    #xmlpanel h2 { margin: 0 0 6px; font-size: 11px; color: var(--ink); letter-spacing: 0.06em; }
+    #xmlpre {
+      margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
+      word-break: break-all; color: #8fb8d8;
+    }
+    footer {
+      max-width: 860px; margin: 0 auto; padding: 0 20px 48px;
+      color: var(--dim); font-size: 12px;
+    }
+    footer code { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>THE DOCX <span class="accent">OBSERVATORY</span></h1>
+    <span class="sub">natural phenomena, procedurally rendered into a live Word document</span>
+  </header>
+
+  <div class="controls">
+    <div class="group" id="scenes"></div>
+    <button id="playpause" disabled>Pause</button>
+    <button id="step" disabled>Step</button>
+    <select id="pace" title="Target frame pacing">
+      <option value="125">8 fps · cinematic</option>
+      <option value="83" selected>12 fps · steady</option>
+      <option value="50">20 fps · brisk</option>
+      <option value="0">unthrottled</option>
+    </select>
+    <button id="save" disabled>Save .docx</button>
+    <button id="xml" aria-pressed="false" disabled>Show OOXML</button>
+  </div>
+
+  <div id="stats">booting the .NET runtime…</div>
+
+  <main><div id="doc"><div id="boot">Loading WASM runtime — the ocean warms up shortly…</div></div></main>
+
+  <div id="xmlpanel" hidden>
+    <h2>THE CANVAS PARAGRAPH, LIVE (session.raw.getXml)</h2>
+    <pre id="xmlpre"></pre>
+  </div>
+
+  <footer>
+    How it works: a blank DOCX is minted in-memory (<code>CreateBlankDocx</code>) and seeded through the
+    agentic editing surface (<code>replaceText</code>, <code>insertParagraph</code>, <code>applyFormat</code>,
+    <code>insertFootnote</code>). One paragraph is the framebuffer: every animation frame builds that
+    paragraph's OOXML — colored monospace runs plus <code>w:br</code> line breaks — and swaps it in with
+    <code>session.raw.replaceXml</code>. Because the replacement XML keeps the paragraph's Unid, the anchor
+    survives every frame, so <code>session.renderBlock(anchor)</code> re-renders just that block and the DOM
+    swap is one <code>replaceWith</code>. Hit <em>Save .docx</em> mid-wave and open it in Word: the sea
+    freezes exactly where you caught it.
+  </footer>
+
+  <script src="./session.bundle.js"></script>
+  <script type="module">
+    import { dotnet } from './_framework/dotnet.js';
+
+    // ─── Canvas geometry ────────────────────────────────────────────────
+    // 92 columns of 8pt Courier New ≈ 6.1in — fits the blank doc's 6.5in text
+    // column without wrapping. Line rule "exact" 200 twips (10pt) gives a
+    // terminal-ish cell aspect of ~2:1 (height:width).
+    const COLS = 92, ROWS = 26;
+    const FONT = 'Courier New';
+    const SZ = 16;          // w:sz half-points → 8pt
+    const LINE_TWIPS = 200; // 10pt exact line height
+
+    const $ = (id) => document.getElementById(id);
+    const boot = (msg) => { $('stats').textContent = msg; };
+
+    // ─── Tiny deterministic noise (no Math.random: frames must be a pure
+    //     function of t so tests and repro stay honest) ───────────────────
+    function hash2(x, y) {
+      let h = (x * 374761393 + y * 668265263) | 0;
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    }
+
+    // ─── Scenes ─────────────────────────────────────────────────────────
+    // A scene fills a COLS×ROWS cell grid: chars[row][col] + colors[row][col]
+    // (hex RRGGBB, ignored for spaces). `bg` becomes the paragraph's w:shd fill.
+    function makeGrid() {
+      const chars = [], colors = [];
+      for (let y = 0; y < ROWS; y++) {
+        chars.push(new Array(COLS).fill(' '));
+        colors.push(new Array(COLS).fill('FFFFFF'));
+      }
+      return { chars, colors };
+    }
+
+    const oceanScene = {
+      name: 'ocean', label: 'Ocean swell', bg: '071426',
+      gen(t) {
+        const g = makeGrid();
+        const surf = (x) =>
+          ROWS * 0.42
+          + 2.6 * Math.sin(x * 0.110 + t * 0.90)
+          + 1.7 * Math.sin(x * 0.053 - t * 0.55)
+          + 0.9 * Math.sin(x * 0.023 + t * 0.21);
+        // GLYPHS follow the true wavy surface; INK is banded by flat row depth.
+        // Every color change inside a row is its own w:r and the converter pays
+        // ~1 ms per run, so letting color bands zigzag along the wave multiplies
+        // runs ~2×. Flat bands keep most rows at ONE run — the silhouette still
+        // reads because the glyphs carry it.
+        const mean = ROWS * 0.42;
+        const rowInk = (y) => {
+          const d = y - mean;
+          return d < 1.5 ? '7FD7F0' : d < 4 ? '4FB3DC' : d < 7 ? '2E86B8' : '1A5E8C';
+        };
+        for (let x = 0; x < COLS; x++) {
+          const ys = surf(x);
+          const slope = surf(x + 1) - surf(x - 1);
+          for (let y = 0; y < ROWS; y++) {
+            const d = y - ys;
+            if (d < -1) {
+              // Night sky: sparse twinkling stars, one shared color.
+              const r = hash2(x, y);
+              if (r < 0.012) {
+                g.chars[y][x] = (r * 900 + t * 1.4) % 2 < 1 ? '.' : '+';
+                g.colors[y][x] = 'D8D2B8';
+              }
+            } else if (d < 0.5) {
+              // Surface: crest tips foam white, steep faces break into slashes.
+              const crest = surf(x) < surf(x - 1) - 0.35 && surf(x) < surf(x + 1) - 0.35;
+              g.chars[y][x] = crest ? '^' : slope > 0.9 ? '\\' : slope < -0.9 ? '/' : '~';
+              g.colors[y][x] = crest ? 'F3FBFF' : rowInk(y);
+            } else if (d < 2.2) {
+              const n = Math.sin(x * 0.35 + t * 2.1 + y * 1.7);
+              g.chars[y][x] = n > 0.25 ? '~' : '-';
+              g.colors[y][x] = rowInk(y);
+            } else if (d < 5.5) {
+              const n = Math.sin(x * 0.21 - t * 1.2 + y * 2.3);
+              g.chars[y][x] = n > 0.45 ? '=' : ':';
+              g.colors[y][x] = rowInk(y);
+            } else {
+              const r = hash2(x, y * 7);
+              g.chars[y][x] = r < 0.16 ? ':' : r < 0.4 ? '.' : ' ';
+              g.colors[y][x] = rowInk(y);
+            }
+          }
+        }
+        // Two fish on their commutes, at fixed depths below the average surface.
+        const fishRows = [Math.floor(ROWS * 0.62), Math.floor(ROWS * 0.80)];
+        const sprites = ['><>', '<><'];
+        fishRows.forEach((fy, i) => {
+          const span = COLS + 8;
+          let fx = Math.floor((t * (7 + i * 4) + i * 37) % span) - 4;
+          if (i === 1) fx = COLS - 1 - fx; // second fish swims the other way
+          const s = sprites[i];
+          for (let k = 0; k < s.length; k++) {
+            const x = fx + k;
+            if (x >= 0 && x < COLS) { g.chars[fy][x] = s[k]; g.colors[fy][x] = 'F4B860'; }
+          }
+        });
+        return g;
+      },
+    };
+
+    const rippleScene = {
+      name: 'ripples', label: 'Pond ripples', bg: '06131F',
+      gen(t) {
+        const g = makeGrid();
+        // Deterministic drop schedule: one drop every 2.1s, position hashed
+        // from the drop ordinal, each ringing for ~6s.
+        const drops = [];
+        const first = Math.max(0, Math.floor((t - 6) / 2.1));
+        for (let k = first; k * 2.1 <= t; k++) {
+          drops.push({
+            x: 6 + hash2(k, 11) * (COLS - 12),
+            y: 2 + hash2(k, 29) * (ROWS - 4),
+            age: t - k * 2.1,
+          });
+        }
+        // Five glyph intensities but only TWO ink colors (+foam at the very
+        // peak): each color change inside a row is a fresh w:r, so the palette
+        // is spent where it shows.
+        const ramp = ['.', ':', 'o', 'O', '@'];
+        const cols = ['2E86B8', '2E86B8', '9BE0F2', '9BE0F2', 'F3FBFF'];
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            let h = 0;
+            for (const d of drops) {
+              const dx = x - d.x, dy = (y - d.y) * 2; // ×2: cells are ~2:1 tall
+              const r = Math.sqrt(dx * dx + dy * dy);
+              if (r > d.age * 8 + 4) continue; // outside the wavefront
+              h += Math.sin(r * 0.9 - d.age * 6) * Math.exp(-r * 0.085) * Math.exp(-d.age * 0.35);
+            }
+            const a = Math.abs(h);
+            if (a < 0.055) {
+              // Calm water carries a faint static weave so the rings read as
+              // water. Same ink as the ring base so it merges into their runs.
+              if ((x * 3 + y * 7) % 23 === 0) { g.chars[y][x] = '·'; g.colors[y][x] = '2E86B8'; }
+            } else {
+              const i = Math.min(ramp.length - 1, Math.floor(a * 7));
+              g.chars[y][x] = ramp[i];
+              g.colors[y][x] = cols[i];
+            }
+          }
+        }
+        return g;
+      },
+    };
+
+    const rainScene = {
+      name: 'rain', label: 'Squall', bg: '0A1220',
+      gen(t) {
+        const g = makeGrid();
+        const groundY = ROWS - 1;
+        // Ground line.
+        for (let x = 0; x < COLS; x++) { g.chars[groundY][x] = '_'; g.colors[groundY][x] = '35567A'; }
+        for (let x = 0; x < COLS; x++) {
+          const density = hash2(x, 5);
+          if (density < 0.28) continue; // dry lane
+          const speed = 16 + hash2(x, 7) * 14;       // rows/second
+          const cycle = ROWS + 6 + hash2(x, 13) * 20; // fall + regroup gap
+          const p = (hash2(x, 3) * cycle + t * speed) % cycle;
+          const head = Math.floor(p);
+          // Streak glyphs share ONE ink (glyph shape carries the fade): with a
+          // single color, a whole row of scattered drops merges into one w:r.
+          if (head < groundY) {
+            g.chars[head][x] = '|'; g.colors[head][x] = '7FA8CC';
+            if (head - 1 >= 0) { g.chars[head - 1][x] = ':'; g.colors[head - 1][x] = '7FA8CC'; }
+            if (head - 2 >= 0) { g.chars[head - 2][x] = '.'; g.colors[head - 2][x] = '7FA8CC'; }
+          } else if (p < groundY + 1.2) {
+            // Splash: a beat of white at the ground.
+            const sy = groundY - 1;
+            g.chars[sy][x] = 'o'; g.colors[sy][x] = 'D7E7F5';
+            if (x > 0 && g.chars[sy][x - 1] === ' ') { g.chars[sy][x - 1] = '.'; g.colors[sy][x - 1] = '7FA8CC'; }
+            if (x < COLS - 1 && g.chars[sy][x + 1] === ' ') { g.chars[sy][x + 1] = '.'; g.colors[sy][x + 1] = '7FA8CC'; }
+          }
+        }
+        // A lightning bolt every ~6.3s, alive for 0.22s, zigzagging down.
+        const k = Math.floor(t / 6.3);
+        if (t - k * 6.3 < 0.22) {
+          let bx = Math.floor(8 + hash2(k, 41) * (COLS - 16));
+          for (let y = 0; y < groundY - 3; y++) {
+            const j = hash2(k * 100 + y, 43);
+            const step = j < 0.35 ? -1 : j < 0.7 ? 1 : 0;
+            bx = Math.max(1, Math.min(COLS - 2, bx + step));
+            g.chars[y][bx] = step < 0 ? '/' : step > 0 ? '\\' : '|';
+            g.colors[y][bx] = 'FFF7B0';
+          }
+        }
+        return g;
+      },
+    };
+
+    const fireScene = {
+      name: 'fire', label: 'Hearth fire', bg: '0D0603',
+      heat: null,
+      reset() { this.heat = null; },
+      gen(t) {
+        // Classic propagation fire: heat rises from a stoked bottom row and
+        // cools on the way up. Stateful (the grid IS the phenomenon), but all
+        // randomness is hashed off (t, x) so a given timeline replays identically.
+        const H = ROWS, W = COLS;
+        if (!this.heat) {
+          this.heat = [];
+          for (let y = 0; y < H; y++) this.heat.push(new Float32Array(W));
+        }
+        const heat = this.heat;
+        const stoke = Math.floor(t * 24); // discrete stoking ticks
+        for (let x = 0; x < W; x++) {
+          // Fuel bed breathes: edges cooler, center roaring.
+          const edge = Math.sin((x / W) * Math.PI);
+          heat[H - 1][x] = 26 + 10 * edge * (0.7 + 0.3 * Math.sin(x * 0.5 + t * 3)) * (0.75 + 0.5 * hash2(x, stoke));
+        }
+        for (let y = 0; y < H - 1; y++) {
+          for (let x = 0; x < W; x++) {
+            const drift = Math.round((hash2(x * 7 + y, stoke) - 0.5) * 2);
+            const sx = Math.max(0, Math.min(W - 1, x + drift));
+            const cool = hash2(x + y * 31, stoke + 1) * 3.4;
+            heat[y][x] = Math.max(0, heat[y + 1][sx] - cool);
+          }
+        }
+        // Glyphs flicker on RAW per-cell heat; ink follows a horizontally
+        // smoothed heat field. Raw heat dithers between palette bands cell to
+        // cell, and every color change is its own w:r — smoothing the color
+        // field cuts a frame from ~1300 runs (≈550 ms renders) to ~200.
+        const ramp = [' ', '.', ':', '+', '=', '*', '#', '%', '@'];
+        // Nine glyph intensities but only FIVE inks, chosen off a widely
+        // smoothed heat field: raw heat dithers between bands cell to cell, and
+        // every color change is its own w:r — unsmoothed this frame costs
+        // ~1300 runs (≈550 ms renders); banded it sits nearer 150.
+        const cols = ['000000', '7A1E06', 'C2410C', 'FB923C', 'FEF3C7'];
+        const g = makeGrid();
+        const smooth = new Float32Array(W);
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            let acc = 0, n = 0;
+            for (let k = -4; k <= 4; k++) {
+              const sx = x + k;
+              if (sx >= 0 && sx < W) { acc += heat[y][sx]; n++; }
+            }
+            smooth[x] = acc / n;
+          }
+          for (let x = 0; x < W; x++) {
+            const i = Math.max(0, Math.min(8, Math.floor(heat[y][x] / 4)));
+            const ci = Math.max(0, Math.min(4, Math.round(smooth[x] / 8)));
+            g.chars[y][x] = ramp[i];
+            g.colors[y][x] = cols[ci];
+          }
+        }
+        return g;
+      },
+    };
+
+    const SCENES = [oceanScene, rippleScene, rainScene, fireScene];
+
+    // ─── Frame → OOXML ──────────────────────────────────────────────────
+    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    /** Merge each row's cells into runs: a new run only where a visible glyph
+     *  changes color (spaces piggyback on the current run — background ink
+     *  is invisible, so they never force a split). */
+    function rowRuns(chars, colors) {
+      const runs = [];
+      let text = '', color = null;
+      for (let x = 0; x < COLS; x++) {
+        const ch = chars[x];
+        if (ch !== ' ' && colors[x] !== color && color !== null) {
+          runs.push([text, color]); text = '';
+        }
+        if (ch !== ' ') color = colors[x] ?? color;
+        text += ch;
+      }
+      runs.push([text, color ?? '9CB3C9']);
+      return runs;
+    }
+
+    /** The whole frame as one w:p: the captured opening tag (which carries the
+     *  paragraph's Unid — THE thing that keeps the anchor stable across frames),
+     *  a pPr with shading + exact line height, then per row: colored runs joined
+     *  by w:br. */
+    function frameXml(openTag, grid, bg) {
+      const parts = [openTag,
+        '<w:pPr>',
+        `<w:spacing w:before="0" w:after="0" w:line="${LINE_TWIPS}" w:lineRule="exact"/>`,
+        `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`,
+        '</w:pPr>'];
+      let runs = 0;
+      for (let y = 0; y < ROWS; y++) {
+        if (y > 0) parts.push('<w:r><w:br/></w:r>');
+        for (const [text, color] of rowRuns(grid.chars[y], grid.colors[y])) {
+          runs++;
+          parts.push(
+            `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
+            `<w:color w:val="${color}"/><w:sz w:val="${SZ}"/><w:szCs w:val="${SZ}"/></w:rPr>` +
+            `<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`);
+        }
+      }
+      parts.push('</w:p>');
+      return { xml: parts.join(''), runs };
+    }
+
+    // ─── Boot ───────────────────────────────────────────────────────────
+    try {
+      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
+      boot('runtime up — opening a blank document…');
+      const wasm = await getAssemblyExports(getConfig().mainAssemblyName);
+      const bridge = wasm.DocxodusWasm.DocxSessionBridge;
+
+      // A fresh Word document, minted in memory, opened as an editing session.
+      // Markdown patches off + no initial projection: this session re-renders
+      // from HTML, so per-op projection work is pure overhead at animation rates.
+      const blank = bridge.CreateBlankDocx();
+      const handle = bridge.OpenSession(blank, JSON.stringify({
+        emitMarkdownPatch: false,
+        captureInitialProjection: false,
+        undoDepth: 2,
+      }));
+      const session = new window.DocxodusSession.DocxSession(handle, bridge);
+
+      // ─── Seed the document through the agentic surface ────────────────
+      boot('seeding the document…');
+      const check = (r, what) => {
+        if (!r.success) throw new Error(`${what} failed: ${r.error?.code} ${r.error?.message}`);
+        return r;
+      };
+
+      const firstP = session.findByKind('p', 'body')[0];
+      if (!firstP) throw new Error('blank document has no body paragraph');
+      const titleAnchor = firstP.id;
+      check(session.replaceText(titleAnchor, 'THE DOCX OBSERVATORY'), 'title replaceText');
+      check(session.setParagraphFormat(titleAnchor, { alignment: 'center', spacingAfter: 160 }), 'title format');
+      check(session.applyFormat(titleAnchor, null, { bold: true, fontFamily: FONT, fontSizePts: 13, color: '1F2937' }), 'title run format');
+
+      const canvasResult = check(session.insertParagraph(titleAnchor, 'after', '(warming up the sea…)'), 'canvas insert');
+      let canvasAnchor = canvasResult.created[0].id;
+
+      const captionResult = check(session.insertParagraph(canvasAnchor, 'after',
+        `Procedural phenomena drawn ${COLS} columns × ${ROWS} rows into a single monospaced paragraph.`), 'caption insert');
+      const captionAnchor = captionResult.created[0].id;
+      check(session.setParagraphFormat(captionAnchor, { alignment: 'center', spacingBefore: 160 }), 'caption format');
+      check(session.applyFormat(captionAnchor, null, { fontFamily: FONT, fontSizePts: 8, color: '6B7280' }), 'caption run format');
+
+      // A real footnote, because this is a real document.
+      check(session.insertFootnote(captionAnchor, 20, // after "Procedural phenomena"
+        'Every frame is OOXML: colored runs and `w:br` breaks in one Word paragraph, swapped in by ' +
+        '`DocxSession.raw.replaceXml` and re-rendered by `renderBlock`. Save mid-wave and the sea freezes in Word.'),
+        'footnote');
+
+      // Capture the canvas paragraph's opening tag once. It carries the Unid
+      // attribute (plus every namespace declaration), so frames built from it
+      // keep the anchor alive — replaceXml reports the block as Modified, not
+      // Removed+Created.
+      const seedXml = session.raw.getXml(canvasAnchor);
+      let gt = seedXml.indexOf('>');
+      let openTag = seedXml.slice(0, gt + 1);
+      if (openTag.endsWith('/>')) openTag = openTag.slice(0, -2) + '>';
+
+      // ─── First paint: full session-attached render (styles + anchors) ──
+      boot('first render…');
+      const fullHtml = bridge.RenderHtml(handle, 'docx-', false, /* paginated */ false, 1.0);
+      if (fullHtml.charCodeAt(0) === 0x7b) throw new Error('RenderHtml: ' + fullHtml);
+      const parsed = new DOMParser().parseFromString(fullHtml, 'text/html');
+      const docEl = $('doc');
+      docEl.innerHTML = Array.from(parsed.querySelectorAll('style')).map((s) => s.outerHTML).join('');
+      const flow = document.createElement('div');
+      flow.innerHTML = parsed.body.innerHTML;
+      docEl.appendChild(flow);
+
+      const unidOf = (anchor) => anchor.split(':')[2];
+      let canvasEl = docEl.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
+      if (!canvasEl) throw new Error('canvas block not found in rendered HTML');
+
+      // ─── Animation loop ─────────────────────────────────────────────
+      let scene = SCENES[0];
+      let playing = true;
+      let timer = 0;
+      let t = 0;                       // phenomenon time (seconds)
+      let lastWall = performance.now();
+      let frames = 0;
+      let fps = 0;
+      const timings = { mutate: 0, render: 0, dom: 0 };
+      let interval = Number($('pace').value);
+
+      function drawFrame() {
+        const wall = performance.now();
+        t += Math.min(0.25, (wall - lastWall) / 1000);
+        lastWall = wall;
+
+        const grid = scene.gen(t);
+        const { xml, runs } = frameXml(openTag, grid, scene.bg);
+        lastRuns = runs;
+
+        const t0 = performance.now();
+        const res = session.raw.replaceXml(canvasAnchor, xml);
+        const t1 = performance.now();
+        if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
+        // The Unid-preserving path reports Modified; adopt Created defensively
+        // if a frame ever loses the attribute so the loop self-heals.
+        canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+
+        const html = session.renderBlock(canvasAnchor);
+        const t2 = performance.now();
+        const fresh = new DOMParser().parseFromString(html, 'text/html').body.firstElementChild;
+        canvasEl.replaceWith(fresh);
+        canvasEl = fresh;
+        const t3 = performance.now();
+
+        // Exponential moving averages keep the readout calm.
+        const mix = (a, b) => a === 0 ? b : a * 0.9 + b * 0.1;
+        timings.mutate = mix(timings.mutate, t1 - t0);
+        timings.render = mix(timings.render, t2 - t1);
+        timings.dom = mix(timings.dom, t3 - t2);
+        fps = mix(fps, 1000 / Math.max(1, t3 - wall + (wall - lastFrameEnd)));
+        lastFrameEnd = t3;
+        frames++;
+
+        $('stats').innerHTML =
+          `<b>${scene.label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+          `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · renderBlock <b>${timings.render.toFixed(1)}</b> ms · ` +
+          `DOM swap <b>${timings.dom.toFixed(1)}</b> ms · ${COLS}×${ROWS} cells as <b>${lastRuns}</b> runs · ` +
+          `anchor <b>${canvasAnchor}</b>`;
+
+        if (!$('xmlpanel').hidden && frames % 8 === 0) refreshXml();
+      }
+      let lastFrameEnd = performance.now();
+      let lastRuns = 0;
+
+      function loop() {
+        if (!playing) return;
+        const started = performance.now();
+        try { drawFrame(); }
+        catch (e) { playing = false; $('stats').textContent = 'animation halted: ' + e.message; throw e; }
+        timer = setTimeout(loop, Math.max(0, interval - (performance.now() - started)));
+      }
+
+      function refreshXml() {
+        const xml = session.raw.getXml(canvasAnchor);
+        $('xmlpre').textContent = xml.length > 3000
+          ? xml.slice(0, 3000) + `\n… ${(xml.length - 3000).toLocaleString()} more characters`
+          : xml;
+      }
+
+      // ─── Controls ─────────────────────────────────────────────────────
+      const sceneBtns = new Map();
+      for (const s of SCENES) {
+        const b = document.createElement('button');
+        b.textContent = s.label;
+        b.setAttribute('aria-pressed', String(s === scene));
+        b.addEventListener('click', () => setScene(s.name));
+        sceneBtns.set(s.name, b);
+        $('scenes').appendChild(b);
+      }
+      function setScene(name) {
+        const next = SCENES.find((s) => s.name === name);
+        if (!next) return;
+        scene = next;
+        scene.reset?.();
+        sceneBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
+        if (!playing) drawFrame(); // paused: still show the new phenomenon
+      }
+      $('playpause').addEventListener('click', () => {
+        playing = !playing;
+        $('playpause').textContent = playing ? 'Pause' : 'Play';
+        $('step').disabled = playing;
+        if (playing) { lastWall = performance.now(); loop(); }
+        else clearTimeout(timer);
+      });
+      $('step').addEventListener('click', () => { if (!playing) drawFrame(); });
+      $('pace').addEventListener('change', () => { interval = Number($('pace').value); });
+      $('save').addEventListener('click', () => {
+        const bytes = session.save();
+        const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `docx-observatory-${scene.name}.docx`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+      $('xml').addEventListener('click', () => {
+        const open = $('xmlpanel').hidden;
+        $('xmlpanel').hidden = !open;
+        $('xml').setAttribute('aria-pressed', String(open));
+        $('xml').textContent = open ? 'Hide OOXML' : 'Show OOXML';
+        if (open) refreshXml();
+      });
+      for (const id of ['playpause', 'step', 'save', 'xml']) $(id).disabled = false;
+      $('step').disabled = true;
+
+      // First frame + loop.
+      drawFrame();
+      loop();
+
+      // Published only once the first frame has landed: specs treat __observatory
+      // as the "canvas is live" signal.
+      window.__observatory = {
+        session,
+        bridge,
+        canvasAnchor: () => canvasAnchor,
+        canvasText: () => canvasEl.textContent,
+        frames: () => frames,
+        fps: () => fps,
+        timings: () => ({ ...timings, runs: lastRuns }),
+        scene: () => scene.name,
+        setScene,
+        playing: () => playing,
+        pause: () => { if (playing) $('playpause').click(); },
+        play: () => { if (!playing) $('playpause').click(); },
+        step: () => { if (!playing) drawFrame(); },
+        save: () => session.save(),
+      };
+    } catch (error) {
+      console.error(error);
+      $('stats').textContent = 'boot failed';
+      const b = $('boot') ?? $('doc');
+      b.innerHTML = `<div class="err">Boot failed:\n${String(error?.stack ?? error)}</div>`;
+      window.__observatoryError = String(error);
+    }
+  </script>
+</body>
+</html>
