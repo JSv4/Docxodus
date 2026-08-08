@@ -336,3 +336,134 @@ export function seedObservatory(session) {
 
   return { titleAnchor, canvasAnchor, captionAnchor, openTag };
 }
+
+// ─── The editor-hosted driver ─────────────────────────────────────────
+
+/**
+ * Seed the Observatory into a ribbon-hosted editor's session and run the
+ * animation loop against it: per frame, a Unid-preserving `raw.replaceXml` on
+ * the canvas paragraph, then `editor.refresh()` — the editor's public
+ * "the session changed behind your back" seam — which reconciles exactly one
+ * block in continuous mode. Owns the dock controls (scene buttons, play/pause,
+ * step, pacing, telemetry line) and pauses on any pointerdown in the document,
+ * so clicking the water catches the frame and drops the caret in.
+ *
+ * `ui`: { scenes, playpause, step, pace, stats } — the dock's DOM elements.
+ * Returns the controller specs publish as `window.__moneyshot`.
+ */
+export function startObservatory({ editor, session, ui }) {
+  if (typeof editor.refresh !== 'function') {
+    throw new Error('This engine predates DocxEditor.refresh() — the Observatory needs docxodus ≥ 9.6.0.');
+  }
+  const seeded = seedObservatory(session);
+  let canvasAnchor = seeded.canvasAnchor;
+  const openTag = seeded.openTag;
+  editor.refresh();
+
+  const unidOf = (anchor) => anchor.split(':')[2];
+  const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
+
+  let scene = SCENES[0];
+  let playing = true;
+  let timer = 0;
+  let t = 0;
+  let lastWall = performance.now();
+  let frames = 0;
+  let fps = 0;
+  let lastRuns = 0;
+  let lastFrameEnd = performance.now();
+  const timings = { mutate: 0, refresh: 0 };
+  let interval = Number(ui.pace.value);
+
+  function drawFrame() {
+    const wall = performance.now();
+    t += Math.min(0.25, (wall - lastWall) / 1000);
+    lastWall = wall;
+
+    const grid = scene.gen(t);
+    const { xml, runs } = frameXml(openTag, grid, scene.bg);
+    lastRuns = runs;
+
+    const t0 = performance.now();
+    const res = session.raw.replaceXml(canvasAnchor, xml);
+    const t1 = performance.now();
+    if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
+    canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+
+    editor.refresh();
+    const t2 = performance.now();
+
+    const mix = (a, b) => a === 0 ? b : a * 0.9 + b * 0.1;
+    timings.mutate = mix(timings.mutate, t1 - t0);
+    timings.refresh = mix(timings.refresh, t2 - t1);
+    fps = mix(fps, 1000 / Math.max(1, t2 - wall + (wall - lastFrameEnd)));
+    lastFrameEnd = t2;
+    frames++;
+
+    const fb = editor.lastReconcileFallback;
+    ui.stats.innerHTML =
+      `<b>${scene.label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+      `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · editor.refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
+      `<b>${lastRuns}</b> runs · ` +
+      (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+  }
+
+  function loop() {
+    if (!playing) return;
+    const started = performance.now();
+    try { drawFrame(); }
+    catch (e) { playing = false; ui.stats.textContent = 'halted: ' + e.message; throw e; }
+    timer = setTimeout(loop, Math.max(0, interval - (performance.now() - started)));
+  }
+
+  const sceneBtns = new Map();
+  for (const s of SCENES) {
+    const b = document.createElement('button');
+    b.textContent = s.label;
+    b.setAttribute('aria-pressed', String(s === scene));
+    b.addEventListener('click', () => setScene(s.name));
+    sceneBtns.set(s.name, b);
+    ui.scenes.appendChild(b);
+  }
+  function setScene(name) {
+    const next = SCENES.find((s) => s.name === name);
+    if (!next) return;
+    scene = next;
+    scene.reset?.();
+    sceneBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
+    if (!playing) drawFrame();
+  }
+  function setPlaying(next) {
+    if (playing === next) return;
+    playing = next;
+    ui.playpause.textContent = playing ? 'Pause' : 'Play';
+    ui.step.disabled = playing;
+    if (playing) { lastWall = performance.now(); loop(); }
+    else clearTimeout(timer);
+  }
+  ui.playpause.addEventListener('click', () => setPlaying(!playing));
+  ui.step.addEventListener('click', () => { if (!playing) drawFrame(); });
+  ui.pace.addEventListener('change', () => { interval = Number(ui.pace.value); });
+
+  // Click the water (or any block) while it plays: catch the frame and start
+  // editing. No mode switch — the document was editable the whole time.
+  editor.root.addEventListener('pointerdown', () => setPlaying(false), true);
+
+  drawFrame();
+  loop();
+
+  return {
+    canvasAnchor: () => canvasAnchor,
+    canvasText: () => canvasEl()?.textContent ?? '',
+    frames: () => frames,
+    fps: () => fps,
+    timings: () => ({ ...timings, runs: lastRuns }),
+    scene: () => scene.name,
+    setScene,
+    playing: () => playing,
+    pause: () => setPlaying(false),
+    play: () => setPlaying(true),
+    step: () => { if (!playing) drawFrame(); },
+    save: () => editor.save(),
+  };
+}

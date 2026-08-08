@@ -38,6 +38,17 @@ All notable changes to this project will be documented in this file.
   `npm/tests/ascii-animation-editor.spec.ts` (frames advance incrementally — never a per-frame
   remount — on a stable anchor; pause → type via real editing gestures → one saved DOCX holds
   both the frozen frame and the human's edit; every scene draws).
+- **Observatory on the GitHub Pages demo** (`docs/demo/observatory.html`, linked from the landing
+  nav). A fourth Pages page hosting the same effect through the *published* package: it imports
+  `createRibbonEditor`/`DocxSession`/`getWasmExports` from the pinned CDN embed bundle and the
+  phenomena from `dist/ascii-scenes.js` in the same package (the npm build now ships the scenes
+  module — `build:scenes` — so one `?engine=` override retargets engine and phenomena together,
+  and the Pages page carries no drifting copy). The frame loop + dock wiring moved into
+  `startObservatory()` in `ascii-scenes.js`, shared by the example page and the Pages page.
+  Pinned to `docxodus@9.6.0` — the page needs `DocxEditor.refresh()`, which 9.5.0 predates — so
+  it shows its boot-failure card until that release publishes, then heals with no further change.
+  Spec: `npm/tests/demo-observatory.spec.ts` drives the page fully locally via the `?engine=`
+  override (boots the shipped surface, animates incrementally, save round-trips).
 
 ## [9.5.0] - 2026-08-08
 

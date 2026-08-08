@@ -1,6 +1,6 @@
 # GitHub Pages demo
 
-Three static pages, no application server. All three host the **same** editor
+Four static pages, no application server. All host the **same** editor
 surface — `createRibbonEditor` from the pinned `docxodus@9.5.0` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
@@ -9,6 +9,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `index.html` | The landing page. Hero, capability cards, the embed dialog, and the live editor inside its frame. This is the URL to share; its Open Graph metadata is what social platforms read. |
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
+| `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop ship in the same package (`dist/ascii-scenes.js`), so one `?engine=` override retargets both. **Pinned to `docxodus@9.6.0`** (needs `DocxEditor.refresh()`, which 9.5.0 predates); it shows the boot-failure card until that version is published, then heals with no further change. |
 
 The surface itself is **not** written here — it ships in the npm package
 (`npm/src/ribbon.ts`). These pages used to carry a hand-written toolbar each,
