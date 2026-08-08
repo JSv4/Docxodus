@@ -172,6 +172,69 @@ test.describe('DocxEditor — block drag handle', () => {
     await expect(page.locator('.docx-block-drop-indicator')).toBeHidden();
   });
 
+  // A paragraph's w:spacing becomes a CSS margin, which sits OUTSIDE the border box, so the
+  // visual gap between two blocks is not where either box edge is. Drawing the drop line on the
+  // target's edge underlines that block's last line instead of reading as a boundary — which
+  // every DOM-level assertion above is blind to, since the line is shown, is the right width,
+  // and tracks the pointer either way. This pins the position itself.
+  test('the drop line is drawn in the gap between blocks, not on a block edge', async ({ page }) => {
+    await openParagraphDocument(page, ['Alpha', 'Beta', 'Gamma', 'Delta']);
+    // Real spacing, written through the session rather than injected as CSS, so the geometry
+    // under test is the geometry a document with `w:spacing` actually produces.
+    await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const { editor } = (window as any).__drag;
+      for (const unit of editor['bodyUnitNodes']() as HTMLElement[]) {
+        const id = editor['anchorIdOf'](unit);
+        if (id) D.DocxSessionBridge.SetParagraphFormat(editor.sessionHandle, id,
+          JSON.stringify({ spacingBefore: 240, spacingAfter: 240 }));
+      }
+      editor['remount']();
+    });
+
+    // Driven through the drag internals rather than a native drag: this is a geometry assertion,
+    // and Chromium's asynchronous drag-event dispatch would only add settle timing to it.
+    const geo = await page.evaluate(() => {
+      const { editor } = (window as any).__drag;
+      const units = editor['bodyUnitNodes']() as HTMLElement[];
+      const source = units[0];
+      editor['blockDragSource'] = source;
+      editor['refreshBlockMoveTargets'](source);
+      editor['captureDropZones']();
+
+      const lineTopFor = (y: number): number | null => {
+        const hit = editor['resolveDropAt'](y);
+        if (!hit) return null;
+        editor['paintDropIndicator']({ zone: hit.zone, position: hit.position });
+        const line = document.querySelector<HTMLElement>('.docx-block-drop-indicator')!;
+        return getComputedStyle(line).display === 'none'
+          ? null
+          : line.getBoundingClientRect().top;
+      };
+
+      const box = (el: HTMLElement) => el.getBoundingClientRect();
+      const gamma = box(units[2]);
+      const delta = box(units[3]);
+      return {
+        // Lower half of Gamma ⇒ insert after Gamma, i.e. in the Gamma/Delta gap.
+        betweenBlocks: lineTopFor(gamma.bottom - 2),
+        gammaBottom: gamma.bottom,
+        deltaTop: delta.top,
+        // Below the last block ⇒ insert after Delta, where there is no neighbour to bisect.
+        endOfFlow: lineTopFor(delta.bottom + 40),
+        deltaBottom: delta.bottom,
+      };
+    });
+
+    // There is a real gap to land in — otherwise the assertions below prove nothing.
+    expect(geo.deltaTop - geo.gammaBottom).toBeGreaterThan(6);
+    // Strictly inside the gap, on neither block's edge.
+    expect(geo.betweenBlocks).toBeGreaterThan(geo.gammaBottom + 1);
+    expect(geo.betweenBlocks).toBeLessThan(geo.deltaTop - 1);
+    // Past the end of the flow the line still clears the last block's text.
+    expect(geo.endOfFlow).toBeGreaterThan(geo.deltaBottom + 1);
+  });
+
   test('a cell hover selects and moves its whole table', async ({ page }) => {
     await openParagraphDocument(page, ['Before', 'After']);
     await page.evaluate(() => {

@@ -356,7 +356,11 @@ block's own margin stands in — the only place a computed style is read, and on
 blocks.
 
 `editor-block-drag.spec.ts` drags down the gutter without ever entering the text column and
-asserts all three, sampled per pointer step rather than only at the end.
+asserts all three, sampled per pointer step rather than only at the end. A second test pins the
+line's POSITION on a document with real `w:spacing` — strictly inside the gap, on neither block's
+edge, and clear of the last block past the end of the flow. That is a separate test on purpose:
+every DOM-level assertion in the first one passes while the line is drawn in the wrong place,
+because it is shown, is the right width, and tracks the pointer either way.
 
 A review-mode move used to force a full remount, on the reasoning that the move-from/move-to
 pair had to stay canonical. It does not: the render plan signs every unit with a content hash,
