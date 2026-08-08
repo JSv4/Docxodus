@@ -1,7 +1,7 @@
 # GitHub Pages demo
 
 Four static pages, no application server. All host the **same** editor
-surface — `createRibbonEditor` from the pinned `docxodus@9.5.0` embed bundle on
+surface — `createRibbonEditor` from the pinned `docxodus@9.6.0` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
 | Page | What it is |
@@ -9,7 +9,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `index.html` | The landing page. Hero, capability cards, the embed dialog, and the live editor inside its frame. This is the URL to share; its Open Graph metadata is what social platforms read. |
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
-| `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. **Pinned to `docxodus@9.6.0`** (needs `DocxEditor.refresh()`, which 9.5.0 predates); it shows the boot-failure card until that version is published, then heals with no further change. |
+| `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
 
 The surface itself is **not** written here — it ships in the npm package
 (`npm/src/ribbon.ts`). These pages used to carry a hand-written toolbar each,
@@ -21,8 +21,8 @@ it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
-1. Publish `docxodus@9.5.0` and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@9.5.0/dist/embed.bundle.js` returns JavaScript.
+1. Publish `docxodus@9.6.0` and confirm
+   `https://cdn.jsdelivr.net/npm/docxodus@9.6.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
    running Jekyll.

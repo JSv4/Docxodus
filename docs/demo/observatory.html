@@ -75,8 +75,8 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    // The observatory needs DocxEditor.refresh() (docxodus ≥ 9.6.0), so this page
-    // pins one version ahead of its siblings until the next demo pin-bump aligns them.
+    // The observatory needs DocxEditor.refresh() (docxodus ≥ 9.6.0); this page was
+    // pinned there ahead of that release and now shares the pin with its siblings.
     const ENGINE = params.get("engine")
       ?? "https://cdn.jsdelivr.net/npm/docxodus@9.6.0/dist/embed.bundle.js";
     const engineUrl = new URL(ENGINE, location.href);
