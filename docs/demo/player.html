@@ -20,7 +20,7 @@
     from jsDelivr and the sample document comes from this same directory.
 
     Query overrides (used by tests and local dev):
-      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.3.0
+      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.5.0
       ?doc=<docx URL>                        default: local branded product guide
   -->
   <style>
@@ -122,7 +122,7 @@
   <script type="module">
     const params = new URLSearchParams(location.search);
     const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.3.0/dist/embed.bundle.js";
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.5.0/dist/embed.bundle.js";
     const DOC = params.get("doc")
       ?? "./docxodus-demo-guide.docx";
 
