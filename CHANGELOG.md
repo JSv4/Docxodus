@@ -19,6 +19,18 @@ All notable changes to this project will be documented in this file.
   `player.html` to the dark-sidebar variant, and `app.html`'s frame syncs with
   the new desk color. No DOM, `data-dxr` addressing, or behavior changes.
 
+### Added
+- **`frame` option on the ribbon surface** (`RibbonOptions.frame`,
+  `"card" | "flush"`): `"card"` makes the surface carry its own embed boundary —
+  14px rounded corners, hairline border, house shadow, `overflow: clip` so the
+  sticky chrome, scrollbars, and loading overlay respect the curve. Default
+  `"flush"` for `mountRibbon` (full-bleed hosts unchanged); `createRibbonEditor`
+  defaults to `"card"` since it is the drop-into-a-page path (the three
+  `docs/demo/` hosts pin `"flush"` — they frame the surface themselves). The
+  document scroll area also gains soft top/bottom edge fades (sticky gradient
+  veils) in both frames, so content dissolves at the chrome instead of
+  hard-clipping.
+
 ## [9.6.0] - 2026-08-08
 
 ### Added

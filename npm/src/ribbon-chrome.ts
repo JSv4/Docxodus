@@ -23,7 +23,7 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "7";
+export const RIBBON_STYLE_VERSION = "8";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
 
 /**
@@ -76,6 +76,18 @@ export const RIBBON_CSS = `
   -webkit-text-size-adjust: 100%;
 }
 .dxr *, .dxr *::before, .dxr *::after { box-sizing: border-box; }
+
+/* ── Card frame ────────────────────────────────────────────────────────────────
+   A drop-in embed carries its OWN boundary instead of hoping the host clips it:
+   rounded corners, a hairline, and the house elevation. overflow: clip keeps
+   the sticky chrome, scrollbars, and the loading overlay inside the curve.
+   Full-bleed hosts mount with data-frame="flush" and stay edge-to-edge. */
+.dxr[data-frame="card"] {
+  border: 1px solid var(--dxr-rule);
+  border-radius: 14px;
+  box-shadow: var(--dxr-shadow-xl);
+  overflow: clip;
+}
 
 /* Touch devices get bigger hit targets everywhere the token is used. */
 @media (pointer: coarse) { .dxr { --dxr-tap: 40px; } }
@@ -351,6 +363,27 @@ export const RIBBON_CSS = `
    SHOULD win.
    (No backticks in this file's comments: the stylesheet is a template literal.) */
 .dxr-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+/* Soft scroll boundaries: content dissolves at the chrome and at the bottom edge
+   instead of hard-clipping. Sticky gradient veils cost one paint layer each and
+   never intercept input. */
+.dxr-scroll::before, .dxr-scroll::after {
+  content: "";
+  position: sticky;
+  z-index: 3;
+  display: block;
+  height: 26px;
+  pointer-events: none;
+}
+.dxr-scroll::before {
+  top: 0;
+  margin-bottom: -26px;
+  background: linear-gradient(to bottom, var(--dxr-desk), transparent);
+}
+.dxr-scroll::after {
+  bottom: 0;
+  margin-top: -26px;
+  background: linear-gradient(to top, var(--dxr-desk), transparent);
+}
 .dxr[data-chrome] .dxr-surface { margin: 26px auto; padding: 0 16px 96px; }
 .dxr-surface [contenteditable="true"]:focus {
   outline: 2px solid var(--dxr-accent);

@@ -165,6 +165,8 @@
           // Pinned, not measured: this page exists to BE the compact layout, and a
           // host site may size the iframe wide enough to trip the roomy one.
           chrome: "compact",
+          // The iframe's own border-radius is the boundary here.
+          frame: "flush",
           documentName: "docxodus-demo.docx",
           hint: false,
           loader: { eyebrow: "Private · local · WebAssembly", meta: "DOCX → WASM → DOCX" },

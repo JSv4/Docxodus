@@ -400,6 +400,9 @@
       // dark frame around it and the status chip above it.
       window.__ribbon = await createRibbonEditor("#workspace", DOC, {
         documentName: "docxodus-demo.docx",
+        // The landing page frames the surface itself (status head + card), so the
+        // surface stays flush inside it.
+        frame: "flush",
         // Relay the surface's own status into the chip, without demoting the dot
         // back to "loading" for routine post-boot messages ("Saved …").
         onStatus: (text) => setStatus(text, statusbar.dataset.state === "ready" ? "ready" : "loading"),

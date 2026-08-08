@@ -89,6 +89,8 @@
       // here on. Only the module import above can fail with nothing on screen.
       window.__ribbon = await createRibbonEditor("#app", BLANK ? null : DOC, {
         documentName: BLANK ? "untitled.docx" : "docxodus-demo-guide.docx",
+        // Full-bleed: the page IS the surface, so no card boundary.
+        frame: "flush",
         // Bands are a Word-authoring feature rather than a first-30-seconds one; the
         // Layout tab turns them on without reloading.
         headerFooter: false,
