@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Editor surface restyled to the OS-Legal house design system**
+  (github.com/Open-Source-Legal/OS-Legal-Style): the ribbon chrome
+  (`npm/src/ribbon-chrome.ts`, style version 6) moves from the ad-hoc blue/gray
+  palette to the house tokens — deep-teal accent `#0F766E`, slate foreground
+  scale, white surfaces over a warm `#FAFAFA`/`#F1F5F9` canvas, 6/12px radii,
+  and 0.03–0.06-opacity "light touch" shadows; Inter leads the UI font stack
+  (hosts load it, system-ui fallback), Save becomes the surface's one primary
+  accent button, and the loading overlay trades the neon cyan/violet look for
+  the house dark-slate `#0F172A` + teal family with a Georgia serif headline.
+  The GitHub Pages demo pages follow: `docs/demo/index.html` is re-skinned to
+  the light "warm precision" look (Georgia headlines, teal CTAs, white cards),
+  `player.html` to the dark-sidebar variant, and `app.html`'s frame syncs with
+  the new desk color. No DOM, `data-dxr` addressing, or behavior changes.
+
 ## [9.6.0] - 2026-08-08
 
 ### Added
