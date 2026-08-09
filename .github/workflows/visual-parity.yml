@@ -1,0 +1,72 @@
+name: LibreOffice visual parity
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: Optional comma-separated corpus case IDs
+        required: false
+        type: string
+      strict:
+        description: Fail if any case is severe
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '41 8 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  visual-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install deterministic rendering tools and fonts
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libreoffice-writer poppler-utils fonts-liberation2
+          fonts-crosextra-carlito fonts-crosextra-caladea
+
+      - name: Install npm dependencies
+        run: cd npm && npm ci
+
+      - name: Build npm package
+        run: cd npm && npm run build
+
+      - name: Install Chromium
+        run: cd npm && npx playwright install --with-deps chromium
+
+      - name: Compare stratified corpus with LibreOffice
+        env:
+          DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity
+          DOCXODUS_VISUAL_PARITY_FILTER: ${{ inputs.filter }}
+          DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
+        run: cd npm && npm run test:visual-parity
+
+      - name: Upload visual comparison report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: libreoffice-visual-parity
+          path: ${{ runner.temp }}/docxodus-visual-parity/
+          if-no-files-found: warn
+          retention-days: 14

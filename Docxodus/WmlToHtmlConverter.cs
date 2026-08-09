@@ -1773,7 +1773,11 @@ namespace Docxodus
             sb.AppendLine("    border: none;");
             sb.AppendLine("    height: 1px;");
             sb.AppendLine("    background-color: #999;");
-            sb.AppendLine("    width: 33%;");
+            // Word's built-in footnote separator is two inches long. A percentage makes the
+            // rule drift with paper size/margins (6.5in Letter text yielded 2.145in) and does
+            // not match either Word or LibreOffice's fixed default separator.
+            sb.AppendLine("    width: 2in;");
+            sb.AppendLine("    max-width: 100%;");
             sb.AppendLine("    margin: 0 0 6pt 0;");
             sb.AppendLine("    opacity: 0.6;");
             sb.AppendLine("}");
@@ -5765,8 +5769,12 @@ namespace Docxodus
                 return exactRun;
             }
 
-            // hide all content that contains the w:rPr/w:webHidden element
-            if (rPr.Element(W.webHidden) != null)
+            // w:webHidden is view-specific: it suppresses the run in Web layout, but the same
+            // run remains visible in Print layout. Paginated output models the latter (and is
+            // also what Chromium captures/prints), so hiding TOC PAGEREF results here removed
+            // both their page numbers and the leader tabs that precede them.
+            if (rPr.Element(W.webHidden) != null &&
+                settings.RenderPagination != PaginationMode.Paginated)
                 return null;
 
             var style = DefineRunStyle(run);
