@@ -4410,7 +4410,10 @@ namespace Docxodus
             return span;
         }
 
-        private static object ProcessBreak(XElement element, WmlToHtmlConverterSettings settings)
+        private static object ProcessBreak(
+            XElement element,
+            WmlToHtmlConverterSettings settings,
+            bool compactDirectionMark = false)
         {
             // Check for page break (w:br with w:type="page")
             var breakType = (string)element.Attribute(W.type);
@@ -4459,11 +4462,32 @@ namespace Docxodus
                          paragraph.Elements(W.pPr).Elements(W.bidi).Any(b => b.Attribute(W.val) == null ||
                                                                              b.Attribute(W.val).ToBoolean() == true);
             var zeroWidthChar = isBidi ? new XEntity("#x200f") : new XEntity("#x200e");
+            var breakElement = new XElement(Xhtml.br);
+            object directionMark = zeroWidthChar;
+            if (compactDirectionMark)
+            {
+                // A bare <br> still inherits the paragraph's default font size. Chromium uses
+                // that font's metrics when constructing the line box, even when the paragraph
+                // itself has an exact line-height. Compact both pieces emitted for the break;
+                // visible run boxes are aligned separately below.
+                breakElement.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "font-size", "0" },
+                    { "line-height", "0" },
+                });
+                var markSpan = new XElement(Xhtml.span, zeroWidthChar);
+                markSpan.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "font-size", "0" },
+                    { "line-height", "0" },
+                });
+                directionMark = markSpan;
+            }
 
             return new object[]
             {
-                new XElement(Xhtml.br),
-                zeroWidthChar,
+                breakElement,
+                directionMark,
                 span,
             };
         }
@@ -5708,14 +5732,52 @@ namespace Docxodus
                 return ConvertToHtmlTransform(wordDoc, settings, contentElements[0], false, 0m);
             }
 
+            // Under exact paragraph spacing, generated break-only runs must not contribute
+            // default-font metrics. FormattingAssembler gives otherwise-unformatted break
+            // runs the document default rPr; wrapping that <br> in (for example) an 11pt span
+            // makes Chromium enlarge every 10pt line even though CSS line-height is exact.
+            // A bare break matches Word/LibreOffice and leaves ordinary (auto-spaced)
+            // paragraphs untouched.
+            var isBreakOnlyRun = contentElements.Count > 0 &&
+                contentElements.All(e => e.Name == W.br || e.Name == W.cr);
+            var paragraphHasExactLineHeight = run.Ancestors(W.p)
+                .Select(p => p.Element(W.pPr)?.Element(W.spacing))
+                .Any(spacing => spacing != null &&
+                    (string)spacing.Attribute(W.lineRule) == "exact" &&
+                    spacing.Attribute(W.line) != null);
+            if (isBreakOnlyRun && paragraphHasExactLineHeight)
+                return contentElements.Select(e => ProcessBreak(e, settings, compactDirectionMark: true));
+
             if (rPr == null)
-                return run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            {
+                var unstyledContent = run.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+                if (!paragraphHasExactLineHeight)
+                    return unstyledContent;
+
+                var exactRun = new XElement(Xhtml.span, unstyledContent);
+                exactRun.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "vertical-align", "top" },
+                    { "margin", "0" },
+                    { "padding", "0" },
+                });
+                return exactRun;
+            }
 
             // hide all content that contains the w:rPr/w:webHidden element
             if (rPr.Element(W.webHidden) != null)
                 return null;
 
             var style = DefineRunStyle(run);
+            if (paragraphHasExactLineHeight)
+            {
+                // CSS line boxes are allowed to grow when baseline-aligned runs use font
+                // metrics that differ from the paragraph strut. Word's exact line spacing is
+                // fixed instead. Top-aligning run boxes preserves their declared line-height
+                // without changing glyph size, including when the paragraph default is larger.
+                style["vertical-align"] = "top";
+            }
 
             // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
             // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map

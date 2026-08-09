@@ -199,6 +199,40 @@ test.describe('DocxEditor — incremental structural reconcile', () => {
     expect(r.backrefs).toEqual(r.engineIds.map((id: string) => `#fn-ref-${id}`));
   });
 
+  test('the first footnote creates its section without remounting untouched blocks', async ({ page }) => {
+    await buildParagraphs(page, ['Cite here.', 'Untouched survivor.']);
+    await page.evaluate(() => {
+      const { editor } = (window as any).__rec;
+      const blocks = editor['editableList']() as HTMLElement[];
+      (blocks[1] as any).__sentinel = 'first-note-survivor';
+    });
+    await focusBlock(page, 0);
+    await page.evaluate(() => (window as any).__rec.editor.insertFootnote('First note.'));
+
+    const r = await page.evaluate(() => {
+      const { editor, container } = (window as any).__rec;
+      const blocks = editor['editableList']() as HTMLElement[];
+      const section = container.querySelector('section.footnotes');
+      const li = section?.querySelector('ol > li') as HTMLElement | null;
+      return {
+        survived: blocks.some((b: any) => b.__sentinel === 'first-note-survivor'),
+        fallback: editor.lastReconcileFallback as string | null,
+        sections: container.querySelectorAll('section.footnotes').length,
+        noteCount: section?.querySelectorAll(':scope > ol > li').length ?? 0,
+        noteStamped: li?.hasAttribute('data-note-anchor') ?? false,
+        noteEditable: !!li?.querySelector('[data-anchor][contenteditable="true"]'),
+        noteText: li?.textContent ?? '',
+      };
+    });
+    expect(r.survived).toBe(true);
+    expect(r.fallback).toBeNull();
+    expect(r.sections).toBe(1);
+    expect(r.noteCount).toBe(1);
+    expect(r.noteStamped).toBe(true);
+    expect(r.noteEditable).toBe(true);
+    expect(r.noteText).toContain('First note.');
+  });
+
   test('reconciled edits survive save/reopen losslessly', async ({ page }) => {
     await buildParagraphs(page, ['AAA', 'BBB', 'CCC']);
     await focusBlock(page, 1);

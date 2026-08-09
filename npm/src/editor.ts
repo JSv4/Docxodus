@@ -3039,8 +3039,8 @@ export class DocxEditor {
    * editable `data-anchor` blocks in the notes section, so editing it afterwards needs no new op.
    *
    * Body blocks only: Word disallows a note reference inside a header/footer story or inside
-   * another note, and the session rejects those with `AnchorWrongKind`. Remounts, because a new
-   * note renumbers the citations after it and can add a whole part.
+   * another note, and the session rejects those with `AnchorWrongKind`. Reconciliation creates
+   * the first notes section when needed and renumbers every affected citation in place.
    */
   insertFootnote(markdown = "New footnote."): void {
     this.insertNote("footnote", markdown);
@@ -3508,6 +3508,7 @@ export class DocxEditor {
       n.parentElement &&
       n.parentElement !== this.editRoot &&
       n.parentElement.tagName === "DIV" &&
+      !n.parentElement.hasAttribute("data-section-index") &&
       !n.parentElement.hasAttribute("data-anchor") &&
       n.parentElement.childElementCount === 1
     ) {
@@ -3570,6 +3571,10 @@ export class DocxEditor {
     const pureRemoved = diff.removed.filter(
       (i) => !diff.substituted.some((s) => s.oldIndex === i) && !movedOld.has(i),
     );
+    // DOMParser roots report isConnected=true because they belong to their detached
+    // HTMLDocument. Track only fresh additions actually inserted into the live editor;
+    // otherwise a later not-yet-applied sibling looks like a neighbor in another parent.
+    const appliedFresh = new Set<number>();
     const nodeAt = (j: number): HTMLElement | null => {
       const oi = diff.keep.get(j);
       if (oi !== undefined) return oldNodes[oi];
@@ -3577,7 +3582,7 @@ export class DocxEditor {
       if (movedOi !== undefined) return oldNodes[movedOi];
       if (subOldByNew.has(j)) return fresh.get(j)!;
       const f = fresh.get(j);
-      return f && f.isConnected ? f : null;
+      return f && appliedFresh.has(j) ? f : null;
     };
 
     // Preserve the established incremental insertion path: body render output may
@@ -3596,6 +3601,7 @@ export class DocxEditor {
       if (prevW) prevW.after(el);
       else if (nextW) nextW.before(el);
       else return "insert with no anchored neighbor";
+      appliedFresh.add(j);
       this.wireUnit(el, units[j]);
     }
 
@@ -3643,8 +3649,8 @@ export class DocxEditor {
     root.querySelectorAll<HTMLElement>("[data-anchor]").forEach((b) => this.wireBlock(b));
   }
 
-  /** Old-sequence diff state for one notes section. `null` requests remount (DOM not
-   *  stampable/consistent). */
+  /** Old-sequence diff state for one notes section. `null` requests remount when an
+   *  existing list is not stampable; an absent list is the valid first-note case. */
   private notesDiff(
     sectionClass: "footnotes" | "endnotes",
     units: RenderUnit[],
@@ -3652,8 +3658,9 @@ export class DocxEditor {
     const ol = this.editRoot.querySelector<HTMLElement>(`section.${sectionClass} > ol`);
     const lis = ol ? (Array.from(ol.children).filter((c) => c.tagName === "LI") as HTMLElement[]) : [];
     if (units.length === 0 && lis.length === 0) return { lis, diff: diffUnits([], []) };
-    // A document that gains its FIRST note has no section to patch — remount builds it.
-    if (!ol) return null;
+    // Full render omits empty note sections. Treat the first note as an insertion into
+    // an empty list; applyNotesDiff creates the converter-equivalent section + list.
+    if (!ol) return { lis, diff: diffUnits([], units) };
     const tokens: string[] = [];
     for (const li of lis) {
       const unid = li.getAttribute("data-note-anchor");
@@ -3678,7 +3685,22 @@ export class DocxEditor {
       this.editRoot.querySelector(`section.${sectionClass}`)?.remove();
       return;
     }
-    const ol = this.editRoot.querySelector<HTMLElement>(`section.${sectionClass} > ol`)!;
+    let section = this.editRoot.querySelector<HTMLElement>(`:scope > section.${sectionClass}`);
+    let ol = section?.querySelector<HTMLOListElement>(`:scope > ol`) ?? null;
+    if (!ol) {
+      if (!section) {
+        section = document.createElement("section");
+        section.className = sectionClass;
+        const following = sectionClass === "footnotes"
+          ? this.editRoot.querySelector<HTMLElement>(`:scope > section.endnotes`)
+          : null;
+        if (following) following.before(section);
+        else this.editRoot.append(section);
+      }
+      if (!section.querySelector(":scope > hr")) section.prepend(document.createElement("hr"));
+      ol = document.createElement("ol");
+      section.append(ol);
+    }
     const prefix = sectionClass === "footnotes" ? "fn" : "en";
     const nodes: HTMLElement[] = [];
     for (let j = 0; j < units.length; j++) {

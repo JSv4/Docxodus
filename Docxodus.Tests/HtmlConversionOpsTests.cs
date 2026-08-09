@@ -1185,6 +1185,57 @@ public class HtmlConversionOpsTests
         Assert.StartsWith("<p", second);
     }
 
+    // A default-formatted run containing only w:br must not contribute its own font-size
+    // strut when the paragraph declares exact line spacing. Chromium otherwise expands a
+    // 10pt arcade row to ~15.3px because the generated 11pt span wraps the break.
+    [Fact]
+    public void HCO084_ExactLineHeight_RendersBreakOnlyRunsWithoutStyledSpan()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(new Wp.Body(
+                new Wp.Paragraph(
+                    new Wp.ParagraphProperties(
+                        new Wp.SpacingBetweenLines
+                        {
+                            Line = "200",
+                            LineRule = Wp.LineSpacingRuleValues.Exact,
+                        }),
+                    new Wp.Run(
+                        new Wp.RunProperties(new Wp.FontSize { Val = "16" }),
+                        new Wp.Text("ROW ONE")),
+                    new Wp.Run(new Wp.Break()),
+                    new Wp.Run(
+                        new Wp.RunProperties(new Wp.FontSize { Val = "16" }),
+                        new Wp.Text("ROW TWO")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(new Wp.FontSize { Val = "22" }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document.Save();
+        }
+
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = System.Xml.Linq.XElement.Parse(html);
+        var paragraph = root.Descendants().Single(e => e.Name.LocalName == "p");
+        var lineBreak = paragraph.Descendants().Single(e => e.Name.LocalName == "br");
+
+        Assert.Contains("line-height: 10.0pt", html);
+        Assert.Contains("vertical-align: top", html);
+        Assert.Equal("p", lineBreak.Parent!.Name.LocalName);
+        Assert.Contains("font-size: 0", (string?)lineBreak.Attribute("style"));
+        Assert.Contains("line-height: 0", (string?)lineBreak.Attribute("style"));
+        Assert.DoesNotContain(paragraph.Nodes().OfType<System.Xml.Linq.XText>(),
+            text => text.Value.Contains('\u200e'));
+        Assert.DoesNotContain(paragraph.Descendants(), e =>
+            e.Name.LocalName == "span" && e.Descendants().Any(d => d.Name.LocalName == "br"));
+    }
+
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the
     // same call still render. (The reconciler falls back to a full remount per null.)
     [Fact]
