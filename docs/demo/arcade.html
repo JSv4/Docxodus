@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light" />
+  <title>Docxodus — THE DOCX ARCADE: a video game inside a Word document</title>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+  <meta name="description" content="A platformer and a Doom-style raycaster rendered as colored runs in a live Word paragraph, playable in the in-browser Docxodus editor. Pause anywhere: it is only a document — type new terrain into the level, resume, and it is real. Save mid-jump as .docx." />
+
+  <!-- Share THIS page's URL. Social platforms link through to the live game. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="THE DOCX ARCADE — a video game running inside a Word document" />
+  <meta property="og:description" content="WASD works. The framebuffer is a Word paragraph. Pause and TYPE new level geometry straight into the document; resume and it is solid. Save mid-jump: the frame downloads as a real .docx. 100% in-browser via WebAssembly." />
+  <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/arcade.html" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/arcade-social.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="THE DOCX ARCADE — a video game running inside a Word document" />
+  <meta name="twitter:description" content="A platformer and a Doom-style raycaster whose screen is a live Word paragraph. Pause, type terrain into the document, resume — you wrote the level." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/arcade-social.png" />
+
+  <style>
+    /* A HOST page, like observatory.html: the editor surface ships in the npm
+       package (`createRibbonEditor`); the games and their driver are demo
+       content living beside this page (`ascii-arcade.js`). The page's only
+       original chrome is the arcade dock pinned under the document and the
+       power-on screen shown when the page is embedded in an iframe. */
+    html, body { height: 100%; }
+    body { margin: 0; background: #e8ecf2; }
+    #app { height: 100%; }
+    #home {
+      position: fixed; top: 10px; right: 12px; z-index: 50;
+      font: 12px/1 system-ui, sans-serif; color: #33465b;
+      background: #ffffffd9; border: 1px solid #d3dae4; border-radius: 999px;
+      padding: 7px 12px; backdrop-filter: blur(4px);
+      text-decoration: none;
+    }
+    #home:hover { color: #101418; background: #fff; border-color: #b9c4d4; }
+    #app .dxr-titlebar { padding-right: 84px; }
+    body:has(.dxr[data-state="loading"]) #home,
+    body:has(.dxr[data-state="error"]) #home { display: none; }
+
+    #dock {
+      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+      z-index: 60; max-width: min(980px, calc(100vw - 24px));
+      display: flex; flex-direction: column; gap: 5px; align-items: center;
+      background: rgba(11, 15, 26, 0.94); color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 10px;
+      padding: 8px 14px 7px;
+      font: 12px/1.4 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    #dock .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
+    #dock button, #dock select {
+      appearance: none; background: #111827; color: #d5dce8;
+      border: 1px solid #1f2a3f; border-radius: 6px;
+      font: inherit; font-size: 11.5px; padding: 4px 10px; cursor: pointer;
+    }
+    #dock button:hover { background: #18233a; }
+    #dock button[aria-pressed="true"] { background: #123a34; color: #5eead4; }
+    #dock button:disabled { opacity: 0.4; cursor: default; }
+    #playpause { min-width: 110px; }
+    #dockstats { color: #7a8699; font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
+    #dockstats b { color: #d5dce8; font-weight: 600; }
+    #dockstats .inc { color: #5eead4; }
+    #dockhint { color: #7a8699; font-size: 10.5px; text-align: center; }
+    #dockhint b { color: #d5dce8; font-weight: 600; }
+
+    /* Touch pad: only when the pointer is coarse (phones/tablets). */
+    #pad { display: none; }
+    @media (pointer: coarse) { #pad { display: flex; } }
+    #pad button { min-width: 44px; min-height: 40px; font-size: 15px; touch-action: none; user-select: none; }
+
+    #copyEmbed { border-color: #123a34; color: #5eead4; }
+    #copyEmbed:hover { background: #123a34; }
+
+    /* Power-on screen: shown instead of auto-booting when the page is inside
+       an iframe, so a feed embed never streams a .NET runtime unasked. */
+    /* The explicit display values below would defeat the `hidden` attribute
+       (author CSS beats the UA's display:none), so restore it explicitly. */
+    #boot[hidden], #dock[hidden] { display: none; }
+    #boot {
+      position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+      background: radial-gradient(ellipse at center, #12203a 0%, #0a0f1a 70%);
+      color: #d5dce8; cursor: pointer;
+      font: 14px/1.7 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      text-align: center;
+    }
+    #boot .title { color: #5eead4; font-size: clamp(18px, 4vw, 28px); letter-spacing: .18em; font-weight: 700; }
+    #boot .coin { margin-top: 18px; color: #ffd166; animation: blink 1.1s steps(1) infinite; }
+    #boot .sub { margin-top: 10px; color: #7a8699; font-size: 11.5px; }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+</head>
+<body>
+  <a id="home" href="./" title="Back to the Docxodus overview">About ↗</a>
+  <div id="app"></div>
+
+  <div id="boot" hidden>
+    <div>
+      <div class="title">THE DOCX ARCADE</div>
+      <div class="coin">▶ INSERT COIN — CLICK TO POWER ON</div>
+      <div class="sub">a video game whose screen is a live Word document<br>
+        runs entirely in your browser · nothing uploaded</div>
+    </div>
+  </div>
+
+  <div id="dock" hidden>
+    <div class="row" id="dockcarts"></div>
+    <div class="row">
+      <button id="playpause">⏸ Pause &amp; edit</button>
+      <button id="restart" title="Restart the cartridge (R)">↻ Restart</button>
+      <select id="pace" title="Target frame pacing">
+        <option value="125">8 fps</option>
+        <option value="100" selected>10 fps</option>
+        <option value="66">15 fps</option>
+        <option value="0">unthrottled</option>
+      </select>
+      <button id="copyEmbed" title="Copy an iframe that embeds this arcade on your site">&lt;/&gt; Embed</button>
+      <span id="dockstats">warming up…</span>
+    </div>
+    <div class="row" id="pad" aria-label="Touch controls">
+      <button data-code="ArrowLeft" aria-label="Left / turn left">◀</button>
+      <button data-code="ArrowRight" aria-label="Right / turn right">▶</button>
+      <button data-code="KeyW" aria-label="Jump / forward">▲</button>
+      <button data-code="KeyS" aria-label="Back">▼</button>
+    </div>
+    <div id="dockhint">warming up…</div>
+  </div>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    // The Arcade needs DocxEditor.refresh() (docxodus ≥ 9.6.0); it shares the
+    // site-wide pin with its sibling pages.
+    const ENGINE = params.get("engine")
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@9.7.0/dist/embed.bundle.js";
+    const engineUrl = new URL(ENGINE, location.href);
+    // The games are demo content, not library machinery: they live beside this
+    // page (docs/demo/ deploys verbatim; pretest copies the same file into the
+    // local webroot), so ?engine= pins the library alone and the games version
+    // with the site.
+    const GAMES_URL = params.get("games") ?? "./ascii-arcade.js";
+
+    const embedSnippet = `<iframe
+  src="https://jsv4.github.io/Docxodus/demo/arcade.html"
+  width="960" height="720"
+  title="THE DOCX ARCADE — a game inside a Word document"
+  loading="lazy" allow="fullscreen"
+  sandbox="allow-scripts allow-same-origin allow-downloads"
+  style="border:0;border-radius:14px;overflow:hidden">
+</iframe>`;
+
+    async function powerOn() {
+      try {
+        const [{ createRibbonEditor, DocxSession, getWasmExports }, { startArcade }] =
+          await Promise.all([import(engineUrl.href), import(GAMES_URL)]);
+
+        const ribbon = await createRibbonEditor("#app", null, {
+          documentName: "docx-arcade.docx",
+          headerFooter: false,
+          hint: "The game screen below is a Word paragraph. Pause (or click it) and edit it like any other document.",
+          loader: {
+            eyebrow: "Running locally in this tab",
+            meta: "a live DOCX as the framebuffer",
+          },
+        });
+
+        const editor = ribbon.editor;
+        const bridge = getWasmExports().DocxSessionBridge;
+        const session = new DocxSession(editor.sessionHandle, bridge);
+        const controller = startArcade({
+          editor,
+          session,
+          cart: params.get("cart") ?? "quest",
+          ui: {
+            carts: document.getElementById("dockcarts"),
+            playpause: document.getElementById("playpause"),
+            restart: document.getElementById("restart"),
+            pace: document.getElementById("pace"),
+            stats: document.getElementById("dockstats"),
+            hint: document.getElementById("dockhint"),
+            pad: document.getElementById("pad"),
+          },
+        });
+        document.getElementById("dock").hidden = false;
+
+        document.getElementById("copyEmbed").addEventListener("click", async (event) => {
+          const button = event.currentTarget;
+          try { await navigator.clipboard.writeText(embedSnippet); }
+          catch {
+            const area = Object.assign(document.createElement("textarea"), { value: embedSnippet });
+            area.style.cssText = "position:fixed;opacity:0";
+            document.body.append(area);
+            area.select();
+            document.execCommand("copy");
+            area.remove();
+          }
+          const previous = button.innerHTML;
+          button.textContent = "Copied!";
+          setTimeout(() => { button.innerHTML = previous; }, 1500);
+        });
+
+        window.__arcade = { ...controller, editor, ribbon, session, bridge };
+      } catch (error) {
+        document.getElementById("app").innerHTML =
+          '<div style="display:grid;place-items:center;height:100%;padding:24px;text-align:center;'
+          + 'font:14px/1.6 system-ui,sans-serif;color:#33465b"><div><strong>The arcade could not start.</strong>'
+          + '<p id="bootError" style="margin:8px 0 16px;color:#5d6975"></p>'
+          + '<button onclick="location.reload()" style="font:inherit;padding:8px 14px;border:1px solid #d3dae4;'
+          + 'border-radius:8px;background:#fff;cursor:pointer">Retry</button></div></div>';
+        document.getElementById("bootError").textContent = String(error).slice(0, 220);
+        window.__arcadeError = String(error);
+      }
+    }
+
+    // Inside an iframe the cabinet waits for a coin: an embed in someone's
+    // page must not stream a .NET runtime unasked. Top-level it boots at once.
+    const embedded = window.self !== window.top;
+    const bootMode = params.get("boot") ?? (embedded ? "tap" : "auto");
+    if (bootMode === "tap") {
+      const boot = document.getElementById("boot");
+      boot.hidden = false;
+      boot.addEventListener("click", () => { boot.remove(); powerOn(); }, { once: true });
+    } else {
+      powerOn();
+    }
+  </script>
+</body>
+</html>
