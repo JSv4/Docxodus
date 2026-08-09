@@ -23,7 +23,7 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "5";
+export const RIBBON_STYLE_VERSION = "8";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
 
 /**
@@ -34,19 +34,34 @@ export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
  */
 export const RIBBON_CSS = `
 .dxr {
-  --dxr-ink: #101418;
+  /* OS-Legal design tokens (github.com/Open-Source-Legal/OS-Legal-Style):
+     deep-teal accent, slate foreground scale, warm neutral surfaces, and
+     "light touch" shadows at 0.03-0.06 opacity — structure over decoration. */
+  --dxr-ink: #1e293b;
   --dxr-sheet: #ffffff;
-  --dxr-chrome: #eef1f6;
-  --dxr-chrome-sunk: #e3e8f0;
-  --dxr-rule: #d3dae4;
-  --dxr-accent: #1f5fd0;
-  --dxr-wash: #dde8fb;
-  --dxr-muted: #5d6975;
-  --dxr-data: #0b6f6a;
-  --dxr-danger: #a3341f;
-  --dxr-desk: #dfe3ea;
-  --dxr-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --dxr-chrome: #ffffff;
+  --dxr-chrome-sunk: #f8fafc;
+  --dxr-rule: #e2e8f0;
+  --dxr-rule-strong: #cbd5e1;
+  --dxr-accent: #0f766e;
+  --dxr-accent-hover: #0d9488;
+  --dxr-accent-active: #115e59;
+  --dxr-wash: #f0fdfa;
+  --dxr-wash-on: #ccfbf1;
+  --dxr-muted: #475569;
+  --dxr-faint: #94a3b8;
+  --dxr-data: #0f766e;
+  --dxr-danger: #dc2626;
+  --dxr-danger-wash: #fef2f2;
+  --dxr-desk: #f1f5f9;
+  --dxr-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --dxr-serif: Georgia, "Times New Roman", serif;
   --dxr-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  --dxr-shadow-sm: 0 1px 2px rgba(15, 23, 42, .04);
+  --dxr-shadow-md: 0 1px 3px rgba(15, 23, 42, .06), 0 4px 6px rgba(15, 23, 42, .03);
+  --dxr-shadow-lg: 0 4px 6px rgba(15, 23, 42, .05), 0 10px 15px rgba(15, 23, 42, .04);
+  --dxr-shadow-xl: 0 8px 16px rgba(15, 23, 42, .06), 0 20px 25px rgba(15, 23, 42, .05);
+  --dxr-ease: cubic-bezier(.4, 0, .2, 1);
   --dxr-tap: 30px;
 
   position: relative;
@@ -61,6 +76,18 @@ export const RIBBON_CSS = `
   -webkit-text-size-adjust: 100%;
 }
 .dxr *, .dxr *::before, .dxr *::after { box-sizing: border-box; }
+
+/* ── Card frame ────────────────────────────────────────────────────────────────
+   A drop-in embed carries its OWN boundary instead of hoping the host clips it:
+   rounded corners, a hairline, and the house elevation. overflow: clip keeps
+   the sticky chrome, scrollbars, and the loading overlay inside the curve.
+   Full-bleed hosts mount with data-frame="flush" and stay edge-to-edge. */
+.dxr[data-frame="card"] {
+  border: 1px solid var(--dxr-rule);
+  border-radius: 14px;
+  box-shadow: var(--dxr-shadow-xl);
+  overflow: clip;
+}
 
 /* Touch devices get bigger hit targets everywhere the token is used. */
 @media (pointer: coarse) { .dxr { --dxr-tap: 40px; } }
@@ -90,12 +117,13 @@ export const RIBBON_CSS = `
   font-weight: 600;
   letter-spacing: -.01em;
 }
+/* A filled circle, echoing the OS-Legal "Node" motif rather than a diamond. */
 .dxr-brand .dxr-mark {
   flex: 0 0 auto;
   width: 9px;
   height: 9px;
+  border-radius: 50%;
   background: var(--dxr-accent);
-  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
 .dxr-brand .dxr-docname {
   overflow: hidden;
@@ -127,25 +155,25 @@ export const RIBBON_CSS = `
   scrollbar-width: none;
 }
 .dxr-tabs::-webkit-scrollbar { display: none; }
+/* Line-variant tabs (the house Tabs default): no boxes, no fills — the selected
+   tab is a 2px accent underline sitting on the panel's own hairline. */
 .dxr-tab {
   flex: 0 0 auto;
-  padding: 6px 15px 7px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 5px 5px 0 0;
+  padding: 7px 14px 8px;
+  border: none;
   background: none;
   color: var(--dxr-muted);
   font: inherit;
   font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: color .15s var(--dxr-ease), box-shadow .15s var(--dxr-ease);
 }
-.dxr-tab:hover { color: var(--dxr-ink); background: #e6ebf3; }
+.dxr-tab:hover { color: var(--dxr-ink); }
 .dxr-tab[aria-selected="true"] {
   color: var(--dxr-ink);
   font-weight: 600;
-  background: var(--dxr-chrome-sunk);
-  border-color: var(--dxr-rule);
-  box-shadow: inset 0 2px 0 var(--dxr-accent);
+  box-shadow: inset 0 -2px 0 var(--dxr-accent);
 }
 /* Contextual tab — present only while the caret is inside a table. */
 .dxr-tab[data-contextual] { color: var(--dxr-accent); }
@@ -175,7 +203,7 @@ export const RIBBON_CSS = `
 .dxr-group:last-child { border-right: none; }
 .dxr-group:first-child { padding-left: 0; }
 .dxr-glabel {
-  color: var(--dxr-muted);
+  color: var(--dxr-faint);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: .11em;
@@ -184,48 +212,69 @@ export const RIBBON_CSS = `
 .dxr-row { display: flex; gap: 3px; align-items: center; }
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
+/* One button family, house-style: every control is a ghost — no borders, no
+   fills, no per-button boxes. Hover paints a quiet slate wash; the active
+   (toggled) state paints a teal one. Save alone is the flat primary, so the
+   surface has exactly one accent-colored action. */
 .dxr button, .dxr label.dxr-btn {
   min-height: var(--dxr-tap);
   padding: 5px 9px;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  border: none;
+  border-radius: 6px;
   background: none;
   color: var(--dxr-ink);
   font: inherit;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.15;
   cursor: pointer;
+  transition: background-color .15s var(--dxr-ease), color .15s var(--dxr-ease),
+    box-shadow .15s var(--dxr-ease), transform .15s var(--dxr-ease);
 }
 .dxr label.dxr-btn { display: inline-flex; align-items: center; }
-.dxr button:hover, .dxr label.dxr-btn:hover { background: #d6deea; }
-.dxr button:active { background: #c8d3e3; }
+.dxr button:hover, .dxr label.dxr-btn:hover { background: #f1f5f9; }
+.dxr button:active { background: #e2e8f0; }
 .dxr button:disabled { opacity: .38; cursor: default; background: none; }
-.dxr button.dxr-on { color: var(--dxr-accent); background: var(--dxr-wash); border-color: #b3ccf2; }
-.dxr-quick button, .dxr-quick label.dxr-btn {
-  padding: 4px 10px;
-  border-color: var(--dxr-rule);
-  background: #f7f9fc;
-  font-size: 12.5px;
+.dxr button.dxr-on { color: var(--dxr-accent); background: var(--dxr-wash-on); }
+.dxr-quick button, .dxr-quick label.dxr-btn { padding: 4px 10px; font-size: 12.5px; }
+/* Save — the house primary: flat accent, sm shadow, the 1px lift on hover. */
+.dxr-quick button[data-dxr="save"]:not(:disabled) {
+  background: var(--dxr-accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: var(--dxr-shadow-sm);
 }
-.dxr-quick button:hover, .dxr-quick label.dxr-btn:hover { background: #fff; border-color: #b9c4d4; }
-.dxr-quick button:disabled:hover { background: #f7f9fc; border-color: var(--dxr-rule); }
-.dxr button.dxr-icon { min-width: var(--dxr-tap); text-align: center; }
+.dxr-quick button[data-dxr="save"]:not(:disabled):hover {
+  background: var(--dxr-accent-hover);
+  box-shadow: var(--dxr-shadow-md);
+  transform: translateY(-1px);
+}
+.dxr-quick button[data-dxr="save"]:not(:disabled):active {
+  background: var(--dxr-accent-active);
+  box-shadow: var(--dxr-shadow-sm);
+  transform: translateY(0);
+}
+/* Icon controls sit quieter than text ones until touched (house IconButton). */
+.dxr button.dxr-icon { min-width: var(--dxr-tap); text-align: center; color: var(--dxr-muted); }
+.dxr button.dxr-icon:hover:not(:disabled) { color: var(--dxr-ink); }
+.dxr button.dxr-icon.dxr-on { color: var(--dxr-accent); }
 /* Icons are inline SVG drawn from the same shapes the control acts on (text lines,
    rules), so alignment and indent read at a glance instead of relying on arrow
    glyphs that collide with undo/redo. currentColor keeps them in step with state. */
 .dxr button svg { display: block; margin: 0 auto; fill: currentColor; }
 .dxr button.dxr-wide { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.dxr button.dxr-danger:hover { color: var(--dxr-danger); background: #f6dcd6; }
+.dxr button.dxr-danger:hover { color: var(--dxr-danger); background: var(--dxr-danger-wash); }
 .dxr select, .dxr input[type="number"], .dxr input[type="text"] {
   min-height: var(--dxr-tap);
   padding: 4px 6px;
   border: 1px solid var(--dxr-rule);
-  border-radius: 4px;
-  background: #f7f9fc;
+  border-radius: 6px;
+  background: var(--dxr-sheet);
   color: var(--dxr-ink);
   font: inherit;
   font-size: 12.5px;
 }
+.dxr select:hover, .dxr input:hover { border-color: var(--dxr-rule-strong); }
 .dxr select:focus-visible, .dxr input:focus-visible, .dxr button:focus-visible,
 .dxr .dxr-tab:focus-visible, .dxr label.dxr-btn:focus-within {
   outline: 2px solid var(--dxr-accent);
@@ -256,7 +305,7 @@ export const RIBBON_CSS = `
   height: 25px;
   padding: 0 10px;
   overflow-x: auto;
-  background: #f7f9fc;
+  background: #fafafa;
   border-top: 1px solid var(--dxr-rule);
   color: var(--dxr-muted);
   font-family: var(--dxr-mono);
@@ -275,7 +324,7 @@ export const RIBBON_CSS = `
 .dxr-rail .dxr-cell:first-child { padding-left: 0; }
 .dxr-rail .dxr-cell:last-child { border-right: none; }
 .dxr-rail .dxr-k {
-  color: #8b96a3;
+  color: var(--dxr-faint);
   font-family: var(--dxr-ui);
   font-size: 9.5px;
   letter-spacing: .1em;
@@ -283,7 +332,7 @@ export const RIBBON_CSS = `
 }
 .dxr-rail .dxr-v { color: var(--dxr-data); }
 .dxr-rail .dxr-v.dxr-flash { animation: dxr-railflash .45s ease-out; }
-@keyframes dxr-railflash { from { background: #b9ecdf; } to { background: transparent; } }
+@keyframes dxr-railflash { from { background: #ccfbf1; } to { background: transparent; } }
 
 /* ── Hint ─────────────────────────────────────────────────────────────────── */
 .dxr-hint {
@@ -298,8 +347,8 @@ export const RIBBON_CSS = `
 .dxr-hint kbd {
   padding: 0 4px;
   border: 1px solid var(--dxr-rule);
-  border-radius: 3px;
-  background: #e8ecf3;
+  border-radius: 4px;
+  background: #f1f5f9;
   font-family: var(--dxr-mono);
   font-size: 11px;
 }
@@ -314,13 +363,34 @@ export const RIBBON_CSS = `
    SHOULD win.
    (No backticks in this file's comments: the stylesheet is a template literal.) */
 .dxr-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+/* Soft scroll boundaries: content dissolves at the chrome and at the bottom edge
+   instead of hard-clipping. Sticky gradient veils cost one paint layer each and
+   never intercept input. */
+.dxr-scroll::before, .dxr-scroll::after {
+  content: "";
+  position: sticky;
+  z-index: 3;
+  display: block;
+  height: 26px;
+  pointer-events: none;
+}
+.dxr-scroll::before {
+  top: 0;
+  margin-bottom: -26px;
+  background: linear-gradient(to bottom, var(--dxr-desk), transparent);
+}
+.dxr-scroll::after {
+  bottom: 0;
+  margin-top: -26px;
+  background: linear-gradient(to top, var(--dxr-desk), transparent);
+}
 .dxr[data-chrome] .dxr-surface { margin: 26px auto; padding: 0 16px 96px; }
 .dxr-surface [contenteditable="true"]:focus {
   outline: 2px solid var(--dxr-accent);
   outline-offset: 2px;
   border-radius: 2px;
 }
-@media (hover: hover) { .dxr-surface [contenteditable="true"]:hover { background: #f2f7ff; } }
+@media (hover: hover) { .dxr-surface [contenteditable="true"]:hover { background: var(--dxr-wash); } }
 
 /* Header/footer bands: stories live in their own OOXML parts outside the body,
    so they dock as their own regions. Styled from the same tokens as the ribbon
@@ -332,9 +402,10 @@ export const RIBBON_CSS = `
   margin: 0 auto 14px;
   padding: 9px 72px 13px;
   border: 1px solid var(--dxr-rule);
-  border-left: 2px solid #c2ccd9;
-  border-radius: 3px;
+  border-left: 2px solid #5eead4;
+  border-radius: 6px;
   background: var(--dxr-sheet);
+  box-shadow: var(--dxr-shadow-sm);
 }
 .dxr-surface .docx-hf-band + .docx-body-flow { margin-top: 0; }
 .dxr-surface .docx-hf-band[data-hf-band="footer"] { margin: 14px auto 0; }
@@ -353,8 +424,8 @@ export const RIBBON_CSS = `
 .dxr-surface .docx-hf-chrome select, .dxr-surface .docx-hf-chrome input {
   padding: 3px 5px;
   border: 1px solid var(--dxr-rule);
-  border-radius: 4px;
-  background: #f7f9fc;
+  border-radius: 6px;
+  background: var(--dxr-sheet);
   color: var(--dxr-ink);
   font: inherit;
   font-family: var(--dxr-ui);
@@ -368,22 +439,22 @@ export const RIBBON_CSS = `
 .dxr-surface .docx-hf-warning {
   margin: 0 0 8px -60px;
   padding: 7px 9px;
-  border: 1px solid #e8d9a8;
-  border-left: 2px solid #c9a227;
-  border-radius: 3px;
-  background: #fdf6e3;
-  color: #6b5310;
+  border: 1px solid #fde68a;
+  border-left: 2px solid #d97706;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #92400e;
   font-size: 12px;
   line-height: 1.45;
 }
 .dxr-surface .docx-hf-warning button {
   margin-left: 6px;
   padding: 2px 8px;
-  border-color: #e8d9a8;
+  border-color: #fde68a;
   background: #fff;
   font-size: 12px;
 }
-.dxr-surface .docx-hf-placeholder { color: #9aa4b1; font-style: italic; }
+.dxr-surface .docx-hf-placeholder { color: var(--dxr-faint); font-style: italic; }
 .dxr-surface .docx-hf-inherited {
   color: var(--dxr-muted);
   font-style: italic;
@@ -403,7 +474,7 @@ export const RIBBON_CSS = `
   padding: 56px 0;
   border-radius: 3px;
   background: var(--dxr-sheet);
-  box-shadow: 0 1px 3px rgba(16, 20, 24, .14), 0 8px 24px rgba(16, 20, 24, .05);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 12px 24px rgba(15, 23, 42, .06);
 }
 
 /* ── Table size picker ────────────────────────────────────────────────────── */
@@ -413,9 +484,9 @@ export const RIBBON_CSS = `
   z-index: 30;
   padding: 9px;
   border: 1px solid var(--dxr-rule);
-  border-radius: 6px;
+  border-radius: 12px;
   background: #fff;
-  box-shadow: 0 4px 16px rgba(16, 20, 24, .18);
+  box-shadow: var(--dxr-shadow-xl);
 }
 .dxr-pop[data-open] { display: block; }
 .dxr-gridcells { display: grid; grid-template-columns: repeat(10, 16px); gap: 2px; }
@@ -423,11 +494,11 @@ export const RIBBON_CSS = `
   width: 16px;
   height: 16px;
   border: 1px solid var(--dxr-rule);
-  border-radius: 2px;
-  background: #f2f5f9;
+  border-radius: 3px;
+  background: var(--dxr-chrome-sunk);
   cursor: pointer;
 }
-.dxr-gridcells div[data-on] { background: var(--dxr-wash); border-color: var(--dxr-accent); }
+.dxr-gridcells div[data-on] { background: #ccfbf1; border-color: var(--dxr-accent); }
 .dxr-popfoot {
   display: flex;
   justify-content: space-between;
@@ -510,11 +581,11 @@ export const RIBBON_CSS = `
   display: grid;
   place-items: center;
   padding: 24px;
-  color: #f4f9ff;
+  color: #f8fafc;
   background:
-    radial-gradient(circle at 20% 20%, rgba(63, 128, 255, .24), transparent 22rem),
-    radial-gradient(circle at 82% 80%, rgba(176, 91, 255, .22), transparent 24rem),
-    linear-gradient(145deg, #071221 0%, #0b1930 52%, #101426 100%);
+    radial-gradient(circle at 20% 20%, rgba(13, 148, 136, .2), transparent 22rem),
+    radial-gradient(circle at 82% 80%, rgba(45, 212, 191, .1), transparent 24rem),
+    linear-gradient(150deg, #0b1220 0%, #0f172a 55%, #0f2723 100%);
   transition: opacity .55s ease, visibility .55s ease;
 }
 .dxr-loader[hidden] { display: none; }
@@ -533,14 +604,14 @@ export const RIBBON_CSS = `
 .dxr-orbit {
   position: absolute;
   inset: 7%;
-  border: 1px solid rgba(115, 204, 255, .22);
+  border: 1px solid rgba(45, 212, 191, .24);
   border-radius: 50%;
   animation: dxr-spin 9s linear infinite;
 }
 .dxr-orbit.dxr-two {
   inset: 20%;
   border-style: dashed;
-  border-color: rgba(196, 128, 255, .32);
+  border-color: rgba(94, 234, 212, .3);
   animation-duration: 6s;
   animation-direction: reverse;
 }
@@ -550,19 +621,19 @@ export const RIBBON_CSS = `
   height: 10px;
   border-radius: 50%;
   content: "";
-  background: #52e5ff;
-  box-shadow: 0 0 18px #52e5ff;
+  background: #2dd4bf;
+  box-shadow: 0 0 18px rgba(45, 212, 191, .8);
 }
 .dxr-orbit::before { top: -5px; left: 50%; }
-.dxr-orbit::after { right: 7%; bottom: 12%; background: #b26cff; box-shadow: 0 0 18px #b26cff; }
+.dxr-orbit::after { right: 7%; bottom: 12%; background: #5eead4; box-shadow: 0 0 18px rgba(94, 234, 212, .7); }
 .dxr-card {
   position: absolute;
   inset: 24% 28%;
   padding: 20px 15px;
-  border: 1px solid rgba(255, 255, 255, .33);
+  border: 1px solid rgba(255, 255, 255, .3);
   border-radius: 14px;
-  background: linear-gradient(150deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, .06));
-  box-shadow: 0 22px 50px rgba(0, 0, 0, .35), 0 0 45px rgba(71, 150, 255, .13);
+  background: linear-gradient(150deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .05));
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .35), 0 0 45px rgba(13, 148, 136, .15);
   backdrop-filter: blur(10px);
   animation: dxr-float 3.6s ease-in-out infinite;
 }
@@ -572,8 +643,8 @@ export const RIBBON_CSS = `
   right: -9px;
   padding: 4px 7px;
   border-radius: 6px;
-  background: #52e5ff;
-  color: #06111d;
+  background: #2dd4bf;
+  color: #042f2e;
   content: "DOCX";
   font-size: 8px;
   font-weight: 900;
@@ -590,46 +661,49 @@ export const RIBBON_CSS = `
 }
 .dxr-card i:nth-child(2) { width: 76%; animation-delay: -.45s; }
 .dxr-card i:nth-child(3) { width: 88%; animation-delay: -.85s; }
-.dxr-card i:nth-child(4) { width: 58%; background: rgba(255, 111, 139, .75); animation-delay: -1.2s; }
+.dxr-card i:nth-child(4) { width: 58%; background: rgba(248, 113, 113, .75); animation-delay: -1.2s; }
 .dxr-chip {
   position: absolute;
   display: grid;
   width: 34px;
   height: 34px;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, .17);
+  border: 1px solid rgba(255, 255, 255, .16);
   border-radius: 11px;
-  background: rgba(12, 28, 49, .88);
+  background: rgba(15, 30, 46, .88);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
   font-size: 11px;
   font-weight: 850;
 }
-.dxr-chip.dxr-b { left: 2%; top: 30%; color: #52e5ff; animation: dxr-chip 3s ease-in-out infinite; }
-.dxr-chip.dxr-r { right: -2%; bottom: 24%; color: #ff8da0; animation: dxr-chip 3s -1.4s ease-in-out infinite; }
-.dxr-chip.dxr-s { left: 20%; bottom: 0; color: #52e0a2; animation: dxr-chip 3s -.7s ease-in-out infinite; }
-.dxr-eyebrow { color: #52e5ff; font-size: 10px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+.dxr-chip.dxr-b { left: 2%; top: 30%; color: #5eead4; animation: dxr-chip 3s ease-in-out infinite; }
+.dxr-chip.dxr-r { right: -2%; bottom: 24%; color: #fca5a5; animation: dxr-chip 3s -1.4s ease-in-out infinite; }
+.dxr-chip.dxr-s { left: 20%; bottom: 0; color: #6ee7b7; animation: dxr-chip 3s -.7s ease-in-out infinite; }
+.dxr-eyebrow { color: #5eead4; font-size: 10px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+/* Georgia headline — the house pairing of a serif headline over Inter UI copy. */
 .dxr-loader h2 {
   margin: 10px auto 10px;
   max-width: 520px;
-  font-size: clamp(23px, 5vw, 40px);
-  line-height: 1.05;
-  letter-spacing: -.045em;
+  font-family: var(--dxr-serif);
+  font-size: clamp(23px, 5vw, 38px);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -.02em;
 }
-.dxr-loader-copy > p { margin: 0 auto; max-width: 46ch; color: #9eb2c9; font-size: 13.5px; line-height: 1.6; }
+.dxr-loader-copy > p { margin: 0 auto; max-width: 46ch; color: #94a3b8; font-size: 13.5px; line-height: 1.6; }
 .dxr-ad {
   display: flex;
   gap: 12px;
   margin: 20px auto 0;
   max-width: 420px;
   padding: 13px;
-  border: 1px solid rgba(126, 160, 200, .16);
-  border-radius: 13px;
+  border: 1px solid rgba(148, 163, 184, .16);
+  border-radius: 12px;
   background: rgba(255, 255, 255, .04);
   text-align: left;
 }
-.dxr-ad .dxr-num { color: #b26cff; font: 800 10px/1.4 var(--dxr-mono); }
+.dxr-ad .dxr-num { color: #2dd4bf; font: 800 10px/1.4 var(--dxr-mono); }
 .dxr-ad strong { display: block; font-size: 12.5px; }
-.dxr-ad .dxr-adcopy { display: block; margin-top: 4px; color: #849bb5; font-size: 11.5px; line-height: 1.45; }
+.dxr-ad .dxr-adcopy { display: block; margin-top: 4px; color: #8ba0b9; font-size: 11.5px; line-height: 1.45; }
 .dxr-ad[data-swap] { animation: dxr-swap .4s ease; }
 .dxr-track {
   height: 3px;
@@ -643,8 +717,8 @@ export const RIBBON_CSS = `
   width: 12%;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #52e5ff, #5c7cff, #b26cff);
-  box-shadow: 0 0 16px rgba(82, 229, 255, .55);
+  background: linear-gradient(90deg, #14b8a6, #2dd4bf, #5eead4);
+  box-shadow: 0 0 16px rgba(45, 212, 191, .5);
   transition: width .65s cubic-bezier(.22, .8, .28, 1);
 }
 .dxr-meta {
@@ -653,7 +727,7 @@ export const RIBBON_CSS = `
   gap: 14px;
   margin: 9px auto 0;
   max-width: 420px;
-  color: #647e9c;
+  color: #64748b;
   font: 700 9px/1 var(--dxr-mono);
   letter-spacing: .09em;
   text-transform: uppercase;
@@ -662,9 +736,9 @@ export const RIBBON_CSS = `
   display: none;
   margin-top: 18px;
   padding: 9px 14px;
-  border: 1px solid rgba(255, 127, 145, .4);
+  border: 1px solid rgba(248, 113, 113, .4);
   border-radius: 9px;
-  background: rgba(255, 127, 145, .12);
+  background: rgba(248, 113, 113, .12);
   color: #fff;
   cursor: pointer;
 }
@@ -790,8 +864,8 @@ export const RIBBON_HTML = `
           )}</button>
         </div>
         <div class="dxr-row">
-          <button type="button" data-list="bullet" title="Bullet list">&#8226; List</button>
-          <button type="button" data-list="decimal" title="Numbered list">1. List</button>
+          <button type="button" data-list="bullet" title="Bullet list">Bullets</button>
+          <button type="button" data-list="decimal" title="Numbered list">Numbered</button>
           <button type="button" data-pagebreak title="Start this block on a new page">Page break</button>
         </div>
       </div>

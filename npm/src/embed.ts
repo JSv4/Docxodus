@@ -470,6 +470,9 @@ export async function createRibbonEditor(
   mount.root.style.minHeight = "0";
   const ribbon = mountRibbon(mount.root, {
     documentName: ribbonOptions.documentName ?? nameFromSource(source),
+    // A drop-in embed sits in the middle of someone's page, so it carries its own
+    // boundary (rounded card + shadow). Full-bleed hosts pass frame: "flush".
+    frame: "card",
     ...ribbonOptions,
     // Exports arrive after the runtime boots; the loader covers that gap.
     exports: undefined,

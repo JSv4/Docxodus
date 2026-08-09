@@ -88,6 +88,14 @@ export interface RibbonOptions extends DocxEditorOptions {
   exports?: DocxEditorExports;
   /** Layout density. Default "auto". */
   chrome?: RibbonChromeMode;
+  /**
+   * Boundary treatment. "flush" (default) is edge-to-edge for full-bleed hosts
+   * and hosts that frame the surface themselves; "card" makes the surface carry
+   * its own boundary — rounded corners, hairline border, house shadow — for a
+   * drop-in embed in the middle of a page. `createRibbonEditor` defaults to
+   * "card", since that is the drop-in path.
+   */
+  frame?: "card" | "flush";
   /** Root width, in px, below which "auto" picks compact. Default 720. */
   compactBreakpoint?: number;
   /** Show the anchor rail (full chrome only). Default true. */
@@ -316,6 +324,7 @@ class RibbonSurface implements RibbonEditor {
     const root = doc.createElement("div");
     root.className = "dxr";
     root.dataset.state = "idle";
+    root.dataset.frame = this.options.frame ?? "flush";
     root.innerHTML = RIBBON_HTML;
     for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-dxr]"))) {
       el.id = this.idPrefix + el.dataset.dxr;

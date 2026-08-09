@@ -32,11 +32,17 @@
   <meta name="twitter:description" content="Open, edit and save a real .docx with no server." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
 
+  <!-- Inter — the surface's UI typeface (falls back to system-ui offline). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
   <style>
     html, body { height: 100%; }
     /* 100dvh, not 100vh: on mobile browsers the URL bar collapses and 100vh leaves a
        dead strip the surface can never scroll into. */
-    body { margin: 0; height: 100dvh; background: #dfe3ea; overscroll-behavior: none; }
+    /* Matches the surface's --dxr-desk so the page never flashes a different gray. */
+    body { margin: 0; height: 100dvh; background: #f1f5f9; overscroll-behavior: none; }
     #app { height: 100%; }
 
     /* A single "back to the landing page" affordance, docked over the ribbon's own
@@ -47,14 +53,15 @@
       right: max(8px, env(safe-area-inset-right));
       top: 7px;
       padding: 4px 10px;
-      border: 1px solid #d3dae4;
+      border: 1px solid #e2e8f0;
       border-radius: 999px;
-      background: #f7f9fc;
-      color: #5d6975;
-      font: 600 11.5px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #fff;
+      color: #475569;
+      font: 600 11.5px/1.6 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       text-decoration: none;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
     }
-    #home:hover { color: #101418; background: #fff; border-color: #b9c4d4; }
+    #home:hover { color: #1e293b; border-color: #cbd5e1; background: #f8fafc; }
     /* Reserve the pill's corner. The compact title bar scrolls horizontally and ends
        with Undo/Redo, which a floating pill would otherwise sit on top of. */
     #app .dxr-titlebar { padding-right: 84px; }
@@ -82,6 +89,8 @@
       // here on. Only the module import above can fail with nothing on screen.
       window.__ribbon = await createRibbonEditor("#app", BLANK ? null : DOC, {
         documentName: BLANK ? "untitled.docx" : "docxodus-demo-guide.docx",
+        // Full-bleed: the page IS the surface, so no card boundary.
+        frame: "flush",
         // Bands are a Word-authoring feature rather than a first-30-seconds one; the
         // Layout tab turns them on without reloading.
         headerFooter: false,
@@ -93,9 +102,9 @@
     } catch (error) {
       document.getElementById("app").innerHTML =
         '<div style="display:grid;place-items:center;height:100%;padding:24px;text-align:center;'
-        + 'font:14px/1.6 system-ui,sans-serif;color:#33465b"><div><strong>The editor could not start.</strong>'
-        + '<p id="bootError" style="margin:8px 0 16px;color:#5d6975"></p>'
-        + '<button onclick="location.reload()" style="font:inherit;padding:8px 14px;border:1px solid #d3dae4;'
+        + 'font:14px/1.6 system-ui,sans-serif;color:#334155"><div><strong>The editor could not start.</strong>'
+        + '<p id="bootError" style="margin:8px 0 16px;color:#475569"></p>'
+        + '<button onclick="location.reload()" style="font:inherit;padding:8px 14px;border:1px solid #e2e8f0;'
         + 'border-radius:8px;background:#fff;cursor:pointer">Retry</button></div></div>';
       document.getElementById("bootError").textContent = String(error).slice(0, 220);
     }

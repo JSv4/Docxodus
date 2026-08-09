@@ -23,18 +23,21 @@
       ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@9.6.0
       ?doc=<docx URL>                        default: local branded product guide
   -->
+  <!-- Inter — the surface's UI typeface (falls back to system-ui offline). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; --cyan: #52e5ff; --violet: #b26cff; }
+    /* OS-Legal house style, dark-sidebar variant: slate #0F172A ground with the
+       deep-teal accent family. See github.com/Open-Source-Legal/OS-Legal-Style. */
+    :root { color-scheme: dark; --teal: #2DD4BF; --teal-soft: #5EEAD4; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { position: relative; margin: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui,
-      -apple-system, "Segoe UI", sans-serif; background: #07111f; color: #f5f9ff; display: flex; flex-direction: column; }
+      -apple-system, "Segoe UI", sans-serif; background: #0F172A; color: #F8FAFC; display: flex; flex-direction: column; }
     body::before { position: absolute; inset: 0; content: ""; pointer-events: none; background:
-      radial-gradient(circle at 15% 14%, rgba(54,126,255,.28), transparent 52%),
-      radial-gradient(circle at 86% 82%, rgba(178,108,255,.22), transparent 48%),
-      linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
-      background-size: auto, auto, 30px 30px, 30px 30px; }
+      radial-gradient(circle at 15% 14%, rgba(13,148,136,.24), transparent 52%),
+      radial-gradient(circle at 86% 82%, rgba(45,212,191,.12), transparent 48%); }
 
     /* ── Animated poster ─────────────────────────────────────────────────────
        Shown until the visitor asks for the editor. Once they do, the surface's
@@ -43,39 +46,39 @@
       align-items: center; justify-content: center; text-align: center; padding: 22px; }
     #boot[hidden] { display: none; }
     .boot-art { position: relative; width: 126px; height: 126px; margin-bottom: 14px; }
-    .ring { position: absolute; inset: 2px; border: 1px solid rgba(82,229,255,.25); border-radius: 50%;
+    .ring { position: absolute; inset: 2px; border: 1px solid rgba(45,212,191,.25); border-radius: 50%;
       animation: spin 7s linear infinite; }
-    .ring.two { inset: 17px; border-style: dashed; border-color: rgba(178,108,255,.4);
+    .ring.two { inset: 17px; border-style: dashed; border-color: rgba(94,234,212,.35);
       animation-duration: 4.5s; animation-direction: reverse; }
     .ring::before { position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; border-radius: 50%;
-      content: ""; background: var(--cyan); box-shadow: 0 0 14px var(--cyan); }
-    .mark { position: absolute; inset: 30px 37px; padding: 17px 11px; border: 1px solid rgba(255,255,255,.35);
-      border-radius: 10px; background: linear-gradient(150deg, rgba(255,255,255,.2), rgba(255,255,255,.06));
+      content: ""; background: var(--teal); box-shadow: 0 0 14px rgba(45,212,191,.8); }
+    .mark { position: absolute; inset: 30px 37px; padding: 17px 11px; border: 1px solid rgba(255,255,255,.32);
+      border-radius: 10px; background: linear-gradient(150deg, rgba(255,255,255,.18), rgba(255,255,255,.05));
       box-shadow: 0 17px 35px rgba(0,0,0,.35); animation: float 3s ease-in-out infinite; }
     .mark::before { position: absolute; top: -7px; right: -8px; padding: 3px 5px; border-radius: 5px;
-      color: #07111f; background: var(--cyan); content: "DOCX"; font-size: 6px; font-weight: 900; letter-spacing: .1em; }
+      color: #042F2E; background: var(--teal); content: "DOCX"; font-size: 6px; font-weight: 900; letter-spacing: .1em; }
     .mark span { display: block; height: 3px; margin-bottom: 7px; border-radius: 2px; background: rgba(255,255,255,.7);
       transform-origin: left; animation: pulse-line 1.9s ease-in-out infinite; }
     .mark span:nth-child(2) { width: 74%; animation-delay: -.5s; }
-    .mark span:nth-child(3) { width: 88%; background: #ff8298; animation-delay: -1s; }
-    .boot-kicker { color: var(--cyan); font-size: 9px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
-    #boot h1 { margin: 7px 0 9px; font-size: clamp(25px, 7vw, 34px); line-height: 1; letter-spacing: -.045em; }
-    #boot h1 span { color: transparent; background: linear-gradient(90deg, var(--cyan), #c48cff);
-      background-clip: text; -webkit-background-clip: text; }
-    #boot > p { max-width: 340px; margin: 0; color: #9ab0c9; font-size: 12.5px; line-height: 1.5; }
+    .mark span:nth-child(3) { width: 88%; background: #F87171; animation-delay: -1s; }
+    .boot-kicker { color: var(--teal-soft); font-size: 9px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    #boot h1 { margin: 7px 0 9px; font-family: Georgia, "Times New Roman", serif; font-weight: 500;
+      font-size: clamp(25px, 7vw, 34px); line-height: 1.05; letter-spacing: -.02em; }
+    #boot h1 span { color: var(--teal-soft); font-style: italic; }
+    #boot > p { max-width: 340px; margin: 0; color: #94A3B8; font-size: 12.5px; line-height: 1.5; }
     .feature-ticker { width: min(340px, 100%); min-height: 51px; display: flex; align-items: center; gap: 10px;
-      margin: 15px 0; padding: 10px 12px; border: 1px solid rgba(136,166,201,.15); border-radius: 11px;
-      background: rgba(255,255,255,.045); text-align: left; }
-    .feature-ticker .number { color: var(--violet); font: 800 9px ui-monospace, monospace; }
+      margin: 15px 0; padding: 10px 12px; border: 1px solid rgba(148,163,184,.16); border-radius: 11px;
+      background: rgba(255,255,255,.04); text-align: left; }
+    .feature-ticker .number { color: var(--teal); font: 800 9px ui-monospace, monospace; }
     .feature-ticker strong { display: block; font-size: 10.5px; }
-    .feature-ticker span:last-child { display: block; margin-top: 2px; color: #7890ab; font-size: 9.5px; line-height: 1.35; }
+    .feature-ticker span:last-child { display: block; margin-top: 2px; color: #8BA0B9; font-size: 9.5px; line-height: 1.35; }
     .feature-ticker.swap { animation: swap .35s ease; }
-    #start { min-width: 196px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 999px; color: #07111f;
-      background: linear-gradient(135deg, var(--cyan), #89f7dd); box-shadow: 0 11px 28px rgba(82,229,255,.18);
-      font: inherit; font-size: 12px; font-weight: 820; cursor: pointer; transition: transform .2s, box-shadow .2s; }
-    #start:hover { transform: translateY(-2px); box-shadow: 0 15px 34px rgba(82,229,255,.25); }
-    #start:disabled { color: #c1d1e2; background: rgba(255,255,255,.08); box-shadow: none; cursor: wait; transform: none; }
-    #bootStatus { min-height: 16px; margin-top: 12px; color: #7991ac; font-size: 9.5px; }
+    #start { min-width: 196px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 999px; color: #042F2E;
+      background: linear-gradient(135deg, var(--teal), var(--teal-soft)); box-shadow: 0 11px 28px rgba(45,212,191,.2);
+      font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .2s, box-shadow .2s; }
+    #start:hover { transform: translateY(-2px); box-shadow: 0 15px 34px rgba(45,212,191,.28); }
+    #start:disabled { color: #94A3B8; background: rgba(255,255,255,.08); box-shadow: none; cursor: wait; transform: none; }
+    #bootStatus { min-height: 16px; margin-top: 12px; color: #64748B; font-size: 9.5px; }
 
     /* ── Editor ──────────────────────────────────────────────────────────── */
     #app { position: relative; z-index: 1; flex: 1; min-height: 0; }
@@ -84,9 +87,9 @@
        costs no height in an already small frame. It sits OUTSIDE #app because the
        embed factory takes ownership of that element's children. */
     #brandLink { position: fixed; z-index: 50; right: 8px; top: 8px; padding: 3px 8px;
-      border: 1px solid #d3dae4; border-radius: 999px; background: #f7f9fc; color: #5d6975;
-      font: 600 10px/1.5 system-ui, sans-serif; text-decoration: none; }
-    #brandLink:hover { color: #101418; background: #fff; }
+      border: 1px solid #E2E8F0; border-radius: 999px; background: #fff; color: #475569;
+      font: 600 10px/1.5 system-ui, sans-serif; text-decoration: none; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+    #brandLink:hover { color: #1E293B; border-color: #CBD5E1; }
     /* Reserve the pill's corner so it never covers the title bar's Undo/Redo. */
     #app .dxr-titlebar { padding-right: 78px; }
     body:has(.dxr[data-state="loading"]) #brandLink { display: none; }
@@ -162,6 +165,8 @@
           // Pinned, not measured: this page exists to BE the compact layout, and a
           // host site may size the iframe wide enough to trip the roomy one.
           chrome: "compact",
+          // The iframe's own border-radius is the boundary here.
+          frame: "flush",
           documentName: "docxodus-demo.docx",
           hint: false,
           loader: { eyebrow: "Private · local · WebAssembly", meta: "DOCX → WASM → DOCX" },
