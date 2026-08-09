@@ -647,8 +647,33 @@ export function dungeonCart() {
             : ch === '.' || ch === '#' ? '46556B' : '5EEAD4';
       }
     }
+    // The camera's view cone, cast onto the map with line-of-sight: bright
+    // dots on exactly the floor the 3-D view is showing. This is the seam
+    // that makes the map and the corridor read as one world — as you turn,
+    // the lit wedge sweeps with the render.
+    const FCOS = 0.83; // cos(FOV/2)
+    for (let y = 0; y < MAPH; y++) for (let x = 0; x < MAPW; x++) {
+      if (map[y][x] !== '.') continue;
+      const vx = x + 0.5 - px, vy = y + 0.5 - py;
+      const d = Math.hypot(vx, vy);
+      if (d < 0.4 || d > 7) continue;
+      if ((vx * dx + vy * dy) / d < FCOS) continue;
+      let lit = true;
+      const steps = Math.ceil(d * 3);
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        const cx2 = Math.floor(px + vx * t), cy2 = Math.floor(py + vy * t);
+        if (cx2 === x && cy2 === y) break;
+        if (isWall(cell(cx2, cy2))) { lit = false; break; }
+      }
+      if (!lit) continue;
+      g.chars[MAP_TOP + y][BAND_X + 1 + x] = '·';
+      g.colors[MAP_TOP + y][BAND_X + 1 + x] = 'C8D4E2';
+    }
+    // Directional player marker — the map's compass for the 3-D camera.
     const pmx = Math.floor(px), pmy = Math.floor(py);
-    g.chars[MAP_TOP + pmy][BAND_X + 1 + pmx] = '@';
+    g.chars[MAP_TOP + pmy][BAND_X + 1 + pmx] =
+      Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? '►' : '◄') : (dy > 0 ? '▼' : '▲');
     g.colors[MAP_TOP + pmy][BAND_X + 1 + pmx] = 'FF6B6B';
     writeText(g, MAP_TOP + MAPH + 1, BAND_X + 1, 'letters become walls', '46556B');
     writeText(g, MAP_TOP + MAPH + 2, BAND_X + 1, '$ = treasure  @ = you', '46556B');
@@ -674,7 +699,12 @@ export function dungeonCart() {
       const cells = [];
       for (let x = 0; x < MAPW; x++) {
         let ch = band[x] ?? map[y][x];
-        if (ch === '@') { atX = x; atY = y; ch = '.'; }
+        // '@' is the typeable teleport; ►◄▲▼ is how the renderer draws the
+        // player, and '·' is the rendered view cone — all parse back to
+        // position-or-floor, never to walls.
+        if (ch === '@' || ch === '►' || ch === '◄' || ch === '▲' || ch === '▼') {
+          atX = x; atY = y; ch = '.';
+        } else if (ch === '·') ch = '.';
         cells.push(ch);
       }
       parsed.push(cells.join(''));

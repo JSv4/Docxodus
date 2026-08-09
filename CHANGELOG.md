@@ -12,7 +12,8 @@ All notable changes to this project will be documented in this file.
   Two cartridges: *Pilcrow's Quest*, a side-scrolling platformer starring ¶
   (run/jump/stomp, coins, spikes, flagpole), and *The Docx Dungeon*, a
   Doom-style DDA raycaster whose right-hand MAP panel is part of the same
-  paragraph. A capture-phase listener owns WASD/arrows/Space only while
+  paragraph (a red directional marker and a line-of-sight view cone on the
+  map track the 3-D camera, so the two views read as one world). A capture-phase listener owns WASD/arrows/Space only while
   playing; pausing (Esc, the dock button, or just clicking the screen) hands
   the keyboard back to the editor with no mode switch. The signature trick is
   document-as-level-source: on resume the driver blurs the edit (the editor
