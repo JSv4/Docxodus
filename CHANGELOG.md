@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.7.0] - 2026-08-08
+
 ### Changed
 - **Editor surface restyled to the OS-Legal house design system**
   (github.com/Open-Source-Legal/OS-Legal-Style): the ribbon chrome
