@@ -124,6 +124,36 @@ Each section can define its own headers and footers:
 | First | `"first"` | First page of section (requires `w:titlePg`) |
 | Even | `"even"` | Even pages (requires "Different odd & even" setting) |
 
+### Reference Inheritance Across Sections
+
+A `w:sectPr` that omits a reference type does **not** have an empty story of that
+type: each story type is linked to the preceding section until that type is
+explicitly replaced. Only the first section starts with blank stories.
+
+```xml
+<!-- Section 1: defines default + first -->
+<w:sectPr>
+  <w:headerReference w:type="default" r:id="rId6"/>
+  <w:headerReference w:type="first" r:id="rId7"/>
+</w:sectPr>
+
+<!-- Section 2: defines nothing — BOTH stories still render, inherited from section 1 -->
+<w:sectPr>
+  <w:pgSz w:w="12240" w:h="15840"/>
+</w:sectPr>
+```
+
+`EffectiveHeaderFooterReferences` (in `WmlToHtmlConverter.cs`) carries the
+effective reference per story type as sections are visited in document order,
+and is the single owner of that rule for both the paginated registry and
+`GetDocumentMetadata`. A section with no `w:sectPr` at all (`CollectSectionData`'s
+documented `null` ⇒ defaults contract) records nothing and leaves the inherited
+references untouched.
+
+Inheritance is orthogonal to *visibility*: an inherited or explicit `first`/`even`
+reference is still inert unless `w:titlePg` / the document-global
+`w:evenAndOddHeaders` switch it on (see Limitations).
+
 ### Margin Model
 
 Word's page margins include header/footer space:

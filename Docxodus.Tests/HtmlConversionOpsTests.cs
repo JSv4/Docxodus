@@ -1236,6 +1236,46 @@ public class HtmlConversionOpsTests
             e.Name.LocalName == "span" && e.Descendants().Any(d => d.Name.LocalName == "br"));
     }
 
+    // An empty Word paragraph is represented only by its paragraph mark, whose line box uses the
+    // font's native single-line height. Treating an auto value such as 259 as 107.9% of font-size
+    // makes repeated blank lines materially too short. The generated HTML keeps `normal` as that
+    // native base and applies the OOXML multiplier to the synthesized inline placeholder.
+    [Fact]
+    public void HCO085_EmptyParagraphAutoLineSpacing_MultipliesNativeLineHeight()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph()));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(new Wp.FontSize { Val = "22" })),
+                    new Wp.ParagraphPropertiesDefault(
+                        new Wp.ParagraphPropertiesBaseStyle(
+                            new Wp.SpacingBetweenLines
+                            {
+                                Line = "259",
+                                LineRule = Wp.LineSpacingRuleValues.Auto,
+                            }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document.Save();
+        }
+
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = System.Xml.Linq.XElement.Parse(html);
+        var paragraph = root.Descendants().Single(e => e.Name.LocalName == "p");
+        var placeholder = paragraph.Elements().Single(e => e.Name.LocalName == "span");
+
+        Assert.Contains("--docx-auto-line-spacing: 1.079", (string?)paragraph.Attribute("style"));
+        Assert.Contains("line-height: normal", (string?)paragraph.Attribute("style"));
+        Assert.Contains("line-height: calc(1lh * var(--docx-auto-line-spacing))",
+            (string?)placeholder.Attribute("style"));
+    }
+
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the
     // same call still render. (The reconciler falls back to a full remount per null.)
     [Fact]

@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -78,6 +79,65 @@ public class PaginatedHeaderFooterGatingTests
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Builds two sections where only the first section has explicit references. The second turns
+    /// on its first-page story but otherwise relies entirely on OOXML's per-story inheritance.
+    /// </summary>
+    private static byte[] BuildInheritedSectionDoc()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            main.AddNewPart<DocumentSettingsPart>().Settings =
+                new Settings(new EvenAndOddHeaders());
+
+            var firstSectPr = new SectionProperties(
+                new PageSize { Width = 12240u, Height = 15840u },
+                new PageMargin
+                {
+                    Top = 1440, Bottom = 1440, Left = 1440, Right = 1440,
+                    Header = 720, Footer = 720, Gutter = 0,
+                });
+
+            foreach (var (kind, suffix) in new[]
+                     {
+                         (HeaderFooterValues.Default, "DEFAULT"),
+                         (HeaderFooterValues.Even, "EVEN"),
+                         (HeaderFooterValues.First, "FIRST"),
+                     })
+            {
+                var hp = main.AddNewPart<HeaderPart>();
+                hp.Header = new Header(new Paragraph(new Run(new Text($"{suffix}-HEADER"))));
+                var fp = main.AddNewPart<FooterPart>();
+                fp.Footer = new Footer(new Paragraph(new Run(new Text($"{suffix}-FOOTER"))));
+                firstSectPr.PrependChild(
+                    new FooterReference { Type = kind, Id = main.GetIdOfPart(fp) });
+                firstSectPr.PrependChild(
+                    new HeaderReference { Type = kind, Id = main.GetIdOfPart(hp) });
+            }
+
+            body.Append(new Paragraph(
+                new ParagraphProperties(firstSectPr),
+                new Run(new Text("First section."))));
+            body.Append(new Paragraph(new Run(new Text("Second section."))));
+            body.Append(new SectionProperties(
+                new PageSize { Width = 12240u, Height = 15840u },
+                new PageMargin
+                {
+                    Top = 1440, Bottom = 1440, Left = 1440, Right = 1440,
+                    Header = 720, Footer = 720, Gutter = 0,
+                },
+                new TitlePage()));
+            main.Document.Save();
+        }
+
+        return ms.ToArray();
+    }
+
     private static string PaginatedHtml(byte[] bytes)
     {
         // Resizable: the converter opens the package for editing (it annotates), and a MemoryStream
@@ -127,5 +187,48 @@ public class PaginatedHeaderFooterGatingTests
         Assert.Contains("header-first", with);
         Assert.Contains("footer-first", with);
         Assert.Contains("FIRST-STORY", with);
+    }
+
+    [Fact]
+    public void PHF004_OmittedReferencesInheritEachStoryFromThePreviousSection()
+    {
+        var bytes = BuildInheritedSectionDoc();
+        var root = XElement.Parse(PaginatedHtml(bytes));
+        var inheritedStories = root.Descendants()
+            .Where(e => e.Name.LocalName == "div" &&
+                        (string?)e.Attribute("data-section") == "1")
+            .ToList();
+
+        foreach (var type in new[]
+                 {
+                     "header-default", "header-first", "header-even",
+                     "footer-default", "footer-first", "footer-even",
+                 })
+        {
+            Assert.Contains(inheritedStories,
+                e => (string?)e.Attribute("data-hf-type") == type);
+        }
+
+        var inheritedText = string.Concat(inheritedStories.Select(e => e.Value));
+        Assert.Contains("DEFAULT-HEADER", inheritedText);
+        Assert.Contains("FIRST-HEADER", inheritedText);
+        Assert.Contains("EVEN-HEADER", inheritedText);
+        Assert.Contains("DEFAULT-FOOTER", inheritedText);
+        Assert.Contains("FIRST-FOOTER", inheritedText);
+        Assert.Contains("EVEN-FOOTER", inheritedText);
+
+        using var ms = new MemoryStream();
+        ms.Write(bytes);
+        ms.Position = 0;
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var metadata = WmlToHtmlConverter.GetDocumentMetadata(doc);
+        Assert.Equal(2, metadata.Sections.Count);
+        var second = metadata.Sections[1];
+        Assert.True(second.HasHeader);
+        Assert.True(second.HasFirstPageHeader);
+        Assert.True(second.HasEvenPageHeader);
+        Assert.True(second.HasFooter);
+        Assert.True(second.HasFirstPageFooter);
+        Assert.True(second.HasEvenPageFooter);
     }
 }

@@ -6127,6 +6127,7 @@ listSeparator
         public static XName TabAlignment = pt + "TabAlignment";
 
         public static XName ListItemRun = pt + "ListItemRun";
+        public static XName EmptyParagraph = pt + "EmptyParagraph";
 
         public static XName HtmlToWmlCssWidth = pt + "HtmlToWmlCssWidth";
     }
