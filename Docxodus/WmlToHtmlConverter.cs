@@ -808,7 +808,7 @@ namespace Docxodus
         public int EstimatedPageCount { get; set; }
     }
 
-    public static class WmlToHtmlConverter
+    public static partial class WmlToHtmlConverter
     {
         /// <summary>
         /// Converts the HTML XElement to a string, removing whitespace between inline elements
@@ -8412,6 +8412,10 @@ namespace Docxodus
         {
             if (element.Name == W.drawing)
             {
+                var chart = ProcessChart(wordDoc, element);
+                if (chart != null)
+                    return chart;
+
                 // Preserve established image output for the uncommon shape that carries both an
                 // image and textbox body. A textbox-only drawing falls through when no image can
                 // be resolved (including a malformed/missing relationship).
