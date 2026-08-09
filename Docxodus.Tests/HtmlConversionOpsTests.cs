@@ -137,6 +137,62 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO079_WebHiddenRun_IsVisibleOnlyInPaginatedPrintLayout()
+    {
+        // Word uses w:webHidden on cached TOC page numbers: they are hidden in Web layout but
+        // remain visible in Print layout. Build the document independently so this regression
+        // does not depend on an external fixture or snapshot.
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text("Visible TOC title")),
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.WebHidden()),
+                            new Wp.TabChar(),
+                            new Wp.Text("7"))),
+                    new Wp.SectionProperties()));
+            main.Document.Save();
+        }
+
+        string paginated = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions
+            {
+                PaginationMode = (int)PaginationMode.Paginated,
+                FabricateCssClasses = false,
+            });
+        string web = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("Visible TOC title", paginated);
+        Assert.Contains(">7<", paginated);
+        Assert.Contains("Visible TOC title", web);
+        Assert.DoesNotContain(">7<", web);
+    }
+
+    [Fact]
+    public void HCO085_PaginatedFootnoteSeparator_UsesWordDefaultTwoInchWidth()
+    {
+        // The CSS is emitted only when note rendering is enabled. Use an independently generated
+        // package so the regression has no fixture or snapshot licensing dependency.
+        string html = HtmlConversionOps.ConvertToHtml(DocumentOnlyDocxBytes("Body with note CSS"),
+            new HtmlConversionOptions
+            {
+                PaginationMode = (int)PaginationMode.Paginated,
+                RenderFootnotesAndEndnotes = true,
+                FabricateCssClasses = false,
+            });
+
+        Assert.Contains("width: 2in;", html);
+        Assert.Contains("max-width: 100%;", html);
+        Assert.DoesNotContain("width: 33%;", html);
+    }
+
+    [Fact]
     public void HCO020_BulletListMarker_RendersUnicodeBullet()
     {
         // A bullet list item carries the Symbol-font glyph U+F0B7, which renders as a blank box in a
