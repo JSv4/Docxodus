@@ -1042,6 +1042,7 @@ namespace Docxodus
             int globalParagraphIndex = 0;
             int globalTableIndex = 0;
             int sectionIndex = 0;
+            var effectiveHeaderFooterReferences = new EffectiveHeaderFooterReferences();
 
             foreach (var (sectPr, paragraphs, tables) in sectionData)
             {
@@ -1070,7 +1071,8 @@ namespace Docxodus
                 sectionMeta.FooterPt = dims.FooterPt;
 
                 // Detect headers and footers
-                DetectHeadersFooters(wordDoc, sectPr, sectionMeta);
+                effectiveHeaderFooterReferences.Update(sectPr);
+                DetectHeadersFooters(wordDoc, sectPr, sectionMeta, effectiveHeaderFooterReferences);
 
                 metadata.Sections.Add(sectionMeta);
 
@@ -1243,9 +1245,50 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Detects presence of headers and footers for a section.
+        /// Tracks the effective reference for each story type as sections are visited in document
+        /// order. An omitted reference inherits the effective reference from the prior section.
         /// </summary>
-        private static void DetectHeadersFooters(WordprocessingDocument wordDoc, XElement sectPr, SectionMetadata sectionMeta)
+        private sealed class EffectiveHeaderFooterReferences
+        {
+            private readonly Dictionary<string, XElement> headerReferences =
+                new Dictionary<string, XElement>(StringComparer.Ordinal);
+            private readonly Dictionary<string, XElement> footerReferences =
+                new Dictionary<string, XElement>(StringComparer.Ordinal);
+
+            public IEnumerable<XElement> HeaderReferences => headerReferences.Values;
+
+            public IEnumerable<XElement> FooterReferences => footerReferences.Values;
+
+            public void Update(XElement sectPr)
+            {
+                UpdateReferences(headerReferences, sectPr.Elements(W.headerReference));
+                UpdateReferences(footerReferences, sectPr.Elements(W.footerReference));
+            }
+
+            public XElement GetHeader(string type) =>
+                headerReferences.TryGetValue(type, out var reference) ? reference : null;
+
+            public XElement GetFooter(string type) =>
+                footerReferences.TryGetValue(type, out var reference) ? reference : null;
+
+            private static void UpdateReferences(
+                IDictionary<string, XElement> effectiveReferences,
+                IEnumerable<XElement> explicitReferences)
+            {
+                foreach (var reference in explicitReferences)
+                {
+                    var type = (string)reference.Attribute(W.type);
+                    if (!string.IsNullOrEmpty(type))
+                        effectiveReferences[type] = reference;
+                }
+            }
+        }
+
+        private static void DetectHeadersFooters(
+            WordprocessingDocument wordDoc,
+            XElement sectPr,
+            SectionMetadata sectionMeta,
+            EffectiveHeaderFooterReferences effectiveReferences)
         {
             if (sectPr == null)
                 return;
@@ -1254,8 +1297,7 @@ namespace Docxodus
             bool hasTitlePage = sectPr.Element(W.titlePg) != null;
 
             // Check header references
-            var headerRefs = sectPr.Elements(W.headerReference).ToList();
-            foreach (var headerRef in headerRefs)
+            foreach (var headerRef in effectiveReferences.HeaderReferences)
             {
                 var type = (string)headerRef.Attribute(W.type);
                 var headerId = (string)headerRef.Attribute(R.id);
@@ -1291,8 +1333,7 @@ namespace Docxodus
             }
 
             // Check footer references
-            var footerRefs = sectPr.Elements(W.footerReference).ToList();
-            foreach (var footerRef in footerRefs)
+            foreach (var footerRef in effectiveReferences.FooterReferences)
             {
                 var type = (string)footerRef.Attribute(W.type);
                 var footerId = (string)footerRef.Attribute(R.id);
@@ -3710,26 +3751,28 @@ namespace Docxodus
                     sectionProperties.Add(sectPr);
             }
 
+            // A missing reference does not mean an empty story: each story type is linked to the
+            // preceding section until that type is explicitly replaced. The first section starts
+            // with blank stories when it omits them.
+            var effectiveReferences = new EffectiveHeaderFooterReferences();
+
+            // The even/odd switch is document-global. References can remain in the package while
+            // the switch is off, but the Default story renders on those pages in that state.
+            bool hasEvenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
+                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders) != null;
+
             // Render headers/footers for each section
             for (int sectionIndex = 0; sectionIndex < sectionProperties.Count; sectionIndex++)
             {
                 var sectPr = sectionProperties[sectionIndex];
+                effectiveReferences.Update(sectPr);
 
                 // Check if section has different first page headers/footers
                 bool hasTitlePage = sectPr.Element(W.titlePg) != null;
 
-                // …and whether the EVEN stories are switched on. Word leaves the even part and its
-                // w:footerReference behind when "Different odd & even pages" is turned back off,
-                // dropping only the document-global w:evenAndOddHeaders — so a reference of type
-                // "even" is NOT on its own evidence that anything renders. Word and LibreOffice
-                // both use the Default story on even pages in that state; without this gate the
-                // paginated view showed a running foot the document does not have (confirmed on a
-                // real filing template whose leftover even footer reads "DRAFT").
-                bool hasEvenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
-                    ?.GetXDocument().Root?.Element(W.evenAndOddHeaders) != null;
-
                 // Render default header
-                var defaultHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "default");
+                var defaultHeaderContent = RenderHeaderReference(
+                    wordDoc, settings, effectiveReferences.GetHeader("default"));
                 if (defaultHeaderContent != null)
                 {
                     registry.Add(new XElement(Xhtml.div,
@@ -3741,7 +3784,8 @@ namespace Docxodus
                 // Render first page header if different first page is enabled
                 if (hasTitlePage)
                 {
-                    var firstHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "first");
+                    var firstHeaderContent = RenderHeaderReference(
+                        wordDoc, settings, effectiveReferences.GetHeader("first"));
                     if (firstHeaderContent != null)
                     {
                         registry.Add(new XElement(Xhtml.div,
@@ -3753,7 +3797,7 @@ namespace Docxodus
 
                 // Render even header if the document actually uses even/odd stories
                 var evenHeaderContent = hasEvenAndOddHeaders
-                    ? RenderHeaderForSection(wordDoc, settings, sectPr, "even")
+                    ? RenderHeaderReference(wordDoc, settings, effectiveReferences.GetHeader("even"))
                     : null;
                 if (evenHeaderContent != null)
                 {
@@ -3764,7 +3808,8 @@ namespace Docxodus
                 }
 
                 // Render default footer
-                var defaultFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "default");
+                var defaultFooterContent = RenderFooterReference(
+                    wordDoc, settings, effectiveReferences.GetFooter("default"));
                 if (defaultFooterContent != null)
                 {
                     registry.Add(new XElement(Xhtml.div,
@@ -3776,7 +3821,8 @@ namespace Docxodus
                 // Render first page footer if different first page is enabled
                 if (hasTitlePage)
                 {
-                    var firstFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "first");
+                    var firstFooterContent = RenderFooterReference(
+                        wordDoc, settings, effectiveReferences.GetFooter("first"));
                     if (firstFooterContent != null)
                     {
                         registry.Add(new XElement(Xhtml.div,
@@ -3788,7 +3834,7 @@ namespace Docxodus
 
                 // Render even footer if the document actually uses even/odd stories
                 var evenFooterContent = hasEvenAndOddHeaders
-                    ? RenderFooterForSection(wordDoc, settings, sectPr, "even")
+                    ? RenderFooterReference(wordDoc, settings, effectiveReferences.GetFooter("even"))
                     : null;
                 if (evenFooterContent != null)
                 {
@@ -3804,17 +3850,13 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Renders a header of a specific type for a section.
+        /// Renders the header selected for a section after reference inheritance is resolved.
         /// </summary>
-        private static object RenderHeaderForSection(
+        private static object RenderHeaderReference(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
-            XElement sectPr,
-            string headerType)
+            XElement headerRef)
         {
-            var headerRef = sectPr?.Elements(W.headerReference)
-                .FirstOrDefault(hr => (string)hr.Attribute(W.type) == headerType);
-
             if (headerRef == null)
                 return null;
 
@@ -3845,17 +3887,13 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Renders a footer of a specific type for a section.
+        /// Renders the footer selected for a section after reference inheritance is resolved.
         /// </summary>
-        private static object RenderFooterForSection(
+        private static object RenderFooterReference(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
-            XElement sectPr,
-            string footerType)
+            XElement footerRef)
         {
-            var footerRef = sectPr?.Elements(W.footerReference)
-                .FirstOrDefault(fr => (string)fr.Attribute(W.type) == footerType);
-
             if (footerRef == null)
                 return null;
 
@@ -3873,7 +3911,7 @@ namespace Docxodus
             if (footerRoot == null || !footerRoot.Elements().Any())
                 return null;
 
-            // See RenderHeaderForSection: fields are grouped from these annotations, and only the
+            // See RenderHeaderReference: fields are grouped from these annotations, and only the
             // main part is annotated up front.
             FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
@@ -5368,6 +5406,7 @@ namespace Docxodus
                     firstMark,
                     anchorAttr,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
+                ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
                 paraElement1.AddAnnotation(style);
                 return paraElement1;
             }
@@ -5382,9 +5421,44 @@ namespace Docxodus
                 anchorAttr,
                 txElementsPrecedingTab,
                 ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
+            ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
             paraElement.AddAnnotation(style);
 
             return paraElement;
+        }
+
+        private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
+
+        /// <summary>
+        /// OOXML auto line spacing is a multiple of the font's native single-line height, not a
+        /// percentage of its em square. CSS percentages and unitless line-height values both use
+        /// font-size as their base, which makes common values such as 259/240 render too tightly.
+        ///
+        /// The paragraph retains <c>line-height: normal</c>, so <c>1lh</c> on each direct inline
+        /// child resolves to the browser's native line box for the paragraph font. Multiplying that
+        /// length preserves the OOXML semantics without hard-coding a font-independent approximation.
+        /// Applying the calculated height to the direct children also avoids a self-reference in the
+        /// paragraph's own line-height property.
+        /// </summary>
+        private static void ApplyAutomaticLineSpacingToInlineContent(
+            XElement paragraph,
+            Dictionary<string, string> paragraphStyle)
+        {
+            if (!paragraphStyle.ContainsKey(AutomaticLineSpacingMultiplierCssProperty))
+                return;
+
+            foreach (var child in paragraph.Elements())
+            {
+                var childStyle = child.Annotation<Dictionary<string, string>>();
+                if (childStyle == null)
+                {
+                    childStyle = new Dictionary<string, string>();
+                    child.AddAnnotation(childStyle);
+                }
+
+                childStyle["line-height"] =
+                    $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+            }
         }
 
         private static List<object> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
@@ -5492,7 +5566,8 @@ namespace Docxodus
             var pPr = paragraph.Element(W.pPr);
             if (pPr == null) return style;
 
-            CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace, suppressLeadingWhiteSpace);
+            CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace,
+                suppressLeadingWhiteSpace, paragraph.Attribute(PtOpenXml.EmptyParagraph) != null);
             CreateStyleFromInd(style, pPr.Element(W.ind), elementName, currentMarginLeft, isBidi);
 
             // todo need to handle
@@ -5585,7 +5660,8 @@ namespace Docxodus
         }
 
         private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement spacing, XName elementName,
-            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
+            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false,
+            bool useNativeLineHeightForAutoSpacing = false)
         {
             if (spacing == null) return;
 
@@ -5608,8 +5684,22 @@ namespace Docxodus
             {
                 if (autoLine != 240m)
                 {
-                    var pct = (autoLine/240m)*100m;
-                    style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
+                    if (useNativeLineHeightForAutoSpacing)
+                    {
+                        var multiple = autoLine / 240m;
+                        style.Add(AutomaticLineSpacingMultiplierCssProperty,
+                            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.###}", multiple));
+                        style.Add("line-height", "normal");
+                    }
+                    else
+                    {
+                        // Populated paragraph behavior is retained for compatibility. Empty Word
+                        // paragraph marks use the font's native line box instead (handled above),
+                        // which is where percentage-of-font-size materially under-measures layout.
+                        var pct = (autoLine / 240m) * 100m;
+                        style.Add("line-height",
+                            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
+                    }
                 }
             }
             if (lineRule == "exact" && line is { } exactLine)
@@ -7376,6 +7466,7 @@ namespace Docxodus
                     if (hasContent == false)
                         return new XElement(element.Name,
                             element.Attributes(),
+                            new XAttribute(PtOpenXml.EmptyParagraph, true),
                             element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)),
                             new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
