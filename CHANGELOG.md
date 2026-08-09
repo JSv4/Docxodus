@@ -30,6 +30,27 @@ All notable changes to this project will be documented in this file.
   `npm/tests/demo-arcade.spec.ts` drives boot, keyboard steering, the
   pause→type→resume loop, and the save round-trip.
 
+### Fixed
+- **Empty paragraphs measure automatic line spacing from the font's native line
+  box.** OOXML `w:lineRule="auto"` is a multiple of the font's single-line
+  height, but the converter expressed it as a percentage of CSS font size,
+  which under-measures an empty paragraph mark (its whole height *is* that
+  single line box). Empty paragraphs now emit `line-height: normal` plus
+  `calc(1lh * <multiple>)` on their inline content; populated paragraphs keep
+  the percentage form. A 200-document tracked-fixture comparison went from
+  199/200 to 200/200 LibreOffice page-count matches, and `DB005-Headers-With-
+  Images.docx` now paginates to 5 pages like LibreOffice instead of 4. The four
+  `npm/tests/__snapshots__/tabs-visual.spec.ts` baselines whose fixtures end in
+  an empty paragraph were regenerated (2–7 px taller).
+- **Omitted header/footer references inherit from the preceding section.** Both
+  the paginated header/footer registry and `WmlToHtmlConverter.GetDocumentMetadata`
+  treated a section that omits a default/first/even reference as having an empty
+  story; OOXML instead links that story type forward until it is explicitly
+  replaced, so inherited running content went missing on later-section pages and
+  was mis-reported in section metadata. `GetDocumentMetadata` also no longer
+  throws `NullReferenceException` on a body with no `w:sectPr` at all, which
+  `CollectSectionData` explicitly allows (`null` ⇒ defaults).
+
 ## [9.7.0] - 2026-08-08
 
 ### Changed

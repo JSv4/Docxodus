@@ -1261,6 +1261,12 @@ namespace Docxodus
 
             public void Update(XElement sectPr)
             {
+                // A section may carry no properties at all — CollectSectionData's documented
+                // (null => defaults) contract. There is then nothing explicit to record, so the
+                // effective references stay as the preceding section left them.
+                if (sectPr == null)
+                    return;
+
                 UpdateReferences(headerReferences, sectPr.Elements(W.headerReference));
                 UpdateReferences(footerReferences, sectPr.Elements(W.footerReference));
             }
