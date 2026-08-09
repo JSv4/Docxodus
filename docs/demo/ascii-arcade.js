@@ -304,9 +304,13 @@ export function platformerCart() {
       const footing = at(Math.round(gx + g.dir * 0.5), Math.round(g.y) + 1);
       if (solid(front) || !solid(footing)) g.dir = -g.dir;
       else g.x = gx;
-      if (Math.abs(p.x - g.x) < 0.9 && Math.abs(p.y - g.y) < 0.9) {
-        if (p.vy > 2 && p.y < g.y) { g.dead = true; p.vy = -14; score += 100; }
-        else return die();
+      if (Math.abs(p.x - g.x) < 0.9) {
+        // The stomp band reaches 2.4 cells above the gremlin — deeper than
+        // one sub-step of terminal fall speed (~1.2 cells), so a fast fall
+        // cannot tunnel past its head between collision checks.
+        if (p.vy > 2 && p.y < g.y - 0.1 && p.y > g.y - 2.4) {
+          g.dead = true; p.vy = -14; score += 100;
+        } else if (Math.abs(p.y - g.y) < 0.9) return die();
       }
     }
     camX = Math.max(0, Math.min(LEVEL_W - INNER_W, Math.round(p.x) - Math.floor(INNER_W / 2)));
@@ -400,6 +404,8 @@ export function platformerCart() {
       player: { x: player.x, y: player.y },
       camX, coinsGot, coinsTotal, score, deaths, mode: state,
       gremlins: gremlins.filter((gr) => !gr.dead).length,
+      gremlinList: gremlins.filter((gr) => !gr.dead)
+        .map((gr) => ({ x: gr.x, y: gr.y, dir: gr.dir })),
       levelRow: (y) => (level[y] ?? []).join(''),
     }),
   };
