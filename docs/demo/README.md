@@ -1,6 +1,6 @@
 # GitHub Pages demo
 
-Four static pages, no application server. All host the **same** editor
+Five static pages, no application server. All host the **same** editor
 surface — `createRibbonEditor` from the pinned `docxodus@9.7.0` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
@@ -10,6 +10,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
+| `arcade.html` | THE DOCX ARCADE — the Observatory's interactive sequel: two playable games (a ¶-starring platformer and a Doom-style raycaster) whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` paragraph, plus keyboard input both ways — WASD/arrows are claimed only while playing, and on resume the driver re-parses the game world FROM the document, so terrain typed into the paused screen (or letters typed into the dungeon's MAP panel) becomes real. The games live in `ascii-arcade.js` in this directory (importing shared plumbing from `ascii-scenes.js`), same `?engine=` split as the Observatory, plus `?cart=quest\|dungeon`. Boots on tap when iframed; the dock has an embed-snippet copy button and touch controls. Spec: `npm/tests/demo-arcade.spec.ts`. |
 
 The surface itself is **not** written here — it ships in the npm package
 (`npm/src/ribbon.ts`). These pages used to carry a hand-written toolbar each,

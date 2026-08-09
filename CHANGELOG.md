@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
+  playable video games whose screen is a live Word paragraph inside the shipped
+  ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo
+  content (no library changes; the page pins the already-published engine).
+  Two cartridges: *Pilcrow's Quest*, a side-scrolling platformer starring ¶
+  (run/jump/stomp, coins, spikes, flagpole), and *The Docx Dungeon*, a
+  Doom-style DDA raycaster whose right-hand MAP panel is part of the same
+  paragraph. A capture-phase listener owns WASD/arrows/Space only while
+  playing; pausing (Esc, the dock button, or just clicking the screen) hands
+  the keyboard back to the editor with no mode switch. The signature trick is
+  document-as-level-source: on resume the driver blurs the edit (the editor
+  commits on blur), re-parses the game world from the session's XML, and
+  typed terrain — `#` bricks, `$` coins, `^` spikes, `&` gremlins, or any
+  letter as a 3-D dungeon wall — becomes real. A box-drawing bezel frames
+  every row so the markdown blur-commit can never read a game row as a
+  heading/bullet or split the paragraph on a blank line. Each frame remains a
+  Unid-preserving `raw.replaceXml` + `editor.refresh()` (one block repainted
+  incrementally, ~90–150 runs/frame at 10 fps), every frame is undoable, and
+  the ribbon's Save downloads the current frame as a real .docx. The page
+  boots on tap inside iframes, ships an embed-snippet copy button, on-screen
+  touch controls, and `?cart=`/`?engine=` overrides; spec
+  `npm/tests/demo-arcade.spec.ts` drives boot, keyboard steering, the
+  pause→type→resume loop, and the save round-trip.
+
 ## [9.7.0] - 2026-08-08
 
 ### Changed
