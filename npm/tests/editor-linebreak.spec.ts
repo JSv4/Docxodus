@@ -84,4 +84,61 @@ test.describe('DocxEditor — line-break fidelity (Shift+Enter → w:br)', () =>
     // ...and it survives a full save → reopen (w:br renders back as <br>).
     expect(out.brAfterReopen).toBeGreaterThanOrEqual(1);
   });
+
+  test('exact 10pt rows keep exact browser geometry with unformatted break runs', async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const D = (window as any).Docxodus;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, D.DocxSessionBridge.CreateBlankDocx(), D, {});
+      const bridge = D.DocxSessionBridge;
+      const anchor = JSON.parse(bridge.FindByKind(editor.sessionHandle, 'p', 'body'))[0].id as string;
+      const current = bridge.RawGetXml(editor.sessionHandle, anchor) as string;
+      const rawOpenTag = current.match(/^<w:p\b[^>]*>/)?.[0];
+      if (!rawOpenTag) throw new Error(`paragraph opener missing: ${current.slice(0, 120)}`);
+      const openTag = rawOpenTag.endsWith('/>') ? `${rawOpenTag.slice(0, -2)}>` : rawOpenTag;
+
+      const rows = Array.from({ length: 20 }, (_, i) => `ROW ${String(i).padStart(2, '0')}`);
+      const textRun = (text: string) =>
+        `<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>` +
+        `<w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
+      // Deliberately leave each break run unformatted. The document default is 11pt,
+      // while the visible rows are 8pt and paragraph spacing is exactly 10pt.
+      const content = rows.map((row, i) => textRun(row) + (i + 1 < rows.length
+        ? '<w:r><w:br/></w:r>'
+        : '')).join('');
+      const replacement = `${openTag}<w:pPr><w:spacing w:line="200" w:lineRule="exact"/>` +
+        `</w:pPr>${content}</w:p>`;
+      const edit = JSON.parse(bridge.RawReplaceXml(editor.sessionHandle, anchor, replacement));
+      if (!edit.success) throw new Error(JSON.stringify(edit.error));
+      editor.refresh();
+
+      const paragraph = container.querySelector('p[data-anchor]') as HTMLElement;
+      const rect = paragraph.getBoundingClientRect();
+      const breakParents = Array.from(paragraph.querySelectorAll('br')).map((br) => br.parentElement?.tagName);
+      const computed = getComputedStyle(paragraph);
+      const out = {
+        height: rect.height,
+        expectedHeight: rows.length * 10 * 96 / 72,
+        lineHeight: computed.lineHeight,
+        box: {
+          paddingTop: computed.paddingTop,
+          paddingBottom: computed.paddingBottom,
+          borderTop: computed.borderTopWidth,
+          borderBottom: computed.borderBottomWidth,
+          minHeight: computed.minHeight,
+        },
+        breakCount: breakParents.length,
+        breakParents,
+      };
+      editor.close();
+      container.remove();
+      return out;
+    });
+
+    expect(parseFloat(result.lineHeight)).toBeCloseTo(10 * 96 / 72, 2);
+    expect(result.breakCount).toBe(19);
+    expect(result.breakParents.every((tag) => tag === 'P')).toBe(true);
+    expect(Math.abs(result.height - result.expectedHeight), JSON.stringify(result)).toBeLessThan(1);
+  });
 });

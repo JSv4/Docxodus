@@ -1,0 +1,57 @@
+name: Arcade LibreOffice parity
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 8 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install rendering references
+        run: sudo apt-get update && sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation2
+
+      - name: Install npm dependencies
+        run: cd npm && npm ci
+
+      - name: Build npm package
+        run: cd npm && npm run build
+
+      - name: Install Chromium
+        run: cd npm && npx playwright install --with-deps chromium
+
+      - name: Compare representative arcade frames with LibreOffice
+        run: cd npm && npm run test:arcade:libreoffice
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: arcade-libreoffice-report
+          path: |
+            npm/playwright-report/
+            npm/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

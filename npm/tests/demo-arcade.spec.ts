@@ -27,7 +27,117 @@ async function waitForBoot(page: Page) {
   expect(err, `arcade boot failed: ${err}`).toBeUndefined();
 }
 
+/** Hold the named game-loop timeout after every completed frame. Calling
+ * `release()` runs exactly one next frame synchronously, then captures its
+ * newly scheduled timeout. This makes frame assertions genuinely consecutive. */
+async function installFrameGate(page: Page) {
+  await page.evaluate(() => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    let pending: (() => void) | null = null;
+    let sequence = 0;
+    (window as any).__arcadeFrameGate = {
+      sequence: () => sequence,
+      release: () => {
+        if (!pending) throw new Error('no arcade frame is pending');
+        const next = pending;
+        pending = null;
+        next();
+      },
+    };
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+      if (typeof handler === 'function' && handler.name === 'loop') {
+        pending = () => handler(...args);
+        sequence++;
+        return -sequence;
+      }
+      return nativeSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout;
+  });
+}
+
+async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon') {
+  await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&cart=${cart}`);
+  await installFrameGate(page);
+  await page.locator('#boot').click();
+  await waitForBoot(page);
+  await page.waitForFunction(() =>
+    (window as any).__arcade.frames() === 1 &&
+    (window as any).__arcadeFrameGate.sequence() === 1,
+  );
+}
+
 test.describe('THE DOCX ARCADE page', () => {
+  for (const cart of ['quest', 'dungeon'] as const) {
+    test(`${cart}: its very first frame reconciles incrementally`, async ({ page }) => {
+      await bootGatedCartridge(page, cart);
+      const state = await page.evaluate(() => {
+        const a = (window as any).__arcade;
+        return {
+          frames: a.frames() as number,
+          fallback: a.editor.lastReconcileFallback as string | null,
+          notes: document.querySelectorAll('section.footnotes > ol > li').length,
+          text: a.canvasText() as string,
+        };
+      });
+      expect(state.frames).toBe(1);
+      expect(state.fallback).toBeNull();
+      expect(state.notes).toBe(1);
+      expect(state.text).toContain(cart === 'quest' ? 'PILCROW' : 'DUNGEON');
+    });
+
+    test(`${cart}: ten consecutive frame saves reopen with stable canvas content`, async ({ page }) => {
+      test.setTimeout(120000);
+      await bootGatedCartridge(page, cart);
+
+      const observations: Array<{
+        frame: number;
+        anchor: string;
+        reopenedAnchor: string | null;
+        text: string;
+        reopenedText: string;
+        magic: number[];
+      }> = [];
+      for (let i = 0; i < 10; i++) {
+        observations.push(await page.evaluate(() => {
+          const a = (window as any).__arcade;
+          const anchor = a.canvasAnchor() as string;
+          const text = a.canvasText() as string;
+          const bytes: Uint8Array = a.save();
+          const reopened = a.bridge.OpenSession(bytes, '');
+          const html = a.bridge.RenderHtml(reopened, 'stress-', false, false, 1) as string;
+          const parsed = new DOMParser().parseFromString(html, 'text/html');
+          const reopenedCanvas = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
+            .find((paragraph) => (paragraph.textContent ?? '')
+              .includes(a.cart() === 'quest' ? 'PILCROW' : 'DUNGEON')) ?? null;
+          const reopenedAnchor = reopenedCanvas?.getAttribute('data-anchor') ?? null;
+          const reopenedText = reopenedCanvas?.textContent ?? '';
+          a.bridge.CloseSession(reopened);
+          return {
+            frame: a.frames() as number,
+            anchor,
+            reopenedAnchor,
+            text,
+            reopenedText,
+            magic: Array.from(bytes.slice(0, 2)),
+          };
+        }));
+        if (i < 9) {
+          await page.evaluate(() => (window as any).__arcadeFrameGate.release());
+          await page.waitForFunction((frame) => (window as any).__arcade.frames() === frame, i + 2);
+        }
+      }
+
+      expect(observations.map((o) => o.frame)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(new Set(observations.map((o) => o.anchor)).size).toBe(1);
+      for (const observation of observations) {
+        expect(observation.magic).toEqual([0x50, 0x4b]);
+        expect(observation.reopenedAnchor).toMatch(/^[0-9a-f]{32}$/);
+        expect(observation.reopenedText).toBe(observation.text);
+        expect(observation.reopenedText).toContain(cart === 'quest' ? 'PILCROW' : 'DUNGEON');
+      }
+    });
+  }
+
   test('boots the shipped surface, animates incrementally, and steers with the keyboard', async ({ page }) => {
     await page.goto(`/demo-arcade.html?${OVERRIDE}`);
     await waitForBoot(page);
