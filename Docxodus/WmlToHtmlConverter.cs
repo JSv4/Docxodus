@@ -4439,10 +4439,18 @@ namespace Docxodus
                             else
                                 span = new XElement(Xhtml.span, new XEntity("#x200e")); // LRM
 #else
-                // The tab advance is the box itself. Keep a collapsible space for DOM/plain-text
-                // separation without using the old nonbreaking glyph, which could add an
-                // unmeasured advance after the box and shift the following run.
-                span = new XElement(Xhtml.span, new XText(" "));
+                // The tab advance is the box itself. Preserve a separator for DOM/plain-text
+                // consumers without putting a glyph in layout: even a collapsible space changes
+                // an inline-block's baseline and therefore the paragraph's line-box height.
+                var separator = new XElement(Xhtml.span,
+                    new XAttribute("aria-hidden", "true"),
+                    new XAttribute("data-docx-tab-separator", string.Empty),
+                    new XText(" "));
+                separator.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "display", "none" },
+                });
+                span = new XElement(Xhtml.span, separator);
 #endif
                 style.Add("display", "inline-block");
                 style.Add("padding", "0 0 0 0");

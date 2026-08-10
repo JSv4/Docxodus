@@ -252,6 +252,10 @@ public class HtmlConversionOpsTests
         Assert.Equal(expectedTabWidth, (string?)tab.Attribute("data-docx-tab-width"));
         Assert.Contains(expectedPrecedingWidth, (string?)tab.Parent!.Attribute("style"));
         Assert.Contains($"iiii {after}", tab.Parent!.Parent!.Value);
+        var separator = Assert.Single(tab.Elements());
+        Assert.Equal(string.Empty, (string?)separator.Attribute("data-docx-tab-separator"));
+        Assert.Equal("true", (string?)separator.Attribute("aria-hidden"));
+        Assert.Contains("display: none", (string?)separator.Attribute("style"));
     }
 
     [Fact]
