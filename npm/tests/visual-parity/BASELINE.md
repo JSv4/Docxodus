@@ -109,7 +109,7 @@ single blank or disjoint page rather than averaging it away.
 | inline-image | 1/1 | severe | 0.93660 | 0.64760 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. |
 | chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
 | shape | 1/1 | severe | 0.96967 | 0.50719 | Textbox content exists but is roughly 5 px right and 13 px down with a small size difference: drawing-anchor geometry. |
-| fields-and-tabs | 1/1 | severe | 0.89089 | 0.30293 | Cached TOC leaders/page numbers are present in print layout, but the right tab/leader span is too short and displaced; hyperlink styling and font metrics also differ. |
+| fields-and-tabs | 1/1 | severe | 0.88672 | 0.30164 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
 | footnote | 1/1 | severe | 0.99218 | 0.56597 | Separator width now matches Word/LibreOffice's two-inch default; the note block remains about 13 px too high. |
 | tracked-deletion | 1/1 | severe | 0.93177 | 0.46817 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. |
 
@@ -118,8 +118,8 @@ single blank or disjoint page rather than averaging it away.
 1. **Print-layout `w:webHidden`.** Word uses this on cached TOC leader/page-number runs. They should
    be hidden in Web view but remain visible in paginated Print layout. A generated DOCX regression
    now checks both modes. Restoring the content slightly worsens the current pixel score because the
-   existing tab calculation places it incorrectly; semantic correctness is retained and tab geometry
-   remains a separate defect.
+   former tab calculation placed it incorrectly; semantic correctness was retained while that
+   geometry was corrected separately in item 5.
 2. **Two-inch footnote separator.** The previous `width: 33%` produced 2.145 inches in a standard
    6.5-inch text area. `width: 2in; max-width: 100%` improves SSIM from 0.992055 to 0.992183 and
    tolerant ink F1 from 0.562434 to 0.565971. A generated regression pins the CSS.
@@ -131,6 +131,14 @@ single blank or disjoint page rather than averaging it away.
    DrawingML font sizes, and stored extent into accessible inline SVG. An independently generated
    DOCX regression deliberately omits an embedded workbook and checks semantic SVG output; the
    tracked `HC043` fixture supplies the separate pixel-level LibreOffice validation.
+5. **Aligned tab-stop geometry.** Right, center, and decimal tabs now measure only authored text,
+   normalize unavailable-font estimates to CSS pixels, and use a flexible inline tab remainder to
+   absorb native/browser metric drift. Dot, hyphen, and underscore leaders are CSS rules across that
+   exact remainder. Generated DOCX and Chromium checks pin the right edge, midpoint, decimal point,
+   current position, following-run width, and leader/no-leader variants. On tracked `HC022`, the page
+   number lands within 1.5 px of the 9350-twip target and the leader spans the full gap. The global
+   pixel scores above remain dominated by line-height, hyperlink-style, and font differences;
+   LibreOffice is retained as a comparison implementation rather than used to hide valid print ink.
 
 An attempted explicit `Calibri Light -> Carlito` browser fallback was rejected: it worsened the
 accepted-revision case (SSIM 0.93177 to 0.92905; ink F1 0.46817 to 0.42477) despite a small SSIM gain
@@ -139,17 +147,14 @@ renderer heuristic.
 
 ## Prioritized next work
 
-The former first priority (blank charts) and the PR #372 rerun are resolved above. The remaining
-order is:
+The former first priority (blank charts), the PR #372 rerun, and aligned tab geometry are resolved
+above. The remaining order is:
 
-1. Reduce right/center/decimal tab-stop layout to generated documents and fix leader width plus
-   post-tab alignment. The existing tab reference analysis already identifies `ProcessTab` and
-   `CalcWidthOfRunInTwips` as the likely path; browser geometry assertions should accompany the fix.
-2. Correct drawing-anchor offsets with a generated textbox geometry regression.
-3. Correct inherited header/body/footer vertical placement independently of the now-fixed story
+1. Correct drawing-anchor offsets with a generated textbox geometry regression.
+2. Correct inherited header/body/footer vertical placement independently of the now-fixed story
    selection and page-count semantics.
-4. Correct footnote block vertical placement independently of the now-fixed separator width.
-5. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
+3. Correct footnote block vertical placement independently of the now-fixed separator width.
+4. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
    treating paragraph-wrap differences as renderer regressions.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence

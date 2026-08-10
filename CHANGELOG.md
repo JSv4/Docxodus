@@ -31,6 +31,15 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Right, center, and decimal tab stops retain their OOXML targets across native and WASM
+  rendering.** Tab measurement no longer includes an invented trailing blank; unavailable-font
+  estimates are normalized to CSS layout units; empty tabs advance with an explicit box instead of
+  an extra nonbreaking-space glyph; and the aligned segment gives browser font-metric drift to a
+  flexible tab remainder. Dot/hyphen/underscore leaders now fill that exact remainder with CSS
+  rules, including cached paginated TOCs whose `w:webHidden` tab and page-number runs sit inside a
+  hyperlink. Hyperlink containers suppress browser-default styling while preserving explicit Word
+  run formatting. Generated DOCX and Chromium regressions cover right/center/decimal targets,
+  current and following-run widths, dot/no-leader variants, and the tracked cached-TOC print path.
 - **Cached clustered column and horizontal bar charts render instead of disappearing.** A
   `c:barChart` drawing with portable cached categories/values is now projected to accessible inline
   SVG at its stored Word extent, including title, legend, value grid, axis labels, gap/overlap,

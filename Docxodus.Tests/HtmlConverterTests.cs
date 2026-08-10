@@ -2144,9 +2144,9 @@ namespace OxPt
                     Assert.Contains("Col2", htmlString);
                     Assert.Contains("Col3", htmlString);
 
-                    // Count margin/spacing occurrences - should have multiple for tabs
-                    int marginCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"margin[^;]*:").Count;
-                    Assert.True(marginCount >= 2, $"Expected at least 2 margin styles for tabs, found {marginCount}");
+                    // Count explicit tab boxes - each tab advance is represented by its width.
+                    int tabCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"data-docx-tab=").Count;
+                    Assert.True(tabCount >= 2, $"Expected at least 2 tab boxes, found {tabCount}");
 
                     // Save for debugging
                     var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Multiple.html"));
