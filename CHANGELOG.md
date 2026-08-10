@@ -19,11 +19,18 @@ All notable changes to this project will be documented in this file.
   sigils on the level's own keycard/armor/weapon spots and the `*` gate at the
   exit switch, and BFS-proves every objective reachable before emitting.
   Levels larger than the 24×16 MAP band scroll it as a player-following window
-  whose typed edits land on exactly the world cells it shows. Spec
+  whose typed edits land on exactly the world cells it shows. The level's 45
+  single-player monster placements come along as a combat layer: billboard
+  enemies (zombieman/sergeant/imp/demon glyphs) with line-of-sight wake
+  checks and chase AI, melee damage, a Space-triggered hitscan sidearm along
+  the view center, HP/kills HUD, death + respawn-at-start with progress
+  kept, sigils that heal — and the MAP band round-trips enemies as entities,
+  so typing `&` into the paused document conjures one. Spec
   `npm/tests/demo-arcade-freedoom.spec.ts` proves real play through the live
   `raw.replaceXml` + `editor.refresh()` loop: a BFS autopilot drives the
-  game's own input seam to a Freedoom pickup, and `DOCXODUS_DOOM_MARATHON=1`
-  plays the entire level — every sigil, then the exit — to the win banner.
+  game's own input seam to a Freedoom pickup (fighting the monsters that
+  find it on the way), and `DOCXODUS_DOOM_MARATHON=1` plays the entire
+  level — every sigil, then the exit — to the win banner.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo
