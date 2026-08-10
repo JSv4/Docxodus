@@ -78,6 +78,29 @@ async function startAutopilot(page: Page) {
       if (!a.playing()) return;
       const s = a.game();
       if (s.mode === 'won') { clearInterval(timer); return; }
+      const input = a.input;
+      if (s.mode === 'dead') return; // the game respawns us; keep no keys held
+      // Combat doctrine: the nearest AWAKE enemy within 6 cells gets faced
+      // and shot (an enemy still asleep provably has no line of sight — its
+      // own wake check would have fired — so shooting at it only hits wall).
+      const foe = (s.enemies ?? [])
+        .filter((e: any) => e.awake)
+        .map((e: any) => ({ e, d: Math.hypot(e.x - s.player.x, e.y - s.player.y) }))
+        .filter((f: any) => f.d < 6)
+        .sort((x: any, y: any) => x.d - y.d)[0];
+      if (foe) {
+        const vx = foe.e.x - s.player.x, vy = foe.e.y - s.player.y;
+        const fcross = s.player.dx * vy - s.player.dy * vx;
+        const fdot = s.player.dx * vx + s.player.dy * vy;
+        const aligned = fdot > 0 && Math.abs(fcross) < 0.25 * foe.d;
+        input.set('KeyW', false); input.set('ShiftLeft', false);
+        input.set('ArrowLeft', false); input.set('ArrowRight', false);
+        if (!aligned) input.set(fcross < 0 ? 'ArrowLeft' : 'ArrowRight', true);
+        input.set('Space', false);
+        if (aligned) input.set('Space', true); // fresh edge each tick; cooldown gates
+        return;
+      }
+      input.set('Space', false);
       if (!goal || (Math.floor(s.player.x) === goal.fx && Math.floor(s.player.y) === goal.fy)
         || ++stuck > 25) {
         goal = bfsNext();
@@ -87,7 +110,6 @@ async function startAutopilot(page: Page) {
       const tx = goal.fx + 0.5 - s.player.x, ty = goal.fy + 0.5 - s.player.y;
       const cross = s.player.dx * ty - s.player.dy * tx;
       const dot = s.player.dx * tx + s.player.dy * ty;
-      const input = a.input;
       input.set('ArrowLeft', false); input.set('ArrowRight', false);
       input.set('KeyW', false); input.set('ShiftLeft', false);
       if (dot < 0 || Math.abs(cross) > 0.35 * Math.hypot(tx, ty)) {
@@ -114,6 +136,8 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
         text: a.canvasText() as string,
         window: a.game().window as [number, number],
         sigils: a.game().sigilsLeft as number,
+        monsters: a.game().killsTotal as number,
+        health: a.game().health as number,
         fallback: a.editor.lastReconcileFallback as string | null,
         row0: a.game().mapRow(0) as string,
       };
@@ -122,7 +146,10 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
     expect(state.text).toContain('FREEDOOM E1M1');
     expect(state.text).toMatch(/[█▓▒░]/);       // raycast wall columns on screen
     expect(state.text).toContain('MAP @');       // the scrolling window header
+    expect(state.text).toContain('HP');          // combat HUD present
     expect(state.sigils).toBe(5);                // the level's own pickup spots
+    expect(state.monsters).toBe(45);             // the level's own monster placements
+    expect(state.health).toBe(100);
     expect(state.fallback).toBeNull();           // frames stay incremental
     expect(state.row0.length).toBe(126);         // the real rasterized grid width
     // The window is a proper sub-view of the 126×109 level, not the whole map.
@@ -189,7 +216,7 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
       if (s.mode === 'won') break;
       if (s.sigilsLeft !== last) {
         last = s.sigilsLeft;
-        console.log(`sigils left ${s.sigilsLeft} · frame ${s.frames} · player (${s.player.x.toFixed(1)}, ${s.player.y.toFixed(1)})`);
+        console.log(`sigils left ${s.sigilsLeft} · kills ${s.kills}/${s.killsTotal} · HP ${Math.ceil(s.health)} · frame ${s.frames} · player (${s.player.x.toFixed(1)}, ${s.player.y.toFixed(1)})`);
         await page.screenshot({ path: `test-results/doom-marathon-${5 - s.sigilsLeft}.png` });
       }
       await page.waitForTimeout(2000);

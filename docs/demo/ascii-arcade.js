@@ -434,6 +434,19 @@ const BAND_X = DIV_X + 1;          // first grid column of the map band
 const MAP_TOP = FIELD_TOP + 2;     // first grid row of map cells in the band
 const WIN_W = 24, WIN_H = 16;      // map-band window (the classic map's size)
 
+// Enemy bestiary. Entities, not tiles — they billboard in the 3-D view and
+// overlay the map band, and typing '&' into the MAP conjures one (the same
+// glyph the platformer's gremlins answer to). Speeds are cells/second at
+// wallScale 1 and scale with the pack, like the player's stride.
+const ENEMY_KINDS = {
+  zombie:   { glyph: 'z', ink: 'A8B78A', hp: 1, speed: 1.1, dps: 9 },
+  sergeant: { glyph: 'Z', ink: '9AAFC4', hp: 1, speed: 1.2, dps: 13 },
+  imp:      { glyph: '&', ink: 'C084FC', hp: 2, speed: 1.5, dps: 11 },
+  demon:    { glyph: 'D', ink: 'FF6B6B', hp: 3, speed: 2.0, dps: 17 },
+};
+const ENEMY_BY_GLYPH = Object.fromEntries(
+  Object.entries(ENEMY_KINDS).map(([kind, k]) => [k.glyph, kind]));
+
 // 24×16, every row exactly MAPW chars (the headless harness re-checks this
 // and walks the maze to prove every § and the * gate stay reachable). The
 // D.O.C.X cells are free-standing letter pillars in the entry hall — the
@@ -486,14 +499,16 @@ const FREEDOOM_PACK = {
   bg: '120D0A',
   caption:
     'A REAL Doom-format level — E1M1 from the Freedoom project (BSD-licensed), its 1,175 ' +
-    'linedefs rasterized onto this grid by `wad2cart.mjs` — playable inside a Word paragraph. ' +
-    'Move **W/S** · strafe **A/D** · turn **←/→** · **Shift** sprints. Recover every § the level ' +
-    'placed (its own keycard, armor and weapon spots), then step through the * exit switch. ' +
-    'The scrolling MAP window is still just document text: pause, type walls, resume.',
-  hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Shift</b> sprint — a real Doom-format map; the § sit where Freedoom placed its pickups.',
+    'linedefs rasterized onto this grid by `wad2cart.mjs` — playable inside a Word paragraph, ' +
+    'monsters included (its own zombies, imps and demons, right where the level put them). ' +
+    'Move **W/S** · strafe **A/D** · turn **←/→** · **Shift** sprints · **Space** fires. ' +
+    'Recover every § the level placed, then step through the * exit switch. ' +
+    'The scrolling MAP window is still just document text: pause, type walls — or `&` baddies — resume.',
+  hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire — a real Doom-format map with its own monsters; § heal and open the gate.',
   winBanner: ['E1M1 CLEARED', 'a real Doom-format level, beaten inside a Word document', 'press R to rip and tear again'],
   rows: FREEDOOM_LEVEL.rows, w: FREEDOOM_LEVEL.w, h: FREEDOOM_LEVEL.h,
   spawn: FREEDOOM_LEVEL.spawn,
+  monsters: FREEDOOM_LEVEL.monsters,
   moveSpeed: 6.8, // 32-unit cells: double the dungeon's 64-unit stride
   wallScale: 2,   // Doom walls span two 32-unit cells
   coneRadius: 14,
@@ -504,6 +519,7 @@ const FREEDOOM_PACK = {
 function raycastCart(pack) {
   const W = pack.w, H = pack.h, S = pack.wallScale;
   let map, px, py, dx, dy, plx, ply, state;
+  let enemies, health, kills, killsTotal, fireCooldown, muzzleT, hurtT, deathT;
 
   const cell = (x, y) => (x >= 0 && x < W && y >= 0 && y < H ? map[y][x] : '#');
   function sigilsLeft() {
@@ -560,15 +576,74 @@ function raycastCart(pack) {
     }
   }
 
+  const spawnEnemy = (x, y, kind) => enemies.push({
+    x, y, kind, hp: ENEMY_KINDS[kind].hp, awake: false, flashT: 0,
+  });
+
   function reset() {
     normalizeMap(pack.rows);
     px = pack.spawn.x; py = pack.spawn.y;
     const n = Math.hypot(pack.spawn.dx, pack.spawn.dy) || 1;
     dx = pack.spawn.dx / n; dy = pack.spawn.dy / n;
     plx = -dy * 0.577; ply = dx * 0.577; // FOV ≈ 60°
+    enemies = [];
+    for (const m of pack.monsters ?? []) spawnEnemy(m.x + 0.5, m.y + 0.5, m.kind);
+    health = 100; kills = 0; killsTotal = enemies.length;
+    fireCooldown = 0; muzzleT = 0; hurtT = 0; deathT = 0;
     state = 'run';
   }
   reset();
+
+  /** Straight-line sight check between two points, sampled sub-cell. */
+  function lineOfSight(ax, ay, bx, by) {
+    const d = Math.hypot(bx - ax, by - ay);
+    const steps = Math.max(1, Math.ceil(d * 3));
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      if (isWall(cell(Math.floor(ax + (bx - ax) * t), Math.floor(ay + (by - ay) * t)))) return false;
+    }
+    return true;
+  }
+
+  /** Distance to the first wall straight ahead — the sidearm's reach. */
+  function wallDistAhead() {
+    let mx = Math.floor(px), my = Math.floor(py);
+    const ddx = Math.abs(1 / (dx || 1e-9)), ddy = Math.abs(1 / (dy || 1e-9));
+    const stx = dx < 0 ? -1 : 1, sty = dy < 0 ? -1 : 1;
+    let sx = dx < 0 ? (px - mx) * ddx : (mx + 1 - px) * ddx;
+    let sy = dy < 0 ? (py - my) * ddy : (my + 1 - py) * ddy;
+    let side = 0, guard = 0;
+    while (guard++ < W + H + 8) {
+      if (sx < sy) { sx += ddx; mx += stx; side = 0; } else { sy += ddy; my += sty; side = 1; }
+      if (isWall(cell(mx, my))) break;
+    }
+    return Math.max(0.05, side === 0 ? sx - ddx : sy - ddy);
+  }
+
+  /** The sidearm: hitscan along the view center. Hits the nearest live enemy
+   *  inside a narrow cone, if no wall stands in front of it. */
+  function fire() {
+    fireCooldown = 0.45; muzzleT = 0.15;
+    const reach = wallDistAhead();
+    let best = null;
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const vx = e.x - px, vy = e.y - py;
+      const d = Math.hypot(vx, vy);
+      if (d < 0.2 || d > reach + 0.4) continue;
+      const ahead = (vx * dx + vy * dy) / d;
+      // Cone widens up close (a body fills more of the view): base 4° plus
+      // the angular half-width of a ~0.45-cell-wide target.
+      if (ahead < Math.cos(0.07 + Math.atan(0.45 / d))) continue;
+      if (!best || d < best.d) best = { e, d };
+    }
+    if (best) {
+      best.e.awake = true;
+      best.e.hp -= 1;
+      best.e.flashT = 0.2;
+      if (best.e.hp <= 0) kills++;
+    }
+  }
 
   function rotate(a) {
     const c = Math.cos(a), s = Math.sin(a);
@@ -594,6 +669,19 @@ function raycastCart(pack) {
       if (input.took('KeyR')) reset();
       return;
     }
+    fireCooldown = Math.max(0, fireCooldown - dt);
+    muzzleT = Math.max(0, muzzleT - dt);
+    hurtT = Math.max(0, hurtT - dt);
+    if (state === 'dead') {
+      deathT -= dt;
+      if (deathT <= 0) {
+        // Doom's contract: back to the start, monsters keep their grudges,
+        // your progress (sigils, kills) stands.
+        px = pack.spawn.x; py = pack.spawn.y;
+        health = 100; state = 'run';
+      }
+      return;
+    }
     const sprint = input.held('ShiftLeft', 'ShiftRight') ? 1.7 : 1;
     const mv = pack.moveSpeed * sprint * dt, rot = 2.6 * dt;
     if (input.held('ArrowLeft')) rotate(-rot);
@@ -602,9 +690,39 @@ function raycastCart(pack) {
     if (input.held('KeyS', 'ArrowDown')) tryMove(px - dx * mv, py - dy * mv);
     if (input.held('KeyA')) tryMove(px + dy * mv, py - dx * mv);
     if (input.held('KeyD')) tryMove(px - dy * mv, py + dx * mv);
+    if (input.took('Space') && fireCooldown <= 0) fire();
+
+    // Enemies: sleep until they see you (or get shot), then close in.
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      e.flashT = Math.max(0, e.flashT - dt);
+      const vx = px - e.x, vy = py - e.y;
+      const d = Math.hypot(vx, vy);
+      if (!e.awake) {
+        if (d < 8 * S && lineOfSight(e.x, e.y, px, py)) e.awake = true;
+        else continue;
+      }
+      if (d > 0.8) {
+        const step = ENEMY_KINDS[e.kind].speed * S * dt;
+        const nx = e.x + (vx / d) * step, ny = e.y + (vy / d) * step;
+        if (!isWall(cell(Math.floor(nx), Math.floor(e.y)))) e.x = nx;
+        if (!isWall(cell(Math.floor(e.x), Math.floor(ny)))) e.y = ny;
+      }
+      if (d < 1.0) {
+        health -= ENEMY_KINDS[e.kind].dps * dt;
+        hurtT = 0.25;
+      }
+    }
+    if (health <= 0) {
+      health = 0; state = 'dead'; deathT = 1.2;
+      return;
+    }
 
     const cx = Math.floor(px), cy = Math.floor(py);
-    if (cell(cx, cy) === '§') map[cy][cx] = '.';
+    if (cell(cx, cy) === '§') {
+      map[cy][cx] = '.';
+      health = Math.min(100, health + 15); // the level's supplies patch you up
+    }
     if (cell(cx, cy) === '*' && sigilsLeft() === 0) state = 'won';
   }
 
@@ -619,9 +737,12 @@ function raycastCart(pack) {
   function render() {
     const g = makeGrid();
     const left = sigilsLeft();
+    const combat = killsTotal > 0 || kills > 0 || enemies.some((e) => e.hp > 0);
     drawChrome(g,
-      `${pack.hudTitle}   § left ${left}   gate ${left === 0 ? 'OPEN - step on *' : 'SEALED'}` +
-      '   WASD move - arrows turn');
+      `${pack.hudTitle}   ` +
+      (combat ? `HP ${String(Math.ceil(health)).padStart(3)}   kills ${kills}/${killsTotal}   ` : '') +
+      `§ left ${left}   gate ${left === 0 ? 'OPEN - step on *' : 'SEALED'}   ` +
+      (combat ? 'WASD move - Space fire' : 'WASD move - arrows turn'));
     // The divider starts below the HUD row, which spans the full bezel width.
     for (let y = FIELD_TOP; y < ROWS - 1; y++) {
       g.chars[y][DIV_X] = '│';
@@ -673,14 +794,19 @@ function raycastCart(pack) {
       }
     }
 
-    // Billboard sprites: § pickups (and the * gate once open, so it stays
-    // visible as a floor marker).
+    // Billboard sprites: § pickups, the * gate once open, and every live
+    // enemy (white for a beat when shot).
     const sprites = [];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const ch = map[y][x];
       if (ch === '§' || (ch === '*' && left === 0)) {
         sprites.push({ x: x + 0.5, y: y + 0.5, ch, ink: ch === '§' ? 'FFD166' : '4ADE80' });
       }
+    }
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const k = ENEMY_KINDS[e.kind];
+      sprites.push({ x: e.x, y: e.y, ch: k.glyph, ink: e.flashT > 0 ? 'FFFFFF' : k.ink });
     }
     const inv = 1 / (plx * dy - dx * ply);
     sprites.sort((a, b) =>
@@ -700,6 +826,31 @@ function raycastCart(pack) {
             g.chars[syp][1 + sxp] = s.ch;
             g.colors[syp][1 + sxp] = s.ink;
           }
+        }
+      }
+    }
+
+    // ── Weapon chrome, drawn in the 3-D view (which the resume-parse never
+    // reads, so it can't leak into the level): crosshair, a sidearm wedge at
+    // the bottom, a muzzle star while firing, and red view edges when hurt.
+    if (combat) {
+      const cxv = 1 + (VIEW_W >> 1), cyv = FIELD_TOP + (FIELD_ROWS >> 1);
+      if (g.chars[cyv][cxv] === ' ' || muzzleT > 0) {
+        g.chars[cyv][cxv] = '+';
+        g.colors[cyv][cxv] = muzzleT > 0 ? 'FFF7B0' : '9CB3C9';
+      }
+      const gy = FIELD_TOP + FIELD_ROWS - 1;
+      g.chars[gy][cxv - 1] = '/'; g.colors[gy][cxv - 1] = 'C8D4E2';
+      g.chars[gy][cxv] = '█'; g.colors[gy][cxv] = '75879E';
+      g.chars[gy][cxv + 1] = '\\'; g.colors[gy][cxv + 1] = 'C8D4E2';
+      if (muzzleT > 0) {
+        g.chars[gy - 1][cxv] = '*';
+        g.colors[gy - 1][cxv] = 'FFF7B0';
+      }
+      if (hurtT > 0) {
+        for (let y = FIELD_TOP; y < FIELD_TOP + FIELD_ROWS; y++) {
+          g.chars[y][1] = '░'; g.colors[y][1] = 'FF6B6B';
+          g.chars[y][VIEW_W] = '░'; g.colors[y][VIEW_W] = 'FF6B6B';
         }
       }
     }
@@ -746,6 +897,16 @@ function raycastCart(pack) {
       g.chars[MAP_TOP + y][BAND_X + 1 + x] = '·';
       g.colors[MAP_TOP + y][BAND_X + 1 + x] = 'C8D4E2';
     }
+    // Live enemies overlay the band as their glyphs — entities on top of
+    // tiles, exactly how the resume-parse reads them back.
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const ex = Math.floor(e.x) - wx, ey = Math.floor(e.y) - wy;
+      if (ex >= 0 && ex < WIN_W && ey >= 0 && ey < WIN_H) {
+        g.chars[MAP_TOP + ey][BAND_X + 1 + ex] = ENEMY_KINDS[e.kind].glyph;
+        g.colors[MAP_TOP + ey][BAND_X + 1 + ex] = ENEMY_KINDS[e.kind].ink;
+      }
+    }
     // Directional player marker — the map's compass for the 3-D camera.
     const pmx = Math.floor(px) - wx, pmy = Math.floor(py) - wy;
     if (pmx >= 0 && pmx < WIN_W && pmy >= 0 && pmy < WIN_H) {
@@ -754,9 +915,11 @@ function raycastCart(pack) {
       g.colors[MAP_TOP + pmy][BAND_X + 1 + pmx] = 'FF6B6B';
     }
     writeText(g, MAP_TOP + WIN_H + 1, BAND_X + 1, 'letters become walls', '46556B');
-    writeText(g, MAP_TOP + WIN_H + 2, BAND_X + 1, '$ = treasure  @ = you', '46556B');
+    writeText(g, MAP_TOP + WIN_H + 2, BAND_X + 1,
+      killsTotal > 0 ? '$ heals  & = baddie' : '$ = treasure  @ = you', '46556B');
 
     if (state === 'won') drawBanner(g, pack.winBanner);
+    else if (state === 'dead') drawBanner(g, ['YOU DIED', 'the document respawns you at the start']);
     return { grid: g, bg: pack.bg };
   }
 
@@ -769,6 +932,12 @@ function raycastCart(pack) {
     const [wx, wy] = winPos();
     const parsed = map.map((r) => r.slice());
     let atX = null, atY = null;
+    // Enemies inside the window are re-seeded from what the text says — same
+    // entity contract as the platformer's gremlins. Anything outside the
+    // window is beyond edit reach and survives untouched.
+    const inWindow = (x, y) => x >= wx && x < wx + WIN_W && y >= wy && y < wy + WIN_H;
+    enemies = enemies.filter((e) =>
+      e.hp > 0 && !inWindow(Math.floor(e.x), Math.floor(e.y)));
     for (let y = 0; y < WIN_H; y++) {
       const line = rows[MAP_TOP + y];
       if (line == null) continue;
@@ -779,13 +948,21 @@ function raycastCart(pack) {
         let ch = band[x] ?? parsed[wy + y][wx + x];
         // '@' is the typeable teleport; ►◄▲▼ is how the renderer draws the
         // player, and '·' is the rendered view cone — all parse back to
-        // position-or-floor, never to walls.
+        // position-or-floor, never to walls. An enemy glyph is an entity:
+        // it respawns that enemy and leaves floor beneath (typing '&' — or
+        // any of the bestiary's letters — conjures one from the document).
         if (ch === '@' || ch === '►' || ch === '◄' || ch === '▲' || ch === '▼') {
           atX = wx + x; atY = wy + y; ch = '.';
-        } else if (ch === '·') ch = '.';
+        } else if (ch === '·') {
+          ch = '.';
+        } else if (ENEMY_BY_GLYPH[ch]) {
+          spawnEnemy(wx + x + 0.5, wy + y + 0.5, ENEMY_BY_GLYPH[ch]);
+          ch = '.';
+        }
         parsed[wy + y][wx + x] = ch;
       }
     }
+    killsTotal = Math.max(killsTotal, kills + enemies.filter((e) => e.hp > 0).length);
     normalizeMap(parsed.map((r) => r.join('')));
     if (atX != null && (atX !== Math.floor(px) || atY !== Math.floor(py))) {
       px = atX + 0.5; py = atY + 0.5;
@@ -806,6 +983,9 @@ function raycastCart(pack) {
       player: { x: px, y: py, dx, dy },
       sigilsLeft: sigilsLeft(), mode: state,
       window: winPos(),
+      health, kills, killsTotal,
+      enemies: enemies.filter((e) => e.hp > 0)
+        .map((e) => ({ x: e.x, y: e.y, kind: e.kind, hp: e.hp, awake: e.awake })),
       mapRow: (y) => (map[y] ?? []).join(''),
     }),
   };

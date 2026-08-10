@@ -143,6 +143,12 @@ const SIGIL_THINGS = [
 ];
 const MTF_NOT_SINGLE = 0x0010;
 
+// Monster THINGS → the cartridge's enemy kinds. The cartridge owns stats and
+// glyphs; the converter only records what the level placed and where.
+const MONSTER_THINGS = {
+  3004: 'zombie', 9: 'sergeant', 3001: 'imp', 3002: 'demon', 58: 'demon',
+};
+
 // ─── Rasterization ─────────────────────────────────────────────────────
 export function rasterize(level, { cell = 64, sigilCap = 10, onGrid = null } = {}) {
   const { vertexes, linedefs, sidedefs, sectors, things } = level;
@@ -288,6 +294,29 @@ export function rasterize(level, { cell = 64, sigilCap = 10, onGrid = null } = {
   if (sigils.length === 0) throw new Error('no reachable sigil spots');
   for (const [cx, cy] of sigils) grid[cy][cx] = '§';
 
+  // Monsters: entities, not tiles — they get their own list, placed on the
+  // reachable floor nearest to where the level put them (skipping cells the
+  // raster sealed). Multiplayer-only placements are skipped like pickups.
+  const monsters = [];
+  const mTaken = new Set(taken);
+  for (const t of things) {
+    const kind = MONSTER_THINGS[t.type];
+    if (!kind || (t.flags & MTF_NOT_SINGLE)) continue;
+    const [cx, cy] = toCell(t.x, t.y);
+    let spot = null;
+    for (let r = 0; r <= 2 && !spot; r++) {
+      for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || x >= W || y < 0 || y >= H) continue;
+        if (grid[y][x] === '.' && !mTaken.has(x + ',' + y)) { spot = [x, y]; break; }
+      }
+    }
+    if (!spot) continue;
+    mTaken.add(spot.join(','));
+    monsters.push({ x: spot[0], y: spot[1], kind });
+  }
+
   // Spawn facing: Doom angle is degrees CCW from east; grid Y is flipped, so
   // the y component negates.
   const rad = ((p1.angle || 0) * Math.PI) / 180;
@@ -299,7 +328,7 @@ export function rasterize(level, { cell = 64, sigilCap = 10, onGrid = null } = {
 
   return {
     rows: grid.map((r) => r.join('')),
-    w: W, h: H, spawn,
+    w: W, h: H, spawn, monsters,
     sigils: sigils.length,
     exit: exitCell,
     stats: { cell, mapUnits: [maxX - minX, maxY - minY] },
@@ -384,6 +413,10 @@ export const FREEDOOM_LEVEL = {
   spawn: ${JSON.stringify(out.spawn)},
   rows: [
 ${out.rows.map((r) => '    ' + JSON.stringify(r) + ',').join('\n')}
+  ],
+  // The level's own single-player monster placements (entities, not tiles).
+  monsters: [
+${out.monsters.map((m) => '    ' + JSON.stringify(m) + ',').join('\n')}
   ],
 };
 `;
