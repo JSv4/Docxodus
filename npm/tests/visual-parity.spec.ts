@@ -17,6 +17,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REQUIRED_VISUAL_CATEGORIES, VISUAL_PARITY_CORPUS, type VisualCorpusEntry } from './visual-parity/corpus.js';
 import { compareImages, VISUAL_THRESHOLDS, type PageMetrics, type VisualSeverity } from './visual-parity/metrics.js';
 import { decodePng, encodePng } from './visual-parity/png.js';
+import {
+  FONT_CONTRACT_PACKAGES,
+  FONTCONFIG_FRAGMENT,
+  resolveFontContract,
+  writeFontconfigRoot,
+  type FontContractStatus,
+} from './visual-parity/fonts.js';
+import {
+  compareProbeLines,
+  generateFontProbeDocx,
+  inkLines,
+  PROBE_FAMILIES,
+  type FontProbeResult,
+} from './visual-parity/font-probe.js';
 
 test.skip(process.env.DOCXODUS_VISUAL_PARITY !== '1',
   'set DOCXODUS_VISUAL_PARITY=1 on a host with libreoffice and pdftoppm');
@@ -24,6 +38,28 @@ test.skip(process.env.DOCXODUS_VISUAL_PARITY !== '1',
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
 const severityOrder: VisualSeverity[] = ['close', 'minor', 'major', 'severe'];
+
+/**
+ * The font-substitution contract has to be in force before EITHER engine starts, and Chromium's
+ * fontconfig is read when the browser process launches — which happens when the first test
+ * requests a page, after this module is evaluated. So the layered fontconfig root is written
+ * here, at import time, and handed to the browser through `test.use` below and to every
+ * LibreOffice subprocess through its env.
+ *
+ * `DOCXODUS_VISUAL_PARITY_HOST_FONTS=1` opts out and measures the host as it is, which is how you
+ * reproduce a report from a machine that installed the fragment permanently instead.
+ */
+const useHostFonts = process.env.DOCXODUS_VISUAL_PARITY_HOST_FONTS === '1';
+const fontconfigRoot = useHostFonts || process.env.DOCXODUS_VISUAL_PARITY !== '1'
+  ? undefined
+  : writeFontconfigRoot(mkdtempSync(join(tmpdir(), 'docxodus-visual-fontconfig-')));
+const fontEnv: NodeJS.ProcessEnv = fontconfigRoot
+  ? { ...process.env, FONTCONFIG_FILE: fontconfigRoot }
+  : process.env;
+
+if (fontconfigRoot) {
+  test.use({ launchOptions: { env: { ...process.env, FONTCONFIG_FILE: fontconfigRoot } } });
+}
 
 interface PageResult extends PageMetrics {
   page: number;
@@ -121,7 +157,7 @@ function renderLibreOffice(docxPath: string, work: string): string[] {
   for (const directory of [pdfDir, profileDir, runtimeDir, homeDir]) mkdirSync(directory, { mode: 0o700 });
 
   const deterministicEnv = {
-    ...process.env,
+    ...fontEnv,
     HOME: homeDir,
     XDG_RUNTIME_DIR: runtimeDir,
     LANG: 'C.UTF-8',
@@ -240,6 +276,46 @@ async function renderDocxodus(page: Page, docxPath: string, output: string): Pro
   return paths;
 }
 
+/**
+ * Renders the synthetic wrapping probe through both engines and reports whether they agree.
+ *
+ * This is the signal that separates a renderer regression from a font-environment change: the
+ * probe's only variable is which face each engine resolved, so when its lines stop matching, the
+ * corpus numbers that moved with them did not move because of this repository.
+ */
+async function runFontProbe(page: Page, outputRoot: string): Promise<FontProbeResult & {
+  families: string[];
+  artifacts: { docxodus: string; libreoffice: string };
+}> {
+  const probeOutput = join(outputRoot, 'font-probe');
+  mkdirSync(probeOutput, { recursive: true });
+  const work = mkdtempSync(join(tmpdir(), 'docxodus-font-probe-'));
+  try {
+    const probePath = join(work, 'font-probe.docx');
+    writeFileSync(probePath, generateFontProbeDocx());
+
+    const libreofficePages = renderLibreOffice(probePath, work);
+    const libreofficePng = join(probeOutput, 'libreoffice-1.png');
+    writeFileSync(libreofficePng, readFileSync(libreofficePages[0]));
+    const docxodusPages = await renderDocxodus(page, probePath, probeOutput);
+
+    const comparison = compareProbeLines(
+      inkLines(decodePng(readFileSync(docxodusPages[0]))),
+      inkLines(decodePng(readFileSync(libreofficePng))),
+    );
+    return {
+      ...comparison,
+      families: PROBE_FAMILIES,
+      artifacts: {
+        docxodus: relative(outputRoot, docxodusPages[0]),
+        libreoffice: relative(outputRoot, libreofficePng),
+      },
+    };
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function worse(a: VisualSeverity, b: VisualSeverity): VisualSeverity {
   return severityOrder.indexOf(a) >= severityOrder.indexOf(b) ? a : b;
 }
@@ -276,11 +352,26 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   }
   mkdirSync(outputRoot, { recursive: true, mode: 0o700 });
 
+  // The font contract gates the whole run: without it the two engines can be set in different
+  // faces, and every number below would be measuring the host rather than the renderer.
+  const fontContract: FontContractStatus = resolveFontContract(fontEnv);
+  if (!fontContract.satisfied) {
+    const message = `${fontContract.problem}\nRequired packages: ${FONT_CONTRACT_PACKAGES.join(' ')}`;
+    if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') throw new Error(message);
+    test.skip(true, message);
+  }
+
   await page.setViewportSize({ width: 1400, height: 1000 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 90000 });
   await page.addScriptTag({ url: '/pagination.bundle.js' });
+
+  const fontProbe = await runFontProbe(page, outputRoot);
+  console.log(fontProbe.agreed
+    ? `Font probe: engines agree on ${fontProbe.docxodusLines} lines ` +
+      `(worst advance delta ${fontProbe.maxAdvanceDeltaPx} px)`
+    : `Font probe: FONT ENVIRONMENT DRIFT — ${fontProbe.problem}`);
 
   const cases: CaseResult[] = [];
   for (const [caseIndex, entry] of corpus.entries()) {
@@ -374,12 +465,17 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       chromium: page.context().browser()?.version() ?? 'unknown',
       libreoffice: commandVersion('libreoffice', ['--version']),
       pdftoppm: commandVersion('pdftoppm', ['-v']).split('\n')[0],
-      calibriMatch: commandVersion('fc-match', ['Calibri', '--format=%{family} %{file}']),
-      calibriLightMatch: commandVersion('fc-match', ['Calibri Light', '--format=%{family} %{file}']),
-      timesNewRomanMatch: commandVersion('fc-match', ['Times New Roman', '--format=%{family} %{file}']),
       locale: 'C.UTF-8',
       timezone: 'UTC',
     },
+    // The exact faces both engines rendered with, so a rerun can tell a renderer change from a
+    // font-environment change instead of guessing.
+    fontContract: {
+      ...fontContract,
+      fragment: relative(repoRoot, FONTCONFIG_FRAGMENT),
+      source: useHostFonts ? 'host fontconfig (DOCXODUS_VISUAL_PARITY_HOST_FONTS=1)' : 'repository fragment',
+    },
+    fontProbe,
     coverage: Object.fromEntries(REQUIRED_VISUAL_CATEGORIES.map(category => [
       category,
       VISUAL_PARITY_CORPUS.filter(entry => entry.categories.includes(category)).map(entry => entry.id),
@@ -390,6 +486,11 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   const summaryPath = join(outputRoot, 'summary.json');
   writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`Visual parity report: ${summaryPath}`);
+
+  // Reported before the corpus verdict on purpose: when the probe fails, the corpus numbers are
+  // not evidence about the renderer, and saying so first keeps the two from being confused.
+  expect(fontProbe.agreed, `font environment drift, not a renderer regression: ${fontProbe.problem}`)
+    .toBe(true);
 
   if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') {
     expect(cases.filter(result => result.severity === 'severe'),

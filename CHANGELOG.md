@@ -30,6 +30,32 @@ All notable changes to this project will be documented in this file.
   `npm/tests/demo-arcade.spec.ts` drives boot, keyboard steering, the
   pause→type→resume loop, and the save round-trip.
 
+### Changed
+- **The LibreOffice visual-parity benchmark declares one font-substitution
+  contract that both renderers obey.** Neither engine ships Microsoft's Office
+  fonts, so every Office family a fixture names is substituted — and when the two
+  substitute differently, their line breaking differs for reasons that have
+  nothing to do with this repository. The policy is now a fontconfig fragment
+  (`npm/tests/visual-parity/fontconfig/`) that Chromium and LibreOffice both read,
+  binding Calibri and Calibri Light to Carlito, Cambria to Caladea, and Times New
+  Roman / Arial / Courier New to the matching Liberation faces — all freely
+  redistributable metric clones the distributions package; no font is vendored.
+  The benchmark layers the fragment over the host's configuration outside the
+  checkout (nothing is written to `$HOME` or `/etc`), resolves every declared
+  family before either engine starts, records the exact font file each one used in
+  `summary.json`, and skips — or fails under `DOCXODUS_VISUAL_PARITY_STRICT=1` —
+  with the package to install rather than reporting numbers from an unknown font
+  environment. A generated probe compares the two engines' glyph advances and
+  wrapped line counts and reports a mismatch as *font environment drift, not a
+  renderer regression*; `npm/tests/font-contract.spec.ts` pins the fragment
+  against its TypeScript declaration and the detector's sensitivity, and needs no
+  LibreOffice. The earlier Chromium-only `Calibri Light → Carlito` fallback stays
+  rejected: it changed one engine's mind and made the two disagree more.
+  `tracked-deletion` improves (SSIM 0.93177 → 0.95011, ink F1 0.46817 → 0.62634)
+  now that both engines resolve Calibri Light identically; `fields-and-tabs` ink F1
+  drops (0.30164 → 0.15913, SSIM 0.88672 → 0.89415) because the substitution had
+  been masking a real TOC line-height difference.
+
 ### Fixed
 - **The paginated footnote block sits where Word puts it.** The note area is
   bottom-aligned to the body text band, so its height IS its position — every

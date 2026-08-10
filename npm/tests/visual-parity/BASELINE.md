@@ -33,8 +33,12 @@ does not replace the fast committed snapshots or the arcade export test.
 - False-positive controls: wait for fonts/images/two animation frames; disable animation, carets,
   shadows, labels, and page gaps; search only a +/-2 px translation; report page geometry
   independently; use no masks.
-- Environment: Chromium 143.0.7499.4; LibreOffice 25.8.7.3; Poppler 25.03.0; Calibri mapped by
-  fontconfig to Carlito, Calibri Light to Noto Sans, and Times New Roman to Liberation Serif.
+- Environment: Chromium 143.0.7499.4; LibreOffice 25.8.7.3; Poppler 25.03.0. Fonts are governed by
+  the shared substitution contract (issue #379): one fontconfig fragment both engines read, mapping
+  Calibri and Calibri Light to Carlito, Cambria to Caladea, and Times New Roman / Arial / Courier
+  New to the matching Liberation faces. The run resolves every declared family before either engine
+  starts, records the exact font file each one used, and skips (or fails, under strict mode) rather
+  than reporting numbers from an unknown font environment.
 
 Two clean full render passes produced identical normalized metrics and all 60 Docxodus,
 LibreOffice, and overlay PNG SHA-256 hashes. The final ink-F1 edge-case correction changed no image
@@ -76,8 +80,8 @@ were added to the repository.
 | Page-count mismatches | 1 | 0 | 0 |
 | Case severity | 1 close, 1 minor, 0 major, 10 severe | 2 close, 1 minor, 0 major, 9 severe | 5 close, 1 minor, 0 major, 6 severe |
 | Page severity | 1 close, 1 minor, 2 major, 16 severe | 2 close, 1 minor, 1 major, 17 severe | 14 close, 1 minor, 0 major, 6 severe |
-| Mean SSIM | 0.974586 | 0.978298 | 0.979980 |
-| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.854069 |
+| Mean SSIM | 0.974586 | 0.978298 | 0.981207 |
+| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.854815 |
 
 Resolved items:
 
@@ -111,6 +115,16 @@ Resolved items:
    mark, and a fixed 1.4 line-height overriding the note style's single spacing) lands the
    separator within 2 px of LibreOffice's and the note text's bottom edge exactly on it. The case
    moves from severe (SSIM 0.99218, ink F1 0.56597) to **close** (0.99481 / 0.95875).
+6. **Shared font-substitution contract (issue #379).** One fontconfig fragment now governs both
+   engines, so a family cannot be set in different faces on the two sides of the comparison. The
+   run resolves every declared family before starting, records the font file each one used, and
+   skips or fails rather than reporting numbers from an unknown environment; a generated probe
+   compares the engines' advances and wrapped line counts and labels a mismatch as font-environment
+   drift rather than a renderer regression. `tracked-deletion` improves markedly (SSIM 0.93177 →
+   0.95011, ink F1 0.46817 → 0.62634) because Chromium and LibreOffice previously disagreed about
+   Calibri Light. `fields-and-tabs` moves the other way on ink F1 (0.30164 → 0.15913, SSIM
+   0.88672 → 0.89415): the substitution had been masking a real TOC line-height difference, which
+   is now visible as the renderer signal it always was.
 
 ## Current case results and triage
 
@@ -128,9 +142,9 @@ single blank or disjoint page rather than averaging it away.
 | inline-image | 1/1 | severe | 0.93660 | 0.64760 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. |
 | chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
 | shape | 1/1 | severe | 0.96967 | 0.50719 | Textbox content exists but is roughly 5 px right and 13 px down with a small size difference: drawing-anchor geometry. |
-| fields-and-tabs | 1/1 | severe | 0.88672 | 0.30164 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
+| fields-and-tabs | 1/1 | severe | 0.89415 | 0.15913 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
 | footnote | 1/1 | close | 0.99481 | 0.95875 | Note block composition corrected (issue #378): the separator is a line with the rule on its baseline, spacing falls between notes, and the last note ends on the body band's bottom edge. |
-| tracked-deletion | 1/1 | severe | 0.93177 | 0.46817 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. |
+| tracked-deletion | 1/1 | severe | 0.95011 | 0.62634 | Identical accepted-revision bytes, and both engines now resolve Calibri Light the same way (issue #379). Remaining differences are heading metrics and wrapping, not revision semantics. |
 
 ## Fixes justified by the baseline
 
@@ -161,18 +175,22 @@ single blank or disjoint page rather than averaging it away.
 
 An attempted explicit `Calibri Light -> Carlito` browser fallback was rejected: it worsened the
 accepted-revision case (SSIM 0.93177 to 0.92905; ink F1 0.46817 to 0.42477) despite a small SSIM gain
-on the TOC. Font substitution therefore remains an observed environment variable, not a hidden
-renderer heuristic.
+on the TOC. That result was the diagnosis, not a dead end — changing ONE engine's mind made the two
+disagree more, because LibreOffice was already resolving Calibri Light through its own substitution
+table. Issue #379 resolves it where it belongs: a fontconfig fragment both engines read, which moves
+the same case to SSIM 0.95011 / ink F1 0.62634. Font substitution is now a declared, verified
+contract rather than either an observed variable or a hidden renderer heuristic.
 
 ## Prioritized next work
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
-header/body/footer vertical placement (issue #377), and footnote block placement (issue #378) are
-resolved above. The remaining order is:
+header/body/footer vertical placement (issue #377), footnote block placement (issue #378), and the
+shared font-substitution contract (issue #379) are resolved above. The remaining order is:
 
 1. Correct drawing-anchor offsets with a generated textbox geometry regression.
-2. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
-   treating paragraph-wrap differences as renderer regressions (issue #379).
+2. Investigate the paragraph line-height differences the font contract now exposes on
+   `fields-and-tabs`, `landscape-section`, and `inline-image` — with the fonts pinned, these are
+   renderer signals rather than environment noise.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
 supports Docxodus's use of the declared OOXML margin. LibreOffice is a comparison implementation, not
