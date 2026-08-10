@@ -31,6 +31,27 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **The paginated footnote block sits where Word puts it.** The note area is
+  bottom-aligned to the body text band, so its height IS its position — every
+  point of slack inside it lifts everything above it, which is why the note text
+  and the already-correct two-inch separator were both about 13 px too high.
+  Four pieces of slack are gone: `margin-bottom` on the last note (spacing now
+  falls BETWEEN notes, so the last one ends on the edge the block is anchored to);
+  the separator as a bare rule with a hard-coded 6 pt gap under it (`w:separator`
+  is a RUN, so it is now a line of the note font with the rule on its baseline —
+  the space around it comes from the document's own metrics); `vertical-align:
+  super` on the reference mark, which grew the line box it sits in; and a fixed
+  `line-height: 1.4` that overrode the note style's single spacing. Word's
+  `w:continuationSeparator` — full text-column width — is now drawn on a page that
+  opens with carried-over note text, instead of the two-inch separator. The back
+  reference is an HTML navigation affordance and no longer prints on a paginated
+  page, and the note's reference mark is printed alone, without the added period
+  Word never writes. `PaginationEngine.buildNoteArea()` is the single builder the
+  renderer and all four measurement paths share, so the height the flow loop
+  reserves and the block the page draws can no longer drift apart. Against
+  LibreOffice, `CA008-Footnote-Reference.docx` moves from severe (SSIM 0.99218,
+  ink F1 0.56597) to **close** (0.99481 / 0.95875), with the separator within 2 px
+  and the note text's bottom edge exact.
 - **Paginated headers, footers, and body text sit at the distances `w:pgMar`
   declares.** `w:header` and `w:footer` are distances from the PAPER EDGE to the
   top of the header story and the bottom of the footer story — four independent

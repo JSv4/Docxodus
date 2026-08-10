@@ -1811,36 +1811,78 @@ namespace Docxodus
             // Page footnotes container
             sb.AppendLine($".{prefix}footnotes {{");
             sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("    line-height: 1.4;");
+            // Word's note paragraphs are single-spaced unless their style says otherwise, and
+            // `w:lineRule="auto"` at 240 means exactly the font's own line box. A fixed 1.4 here
+            // won over that for every note whose style sets no spacing of its own — 17% of
+            // invented leading, which on a bottom-anchored block also lifts the separator.
+            sb.AppendLine("    line-height: normal;");
             sb.AppendLine("}");
 
-            // Separator line above footnotes - using background instead of border
-            // to avoid subpixel rendering issues that can cause the line to disappear during scrolling
-            sb.AppendLine($".{prefix}footnotes hr {{");
+            // The separator band. `w:separator` is a RUN inside the separator note's paragraph,
+            // so Word draws the rule on that paragraph's BASELINE: the space above and below it
+            // is the note font's own line box, not two tuned margins. Giving the band a line box
+            // and sitting the rule on its baseline reproduces that from the document's metrics —
+            // the previous `1px rule + 6pt bottom margin + nothing above` was 14 px off.
+            sb.AppendLine($".{prefix}footnotes .footnote-separator {{");
+            sb.AppendLine("    margin: 0;");
+            sb.AppendLine("}");
+
+            // The band's own line box is what gives the rule its space. Blink does not apply the
+            // strut to a line whose only content is an atomic inline, so a band holding just the
+            // rule collapses to the rule's own 1 px; a zero-width word joiner is the standard way
+            // to make the line real without adding anything visible or selectable.
+            sb.AppendLine($".{prefix}footnotes .footnote-separator::after {{");
+            sb.AppendLine("    content: \"\\2060\";");
+            sb.AppendLine("}");
+
+            // An empty inline-block takes its baseline from its bottom margin edge, so a
+            // zero-height box with a top border draws the rule exactly on the text baseline.
+            sb.AppendLine($".{prefix}footnotes .footnote-separator hr {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    vertical-align: baseline;");
             sb.AppendLine("    border: none;");
-            sb.AppendLine("    height: 1px;");
-            sb.AppendLine("    background-color: #999;");
+            // Word draws the separator in the automatic text colour, not a web grey.
+            sb.AppendLine("    border-top: 1px solid currentColor;");
+            sb.AppendLine("    height: 0;");
             // Word's built-in footnote separator is two inches long. A percentage makes the
             // rule drift with paper size/margins (6.5in Letter text yielded 2.145in) and does
             // not match either Word or LibreOffice's fixed default separator.
             sb.AppendLine("    width: 2in;");
             sb.AppendLine("    max-width: 100%;");
-            sb.AppendLine("    margin: 0 0 6pt 0;");
-            sb.AppendLine("    opacity: 0.6;");
+            sb.AppendLine("    margin: 0;");
             sb.AppendLine("}");
 
-            // Individual footnote item (in registry and on page)
-            sb.AppendLine(".footnote-item {");
-            sb.AppendLine("    margin-bottom: 4pt;");
+            // Word's `w:continuationSeparator` — drawn when a page opens with note text carried
+            // over — spans the whole text column instead of the two-inch default.
+            sb.AppendLine($".{prefix}footnotes .footnote-separator-continuation hr {{");
+            sb.AppendLine("    width: 100%;");
             sb.AppendLine("}");
 
-            // Footnote number - inline with superscript styling
+            // Individual footnote item (in registry and on page). Spacing goes BETWEEN notes:
+            // the note area is bottom-aligned to the body band, so a trailing margin below the
+            // last note is dead space that lifts the whole block off the edge it is anchored to.
+            sb.AppendLine(".footnote-item + .footnote-item {");
+            sb.AppendLine("    margin-top: 4pt;");
+            sb.AppendLine("}");
+
+            // Footnote number - the note's reference mark, a superscript INSIDE the note's first
+            // line. `vertical-align: super` grows the line box, so every note gained leading the
+            // document never asked for; a relative offset raises the glyph without doing that.
             sb.AppendLine(".footnote-number {");
             sb.AppendLine("    font-weight: normal;");
             sb.AppendLine("    display: inline;");
-            sb.AppendLine("    vertical-align: super;");
+            sb.AppendLine("    vertical-align: baseline;");
+            sb.AppendLine("    position: relative;");
+            sb.AppendLine("    top: -0.35em;");
             sb.AppendLine("    font-size: 0.85em;");
             sb.AppendLine("    margin-right: 2pt;");
+            sb.AppendLine("}");
+
+            // The back-reference is an HTML navigation affordance, not document content. It
+            // belongs in the scrolling view; on a paginated page — a facsimile of paper — Word
+            // and LibreOffice print nothing there, so neither does this.
+            sb.AppendLine($".{prefix}footnotes .footnote-backref {{");
+            sb.AppendLine("    display: none;");
             sb.AppendLine("}");
 
             // Footnote content (inline with number)
@@ -3604,9 +3646,12 @@ namespace Docxodus
                     new XAttribute("data-footnote-id", footnoteId),
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
+                    // Word prints the note's reference MARK and nothing else — the gap to the text
+                    // is the note paragraph's own leading space, and there is no trailing period.
+                    // A paginated page is a facsimile of paper, so it prints the mark alone.
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-number"),
-                        new XText($"{displayNumber}. ")),
+                        new XText(displayNumber)),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content),

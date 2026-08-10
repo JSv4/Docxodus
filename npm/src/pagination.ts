@@ -1043,8 +1043,106 @@ export class PaginationEngine {
   }
 
   /**
+   * The separator band Word draws above a page's notes.
+   *
+   * `w:separator` and `w:continuationSeparator` are RUNS inside the reserved notes' paragraphs,
+   * so the rule sits on a text baseline and the space around it is the note font's own line box
+   * — which is why the band is a block with a line box rather than a bare rule with margins.
+   * A page that opens with note text carried over from the previous page shows the CONTINUATION
+   * separator, which spans the whole text column instead of the two-inch default.
+   */
+  private buildNoteSeparator(isContinuation: boolean): HTMLElement {
+    const band = document.createElement("div");
+    band.className = isContinuation
+      ? "footnote-separator footnote-separator-continuation"
+      : "footnote-separator";
+    band.appendChild(document.createElement("hr"));
+    return band;
+  }
+
+  /**
+   * Builds a page's note area: separator band, carried-over note text, then this page's notes.
+   *
+   * The SINGLE description of what that block contains. The height the flow loop reserves and
+   * the block the page actually draws used to be assembled by four separate copies of this
+   * markup, so "how tall are the notes" and "what do the notes look like" could — and did —
+   * drift apart. Everything that needs either now goes through here.
+   */
+  private buildNoteArea(
+    footnoteIds: string[],
+    continuation?: FootnoteContinuation | null,
+    partialFootnotes?: PartialFootnote[]
+  ): HTMLElement {
+    const hasContinuation = !!continuation && continuation.remainingElements.length > 0;
+    const partialById = new Map((partialFootnotes ?? []).map((p) => [p.footnoteId, p]));
+
+    const area = document.createElement("div");
+    area.className = `${this.cssPrefix}footnotes`;
+    area.appendChild(this.buildNoteSeparator(hasContinuation));
+
+    if (hasContinuation) {
+      const contWrapper = document.createElement("div");
+      contWrapper.className = "footnote-continuation";
+      for (const el of continuation!.remainingElements) {
+        contWrapper.appendChild(el.cloneNode(true));
+      }
+      area.appendChild(contWrapper);
+    }
+
+    for (const id of footnoteIds) {
+      const footnote = this.footnoteRegistry.get(id);
+      if (!footnote) continue;
+
+      const partial = partialById.get(id);
+      if (!partial) {
+        area.appendChild(footnote.cloneNode(true));
+        continue;
+      }
+
+      // A note split across pages: only the part that fits, in the same wrapper a whole note
+      // uses, so it measures and renders identically to one.
+      const partialDiv = document.createElement("div");
+      partialDiv.className = "footnote-item";
+      partialDiv.dataset.footnoteId = id;
+
+      const numberSpan = footnote.querySelector(".footnote-number");
+      if (numberSpan) partialDiv.appendChild(numberSpan.cloneNode(true));
+
+      const contentSpan = document.createElement("span");
+      contentSpan.className = "footnote-content";
+      for (const el of partial.fittingElements) contentSpan.appendChild(el.cloneNode(true));
+      partialDiv.appendChild(contentSpan);
+
+      area.appendChild(partialDiv);
+    }
+
+    return area;
+  }
+
+  /**
+   * Lays `element` out at `contentWidth` off-screen and returns its height in points.
+   *
+   * Measurement must happen in the SAME styling context the notes render in — `.page-footnotes`
+   * carries the note font size and line height — which {@link buildNoteArea} guarantees by
+   * building the real block.
+   */
+  private measureOffscreen(element: HTMLElement, contentWidth: number): number {
+    const host = document.createElement("div");
+    host.style.position = "absolute";
+    host.style.visibility = "hidden";
+    host.style.width = `${contentWidth}pt`;
+    host.style.left = "-9999px";
+    host.appendChild(element);
+
+    this.stagingElement.appendChild(host);
+    const heightPt = pxToPt(element.getBoundingClientRect().height);
+    this.stagingElement.removeChild(host);
+
+    return heightPt;
+  }
+
+  /**
    * Measures the height of footnotes for given IDs (in points).
-   * Creates a temporary container to measure the footnotes.
    * @param footnoteIds - IDs of footnotes to measure
    * @param contentWidth - Width for measurement
    * @param continuation - Optional continuation content to include first
@@ -1058,51 +1156,7 @@ export class PaginationEngine {
     if ((footnoteIds.length === 0 && !hasContinuation) || this.footnoteRegistry.size === 0) {
       return 0;
     }
-
-    // Measure in the SAME styling context the notes render in: `.page-footnotes` carries
-    // font-size 0.85em and line-height 1.4, so measuring without the class sizes the note
-    // block against body type and the reserve can never match what is drawn.
-    // Create a temporary measurement container
-    const measureContainer = document.createElement("div");
-    measureContainer.style.position = "absolute";
-    measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
-    measureContainer.style.left = "-9999px";
-    measureContainer.className = this.cssPrefix + "footnotes";
-
-    // Add separator line (same as will be rendered)
-    const hr = document.createElement("hr");
-    measureContainer.appendChild(hr);
-
-    // Add continuation content first (if any)
-    if (hasContinuation) {
-      const contWrapper = document.createElement("div");
-      contWrapper.className = "footnote-continuation";
-      for (const el of continuation!.remainingElements) {
-        contWrapper.appendChild(el.cloneNode(true));
-      }
-      measureContainer.appendChild(contWrapper);
-    }
-
-    // Add footnotes
-    for (const id of footnoteIds) {
-      const footnote = this.footnoteRegistry.get(id);
-      if (footnote) {
-        measureContainer.appendChild(footnote.cloneNode(true));
-      }
-    }
-
-    // Append to staging for measurement
-    this.stagingElement.appendChild(measureContainer);
-
-    // Measure
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-
-    // Clean up
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
+    return this.measureOffscreen(this.buildNoteArea(footnoteIds, continuation), contentWidth);
   }
 
   /**
@@ -1115,29 +1169,7 @@ export class PaginationEngine {
     if (!continuation || continuation.remainingElements.length === 0) {
       return 0;
     }
-
-    const measureContainer = document.createElement("div");
-    measureContainer.style.position = "absolute";
-    measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
-    measureContainer.style.left = "-9999px";
-    measureContainer.className = this.cssPrefix + "footnotes";
-
-    // Add separator line
-    const hr = document.createElement("hr");
-    measureContainer.appendChild(hr);
-
-    // Add continuation content
-    for (const el of continuation.remainingElements) {
-      measureContainer.appendChild(el.cloneNode(true));
-    }
-
-    this.stagingElement.appendChild(measureContainer);
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
+    return this.measureOffscreen(this.buildNoteArea([], continuation), contentWidth);
   }
 
   /**
@@ -1177,40 +1209,18 @@ export class PaginationEngine {
 
     const fits: HTMLElement[] = [];
     const overflow: HTMLElement[] = [];
-    let currentHeight = 0;
 
-    // Measure separator line height
-    const hrMeasure = document.createElement("div");
-    hrMeasure.style.position = "absolute";
-    hrMeasure.style.visibility = "hidden";
-    hrMeasure.style.width = `${contentWidth}pt`;
-    hrMeasure.style.left = "-9999px";
-    hrMeasure.className = this.cssPrefix + "footnotes";
-    const hr = document.createElement("hr");
-    hrMeasure.appendChild(hr);
-    this.stagingElement.appendChild(hrMeasure);
-    const hrHeight = pxToPt(hrMeasure.getBoundingClientRect().height);
-    this.stagingElement.removeChild(hrMeasure);
-
-    currentHeight = hrHeight;
-
-    // Also account for footnote number
-    const footnoteNumber = footnoteElement.querySelector(".footnote-number");
+    // The separator band is part of every note area, so its height is already spent before the
+    // first paragraph of this note can be placed.
+    let currentHeight = this.measureOffscreen(this.buildNoteArea([]), contentWidth);
 
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
 
-      // Measure this element
-      const measureContainer = document.createElement("div");
-      measureContainer.style.position = "absolute";
-      measureContainer.style.visibility = "hidden";
-      measureContainer.style.width = `${contentWidth}pt`;
-      measureContainer.style.left = "-9999px";
-      measureContainer.className = this.cssPrefix + "footnotes";
-      measureContainer.appendChild(child.cloneNode(true));
-      this.stagingElement.appendChild(measureContainer);
-      const childHeight = pxToPt(measureContainer.getBoundingClientRect().height);
-      this.stagingElement.removeChild(measureContainer);
+      const measureHost = document.createElement("div");
+      measureHost.className = `${this.cssPrefix}footnotes`;
+      measureHost.appendChild(child.cloneNode(true));
+      const childHeight = this.measureOffscreen(measureHost, contentWidth);
 
       if (currentHeight + childHeight <= availableHeightPt) {
         fits.push(child.cloneNode(true) as HTMLElement);
@@ -1234,20 +1244,10 @@ export class PaginationEngine {
     const footnote = this.footnoteRegistry.get(footnoteId);
     if (!footnote) return 0;
 
-    const measureContainer = document.createElement("div");
-    measureContainer.style.position = "absolute";
-    measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
-    measureContainer.style.left = "-9999px";
-    measureContainer.className = this.cssPrefix + "footnotes";
-    measureContainer.appendChild(footnote.cloneNode(true));
-
-    this.stagingElement.appendChild(measureContainer);
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
+    const host = document.createElement("div");
+    host.className = `${this.cssPrefix}footnotes`;
+    host.appendChild(footnote.cloneNode(true));
+    return this.measureOffscreen(host, contentWidth);
   }
 
   /**
@@ -1270,20 +1270,20 @@ export class PaginationEngine {
       return;
     }
 
-    // Create a set of partial footnote IDs for quick lookup
-    const partialFootnoteIds = new Set(partialFootnotes?.map(p => p.footnoteId) || []);
-
     // Calculate max height for footnotes area (content height minus margin for body content)
     const maxFootnoteHeight = Math.min(
       footnoteHeight,
       bands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO
     );
 
-    const footnotesDiv = document.createElement("div");
-    footnotesDiv.className = `${this.cssPrefix}footnotes`;
+    const footnotesDiv = this.buildNoteArea(footnoteIds, continuation, partialFootnotes);
     footnotesDiv.style.position = "absolute";
-    // Notes sit at the FOOT OF THE BODY BAND, not at the bottom margin: a footer taller than
-    // its margin raises that edge, and anchoring to the raw margin would draw notes over it.
+    // Word bottom-aligns the note area to the FOOT OF THE BODY BAND — the last note's line box
+    // ends on that edge. Two things follow, and both were wrong before: the anchor is the body
+    // band's bottom rather than the raw bottom margin (a footer taller than its margin raises
+    // it, and anchoring to the margin would draw notes over the footer), and the block must
+    // carry no trailing space of its own, or the whole note area floats above the edge it is
+    // anchored to — 7 px of `margin-bottom` on the last note lifted the separator with it.
     footnotesDiv.style.bottom = `${dims.pageHeight - (bands.bodyTop + bands.bodyHeight)}pt`;
     footnotesDiv.style.left = `${dims.marginLeft}pt`;
     footnotesDiv.style.width = `${dims.contentWidth}pt`;
@@ -1291,57 +1291,6 @@ export class PaginationEngine {
     // Constrain height and clip overflow to prevent footnotes covering body content
     footnotesDiv.style.maxHeight = `${maxFootnoteHeight}pt`;
     footnotesDiv.style.overflow = "hidden";
-
-    // Add separator line
-    const hr = document.createElement("hr");
-    footnotesDiv.appendChild(hr);
-
-    // Add continuation content first (if any)
-    if (hasContinuation) {
-      const contWrapper = document.createElement("div");
-      contWrapper.className = "footnote-continuation";
-      for (const el of continuation!.remainingElements) {
-        contWrapper.appendChild(el.cloneNode(true));
-      }
-      footnotesDiv.appendChild(contWrapper);
-    }
-
-    // Clone footnotes in order of appearance
-    for (const id of footnoteIds) {
-      // Check if this is a partial footnote
-      const partial = partialFootnotes?.find(p => p.footnoteId === id);
-      if (partial) {
-        // Render partial footnote (only the fitting elements)
-        const footnote = this.footnoteRegistry.get(id);
-        if (footnote) {
-          const partialDiv = document.createElement("div");
-          partialDiv.className = "footnote-item";
-          partialDiv.dataset.footnoteId = id;
-
-          // Add footnote number
-          const numberSpan = footnote.querySelector(".footnote-number");
-          if (numberSpan) {
-            partialDiv.appendChild(numberSpan.cloneNode(true));
-          }
-
-          // Add only the fitting content
-          const contentSpan = document.createElement("span");
-          contentSpan.className = "footnote-content";
-          for (const el of partial.fittingElements) {
-            contentSpan.appendChild(el.cloneNode(true));
-          }
-          partialDiv.appendChild(contentSpan);
-
-          footnotesDiv.appendChild(partialDiv);
-        }
-      } else {
-        // Render full footnote from registry
-        const footnote = this.footnoteRegistry.get(id);
-        if (footnote) {
-          footnotesDiv.appendChild(footnote.cloneNode(true));
-        }
-      }
-    }
 
     pageBox.appendChild(footnotesDiv);
   }

@@ -9,6 +9,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
 2. [Footnotes](#footnotes)
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
+   - [The Footnote Separator Is a Run, Not a Rule](#the-footnote-separator-is-a-run-not-a-rule)
 3. [Package Output](#package-output)
    - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
 4. [Contributing](#contributing)
@@ -1086,6 +1087,66 @@ rather than only under `PaginationMode.Paginated`. `npm/src/page-geometry.ts` re
 geometry outside Paginated mode), `HC058`/`HC059` (fixed vs AutoFit table layout);
 `npm/tests/editor-page-geometry.spec.ts` — the end-to-end assertion that a 66pt heading on a
 390px viewport leaves nothing overflowing the sheet.
+
+---
+
+### The Footnote Separator Is a Run, Not a Rule
+
+**Status:** Fixed (August 2026, issue #378)
+**Test File:** generated — `npm/tests/docx-footnote-fixture.ts`
+
+#### The Problem
+
+The paginated note area sat 14 px too high on a Word-default page. The separator's *width* had
+already been corrected to Word's two-inch default, which made the residual look like a second,
+unrelated width problem; it was not. The note area is bottom-aligned to the body text band, so
+every point of slack anywhere inside the block lifts everything above it by the same amount —
+the separator's position is a function of the block's height, not of its own styling.
+
+#### What the spec says
+
+ECMA-376 §17.11.23 defines `w:separator` as a **run-level** mark: the separator note's paragraph
+contains a run that "shall contain the horizontal line". It is therefore laid out like any other
+line of text, and the space above and below the rule is that paragraph's own line box.
+§17.11.5 `w:continuationSeparator` is the same shape for a page that opens with carried-over note
+text; Word draws it across the full text column rather than at the two-inch default length.
+
+The spec does not state where in the line the rule sits. LibreOffice draws it slightly above the
+baseline; Docxodus draws it on the baseline, which lands within ~2 px at 96 DPI.
+
+| Renderer | Separator rule (px from page top, 1 in margins, 11 in page) | Note text ink |
+|---|---:|---:|
+| LibreOffice 25.8 | 936–937 | 946–955 |
+| Docxodus (before) | 922 | 935–948 |
+| Docxodus (after) | 939 | 944–955 |
+
+#### Analysis
+
+Three pieces of slack, all of them CSS habits rather than OOXML:
+
+1. `.footnote-item { margin-bottom: 4pt }` put dead space *below* the last note — beneath content
+   whose bottom edge is the anchor. Spacing between notes belongs on `+ .footnote-item`.
+2. The separator was a bare 1 px rule with `margin: 0 0 6pt 0` — nothing above it, a tuned gap
+   below it — instead of a line box with the rule on its baseline.
+3. `vertical-align: super` on the note's reference mark grows the line box it sits in, so every
+   note carried leading the document never asked for. A relative offset raises the glyph without
+   doing that.
+4. `.page-footnotes { line-height: 1.4 }` overrode the note style's own spacing. Word's note
+   paragraphs are single-spaced unless their style says otherwise, and `w:lineRule="auto"` at 240
+   means exactly the font's line box — `normal` in CSS.
+
+A separate trap: in Blink a block whose only inline-level content is an **atomic** inline (here
+the rule) gets no strut, so the separator band collapses to the rule's own 1 px. A zero-width
+word joiner in generated content makes the line real.
+
+#### Relevant Code
+
+`Docxodus/WmlToHtmlConverter.cs` — `GenerateFootnoteCss`;
+`npm/src/pagination.ts` — `buildNoteArea`/`buildNoteSeparator`, the single builder the renderer
+and every measurement share;
+`npm/tests/pagination-footnote-geometry.spec.ts` — separator and note-block coordinates pinned
+separately;
+`Docxodus.Tests/HtmlConversionOpsTests.cs` — `HCO086` (width), `HCO091` (composition).
 
 ---
 

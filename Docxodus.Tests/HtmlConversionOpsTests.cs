@@ -326,6 +326,53 @@ public class HtmlConversionOpsTests
         Assert.DoesNotContain("width: 33%;", html);
     }
 
+    /// <summary>
+    /// Issue #378 — the note area's composition, which is what puts the separator where it goes.
+    /// </summary>
+    /// <remarks>
+    /// The block is bottom-aligned to the body band, so its height is its position: every point
+    /// of slack inside it lifts the separator by the same amount. Three pieces of slack moved the
+    /// separator 14 px up the page — a trailing margin below the LAST note, a bare rule with a
+    /// hard-coded gap under it instead of the separator paragraph's own line, and a
+    /// line-box-inflating `vertical-align: super` on the reference mark. This pins the shape that
+    /// replaced them; `pagination-footnote-geometry.spec.ts` pins the resulting coordinates.
+    /// </remarks>
+    [Fact]
+    public void HCO091_PaginatedNoteArea_HasNoSlackOfItsOwn()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(DocumentOnlyDocxBytes("Body with note CSS"),
+            new HtmlConversionOptions
+            {
+                PaginationMode = (int)PaginationMode.Paginated,
+                RenderFootnotesAndEndnotes = true,
+                FabricateCssClasses = false,
+            });
+
+        // Spacing goes BETWEEN notes, so the last note ends on the edge the block is anchored to.
+        Assert.Contains(".footnote-item + .footnote-item {", html);
+        Assert.DoesNotContain("margin-bottom: 4pt;", html);
+
+        // The separator is a line of the note font with the rule on its baseline, not a rule
+        // with tuned margins. The word joiner is what makes that line real in Blink.
+        Assert.Contains(".footnote-separator::after {", html);
+        Assert.Contains("content: \"\\2060\";", html);
+        Assert.Contains("vertical-align: baseline;", html);
+        Assert.DoesNotContain("margin: 0 0 6pt 0;", html);
+
+        // `w:continuationSeparator` spans the whole text column.
+        Assert.Contains(".footnote-separator-continuation hr {", html);
+
+        // The reference mark must not grow the note's line box.
+        Assert.DoesNotContain("vertical-align: super;", html);
+
+        // Note paragraphs are single-spaced unless their own style says otherwise; a fixed 1.4
+        // overrode that for every note and, on a bottom-anchored block, moved the separator too.
+        Assert.DoesNotContain("line-height: 1.4;", html);
+
+        // A paginated page is a facsimile of paper: no HTML navigation affordance on it.
+        Assert.Contains(".footnote-backref {", html);
+    }
+
     [Theory]
     [InlineData("col", "column")]
     [InlineData("bar", "bar")]

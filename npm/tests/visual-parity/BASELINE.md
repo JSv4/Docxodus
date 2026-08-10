@@ -74,10 +74,10 @@ were added to the repository.
 | Paired pages | 20 | 21 | 21 |
 | Conversion errors | 0 | 0 | 0 |
 | Page-count mismatches | 1 | 0 | 0 |
-| Case severity | 1 close, 1 minor, 0 major, 10 severe | 2 close, 1 minor, 0 major, 9 severe | 4 close, 1 minor, 0 major, 7 severe |
-| Page severity | 1 close, 1 minor, 2 major, 16 severe | 2 close, 1 minor, 1 major, 17 severe | 13 close, 1 minor, 0 major, 7 severe |
-| Mean SSIM | 0.974586 | 0.978298 | 0.979855 |
-| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.835366 |
+| Case severity | 1 close, 1 minor, 0 major, 10 severe | 2 close, 1 minor, 0 major, 9 severe | 5 close, 1 minor, 0 major, 6 severe |
+| Page severity | 1 close, 1 minor, 2 major, 16 severe | 2 close, 1 minor, 1 major, 17 severe | 14 close, 1 minor, 0 major, 6 severe |
+| Mean SSIM | 0.974586 | 0.978298 | 0.979980 |
+| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.854069 |
 
 Resolved items:
 
@@ -103,6 +103,14 @@ Resolved items:
    `landscape-section` improves as a side effect (0.91746 → 0.92607, 0.50174 → 0.60042). Story
    inheritance and page counts are unchanged, which the generated regression asserts alongside the
    coordinates.
+5. **Footnote block placement (issue #378).** The note area is bottom-aligned to the body band, so
+   the block's HEIGHT is its position — which is why the note text and the already-correct
+   two-inch separator were both about 13 px too high, and why fixing the separator's width could
+   not move it. Removing the block's own slack (a trailing margin below the last note, a bare rule
+   with a tuned gap instead of the separator paragraph's line, a line-box-inflating superscript
+   mark, and a fixed 1.4 line-height overriding the note style's single spacing) lands the
+   separator within 2 px of LibreOffice's and the note text's bottom edge exactly on it. The case
+   moves from severe (SSIM 0.99218, ink F1 0.56597) to **close** (0.99481 / 0.95875).
 
 ## Current case results and triage
 
@@ -121,7 +129,7 @@ single blank or disjoint page rather than averaging it away.
 | chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
 | shape | 1/1 | severe | 0.96967 | 0.50719 | Textbox content exists but is roughly 5 px right and 13 px down with a small size difference: drawing-anchor geometry. |
 | fields-and-tabs | 1/1 | severe | 0.88672 | 0.30164 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
-| footnote | 1/1 | severe | 0.99218 | 0.56597 | Separator width now matches Word/LibreOffice's two-inch default; the note block remains about 13 px too high. |
+| footnote | 1/1 | close | 0.99481 | 0.95875 | Note block composition corrected (issue #378): the separator is a line with the rule on its baseline, spacing falls between notes, and the last note ends on the body band's bottom edge. |
 | tracked-deletion | 1/1 | severe | 0.93177 | 0.46817 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. |
 
 ## Fixes justified by the baseline
@@ -158,13 +166,12 @@ renderer heuristic.
 
 ## Prioritized next work
 
-The former first priority (blank charts), the PR #372 rerun, aligned tab geometry, and
-header/body/footer vertical placement (issue #377) are resolved above. The remaining order is:
+The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
+header/body/footer vertical placement (issue #377), and footnote block placement (issue #378) are
+resolved above. The remaining order is:
 
 1. Correct drawing-anchor offsets with a generated textbox geometry regression.
-2. Correct footnote block vertical placement independently of the now-fixed separator width
-   (issue #378).
-3. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
+2. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
    treating paragraph-wrap differences as renderer regressions (issue #379).
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
