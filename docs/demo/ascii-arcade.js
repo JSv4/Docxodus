@@ -820,7 +820,7 @@ function raycastCart(pack) {
     for (const e of enemies) {
       if (e.hp <= 0) continue;
       const k = ENEMY_KINDS[e.kind];
-      sprites.push({ x: e.x, y: e.y, ch: k.glyph, ink: e.flashT > 0 ? 'FFFFFF' : k.ink });
+      sprites.push({ x: e.x, y: e.y, ch: k.glyph, ink: e.flashT > 0 ? 'FFFFFF' : k.ink, enemy: true });
     }
     const inv = 1 / (plx * dy - dx * ply);
     sprites.sort((a, b) =>
@@ -831,15 +831,26 @@ function raycastCart(pack) {
       const ty = inv * (-ply * rx + plx * ry);
       if (ty <= 0.2) continue;
       const screen = Math.floor((VIEW_W / 2) * (1 + tx / ty));
-      const size = Math.max(1, Math.min(6, Math.round((5 * S) / ty)));
-      const y1 = FIELD_TOP + Math.floor(FIELD_ROWS / 2) - Math.floor(size / 3);
-      for (let sxp = screen - Math.floor(size / 2); sxp <= screen + Math.floor(size / 2); sxp++) {
+      // Pickups stay small floating tokens; enemies LOOM — twice the width
+      // cap, stood on the floor line at their distance (the bottom of the
+      // wall slice), with a narrowed top row so a close one reads as a
+      // head-and-shoulders silhouette instead of a square.
+      const cap = s.enemy ? 12 : 6;
+      const size = Math.max(1, Math.min(cap, Math.round((5 * S) / ty)));
+      const hgt = s.enemy ? Math.max(1, Math.round(size * 1.1)) : Math.max(1, Math.floor(size * 0.7));
+      const wallH = Math.min(FIELD_ROWS, Math.round((FIELD_ROWS * S) / ty));
+      const floorLine = FIELD_TOP + Math.floor((FIELD_ROWS + wallH) / 2);
+      const y1 = s.enemy
+        ? floorLine - hgt
+        : FIELD_TOP + Math.floor(FIELD_ROWS / 2) - Math.floor(size / 3);
+      const half = Math.floor(size / 2);
+      for (let sxp = screen - half; sxp <= screen + half; sxp++) {
         if (sxp < 0 || sxp >= VIEW_W || ty >= zbuf[sxp]) continue;
-        for (let syp = y1; syp < y1 + Math.max(1, Math.floor(size * 0.7)); syp++) {
-          if (syp >= FIELD_TOP && syp < FIELD_TOP + FIELD_ROWS) {
-            g.chars[syp][1 + sxp] = s.ch;
-            g.colors[syp][1 + sxp] = s.ink;
-          }
+        for (let syp = y1; syp < y1 + hgt; syp++) {
+          if (syp < FIELD_TOP || syp >= FIELD_TOP + FIELD_ROWS) continue;
+          if (s.enemy && hgt >= 3 && syp === y1 && Math.abs(sxp - screen) > Math.max(1, half >> 1)) continue;
+          g.chars[syp][1 + sxp] = s.ch;
+          g.colors[syp][1 + sxp] = s.ink;
         }
       }
     }
