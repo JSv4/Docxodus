@@ -179,14 +179,32 @@ public class IrAlignerAdversarialTests
         // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 12× the CPU time
         // (a true O(n²) regression reads ~16×). Process CPU time keeps shared-runner scheduling noise
         // from looking like algorithmic work.
-        double small = BestSampleCpuMs(500);
-        double large = BestSampleCpuMs(2000);
-        double ratio = large / Math.Max(small, 0.0001);
+        // Best of up to three independent rounds. Scheduling noise on a shared runner can only ADD CPU
+        // time, so it can only inflate the ratio — which makes the MINIMUM across rounds the closest
+        // estimate of the true algorithmic one, and makes a single noisy round unable to fail the test.
+        // The guard keeps its teeth: a real O(n²) regression reads ~16x in EVERY round, so all three
+        // have to exceed the limit before this fails. Rounds stop as soon as one comes in under.
+        const double limit = 12.0;
+        const int rounds = 3;
 
-        _out.WriteLine($"Scale guard CPU: 500-para = {small:F2} ms, 2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
-        Assert.True(ratio <= 12.0,
-            $"Align CPU-time ratio {ratio:F2}x for 4x input exceeds the 12x anti-O(n²) guard " +
-            $"(500={small:F2}ms, 2000={large:F2}ms).");
+        double bestRatio = double.MaxValue, bestSmall = 0, bestLarge = 0;
+        for (int round = 0; round < rounds; round++)
+        {
+            double small = BestSampleCpuMs(500);
+            double large = BestSampleCpuMs(2000);
+            double ratio = large / Math.Max(small, 0.0001);
+            _out.WriteLine($"Scale guard CPU round {round + 1}: 500-para = {small:F2} ms, " +
+                $"2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
+
+            if (ratio < bestRatio)
+                (bestRatio, bestSmall, bestLarge) = (ratio, small, large);
+            if (bestRatio <= limit)
+                break;
+        }
+
+        Assert.True(bestRatio <= limit,
+            $"Align CPU-time ratio {bestRatio:F2}x for 4x input exceeds the {limit:F0}x anti-O(n²) guard " +
+            $"in every one of {rounds} rounds (best round: 500={bestSmall:F2}ms, 2000={bestLarge:F2}ms).");
     }
 
     /// <summary>

@@ -95,7 +95,7 @@ public class DocxCompareTests
     }
 
     [Fact]
-    public void DocxDiffBranch_ProducesSameBytesAsDirectDocxDiff()
+    public void DocxDiffBranch_ProducesSamePackageAsDirectDocxDiff()
     {
         var left = Doc("The quick brown fox");
         var right = Doc("The quick red fox");
@@ -104,7 +104,9 @@ public class DocxCompareTests
         var viaFacade = DocxCompare.Compare(left, right, ComparisonEngine.DocxDiff, settings);
         var direct = DocxDiff.Compare(left, right, DocxCompare.ToDocxDiffSettings(settings));
 
-        Assert.Equal(direct.DocumentByteArray, viaFacade.DocumentByteArray);
+        // Part by part, not raw package bytes: two separately produced ZIPs also differ in the entry
+        // timestamps the container writes, which says nothing about the facade. See PackageEquivalence.
+        PackageEquivalence.AssertSamePackage(direct, viaFacade);
     }
 
     [Theory]
