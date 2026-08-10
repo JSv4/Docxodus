@@ -2,10 +2,12 @@ import { test, expect, Page } from '@playwright/test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import {
+  FOOTER_DISTANCE_PT,
   MARGIN_PT,
   PAGE_HEIGHT_PT,
   SEPARATOR_WIDTH_IN,
   generateFootnoteDocx,
+  type FootnoteFixtureOptions,
 } from './docx-footnote-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +48,10 @@ interface NoteGeometry {
   ruleBottom: number;
   ruleWidth: number;
   noteLineHeight: number;
+  footerTop: number;
+  footerBottom: number;
+  bodyIds: string[];
+  noteIds: string[];
   items: Array<{ top: number; bottom: number; marginTop: number }>;
 }
 
@@ -57,6 +63,7 @@ const MEASURE = () => {
     const body = box.querySelector('.page-content') as HTMLElement;
     const sep = notes?.querySelector('.footnote-separator') as HTMLElement | null;
     const rule = sep?.querySelector('hr') as HTMLElement | null;
+    const footer = box.querySelector('.page-footer') as HTMLElement | null;
     const rect = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
     // One line of the note area's own font, measured rather than parsed: the area's resolved
     // `line-height` is `normal`, which is not a number the document can state for it.
@@ -82,6 +89,12 @@ const MEASURE = () => {
       ruleBottom: rect(rule)?.bottom ?? NaN,
       ruleWidth: rect(rule)?.width ?? NaN,
       noteLineHeight,
+      footerTop: rect(footer)?.top ?? NaN,
+      footerBottom: rect(footer)?.bottom ?? NaN,
+      bodyIds: Array.from(body.querySelectorAll('[data-footnote-id]'))
+        .map((el) => el.getAttribute('data-footnote-id')!),
+      noteIds: Array.from(notes?.querySelectorAll('.footnote-item') ?? [])
+        .map((el) => (el as HTMLElement).dataset.footnoteId!),
       items: Array.from(notes?.querySelectorAll('.footnote-item') ?? []).map((el) => ({
         top: el.getBoundingClientRect().top,
         bottom: el.getBoundingClientRect().bottom,
@@ -91,20 +104,24 @@ const MEASURE = () => {
   });
 };
 
-async function paginate(page: Page, docx: Uint8Array): Promise<NoteGeometry[]> {
+async function paginate(
+  page: Page,
+  docx: Uint8Array,
+  renderHeadersAndFooters = false,
+): Promise<NoteGeometry[]> {
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
 
-  const html = await page.evaluate((bytes) => {
+  const html = await page.evaluate(({ bytes, headersAndFooters }) => {
     const c = (window as any).Docxodus.DocumentConverter;
     return c.ConvertDocxToHtmlComplete(
       new Uint8Array(bytes), 'Document', 'docx-', true, '', -1, 'comment-',
       /* paginationMode */ 1, /* paginationScale */ 1, 'page-',
       false, 0, 'annot-',
-      /* footnotes */ true, /* headersAndFooters */ false,
+      /* footnotes */ true, headersAndFooters,
       false, false, false,
     ) as string;
-  }, Array.from(docx));
+  }, { bytes: Array.from(docx), headersAndFooters: renderHeadersAndFooters });
   expect(html.startsWith('{'), `conversion failed: ${html.slice(0, 300)}`).toBe(false);
 
   await page.setContent(html);
@@ -186,6 +203,77 @@ test.describe('Paginated footnote block geometry', () => {
       expect(p.bodyBottom, `page ${p.page} body vs notes`).toBeLessThanOrEqual(p.notesTop + TOL);
     }
   });
+
+  /**
+   * The reserve the flow loop computes and the block the page draws are built by one builder, so
+   * they cannot disagree — but only measurement proves it. Several multi-line notes spread across
+   * pages is the shape that produced ~134 pt of superimposed body and note glyphs on a real
+   * 94-footnote document, and it is also the shape most sensitive to the note area's leading,
+   * which this change took from a fixed 1.4 to the note style's own single spacing.
+   *
+   * Citations are spread out on purpose. Crowding every note onto one page instead runs into the
+   * flow loop's separate 60% note-area cap, which admits more notes than it leaves room for and
+   * clips the overflow — reproduced identically before this branch's changes, so it is a
+   * pre-existing question about the CAP, not about the block's composition, and not this test's.
+   */
+  test('many multi-line notes still reserve exactly the space they render in',
+    async ({ page }) => {
+      const options: FootnoteFixtureOptions = {
+        paragraphs: Array.from({ length: 40 }, (_unused, i) => (i % 4 === 0 ? 1 : 0)),
+        linesPerNote: 3,
+      };
+      const pages = await paginate(page, generateFootnoteDocx(options));
+
+      expect(pages.length).toBeGreaterThan(1);
+      for (const p of pages) {
+        if (Number.isNaN(p.notesTop)) continue;
+        expect(p.bodyBottom, `page ${p.page} body overlaps its notes`)
+          .toBeLessThanOrEqual(p.notesTop + TOL);
+        expect(p.notesBottom, `page ${p.page} note block bottom`)
+          .toBeCloseTo(p.boxTop + (PAGE_HEIGHT_PT - MARGIN_PT) * PT_TO_PX, 0);
+        expect(p.items[p.items.length - 1].bottom, `page ${p.page} last note bottom`)
+          .toBeCloseTo(p.notesBottom, 0);
+      }
+
+      // Reserving space must not lose a note: everything cited has to render somewhere.
+      const cited = new Set(pages.flatMap((p) => p.bodyIds));
+      const rendered = new Set(pages.flatMap((p) => p.noteIds));
+      expect(cited.size).toBe(10);
+      expect([...cited].filter((id) => !rendered.has(id)), 'cited but never rendered').toEqual([]);
+    });
+});
+
+/**
+ * The note area follows the BODY BAND's bottom edge, not the raw bottom margin. The two coincide
+ * on an ordinary page, which is why this needs a footer tall enough to reach above its own margin:
+ * that raises the body band's bottom, and an anchor left on `w:bottom` would draw the notes over
+ * the footer. It is the seam between issues #377 and #378, so it gets its own document.
+ */
+test.describe('Notes against a footer that outgrows its margin', () => {
+  test('the note block ends where the body band ends, above the bottom margin',
+    async ({ page }) => {
+      const pages = await paginate(
+        page,
+        generateFootnoteDocx({ paragraphs: [1], footerLines: 6 }),
+        /* renderHeadersAndFooters */ true,
+      );
+      const p = pages[0];
+
+      expect(Number.isNaN(p.footerTop), 'the fixture must render a footer').toBe(false);
+      const footerHeight = p.footerBottom - p.footerTop;
+      const footerReach = FOOTER_DISTANCE_PT * PT_TO_PX + footerHeight;
+      // If the story stopped overflowing its margin, the rest of this test would pass vacuously.
+      expect(footerReach, 'the footer must reach past the bottom margin')
+        .toBeGreaterThan(MARGIN_PT * PT_TO_PX);
+
+      expect(p.notesBottom, 'note block bottom vs the body band bottom the footer raised')
+        .toBeCloseTo(p.boxBottom - footerReach, 0);
+      // The discriminating assertion: anchored to `w:bottom` the block would end lower than this.
+      expect(p.boxBottom - p.notesBottom, 'notes must clear the raw bottom margin')
+        .toBeGreaterThan(MARGIN_PT * PT_TO_PX + 1);
+      expect(p.notesBottom, 'notes must not overlap the footer band')
+        .toBeLessThanOrEqual(p.footerTop + TOL);
+    });
 });
 
 /**

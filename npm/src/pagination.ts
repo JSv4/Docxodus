@@ -1078,6 +1078,11 @@ export class PaginationEngine {
 
     const area = document.createElement("div");
     area.className = `${this.cssPrefix}footnotes`;
+    // Establishes a block formatting context, exactly as the rendered block does. Without it a
+    // margin on the first or last child would collapse OUT of the measured box and not out of the
+    // rendered one — the measure-versus-render drift this builder exists to prevent, and the very
+    // thing a future `margin` on `.footnote-item` would reintroduce.
+    area.style.overflow = "hidden";
     area.appendChild(this.buildNoteSeparator(hasContinuation));
 
     if (hasContinuation) {

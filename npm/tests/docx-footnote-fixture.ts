@@ -25,7 +25,20 @@ export interface FootnoteFixtureOptions {
   linesPerNote?: number;
   /** Bottom margin in twips, when a test needs the body band's bottom edge to move. */
   marginBottomTwips?: number;
+  /**
+   * Paragraphs in a default footer story, or 0 for no footer at all.
+   *
+   * Enough of them, against the default 1 inch bottom margin and 0.5 inch footer distance, and the
+   * footer reaches ABOVE its margin and raises the body band's bottom edge — which is the only
+   * shape that can tell "the notes are anchored to the body band" apart from "the notes are
+   * anchored to the bottom margin".
+   */
+  footerLines?: number;
 }
+
+/** `w:pgMar/@w:footer` in twips: the distance from the paper's bottom edge to the footer story. */
+export const FOOTER_DISTANCE_TWIPS = 720;
+export const FOOTER_DISTANCE_PT = FOOTER_DISTANCE_TWIPS / 20;
 
 function noteBody(index: number, lines: number): string {
   return Array.from({ length: lines }, (_, i) =>
@@ -37,7 +50,9 @@ function noteBody(index: number, lines: number): string {
 }
 
 export function generateFootnoteDocx(options: FootnoteFixtureOptions): Uint8Array {
-  const { paragraphs, linesPerNote = 1, marginBottomTwips = MARGIN_TWIPS } = options;
+  const {
+    paragraphs, linesPerNote = 1, marginBottomTwips = MARGIN_TWIPS, footerLines = 0,
+  } = options;
 
   let nextNoteId = 1;
   const notes: string[] = [];
@@ -73,7 +88,8 @@ export function generateFootnoteDocx(options: FootnoteFixtureOptions): Uint8Arra
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
-  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>${footerLines > 0 ? `
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>` : ''}
 </Types>`),
     },
     {
@@ -89,7 +105,8 @@ export function generateFootnoteDocx(options: FootnoteFixtureOptions): Uint8Arra
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/>
   <Relationship Id="rId2" Type="${R_NS}/settings" Target="settings.xml"/>
-  <Relationship Id="rId3" Type="${R_NS}/footnotes" Target="footnotes.xml"/>
+  <Relationship Id="rId3" Type="${R_NS}/footnotes" Target="footnotes.xml"/>${footerLines > 0 ? `
+  <Relationship Id="rId4" Type="${R_NS}/footer" Target="footer1.xml"/>` : ''}
 </Relationships>`),
     },
     {
@@ -122,15 +139,22 @@ export function generateFootnoteDocx(options: FootnoteFixtureOptions): Uint8Arra
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="${W_NS}">${reserved}${notes.join('')}</w:footnotes>`),
     },
+    ...(footerLines > 0 ? [{
+      name: 'word/footer1.xml',
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="${W_NS}">${Array.from({ length: footerLines }, (_unused, i) =>
+  `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>` +
+  `<w:r><w:t>Footer line ${i + 1}</w:t></w:r></w:p>`).join('')}</w:ftr>`),
+    }] : []),
     {
       name: 'word/document.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>
   ${body}
-  <w:sectPr>
+  <w:sectPr>${footerLines > 0 ? '<w:footerReference w:type="default" r:id="rId4"/>' : ''}
     <w:pgSz w:w="${PAGE_WIDTH_TWIPS}" w:h="${PAGE_HEIGHT_TWIPS}"/>
     <w:pgMar w:top="${MARGIN_TWIPS}" w:right="${MARGIN_TWIPS}" w:bottom="${marginBottomTwips}"
-             w:left="${MARGIN_TWIPS}" w:header="720" w:footer="720" w:gutter="0"/>
+             w:left="${MARGIN_TWIPS}" w:header="720" w:footer="${FOOTER_DISTANCE_TWIPS}" w:gutter="0"/>
     <w:cols w:space="720"/>
   </w:sectPr>
 </w:body></w:document>`),
