@@ -251,7 +251,7 @@ public class HtmlConversionOpsTests
         Assert.Equal(alignment, (string?)tab.Attribute("data-docx-tab"));
         Assert.Equal(expectedTabWidth, (string?)tab.Attribute("data-docx-tab-width"));
         Assert.Contains(expectedPrecedingWidth, (string?)tab.Parent!.Attribute("style"));
-        Assert.Contains(after, tab.Parent!.Parent!.Value);
+        Assert.Contains($"iiii {after}", tab.Parent!.Parent!.Value);
     }
 
     [Fact]

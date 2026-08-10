@@ -4439,9 +4439,10 @@ namespace Docxodus
                             else
                                 span = new XElement(Xhtml.span, new XEntity("#x200e")); // LRM
 #else
-                // The tab advance is the box itself. A nonbreaking-space child adds an
-                // unmeasured glyph after that advance and shifts every aligned following run.
-                span = new XElement(Xhtml.span, new XText(string.Empty));
+                // The tab advance is the box itself. Keep a collapsible space for DOM/plain-text
+                // separation without using the old nonbreaking glyph, which could add an
+                // unmeasured advance after the box and shift the following run.
+                span = new XElement(Xhtml.span, new XText(" "));
 #endif
                 style.Add("display", "inline-block");
                 style.Add("padding", "0 0 0 0");
