@@ -103,6 +103,12 @@ Resolved items:
    `landscape-section` improves as a side effect (0.91746 → 0.92607, 0.50174 → 0.60042). Story
    inheritance and page counts are unchanged, which the generated regression asserts alongside the
    coordinates.
+5. **DrawingML textbox anchor geometry.** `DB011-Body-With-Shape.docx` now honors its
+   column-centered, margin-relative-width and paragraph-offset geometry. The rendered box moves
+   from `(273,113)–(520,202)` to `(268,133)–(524,222)`, versus LibreOffice's
+   `(268,132)–(524,237)`: horizontal bounds match exactly and the vertical origin is within 1 px.
+   SSIM improves from 0.96967 to 0.97428 and ink F1 from 0.50719 to 0.63049. The remaining height
+   difference is auto-fit line geometry, independent of the now-correct anchor origin and width.
 
 ## Current case results and triage
 
@@ -119,7 +125,7 @@ single blank or disjoint page rather than averaging it away.
 | running-content | 5/5 | close | 0.99921 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved the vertical placement of the inherited stories themselves. |
 | inline-image | 1/1 | severe | 0.93660 | 0.64760 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. |
 | chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
-| shape | 1/1 | severe | 0.96967 | 0.50719 | Textbox content exists but is roughly 5 px right and 13 px down with a small size difference: drawing-anchor geometry. |
+| shape | 1/1 | severe | 0.97428 | 0.63049 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
 | fields-and-tabs | 1/1 | severe | 0.88672 | 0.30164 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
 | footnote | 1/1 | severe | 0.99218 | 0.56597 | Separator width now matches Word/LibreOffice's two-inch default; the note block remains about 13 px too high. |
 | tracked-deletion | 1/1 | severe | 0.93177 | 0.46817 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. |
@@ -150,6 +156,12 @@ single blank or disjoint page rather than averaging it away.
    number lands within 1.5 px of the 9350-twip target and the leader spans the full gap. The global
    pixel scores above remain dominated by line-height, hyperlink-style, and font differences;
    LibreOffice is retained as a comparison implementation rather than used to hide valid print ink.
+6. **DrawingML textbox anchor geometry.** The converter preserves positioning bases, offsets,
+   alignments, extents, relative sizes, wrap clearances, and `wps:bodyPr` insets independently.
+   Pagination resolves page/margin/column coordinates against the final page box and
+   paragraph/line/character coordinates against the laid-out anchor, then promotes the object out
+   of the clipped text column. Generated DOCX browser tests pin outer and inner coordinates for all
+   supported bases; the tracked shape fixture supplies the separate pixel comparison above.
 
 An attempted explicit `Calibri Light -> Carlito` browser fallback was rejected: it worsened the
 accepted-revision case (SSIM 0.93177 to 0.92905; ink F1 0.46817 to 0.42477) despite a small SSIM gain
@@ -158,13 +170,13 @@ renderer heuristic.
 
 ## Prioritized next work
 
-The former first priority (blank charts), the PR #372 rerun, aligned tab geometry, and
-header/body/footer vertical placement (issue #377) are resolved above. The remaining order is:
+The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
+header/body/footer vertical placement (issue #377), and DrawingML textbox anchor geometry are
+resolved above. The remaining order is:
 
-1. Correct drawing-anchor offsets with a generated textbox geometry regression.
-2. Correct footnote block vertical placement independently of the now-fixed separator width
+1. Correct footnote block vertical placement independently of the now-fixed separator width
    (issue #378).
-3. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
+2. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
    treating paragraph-wrap differences as renderer regressions (issue #379).
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
