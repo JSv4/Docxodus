@@ -68,6 +68,12 @@ The complete 12-case corpus was rerun after rebuilding the production WASM bundl
 report remained outside the checkout under `/tmp`; no benchmark artifacts or additional corpus files
 were added to the repository.
 
+`Current` is one clean-worktree rerun of the whole corpus on this branch after it merged `main`, so
+it measures the running-content fix (issue #377) and the DrawingML anchor fix (PR #381) TOGETHER
+rather than splicing two separately measured runs. The two fixes touch disjoint cases, and every
+per-case figure below reproduced its own branch's measurement exactly; only the corpus-wide means
+move.
+
 | Signal | Initial | After PRs #372–#374 | Current |
 |---|---:|---:|---:|
 | Cases | 12 | 12 | 12 |
@@ -76,8 +82,8 @@ were added to the repository.
 | Page-count mismatches | 1 | 0 | 0 |
 | Case severity | 1 close, 1 minor, 0 major, 10 severe | 2 close, 1 minor, 0 major, 9 severe | 4 close, 1 minor, 0 major, 7 severe |
 | Page severity | 1 close, 1 minor, 2 major, 16 severe | 2 close, 1 minor, 1 major, 17 severe | 13 close, 1 minor, 0 major, 7 severe |
-| Mean SSIM | 0.974586 | 0.978298 | 0.979855 |
-| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.835366 |
+| Mean SSIM | 0.974586 | 0.978298 | 0.980074 |
+| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.841237 |
 
 Resolved items:
 
