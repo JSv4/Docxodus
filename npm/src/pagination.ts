@@ -1942,6 +1942,213 @@ export class PaginationEngine {
   }
 
   /**
+   * Resolves floating DrawingML objects after their anchor paragraphs have landed on a page.
+   *
+   * The converter deliberately carries the OOXML bases and offsets as data instead of flattening
+   * them into CSS: page/margin/column bases belong to the page, while paragraph/line/character
+   * bases belong to the laid-out anchor. Once both coordinate systems exist, promote the object
+   * from the clipped text column into the page box and position it in one shared point space.
+   */
+  private positionDrawingAnchors(
+    pageBox: HTMLElement,
+    contentArea: HTMLElement,
+    dims: PageDimensions,
+    pageNumber: number,
+  ): void {
+    const anchors = Array.from(
+      contentArea.querySelectorAll<HTMLElement>('[data-docx-drawing-anchor="true"]'),
+    );
+    if (anchors.length === 0) return;
+
+    const pageRect = pageBox.getBoundingClientRect();
+    const pixelsPerPoint = pageRect.width / dims.pageWidth;
+    if (!(pixelsPerPoint > 0)) return;
+
+    for (const anchor of anchors) {
+      const staticRect = anchor.getBoundingClientRect();
+      const paragraph = anchor.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6');
+      const paragraphRect = paragraph?.getBoundingClientRect() ?? staticRect;
+      const toPageX = (x: number) => (x - pageRect.left) / pixelsPerPoint;
+      const toPageY = (y: number) => (y - pageRect.top) / pixelsPerPoint;
+
+      const context = {
+        staticLeft: toPageX(staticRect.left),
+        staticTop: toPageY(staticRect.top),
+        lineHeight: paragraph
+          ? (parseFloat(getComputedStyle(paragraph).lineHeight) || staticRect.height) / pixelsPerPoint
+          : staticRect.height / pixelsPerPoint,
+        paragraphLeft: toPageX(paragraphRect.left),
+        paragraphTop: toPageY(paragraphRect.top),
+        paragraphWidth: paragraphRect.width / pixelsPerPoint,
+        paragraphHeight: paragraphRect.height / pixelsPerPoint,
+      };
+
+      const widthReference = this.horizontalAnchorReference(
+        anchor.getAttribute('data-docx-anchor-width-relative') ?? 'margin',
+        dims,
+        pageNumber,
+        context,
+      );
+      const widthPercent = this.anchorNumber(anchor, 'width-percent');
+      if (widthPercent !== undefined) {
+        anchor.style.width = `${widthReference.size * widthPercent / 100}pt`;
+      }
+
+      const heightReference = this.verticalAnchorReference(
+        anchor.getAttribute('data-docx-anchor-height-relative') ?? 'margin',
+        dims,
+        pageNumber,
+        context,
+      );
+      const heightPercent = this.anchorNumber(anchor, 'height-percent');
+      if (heightPercent !== undefined && anchor.dataset.docxAnchorAutofit !== 'true') {
+        anchor.style.height = `${heightReference.size * heightPercent / 100}pt`;
+      }
+
+      // Read the final border-box size after relative sizing and before reparenting. The stored
+      // wp:extent remains the fallback; wps:bodyPr insets stay inside it through border-box sizing.
+      const sizedRect = anchor.getBoundingClientRect();
+      const width = sizedRect.width / pixelsPerPoint;
+      const height = sizedRect.height / pixelsPerPoint;
+      const horizontal = this.horizontalAnchorReference(
+        anchor.getAttribute('data-docx-anchor-h-relative') ?? 'column',
+        dims,
+        pageNumber,
+        context,
+      );
+      const vertical = this.verticalAnchorReference(
+        anchor.getAttribute('data-docx-anchor-v-relative') ?? 'paragraph',
+        dims,
+        pageNumber,
+        context,
+      );
+      const left = this.resolveAnchorAxis(
+        horizontal,
+        width,
+        anchor.getAttribute('data-docx-anchor-h-align'),
+        this.anchorNumber(anchor, 'h-offset'),
+        pageNumber,
+      );
+      const top = this.resolveAnchorAxis(
+        vertical,
+        height,
+        anchor.getAttribute('data-docx-anchor-v-align'),
+        this.anchorNumber(anchor, 'v-offset'),
+        pageNumber,
+      );
+
+      pageBox.appendChild(anchor);
+      anchor.style.position = 'absolute';
+      anchor.style.left = `${left}pt`;
+      anchor.style.top = `${top}pt`;
+      anchor.style.margin = '0';
+    }
+  }
+
+  private anchorNumber(anchor: HTMLElement, suffix: string): number | undefined {
+    const raw = anchor.getAttribute(`data-docx-anchor-${suffix}`);
+    if (raw === null) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  private horizontalAnchorReference(
+    relativeFrom: string,
+    dims: PageDimensions,
+    pageNumber: number,
+    context: {
+      staticLeft: number;
+      paragraphLeft: number;
+      paragraphWidth: number;
+    },
+  ): { start: number; size: number } {
+    const leftMargin = { start: 0, size: dims.marginLeft };
+    const rightMargin = {
+      start: dims.marginLeft + dims.contentWidth,
+      size: dims.marginRight,
+    };
+    switch (relativeFrom) {
+      case 'page':
+        return { start: 0, size: dims.pageWidth };
+      case 'character':
+        return { start: context.staticLeft, size: 0 };
+      case 'leftMargin':
+        return leftMargin;
+      case 'rightMargin':
+        return rightMargin;
+      case 'insideMargin':
+        return pageNumber % 2 === 1 ? leftMargin : rightMargin;
+      case 'outsideMargin':
+        return pageNumber % 2 === 1 ? rightMargin : leftMargin;
+      case 'paragraph':
+        // Not part of ST_RelFromH, but accepting it gives malformed/legacy producers the
+        // intuitive base without conflating it with the whole text column.
+        return { start: context.paragraphLeft, size: context.paragraphWidth };
+      case 'column':
+      case 'margin':
+      default:
+        // The paginator currently lays out one text column per section, so the column and page
+        // margin boxes coincide. Keeping the names distinct here leaves multi-column geometry
+        // localized to this resolver when that layout support is added.
+        return { start: dims.marginLeft, size: dims.contentWidth };
+    }
+  }
+
+  private verticalAnchorReference(
+    relativeFrom: string,
+    dims: PageDimensions,
+    pageNumber: number,
+    context: {
+      staticTop: number;
+      lineHeight: number;
+      paragraphTop: number;
+      paragraphHeight: number;
+    },
+  ): { start: number; size: number } {
+    const topMargin = { start: 0, size: dims.marginTop };
+    const bottomMargin = {
+      start: dims.marginTop + dims.contentHeight,
+      size: dims.marginBottom,
+    };
+    switch (relativeFrom) {
+      case 'page':
+        return { start: 0, size: dims.pageHeight };
+      case 'paragraph':
+        return { start: context.paragraphTop, size: context.paragraphHeight };
+      case 'line':
+        return { start: context.staticTop, size: context.lineHeight };
+      case 'topMargin':
+        return topMargin;
+      case 'bottomMargin':
+        return bottomMargin;
+      case 'insideMargin':
+        return pageNumber % 2 === 1 ? topMargin : bottomMargin;
+      case 'outsideMargin':
+        return pageNumber % 2 === 1 ? bottomMargin : topMargin;
+      case 'margin':
+      default:
+        return { start: dims.marginTop, size: dims.contentHeight };
+    }
+  }
+
+  private resolveAnchorAxis(
+    reference: { start: number; size: number },
+    objectSize: number,
+    alignment: string | null,
+    offset: number | undefined,
+    pageNumber: number,
+  ): number {
+    if (offset !== undefined) return reference.start + offset;
+
+    let fraction = 0;
+    if (alignment === 'center') fraction = 0.5;
+    else if (alignment === 'right' || alignment === 'bottom') fraction = 1;
+    else if (alignment === 'inside') fraction = pageNumber % 2 === 1 ? 0 : 1;
+    else if (alignment === 'outside') fraction = pageNumber % 2 === 1 ? 1 : 0;
+    return reference.start + (reference.size - objectSize) * fraction;
+  }
+
+  /**
    * Creates a page container element.
    */
   private createPage(
@@ -2082,6 +2289,10 @@ export class PaginationEngine {
 
     // Add to container
     this.containerElement.appendChild(pageBox);
+
+    // Floating objects need the final page and anchor-paragraph boxes. Resolve them only after
+    // append, when getBoundingClientRect() is meaningful, and lift them out of content clipping.
+    this.positionDrawingAnchors(pageBox, contentArea, dims, pageNumber);
 
     // Body and notes must occupy DISJOINT bands. The note block is absolutely positioned against
     // the page bottom and grows upward, while the content area spans the whole text height — so

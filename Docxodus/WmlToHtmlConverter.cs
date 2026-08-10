@@ -8476,7 +8476,7 @@ namespace Docxodus
             var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
             var autoFit = HasAutoFitTextBox(element);
             if (drawingContainer != null)
-                AddDrawingTextBoxStyle(style, element, drawingContainer);
+                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings, autoFit);
             else if (vmlShape != null)
                 AddVmlTextBoxStyle(style, vmlShape);
 
@@ -8633,8 +8633,8 @@ namespace Docxodus
             return blocks.Count == 0 ? null : new XElement(W.txbxContent, blocks);
         }
 
-        private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement drawing,
-            XElement drawingContainer)
+        private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
+            XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
         {
             var extentCx = (long?)drawingContainer.Elements(WP.extent)
                 .Attributes(NoNamespace.cx).FirstOrDefault();
@@ -8642,18 +8642,38 @@ namespace Docxodus
                 .Attributes(NoNamespace.cy).FirstOrDefault();
             AddEmuDimensions(style, extentCx, extentCy);
 
-            var horizontalAlign = drawingContainer.Elements(WP.positionH).Elements(WP.align)
-                .Select(e => e.Value).FirstOrDefault();
-            if (horizontalAlign == "center")
+            if (drawingContainer.Name == WP.anchor)
             {
-                style["display"] = "block";
-                style.AddIfMissing("margin-left", "auto");
-                style.AddIfMissing("margin-right", "auto");
-            }
-            else if (horizontalAlign == "right")
-            {
-                style["display"] = "block";
-                style.AddIfMissing("margin-left", "auto");
+                AddDrawingAnchorMetadata(wrapper, drawingContainer, extentCx, extentCy, autoFit);
+
+                // A floating DrawingML object is outside the text flow. Pagination resolves the
+                // stored bases/offsets after the paragraph has landed on a concrete page, then
+                // promotes the object into that page's coordinate space. Keeping it absolute in
+                // staging is equally important: otherwise its extent incorrectly consumes body
+                // height before that page context exists.
+                if (settings.RenderPagination == PaginationMode.Paginated)
+                {
+                    style["position"] = "absolute";
+                }
+                else
+                {
+                    // Standalone conversion has no page box in which to resolve an anchor. Keep
+                    // the established column-alignment fallback there; paginated output must not
+                    // flatten these bases because its runtime can position them exactly.
+                    var horizontalAlign = drawingContainer.Element(WP.positionH)?
+                        .Element(WP.align)?.Value;
+                    if (horizontalAlign == "center")
+                    {
+                        style["display"] = "block";
+                        style.AddIfMissing("margin-left", "auto");
+                        style.AddIfMissing("margin-right", "auto");
+                    }
+                    else if (horizontalAlign == "right")
+                    {
+                        style["display"] = "block";
+                        style.AddIfMissing("margin-left", "auto");
+                    }
+                }
             }
 
             var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
@@ -8686,6 +8706,88 @@ namespace Docxodus
                 AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
                 AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
             }
+        }
+
+        /// <summary>
+        /// Preserves the geometry of a floating DrawingML object for the browser paginator. Page,
+        /// margin, column, paragraph, line, and character bases cannot be collapsed to one static
+        /// CSS offset during XML conversion: several of them only exist after pagination. Wrap
+        /// distances are emitted separately because they are text-clearance values, not additions
+        /// to the object's position or to the text box's <c>wps:bodyPr</c> insets.
+        /// </summary>
+        private static void AddDrawingAnchorMetadata(XElement wrapper, XElement anchor,
+            long? extentCx, long? extentCy, bool autoFit)
+        {
+            wrapper.Add(new XAttribute("data-docx-drawing-anchor", "true"));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-width", extentCx);
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-height", extentCy);
+
+            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
+            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
+                (long?)anchor.Attribute(NoNamespace.distT));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
+                (long?)anchor.Attribute(NoNamespace.distR));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-bottom",
+                (long?)anchor.Attribute(NoNamespace.distB));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-left",
+                (long?)anchor.Attribute(NoNamespace.distL));
+
+            AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelH), WP14.pctWidth,
+                "width");
+            if (!autoFit)
+            {
+                AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelV), WP14.pctHeight,
+                    "height");
+            }
+            else
+            {
+                wrapper.Add(new XAttribute("data-docx-anchor-autofit", "true"));
+            }
+        }
+
+        private static void AddAnchorAxisMetadata(XElement wrapper, XElement position, string axis)
+        {
+            if (position == null)
+                return;
+
+            var relativeFrom = (string)position.Attribute(NoNamespace.relativeFrom);
+            if (!string.IsNullOrWhiteSpace(relativeFrom))
+                wrapper.Add(new XAttribute($"data-docx-anchor-{axis}-relative", relativeFrom));
+
+            var align = position.Element(WP.align)?.Value;
+            if (!string.IsNullOrWhiteSpace(align))
+                wrapper.Add(new XAttribute($"data-docx-anchor-{axis}-align", align));
+
+            AddEmuDataAttribute(wrapper, $"data-docx-anchor-{axis}-offset",
+                (long?)position.Element(WP.posOffset));
+        }
+
+        private static void AddRelativeSizeMetadata(XElement wrapper, XElement relativeSize,
+            XName percentageName, string dimension)
+        {
+            if (relativeSize == null ||
+                !decimal.TryParse(relativeSize.Element(percentageName)?.Value,
+                    NumberStyles.Integer, NumberFormatInfo.InvariantInfo, out var rawPercentage))
+                return;
+
+            var relativeFrom = (string)relativeSize.Attribute(NoNamespace.relativeFrom);
+            if (string.IsNullOrWhiteSpace(relativeFrom))
+                return;
+
+            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-relative", relativeFrom));
+            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-percent",
+                (rawPercentage / 1000m).ToString("0.###", NumberFormatInfo.InvariantInfo)));
+        }
+
+        private static void AddEmuDataAttribute(XElement element, string name, long? emu)
+        {
+            if (emu == null)
+                return;
+
+            element.Add(new XAttribute(name,
+                (emu.Value / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo)));
         }
 
         private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
