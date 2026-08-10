@@ -1206,6 +1206,55 @@ public class HtmlConversionOpsTests
         Assert.Contains("width: 120pt", html);
         Assert.DoesNotContain("height: 60pt", html);
         Assert.Contains("margin-bottom: 0", html);
+        Assert.DoesNotContain("data-docx-drawing-anchor", html);
+        Assert.DoesNotContain("position: absolute", html);
+    }
+
+    // Floating drawings cannot be positioned until pagination supplies the concrete page and
+    // anchor-paragraph boxes. Preserve each OOXML input independently: offsets locate the object,
+    // wrap distances describe clearance from surrounding text, bodyPr insets locate text inside it,
+    // the stored extent remains the fixed-size fallback when no relative size overrides it.
+    [Fact]
+    public void HCO091_AnchoredDrawingMlTextBox_PreservesGeometryForPagination()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<w:drawing><wp:anchor distT=\"45720\" distR=\"114300\" distB=\"45720\" distL=\"114300\" " +
+            "simplePos=\"0\" relativeHeight=\"12\" behindDoc=\"0\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">" +
+            "<wp:simplePos x=\"0\" y=\"0\"/>" +
+            "<wp:positionH relativeFrom=\"page\"><wp:posOffset>457200</wp:posOffset></wp:positionH>" +
+            "<wp:positionV relativeFrom=\"paragraph\"><wp:posOffset>228600</wp:posOffset></wp:positionV>" +
+            "<wp:extent cx=\"1524000\" cy=\"762000\"/><wp:wrapSquare wrapText=\"bothSides\"/>" +
+            "<wp:docPr id=\"1\" name=\"Generated anchor\"/><wp:cNvGraphicFramePr/>" +
+            "<a:graphic><a:graphicData><wps:wsp><wps:txbx><w:txbxContent>" +
+            "<w:p><w:r><w:t>HCO091 anchored text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></wps:txbx><wps:bodyPr lIns=\"91440\" tIns=\"45720\" " +
+            "rIns=\"91440\" bIns=\"45720\"/></wps:wsp></a:graphicData></a:graphic>" +
+            "<wp14:sizeRelH relativeFrom=\"margin\"><wp14:pctWidth>40000</wp14:pctWidth></wp14:sizeRelH>" +
+            "</wp:anchor></w:drawing>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions
+            {
+                FabricateCssClasses = false,
+                PaginationMode = (int)PaginationMode.Paginated,
+            });
+
+        Assert.Contains("data-docx-drawing-anchor=\"true\"", html);
+        Assert.Contains("data-docx-anchor-extent-width=\"120\"", html);
+        Assert.Contains("data-docx-anchor-extent-height=\"60\"", html);
+        Assert.Contains("data-docx-anchor-h-relative=\"page\"", html);
+        Assert.Contains("data-docx-anchor-h-offset=\"36\"", html);
+        Assert.Contains("data-docx-anchor-v-relative=\"paragraph\"", html);
+        Assert.Contains("data-docx-anchor-v-offset=\"18\"", html);
+        Assert.Contains("data-docx-anchor-wrap-top=\"3.6\"", html);
+        Assert.Contains("data-docx-anchor-wrap-right=\"9\"", html);
+        Assert.Contains("data-docx-anchor-width-relative=\"margin\"", html);
+        Assert.Contains("data-docx-anchor-width-percent=\"40\"", html);
+        Assert.Contains("width: 120pt", html);
+        Assert.Contains("height: 60pt", html);
+        Assert.Contains("padding-left: 7.2pt", html);
+        Assert.Contains("padding-top: 3.6pt", html);
+        Assert.Contains("position: absolute", html);
     }
 
     // Some legacy Word documents keep the modern DrawingML text-box body in a related XML
@@ -1360,6 +1409,7 @@ public class HtmlConversionOpsTests
                     "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
                     "xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
                     "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing\" " +
                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
                     "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
                     "xmlns:legacywps=\"http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape\">" +

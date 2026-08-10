@@ -72,6 +72,12 @@ The complete 12-case corpus was rerun after rebuilding the production WASM bundl
 report remained outside the checkout under `/tmp`; no benchmark artifacts or additional corpus files
 were added to the repository.
 
+`Current` is one clean-worktree rerun of the whole corpus on this branch after it merged `main`, so
+it measures the running-content fix (issue #377) and the DrawingML anchor fix (PR #381) TOGETHER
+rather than splicing two separately measured runs. The two fixes touch disjoint cases, and every
+per-case figure below reproduced its own branch's measurement exactly; only the corpus-wide means
+move.
+
 | Signal | Initial | After PRs #372–#374 | Current |
 |---|---:|---:|---:|
 | Cases | 12 | 12 | 12 |
@@ -125,6 +131,12 @@ Resolved items:
    Calibri Light. `fields-and-tabs` moves the other way on ink F1 (0.30164 → 0.15913, SSIM
    0.88672 → 0.89415): the substitution had been masking a real TOC line-height difference, which
    is now visible as the renderer signal it always was.
+7. **DrawingML textbox anchor geometry.** `DB011-Body-With-Shape.docx` now honors its
+   column-centered, margin-relative-width and paragraph-offset geometry. The rendered box moves
+   from `(273,113)–(520,202)` to `(268,133)–(524,222)`, versus LibreOffice's
+   `(268,132)–(524,237)`: horizontal bounds match exactly and the vertical origin is within 1 px.
+   SSIM improves from 0.96967 to 0.97428 and ink F1 from 0.50719 to 0.63049. The remaining height
+   difference is auto-fit line geometry, independent of the now-correct anchor origin and width.
 
 ## Current case results and triage
 
@@ -141,7 +153,7 @@ single blank or disjoint page rather than averaging it away.
 | running-content | 5/5 | close | 0.99921 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved the vertical placement of the inherited stories themselves. |
 | inline-image | 1/1 | severe | 0.93660 | 0.64760 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. |
 | chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
-| shape | 1/1 | severe | 0.96967 | 0.50719 | Textbox content exists but is roughly 5 px right and 13 px down with a small size difference: drawing-anchor geometry. |
+| shape | 1/1 | severe | 0.97428 | 0.63049 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
 | fields-and-tabs | 1/1 | severe | 0.89415 | 0.15913 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
 | footnote | 1/1 | close | 0.99481 | 0.95875 | Note block composition corrected (issue #378): the separator is a line with the rule on its baseline, spacing falls between notes, and the last note ends on the body band's bottom edge. |
 | tracked-deletion | 1/1 | severe | 0.95011 | 0.62634 | Identical accepted-revision bytes, and both engines now resolve Calibri Light the same way (issue #379). Remaining differences are heading metrics and wrapping, not revision semantics. |
@@ -172,6 +184,12 @@ single blank or disjoint page rather than averaging it away.
    number lands within 1.5 px of the 9350-twip target and the leader spans the full gap. The global
    pixel scores above remain dominated by line-height, hyperlink-style, and font differences;
    LibreOffice is retained as a comparison implementation rather than used to hide valid print ink.
+6. **DrawingML textbox anchor geometry.** The converter preserves positioning bases, offsets,
+   alignments, extents, relative sizes, wrap clearances, and `wps:bodyPr` insets independently.
+   Pagination resolves page/margin/column coordinates against the final page box and
+   paragraph/line/character coordinates against the laid-out anchor, then promotes the object out
+   of the clipped text column. Generated DOCX browser tests pin outer and inner coordinates for all
+   supported bases; the tracked shape fixture supplies the separate pixel comparison above.
 
 An attempted explicit `Calibri Light -> Carlito` browser fallback was rejected: it worsened the
 accepted-revision case (SSIM 0.93177 to 0.92905; ink F1 0.46817 to 0.42477) despite a small SSIM gain
@@ -184,14 +202,14 @@ contract rather than either an observed variable or a hidden renderer heuristic.
 ## Prioritized next work
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
-header/body/footer vertical placement (issue #377), footnote block placement (issue #378), and the
-shared font-substitution contract (issue #379) are resolved above. The remaining order is:
+header/body/footer vertical placement (issue #377), footnote block placement (issue #378), the
+shared font-substitution contract (issue #379), and DrawingML textbox anchor geometry are resolved
+above. The remaining order is:
 
-1. Correct drawing-anchor offsets with a generated textbox geometry regression.
-2. Investigate the paragraph line-height differences the font contract now exposes on
+1. Investigate the paragraph line-height differences the font contract now exposes on
    `fields-and-tabs`, `landscape-section`, and `inline-image` — with the fonts pinned, these are
    renderer signals rather than environment noise.
-3. Make the paginator's 60% note-area cap defer rather than clip. A page whose citations would
+2. Make the paginator's 60% note-area cap defer rather than clip. A page whose citations would
    fill more than that share admits more notes than it leaves room for, and the surplus is cut off
    by the note block's `overflow: hidden` — 187 px on a generated twelve-note page, reproduced
    identically before issue #378's changes, so it is a question about the cap and not about the
