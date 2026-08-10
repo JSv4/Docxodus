@@ -72,11 +72,13 @@ The complete 12-case corpus was rerun after rebuilding the production WASM bundl
 report remained outside the checkout under `/tmp`; no benchmark artifacts or additional corpus files
 were added to the repository.
 
-`Current` is one clean-worktree rerun of the whole corpus on this branch after it merged `main`, so
-it measures the running-content fix (issue #377) and the DrawingML anchor fix (PR #381) TOGETHER
-rather than splicing two separately measured runs. The two fixes touch disjoint cases, and every
-per-case figure below reproduced its own branch's measurement exactly; only the corpus-wide means
-move.
+`Current` is one clean-worktree rerun of the whole corpus on this branch, so it measures the
+running-content fix (issue #377), the footnote block fix (issue #378), the font-substitution
+contract (issue #379), and the DrawingML anchor fix (PR #381) TOGETHER rather than splicing
+separately measured runs. That matters most for the font contract, which changes substitution for
+EVERY case rather than one: the rerun confirms it leaves the other fixes' cases where they were —
+every per-case figure below reproduced the measurement made on the branch that produced it, so only
+the corpus-wide means move.
 
 | Signal | Initial | After PRs #372–#374 | Current |
 |---|---:|---:|---:|
@@ -86,8 +88,8 @@ move.
 | Page-count mismatches | 1 | 0 | 0 |
 | Case severity | 1 close, 1 minor, 0 major, 10 severe | 2 close, 1 minor, 0 major, 9 severe | 5 close, 1 minor, 0 major, 6 severe |
 | Page severity | 1 close, 1 minor, 2 major, 16 severe | 2 close, 1 minor, 1 major, 17 severe | 14 close, 1 minor, 0 major, 6 severe |
-| Mean SSIM | 0.974586 | 0.978298 | 0.981207 |
-| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.854815 |
+| Mean SSIM | 0.974586 | 0.978298 | 0.981426 |
+| Mean tolerant ink F1 | 0.394106 | 0.412753 | 0.860687 |
 
 Resolved items:
 
