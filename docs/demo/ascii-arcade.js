@@ -447,6 +447,74 @@ const ENEMY_KINDS = {
 const ENEMY_BY_GLYPH = Object.fromEntries(
   Object.entries(ENEMY_KINDS).map(([kind, k]) => [k.glyph, kind]));
 
+// ── Enemy stamps: original ASCII takes on the classic archetypes — a rifle
+// grunt, its armored sergeant, a horned imp, a big-jawed demon. Drawn on a
+// tall 10×13 grid (a text cell is ~2:1, so this reads as a standing figure),
+// ' ' transparent, each char mapped to an ink; a hit-flash paints them all
+// white. The 3-D renderer nearest-neighbor samples a stamp into the sprite's
+// distance-scaled rectangle: at range a monster is a smudge, up close a face.
+const GRUNT_ROWS = [
+  '   ####   ',
+  '  ######  ',
+  '  #%%%%#  ',
+  '  %o%%o%  ',
+  '  #%~~%#  ',
+  '  .####.  ',
+  ' ######## ',
+  '##########',
+  '## #### ##',
+  '== #### ==',
+  '  ##  ##  ',
+  '  ##  ##  ',
+  ' ###  ### ',
+];
+const ENEMY_STAMPS = {
+  zombie: {
+    rows: GRUNT_ROWS,
+    inks: { '#': 'A8B78A', '%': 'D6C39A', '~': '8A5B4A', o: 'FF5555', '=': '9AA5B1', '.': '6E7D5B' },
+  },
+  sergeant: {
+    rows: GRUNT_ROWS,
+    inks: { '#': '8B9DAF', '%': 'D6C39A', '~': '8A5B4A', o: 'FF5555', '=': 'E2E8F0', '.': '5C6B7E' },
+  },
+  imp: {
+    rows: [
+      ' \\      / ',
+      '  \\####/  ',
+      ' ######## ',
+      ' #@####@# ',
+      ' ######## ',
+      '  #vvvv#  ',
+      ' ######## ',
+      '##  ##  ##',
+      '#  ####  #',
+      '   ####   ',
+      '  ##  ##  ',
+      ' ##    ## ',
+      ' #      # ',
+    ],
+    inks: { '#': 'C084FC', '\\': 'E9D5FF', '/': 'E9D5FF', '@': 'FFD166', v: 'FFFFFF' },
+  },
+  demon: {
+    rows: [
+      '  ######  ',
+      ' ######## ',
+      '#o######o#',
+      '##########',
+      '#MMMMMMMM#',
+      '#WWWWWWWW#',
+      ' ######## ',
+      ' ######## ',
+      '##########',
+      '###    ###',
+      '##      ##',
+      '###    ###',
+      '####  ####',
+    ],
+    inks: { '#': 'FF6B6B', o: 'FFF7B0', M: 'FFFFFF', W: 'F1D1D1' },
+  },
+};
+
 // 24×16, every row exactly MAPW chars (the headless harness re-checks this
 // and walks the maze to prove every § and the * gate stay reachable). The
 // D.O.C.X cells are free-standing letter pillars in the entry hall — the
@@ -820,7 +888,10 @@ function raycastCart(pack) {
     for (const e of enemies) {
       if (e.hp <= 0) continue;
       const k = ENEMY_KINDS[e.kind];
-      sprites.push({ x: e.x, y: e.y, ch: k.glyph, ink: e.flashT > 0 ? 'FFFFFF' : k.ink, enemy: true });
+      sprites.push({
+        x: e.x, y: e.y, ch: k.glyph, ink: e.flashT > 0 ? 'FFFFFF' : k.ink,
+        enemy: true, kind: e.kind, flash: e.flashT > 0,
+      });
     }
     const inv = 1 / (plx * dy - dx * ply);
     sprites.sort((a, b) =>
@@ -837,20 +908,33 @@ function raycastCart(pack) {
       // head-and-shoulders silhouette instead of a square.
       const cap = s.enemy ? 12 : 6;
       const size = Math.max(1, Math.min(cap, Math.round((5 * S) / ty)));
-      const hgt = s.enemy ? Math.max(1, Math.round(size * 1.1)) : Math.max(1, Math.floor(size * 0.7));
+      const hgt = s.enemy ? Math.max(1, Math.round(size * 1.3)) : Math.max(1, Math.floor(size * 0.7));
       const wallH = Math.min(FIELD_ROWS, Math.round((FIELD_ROWS * S) / ty));
       const floorLine = FIELD_TOP + Math.floor((FIELD_ROWS + wallH) / 2);
       const y1 = s.enemy
         ? floorLine - hgt
         : FIELD_TOP + Math.floor(FIELD_ROWS / 2) - Math.floor(size / 3);
       const half = Math.floor(size / 2);
+      const stamp = s.enemy ? ENEMY_STAMPS[s.kind] : null;
+      const sw = stamp ? stamp.rows[0].length : 0;
+      const sh = stamp ? stamp.rows.length : 0;
+      const wS = half * 2 + 1;
       for (let sxp = screen - half; sxp <= screen + half; sxp++) {
         if (sxp < 0 || sxp >= VIEW_W || ty >= zbuf[sxp]) continue;
+        const sxSrc = stamp ? Math.min(sw - 1, Math.floor(((sxp - screen + half) * sw) / wS)) : 0;
         for (let syp = y1; syp < y1 + hgt; syp++) {
           if (syp < FIELD_TOP || syp >= FIELD_TOP + FIELD_ROWS) continue;
-          if (s.enemy && hgt >= 3 && syp === y1 && Math.abs(sxp - screen) > Math.max(1, half >> 1)) continue;
-          g.chars[syp][1 + sxp] = s.ch;
-          g.colors[syp][1 + sxp] = s.ink;
+          if (stamp && hgt >= 4) {
+            // Close enough to have a body: sample the stamp. Transparent
+            // cells let the wall show through, so the silhouette is real.
+            const ch = stamp.rows[Math.min(sh - 1, Math.floor(((syp - y1) * sh) / hgt))][sxSrc];
+            if (ch === ' ') continue;
+            g.chars[syp][1 + sxp] = ch;
+            g.colors[syp][1 + sxp] = s.flash ? 'FFFFFF' : stamp.inks[ch] ?? s.ink;
+          } else {
+            g.chars[syp][1 + sxp] = s.ch;
+            g.colors[syp][1 + sxp] = s.ink;
+          }
         }
       }
     }
