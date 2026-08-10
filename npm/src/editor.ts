@@ -443,6 +443,27 @@ function isListBlock(block: HTMLElement): boolean {
 }
 
 /**
+ * The converter's tab box must stay text-empty because any child changes its inline baseline.
+ * Editable list items still need a textContent separator between generated marker chrome and an
+ * empty body so typing produces "2. BB", not "2.BB". Keep that editor-only separator hidden and
+ * generated, outside the converter-owned marker wrapper.
+ */
+function ensureListMarkerSeparator(block: HTMLElement): void {
+  const marker = block.querySelector<HTMLElement>(":scope > [data-list-marker]");
+  if (!marker) return;
+  const next = marker.nextElementSibling as HTMLElement | null;
+  if (next?.hasAttribute("data-editor-list-separator")) return;
+
+  const separator = block.ownerDocument.createElement("span");
+  separator.setAttribute("data-editor-list-separator", "");
+  separator.setAttribute("data-list-marker", "true");
+  separator.setAttribute("aria-hidden", "true");
+  separator.style.display = "none";
+  separator.textContent = " ";
+  marker.after(separator);
+}
+
+/**
  * Inline chrome the CONVERTER generates that is not part of a paragraph's run text: list
  * number/bullet markers, footnote/endnote citation markers
  * (`<a class="footnote-ref"><sup>1</sup></a>`), and the note backrefs (`↩`).
@@ -2036,6 +2057,7 @@ export class DocxEditor {
     // resolves that unid to a different part (content-addressed unids collide across parts).
     if (!unid || !this.anchorIdOf(el)) return;
     el.setAttribute("contenteditable", "true");
+    ensureListMarkerSeparator(el);
     // Generated chrome (list number/bullet, footnote/endnote citation markers, note backrefs) is
     // not editable content — keep the caret out so offsets stay aligned with the run text, and so
     // a citation marker can't be deleted directly (which would orphan its note definition).
