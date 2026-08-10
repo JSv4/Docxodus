@@ -2785,7 +2785,10 @@ namespace Docxodus
             // Transform tabs that have the pt:TabWidth attribute set
             if (element.Name == W.tab)
             {
-                return ProcessTab(element);
+                var tab = ProcessTab(element);
+                return tab == null
+                    ? null
+                    : new object[] { tab, CreateTabSeparator() };
             }
 
             // Transform w:br to h:br (or page break div in pagination mode).
@@ -4439,18 +4442,10 @@ namespace Docxodus
                             else
                                 span = new XElement(Xhtml.span, new XEntity("#x200e")); // LRM
 #else
-                // The tab advance is the box itself. Preserve a separator for DOM/plain-text
-                // consumers without putting a glyph in layout: even a collapsible space changes
-                // an inline-block's baseline and therefore the paragraph's line-box height.
-                var separator = new XElement(Xhtml.span,
-                    new XAttribute("aria-hidden", "true"),
-                    new XAttribute("data-docx-tab-separator", string.Empty),
-                    new XText(" "));
-                separator.AddAnnotation(new Dictionary<string, string>
-                {
-                    { "display", "none" },
-                });
-                span = new XElement(Xhtml.span, separator);
+                // The tab advance is the box itself. Keep this span truly empty so its baseline
+                // matches the original visual contract; ProcessTab's callers emit the semantic
+                // plain-text separator as a display:none sibling.
+                span = new XElement(Xhtml.span, new XText(string.Empty));
 #endif
                 style.Add("display", "inline-block");
                 style.Add("padding", "0 0 0 0");
@@ -4463,6 +4458,19 @@ namespace Docxodus
                 span.Add(new XAttribute("data-docx-tab-leader", leader));
             span.AddAnnotation(style);
             return span;
+        }
+
+        private static XElement CreateTabSeparator()
+        {
+            var separator = new XElement(Xhtml.span,
+                new XAttribute("aria-hidden", "true"),
+                new XAttribute("data-docx-tab-separator", string.Empty),
+                new XText(" "));
+            separator.AddAnnotation(new Dictionary<string, string>
+            {
+                { "display", "none" },
+            });
+            return separator;
         }
 
         private static object ProcessBreak(
@@ -5505,9 +5513,12 @@ namespace Docxodus
 
             // Process the tab element to get leader characters
             object tabSpan = null;
+            XElement tabSeparator = null;
             if (tabElement != null)
             {
                 tabSpan = ProcessTab(tabElement);
+                if (tabSpan != null)
+                    tabSeparator = CreateTabSeparator();
             }
 
             if (txElementsPrecedingTab.Count > 1 || (txElementsPrecedingTab.Count > 0 && tabSpan != null))
@@ -5526,7 +5537,7 @@ namespace Docxodus
                     tabStyle["flex-shrink"] = "1";
                 }
 
-                var span = new XElement(Xhtml.span, listMarkerAttr, precedingSpan, tabSpan);
+                var span = new XElement(Xhtml.span, listMarkerAttr, precedingSpan, tabSpan, tabSeparator);
                 // The wrapper owns the aligned segment's total advance. Let the browser assign
                 // any font-metric difference to the tab itself, so leaders fill from the actual
                 // rendered label to the target instead of leaving invisible padding after them.
@@ -5554,7 +5565,7 @@ namespace Docxodus
                 // If we have a tab span with leaders, add it after the element
                 if (tabSpan != null)
                 {
-                    var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, element, tabSpan);
+                    var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, element, tabSpan, tabSeparator);
                     var wrapperStyle = new Dictionary<string, string>
                     {
                         { "display", "inline-block" },
@@ -5568,7 +5579,7 @@ namespace Docxodus
             else if (tabSpan != null)
             {
                 // Only the tab, no preceding content
-                var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, tabSpan);
+                var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, tabSpan, tabSeparator);
                 var wrapperStyle = new Dictionary<string, string>
                 {
                     { "display", "inline-block" },
