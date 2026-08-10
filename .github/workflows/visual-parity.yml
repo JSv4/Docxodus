@@ -75,6 +75,10 @@ jobs:
           DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity
           DOCXODUS_VISUAL_PARITY_FILTER: ${{ inputs.filter }}
           DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
+          # Measure the SYSTEM install from the previous step rather than layering the fragment
+          # again. Otherwise the run would satisfy the contract by itself and a broken system
+          # install — the path the README tells humans to use — would never be exercised.
+          DOCXODUS_VISUAL_PARITY_HOST_FONTS: '1'
         run: cd npm && npm run test:visual-parity
 
       - name: Upload visual comparison report

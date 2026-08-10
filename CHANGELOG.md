@@ -30,10 +30,11 @@ All notable changes to this project will be documented in this file.
   `npm/tests/demo-arcade.spec.ts` drives boot, keyboard steering, the
   pause→type→resume loop, and the save round-trip.
 
-### Changed
-- **The LibreOffice visual-parity benchmark declares one font-substitution
-  contract that both renderers obey.** Neither engine ships Microsoft's Office
-  fonts, so every Office family a fixture names is substituted — and when the two
+### Fixed
+- **The LibreOffice visual-parity benchmark could not tell a renderer regression
+  from a change in the font environment.** (Benchmark infrastructure; no public
+  surface changes.) Neither engine ships Microsoft's Office fonts, so every
+  Office family a fixture names is substituted — and when the two
   substitute differently, their line breaking differs for reasons that have
   nothing to do with this repository. The policy is now a fontconfig fragment
   (`npm/tests/visual-parity/fontconfig/`) that Chromium and LibreOffice both read,
@@ -55,8 +56,6 @@ All notable changes to this project will be documented in this file.
   now that both engines resolve Calibri Light identically; `fields-and-tabs` ink F1
   drops (0.30164 → 0.15913, SSIM 0.88672 → 0.89415) because the substitution had
   been masking a real TOC line-height difference.
-
-### Fixed
 - **The paginated footnote block sits where Word puts it.** The note area is
   bottom-aligned to the body text band, so its height IS its position — every
   point of slack inside it lifts everything above it, which is why the note text
