@@ -690,7 +690,11 @@ function raycastCart(pack) {
     if (input.held('KeyS', 'ArrowDown')) tryMove(px - dx * mv, py - dy * mv);
     if (input.held('KeyA')) tryMove(px + dy * mv, py - dx * mv);
     if (input.held('KeyD')) tryMove(px - dy * mv, py + dx * mv);
-    if (input.took('Space') && fireCooldown <= 0) fire();
+    // Hold-to-fire, Doom-pistol style: the cooldown sets the rate, holding
+    // Space keeps shooting. (Edge-triggered fire starved at low frame rates —
+    // one shot per rendered frame at best.)
+    if (input.held('Space') && fireCooldown <= 0) fire();
+    else input.took('Space'); // consume stray edges so pause/resume can't bank one
 
     // Enemies: sleep until they see you (or get shot), then close in. A
     // chaser that loses sight of you for a few seconds loses interest and
