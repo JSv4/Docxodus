@@ -692,15 +692,25 @@ function raycastCart(pack) {
     if (input.held('KeyD')) tryMove(px - dy * mv, py + dx * mv);
     if (input.took('Space') && fireCooldown <= 0) fire();
 
-    // Enemies: sleep until they see you (or get shot), then close in.
+    // Enemies: sleep until they see you (or get shot), then close in. A
+    // chaser that loses sight of you for a few seconds loses interest and
+    // stands down — otherwise one stuck behind a wall would besiege that
+    // wall forever.
     for (const e of enemies) {
       if (e.hp <= 0) continue;
       e.flashT = Math.max(0, e.flashT - dt);
       const vx = px - e.x, vy = py - e.y;
       const d = Math.hypot(vx, vy);
       if (!e.awake) {
-        if (d < 8 * S && lineOfSight(e.x, e.y, px, py)) e.awake = true;
+        if (d < 8 * S && lineOfSight(e.x, e.y, px, py)) { e.awake = true; e.boredT = 0; }
         else continue;
+      } else {
+        e.losCheckT = (e.losCheckT ?? 0) + dt;
+        if (e.losCheckT >= 0.5) {
+          e.losCheckT = 0;
+          if (lineOfSight(e.x, e.y, px, py)) e.boredT = 0;
+          else if ((e.boredT = (e.boredT ?? 0) + 0.5) >= 5) { e.awake = false; continue; }
+        }
       }
       if (d > 0.8) {
         const step = ENEMY_KINDS[e.kind].speed * S * dt;

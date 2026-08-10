@@ -74,21 +74,40 @@ async function startAutopilot(page: Page) {
 
     let goal: { fx: number; fy: number } | null = null;
     let stuck = 0;
+    // No-progress fallback: an engaged foe whose hp hasn't dropped after
+    // sustained fire is behind a wall (awake but unhittable) — ignore it for
+    // a while and let navigation resume; the game's own boredom timer will
+    // put it back to sleep.
+    let engaged: { key: string; hp: number; ticks: number } | null = null;
+    const ignored = new Map<string, number>();
+    const foeKey = (e: any) => `${e.kind}:${e.x.toFixed(0)},${e.y.toFixed(0)}`;
     const timer = setInterval(() => {
       if (!a.playing()) return;
       const s = a.game();
       if (s.mode === 'won') { clearInterval(timer); return; }
       const input = a.input;
       if (s.mode === 'dead') return; // the game respawns us; keep no keys held
+      const now = Date.now();
+      for (const [k, until] of ignored) if (until < now) ignored.delete(k);
       // Combat doctrine: the nearest AWAKE enemy within 6 cells gets faced
       // and shot (an enemy still asleep provably has no line of sight — its
       // own wake check would have fired — so shooting at it only hits wall).
       const foe = (s.enemies ?? [])
-        .filter((e: any) => e.awake)
+        .filter((e: any) => e.awake && !ignored.has(foeKey(e)))
         .map((e: any) => ({ e, d: Math.hypot(e.x - s.player.x, e.y - s.player.y) }))
         .filter((f: any) => f.d < 6)
         .sort((x: any, y: any) => x.d - y.d)[0];
       if (foe) {
+        const key = foeKey(foe.e);
+        if (engaged && engaged.key === key && engaged.hp === foe.e.hp) {
+          if (++engaged.ticks > 50) { // ~3s of fire with no damage: wall between us
+            ignored.set(key, now + 15000);
+            engaged = null;
+            return;
+          }
+        } else {
+          engaged = { key, hp: foe.e.hp, ticks: 0 };
+        }
         const vx = foe.e.x - s.player.x, vy = foe.e.y - s.player.y;
         const fcross = s.player.dx * vy - s.player.dy * vx;
         const fdot = s.player.dx * vx + s.player.dy * vy;
@@ -100,6 +119,7 @@ async function startAutopilot(page: Page) {
         if (aligned) input.set('Space', true); // fresh edge each tick; cooldown gates
         return;
       }
+      engaged = null;
       input.set('Space', false);
       if (!goal || (Math.floor(s.player.x) === goal.fx && Math.floor(s.player.y) === goal.fy)
         || ++stuck > 25) {
