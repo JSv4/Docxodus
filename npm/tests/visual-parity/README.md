@@ -107,8 +107,15 @@ rather than layering the fragment again.
 
 The run resolves every declared family through `fc-match` before either engine starts. If any
 family resolves to the wrong substitute the run **skips** with a message naming the family and the
-package to install — and **fails** instead under `DOCXODUS_VISUAL_PARITY_STRICT=1`. It never
-proceeds and reports numbers produced by an unknown font environment.
+package to install. It never proceeds and reports numbers produced by an unknown font environment.
+
+Skipping is right for a developer who has not installed the fonts and wrong for a machine that is
+supposed to have them, where it would turn the benchmark into a green no-op that produces no
+report. `DOCXODUS_VISUAL_PARITY_REQUIRE_FONTS=1` turns the skip into a failure; CI sets it
+alongside `DOCXODUS_VISUAL_PARITY_HOST_FONTS=1` so the permanent `/etc/fonts/conf.d` install above
+is the thing being verified. It is deliberately separate from
+`DOCXODUS_VISUAL_PARITY_STRICT=1`, which is about the corpus verdict — several cases are
+legitimately severe today, so corpus strictness cannot be used to police the font environment.
 
 ### The drift probe
 

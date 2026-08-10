@@ -79,6 +79,10 @@ jobs:
           # again. Otherwise the run would satisfy the contract by itself and a broken system
           # install — the path the README tells humans to use — would never be exercised.
           DOCXODUS_VISUAL_PARITY_HOST_FONTS: '1'
+          # And having made the run depend on that install, require it: a machine that is supposed
+          # to have the fonts must fail loudly rather than skip, or the weekly run quietly becomes
+          # a green no-op that produces no report.
+          DOCXODUS_VISUAL_PARITY_REQUIRE_FONTS: '1'
         run: cd npm && npm run test:visual-parity
 
       - name: Upload visual comparison report

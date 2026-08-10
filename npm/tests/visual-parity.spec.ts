@@ -354,10 +354,19 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
 
   // The font contract gates the whole run: without it the two engines can be set in different
   // faces, and every number below would be measuring the host rather than the renderer.
+  //
+  // Skipping is right for a developer who has not installed the fonts, and wrong for a machine
+  // that is supposed to have them: there, a contract that silently stops holding turns the whole
+  // benchmark into a green no-op that produces no report. `REQUIRE_FONTS` is separate from
+  // `STRICT` on purpose — strictness is about the corpus verdict, several cases are legitimately
+  // severe today, and a host that cannot even set up its fonts must fail for that reason alone.
   const fontContract: FontContractStatus = resolveFontContract(fontEnv);
   if (!fontContract.satisfied) {
     const message = `${fontContract.problem}\nRequired packages: ${FONT_CONTRACT_PACKAGES.join(' ')}`;
-    if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') throw new Error(message);
+    if (process.env.DOCXODUS_VISUAL_PARITY_REQUIRE_FONTS === '1' ||
+        process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') {
+      throw new Error(message);
+    }
     test.skip(true, message);
   }
 

@@ -191,6 +191,11 @@ shared font-substitution contract (issue #379) are resolved above. The remaining
 2. Investigate the paragraph line-height differences the font contract now exposes on
    `fields-and-tabs`, `landscape-section`, and `inline-image` — with the fonts pinned, these are
    renderer signals rather than environment noise.
+3. Make the paginator's 60% note-area cap defer rather than clip. A page whose citations would
+   fill more than that share admits more notes than it leaves room for, and the surplus is cut off
+   by the note block's `overflow: hidden` — 187 px on a generated twelve-note page, reproduced
+   identically before issue #378's changes, so it is a question about the cap and not about the
+   note block's composition.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
 supports Docxodus's use of the declared OOXML margin. LibreOffice is a comparison implementation, not
