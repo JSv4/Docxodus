@@ -31,6 +31,13 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Floating DrawingML text boxes now honor their OOXML anchor geometry in paginated output.**
+  The converter preserves page/margin/column/paragraph/line/character origins, offsets and
+  alignments, stored extents, relative sizing, wrap clearances, and internal text insets; the
+  paginator resolves those values only after the anchor paragraph has landed on a page. Generated
+  DOCX browser regressions pin the outer box and text origin across the distinct coordinate bases.
+  On the tracked shape fixture, the box moves from 5 px right and 19 px high to exact horizontal
+  bounds and a top origin within 1 px (ink F1 0.50719 → 0.63049), without changing inline drawings.
 - **Right, center, and decimal tab stops retain their OOXML targets across native and WASM
   rendering.** Tab measurement no longer includes an invented trailing blank; unavailable-font
   estimates are normalized to CSS layout units; empty tabs advance with an explicit box instead of
