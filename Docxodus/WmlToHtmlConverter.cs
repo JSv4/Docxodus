@@ -2135,26 +2135,28 @@ namespace Docxodus
             sb.AppendLine("    transform-origin: top left;");
             sb.AppendLine("}");
 
-            // Header area within page (positioned at top, constrained to top margin height)
+            // Header band. Word measures w:header from the paper's top edge to the TOP of the
+            // header story, which then grows downward — so the band is top-anchored and
+            // top-aligned. The paginator supplies the page-specific top/height; anchoring it to
+            // the top margin instead would pull the header down onto the body text.
             sb.AppendLine($".{prefix}header {{");
             sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    top: 0;");
             sb.AppendLine("    overflow: hidden;");
             sb.AppendLine("    box-sizing: border-box;");
             sb.AppendLine("    display: flex;");
             sb.AppendLine("    flex-direction: column;");
-            sb.AppendLine("    justify-content: flex-end;"); // Align content to bottom of header area
+            sb.AppendLine("    justify-content: flex-start;");
             sb.AppendLine("}");
 
-            // Footer area within page (positioned at bottom, constrained to bottom margin height)
+            // Footer band — the mirror: w:footer is the distance to the BOTTOM of the footer
+            // story, which grows upward, so the band is bottom-anchored and bottom-aligned.
             sb.AppendLine($".{prefix}footer {{");
             sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    bottom: 0;");
             sb.AppendLine("    overflow: hidden;");
             sb.AppendLine("    box-sizing: border-box;");
             sb.AppendLine("    display: flex;");
             sb.AppendLine("    flex-direction: column;");
-            sb.AppendLine("    justify-content: flex-start;"); // Align content to top of footer area
+            sb.AppendLine("    justify-content: flex-end;");
             sb.AppendLine("}");
 
             // Page number indicator
