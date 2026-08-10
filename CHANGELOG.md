@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **A real Doom-format level is playable inside a Word document** — Arcade
+  cartridge 3, *Freedoom E1M1* (`docs/demo/freedoom-e1m1.js` +
+  `docs/demo/tools/wad2cart.mjs`; demo content only, no library changes). The
+  Docx Dungeon's DDA raycaster is now a level-pack player: the same renderer,
+  controls, and MAP-panel document round-trip run both the hand-drawn 24×16
+  maze and a 126×109 grid rasterized from the Freedoom project's E1M1
+  (BSD-licensed; notice retained in the generated module). `wad2cart.mjs`
+  parses the classic binary lumps (THINGS/LINEDEFS/SIDEDEFS/VERTEXES/SECTORS),
+  rasterizes blocking linedefs at 32 map units per cell (doors/lifts/stairs
+  resolved to their player-friendly state — the grid world has no door
+  mechanic), flood-fills walkability from the player-1 start, places `§`
+  sigils on the level's own keycard/armor/weapon spots and the `*` gate at the
+  exit switch, and BFS-proves every objective reachable before emitting.
+  Levels larger than the 24×16 MAP band scroll it as a player-following window
+  whose typed edits land on exactly the world cells it shows. Spec
+  `npm/tests/demo-arcade-freedoom.spec.ts` proves real play through the live
+  `raw.replaceXml` + `editor.refresh()` loop: a BFS autopilot drives the
+  game's own input seam to a Freedoom pickup, and `DOCXODUS_DOOM_MARATHON=1`
+  plays the entire level — every sigil, then the exit — to the win banner.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo

@@ -27,6 +27,7 @@
 // machinery, and is deliberately NOT shipped in the npm package.
 
 import { COLS, ROWS, frameXml } from './ascii-scenes.js';
+import { FREEDOOM_LEVEL } from './freedoom-e1m1.js';
 
 // ─── Screen geometry ──────────────────────────────────────────────────
 // Same 92×26 cell grid as the Observatory (proven to repaint incrementally at
@@ -418,13 +419,20 @@ export function platformerCart() {
 // wall (any letter — your name works) into the map, resume, and it stands
 // in the corridor as 3-D towers of that letter. Collect every § sigil, then
 // step through the * gate.
+//
+// The raycaster is a LEVEL PACK player: the same renderer, controls, and
+// map-band round-trip run both the hand-drawn 24×16 dungeon and a real
+// Doom-format level (Cartridge 3 — Freedoom's E1M1, rasterized to a grid by
+// docs/demo/tools/wad2cart.mjs). Maps larger than the band scroll it as a
+// 24×16 window that follows the player; typing into the window edits the
+// world cells it shows, exactly as before.
 // ═══════════════════════════════════════════════════════════════════════
 
-const MAPW = 24, MAPH = 16;
 const VIEW_W = 64;                 // 3-D viewport columns inside the bezel
 const DIV_X = 1 + VIEW_W;          // grid column of the │ divider
 const BAND_X = DIV_X + 1;          // first grid column of the map band
 const MAP_TOP = FIELD_TOP + 2;     // first grid row of map cells in the band
+const WIN_W = 24, WIN_H = 16;      // map-band window (the classic map's size)
 
 // 24×16, every row exactly MAPW chars (the headless harness re-checks this
 // and walks the maze to prove every § and the * gate stay reachable). The
@@ -449,11 +457,55 @@ const DUNGEON_MAP = [
   '########################',
 ];
 
-/** Exported for the Playwright spec and headless logic checks. */
-export function dungeonCart() {
+/** The two level packs the raycaster plays. Geometry is the only difference:
+ *  the dungeon's cells are corridor-sized (≈64 map units of a Doom level),
+ *  while the rasterized Freedoom level uses 32-unit cells so its 64-unit
+ *  corridors survive the grid — hence its doubled stride and wall height. */
+const DUNGEON_PACK = {
+  name: 'dungeon',
+  label: '▓ The Docx Dungeon',
+  hudTitle: 'THE DOCX DUNGEON',
+  bg: '0A0F1A',
+  caption:
+    'Move **W/S** · strafe **A/D** · turn **←/→** · hold **Shift** to sprint. Collect every ' +
+    '§ sigil, then step through the * gate. The MAP panel is part of the document — pause, ' +
+    'type walls into it (any letter: your name works), resume, and walk your word in 3-D.',
+  hint: '<b>WASD</b> move · <b>←/→</b> turn · pause & type your name into the <b>MAP</b> — resume and walk through it in 3-D.',
+  winBanner: ['THE DUNGEON IS CLEARED', 'every § recovered - press R to delve again'],
+  rows: DUNGEON_MAP, w: 24, h: 16,
+  spawn: { x: 3.5, y: 8.5, dx: 1, dy: 0 }, // the open hall, down its long axis
+  moveSpeed: 3.4, // cells/second
+  wallScale: 1,   // one map cell = one full-height wall
+  coneRadius: 7,
+};
+
+const FREEDOOM_PACK = {
+  name: 'e1m1',
+  label: '☩ Freedoom E1M1',
+  hudTitle: 'FREEDOOM E1M1',
+  bg: '120D0A',
+  caption:
+    'A REAL Doom-format level — E1M1 from the Freedoom project (BSD-licensed), its 1,175 ' +
+    'linedefs rasterized onto this grid by `wad2cart.mjs` — playable inside a Word paragraph. ' +
+    'Move **W/S** · strafe **A/D** · turn **←/→** · **Shift** sprints. Recover every § the level ' +
+    'placed (its own keycard, armor and weapon spots), then step through the * exit switch. ' +
+    'The scrolling MAP window is still just document text: pause, type walls, resume.',
+  hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Shift</b> sprint — a real Doom-format map; the § sit where Freedoom placed its pickups.',
+  winBanner: ['E1M1 CLEARED', 'a real Doom-format level, beaten inside a Word document', 'press R to rip and tear again'],
+  rows: FREEDOOM_LEVEL.rows, w: FREEDOOM_LEVEL.w, h: FREEDOOM_LEVEL.h,
+  spawn: FREEDOOM_LEVEL.spawn,
+  moveSpeed: 6.8, // 32-unit cells: double the dungeon's 64-unit stride
+  wallScale: 2,   // Doom walls span two 32-unit cells
+  coneRadius: 14,
+};
+
+/** The raycaster, as a level-pack player. Exported to the Playwright spec and
+ *  headless logic checks through dungeonCart()/freedoomCart() below. */
+function raycastCart(pack) {
+  const W = pack.w, H = pack.h, S = pack.wallScale;
   let map, px, py, dx, dy, plx, ply, state;
 
-  const cell = (x, y) => (x >= 0 && x < MAPW && y >= 0 && y < MAPH ? map[y][x] : '#');
+  const cell = (x, y) => (x >= 0 && x < W && y >= 0 && y < H ? map[y][x] : '#');
   function sigilsLeft() {
     let n = 0;
     for (const row of map) for (const ch of row) if (ch === '§') n++;
@@ -463,10 +515,10 @@ export function dungeonCart() {
 
   function normalizeMap(rows) {
     map = [];
-    for (let y = 0; y < MAPH; y++) {
+    for (let y = 0; y < H; y++) {
       const src = rows[y] ?? '';
       const out = [];
-      for (let x = 0; x < MAPW; x++) {
+      for (let x = 0; x < W; x++) {
         let ch = src[x] ?? '.';
         if (ch === ' ') ch = '.';
         if (ch === '$') ch = '§';
@@ -477,9 +529,18 @@ export function dungeonCart() {
     }
     // The outer ring is always wall — the maze may be rewritten at will, but
     // the world stays closed.
-    for (let x = 0; x < MAPW; x++) { map[0][x] = '#'; map[MAPH - 1][x] = '#'; }
-    for (let y = 0; y < MAPH; y++) { map[y][0] = '#'; map[y][MAPW - 1] = '#'; }
+    for (let x = 0; x < W; x++) { map[0][x] = '#'; map[H - 1][x] = '#'; }
+    for (let y = 0; y < H; y++) { map[y][0] = '#'; map[y][W - 1] = '#'; }
   }
+
+  /** The map-band window: the classic 24×16 map in full, or — when the level
+   *  outgrows the band — a 24×16 view that follows the player. Both render
+   *  and the resume-parse derive it from the (unmoving-while-paused) player
+   *  position, so what you typed lands exactly where you typed it. */
+  const winPos = () => [
+    Math.max(0, Math.min(Math.max(0, W - WIN_W), Math.floor(px) - (WIN_W >> 1))),
+    Math.max(0, Math.min(Math.max(0, H - WIN_H), Math.floor(py) - (WIN_H >> 1))),
+  ];
 
   /** If the player's cell became a wall (someone typed on them), step to the
    *  nearest floor cell so the world stays playable. */
@@ -492,7 +553,7 @@ export function dungeonCart() {
       if (!isWall(cell(x, y))) { px = x + 0.5; py = y + 0.5; return; }
       for (const [ax, ay] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
         const k = ax + ',' + ay;
-        if (ax >= 0 && ax < MAPW && ay >= 0 && ay < MAPH && !seen.has(k)) {
+        if (ax >= 0 && ax < W && ay >= 0 && ay < H && !seen.has(k)) {
           seen.add(k); q.push([ax, ay]);
         }
       }
@@ -500,9 +561,11 @@ export function dungeonCart() {
   }
 
   function reset() {
-    normalizeMap(DUNGEON_MAP);
-    px = 3.5; py = 8.5; // the open hall, facing down its long axis
-    dx = 1; dy = 0; plx = 0; ply = 0.577; // FOV ≈ 60°
+    normalizeMap(pack.rows);
+    px = pack.spawn.x; py = pack.spawn.y;
+    const n = Math.hypot(pack.spawn.dx, pack.spawn.dy) || 1;
+    dx = pack.spawn.dx / n; dy = pack.spawn.dy / n;
+    plx = -dy * 0.577; ply = dx * 0.577; // FOV ≈ 60°
     state = 'run';
   }
   reset();
@@ -532,7 +595,7 @@ export function dungeonCart() {
       return;
     }
     const sprint = input.held('ShiftLeft', 'ShiftRight') ? 1.7 : 1;
-    const mv = 3.4 * sprint * dt, rot = 2.6 * dt;
+    const mv = pack.moveSpeed * sprint * dt, rot = 2.6 * dt;
     if (input.held('ArrowLeft')) rotate(-rot);
     if (input.held('ArrowRight')) rotate(rot);
     if (input.held('KeyW', 'ArrowUp')) tryMove(px + dx * mv, py + dy * mv);
@@ -557,7 +620,7 @@ export function dungeonCart() {
     const g = makeGrid();
     const left = sigilsLeft();
     drawChrome(g,
-      `THE DOCX DUNGEON   § left ${left}   gate ${left === 0 ? 'OPEN - step on *' : 'SEALED'}` +
+      `${pack.hudTitle}   § left ${left}   gate ${left === 0 ? 'OPEN - step on *' : 'SEALED'}` +
       '   WASD move - arrows turn');
     // The divider starts below the HUD row, which spans the full bezel width.
     for (let y = FIELD_TOP; y < ROWS - 1; y++) {
@@ -587,17 +650,19 @@ export function dungeonCart() {
       let sx = rdx < 0 ? (px - mx) * ddx : (mx + 1 - px) * ddx;
       let sy = rdy < 0 ? (py - my) * ddy : (my + 1 - py) * ddy;
       let side = 0, hit = '#', guard = 0;
-      while (guard++ < 64) {
+      const maxSteps = W + H + 8; // a ray can cross at most W+H cell borders
+      while (guard++ < maxSteps) {
         if (sx < sy) { sx += ddx; mx += stx; side = 0; } else { sy += ddy; my += sty; side = 1; }
         hit = cell(mx, my);
         if (isWall(hit)) break;
       }
       const dist = Math.max(0.05, side === 0 ? sx - ddx : sy - ddy);
       zbuf[col] = dist;
-      const h = Math.min(FIELD_ROWS, Math.round(FIELD_ROWS / dist));
+      const h = Math.min(FIELD_ROWS, Math.round((FIELD_ROWS * S) / dist));
       const y0 = FIELD_TOP + Math.floor((FIELD_ROWS - h) / 2);
-      const band = dist < 2.4 ? 0 : dist < 5.5 ? 1 : 2;
-      const density = (dist < 1.6 ? 0 : dist < 3 ? 1 : dist < 5 ? 2 : dist < 8 ? 3 : 4) + side;
+      const band = dist < 2.4 * S ? 0 : dist < 5.5 * S ? 1 : 2;
+      const density =
+        (dist < 1.6 * S ? 0 : dist < 3 * S ? 1 : dist < 5 * S ? 2 : dist < 8 * S ? 3 : 4) + side;
       const letter = /[A-Za-z0-9+]/.test(hit);
       const gate = hit === '*';
       const glyph = letter ? hit : gate ? '▒' : SHADE[Math.min(SHADE.length - 1, density)];
@@ -611,7 +676,7 @@ export function dungeonCart() {
     // Billboard sprites: § pickups (and the * gate once open, so it stays
     // visible as a floor marker).
     const sprites = [];
-    for (let y = 0; y < MAPH; y++) for (let x = 0; x < MAPW; x++) {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const ch = map[y][x];
       if (ch === '§' || (ch === '*' && left === 0)) {
         sprites.push({ x: x + 0.5, y: y + 0.5, ch, ink: ch === '§' ? 'FFD166' : '4ADE80' });
@@ -626,7 +691,7 @@ export function dungeonCart() {
       const ty = inv * (-ply * rx + plx * ry);
       if (ty <= 0.2) continue;
       const screen = Math.floor((VIEW_W / 2) * (1 + tx / ty));
-      const size = Math.max(1, Math.min(6, Math.round(5 / ty)));
+      const size = Math.max(1, Math.min(6, Math.round((5 * S) / ty)));
       const y1 = FIELD_TOP + Math.floor(FIELD_ROWS / 2) - Math.floor(size / 3);
       for (let sxp = screen - Math.floor(size / 2); sxp <= screen + Math.floor(size / 2); sxp++) {
         if (sxp < 0 || sxp >= VIEW_W || ty >= zbuf[sxp]) continue;
@@ -640,13 +705,17 @@ export function dungeonCart() {
     }
 
     // ── The MAP band: raw, typeable characters — this IS the level source.
-    writeText(g, FIELD_TOP, BAND_X + 1, 'MAP · edit me!', '5EEAD4');
+    // A level bigger than the band scrolls it as a window over the world.
+    const [wx, wy] = winPos();
+    const windowed = W > WIN_W || H > WIN_H;
+    writeText(g, FIELD_TOP, BAND_X + 1,
+      windowed ? `MAP @${wx},${wy} · edit!` : 'MAP · edit me!', '5EEAD4');
     // One ink for '.'/'#' (the glyphs already tell them apart) keeps a map
     // row at ~1 run; only the payload cells spend color.
-    for (let y = 0; y < MAPH; y++) {
+    for (let y = 0; y < WIN_H; y++) {
       const gy = MAP_TOP + y;
-      for (let x = 0; x < MAPW; x++) {
-        const ch = map[y][x];
+      for (let x = 0; x < WIN_W; x++) {
+        const ch = cell(wx + x, wy + y);
         g.chars[gy][BAND_X + 1 + x] = ch;
         g.colors[gy][BAND_X + 1 + x] =
           ch === '§' ? 'FFD166' : ch === '*' ? '4ADE80'
@@ -658,18 +727,19 @@ export function dungeonCart() {
     // that makes the map and the corridor read as one world — as you turn,
     // the lit wedge sweeps with the render.
     const FCOS = 0.83; // cos(FOV/2)
-    for (let y = 0; y < MAPH; y++) for (let x = 0; x < MAPW; x++) {
-      if (map[y][x] !== '.') continue;
-      const vx = x + 0.5 - px, vy = y + 0.5 - py;
+    for (let y = 0; y < WIN_H; y++) for (let x = 0; x < WIN_W; x++) {
+      const mx2 = wx + x, my2 = wy + y;
+      if (cell(mx2, my2) !== '.') continue;
+      const vx = mx2 + 0.5 - px, vy = my2 + 0.5 - py;
       const d = Math.hypot(vx, vy);
-      if (d < 0.4 || d > 7) continue;
+      if (d < 0.4 || d > pack.coneRadius) continue;
       if ((vx * dx + vy * dy) / d < FCOS) continue;
       let lit = true;
       const steps = Math.ceil(d * 3);
       for (let s = 1; s < steps; s++) {
         const t = s / steps;
         const cx2 = Math.floor(px + vx * t), cy2 = Math.floor(py + vy * t);
-        if (cx2 === x && cy2 === y) break;
+        if (cx2 === mx2 && cy2 === my2) break;
         if (isWall(cell(cx2, cy2))) { lit = false; break; }
       }
       if (!lit) continue;
@@ -677,45 +747,46 @@ export function dungeonCart() {
       g.colors[MAP_TOP + y][BAND_X + 1 + x] = 'C8D4E2';
     }
     // Directional player marker — the map's compass for the 3-D camera.
-    const pmx = Math.floor(px), pmy = Math.floor(py);
-    g.chars[MAP_TOP + pmy][BAND_X + 1 + pmx] =
-      Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? '►' : '◄') : (dy > 0 ? '▼' : '▲');
-    g.colors[MAP_TOP + pmy][BAND_X + 1 + pmx] = 'FF6B6B';
-    writeText(g, MAP_TOP + MAPH + 1, BAND_X + 1, 'letters become walls', '46556B');
-    writeText(g, MAP_TOP + MAPH + 2, BAND_X + 1, '$ = treasure  @ = you', '46556B');
+    const pmx = Math.floor(px) - wx, pmy = Math.floor(py) - wy;
+    if (pmx >= 0 && pmx < WIN_W && pmy >= 0 && pmy < WIN_H) {
+      g.chars[MAP_TOP + pmy][BAND_X + 1 + pmx] =
+        Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? '►' : '◄') : (dy > 0 ? '▼' : '▲');
+      g.colors[MAP_TOP + pmy][BAND_X + 1 + pmx] = 'FF6B6B';
+    }
+    writeText(g, MAP_TOP + WIN_H + 1, BAND_X + 1, 'letters become walls', '46556B');
+    writeText(g, MAP_TOP + WIN_H + 2, BAND_X + 1, '$ = treasure  @ = you', '46556B');
 
-    if (state === 'won') drawBanner(g, ['THE DUNGEON IS CLEARED', 'every § recovered - press R to delve again']);
-    return { grid: g, bg: '0A0F1A' };
+    if (state === 'won') drawBanner(g, pack.winBanner);
+    return { grid: g, bg: pack.bg };
   }
 
-  /** Rebuild the maze from the MAP band of the parsed document rows. Typed
-   *  letters become walls; a moved '@' teleports the player. */
+  /** Rebuild the world from the MAP band of the parsed document rows. Typed
+   *  letters become walls; a moved '@' teleports the player. The band shows
+   *  the winPos() window, so edits land on exactly the world cells it shows —
+   *  the rest of a big level is untouched. */
   function syncFromRows(rows) {
     if (state !== 'run') return; // a banner is on screen, not the maze
-    const parsed = [];
+    const [wx, wy] = winPos();
+    const parsed = map.map((r) => r.slice());
     let atX = null, atY = null;
-    for (let y = 0; y < MAPH; y++) {
+    for (let y = 0; y < WIN_H; y++) {
       const line = rows[MAP_TOP + y];
-      let band = null;
-      if (line != null) {
-        const div = line.indexOf('│', 1);
-        if (div >= 0) band = line.slice(div + 2, div + 2 + MAPW); // skip │ + pad col
-      }
-      if (band == null) { parsed.push(map[y].join('')); continue; }
-      const cells = [];
-      for (let x = 0; x < MAPW; x++) {
-        let ch = band[x] ?? map[y][x];
+      if (line == null) continue;
+      const div = line.indexOf('│', 1);
+      if (div < 0) continue;
+      const band = line.slice(div + 2, div + 2 + WIN_W); // skip │ + pad col
+      for (let x = 0; x < WIN_W; x++) {
+        let ch = band[x] ?? parsed[wy + y][wx + x];
         // '@' is the typeable teleport; ►◄▲▼ is how the renderer draws the
         // player, and '·' is the rendered view cone — all parse back to
         // position-or-floor, never to walls.
         if (ch === '@' || ch === '►' || ch === '◄' || ch === '▲' || ch === '▼') {
-          atX = x; atY = y; ch = '.';
+          atX = wx + x; atY = wy + y; ch = '.';
         } else if (ch === '·') ch = '.';
-        cells.push(ch);
+        parsed[wy + y][wx + x] = ch;
       }
-      parsed.push(cells.join(''));
     }
-    normalizeMap(parsed);
+    normalizeMap(parsed.map((r) => r.join('')));
     if (atX != null && (atX !== Math.floor(px) || atY !== Math.floor(py))) {
       px = atX + 0.5; py = atY + 0.5;
     }
@@ -723,13 +794,10 @@ export function dungeonCart() {
   }
 
   return {
-    name: 'dungeon',
-    label: '▓ The Docx Dungeon',
-    caption:
-      'Move **W/S** · strafe **A/D** · turn **←/→** · hold **Shift** to sprint. Collect every ' +
-      '§ sigil, then step through the * gate. The MAP panel is part of the document — pause, ' +
-      'type walls into it (any letter: your name works), resume, and walk your word in 3-D.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · pause & type your name into the <b>MAP</b> — resume and walk through it in 3-D.',
+    name: pack.name,
+    label: pack.label,
+    caption: pack.caption,
+    hint: pack.hint,
     reset,
     tick: tickSim,
     render,
@@ -737,10 +805,20 @@ export function dungeonCart() {
     state: () => ({
       player: { x: px, y: py, dx, dy },
       sigilsLeft: sigilsLeft(), mode: state,
+      window: winPos(),
       mapRow: (y) => (map[y] ?? []).join(''),
     }),
   };
 }
+
+/** Exported for the Playwright spec and headless logic checks. */
+export function dungeonCart() { return raycastCart(DUNGEON_PACK); }
+
+/** Cartridge 3 — a REAL Doom-format level: Freedoom's E1M1 (BSD-licensed),
+ *  rasterized to the raycaster's grid by docs/demo/tools/wad2cart.mjs. Same
+ *  controls, same renderer, same document round-trip — only the level pack
+ *  differs. */
+export function freedoomCart() { return raycastCart(FREEDOOM_PACK); }
 
 // ─── Frame → document plumbing ────────────────────────────────────────
 
@@ -823,7 +901,7 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
   let canvasAnchor = seeded.canvasAnchor;
   let openTag = seeded.openTag;
 
-  const carts = [platformerCart(), dungeonCart()];
+  const carts = [platformerCart(), dungeonCart(), freedoomCart()];
   let cart = carts.find((c) => c.name === startCart) ?? carts[0];
 
   let playing = false;

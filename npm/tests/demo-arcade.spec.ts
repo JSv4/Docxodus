@@ -55,7 +55,14 @@ async function installFrameGate(page: Page) {
   });
 }
 
-async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon') {
+/** The HUD word that proves a given cartridge's frame is on screen. */
+export const CART_HUD: Record<string, string> = {
+  quest: 'PILCROW',
+  dungeon: 'DUNGEON',
+  e1m1: 'FREEDOOM',
+};
+
+async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon' | 'e1m1') {
   await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&cart=${cart}`);
   await installFrameGate(page);
   await page.locator('#boot').click();
@@ -67,7 +74,7 @@ async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon') {
 }
 
 test.describe('THE DOCX ARCADE page', () => {
-  for (const cart of ['quest', 'dungeon'] as const) {
+  for (const cart of ['quest', 'dungeon', 'e1m1'] as const) {
     test(`${cart}: its very first frame reconciles incrementally`, async ({ page }) => {
       await bootGatedCartridge(page, cart);
       const state = await page.evaluate(() => {
@@ -82,7 +89,7 @@ test.describe('THE DOCX ARCADE page', () => {
       expect(state.frames).toBe(1);
       expect(state.fallback).toBeNull();
       expect(state.notes).toBe(1);
-      expect(state.text).toContain(cart === 'quest' ? 'PILCROW' : 'DUNGEON');
+      expect(state.text).toContain(CART_HUD[cart]);
     });
 
     test(`${cart}: ten consecutive frame saves reopen with stable canvas content`, async ({ page }) => {
@@ -98,7 +105,7 @@ test.describe('THE DOCX ARCADE page', () => {
         magic: number[];
       }> = [];
       for (let i = 0; i < 10; i++) {
-        observations.push(await page.evaluate(() => {
+        observations.push(await page.evaluate((hudWord) => {
           const a = (window as any).__arcade;
           const anchor = a.canvasAnchor() as string;
           const text = a.canvasText() as string;
@@ -108,7 +115,7 @@ test.describe('THE DOCX ARCADE page', () => {
           const parsed = new DOMParser().parseFromString(html, 'text/html');
           const reopenedCanvas = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
             .find((paragraph) => (paragraph.textContent ?? '')
-              .includes(a.cart() === 'quest' ? 'PILCROW' : 'DUNGEON')) ?? null;
+              .includes(hudWord)) ?? null;
           const reopenedAnchor = reopenedCanvas?.getAttribute('data-anchor') ?? null;
           const reopenedText = reopenedCanvas?.textContent ?? '';
           a.bridge.CloseSession(reopened);
@@ -120,7 +127,7 @@ test.describe('THE DOCX ARCADE page', () => {
             reopenedText,
             magic: Array.from(bytes.slice(0, 2)),
           };
-        }));
+        }, CART_HUD[cart]));
         if (i < 9) {
           await page.evaluate(() => (window as any).__arcadeFrameGate.release());
           await page.waitForFunction((frame) => (window as any).__arcade.frames() === frame, i + 2);
@@ -133,7 +140,7 @@ test.describe('THE DOCX ARCADE page', () => {
         expect(observation.magic).toEqual([0x50, 0x4b]);
         expect(observation.reopenedAnchor).toMatch(/^[0-9a-f]{32}$/);
         expect(observation.reopenedText).toBe(observation.text);
-        expect(observation.reopenedText).toContain(cart === 'quest' ? 'PILCROW' : 'DUNGEON');
+        expect(observation.reopenedText).toContain(CART_HUD[cart]);
       }
     });
   }
@@ -160,7 +167,7 @@ test.describe('THE DOCX ARCADE page', () => {
     expect(state.text).toContain('PILCROW');      // HUD present
     expect(state.text).toContain('│');            // bezel present
     expect(state.fallback).toBeNull();            // per-frame path stayed incremental
-    expect(state.cartButtons).toBe(2);
+    expect(state.cartButtons).toBe(3);
     // Computed visibility, not the `hidden` attribute: the overlay/dock carry
     // explicit display values, which would silently defeat the attribute.
     await expect(page.locator('#dock')).toBeVisible();
