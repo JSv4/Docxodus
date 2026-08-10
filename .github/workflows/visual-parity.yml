@@ -40,11 +40,26 @@ jobs:
         with:
           node-version: '22'
 
+      # The font set is half the contract: Carlito, Caladea, and the Liberation family are the
+      # freely redistributable metric clones of the Office families every fixture names. No font
+      # is vendored into this repository.
       - name: Install deterministic rendering tools and fonts
         run: >-
           sudo apt-get update && sudo apt-get install -y
           libreoffice-writer poppler-utils fonts-liberation2
           fonts-crosextra-carlito fonts-crosextra-caladea
+
+      # The other half: WHICH clone each family resolves to. Chromium and LibreOffice both read
+      # fontconfig, so installing the fragment system-wide makes them substitute identically —
+      # the run then measures the renderer instead of the host. The benchmark also layers this
+      # file in itself; installing it here makes the CI machine reproduce a local run exactly.
+      - name: Apply the shared font-substitution contract
+        run: |
+          sudo cp npm/tests/visual-parity/fontconfig/60-docxodus-office-substitutes.conf /etc/fonts/conf.d/
+          fc-cache -f
+          for family in Calibri "Calibri Light" Cambria "Times New Roman" Arial "Courier New"; do
+            printf '%-16s -> ' "$family"; fc-match "$family" --format='%{family} (%{file})\n'
+          done
 
       - name: Install npm dependencies
         run: cd npm && npm ci
@@ -60,6 +75,14 @@ jobs:
           DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity
           DOCXODUS_VISUAL_PARITY_FILTER: ${{ inputs.filter }}
           DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
+          # Measure the SYSTEM install from the previous step rather than layering the fragment
+          # again. Otherwise the run would satisfy the contract by itself and a broken system
+          # install — the path the README tells humans to use — would never be exercised.
+          DOCXODUS_VISUAL_PARITY_HOST_FONTS: '1'
+          # And having made the run depend on that install, require it: a machine that is supposed
+          # to have the fonts must fail loudly rather than skip, or the weekly run quietly becomes
+          # a green no-op that produces no report.
+          DOCXODUS_VISUAL_PARITY_REQUIRE_FONTS: '1'
         run: cd npm && npm run test:visual-parity
 
       - name: Upload visual comparison report
