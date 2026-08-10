@@ -1470,12 +1470,11 @@ namespace OxPt
         }
 
         [Fact]
-        public void HC015_TabPrecedingText_UsesMinWidth()
+        public void HC015_TabPrecedingText_UsesMeasuredFlexAdvance()
         {
-            // Test that text preceding a tab (like list numbers "2.3") uses min-width
-            // instead of fixed width to prevent text overflow/overlap issues.
-            // This fixes the bug where section numbers would overlap with heading text
-            // because the width was calculated as 0 for text elements.
+            // Text preceding a tab (like list numbers "2.3") and the tab itself form a
+            // measured flex segment. The label keeps its natural width while the tab absorbs
+            // any font-metric difference before the following text.
 
             using (MemoryStream ms = new MemoryStream())
             {
@@ -1539,30 +1538,16 @@ namespace OxPt
                     XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
                     string htmlString = html.ToString();
 
-                    // The key assertion: verify min-width is used instead of width
-                    // for elements preceding tabs. This prevents text overflow.
-                    Assert.Contains("min-width:", htmlString);
+                    Assert.Contains("data-docx-tab=\"left\"", htmlString);
+                    Assert.Contains("display: inline-flex;", htmlString);
+                    Assert.Contains("flex-shrink: 0;", htmlString);
+                    Assert.Contains("width: 0.500in;", htmlString);
 
-                    // Verify the content is present
                     Assert.Contains("2.3", htmlString);
                     Assert.Contains("Section Title", htmlString);
 
-                    // Verify we're NOT using fixed width (which would cause overflow)
-                    // The CSS should have min-width, not a plain width for tab-preceding spans
-                    var styleElement = html.Descendants(Xhtml.style).FirstOrDefault();
-                    if (styleElement != null)
-                    {
-                        string css = styleElement.Value;
-                        // Check that min-width appears in the CSS for inline-block elements
-                        // These are the spans that wrap text preceding tabs
-                        Assert.True(
-                            css.Contains("min-width:") || htmlString.Contains("min-width:"),
-                            "Expected min-width to be used for tab-preceding content to prevent text overflow"
-                        );
-                    }
-
                     // Save for debugging
-                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-MinWidth.html"));
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-MeasuredFlexAdvance.html"));
                     File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
                 }
             }
@@ -2144,9 +2129,9 @@ namespace OxPt
                     Assert.Contains("Col2", htmlString);
                     Assert.Contains("Col3", htmlString);
 
-                    // Count margin/spacing occurrences - should have multiple for tabs
-                    int marginCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"margin[^;]*:").Count;
-                    Assert.True(marginCount >= 2, $"Expected at least 2 margin styles for tabs, found {marginCount}");
+                    // Count explicit tab boxes - each tab advance is represented by its width.
+                    int tabCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"data-docx-tab=").Count;
+                    Assert.True(tabCount >= 2, $"Expected at least 2 tab boxes, found {tabCount}");
 
                     // Save for debugging
                     var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Multiple.html"));
@@ -2180,10 +2165,9 @@ namespace OxPt
                     var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabLeaders-HC024.html"));
                     File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
 
-                    // Check for dot leader characters - at least 3 dots in a row
-                    // Note: The exact count varies by platform due to font measurement differences
-                    bool hasDotLeaders = System.Text.RegularExpressions.Regex.IsMatch(htmlString, @"\.{3,}");
-                    Assert.True(hasDotLeaders, "Expected dot leader characters (...) in HTML output");
+                    // Leaders are CSS rules across the measured tab box, independent of fonts.
+                    Assert.Contains("data-docx-tab-leader=\"dot\"", htmlString);
+                    Assert.Contains("border-bottom: 1px dotted currentColor;", htmlString);
                 }
             }
         }
@@ -2262,9 +2246,9 @@ namespace OxPt
                     System.Diagnostics.Debug.WriteLine("=== HTML OUTPUT ===");
                     System.Diagnostics.Debug.WriteLine(htmlString);
 
-                    // Check for dot leader characters - at least 5 dots in a row
-                    bool hasDotLeaders = System.Text.RegularExpressions.Regex.IsMatch(htmlString, @"\.{5,}");
-                    Assert.True(hasDotLeaders, $"Expected dot leader characters (.....) in HTML output. HTML:\n{htmlString.Substring(0, Math.Min(2000, htmlString.Length))}");
+                    Assert.Contains("data-docx-tab=\"right\"", htmlString);
+                    Assert.Contains("data-docx-tab-leader=\"dot\"", htmlString);
+                    Assert.Contains("border-bottom: 1px dotted currentColor;", htmlString);
                 }
             }
         }

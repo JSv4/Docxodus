@@ -147,6 +147,8 @@ namespace OxPt
             return html
                 .Descendants(Xh + "span")
                 .Where(s => (string?)s.Attribute("data-list-marker") == "true")
+                .Where(s => !s.Descendants(Xh + "span")
+                    .Any(d => (string?)d.Attribute("data-list-marker") == "true"))
                 .Where(s => Regex.IsMatch(s.Value, @"^\d+\.$"))
                 .Select(s => (
                     Number: s.Value,

@@ -29,6 +29,53 @@ public class HtmlConversionOpsTests
     private const string StrictRels =
         "http://purl.oclc.org/ooxml/officeDocument/relationships";
 
+    private static byte[] TabStopDocxBytes(
+        Wp.TabStopValues alignment,
+        string before,
+        string after,
+        Wp.TabStopLeaderCharValues? leader = null)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var tabStop = new Wp.TabStop { Val = alignment, Position = 5760 };
+            if (leader != null)
+                tabStop.Leader = leader.Value;
+
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.ParagraphProperties(new Wp.Tabs(tabStop)),
+                        new Wp.Run(new Wp.Text(before)),
+                        new Wp.Run(new Wp.TabChar()),
+                        new Wp.Run(new Wp.Text(after))),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 12240, Height = 15840 },
+                        new Wp.PageMargin
+                        {
+                            Top = 1440,
+                            Right = 1440,
+                            Bottom = 1440,
+                            Left = 1440,
+                        })));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts
+                            {
+                                Ascii = "MissingTabGeometryFont",
+                                HighAnsi = "MissingTabGeometryFont",
+                            },
+                            new Wp.FontSize { Val = "24" }))));
+            main.Document.Save();
+        }
+
+        return stream.ToArray();
+    }
+
     private static byte[] StrictDocumentOnlyDocxBytes(string text)
     {
         var bytes = DocumentOnlyDocxBytes(text);
@@ -173,6 +220,92 @@ public class HtmlConversionOpsTests
         Assert.Contains(">7<", paginated);
         Assert.Contains("Visible TOC title", web);
         Assert.DoesNotContain(">7<", web);
+    }
+
+    [Theory]
+    [InlineData("right", "W", "3.500", "width: 3.900in")]
+    [InlineData("center", "WWWW", "3.400", "width: 3.800in")]
+    [InlineData("decimal", "12.34", "3.400", "width: 3.800in")]
+    public void HCO088_AlignedTabWidth_MeasuresOnlyFollowingText(
+        string alignment, string after, string expectedTabWidth, string expectedPrecedingWidth)
+    {
+        // A tab's following segment is measured exactly as authored. The old unconditional
+        // trailing blank shifted right, center, and decimal alignment before the HTML renderer
+        // saw the run. Use an unavailable font to make the deterministic fallback explicit.
+        string html = HtmlConversionOps.ConvertToHtml(
+            TabStopDocxBytes(
+                alignment switch
+                {
+                    "right" => Wp.TabStopValues.Right,
+                    "center" => Wp.TabStopValues.Center,
+                    "decimal" => Wp.TabStopValues.Decimal,
+                    _ => throw new System.ArgumentOutOfRangeException(nameof(alignment)),
+                },
+                "iiii",
+                after),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+        var tab = root.Descendants()
+            .Single(element => (string?)element.Attribute("data-docx-tab") == alignment);
+
+        Assert.Equal(alignment, (string?)tab.Attribute("data-docx-tab"));
+        Assert.Equal(expectedTabWidth, (string?)tab.Attribute("data-docx-tab-width"));
+        Assert.Contains(expectedPrecedingWidth, (string?)tab.Parent!.Attribute("style"));
+        Assert.Contains($"iiii{after}", tab.Parent!.Parent!.Value);
+        Assert.Empty(tab.Nodes());
+    }
+
+    [Fact]
+    public void HCO089_RightTabWidth_TracksCurrentPositionAndFollowingRunWidth()
+    {
+        static (decimal TabWidth, decimal PrecedingWidth) Geometry(string before, string after)
+        {
+            string html = HtmlConversionOps.ConvertToHtml(
+                TabStopDocxBytes(Wp.TabStopValues.Right, before, after),
+                new HtmlConversionOptions { FabricateCssClasses = false });
+            var root = XElement.Parse(html);
+            var tab = root.Descendants()
+                .Single(element => (string?)element.Attribute("data-docx-tab") == "right");
+            var tabStyle = (string)tab.Attribute("style")!;
+            var precedingStyle = (string)tab.Parent!.Attribute("style")!;
+            return (
+                decimal.Parse(
+                    tabStyle.Split("width: ")[1].Split("in")[0],
+                    System.Globalization.CultureInfo.InvariantCulture),
+                decimal.Parse(
+                    precedingStyle.Split("width: ")[1].Split("in")[0],
+                    System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        var narrowCurrent = Geometry("iiii", "W");
+        var wideCurrent = Geometry("iiiiiiii", "W");
+        var wideFollowing = Geometry("iiii", "WWWWW");
+
+        Assert.Equal(3.50m, narrowCurrent.TabWidth);
+        Assert.Equal(3.10m, wideCurrent.TabWidth);
+        Assert.Equal(narrowCurrent.PrecedingWidth, wideCurrent.PrecedingWidth);
+        Assert.Equal(3.900m, narrowCurrent.PrecedingWidth);
+        Assert.Equal(3.500m, wideFollowing.PrecedingWidth);
+    }
+
+    [Fact]
+    public void HCO090_DotLeader_FillsItsCalculatedAdvance()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(
+            TabStopDocxBytes(
+                Wp.TabStopValues.Right,
+                "iiii",
+                "W",
+                Wp.TabStopLeaderCharValues.Dot),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+        var leader = root.Descendants()
+            .Single(element => (string?)element.Attribute("data-docx-tab-leader") == "dot");
+
+        Assert.Equal("right", (string?)leader.Attribute("data-docx-tab"));
+        Assert.Empty(leader.Value);
+        Assert.Contains("width: 3.50in", (string?)leader.Attribute("style"));
+        Assert.Contains("border-bottom: 1px dotted currentColor", (string?)leader.Attribute("style"));
     }
 
     [Fact]
@@ -649,7 +782,7 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("AfterTab", html);
         // 720 twips (Word's implicit default tab stop) == 0.5in from position 0.
-        Assert.Contains("margin: 0 0 0 0.50in", html);
+        Assert.Contains("width: 0.50in", html);
     }
 
     // Same computation, but with an explicit DocumentSettingsPart that overrides
@@ -676,8 +809,8 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
 
         Assert.Contains("AfterTab", html);
-        Assert.Contains("margin: 0 0 0 1.00in", html);
-        Assert.DoesNotContain("margin: 0 0 0 0.50in", html);
+        Assert.Contains("width: 1.00in", html);
+        Assert.DoesNotContain("width: 0.50in", html);
     }
 
     // DocumentSettingsPart present but with no w:defaultTabStop element at all (legal — the
@@ -703,7 +836,7 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
 
         Assert.Contains("AfterTab", html);
-        Assert.Contains("margin: 0 0 0 0.50in", html);
+        Assert.Contains("width: 0.50in", html);
     }
 
     // AddFormattingParts copies formatting parts into the RenderBlockHtml throwaway doc but no

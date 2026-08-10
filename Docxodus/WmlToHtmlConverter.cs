@@ -2724,10 +2724,15 @@ namespace Docxodus
                                 .First(x => x.Id == (string)element.Attribute(R.id))
                                 .Uri
                             ),
-                        element.Elements(W.r).Select(run => ConvertRun(wordDoc, settings, run))
+                        ConvertHyperlinkRuns(wordDoc, settings, element)
                         );
                     if (!a.Nodes().Any())
                         a.Add(new XText(""));
+                    a.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "color", "inherit" },
+                        { "text-decoration", "none" },
+                    });
                     return a;
                 }
                 catch (UriFormatException)
@@ -3018,12 +3023,40 @@ namespace Docxodus
             var style = new Dictionary<string, string>();
             var a = new XElement(Xhtml.a,
                 new XAttribute("href", "#" + (string) element.Attribute(W.anchor)),
-                element.Elements(W.r).Select(run => ConvertRun(wordDoc, settings, run)));
+                ConvertHyperlinkRuns(wordDoc, settings, element));
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
+            style.Add("color", "inherit");
             style.Add("text-decoration", "none");
             a.AddAnnotation(style);
             return a;
+        }
+
+        private static IEnumerable<object> ConvertHyperlinkRuns(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement hyperlink)
+        {
+            var runs = hyperlink.Elements(W.r).ToList();
+            var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
+            if (firstTabRun == null)
+                return runs.Select(run => ConvertRun(wordDoc, settings, run));
+
+            // A cached TOC keeps its label, leader tab, and page-number field inside one
+            // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
+            // aligned segment retains the OOXML target instead of treating the tab as an
+            // unrelated inline glyph inside the link.
+            var runsPrecedingTab = runs.TakeWhile(run => run != firstTabRun).ToList();
+            var content = TransformElementsPrecedingTab(
+                wordDoc,
+                settings,
+                runsPrecedingTab,
+                firstTabRun);
+            content.AddRange(runs
+                .SkipWhile(run => run != firstTabRun)
+                .Skip(1)
+                .Select(run => ConvertRun(wordDoc, settings, run)));
+            return content;
         }
 
         private static object ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
@@ -4368,70 +4401,27 @@ namespace Docxodus
             if (tabWidthAtt == null) return null;
 
             var leader = (string) element.Attribute(PtOpenXml.Leader);
+            var alignment = (string) element.Attribute(PtOpenXml.TabAlignment) ?? "left";
             var tabWidth = (decimal) tabWidthAtt;
             var style = new Dictionary<string, string>();
             XElement span;
             if (leader != null)
             {
-                var leaderChar = ".";
-                if (leader == "hyphen")
-                    leaderChar = "-";
-                else if (leader == "dot")
-                    leaderChar = ".";
-                else if (leader == "underscore")
-                    leaderChar = "_";
-
-                var runContainingTabToReplace = element.Ancestors(W.r).First();
-                var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
-                                  runContainingTabToReplace.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
-
-                var dummyRun = new XElement(W.r,
-                    fontNameAtt,
-                    runContainingTabToReplace.Elements(W.rPr),
-                    new XElement(W.t, leaderChar));
-
-                var widthOfLeaderChar = CalcWidthOfRunInTwips(dummyRun);
-
-                bool forceArial = false;
-                if (widthOfLeaderChar == 0)
+                // A leader is a rule across the tab advance, not ordinary text. Repeating a
+                // measured glyph made the fill depend on server/WASM font availability and left
+                // most of wide TOC leaders blank. CSS rules fill the exact computed box and retain
+                // the OOXML distinction between dotted, hyphenated, and underscore leaders.
+                span = new XElement(Xhtml.span, new XText(string.Empty));
+                style.Add("display", "inline-block");
+                style.Add("margin", "0 0 0 0");
+                style.Add("padding", "0 0 0 0");
+                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
+                style.Add("border-bottom", leader switch
                 {
-                    dummyRun = new XElement(W.r,
-                        new XAttribute(PtOpenXml.FontName, "Arial"),
-                        runContainingTabToReplace.Elements(W.rPr),
-                        new XElement(W.t, leaderChar));
-                    widthOfLeaderChar = CalcWidthOfRunInTwips(dummyRun);
-                    forceArial = true;
-                }
-
-                if (widthOfLeaderChar != 0)
-                {
-                    var numberOfLeaderChars = (int) (Math.Floor((tabWidth*1440)/widthOfLeaderChar));
-                    if (numberOfLeaderChars < 0)
-                        numberOfLeaderChars = 0;
-                    span = new XElement(Xhtml.span,
-                        new XAttribute(XNamespace.Xml + "space", "preserve"),
-                        " " + "".PadRight(numberOfLeaderChars, leaderChar[0]) + " ");
-                    style.Add("display", "inline-block");
-                    style.Add("margin", "0 0 0 0");
-                    style.Add("padding", "0 0 0 0");
-                    style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
-                    style.Add("text-align", "center");
-                    if (forceArial)
-                        style.Add("font-family", "Arial");
-                }
-                else
-                {
-                    span = new XElement(Xhtml.span, new XAttribute(XNamespace.Xml + "space", "preserve"), " ");
-                    style.Add("display", "inline-block");
-                    style.Add("margin", "0 0 0 0");
-                    style.Add("padding", "0 0 0 0");
-                    style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
-                    style.Add("text-align", "center");
-                    if (leader == "underscore")
-                    {
-                        style.Add("text-decoration", "underline");
-                    }
-                }
+                    "hyphen" => "1px dashed currentColor",
+                    "underscore" => "1px solid currentColor",
+                    _ => "1px dotted currentColor",
+                });
             }
             else
             {
@@ -4449,11 +4439,23 @@ namespace Docxodus
                             else
                                 span = new XElement(Xhtml.span, new XEntity("#x200e")); // LRM
 #else
-                span = new XElement(Xhtml.span, new XEntity("#x00a0"));
+                // The tab advance is the box itself. A nonbreaking-space child adds an
+                // unmeasured glyph after that advance and shifts every aligned following run.
+                span = new XElement(Xhtml.span, new XText(string.Empty));
 #endif
-                style.Add("margin", string.Format(NumberFormatInfo.InvariantInfo, "0 0 0 {0:0.00}in", tabWidth));
+                style.Add("display", "inline-block");
                 style.Add("padding", "0 0 0 0");
+                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
             }
+            // Empty inline boxes have browser-dependent synthesized baselines. Keep the tab's
+            // content box heightless so it advances horizontally without changing the line box;
+            // leader borders still paint across the computed width.
+            style.Add("height", "0");
+            span.Add(new XAttribute("data-docx-tab", alignment));
+            span.Add(new XAttribute("data-docx-tab-width",
+                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", tabWidth)));
+            if (leader != null)
+                span.Add(new XAttribute("data-docx-tab-leader", leader));
             span.AddAnnotation(style);
             return span;
         }
@@ -5505,20 +5507,30 @@ namespace Docxodus
 
             if (txElementsPrecedingTab.Count > 1 || (txElementsPrecedingTab.Count > 0 && tabSpan != null))
             {
-                var contentList = new List<object>(txElementsPrecedingTab);
-                if (tabSpan != null)
-                    contentList.Add(tabSpan);
+                var precedingSpan = new XElement(Xhtml.span, txElementsPrecedingTab);
+                precedingSpan.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "flex-shrink", "0" },
+                    { "white-space", "nowrap" },
+                });
 
-                var span = new XElement(Xhtml.span, listMarkerAttr, contentList);
-                // Use min-width instead of width so the container expands to fit content
-                // when text is wider than the calculated tab position. This fixes issues
-                // where list numbers (e.g., "2.3") overlap with heading text because the
-                // TabWidth for text elements is 0 (due to font measurement limitations).
+                if (tabSpan is XElement tabSpanElement)
+                {
+                    var tabStyle = tabSpanElement.Annotation<Dictionary<string, string>>();
+                    tabStyle["flex-grow"] = "1";
+                    tabStyle["flex-shrink"] = "1";
+                }
+
+                var span = new XElement(Xhtml.span, listMarkerAttr, precedingSpan, tabSpan);
+                // The wrapper owns the aligned segment's total advance. Let the browser assign
+                // any font-metric difference to the tab itself, so leaders fill from the actual
+                // rendered label to the target instead of leaving invisible padding after them.
                 var spanStyle = new Dictionary<string, string>
                 {
-                    { "display", "inline-block" },
+                    { "align-items", "baseline" },
+                    { "display", "inline-flex" },
                     { "text-indent", "0" },
-                    { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    { "width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                 };
                 span.AddAnnotation(spanStyle);
                 return new List<object> { span };
@@ -7350,15 +7362,10 @@ namespace Docxodus
             var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
 
-            // Appended blank as a quick fix to accommodate &nbsp; that will get
-            // appended to some layout-critical runs such as list item numbers.
-            // In some cases, this might not be required or even wrong, so this
-            // must be revisited.
-            // TODO: Revisit.
             var runText = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.t)
                 .Select(t => (string) t)
-                .StringConcatenate() + " ";
+                .StringConcatenate();
 
             var tabLength = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.tab)
@@ -7393,10 +7400,11 @@ namespace Docxodus
             int w;
             if (FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
             {
-                // Character-based estimation: charWidth = fontSize * 0.6 / 2 per character
-                // This matches the estimation in MetricsGetter._getTextWidth
+                // Character-based estimation starts in point space (w:sz is half-points), while
+                // the rest of this method consumes CSS-pixel widths. Normalize it to the same
+                // 96-DPI coordinate space before converting the result to twips below.
                 float charWidth = (float)sz * 0.6f / 2f;
-                w = (int)(runText.Length * charWidth);
+                w = (int)(runText.Length * charWidth * 96f / 72f);
             }
             else
             {

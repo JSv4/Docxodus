@@ -236,13 +236,16 @@ When adjacent cells have different borders, priority is determined by:
 
 **External links** (`w:hyperlink` with `r:id`):
 ```html
-<a href="https://example.com">link text</a>
+<a href="https://example.com" style="color: inherit; text-decoration: none">link text</a>
 ```
 
 **Bookmark links** (`w:hyperlink` with `w:anchor`):
 ```html
-<a href="#bookmarkName" style="text-decoration: none">link text</a>
+<a href="#bookmarkName" style="color: inherit; text-decoration: none">link text</a>
 ```
+
+The anchor suppresses browser-default link presentation. Explicit Word run styling inside the link
+still wins, while unstyled cached field runs inherit the surrounding document color.
 
 **HYPERLINK fields** (detected via `FieldRetriever`):
 ```html
@@ -251,10 +254,18 @@ When adjacent cells have different borders, priority is determined by:
 
 ### Tabs
 
-Tab characters are converted to `<span>` elements with computed widths:
+`CalculateSpanWidthForTabs` measures the current position and following segment, then annotates each
+tab with the advance needed for its OOXML target. During transformation the text and tab become one
+fixed-width inline flex row; the browser assigns any font-metric difference to the tab remainder, so
+the post-tab text stays aligned without invisible padding after a leader. The same grouping is used
+when a cached TOC nests the runs inside `w:hyperlink`.
 
 ```html
-<span style="margin: 0 0 0 0.75in; padding: 0 0 0 0">&#x00a0;</span>
+<span style="align-items: baseline; display: inline-flex; width: 4.000in">
+  <span style="flex-shrink: 0">Before</span>
+  <span data-docx-tab="right" data-docx-tab-width="3.500"
+        style="display: inline-block; flex-grow: 1; width: 3.50in"></span>
+</span>
 ```
 
 **Tab types supported:**
@@ -265,7 +276,8 @@ Tab characters are converted to `<span>` elements with computed widths:
 
 **Tab leaders:**
 - `dot` (.) `hyphen` (-) `underscore` (_)
-- Rendered as repeated characters within the span
+- Rendered as dotted, dashed, or solid rules across the exact tab box; leader fill therefore does
+  not depend on whether the document font is installed in the native or WASM runtime.
 
 ### Images
 
@@ -472,10 +484,11 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 
 ### Font Metrics
 
-Tab width calculation depends on SkiaSharp's font metrics:
-- Unknown fonts return zero width (tabs may render incorrectly)
-- System font availability affects accuracy
-- Azure/server environments may lack fonts
+Native tab width calculation uses SkiaSharp font metrics. WASM and unavailable-font paths use a
+deterministic character estimate normalized into the same 96-DPI layout space. Post-tab alignment
+uses the measured following run, while the inline flex wrapper absorbs current-run metric drift into
+the tab box. System font availability can still affect wrapping and the small residual difference
+between an aligned glyph edge and its target.
 
 ### Browser Compatibility
 

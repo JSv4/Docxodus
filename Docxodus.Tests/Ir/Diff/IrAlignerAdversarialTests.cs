@@ -16,6 +16,7 @@ namespace Docxodus.Tests.Ir.Diff;
 /// fully-rewritten stress fixtures, a contiguous block-move LIS check, and an anti-O(n²) scale guard.
 /// All documents are built programmatically via <see cref="IrTestDocuments"/> + <see cref="IrReader"/>.
 /// </summary>
+[Collection(IrAlignerPerformanceCollection.Name)]
 public class IrAlignerAdversarialTests
 {
     private static readonly IrReaderOptions NoSources =
@@ -170,30 +171,30 @@ public class IrAlignerAdversarialTests
 
     [Trait("Category", "Perf")]
     [Fact]
-    public void Scale_guard_500_vs_2000_wall_ratio_within_12x()
+    public void Scale_guard_500_vs_2000_cpu_ratio_within_12x()
     {
         // Both inputs are the near-identical fixture (distinct clauses) self-paired with ONE edit, so
         // every block anchors uniquely and the only gap is a single 1-block Modified gap — i.e. NO large
         // all-distinct gap that would trip the InOrderRefine G²/2 worst case. This isolates the spine /
-        // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 12× the wall time (a true O(n²) regression reads ~16×; the slack absorbs parallel-suite scheduler noise at ms scale).
-        double small = BestSampleMs(500);
-        double large = BestSampleMs(2000);
+        // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 12× the CPU time
+        // (a true O(n²) regression reads ~16×). Process CPU time keeps shared-runner scheduling noise
+        // from looking like algorithmic work.
+        double small = BestSampleCpuMs(500);
+        double large = BestSampleCpuMs(2000);
         double ratio = large / Math.Max(small, 0.0001);
 
-        _out.WriteLine($"Scale guard: 500-para = {small:F2} ms, 2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
+        _out.WriteLine($"Scale guard CPU: 500-para = {small:F2} ms, 2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
         Assert.True(ratio <= 12.0,
-            $"Align wall-time ratio {ratio:F2}x for 4x input exceeds the 12x anti-O(n²) guard " +
+            $"Align CPU-time ratio {ratio:F2}x for 4x input exceeds the 12x anti-O(n²) guard " +
             $"(500={small:F2}ms, 2000={large:F2}ms).");
     }
 
     /// <summary>
-    /// Warm up once, then best-of-5 wall-time (ms per align) for an n-para self-pair with one edit.
-    /// Each sample times a BATCH of 10 aligns: single-align wall times at n=500 are ~2 ms, small
-    /// enough that scheduler noise under parallel test load dominates the ratio's denominator
-    /// (observed 8.72× flake in a full-suite run vs 4.7× in isolation). Batching keeps every sample
-    /// well above timer/scheduler granularity without changing what is measured.
+    /// Collect first, warm up once, then take the best of five process-CPU samples (ms per align)
+    /// for an n-paragraph self-pair with one edit. Each sample times a batch of 10 aligns so the
+    /// measurement stays well above platform timer granularity.
     /// </summary>
-    private static double BestSampleMs(int n)
+    private static double BestSampleCpuMs(int n)
     {
         const int alignsPerSample = 10;
         var baseParas = DistinctClauses(n);
@@ -203,16 +204,19 @@ public class IrAlignerAdversarialTests
         var l = Doc(baseParas);
         var r = Doc(edited);
 
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
         _ = Align(l, r); // warm-up (JIT, dictionary growth)
 
+        using var process = Process.GetCurrentProcess();
         double best = double.MaxValue;
         for (int i = 0; i < 5; i++)
         {
-            var sw = Stopwatch.StartNew();
+            TimeSpan start = process.TotalProcessorTime;
             for (int j = 0; j < alignsPerSample; j++)
                 _ = Align(l, r);
-            sw.Stop();
-            best = Math.Min(best, sw.Elapsed.TotalMilliseconds / alignsPerSample);
+            TimeSpan elapsed = process.TotalProcessorTime - start;
+            best = Math.Min(best, elapsed.TotalMilliseconds / alignsPerSample);
         }
         return best;
     }
@@ -221,4 +225,14 @@ public class IrAlignerAdversarialTests
         b is IrParagraph p
             ? string.Concat(p.Inlines.OfType<IrTextRun>().Select(t => t.Text))
             : string.Empty;
+}
+
+/// <summary>
+/// Keeps the scale guard isolated from the default parallel suite so unrelated test work is not
+/// counted in this process's CPU-time measurement.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class IrAlignerPerformanceCollection
+{
+    public const string Name = "IR aligner performance";
 }

@@ -2102,9 +2102,10 @@ public class DocxSessionTests
         // ("o"), not collapse it to level 0's "·". This guards BOTH the singleLevel→ilvl=0 force
         // AND the bullet-continuation collapse — either bug renders the nested item as "· First…".
         var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("x.docx", bytes),
-            new WmlToHtmlConverterSettings { StampAnchors = true }).ToString(SaveOptions.DisableFormatting);
-        var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", string.Empty)
-            .Replace("&#x00a0;", " ");
+            new WmlToHtmlConverterSettings { StampAnchors = true });
+        foreach (var tab in html.Descendants().Where(e => e.Attribute("data-docx-tab") != null).ToList())
+            tab.ReplaceWith(new XText(" "));
+        var text = html.Value.Replace('\u00a0', ' ');
         Assert.Contains("o First bullet", text, StringComparison.Ordinal);   // nested → level 1 glyph
         Assert.Contains("· Second bullet", text, StringComparison.Ordinal);  // sibling stays level 0
     }
