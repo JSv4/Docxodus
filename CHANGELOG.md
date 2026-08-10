@@ -57,6 +57,19 @@ All notable changes to this project will be documented in this file.
   `DB002-Landscape-Section.docx` also improves (0.91746 / 0.50174 →
   0.92607 / 0.60042). `PageDimensions` gains correctly named `headerDistance` /
   `footerDistance`; `headerHeight` / `footerHeight` remain as deprecated aliases.
+- **Two tests failed on evidence they never meant to assert — the wall clock and a shared
+  runner's spare CPU.** `PreAcceptInputRevisionsTests` and `DocxCompareTests` each compared two
+  SEPARATELY PRODUCED packages by raw `DocumentByteArray`, but a DOCX is a ZIP that stamps every
+  entry with the time it was written: the two calls normally land in the same timestamp granule and
+  agree, and on a loaded runner they sometimes straddle one and differ on a byte unrelated to the
+  behavior under test. Both now compare the part set and each part's bytes through the new
+  `PackageEquivalence.AssertSamePackage`, which keeps the entire claim — same parts, same content —
+  and drops only container metadata; two packages produced four seconds apart fail the old
+  assertion and satisfy the new one. `IrAlignerAdversarialTests`' anti-O(n²) scale guard divided
+  two sub-30 ms CPU samples and failed at 12.41x against a 12x limit; since scheduling noise can
+  only ADD CPU time, it now takes the MINIMUM ratio over up to three independent rounds (stopping
+  at the first that passes), which cannot be tripped by one noisy round and still fails a real
+  regression — that reads ~16x in every round. The true ratio measures ~4x.
 - **Floating DrawingML text boxes now honor their OOXML anchor geometry in paginated output.**
   The converter preserves page/margin/column/paragraph/line/character origins, offsets and
   alignments, stored extents, relative sizing, wrap clearances, and internal text insets; the
