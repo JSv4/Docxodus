@@ -4447,6 +4447,10 @@ namespace Docxodus
                 style.Add("padding", "0 0 0 0");
                 style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
             }
+            // Empty inline boxes have browser-dependent synthesized baselines. Keep the tab's
+            // content box heightless so it advances horizontally without changing the line box;
+            // leader borders still paint across the computed width.
+            style.Add("height", "0");
             span.Add(new XAttribute("data-docx-tab", alignment));
             span.Add(new XAttribute("data-docx-tab-width",
                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", tabWidth)));
