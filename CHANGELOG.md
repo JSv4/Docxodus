@@ -31,6 +31,14 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Cached clustered column and horizontal bar charts render instead of disappearing.** A
+  `c:barChart` drawing with portable cached categories/values is now projected to accessible inline
+  SVG at its stored Word extent, including title, legend, value grid, axis labels, gap/overlap,
+  theme/default series colors, and DrawingML font sizes. Rendering does not require the optional
+  embedded workbook, a JavaScript chart library, or an Office process; unsupported chart families
+  continue through the existing fallback path. An independently generated workbook-free DOCX pins
+  the semantic output. In the tracked LibreOffice benchmark, `HC043-Chart.docx` improves from a
+  blank severe result (SSIM 0.92933, ink F1 0) to close (SSIM 0.98687, ink F1 0.96817).
 - **Empty paragraphs measure automatic line spacing from the font's native line
   box.** OOXML `w:lineRule="auto"` is a multiple of the font's single-line
   height, but the converter expressed it as a percentage of CSS font size,

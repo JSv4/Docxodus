@@ -296,6 +296,20 @@ settings.ImageHandler = imageInfo =>
 };
 ```
 
+### Charts
+
+Standard DrawingML `c:barChart` parts with `clustered` grouping render as accessible inline SVG.
+Both column (`c:barDir="col"`) and horizontal bar (`c:barDir="bar"`) directions are supported. The
+converter reads the chart's portable cached categories, series names, and numeric values rather than
+recalculating the optional embedded workbook, and preserves the drawing's stored `wp:extent`.
+
+The SVG projection includes the title, value grid and labels, category labels, bottom legend,
+gap/overlap, explicit or inferred value scale, theme/default series colors, and DrawingML text sizes.
+It carries `role="img"`, an `aria-label`, a `<title>`, and stable `data-chart-*` attributes for
+inspection. Unsupported chart families and stacked/percent-stacked groupings continue through the
+existing drawing fallback; 3-D effects, trend lines, data labels, secondary axes, and exact Office
+chart styling are not projected.
+
 ### Bidirectional Text (RTL)
 
 The converter handles right-to-left text:
@@ -429,7 +443,7 @@ The following are **discarded** and will not appear in output:
 
 **Document features:**
 - Math equations (OMML)
-- Charts
+- Chart families other than clustered column/horizontal bar charts
 - Diagrams (SmartArt)
 - Complex text boxes
 - Headers and footers
@@ -454,7 +468,6 @@ Only **HYPERLINK** fields are converted to `<a>` elements. All other field types
 - **WMF files excluded** - Known to cause memory issues
 - **EMF not supported** - Not in allowed content types
 - **SVG not supported** - Not in allowed content types
-- **Charts not rendered** - Appear as empty space
 - **Requires ImageHandler** - Returns `null` without callback
 
 ### Font Metrics

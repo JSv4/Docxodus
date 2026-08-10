@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Internal;
@@ -175,7 +176,7 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
-    public void HCO085_PaginatedFootnoteSeparator_UsesWordDefaultTwoInchWidth()
+    public void HCO086_PaginatedFootnoteSeparator_UsesWordDefaultTwoInchWidth()
     {
         // The CSS is emitted only when note rendering is enabled. Use an independently generated
         // package so the regression has no fixture or snapshot licensing dependency.
@@ -190,6 +191,117 @@ public class HtmlConversionOpsTests
         Assert.Contains("width: 2in;", html);
         Assert.Contains("max-width: 100%;", html);
         Assert.DoesNotContain("width: 33%;", html);
+    }
+
+    [Theory]
+    [InlineData("col", "column")]
+    [InlineData("bar", "bar")]
+    public void HCO087_CachedClusteredChart_RendersAccessibleSvgAtStoredExtent(
+        string barDirection, string expectedChartType)
+    {
+        // Build the package independently: chart caches are the portable OOXML display source,
+        // while the embedded workbook is optional and must not be needed by the browser renderer.
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XNamespace wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        XNamespace c = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+        XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+        static XElement Series(XNamespace c, int index, string name, double[] values)
+        {
+            var categories = new[] { "Alpha", "Beta", "Gamma" };
+            return new XElement(c + "ser",
+                new XElement(c + "idx", new XAttribute("val", index)),
+                new XElement(c + "order", new XAttribute("val", index)),
+                new XElement(c + "tx",
+                    new XElement(c + "strRef",
+                        new XElement(c + "strCache",
+                            new XElement(c + "ptCount", new XAttribute("val", 1)),
+                            new XElement(c + "pt", new XAttribute("idx", 0),
+                                new XElement(c + "v", name))))),
+                new XElement(c + "cat",
+                    new XElement(c + "strRef",
+                        new XElement(c + "strCache",
+                            new XElement(c + "ptCount", new XAttribute("val", categories.Length)),
+                            categories.Select((value, point) =>
+                                new XElement(c + "pt", new XAttribute("idx", point),
+                                    new XElement(c + "v", value)))))),
+                new XElement(c + "val",
+                    new XElement(c + "numRef",
+                        new XElement(c + "numCache",
+                            new XElement(c + "formatCode", "General"),
+                            new XElement(c + "ptCount", new XAttribute("val", values.Length)),
+                            values.Select((value, point) =>
+                                new XElement(c + "pt", new XAttribute("idx", point),
+                                    new XElement(c + "v",
+                                        value.ToString("R", System.Globalization.CultureInfo.InvariantCulture))))))));
+        }
+
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var chartPart = main.AddNewPart<ChartPart>();
+            var chartRelationshipId = main.GetIdOfPart(chartPart);
+            chartPart.PutXDocument(new XDocument(
+                new XElement(c + "chartSpace",
+                    new XElement(c + "chart",
+                        new XElement(c + "title"),
+                        new XElement(c + "plotArea",
+                            new XElement(c + "barChart",
+                                new XElement(c + "barDir", new XAttribute("val", barDirection)),
+                                new XElement(c + "grouping", new XAttribute("val", "clustered")),
+                                Series(c, 0, "North", new[] { 2.0, 4.0, 3.0 }),
+                                Series(c, 1, "South", new[] { 3.0, 1.0, 5.0 }),
+                                new XElement(c + "gapWidth", new XAttribute("val", 150))),
+                            new XElement(c + "valAx",
+                                new XElement(c + "scaling"))),
+                        new XElement(c + "legend")))));
+            main.PutXDocument(new XDocument(
+                new XElement(w + "document",
+                    new XAttribute(XNamespace.Xmlns + "w", w),
+                    new XAttribute(XNamespace.Xmlns + "wp", wp),
+                    new XAttribute(XNamespace.Xmlns + "a", a),
+                    new XAttribute(XNamespace.Xmlns + "c", c),
+                    new XAttribute(XNamespace.Xmlns + "r", r),
+                    new XElement(w + "body",
+                        new XElement(w + "p",
+                            new XElement(w + "r",
+                                new XElement(w + "drawing",
+                                    new XElement(wp + "inline",
+                                        new XElement(wp + "extent",
+                                            new XAttribute("cx", 5486400),
+                                            new XAttribute("cy", 3200400)),
+                                        new XElement(wp + "docPr",
+                                            new XAttribute("id", 1),
+                                            new XAttribute("name", "Generated chart")),
+                                        new XElement(a + "graphic",
+                                            new XElement(a + "graphicData",
+                                                new XAttribute("uri", c.NamespaceName),
+                                                new XElement(c + "chart",
+                                                    new XAttribute(r + "id", chartRelationshipId)))))))),
+                        new XElement(w + "sectPr")))));
+        }
+
+        var html = HtmlConversionOps.ConvertToHtml(stream.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+        var svg = root.Descendants().Single(element => element.Name.LocalName == "svg");
+        var bars = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-bar")
+            .ToList();
+
+        Assert.Equal(expectedChartType, (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal("Generated chart", (string?)svg.Attribute("aria-label"));
+        Assert.Contains("width: 432pt", (string?)svg.Attribute("style"));
+        Assert.Contains("height: 252pt", (string?)svg.Attribute("style"));
+        Assert.Equal(6, bars.Count);
+        Assert.Contains("Chart Title", svg.Value);
+        Assert.Contains("Alpha", svg.Value);
+        Assert.Contains("North", svg.Value);
+        Assert.Contains(bars, bar => (string?)bar.Attribute("fill") == "#5B9BD5");
+        Assert.Contains(bars, bar => (string?)bar.Attribute("fill") == "#ED7D31");
     }
 
     [Fact]
