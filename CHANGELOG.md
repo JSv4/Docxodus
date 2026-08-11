@@ -14,7 +14,9 @@ All notable changes to this project will be documented in this file.
   (only that derived data is BSD-3-Clause; Docxodus remains MIT, and the full
   scoped notice plus immutable source provenance are retained in the generated
   module). Demo and test assets are excluded from the npm tarball by an explicit
-  runtime-only allowlist and a package-boundary regression check. `wad2cart.mjs`
+  runtime-only allowlist and a package-boundary regression check. The MIT
+  notices now credit John Scrudato IV for Docxodus work while retaining the
+  inherited Microsoft notice required by the upstream license. `wad2cart.mjs`
   parses the classic binary lumps (THINGS/LINEDEFS/SIDEDEFS/VERTEXES/SECTORS),
   rasterizes blocking linedefs at 32 map units per cell (doors/lifts/stairs
   resolved to their player-friendly state — the grid world has no door

@@ -38,6 +38,10 @@ try {
 
   assert.equal(packageJson.license, 'MIT', 'the npm package must remain MIT');
   assert.equal(packageLicense, repositoryLicense, 'npm LICENSE must match the repository MIT license');
+  assert.match(packageLicense, /Copyright \(c\) Microsoft Corporation/,
+    'npm LICENSE must preserve the inherited Microsoft notice');
+  assert.match(packageLicense, /Copyright \(c\) 2025-2026 John Scrudato IV/,
+    'npm LICENSE must credit John Scrudato IV');
   for (const required of [
     'LICENSE',
     'README.md',
