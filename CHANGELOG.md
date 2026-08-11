@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Chart families beyond clustered bar/column render from cached data**
+  (issue #411) — `WmlToHtmlConverter` now projects stacked and percent-stacked
+  bar/column charts, pie and doughnut charts (per-point `c:dPt` colors,
+  `c:firstSliceAng`/`c:holeSize` honored), line charts, and area charts into
+  inline SVG, with 3-D variants (`bar3DChart`, `pie3DChart`, `line3DChart`,
+  `area3DChart`) rendered as their 2-D projection. Previously everything but a
+  clustered `c:barChart` rendered as a blank extent. Line-series colors are
+  read from the stroke (`a:ln/a:solidFill`), date axes (`c:dateAx`) format
+  cached serial day numbers as dates, dense category axes thin their labels to
+  fit, and a percent-stacked value axis pins at 100% with `%`-suffixed ticks.
+  New SVG element classes `docx-chart-slice`, `docx-chart-line`, and
+  `docx-chart-area` join `docx-chart-bar`; `data-chart-type` gains
+  `column-stacked`/`bar-stacked`/`-percent-stacked` suffixes plus `pie`,
+  `doughnut`, `line`, and `area`.
 - **Visual-parity corpus second wave** (issue #400) — nine new tracked cases
   covering the shapes one-fixture-per-category coverage had left invisible:
   stacked/pie/line chart families, floating square- and tight-wrapped images,
