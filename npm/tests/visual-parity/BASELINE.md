@@ -397,12 +397,110 @@ number moves); it changes documents whose theme was swapped without a cache rewr
 With this the corpus has **no `unattributed` case left**, and every remaining residual is either
 `environment` or a recorded `reference-deviation`.
 
+## Second-wave corpus — 2026-08-11 (issue #400)
+
+One fixture per category means a fixed case hides a reopened feature gap: the `chart` case reads
+close while every chart family except clustered bar/column is unsupported — the gap became
+invisible the moment the one fixture was fixed. Nine cases were added covering the missing
+shapes; five reference existing tracked fixtures in place, four are authored deterministically by
+`TestFiles/VP/make-vp-fixtures.py` and committed under the same blob-hash guard (no third-party
+corpus). All nine entered `unattributed`, which strict-gates, and were triaged from the first
+measured run below.
+
+| Case | Fixture | Provenance |
+|---|---|---|
+| chart-stacked | `TestFiles/VP/VP001-Chart-Stacked-Column.docx` | authored — HC043's clustered chart regrouped stacked |
+| chart-pie | `TestFiles/CU002-Chart-Cached-Data-02.docx` | existing tracked fixture |
+| chart-line | `TestFiles/CU004-Chart-Cached-Data-04.docx` | existing tracked fixture |
+| wrapped-image-square | `TestFiles/DB007-WhitePaper.docx` | existing tracked fixture |
+| wrapped-image-tight | `TestFiles/VP/VP002-Image-Wrap-Tight.docx` | authored — HC042's picture re-anchored wrapTight |
+| nested-table | `TestFiles/WC/WC043-Nested-Table.docx` | existing tracked fixture |
+| two-column-section | `TestFiles/VP/VP003-Two-Column-Section.docx` | authored |
+| endnote | `TestFiles/WC/WC036-Endnote-With-Table-Before.docx` | existing tracked fixture |
+| legal-contract | `TestFiles/VP/VP004-Legal-Contract.docx` | authored |
+
+**The first measured run was taken in the record's own environment, reconstructed exactly**:
+LibreOffice 25.8.7.3 (TDF debs), Chromium 143.0.7499.4 (the repository's pinned Playwright), and
+Poppler 25.03.0 — the same fingerprint `ratchet.json` already carried. The proof the
+reconstruction is faithful: the record refresh reproduced **all twelve existing cases'
+SSIM and ink-F1 values to five decimal places** — the update diff touches only `sourceCommit`
+and the nine added rows.
+
+One environment finding with its own lesson: TDF-packaged LibreOffice **bundles its own
+Caladea/Carlito/Liberation fonts**, which silently override the font-substitution contract inside
+LibreOffice only — and the issue-#379 wrapping probe caught it exactly as designed (Cambria→
+Caladea wrapped 4 lines in Chromium vs 5 in LibreOffice against the bundled copy). Removing the
+bundled duplicates restored identical wrapping, and only the one Cambria-declaring case moved.
+Distro LibreOffice packages resolve system fonts and do not hit this.
+
+First measured results (figures are what `ratchet.json` records):
+
+| Case | Pages D/L | Severity | Disposition | SSIM | Ink F1 |
+|---|---:|---|---|---:|---:|
+| chart-stacked | 1/1 | severe | unsupported-feature | 0.94151 | 0.00000 |
+| chart-pie | 1/1 | severe | unsupported-feature | 0.95467 | 0.00000 |
+| chart-line | 1/1 | severe | unsupported-feature | 0.93289 | 0.00000 |
+| wrapped-image-square | 1/1 | severe | unsupported-feature | 0.74176 | 0.39352 |
+| wrapped-image-tight | 1/1 | severe | unsupported-feature | 0.73466 | 0.51179 |
+| nested-table | 1/1 | severe | reference-deviation | 0.96773 | 0.40867 |
+| two-column-section | 2/1 | severe | renderer-bug | 0.80838 | 0.07207 |
+| endnote | 1/1 | severe | renderer-bug | 0.84081 | 0.93747 |
+| legal-contract | 3/3 | severe | renderer-bug | 0.69140 | 0.52148 |
+
+Triage, per case — each disposition is the reviewed claim in `corpus.ts`, with the tracking
+issue where one exists:
+
+1. **Chart families (issue #411, `unsupported-feature` ×3).** The cached-data SVG projection
+   gates on `c:barChart` + `grouping="clustered"` (`WmlToHtmlConverter.Charts.cs`); a stacked
+   grouping, `pie3DChart`, and `lineChart` all return null and the extent renders **blank** —
+   ink F1 0.00000 on all three. Exactly the reopened gap this wave existed to make visible.
+2. **Floating-image text wrap (issue #412, `unsupported-feature` ×2).** The picture is
+   positioned, but text does not flow around it: LibreOffice wraps five lines beside
+   `DB007-WhitePaper.docx`'s square-wrapped picture, Docxodus resumes the text below the image,
+   displacing the page's lower half. Same mechanism on the authored wrapTight case.
+3. **Two-column section (issue #413, `renderer-bug`).** Two failures: the
+   `w:type="continuous"` section start renders as a **page break** (2/1 pages — the only
+   page-count mismatch in the corpus), and `w:cols w:num="2"` is **ignored** (the body renders
+   one full-width column, ink F1 0.07207). General multi-section support is fine —
+   `multi-section` is close at 6/6 — it is specifically the continuous start type and column
+   geometry.
+4. **Endnotes (issue #414, `renderer-bug`).** The converter emits the endnotes section
+   (`docx2html --render-footnotes` output contains `class="endnotes"` and the note's table),
+   but `pagination.ts` has footnote handling only — the endnotes section never reaches a page.
+   The citation marker also renders decimal `1` where Word's default endnote numbering is
+   lowercase roman (`i`).
+5. **Legal contract (issue #415, `renderer-bug`).** The dominant residual is measured, not
+   assumed: the `(a)` list marker lands at 145 px in **both** engines, but the following text
+   starts at 193 px in Docxodus — the next 720-twip default tab stop — versus 169 px in
+   LibreOffice, where the declared `w:ind w:left="1080"` is 168 px. The list-number suffix tab
+   advances to the next default stop instead of the declared text indent, ~25 px right on every
+   numbered clause — the heavy-numbering legal shape the library's positioning makes central.
+   Secondary residuals: LibreOffice drops heading space-before at the top of a page where
+   Docxodus paints the declared `w:spacing w:before` (16 px at each page top), and the cached
+   TOC carries the recorded issue-#397 hyperlink-style deviation. Everything else about the
+   case — cached TOC entries, leaders, PAGEREF results, multilevel heading numbers, cached REF
+   cross-references, the signature table — renders with content parity.
+6. **Nested table (`reference-deviation`).** Both engines nest correctly and start the outer
+   table at the same margin row (96). The outer ink band is 96–163 (Docxodus) vs 96–152
+   (LibreOffice), and the ~11 px difference is the document default `w:spacing w:after="160"`
+   (10.7 px) on the paragraph preceding the nested table: Docxodus paints the declared spacing,
+   LibreOffice suppresses it. Nothing in the OOXML licenses the suppression; Word-behavior
+   evidence for this exact shape is the open question, as with the `numbered-lists` history.
+
+Corpus aggregate after the wave (21 cases, 32 paired pages, 0 conversion errors): 7 close,
+3 minor, 2 major, 9 severe; mean SSIM 0.929394; mean ink F1 0.770255. The nine severe are
+5 `unsupported-feature`, 3 `renderer-bug`, 1 `reference-deviation`; the strict-gating set is
+`two-column-section`, `endnote`, `legal-contract` — renderer-owned work now visible instead of
+hidden, which is the acceptance criterion of issue #400.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
 single blank or disjoint page rather than averaging it away. Figures are from the 2026-08-11 rerun after issue #396
 (LibreOffice 25.8.7.3, Chromium 143.0.7499.4, Poppler 25.03.0); `Disposition` is the corpus
-attribution the strict gate reads, and these numbers are what `ratchet.json` records.
+attribution the strict gate reads, and these numbers are what `ratchet.json` records. The
+second-wave cases (issue #400) are tabulated in their own section above; `ratchet.json` records
+all 21 together.
 
 | Case | Pages D/L | Severity | Disposition | SSIM | Ink F1 | Triage |
 |---|---:|---|---|---:|---:|---|
@@ -461,14 +559,22 @@ renderer heuristic.
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
 header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, footnote
-block vertical placement (issue #378), the font-substitution contract (issue #379), and the
-regression ratchet (issue #395), and automatic line spacing (issue #396, which also resolved
-#397's line-box half and dissolved #398's premise) are resolved above. The remaining order is:
+block vertical placement (issue #378), the font-substitution contract (issue #379), the
+regression ratchet (issue #395), automatic line spacing (issue #396, which also resolved
+#397's line-box half and dissolved #398's premise), and the second-wave corpus (issue #400,
+which replaced the invisible gaps with nine measured cases) are resolved above. The remaining
+order is:
 
-1. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
-   same-font layout cases (issue #404), which is what now stands between the corpus and a
-   strict run.
-2. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
+1. The three renderer-bug severes the second wave surfaced, largest bang first: the list-number
+   suffix tab overshooting the declared text indent (issue #415 — every numbered clause in every
+   legal document), continuous section breaks rendered as page breaks + `w:cols` ignored
+   (issue #413 — the corpus's only page-count mismatch), and the paginated endnotes drop
+   (issue #414).
+2. The chart-family (issue #411) and floating-image text-wrap (issue #412) feature gaps, now
+   measured instead of hidden.
+3. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
+   same-font layout cases (issue #404).
+4. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
    is whether to keep a Word-evidence procedure (issue #402) for it at all.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence

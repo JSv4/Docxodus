@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Visual-parity corpus second wave** (issue #400) — nine new tracked cases
+  covering the shapes one-fixture-per-category coverage had left invisible:
+  stacked/pie/line chart families, floating square- and tight-wrapped images,
+  nested tables, a continuous two-column (`w:cols`) section, endnotes, and a
+  realistic legal contract (cached TOC + multilevel heading numbering +
+  (a)/(i) sub-clauses + cached REF cross-references + signature table). Five
+  fixtures are existing tracked TestFiles; four are authored deterministically
+  by `TestFiles/VP/make-vp-fixtures.py` and committed under the same blob-hash
+  guard. All nine entered `unattributed` (strict-gating) and were triaged from
+  the first measured run — surfacing three renderer bugs (continuous section
+  breaks render as page breaks and `w:cols` is ignored, #413; the paginated
+  print layout drops the endnotes section, #414; the list-number suffix tab
+  overshoots the declared text indent to the next default tab stop, #415) and
+  pinning the chart-family (#411) and floating-image text-wrap (#412) feature
+  gaps as measured, non-hidden corpus results. `ratchet.json` now records all
+  21 cases; BASELINE.md carries the first measured run and each case's triage.
+
 ## [9.8.0] - 2026-08-11
 
 ### Added

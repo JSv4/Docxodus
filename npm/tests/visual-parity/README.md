@@ -190,6 +190,12 @@ Prerequisites: `libreoffice-writer` (a bare `libreoffice-core` install fails eve
 install instructions when missing), Chromium installed for Playwright, and the repository's npm
 dependencies.
 
+Prefer a distro LibreOffice package: TDF-packaged builds bundle their own
+Caladea/Carlito/Liberation copies under `share/fonts/truetype/`, which silently override the
+font contract inside LibreOffice only. The wrapping probe fails against the bundled versions —
+if it names a contract family, remove the bundled duplicates so both engines resolve the same
+system fonts (see the issue-#400 baseline entry).
+
 ```bash
 cd npm
 npm run build

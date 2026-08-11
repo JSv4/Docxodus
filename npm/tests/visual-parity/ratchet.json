@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md.",
   "recordedAt": "2026-08-11",
-  "sourceCommit": "b6b67883789a3a860e0db56e17089ba37fab9230",
+  "sourceCommit": "b001bd651ef0efe2616551edfe27a3aa442655d0",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -23,6 +23,50 @@
       "severity": "close",
       "ssim": 0.98687,
       "worstInkF1": 0.96817
+    },
+    {
+      "id": "chart-line",
+      "disposition": "unsupported-feature",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.93289,
+      "worstInkF1": 0
+    },
+    {
+      "id": "chart-pie",
+      "disposition": "unsupported-feature",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.95467,
+      "worstInkF1": 0
+    },
+    {
+      "id": "chart-stacked",
+      "disposition": "unsupported-feature",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.94151,
+      "worstInkF1": 0
+    },
+    {
+      "id": "endnote",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.84081,
+      "worstInkF1": 0.93747
     },
     {
       "id": "fields-and-tabs",
@@ -69,6 +113,17 @@
       "worstInkF1": 0.95533
     },
     {
+      "id": "legal-contract",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 3,
+        "libreoffice": 3
+      },
+      "severity": "severe",
+      "ssim": 0.6914,
+      "worstInkF1": 0.52148
+    },
+    {
       "id": "merged-table",
       "disposition": "environment",
       "pages": {
@@ -89,6 +144,17 @@
       "severity": "close",
       "ssim": 0.99986,
       "worstInkF1": 1
+    },
+    {
+      "id": "nested-table",
+      "disposition": "reference-deviation",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.96773,
+      "worstInkF1": 0.40867
     },
     {
       "id": "numbered-lists",
@@ -144,6 +210,39 @@
       "severity": "minor",
       "ssim": 0.9795,
       "worstInkF1": 0.99667
+    },
+    {
+      "id": "two-column-section",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 2,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.80838,
+      "worstInkF1": 0.07207
+    },
+    {
+      "id": "wrapped-image-square",
+      "disposition": "unsupported-feature",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.74176,
+      "worstInkF1": 0.39352
+    },
+    {
+      "id": "wrapped-image-tight",
+      "disposition": "unsupported-feature",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.73466,
+      "worstInkF1": 0.51179
     }
   ]
 }
