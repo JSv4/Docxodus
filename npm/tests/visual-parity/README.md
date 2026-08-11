@@ -68,13 +68,36 @@ Severity is assigned by the worst signal:
 | severe | below major | below major | above major | > 1 px |
 
 A page-count mismatch is always severe. Default runs are observational and succeed after producing
-the complete report; `DOCXODUS_VISUAL_PARITY_STRICT=1` turns severe cases into a failing gate. This
-keeps the initial baseline useful while known unsupported content is being triaged.
+the complete report; `DOCXODUS_VISUAL_PARITY_STRICT=1` turns renderer-attributable severe cases into
+a failing gate (see the disposition contract below). This keeps the baseline useful while known
+environment deltas and reference deviations are tracked without blocking.
+
+## Attribution dispositions
+
+Severity measures *how different* two renderings are; it cannot say *whose difference* it is. Every
+corpus entry therefore carries a reviewed `disposition` — an attribution claim with a mandatory
+rationale and, where one exists, a tracking issue:
+
+| Kind | Meaning | Gates strict? |
+|---|---|---|
+| `renderer-bug` | An established Docxodus rendering defect. | yes |
+| `unattributed` | Not yet triaged; the safe default for new corpus entries. | yes |
+| `environment` | Dominated by the comparison environment (Chromium vs LibreOffice font substitution, wrapping, line metrics), not OOXML geometry. | no |
+| `reference-deviation` | Docxodus follows the OOXML evidence; LibreOffice deviates. | no |
+| `unsupported-feature` | A known unimplemented feature tracked as a feature gap. | no |
+
+A conversion error always gates regardless of disposition. Dispositions live in `corpus.ts` so they
+are code-reviewed alongside the corpus, flow into `metrics.json`/`summary.json`
+(`aggregate.severeByDisposition`, `aggregate.strictGatingCases`), and must be updated when a fix or
+new evidence changes the triage. A disposition is a claim about the *dominant residual*
+discrepancy — it never justifies masking, and changing one to make a gate pass requires the same
+evidence bar as a renderer fix: OOXML semantics, Word behavior where available, and a reduced case.
 
 ## Run locally
 
-Prerequisites: `libreoffice`, `pdftoppm`, Chromium installed for Playwright, and the repository's npm
-dependencies.
+Prerequisites: `libreoffice-writer` (a bare `libreoffice-core` install fails every case with
+"source file could not be loaded"), `pdftoppm` (poppler-utils), Chromium installed for Playwright,
+and the repository's npm dependencies.
 
 ```bash
 cd npm

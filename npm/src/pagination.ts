@@ -1060,7 +1060,7 @@ export class PaginationEngine {
     }
 
     // Measure in the SAME styling context the notes render in: `.page-footnotes` carries
-    // font-size 0.85em and line-height 1.4, so measuring without the class sizes the note
+    // its own font-size and line-height, so measuring without the class sizes the note
     // block against body type and the reserve can never match what is drawn.
     // Create a temporary measurement container
     const measureContainer = document.createElement("div");

@@ -116,25 +116,88 @@ Resolved items:
    SSIM improves from 0.96967 to 0.97428 and ink F1 from 0.50719 to 0.63049. The remaining height
    difference is auto-fit line geometry, independent of the now-correct anchor origin and width.
 
+## Attribution dispositions and the issue #378 rerun — 2026-08-11
+
+Severity measures how different two renderings are; it cannot say whose difference it is. Every
+corpus entry now carries a reviewed `disposition` (`renderer-bug` / `environment` /
+`reference-deviation` / `unsupported-feature` / `unattributed`, each with a mandatory rationale and
+an optional tracking reference — see README). Dispositions flow into `metrics.json` and
+`summary.json` (`aggregate.severeByDisposition`, `aggregate.strictGatingCases`), and strict mode now
+gates only on severe cases the renderer owns (`renderer-bug`/`unattributed`) plus conversion
+errors. New corpus entries default to `unattributed`, which gates, so an untriaged severe case
+cannot hide behind a non-gating label.
+
+The whole corpus was rerun twice on this branch (once before, once after the footnote fix) in a
+second, honestly-different environment: Chromium 141.0.7390.37, LibreOffice 24.2.7.2, Poppler
+24.02.0, Calibri→Carlito, Calibri Light→DejaVu Sans, Times New Roman→Liberation Serif. Every
+case reproduced the recorded CI baseline within environment noise, and the cases that moved most
+(`footnote`, `landscape-section`, `tracked-deletion`) are exactly the ones attributed
+`environment` — the reproduction itself corroborates the attributions. One reference-version
+finding: LibreOffice 24.2 draws its legacy 25%-of-column footnote separator where 25.8 draws the
+two-inch default, so the separator-width comparison is only meaningful against LibreOffice ≥ 25.8.
+
+**Footnote block vertical placement is fixed (issue #378).** The note area was already anchored at
+the correct edge — the bottom margin line — but the paginated container carried web chrome inside
+the bottom-anchored box: a 1.4 line-height (Word's FootnoteText is single-spaced), 4pt inter-note
+margins (Word stacks notes with zero spacing of their own), a 6pt separator gap (about double
+Word's one-empty-line model), an `N.`-style number label, and a trailing `↩` back-reference link
+that no print renderer shows. Together they lifted the visible ink ~13px off the margin and drew
+false-positive ink. Measured on the tracked case at 96 DPI (bottom margin line at row 960):
+
+| Signal | Before | After | LibreOffice |
+|---|---:|---:|---:|
+| Note ink rows | 935–948 | 942–955 | 946–955 |
+| Separator row | 922 | 935 | 939–940 |
+| Note ink x-extent | 97–201 | 97–176 | 96–171 |
+| Case SSIM | 0.99247 | 0.99277 | — |
+| Case ink F1 | 0.66696 | 0.73700 | — |
+
+The note-text bottom is now flush with LibreOffice's (row 955 exactly), the separator-to-note gap
+matches (6–7px both), and the backref ink is gone. The generated regression
+`npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the separator separately:
+area bottom on the margin line, last line flush, single-spaced line box, `line-height: normal`,
+2in separator one line above the first note, zero inter-note spacing, bare superscript number, no
+backref. The case's disposition moves to `environment` on this evidence: the residual is line
+metrics of the substituted font differing between Chromium and LibreOffice (issue #379) plus the
+LibreOffice-24.2 separator width, and the case's remaining severe score tracks the same body-text
+glyph differences as the other environment cases.
+
+| Signal | Current (2026-08-09, CI env) | This branch (local env) |
+|---|---:|---:|
+| Cases | 12 | 12 |
+| Paired pages | 21 | 21 |
+| Conversion errors | 0 | 0 |
+| Case severity | 4 close, 1 minor, 0 major, 7 severe | 4 close, 1 minor, 0 major, 7 severe |
+| Severe by disposition | — | 2 renderer-bug, 4 environment, 1 reference-deviation |
+| Strict-gating cases | — | `shape`, `fields-and-tabs` |
+| Mean SSIM | 0.980074 | 0.980203 |
+| Mean tolerant ink F1 | 0.841237 | 0.857746 |
+
+The aggregate means are not comparable across the environment change (different LibreOffice,
+Chromium, and Calibri Light substitutes); the per-case table below carries the current local
+figures. The headline number is no longer the raw severe count but the strict-gating set: two
+renderer-attributable severe cases remain.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
-single blank or disjoint page rather than averaging it away.
+single blank or disjoint page rather than averaging it away. Figures are from the 2026-08-11 local
+rerun (environment above); `Disposition` is the corpus attribution the strict gate reads.
 
-| Case | Pages D/L | Severity | SSIM | Ink F1 | Triage |
-|---|---:|---|---:|---:|---|
-| text-formatting | 1/1 | close | 0.99725 | 0.96770 | Control case; fonts and small caps are close. |
-| merged-table | 1/1 | minor | 0.96348 | 1.00000 | Ink geometry aligns; fill/border color dominates the perceptual delta. |
-| numbered-lists | 1/1 | severe | 0.99426 | 0.55580 | Whole content is about 28 px lower in Docxodus. The OOXML top margin is 1701 twips (113.4 px at 96 DPI), which matches Docxodus; LibreOffice appears to import it differently. Treat as a reference-specific deviation unless Word evidence says otherwise. |
-| multi-section | 6/6 | close | 0.99934 | 0.99797 | Header/body/footer bands now sit at the distances `w:pgMar` declares (issue #377), across the landscape/portrait section transition. |
-| landscape-section | 1/1 | severe | 0.92607 | 0.60042 | Page dimensions match; paragraph spacing/font wrapping differs. Improved as a side effect of issue #377. |
-| running-content | 5/5 | close | 0.99921 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved the vertical placement of the inherited stories themselves. |
-| inline-image | 1/1 | severe | 0.93660 | 0.64760 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. |
-| chart | 1/1 | close | 0.98687 | 0.96817 | Cached clustered column data now renders as accessible inline SVG at the stored extent; bars, grid, colors, labels, title, and bottom legend align closely. Other chart families and stacked groupings remain unsupported. |
-| shape | 1/1 | severe | 0.97428 | 0.63049 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
-| fields-and-tabs | 1/1 | severe | 0.88672 | 0.30164 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. The whole-page score falls slightly because the corrected leader adds ink at the still-mismatched TOC line height; hyperlink styling, font metrics, and paragraph spacing remain separate differences. |
-| footnote | 1/1 | severe | 0.99218 | 0.56597 | Separator width now matches Word/LibreOffice's two-inch default; the note block remains about 13 px too high. |
-| tracked-deletion | 1/1 | severe | 0.93177 | 0.46817 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. |
+| Case | Pages D/L | Severity | Disposition | SSIM | Ink F1 | Triage |
+|---|---:|---|---|---:|---:|---|
+| text-formatting | 1/1 | close | environment | 0.99730 | 0.96575 | Control case; fonts and small caps are close. |
+| merged-table | 1/1 | minor | unattributed | 0.96340 | 1.00000 | Ink geometry aligns; fill/border color dominates the perceptual delta and has not been reduced to a minimal case. |
+| numbered-lists | 1/1 | severe | reference-deviation | 0.99426 | 0.55580 | Whole content is about 28 px lower in Docxodus. The OOXML top margin is 1701 twips (113.4 px at 96 DPI), which matches Docxodus; LibreOffice appears to import it differently. Treat as a reference-specific deviation unless Word evidence says otherwise. |
+| multi-section | 6/6 | close | environment | 0.99932 | 0.99796 | Header/body/footer bands now sit at the distances `w:pgMar` declares (issue #377), across the landscape/portrait section transition. |
+| landscape-section | 1/1 | severe | environment | 0.92525 | 0.64655 | Page dimensions match; paragraph spacing/font wrapping differs. Re-triage after issue #379. |
+| running-content | 5/5 | close | environment | 0.99919 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved the vertical placement of the inherited stories themselves. |
+| inline-image | 1/1 | severe | environment | 0.93585 | 0.64828 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. Re-triage after issue #379. |
+| chart | 1/1 | close | environment | 0.98651 | 0.96816 | Cached clustered column data now renders as accessible inline SVG at the stored extent. Other chart families and stacked groupings remain unsupported and are not yet in the corpus. |
+| shape | 1/1 | severe | renderer-bug | 0.97418 | 0.63170 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
+| fields-and-tabs | 1/1 | severe | renderer-bug | 0.89143 | 0.35965 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. TOC line height and hyperlink styling remain renderer-side, entangled with font metrics. |
+| footnote | 1/1 | severe | environment | 0.99277 | 0.73700 | Note placement fixed (issue #378): note-text bottom flush with LibreOffice's, separator-to-note gap matches. Residual is substituted-font line metrics (issue #379) and LibreOffice-24.2's legacy separator width. |
+| tracked-deletion | 1/1 | severe | environment | 0.93145 | 0.53972 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. Re-triage after issue #379. |
 
 ## Fixes justified by the baseline
 
@@ -177,13 +240,18 @@ renderer heuristic.
 ## Prioritized next work
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
-header/body/footer vertical placement (issue #377), and DrawingML textbox anchor geometry are
-resolved above. The remaining order is:
+header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, and footnote
+block vertical placement (issue #378) are resolved above. The remaining order is:
 
-1. Correct footnote block vertical placement independently of the now-fixed separator width
-   (issue #378).
-2. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI before
-   treating paragraph-wrap differences as renderer regressions (issue #379).
+1. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI
+   (issue #379). This is the gate for everything attributed `environment`: four severe cases
+   (`landscape-section`, `inline-image`, `footnote` residual, `tracked-deletion`) cannot be
+   triaged further until wrap and line-metric differences stop being environment noise.
+2. Model auto-fit text/line height for DrawingML textboxes (`shape`, strict-gating).
+3. TOC line height and hyperlink styling (`fields-and-tabs`, strict-gating; re-measure after 1).
+4. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it.
+5. Obtain Word evidence for the `numbered-lists` top margin to close or reclassify the
+   reference-deviation.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
 supports Docxodus's use of the declared OOXML margin. LibreOffice is a comparison implementation, not

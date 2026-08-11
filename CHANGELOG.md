@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Visual-parity attribution dispositions** (`npm/tests/visual-parity/corpus.ts`):
+  every benchmark corpus case now carries a reviewed `disposition` — `renderer-bug`,
+  `environment`, `reference-deviation`, `unsupported-feature`, or `unattributed` —
+  with a mandatory rationale and optional tracking reference, because severity alone
+  conflates "our bug" with "different comparison environment" and "LibreOffice
+  deviates from the OOXML evidence". Dispositions flow into `metrics.json` and
+  `summary.json` (`aggregate.severeByDisposition`, `aggregate.strictGatingCases`),
+  and strict mode (`DOCXODUS_VISUAL_PARITY_STRICT=1`) now gates only on severe cases
+  the renderer owns (`renderer-bug`/`unattributed`) plus conversion errors, instead
+  of failing on every severe case regardless of whose difference it is. New corpus
+  entries default to `unattributed`, which gates, so an untriaged severe case cannot
+  hide.
+
+### Fixed
+- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
+  anchors the footnote area to the bottom of the text column — the last note line
+  ends ON the bottom margin line, notes stack with no spacing of their own
+  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
+  drawn about one line above the first note. The paginated note container carried
+  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
+  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
+  `N.`-style number label — which together lifted the visible note ink ~13px off
+  the margin and drew ink no print renderer shows. The paginated registry now
+  renders the bare superscript number and no backref (the web-view `<ol>` section
+  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
+  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
+  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
+  separator-to-note gap matches. Generated-DOCX browser regression
+  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
+  separator separately.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo

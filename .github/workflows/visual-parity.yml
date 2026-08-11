@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       strict:
-        description: Fail if any case is severe
+        description: Fail if any renderer-attributable case is severe
         required: false
         default: false
         type: boolean
