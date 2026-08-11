@@ -33,6 +33,56 @@ All notable changes to this project will be documented in this file.
   game's own input seam to a Freedoom pickup (fighting the monsters that
   find it on the way), and `DOCXODUS_DOOM_MARATHON=1` plays the entire
   level — every sigil, then the exit — to the win banner.
+- **Visual-parity font-substitution contract** (issue #379,
+  `npm/tests/visual-parity/fonts.conf` + `font-contract.ts`): font policy for the
+  LibreOffice benchmark is now a shared contract instead of a host observation.
+  `fonts.conf` pins each declared Office family to a license-safe metric-compatible
+  substitute (Calibri/Calibri Light → Carlito, Cambria → Caladea, Times New
+  Roman/Arial/Courier New → Liberation), and BOTH renderers load it via
+  `FONTCONFIG_FILE` — LibreOffice per subprocess, Chromium at browser launch
+  (scoped to the benchmark opt-in in `playwright.config.ts`, so ordinary specs and
+  committed snapshots keep host fonts). Enforcement is layered: an fc-match
+  assertion fails the run naming the package to install, an in-browser
+  canvas-width check catches a browser launched without the contract, and a
+  cross-renderer wrapping probe (one generated paragraph per family; line counts
+  must match) detects drift the other layers can't — negatively validated, since
+  Calibri Light wraps differently without the contract on a stock host. Every
+  `summary.json` records the resolved family/file/version set and the contract
+  file's SHA-256, so baseline deltas trace to the renderer or a declared contract
+  change, never silent host-font drift. On the corpus: nine cases byte-identical,
+  `tracked-deletion` improved (the shared Calibri Light pinning succeeds where the
+  rejected renderer-only fallback failed), `fields-and-tabs` now measures its
+  honest, lower score.
+- **Visual-parity attribution dispositions** (`npm/tests/visual-parity/corpus.ts`):
+  every benchmark corpus case now carries a reviewed `disposition` — `renderer-bug`,
+  `environment`, `reference-deviation`, `unsupported-feature`, or `unattributed` —
+  with a mandatory rationale and optional tracking reference, because severity alone
+  conflates "our bug" with "different comparison environment" and "LibreOffice
+  deviates from the OOXML evidence". Dispositions flow into `metrics.json` and
+  `summary.json` (`aggregate.severeByDisposition`, `aggregate.strictGatingCases`),
+  and strict mode (`DOCXODUS_VISUAL_PARITY_STRICT=1`) now gates only on severe cases
+  the renderer owns (`renderer-bug`/`unattributed`) plus conversion errors, instead
+  of failing on every severe case regardless of whose difference it is. New corpus
+  entries default to `unattributed`, which gates, so an untriaged severe case cannot
+  hide.
+
+### Fixed
+- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
+  anchors the footnote area to the bottom of the text column — the last note line
+  ends ON the bottom margin line, notes stack with no spacing of their own
+  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
+  drawn about one line above the first note. The paginated note container carried
+  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
+  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
+  `N.`-style number label — which together lifted the visible note ink ~13px off
+  the margin and drew ink no print renderer shows. The paginated registry now
+  renders the bare superscript number and no backref (the web-view `<ol>` section
+  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
+  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
+  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
+  separator-to-note gap matches. Generated-DOCX browser regression
+  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
+  separator separately.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo
@@ -59,6 +109,45 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Paginated headers, footers, and body text sit at the distances `w:pgMar`
+  declares.** `w:header` and `w:footer` are distances from the PAPER EDGE to the
+  top of the header story and the bottom of the footer story — four independent
+  numbers with `w:top`/`w:bottom`, not two nested boxes. The paginator ignored
+  both, anchoring the header bottom-aligned above the top margin and the footer
+  top-aligned below the bottom margin, which pulled the two stories toward the
+  body by exactly `margin − distance` (25 px on a Word-default page) and left the
+  top and bottom of the sheet blank. `resolvePageBands()`
+  (`npm/src/page-geometry.ts`) is now the single owner of the model — the header
+  grows down from `w:header`, the footer grows up from `w:footer`, and the body
+  band starts at `w:top` unless the header has already run past it and ends at
+  `w:bottom` unless the footer has already climbed above it — and
+  `PaginationEngine.getPageBands()` is the one place band placement, the flow
+  loop's page budget, and the footnote area's anchor all read, so they cannot
+  disagree about where the body ends. A story taller than its margin now pushes
+  the body instead of drawing over it, and the note block follows the body's real
+  bottom edge rather than the raw bottom margin. The generated
+  `pagination-running-content-geometry` regression pins first/even/odd header and
+  footer coordinates, the inheriting second section's own distances, band
+  disjointness, the overflowing-story case, and a header-less section. Against
+  LibreOffice, `DB001-Sections.docx` improves from severe (SSIM 0.99586, worst ink
+  F1 0.00000) to close (0.99934 / 0.99797) and `DB005-Headers-With-Images.docx`
+  from severe (0.99773 / 0.00000) to close (0.99921 / 0.96486);
+  `DB002-Landscape-Section.docx` also improves (0.91746 / 0.50174 →
+  0.92607 / 0.60042). `PageDimensions` gains correctly named `headerDistance` /
+  `footerDistance`; `headerHeight` / `footerHeight` remain as deprecated aliases.
+- **Two tests failed on evidence they never meant to assert — the wall clock and a shared
+  runner's spare CPU.** `PreAcceptInputRevisionsTests` and `DocxCompareTests` each compared two
+  SEPARATELY PRODUCED packages by raw `DocumentByteArray`, but a DOCX is a ZIP that stamps every
+  entry with the time it was written: the two calls normally land in the same timestamp granule and
+  agree, and on a loaded runner they sometimes straddle one and differ on a byte unrelated to the
+  behavior under test. Both now compare the part set and each part's bytes through the new
+  `PackageEquivalence.AssertSamePackage`, which keeps the entire claim — same parts, same content —
+  and drops only container metadata; two packages produced four seconds apart fail the old
+  assertion and satisfy the new one. `IrAlignerAdversarialTests`' anti-O(n²) scale guard divided
+  two sub-30 ms CPU samples and failed at 12.41x against a 12x limit; since scheduling noise can
+  only ADD CPU time, it now takes the MINIMUM ratio over up to three independent rounds (stopping
+  at the first that passes), which cannot be tripped by one noisy round and still fails a real
+  regression — that reads ~16x in every round. The true ratio measures ~4x.
 - **Floating DrawingML text boxes now honor their OOXML anchor geometry in paginated output.**
   The converter preserves page/margin/column/paragraph/line/character origins, offsets and
   alignments, stored extents, relative sizing, wrap clearances, and internal text insets; the

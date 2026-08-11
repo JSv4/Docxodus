@@ -1,4 +1,20 @@
 import { defineConfig, devices } from '@playwright/test';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The visual-parity benchmark pins font substitution for BOTH renderers (issue #379): the spec
+// passes the same file to LibreOffice via FONTCONFIG_FILE, and Chromium must be LAUNCHED under
+// it, which only the config can do. Scoped to the benchmark opt-in so ordinary specs and their
+// committed snapshots keep the host's default fonts.
+const visualParityLaunchEnv = process.env.DOCXODUS_VISUAL_PARITY === '1'
+  ? {
+      env: {
+        ...process.env as Record<string, string>,
+        FONTCONFIG_FILE: resolve(
+          dirname(fileURLToPath(import.meta.url)), 'tests/visual-parity/fonts.conf'),
+      },
+    }
+  : {};
 
 export default defineConfig({
   testDir: './tests',
@@ -24,7 +40,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], launchOptions: visualParityLaunchEnv },
     },
     {
       // Firefox is the canary for cross-contenteditable drag feedback: its native selection

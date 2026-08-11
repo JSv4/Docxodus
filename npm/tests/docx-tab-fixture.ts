@@ -1,4 +1,4 @@
-import { storedZip, xml } from './docx-fixture.js';
+import { storedZip, xml, W_NS } from './docx-zip.js';
 
 export type TabAlignment = 'right' | 'center' | 'decimal';
 
@@ -9,7 +9,6 @@ export function generateTabDocx(
   leader?: 'dot',
 ): Uint8Array {
   const leaderAttribute = leader ? ` w:leader="${leader}"` : '';
-  const wordNamespace = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   return storedZip([
     {
       name: '[Content_Types].xml',
@@ -40,7 +39,7 @@ export function generateTabDocx(
     {
       name: 'word/styles.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="${wordNamespace}">
+<w:styles xmlns:w="${W_NS}">
   <w:docDefaults><w:rPrDefault><w:rPr>
     <w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/>
     <w:sz w:val="24"/><w:szCs w:val="24"/>
@@ -51,12 +50,12 @@ export function generateTabDocx(
     {
       name: 'word/settings.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:settings xmlns:w="${wordNamespace}"><w:defaultTabStop w:val="720"/></w:settings>`),
+<w:settings xmlns:w="${W_NS}"><w:defaultTabStop w:val="720"/></w:settings>`),
     },
     {
       name: 'word/document.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="${wordNamespace}"><w:body>
+<w:document xmlns:w="${W_NS}"><w:body>
   <w:p><w:pPr><w:tabs><w:tab w:val="${alignment}" w:pos="5760"${leaderAttribute}/></w:tabs></w:pPr>
     <w:r><w:t>${before}</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>${after}</w:t></w:r>
   </w:p>

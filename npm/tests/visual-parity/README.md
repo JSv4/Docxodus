@@ -28,11 +28,10 @@ output directory so stale pages cannot contaminate a rerun.
   raster pixel.
 - LibreOffice exports PDF from a fresh per-document user profile. Poppler rasterizes the PDF at
   exactly 96 DPI.
-- Both processes use `C.UTF-8`, UTC, and the host fontconfig installation. The summary records the
-  Chromium, LibreOffice, Poppler, Calibri/Calibri Light substitutes, and Times New Roman substitute.
-  A missing Office font remains a triage signal rather than something the benchmark masks: for
-  example, a host may map Calibri Light to Noto Sans while LibreOffice applies its own substitution,
-  changing line wraps even when the renderer's OOXML geometry is correct.
+- Both processes use `C.UTF-8`, UTC, and the **font-substitution contract** below instead of the
+  host's default fontconfig, so line wraps cannot drift with whatever fonts a host happens to
+  carry. The summary records the Chromium, LibreOffice, and Poppler versions plus every contract
+  resolution (family, file, font version, contract-file SHA-256).
 - The comparison uses final-revision view: insertions are included and deletions/move markup are not
   rendered. LibreOffice's headless PDF filter follows the file's saved redline-display state and
   provides no final-view switch, so manifest cases marked `revisionMode: 'accepted'` are accepted
@@ -46,6 +45,42 @@ output directory so stale pages cannot contaminate a rerun.
   chosen offset is always reported.
 - No masks are applied. A future mask must be a bounded rectangle tied to one manifest case/page and
   carry a specific justification; a document-wide or text-wide mask is not acceptable.
+
+## Font-substitution contract
+
+Documents declare proprietary Office families no CI host may install. Which substitute each
+family resolves to changes wrapping and line metrics, and a renderer-only fallback was tried and
+rejected — it moved one engine without the other. Font policy is therefore a **shared contract**
+(issue #379): `fonts.conf` pins each declared family to a license-safe metric-compatible
+substitute, and both renderers load it via `FONTCONFIG_FILE` — LibreOffice through the runner's
+subprocess environment, Chromium at browser launch through `playwright.config.ts` (scoped to the
+benchmark opt-in so ordinary specs keep host fonts).
+
+| Declared family | Substitute | Package | Metric-compatible |
+|---|---|---|---|
+| Calibri | Carlito | fonts-crosextra-carlito | yes |
+| Calibri Light | Carlito | fonts-crosextra-carlito | no — documented approximation, no open metric clone exists |
+| Cambria | Caladea | fonts-crosextra-caladea | yes |
+| Times New Roman | Liberation Serif | fonts-liberation2 | yes |
+| Arial | Liberation Sans | fonts-liberation2 | yes |
+| Courier New | Liberation Mono | fonts-liberation2 | yes |
+
+Enforcement is layered, and each layer fails with a message naming what to fix:
+
+- `assertFontContract()` fails the run when `fc-match` under the contract does not resolve every
+  family to its substitute, naming the package to install.
+- An in-browser check fails when Chromium was launched without the contract (canvas advance
+  widths of each family must equal its substitute's).
+- A **wrapping probe** (`declared font families wrap identically…` in `visual-parity.spec.ts`)
+  renders one generated paragraph per family through both engines and requires identical
+  line counts — fc-match proves what fontconfig would resolve; the probe proves what the two
+  renderers actually did. It is negatively validated: without the contract, Calibri Light wraps
+  differently on a stock Ubuntu host.
+
+With the contract pinned and recorded, a baseline delta traces to either the renderer or a
+declared contract change — never to silent host-font drift. `environment` dispositions now mean
+"the two engines lay out the SAME substitute differently" (rasterization, justification, line
+breaking), not "the two engines picked different fonts".
 
 ## Metrics and thresholds
 
@@ -68,12 +103,37 @@ Severity is assigned by the worst signal:
 | severe | below major | below major | above major | > 1 px |
 
 A page-count mismatch is always severe. Default runs are observational and succeed after producing
-the complete report; `DOCXODUS_VISUAL_PARITY_STRICT=1` turns severe cases into a failing gate. This
-keeps the initial baseline useful while known unsupported content is being triaged.
+the complete report; `DOCXODUS_VISUAL_PARITY_STRICT=1` turns renderer-attributable severe cases into
+a failing gate (see the disposition contract below). This keeps the baseline useful while known
+environment deltas and reference deviations are tracked without blocking.
+
+## Attribution dispositions
+
+Severity measures *how different* two renderings are; it cannot say *whose difference* it is. Every
+corpus entry therefore carries a reviewed `disposition` — an attribution claim with a mandatory
+rationale and, where one exists, a tracking issue:
+
+| Kind | Meaning | Gates strict? |
+|---|---|---|
+| `renderer-bug` | An established Docxodus rendering defect. | yes |
+| `unattributed` | Not yet triaged; the safe default for new corpus entries. | yes |
+| `environment` | Dominated by the comparison environment (Chromium vs LibreOffice font substitution, wrapping, line metrics), not OOXML geometry. | no |
+| `reference-deviation` | Docxodus follows the OOXML evidence; LibreOffice deviates. | no |
+| `unsupported-feature` | A known unimplemented feature tracked as a feature gap. | no |
+
+A conversion error always gates regardless of disposition. Dispositions live in `corpus.ts` so they
+are code-reviewed alongside the corpus, flow into `metrics.json`/`summary.json`
+(`aggregate.severeByDisposition`, `aggregate.strictGatingCases`), and must be updated when a fix or
+new evidence changes the triage. A disposition is a claim about the *dominant residual*
+discrepancy — it never justifies masking, and changing one to make a gate pass requires the same
+evidence bar as a renderer fix: OOXML semantics, Word behavior where available, and a reduced case.
 
 ## Run locally
 
-Prerequisites: `libreoffice`, `pdftoppm`, Chromium installed for Playwright, and the repository's npm
+Prerequisites: `libreoffice-writer` (a bare `libreoffice-core` install fails every case with
+"source file could not be loaded"), `poppler-utils` (`pdftoppm`/`pdftotext`), the contract fonts
+(`fonts-crosextra-carlito`, `fonts-crosextra-caladea`, `fonts-liberation2` — the run fails with
+install instructions when missing), Chromium installed for Playwright, and the repository's npm
 dependencies.
 
 ```bash

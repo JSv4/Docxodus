@@ -14,8 +14,25 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { REQUIRED_VISUAL_CATEGORIES, VISUAL_PARITY_CORPUS, type VisualCorpusEntry } from './visual-parity/corpus.js';
+import {
+  GATING_DISPOSITION_KINDS,
+  REQUIRED_VISUAL_CATEGORIES,
+  VISUAL_DISPOSITION_KINDS,
+  VISUAL_PARITY_CORPUS,
+  type VisualCorpusEntry,
+  type VisualDisposition,
+} from './visual-parity/corpus.js';
 import { compareImages, VISUAL_THRESHOLDS, type PageMetrics, type VisualSeverity } from './visual-parity/metrics.js';
+import {
+  FONT_CONTRACT,
+  FONT_CONTRACT_FILE,
+  PROBE_TEXT,
+  assertFontContract,
+  fontContractReport,
+  generateFontProbeDocx,
+  probeLineCountsFromPdfText,
+  probeMarker,
+} from './visual-parity/font-contract.js';
 import { decodePng, encodePng } from './visual-parity/png.js';
 
 test.skip(process.env.DOCXODUS_VISUAL_PARITY !== '1',
@@ -36,12 +53,24 @@ interface CaseResult {
   path: string;
   categories: string[];
   rationale: string;
+  disposition: VisualDisposition;
   docxodusPages: number;
   libreofficePages: number;
   pageCountDelta: number;
   severity: VisualSeverity;
   pages: PageResult[];
   error?: string;
+}
+
+/**
+ * A severe result gates a strict run only when its attribution says the renderer owns it:
+ * an established renderer bug, an untriaged discrepancy, or a case that failed to convert
+ * at all. Environment deltas and documented LibreOffice deviations are tracked but do not
+ * fail the gate — that separation is the point of the disposition field.
+ */
+function gatesStrictRun(result: CaseResult): boolean {
+  if (result.severity !== 'severe') return false;
+  return result.error !== undefined || GATING_DISPOSITION_KINDS.includes(result.disposition.kind);
 }
 
 function commandVersion(command: string, args: string[]): string {
@@ -60,6 +89,12 @@ function assertTrackedCorpus(entries: VisualCorpusEntry[]): void {
   if (missing.length) throw new Error(`Visual corpus misses required categories: ${missing.join(', ')}`);
 
   for (const entry of entries) {
+    if (!VISUAL_DISPOSITION_KINDS.includes(entry.disposition.kind)) {
+      throw new Error(`${entry.id} has an unknown disposition kind: ${entry.disposition.kind}`);
+    }
+    if (!entry.disposition.rationale.trim()) {
+      throw new Error(`${entry.id} disposition needs a rationale: a disposition is a reviewed claim`);
+    }
     if (isAbsolute(entry.path) || relative(repoRoot, resolve(repoRoot, entry.path)).startsWith('..')) {
       throw new Error(`${entry.id} escapes the repository: ${entry.path}`);
     }
@@ -113,36 +148,70 @@ function numericPngs(directory: string, prefix: string): string[] {
     .map(item => join(directory, item.name));
 }
 
-function renderLibreOffice(docxPath: string, work: string): string[] {
-  const pdfDir = join(work, 'pdf');
-  const profileDir = join(work, 'profile');
+function libreofficeEnv(work: string): NodeJS.ProcessEnv {
   const runtimeDir = join(work, 'runtime');
   const homeDir = join(work, 'home');
-  for (const directory of [pdfDir, profileDir, runtimeDir, homeDir]) mkdirSync(directory, { mode: 0o700 });
-
-  const deterministicEnv = {
+  for (const directory of [runtimeDir, homeDir]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return {
     ...process.env,
     HOME: homeDir,
     XDG_RUNTIME_DIR: runtimeDir,
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
     TZ: 'UTC',
+    // The same font-substitution contract Chromium runs under (playwright.config.ts).
+    FONTCONFIG_FILE: FONT_CONTRACT_FILE,
   };
+}
+
+function libreofficePdf(docxPath: string, work: string): string {
+  const pdfDir = join(work, 'pdf');
+  const profileDir = join(work, 'profile');
+  for (const directory of [pdfDir, profileDir]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+
   execFileSync('libreoffice', [
     `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
     '--headless', '--nologo', '--nodefault', '--nofirststartwizard', '--norestore',
     '--convert-to', 'pdf', '--outdir', pdfDir, docxPath,
-  ], { env: deterministicEnv, stdio: 'pipe', timeout: 120000 });
+  ], { env: libreofficeEnv(work), stdio: 'pipe', timeout: 120000 });
 
   const pdfPath = join(pdfDir, `${docxPath.split('/').pop()!.replace(/\.docx$/i, '')}.pdf`);
   if (!existsSync(pdfPath)) throw new Error(`LibreOffice did not produce ${pdfPath}`);
+  return pdfPath;
+}
+
+function renderLibreOffice(docxPath: string, work: string): string[] {
+  const pdfPath = libreofficePdf(docxPath, work);
   const prefix = 'libreoffice-page';
   execFileSync('pdftoppm', [
     '-r', '96', '-png', pdfPath, join(work, prefix),
-  ], { env: deterministicEnv, stdio: 'pipe', timeout: 120000 });
+  ], { env: libreofficeEnv(work), stdio: 'pipe', timeout: 120000 });
   const pages = numericPngs(work, prefix);
   if (!pages.length) throw new Error(`pdftoppm produced no pages for ${docxPath}`);
   return pages;
+}
+
+/**
+ * Chromium must actually be running under the contract, not merely have it on disk — the config
+ * injects FONTCONFIG_FILE only at browser launch. Calibri Light is the discriminator: without
+ * the contract a host resolves it to whatever it has (Noto Sans, DejaVu Sans), whose advance
+ * widths differ from the substitute's.
+ */
+async function assertBrowserFontContract(page: Page): Promise<void> {
+  const mismatches = await page.evaluate((entries) => {
+    const context = document.createElement('canvas').getContext('2d')!;
+    const width = (family: string) => {
+      context.font = `16px "${family}"`;
+      return context.measureText('Sphinx of black quartz, judge my vow 0123456789').width;
+    };
+    return entries
+      .filter(([family, substitute]) => Math.abs(width(family) - width(substitute)) > 0.5)
+      .map(([family, substitute]) => `${family} does not measure as ${substitute}`);
+  }, FONT_CONTRACT.map(entry => [entry.family, entry.substitute] as [string, string]));
+  if (mismatches.length) {
+    throw new Error(`Chromium is not applying the font contract (${FONT_CONTRACT_FILE}):\n  ` +
+      mismatches.join('\n  '));
+  }
 }
 
 async function materializeComparisonFixture(
@@ -247,12 +316,18 @@ function worse(a: VisualSeverity, b: VisualSeverity): VisualSeverity {
 function summarizeCases(cases: CaseResult[]) {
   const counts = Object.fromEntries(severityOrder.map(level =>
     [level, cases.filter(result => result.severity === level).length]));
+  const severeByDisposition = Object.fromEntries(VISUAL_DISPOSITION_KINDS.map(kind => [
+    kind,
+    cases.filter(result => result.severity === 'severe' && result.disposition.kind === kind).length,
+  ]));
   return {
     cases: cases.length,
     pagesCompared: cases.reduce((sum, result) => sum + result.pages.length, 0),
     pageCountMismatches: cases.filter(result => result.pageCountDelta !== 0).length,
     errors: cases.filter(result => result.error !== undefined).length,
     severityCounts: counts,
+    severeByDisposition,
+    strictGatingCases: cases.filter(gatesStrictRun).map(result => result.id),
     meanSsim: cases.flatMap(result => result.pages).reduce((sum, page) => sum + page.ssim, 0) /
       Math.max(1, cases.flatMap(result => result.pages).length),
     meanInkF1: cases.flatMap(result => result.pages).reduce((sum, page) => sum + page.tolerantInkF1, 0) /
@@ -263,6 +338,7 @@ function summarizeCases(cases: CaseResult[]) {
 test('stratified tracked corpus matches LibreOffice at pixel level', async ({ page, browserName }) => {
   test.setTimeout(20 * 60 * 1000);
   assertTrackedCorpus(VISUAL_PARITY_CORPUS);
+  const fontContract = fontContractReport(repoRoot); // throws if the host misses the contract
   const corpus = selectedCorpus();
   const outputRoot = resolve(process.env.DOCXODUS_VISUAL_PARITY_OUTPUT ??
     join(tmpdir(), 'docxodus-visual-parity'));
@@ -280,6 +356,7 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/test-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 90000 });
+  await assertBrowserFontContract(page);
   await page.addScriptTag({ url: '/pagination.bundle.js' });
 
   const cases: CaseResult[] = [];
@@ -339,7 +416,8 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       cases.push(result);
       writeFileSync(join(caseOutput, 'metrics.json'), `${JSON.stringify(result, null, 2)}\n`);
       console.log(`[${caseIndex + 1}/${corpus.length}] ${entry.id}: ` +
-        `${result.docxodusPages}/${result.libreofficePages} pages, ${result.severity}`);
+        `${result.docxodusPages}/${result.libreofficePages} pages, ${result.severity} ` +
+        `(${result.disposition.kind})`);
     } catch (error) {
       const result: CaseResult = {
         ...entry,
@@ -374,9 +452,7 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       chromium: page.context().browser()?.version() ?? 'unknown',
       libreoffice: commandVersion('libreoffice', ['--version']),
       pdftoppm: commandVersion('pdftoppm', ['-v']).split('\n')[0],
-      calibriMatch: commandVersion('fc-match', ['Calibri', '--format=%{family} %{file}']),
-      calibriLightMatch: commandVersion('fc-match', ['Calibri Light', '--format=%{family} %{file}']),
-      timesNewRomanMatch: commandVersion('fc-match', ['Times New Roman', '--format=%{family} %{file}']),
+      fontContract,
       locale: 'C.UTF-8',
       timezone: 'UTC',
     },
@@ -392,7 +468,83 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   console.log(`Visual parity report: ${summaryPath}`);
 
   if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') {
-    expect(cases.filter(result => result.severity === 'severe'),
-      'strict mode rejects severe page-count, geometry, or visual discrepancies').toEqual([]);
+    expect(cases.filter(gatesStrictRun).map(result =>
+      ({ id: result.id, severity: result.severity, disposition: result.disposition.kind, error: result.error })),
+      'strict mode rejects severe cases attributed to the renderer (renderer-bug or unattributed) ' +
+      'and conversion errors; environment and reference-deviation severes are reported, not gated',
+    ).toEqual([]);
+  }
+});
+
+/**
+ * The contract drift probe (issue #379): one generated paragraph per declared family, wrapped in
+ * a 6.5in column by both renderers. Wrapping is the metric-sensitive observable — if either
+ * engine resolves a family to a different font, advance widths change and the paragraph wraps to
+ * a different number of lines. fc-match proves what fontconfig WOULD resolve; this proves what
+ * the two renderers actually DID.
+ */
+test('declared font families wrap identically in Chromium and LibreOffice', async ({ page }) => {
+  test.setTimeout(5 * 60 * 1000);
+  assertFontContract();
+
+  const work = mkdtempSync(join(tmpdir(), 'docxodus-font-probe-'));
+  try {
+    const docxPath = join(work, 'font-probe.docx');
+    writeFileSync(docxPath, Buffer.from(generateFontProbeDocx()));
+    const pdfText = execFileSync('pdftotext', ['-layout', libreofficePdf(docxPath, work), '-'], {
+      encoding: 'utf8',
+      env: libreofficeEnv(work),
+      timeout: 120000,
+    });
+    const libreofficeLines = probeLineCountsFromPdfText(pdfText);
+
+    await page.goto('/test-harness.html');
+    await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 90000 });
+    await assertBrowserFontContract(page);
+    await page.addScriptTag({ url: '/pagination.bundle.js' });
+
+    const chromiumLines = await page.evaluate(
+      ({ bytes, markers }: { bytes: number[]; markers: string[] }) => {
+        const html = (window as any).Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+          new Uint8Array(bytes), 'Document', 'docx-', true, '', -1, 'comment-',
+          1, 1, 'page-', false, 0, 'annot-', true, true, false, false, false,
+        );
+        if (html.startsWith('{') && html.includes('"Error"')) throw new Error(html);
+        document.body.innerHTML = '<main id="font-probe-root"></main>';
+        (window as any).DocxodusPagination.paginateHtml(
+          html, document.getElementById('font-probe-root'),
+          { scale: 1, showPageNumbers: false, pageGap: 0, fragmentParagraphs: false });
+        return document.fonts.ready.then(() => markers.map(marker => {
+          // Only rendered pages — the hidden pagination staging copy has no client rects.
+          const paragraph = Array.from(document.querySelectorAll('#font-probe-root .page-box p'))
+            .find(candidate => (candidate.textContent || '').includes(marker));
+          if (!paragraph) return -1;
+          const range = document.createRange();
+          range.selectNodeContents(paragraph);
+          const lineTops = new Set(Array.from(range.getClientRects())
+            .filter(rect => rect.width > 1 && rect.height > 1)
+            .map(rect => Math.round(rect.top)));
+          return lineTops.size;
+        }));
+      },
+      {
+        bytes: Array.from(generateFontProbeDocx()),
+        markers: FONT_CONTRACT.map((_, index) => probeMarker(index)),
+      });
+
+    for (const [index, entry] of FONT_CONTRACT.entries()) {
+      expect(chromiumLines[index], `${entry.family} paragraph missing from Chromium render`)
+        .toBeGreaterThan(1);
+      expect(libreofficeLines[index], `${entry.family} paragraph missing from LibreOffice render`)
+        .toBeGreaterThan(1);
+      expect(
+        chromiumLines[index],
+        `${entry.family} (contract: ${entry.substitute}) wraps to ${chromiumLines[index]} lines ` +
+        `in Chromium but ${libreofficeLines[index]} in LibreOffice — the substitution contract ` +
+        `has drifted between the renderers. Probe text: "${PROBE_TEXT.slice(0, 40)}…"`,
+      ).toBe(libreofficeLines[index]);
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
 });

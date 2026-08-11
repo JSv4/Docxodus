@@ -1,4 +1,4 @@
-import { storedZip, xml } from './docx-fixture.js';
+import { storedZip, xml } from './docx-zip.js';
 
 export type HorizontalAnchorOrigin =
   | 'page' | 'margin' | 'column' | 'character';

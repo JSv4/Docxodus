@@ -40,7 +40,7 @@ public class PreAcceptInputRevisionsTests
     // ---- oracle (b): the flag IS the wrapper ----------------------------------------------------
 
     [Fact]
-    public void Flag_on_is_byte_identical_to_accept_all_then_compare_wrapper()
+    public void Flag_on_produces_the_same_package_as_accept_all_then_compare_wrapper()
     {
         var left = MultiScopeRevisionDoc(
             "Body alpha", "Alice", "alpha-ins", "alpha-del", "PriorBob", "hdr-prior", "fn-prior");
@@ -53,8 +53,11 @@ public class PreAcceptInputRevisionsTests
             new DocxDiffSettings { AuthorForRevisions = "NewDiff" });
 
         // The flag is, by construction, exactly "accept-all both inputs, then compare" — so the produced
-        // tracked-changes packages are byte-for-byte identical.
-        Assert.Equal(wrapper.DocumentByteArray, flagOn.DocumentByteArray);
+        // tracked-changes packages hold the same parts with byte-for-byte identical content. Compared part
+        // by part rather than as raw package bytes: the ZIP container stamps each entry with the time it
+        // was written, which makes whole-package equality a race between these two calls rather than a
+        // statement about the flag. See PackageEquivalence.
+        PackageEquivalence.AssertSamePackage(wrapper, flagOn);
     }
 
     [Fact]
