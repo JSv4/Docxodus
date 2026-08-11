@@ -4,7 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Border colour resolves `w:themeColor` instead of its cached literal** (issue #399,
+  `Docxodus/WmlToHtmlConverter.cs`): `w:color` on a border is a *cache* of the last
+  theme resolution, not the authority — when `w:themeColor` is present, the theme
+  entry plus any `w:themeTint`/`w:themeShade` is what the border is. Shading already
+  resolved this way, so a single table style whose fill and border reference the same
+  accent colour derived them from two different sources. For any Word-written file the
+  two agree (Word rewrites the cache when it applies the theme), so no rendered output
+  changes and no benchmark number moves; it changes documents whose theme was swapped
+  without a cache rewrite. Found while reducing the `merged-table` benchmark case,
+  which could not expose it: a generated table that makes cache and theme **disagree**
+  can.
+
 ### Changed
+- **The `merged-table` visual-parity case is attributed** (issue #399,
+  `npm/tests/visual-parity/corpus.ts`): the corpus's last `unattributed` disposition.
+  The recorded premise — "the whole perceptual delta is fill/border *color*" — is
+  wrong. Both engines paint the identical theme-derived values (`#4472C4` header,
+  `#D9E2F3` bands, `#8EAADB` borders), and the style's cached literals equal those
+  values exactly under Word's tint formula, so there is nothing to disagree about.
+  Horizontal extents match to the pixel; the residual is row **height**, ~1px per row
+  accumulating to ~3px, which large solid fills amplify perceptually — which is how the
+  case holds ink F1 1.00000 while its SSIM sits at 0.96348. That isolates to font
+  line metrics by elimination: no `w:trHeight`, `w:tblCellMar` top/bottom both 0, and
+  `w:line="240"` single spacing, so a row IS one font line box. Moves to `environment`,
+  leaving the corpus with no `unattributed` case — a tidiness result, not a gating one,
+  since strict mode fires only on *severe* cases and this one is `minor`. Also records
+  that Docxodus applies table-style conditional formatting from Word's per-row/per-cell
+  `w:cnfStyle` hints rather than deriving band membership from `w:tblLook`, so a
+  hand-authored table without them renders unshaded.
 - **TOC hyperlink styling attributed to the reference implementation, not the renderer**
   (issue #397, `npm/tests/toc-line-geometry.spec.ts` + `visual-parity/corpus.ts`):
   the `fields-and-tabs` benchmark case named two residuals, and they have opposite

@@ -80,9 +80,18 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     categories: ['tables'],
     rationale: 'Merged-cell borders, widths, and vertical geometry.',
     disposition: {
-      kind: 'unattributed',
-      rationale: 'Ink geometry aligns; the perceptual delta is dominated by fill/border color that has ' +
-        'not been reduced to a minimal case deciding which engine matches the OOXML color semantics.',
+      kind: 'environment',
+      rationale: 'Colour is NOT the delta (issue #399). Sampling both renders, the two engines paint ' +
+        'the identical theme-derived values — #4472C4 header, #D9E2F3 bands, #8EAADB borders — and ' +
+        'the style\'s cached literals equal those values exactly under Word\'s tint formula, so ' +
+        'there is nothing to disagree about. Horizontal extents match exactly; the residual is row ' +
+        'HEIGHT, about 1 px per row accumulating to ~3 px over the table. That isolates to font ' +
+        'line metrics by elimination: the table declares no `w:trHeight`, its `w:tblCellMar` top ' +
+        'and bottom are both 0, and its paragraphs are `w:line="240"` single spacing — so a row IS ' +
+        'exactly one font line box, and the 1 px is the two engines measuring that box differently ' +
+        'for the same substituted font. Large solid fills make a one-pixel edge offset dominate ' +
+        'the perceptual signal while ink F1 stays 1.00000.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/399',
     },
   },
   {
