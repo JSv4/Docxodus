@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md.",
   "recordedAt": "2026-08-11",
-  "sourceCommit": "cc95e099855dff87d1f45f1b936cdb15465f4306",
+  "sourceCommit": "b6b67883789a3a860e0db56e17089ba37fab9230",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -70,7 +70,7 @@
     },
     {
       "id": "merged-table",
-      "disposition": "unattributed",
+      "disposition": "environment",
       "pages": {
         "docxodus": 1,
         "libreoffice": 1

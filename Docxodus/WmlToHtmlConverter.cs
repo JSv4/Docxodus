@@ -7890,7 +7890,14 @@ namespace Docxodus
             {
                 var sz = (int)side.Attribute(W.sz);
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
-                var color = (string)side.Attribute(W.color);
+                // `w:color` is a CACHE of the last theme resolution, not the authority: when
+                // `w:themeColor` is present the theme entry (plus any tint/shade) is what the
+                // border is. Shading already resolved this way, so a table style whose fill and
+                // border both reference the same theme colour used to resolve them from two
+                // different sources — indistinguishable in a Word-written file, where the cache
+                // agrees, and wrong in one whose theme was changed without rewriting it.
+                var color = ResolveThemeColor(side, W.color, W.themeColor, W.themeTint, W.themeShade,
+                    GetThemeColorScheme(side));
                 if (color == null || color == "auto")
                     color = "windowtext";
                 else

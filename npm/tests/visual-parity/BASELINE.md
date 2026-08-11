@@ -354,6 +354,49 @@ are independent, i.e. that applying the character style does not change the line
 With this, the corpus's remaining non-`environment` work is the `merged-table` colour delta (issue
 #399), the last `unattributed` case.
 
+## The merged-table colour delta — 2026-08-11 (issue #399)
+
+The corpus's last `unattributed` case. The issue recorded that `merged-table` has perfect ink
+geometry (F1 1.00000) and that "the whole perceptual delta is fill/border *color*". **That premise
+was wrong**, and the measurement is easy once taken: sampling every non-white pixel of both renders,
+
+| Renderer | Header fill | Band fill | Border |
+|---|---|---|---|
+| LibreOffice | `#4472C4` | `#D9E2F3` | `#8EAADB` |
+| Docxodus | `#4472C4` | `#D9E2F3` | `#8EAADB` |
+
+The two engines paint the **same three colours**, and they are the theme-derived values: `HC029`
+declares no `w:shd` or border of its own, taking everything from the `Grid Table 4 Accent 5` style,
+whose cached literals equal `accent5` (`4472C4`) under Word's tint formula exactly — `tint 0x99` →
+`8EAADB`, `tint 0x33` → `D9E2F3`. There is nothing for the engines to disagree about.
+
+What differs is **geometry**. Horizontal extents are identical to the pixel (fills span x 96–719 and
+97–718 in both). Vertically the rows are about 1px taller in Docxodus, accumulating to ~3px by the
+second header band (LibreOffice 200–236, Docxodus 203–239). Because the fills are large solid
+areas, a one-pixel edge offset moves a great many pixels past the ΔE threshold, which is exactly how
+a case can hold ink F1 1.00000 — the ink masks overlap within the tolerance — while its SSIM sits at
+0.96348.
+
+That row-height difference isolates to font line metrics by elimination rather than by assumption:
+the table declares no `w:trHeight`, its `w:tblCellMar` top and bottom are both **0**, and its
+paragraphs are `w:line="240"` — exactly single spacing, which issue #396 does not touch. A row is
+therefore exactly one font line box, and the 1px is the two engines measuring that box differently
+for the same substituted font. The disposition moves `unattributed` → **`environment`**, the same
+residual the other environment cases carry. Note this changes no gating: `gatesStrictRun` fires
+only on *severe* cases, and `merged-table` is `minor`.
+
+**A real inconsistency found while reducing it.** The tracked fixture cannot say whether a renderer
+resolves `w:themeFill`/`w:themeColor` or just paints the cached `w:fill`/`w:color` literal, because
+Word keeps the two in sync. A generated table can, by making them disagree — and that exposed
+Docxodus resolving the *same* accent colour from two different sources within one style: shading
+resolved the theme, while border colour read the cache. ECMA-376 makes the theme reference the
+authority and the literal a cache of the last resolution, so border colour now resolves the theme
+like shading always did. For any Word-written file this changes nothing (which is why no corpus
+number moves); it changes documents whose theme was swapped without a cache rewrite.
+
+With this the corpus has **no `unattributed` case left**, and every remaining residual is either
+`environment` or a recorded `reference-deviation`.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -364,7 +407,7 @@ attribution the strict gate reads, and these numbers are what `ratchet.json` rec
 | Case | Pages D/L | Severity | Disposition | SSIM | Ink F1 | Triage |
 |---|---:|---|---|---:|---:|---|
 | text-formatting | 1/1 | close | environment | 0.99708 | 0.96770 | Control case; fonts and small caps are close. |
-| merged-table | 1/1 | minor | unattributed | 0.96348 | 1.00000 | Ink geometry aligns; fill/border color dominates the perceptual delta and has not been reduced to a minimal case. |
+| merged-table | 1/1 | minor | environment | 0.96348 | 1.00000 | Both engines paint the SAME theme-derived colours (issue #399); the residual is row height (~1 px/row) that large solid fills amplify perceptually. |
 | numbered-lists | 1/1 | close | reference-deviation | 0.99898 | 1.00000 | The "28 px lower" reading was the accumulated auto-line-spacing error (issue #396), not a top-margin deviation: ink geometry is now exact. |
 | multi-section | 6/6 | close | environment | 0.99986 | 1.00000 | Header/body/footer bands sit at the distances `w:pgMar` declares (issue #377); ink geometry now exact. |
 | landscape-section | 1/1 | major | environment | 0.94878 | 0.95533 | Page dimensions match; improved by issue #396. Residual is same-font wrapping and rasterization. |
@@ -422,12 +465,10 @@ block vertical placement (issue #378), the font-substitution contract (issue #37
 regression ratchet (issue #395), and automatic line spacing (issue #396, which also resolved
 #397's line-box half and dissolved #398's premise) are resolved above. The remaining order is:
 
-1. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it (issue
-   #399) — the corpus's last `unattributed` disposition.
-2. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
+1. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
    same-font layout cases (issue #404), which is what now stands between the corpus and a
    strict run.
-3. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
+2. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
    is whether to keep a Word-evidence procedure (issue #402) for it at all.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
