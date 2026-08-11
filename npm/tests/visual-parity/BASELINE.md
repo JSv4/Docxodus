@@ -178,6 +178,34 @@ Chromium, and Calibri Light substitutes); the per-case table below carries the c
 figures. The headline number is no longer the raw severe count but the strict-gating set: two
 renderer-attributable severe cases remain.
 
+## Font-substitution contract — 2026-08-11 (issue #379)
+
+Font policy is now a shared contract, not a host observation: `fonts.conf` pins each declared
+Office family to a license-safe metric-compatible substitute (Calibri/Calibri Light → Carlito,
+Cambria → Caladea, Times New Roman/Arial/Courier New → Liberation), and both renderers load it via
+`FONTCONFIG_FILE` — LibreOffice per subprocess, Chromium at launch through `playwright.config.ts`.
+Enforcement is layered (fc-match assertion with install hints, in-browser canvas-width check,
+cross-renderer wrapping probe), and the resolved family/file/version set plus the contract file's
+SHA-256 are recorded in every `summary.json`. The probe is negatively validated: without the
+contract, Calibri Light wraps 5 lines instead of 4 on a stock Ubuntu host (DejaVu Sans vs
+Carlito). See the README's contract section for the full mechanism.
+
+Corpus effect, against the immediately preceding run in the same environment:
+
+- **Nine of twelve cases byte-identical** — this host's defaults already matched the contract for
+  their families, confirming the pinning changes nothing except what it claims to pin.
+- **`tracked-deletion` improved** (SSIM 0.94833, +0.01688; ink F1 0.58271, +0.04299). The
+  renderer-only `Calibri Light → Carlito` fallback was rejected in the initial baseline because it
+  worsened this exact case; the SAME mapping shared by both engines improves it — the contract's
+  thesis, demonstrated.
+- **`fields-and-tabs` measured lower** (ink F1 0.15994, −0.19971): with Calibri Light pinned in
+  both engines the TOC line-height mismatch no longer partially overlaps by accident. The case was
+  already strict-gating `renderer-bug`; the pinned number is the honest one.
+
+Severity counts, strict gating (`shape`, `fields-and-tabs`), and every disposition are unchanged.
+`environment` now has a sharper meaning: the engines lay out the SAME fonts differently
+(line breaking, justification, rasterization) — never that they picked different fonts.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -195,9 +223,9 @@ rerun (environment above); `Disposition` is the corpus attribution the strict ga
 | inline-image | 1/1 | severe | environment | 0.93585 | 0.64828 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. Re-triage after issue #379. |
 | chart | 1/1 | close | environment | 0.98651 | 0.96816 | Cached clustered column data now renders as accessible inline SVG at the stored extent. Other chart families and stacked groupings remain unsupported and are not yet in the corpus. |
 | shape | 1/1 | severe | renderer-bug | 0.97418 | 0.63170 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
-| fields-and-tabs | 1/1 | severe | renderer-bug | 0.89143 | 0.35965 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. TOC line height and hyperlink styling remain renderer-side, entangled with font metrics. |
-| footnote | 1/1 | severe | environment | 0.99277 | 0.73700 | Note placement fixed (issue #378): note-text bottom flush with LibreOffice's, separator-to-note gap matches. Residual is substituted-font line metrics (issue #379) and LibreOffice-24.2's legacy separator width. |
-| tracked-deletion | 1/1 | severe | environment | 0.93145 | 0.53972 | Identical accepted-revision bytes are now compared. Remaining differences cluster around Calibri Light substitution, heading metrics, and wrapping rather than revision semantics. Re-triage after issue #379. |
+| fields-and-tabs | 1/1 | severe | renderer-bug | 0.89412 | 0.15994 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. TOC line height and hyperlink styling remain renderer-side; the font contract made this measurement honest and lower. |
+| footnote | 1/1 | severe | environment | 0.99277 | 0.73700 | Note placement fixed (issue #378): note-text bottom flush with LibreOffice's, separator-to-note gap matches. Residual is same-font line-box metrics and LibreOffice-24.2's legacy separator width. |
+| tracked-deletion | 1/1 | severe | environment | 0.94833 | 0.58271 | Identical accepted-revision bytes are now compared. Improved by the shared Calibri Light pinning (issue #379); the residual is heading metrics and wrapping of the same fonts. |
 
 ## Fixes justified by the baseline
 
@@ -240,17 +268,15 @@ renderer heuristic.
 ## Prioritized next work
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
-header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, and footnote
-block vertical placement (issue #378) are resolved above. The remaining order is:
+header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, footnote
+block vertical placement (issue #378), and the font-substitution contract (issue #379) are
+resolved above. The remaining order is:
 
-1. Define and provision one font-substitution contract shared by Chromium and LibreOffice CI
-   (issue #379). This is the gate for everything attributed `environment`: four severe cases
-   (`landscape-section`, `inline-image`, `footnote` residual, `tracked-deletion`) cannot be
-   triaged further until wrap and line-metric differences stop being environment noise.
-2. Model auto-fit text/line height for DrawingML textboxes (`shape`, strict-gating).
-3. TOC line height and hyperlink styling (`fields-and-tabs`, strict-gating; re-measure after 1).
-4. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it.
-5. Obtain Word evidence for the `numbered-lists` top margin to close or reclassify the
+1. Model auto-fit text/line height for DrawingML textboxes (`shape`, strict-gating).
+2. TOC line height and hyperlink styling (`fields-and-tabs`, strict-gating — now honestly
+   measured under the pinned contract).
+3. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it.
+4. Obtain Word evidence for the `numbered-lists` top margin to close or reclassify the
    reference-deviation.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence

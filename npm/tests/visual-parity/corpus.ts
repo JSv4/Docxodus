@@ -114,10 +114,8 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     rationale: 'Landscape dimensions and margin placement.',
     disposition: {
       kind: 'environment',
-      rationale: 'Page dimensions match exactly; the residual is paragraph spacing and wrapping under ' +
-        'different Chromium/LibreOffice font substitution. Re-triage once a shared substitution ' +
-        'contract exists.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/379',
+      rationale: 'Page dimensions match exactly; unchanged by the font contract, so the residual is ' +
+        'paragraph spacing and line breaking of the SAME fonts differing between the two engines.',
     },
   },
   {
@@ -138,9 +136,8 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     disposition: {
       kind: 'environment',
       rationale: 'The image and text are separate source paragraphs; the discrepancy is ' +
-        'indentation/font/wrapping under differing font substitution, not an inline-flow failure. ' +
-        'Re-triage once a shared substitution contract exists.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/379',
+        'indentation/font/wrapping, not an inline-flow failure. Unchanged by the font contract, ' +
+        'so the engines lay out the same fonts differently.',
     },
   },
   {
@@ -174,8 +171,9 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     disposition: {
       kind: 'renderer-bug',
       rationale: 'Tab targets and leaders are correct since PR #380; TOC line height and hyperlink ' +
-        'styling remain renderer-side differences, entangled with font-substitution wrapping.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/379',
+        'styling remain renderer-side differences. The font contract made the measurement honest ' +
+        'and lower: with Calibri Light pinned to Carlito in both engines, the line-height ' +
+        'mismatch no longer partially overlaps by accident.',
     },
   },
   {
@@ -186,10 +184,9 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     disposition: {
       kind: 'environment',
       rationale: 'Note placement is fixed (issue #378): the last note line ends on the bottom margin ' +
-        'in both engines and the separator-to-note gap matches. The residual is body/note line ' +
-        'metrics of the substituted font differing between Chromium and LibreOffice, and older ' +
-        'LibreOffice drawing its 25%-column separator instead of the two-inch default.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/379',
+        'in both engines and the separator-to-note gap matches. The residual is line-box metrics ' +
+        'of the same font differing between the engines, and older LibreOffice drawing its ' +
+        '25%-column separator instead of the two-inch default.',
     },
   },
   {
@@ -200,10 +197,10 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     revisionMode: 'accepted',
     disposition: {
       kind: 'environment',
-      rationale: 'Identical accepted bytes go to both engines; the differences cluster around Calibri ' +
-        'Light substitution, heading metrics, and wrapping rather than revision semantics. Re-triage ' +
-        'once a shared substitution contract exists.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/379',
+      rationale: 'Identical accepted bytes go to both engines; the differences cluster around heading ' +
+        'metrics and wrapping rather than revision semantics. The font contract improved this case ' +
+        '(shared Calibri Light pinning) — the residual is the engines laying out the same fonts ' +
+        'differently.',
     },
   },
 ];
