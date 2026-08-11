@@ -11,7 +11,9 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
 3. [Package Output](#package-output)
    - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
-4. [Contributing](#contributing)
+4. [Paragraph Layout](#paragraph-layout)
+   - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
+5. [Contributing](#contributing)
 
 ---
 
@@ -1152,6 +1154,92 @@ replaces the previous separate Unix-metadata rewrite. The cost is bounded to fin
 production; editing, projection, undo, and intermediate operations are unchanged. This policy
 favors storage and transfer efficiency for batch-produced documents without paying maximum
 compression cost on every XML save.
+
+---
+
+## Paragraph Layout
+
+### `w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size
+
+#### Symptom
+
+Every line of body text sits too close to the next, and the error compounds down the page. It is
+invisible in a single line and obvious after twenty. Where the laid-out text height *is* a
+rendered dimension — a `spAutoFit` DrawingML textbox, whose height is its content — the same error
+surfaces as a visibly undersized box.
+
+#### Minimal XML reproducer
+
+```xml
+<w:pPr>
+  <w:spacing w:line="259" w:lineRule="auto"/>
+</w:pPr>
+<w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>…</w:t></w:r>
+```
+
+`w:line="259"` with `w:lineRule="auto"` is Word's own default for documents created since Word
+2013, so this is the common case, not an exotic one.
+
+#### The corner case
+
+ECMA-376 defines `w:lineRule="auto"` as specifying line spacing in **240ths of a line**. The
+ambiguity is what "a line" means, and it is not the font size: it is the font's own single-line
+height — ascent + descent + line gap, from the font's metrics.
+
+CSS has no equivalent base. Both `line-height: 107.9%` and `line-height: 1.079` resolve against
+**font-size**, i.e. the em square. For Calibri (and its metric-compatible substitute Carlito) the
+font's natural line box is ≈1.22 em, so a percentage translation under-measures every line by
+that ratio — about 19% — regardless of how faithfully the 259/240 arithmetic itself is done.
+
+At 11pt (14.667px):
+
+| Model | Line height |
+|---|---:|
+| `line-height: 107.9%` (percentage of em square) | 15.69px |
+| 1.0792 × the font's line box (1.22 em ≈ 17.91px) | **19.33px** |
+| LibreOffice, measured | **19.33px** |
+
+Note that `w:line="240"` (exactly single) is the special case where doing nothing is right: CSS
+`line-height: normal` already *is* the font's natural line box. The error only appears once the
+multiplier differs from 1 — which is precisely Word's modern default.
+
+#### Renderer comparison
+
+| Renderer | 11pt Calibri, `w:line="259" w:lineRule="auto"` |
+|---|---|
+| Word | multiple of the font's single-line height |
+| LibreOffice | 19.33px line advance (measured from PDF text extents at 96 DPI) |
+| Docxodus (before) | 15.69px — `line-height: 107.9%` |
+| Docxodus (after) | 19.33px — `line-height: normal` + `calc(1lh * 1.079)` |
+
+#### The fix
+
+CSS's `lh` unit is the missing base. The paragraph keeps `line-height: normal`, so `1lh` on each
+direct inline child resolves to the browser's native line box for that paragraph's font, and
+`calc(1lh * var(--docx-auto-line-spacing))` multiplies it. Applying it to the children rather than
+the paragraph avoids a self-reference in the paragraph's own `line-height`. Nothing font-specific
+is hard-coded, so the result follows whatever font actually resolves.
+
+A child that already declares an explicit `line-height` is skipped — the compacted pieces of a
+`w:br` carry `line-height: 0` precisely so they cannot contribute a line box.
+
+#### Relevant code
+
+- `Docxodus/WmlToHtmlConverter.cs` — `CreateStyleFromSpacing` (derives the multiplier),
+  `ApplyAutomaticLineSpacingToInlineContent` (applies it), `DefineParagraphStyle` (enables it).
+
+#### Tests
+
+- `Docxodus.Tests/HtmlConversionOpsTests.cs` — `HCO073_PointSuffixedAutoLineSpacing_NormalizesToTwipsBeforeDerivingCss`
+- `npm/tests/drawing-autofit-height.spec.ts` — the auto-fit textbox height that this drives
+- `npm/tests/toc-line-geometry.spec.ts` — TOC entry line boxes
+
+#### History
+
+PR #372 introduced the native-line-box model but enabled it only for *empty* paragraph marks,
+which is what pagination parity needed at the time; populated paragraphs kept the percentage
+fallback. Issues #396 (DrawingML textbox auto-fit height) and #397 (TOC line height) were both
+traced to that remaining fallback.
 
 ---
 

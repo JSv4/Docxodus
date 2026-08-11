@@ -421,7 +421,10 @@ namespace OxPt
 
                     // Verify the HTML contains <ins> elements (insertions)
                     Assert.Contains("<ins", htmlString);
-                    Assert.Contains("class=\"rev-ins\"", htmlString);
+                    // The revision class leads the attribute; a fabricated style class may follow
+                    // it, because the class pass APPENDS to an existing attribute rather than
+                    // replacing it. Pin the revision class, not the whole attribute value.
+                    Assert.Contains("class=\"rev-ins", htmlString);
 
                     // Verify metadata attributes are present
                     Assert.Contains("data-author=", htmlString);
@@ -468,7 +471,8 @@ namespace OxPt
 
                     // Verify the HTML contains <del> elements (deletions)
                     Assert.Contains("<del", htmlString);
-                    Assert.Contains("class=\"rev-del\"", htmlString);
+                    // As above: a fabricated style class may follow the revision class.
+                    Assert.Contains("class=\"rev-del", htmlString);
 
                     // Verify metadata attributes are present
                     Assert.Contains("data-author=", htmlString);

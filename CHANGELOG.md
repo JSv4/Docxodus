@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Automatic line spacing is a multiple of the font's line box, not of font-size**
+  (issue #396, `Docxodus/WmlToHtmlConverter.cs`): OOXML's `w:lineRule="auto"` gives
+  line spacing in 240ths of a *line*, where a line is the font's own single-line
+  height. It was emitted as `line-height: <n>%`, and CSS percentages resolve against
+  **font-size**, so every line was short by the ratio between the font's natural line
+  box and its em square — about 19% for Calibri/Carlito, on `w:line="259"`, which is
+  Word's own default for documents created since Word 2013. PR #372 had already built
+  the correct model (`line-height: normal` plus `calc(1lh * multiplier)` on the
+  paragraph's inline children, so nothing font-specific is hard-coded) but enabled it
+  only for empty paragraph marks; it now applies to every paragraph, and the dead
+  percentage branch is gone. Measured against LibreOffice at 11pt, the line advance
+  goes from 15.69px to 19.33px, which is LibreOffice's exactly. Visible wherever the
+  laid-out text height *is* a rendered dimension: a `spAutoFit` DrawingML textbox's
+  height error falls from −16.0px to +2.7px, and TOC entries that were displaced by
+  up to 14.7px now land within 0.12px. Also resolves the "content sits 28px lower"
+  reading of the `numbered-lists` case, which was the accumulated error rather than a
+  page-margin disagreement. On the visual-parity corpus: **severe cases 7 → 0**, mean
+  ink F1 0.848523 → 0.981644, and the strict-gating set is now empty.
+- **A superscript or subscript no longer makes its line taller** (issue #396,
+  `GenerateDocumentLayoutCss`): CSS counts a `vertical-align: super` inline box when
+  it sizes the line box, so a paragraph grew merely because it carried a footnote
+  reference — 25.31px instead of 19.42px on the tracked case, pushing every glyph on
+  the line down. Word rides superscripts inside the existing line. `sup, sub {
+  line-height: 0 }` joins the always-emitted document-layout stylesheet as a third
+  Word layout invariant CSS defaults do not match, alongside over-long-word breaking
+  and table max-width. This is the same device the converter already used to keep the
+  compacted pieces of a `w:br` from contributing a line box.
+
 ### Added
 - **Visual-parity regression ratchet** (issue #395,
   `npm/tests/visual-parity/ratchet.ts` + `ratchet.json`): the weekly scheduled run

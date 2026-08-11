@@ -1046,14 +1046,20 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
 
         Assert.Contains("HCO066 retained text", html);
-        Assert.DoesNotContain("line-height", html);
+        // No line spacing is DERIVED for the paragraph: neither the automatic-spacing multiplier
+        // nor a computed height. The document-layout stylesheet's own `sup, sub { line-height: 0 }`
+        // is always present and is not a paragraph declaration, so assert on what the paragraph
+        // produced rather than on the whole document containing the string at all.
+        Assert.DoesNotContain("--docx-auto-line-spacing", html);
+        Assert.DoesNotContain("calc(1lh", html);
+        Assert.DoesNotContain("line-height: 1", html);
     }
 
     // Strict/compatibility producers can express paragraph spacing as fractional point measures
     // rather than raw twips. It must use the same measure parser for before and line spacing so
     // one style default cannot abort every paragraph in the document.
     [Fact]
-    public void HCO073_PointSuffixedAutoLineSpacing_ConvertsToPercent()
+    public void HCO073_PointSuffixedAutoLineSpacing_NormalizesToTwipsBeforeDerivingCss()
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -1075,7 +1081,12 @@ public class HtmlConversionOpsTests
             new HtmlConversionOptions { FabricateCssClasses = false });
 
         Assert.Contains("HCO073 retained text", html);
-        Assert.Contains("line-height: 107.9%", html);
+        // 12.95pt is 259 twips, so the derived multiple is 259/240. What the test pins is the
+        // NORMALIZATION (a point-suffixed w:line is parsed at all); the CSS shape is the auto
+        // line-spacing model, which expresses the multiple against the font's own line box
+        // rather than as a percentage of its em square (issues #396/#397).
+        Assert.Contains("--docx-auto-line-spacing: 1.079", html);
+        Assert.Contains("line-height: normal", html);
     }
 
     // Table indentation and preceding paragraph spacing can use point measures too. A table-cell

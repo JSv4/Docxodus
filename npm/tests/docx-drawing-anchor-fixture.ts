@@ -9,6 +9,22 @@ export interface DrawingAnchorFixtureOptions {
   horizontal: { relativeFrom: HorizontalAnchorOrigin; offsetEmu?: number; align?: 'left' | 'center' | 'right' };
   vertical: { relativeFrom: VerticalAnchorOrigin; offsetEmu?: number; align?: 'top' | 'center' | 'bottom' };
   prefix?: string;
+  /**
+   * Emit `<a:spAutoFit/>` in `wps:bodyPr`. Word then sizes the shape to its laid-out text plus
+   * the body insets and treats the stored `wp:extent`/`a:ext` as a stale cache; without it the
+   * stored extent is the height (issue #396).
+   */
+  autoFit?: boolean;
+  /** Textbox body text; longer text wraps to more lines and, under auto-fit, a taller box. */
+  text?: string;
+  /** Stored extent. Auto-fit boxes deliberately carry a wrong one, as Word's own files do. */
+  extentEmu?: { cx: number; cy: number };
+  /**
+   * `w:spacing w:line` in 240ths of a line with `w:lineRule="auto"` on the textbox paragraph.
+   * Auto line spacing is a multiple of the FONT's line box, so this is what a content-driven
+   * height must track.
+   */
+  lineTwips?: number;
 }
 
 const w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -32,6 +48,13 @@ export function generateDrawingAnchorDocx(options: DrawingAnchorFixtureOptions):
     ? `<w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/>` +
       `<w:sz w:val="24"/></w:rPr><w:t>${options.prefix}</w:t></w:r>`
     : '';
+  const extent = options.extentEmu ?? { cx: 1828800, cy: 914400 };
+  const bodySpacing = options.lineTwips !== undefined
+    ? `<w:pPr><w:spacing w:line="${options.lineTwips}" w:lineRule="auto"/></w:pPr>`
+    : '';
+  const bodyText = options.text ?? 'ANCHOR';
+  const autoFit = options.autoFit ? '<a:spAutoFit/>' : '';
+
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="${w}" xmlns:wp="${wp}" xmlns:a="${a}" xmlns:wps="${wps}">
   <w:body>
@@ -41,13 +64,14 @@ export function generateDrawingAnchorDocx(options: DrawingAnchorFixtureOptions):
         <wp:simplePos x="0" y="0"/>
         ${positionXml('H', options.horizontal)}
         ${positionXml('V', options.vertical)}
-        <wp:extent cx="1828800" cy="914400"/>
+        <wp:extent cx="${extent.cx}" cy="${extent.cy}"/>
         <wp:wrapSquare wrapText="bothSides"/>
         <wp:docPr id="1" name="Generated anchor"/>
         <wp:cNvGraphicFramePr/>
         <a:graphic><a:graphicData uri="${wps}"><wps:wsp>
-          <wps:txbx><w:txbxContent><w:p><w:r><w:t>ANCHOR</w:t></w:r></w:p></w:txbxContent></wps:txbx>
-          <wps:bodyPr lIns="114300" tIns="76200" rIns="228600" bIns="12700"/>
+          <wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${extent.cx}" cy="${extent.cy}"/></a:xfrm></wps:spPr>
+          <wps:txbx><w:txbxContent><w:p>${bodySpacing}<w:r><w:t xml:space="preserve">${bodyText}</w:t></w:r></w:p></w:txbxContent></wps:txbx>
+          <wps:bodyPr lIns="114300" tIns="76200" rIns="228600" bIns="12700">${autoFit}</wps:bodyPr>
         </wps:wsp></a:graphicData></a:graphic>
       </wp:anchor>
     </w:drawing></w:r></w:p>
