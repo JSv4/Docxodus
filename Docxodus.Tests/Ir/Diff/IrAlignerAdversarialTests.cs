@@ -171,65 +171,33 @@ public class IrAlignerAdversarialTests
 
     [Trait("Category", "Perf")]
     [Fact]
-    public void Scale_guard_1000_vs_4000_cpu_ratio_within_15x()
+    public void Scale_guard_1000_vs_4000_allocation_ratio_within_12x()
     {
         // Both inputs are the near-identical fixture (distinct clauses) self-paired with ONE edit, so
         // every block anchors uniquely and the only gap is a single 1-block Modified gap — i.e. NO large
         // all-distinct gap that would trip the InOrderRefine G²/2 worst case. This isolates the spine /
-        // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 12× the CPU time
-        // (a true O(n²) regression reads ~16×). Process CPU time keeps shared-runner scheduling noise
-        // from looking like algorithmic work.
-        // Best of up to three independent rounds. Scheduling noise on a shared runner can only ADD CPU
-        // time, so it can only inflate the ratio — which makes the MINIMUM across rounds the closest
-        // estimate of the true algorithmic one, and makes a single noisy round unable to fail the test.
-        // The guard keeps its teeth: a real O(n²) regression reads ~16x in EVERY round, so all three
-        // have to exceed the limit before this fails. Rounds stop as soon as one comes in under.
-        //
-        // Sizes are 1000/4000 (was 500/2000): at 500 paragraphs the baseline sample sits at ~2-3 ms,
-        // where the independent per-size minimum is biased — the small input reaches its ideal sample
-        // far more often than the cache-pressured large one, inflating the ratio. CI tripped the 12x
-        // guard three times in a row on unchanged aligner code (12.20x, 12.29x, 15.37x best-of-rounds)
-        // with baselines of 2.28-2.97 ms. Quadrupling both sizes keeps the 4x scale and the limit's
-        // meaning while making the denominator large enough that scheduler noise stops deciding the
-        // verdict.
-        //
-        // Limit calibration: with the solid 7-8 ms baseline the measured ratio on GitHub's shared
-        // runners is 12.5-13x in EVERY round (e.g. 1000=7.64 ms, 4000=97.88 ms ⇒ 12.82x best-of-3) —
-        // that is the aligner's true linear-plus-cache profile at these sizes, not noise: 4000
-        // paragraphs outgrow cache and raise the per-item constant. A genuine O(n²) regression reads
-        // ≥16x from the algorithm alone, before the same cache multiplier pushes it higher, so 15x
-        // still separates the two regimes cleanly while sitting above the measured healthy band.
-        const double limit = 15.0;
-        const int rounds = 3;
+        // anchoring storage, which should scale near-linearly: 4× the blocks must stay well below the
+        // 16× signature of quadratic materialization. Per-thread managed allocations are deterministic
+        // for this synchronous path and cannot be distorted by runner scheduling or CPU-cache pressure.
+        const double limit = 12.0;
 
-        double bestRatio = double.MaxValue, bestSmall = 0, bestLarge = 0;
-        for (int round = 0; round < rounds; round++)
-        {
-            double small = BestSampleCpuMs(1000);
-            double large = BestSampleCpuMs(4000);
-            double ratio = large / Math.Max(small, 0.0001);
-            _out.WriteLine($"Scale guard CPU round {round + 1}: 1000-para = {small:F2} ms, " +
-                $"4000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
+        long small = AllocatedBytesForAlign(1000);
+        long large = AllocatedBytesForAlign(4000);
+        double ratio = (double)large / Math.Max(small, 1L);
 
-            if (ratio < bestRatio)
-                (bestRatio, bestSmall, bestLarge) = (ratio, small, large);
-            if (bestRatio <= limit)
-                break;
-        }
-
-        Assert.True(bestRatio <= limit,
-            $"Align CPU-time ratio {bestRatio:F2}x for 4x input exceeds the {limit:F0}x anti-O(n²) guard " +
-            $"in every one of {rounds} rounds (best round: 1000={bestSmall:F2}ms, 4000={bestLarge:F2}ms).");
+        _out.WriteLine($"Scale guard allocations: 1000-para = {small:N0} bytes, " +
+            $"4000-para = {large:N0} bytes, ratio = {ratio:F2}x (n=4x)");
+        Assert.True(ratio <= limit,
+            $"Align allocation ratio {ratio:F2}x for 4x input exceeds the {limit:F0}x " +
+            $"anti-quadratic-materialization guard (1000={small:N0}, 4000={large:N0} bytes).");
     }
 
     /// <summary>
-    /// Collect first, warm up once, then take the best of five process-CPU samples (ms per align)
-    /// for an n-paragraph self-pair with one edit. Each sample times a batch of 10 aligns so the
-    /// measurement stays well above platform timer granularity.
+    /// Warm up once, then count allocations made on the calling thread by one alignment of an
+    /// n-paragraph self-pair with one edit. Document construction is deliberately outside the sample.
     /// </summary>
-    private static double BestSampleCpuMs(int n)
+    private static long AllocatedBytesForAlign(int n)
     {
-        const int alignsPerSample = 10;
         var baseParas = DistinctClauses(n);
         var edited = (string[])baseParas.Clone();
         edited[n / 2] = $"Clause {n / 2}: REVISED wording for this section of the agreement.";
@@ -237,21 +205,10 @@ public class IrAlignerAdversarialTests
         var l = Doc(baseParas);
         var r = Doc(edited);
 
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-        GC.WaitForPendingFinalizers();
-        _ = Align(l, r); // warm-up (JIT, dictionary growth)
-
-        using var process = Process.GetCurrentProcess();
-        double best = double.MaxValue;
-        for (int i = 0; i < 5; i++)
-        {
-            TimeSpan start = process.TotalProcessorTime;
-            for (int j = 0; j < alignsPerSample; j++)
-                _ = Align(l, r);
-            TimeSpan elapsed = process.TotalProcessorTime - start;
-            best = Math.Min(best, elapsed.TotalMilliseconds / alignsPerSample);
-        }
-        return best;
+        _ = Align(l, r); // warm-up (JIT and any one-time runtime initialization)
+        long start = GC.GetAllocatedBytesForCurrentThread();
+        _ = Align(l, r);
+        return GC.GetAllocatedBytesForCurrentThread() - start;
     }
 
     private static string Text(IrBlock b) =>
@@ -261,8 +218,8 @@ public class IrAlignerAdversarialTests
 }
 
 /// <summary>
-/// Keeps the scale guard isolated from the default parallel suite so unrelated test work is not
-/// counted in this process's CPU-time measurement.
+/// Keeps the scale guard isolated from the default parallel suite so unrelated test work cannot
+/// perturb process-wide runtime state during its measurement.
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class IrAlignerPerformanceCollection

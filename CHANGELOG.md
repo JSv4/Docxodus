@@ -167,11 +167,11 @@ All notable changes to this project will be documented in this file.
   behavior under test. Both now compare the part set and each part's bytes through the new
   `PackageEquivalence.AssertSamePackage`, which keeps the entire claim — same parts, same content —
   and drops only container metadata; two packages produced four seconds apart fail the old
-  assertion and satisfy the new one. `IrAlignerAdversarialTests`' anti-O(n²) scale guard divided
-  two sub-30 ms CPU samples and failed at 12.41x against a 12x limit; since scheduling noise can
-  only ADD CPU time, it now takes the MINIMUM ratio over up to three independent rounds (stopping
-  at the first that passes), which cannot be tripped by one noisy round and still fails a real
-  regression — that reads ~16x in every round. The true ratio measures ~4x.
+  assertion and satisfy the new one. `IrAlignerAdversarialTests`' scale guard divided tiny CPU
+  samples and repeatedly crossed its 12x cliff on unchanged code (12.41x, then 12.82x after all
+  three retry rounds). It now compares per-thread managed allocations for 4x input against the
+  same 12x limit: that deterministically catches quadratic materialization without treating
+  scheduling or CPU-cache pressure as a product regression.
 - **Floating DrawingML text boxes now honor their OOXML anchor geometry in paginated output.**
   The converter preserves page/margin/column/paragraph/line/character origins, offsets and
   alignments, stored extents, relative sizing, wrap clearances, and internal text insets; the
