@@ -2457,6 +2457,13 @@ namespace Docxodus
         ///    table past its container. <c>max-width: 100%</c> plus <c>overflow-wrap: anywhere</c>
         ///    on cells (which, unlike <c>break-word</c>, lowers min-content) restores Word's rule.
         ///    Fixed-layout tables additionally get <c>table-layout: fixed</c> in <c>ProcessTable</c>.
+        /// 3. <b>A superscript or subscript does not make its line taller.</b> Word rides them
+        ///    inside the existing line box; a paragraph does not open up because it happens to
+        ///    carry a footnote reference. CSS instead counts the RAISED inline box when it sizes
+        ///    the line box, so the line grows and every glyph on it shifts down. Zeroing the
+        ///    line-height of the raised box removes it from that calculation while leaving its
+        ///    own glyph untouched — the same device the converter already uses to keep the two
+        ///    compacted pieces of a <c>w:br</c> from contributing a line box.
         /// </remarks>
         private static string GenerateDocumentLayoutCss()
         {
@@ -2470,6 +2477,9 @@ namespace Docxodus
             sb.AppendLine("}");
             sb.AppendLine("td, th {");
             sb.AppendLine("    overflow-wrap: anywhere;");
+            sb.AppendLine("}");
+            sb.AppendLine("sup, sub {");
+            sb.AppendLine("    line-height: 0;");
             sb.AppendLine("}");
             return sb.ToString();
         }
@@ -5475,6 +5485,13 @@ namespace Docxodus
                     child.AddAnnotation(childStyle);
                 }
 
+                // Never overwrite a line-height a child set for its own reasons. The compacted
+                // pieces of a <w:br> carry `line-height: 0` precisely so they cannot contribute a
+                // line box; replacing that with the paragraph's multiple would resurrect the
+                // spurious line the compaction removed.
+                if (childStyle.ContainsKey("line-height"))
+                    continue;
+
                 childStyle["line-height"] =
                     $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
             }
@@ -5596,7 +5613,7 @@ namespace Docxodus
             if (pPr == null) return style;
 
             CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace,
-                suppressLeadingWhiteSpace, paragraph.Attribute(PtOpenXml.EmptyParagraph) != null);
+                suppressLeadingWhiteSpace);
             CreateStyleFromInd(style, pPr.Element(W.ind), elementName, currentMarginLeft, isBidi);
 
             // todo need to handle
@@ -5689,8 +5706,7 @@ namespace Docxodus
         }
 
         private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement spacing, XName elementName,
-            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false,
-            bool useNativeLineHeightForAutoSpacing = false)
+            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
         {
             if (spacing == null) return;
 
@@ -5711,24 +5727,15 @@ namespace Docxodus
             var line = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.line));
             if (lineRule == "auto" && line is { } autoLine)
             {
+                // 240ths of a LINE, where a line is the font's own single-line height. `240` needs
+                // no declaration at all: CSS `line-height: normal` already resolves to exactly
+                // that box, which is why the multiplier is emitted only when it is not 1.
                 if (autoLine != 240m)
                 {
-                    if (useNativeLineHeightForAutoSpacing)
-                    {
-                        var multiple = autoLine / 240m;
-                        style.Add(AutomaticLineSpacingMultiplierCssProperty,
-                            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.###}", multiple));
-                        style.Add("line-height", "normal");
-                    }
-                    else
-                    {
-                        // Populated paragraph behavior is retained for compatibility. Empty Word
-                        // paragraph marks use the font's native line box instead (handled above),
-                        // which is where percentage-of-font-size materially under-measures layout.
-                        var pct = (autoLine / 240m) * 100m;
-                        style.Add("line-height",
-                            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
-                    }
+                    var multiple = autoLine / 240m;
+                    style.Add(AutomaticLineSpacingMultiplierCssProperty,
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.###}", multiple));
+                    style.Add("line-height", "normal");
                 }
             }
             if (lineRule == "exact" && line is { } exactLine)

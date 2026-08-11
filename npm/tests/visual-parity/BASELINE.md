@@ -240,26 +240,103 @@ The alarm itself is verified continuously rather than by anecdote: the compariso
 so `visual-parity-ratchet.spec.ts` feeds it deliberately worsened summaries on every pull request
 — no LibreOffice, no renderer, and no need to break rendering on purpose to prove the gate fires.
 
+## Automatic line spacing — 2026-08-11 (issue #396, and #397's line-box half)
+
+The `shape` case was filed as "auto-fit height is not modeled". It is: the converter already drops
+the CSS height for a `spAutoFit` textbox, so the box already grew to its content. What was wrong
+was the CONTENT height, and the cause was neither auto-fit nor textboxes.
+
+OOXML's `w:lineRule="auto"` gives line spacing in 240ths of a **line**, where a line is the font's
+own single-line height. CSS percentages and unitless line-heights both resolve against
+**font-size**, so translating 259/240 to `line-height: 107.9%` under-measures every line by the
+ratio between the font's natural line box and its em square — about 19% for Calibri/Carlito, and
+`w:line="259"` is Word's own default for documents created since Word 2013. PR #372 had already
+built the correct model (`line-height: normal` on the paragraph plus `calc(1lh * multiplier)` on
+its inline children, so nothing font-specific is hard-coded) but enabled it only for EMPTY
+paragraph marks, which is what pagination parity needed at the time. Populated paragraphs kept the
+percentage fallback.
+
+Measured at 11pt against LibreOffice, both engines under the pinned font contract:
+
+| Model | Line advance |
+|---|---:|
+| `line-height: 107.9%` (percentage of the em square) | 15.69px |
+| 1.0792 × the font's line box (≈1.22 em) | **19.33px** |
+| LibreOffice, from PDF text extents at 96 DPI | **19.33px** |
+
+Two dimensions the error was directly visible in:
+
+- **`shape` (issue #396).** The auto-fit box is its laid-out text plus the `bodyPr` insets, so a
+  text error IS a box error. The box was `(268,133)–(525,223)`, 90.0px tall against LibreOffice's
+  106; it is now 108.7px — the height error falls from **−16.0px to +2.7px**, with left, top, and
+  width already exact. The residual is the shape outline: CSS draws a border inside the border box
+  and adds it to an auto height, while DrawingML strokes `a:ln` centered on the shape boundary, so
+  it does not enlarge the shape. Changing that would move the inner coordinates PR #381
+  deliberately pinned, so it is recorded rather than adjusted to fit the oracle.
+- **`fields-and-tabs` (issue #397's line-box half).** TOC entries were displaced by a growing
+  amount down the page — 7.3px, 11.0px, 14.7px for the first three. They now land at 140.05,
+  166.13, 192.20 against LibreOffice's 140.17, 166.17, 192.17: **within 0.12px**. Ink F1 goes from
+  0.15913 to 0.99775. The remaining difference is hyperlink styling, which issue #397 attributes.
+
+The corpus rerun also dissolved a standing attribution. `numbered-lists` was `reference-deviation`
+on the reading that "the whole content is about 28px lower, so LibreOffice must import the 1701-twip
+top margin differently". It was the accumulated line-spacing error: the case is now close with
+**exact ink geometry (F1 1.00000)**, so the two engines never disagreed about the margin. Issue #398
+was opened to obtain Word evidence for that margin; the premise is gone.
+
+**One regression, found and fixed by the change itself.** With taller line boxes, `footnote`'s ink
+F1 fell 0.70330 → 0.58697: CA008's single body line sat 2px lower, and on a page carrying ~1230 ink
+pixels total that dominates the metric. The cause was the superscript footnote reference. A
+`vertical-align: super` inline box is counted when CSS sizes the line box, so the raised box made
+the line 25.31px instead of 19.42px and pushed every glyph on it down; Word instead rides a
+superscript inside the existing line, and a paragraph does not open up because it carries a
+footnote reference. `sup, sub { line-height: 0 }` joins the document-layout stylesheet as a third
+Word layout invariant CSS defaults do not match — the same device the converter already used to
+stop the two compacted pieces of a `w:br` contributing a line box. `footnote` then goes to **close**
+(ink F1 0.99064), better than before the change.
+
+Corpus effect, one clean-worktree full rerun against the immediately preceding run in the same
+environment:
+
+| Signal | Before | After |
+|---|---:|---:|
+| Case severity | 4 close, 1 minor, 0 major, 7 severe | 7 close, 3 minor, 2 major, **0 severe** |
+| Strict-gating cases | `shape`, `fields-and-tabs` | **none** |
+| Mean SSIM | 0.981316 | 0.987810 |
+| Mean tolerant ink F1 | 0.848523 | **0.981644** |
+
+Nine of twelve cases improved, three of them out of `severe` entirely (`numbered-lists`, `shape`,
+`footnote` to close; `fields-and-tabs` and `tracked-deletion` to minor; `landscape-section` and
+`inline-image` to major). `merged-table`, `chart`, and `running-content` are byte-identical.
+`inline-image` is the one case whose SSIM fell (0.93660 → 0.93255) while its ink F1 rose
+0.64760 → 0.77340 and its severity improved — its glyphs land better, and the remaining
+same-font rasterization difference is what SSIM's block statistics see.
+
+No severe case remains and the strict-gating set is empty, but strict mode is NOT enabled here:
+that is a separate decision, and two `major` cases still sit above the threshold a strict run
+would eventually want.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
-single blank or disjoint page rather than averaging it away. Figures are from the 2026-08-11 local
-rerun (environment above); `Disposition` is the corpus attribution the strict gate reads.
+single blank or disjoint page rather than averaging it away. Figures are from the 2026-08-11 rerun after issue #396
+(LibreOffice 25.8.7.3, Chromium 143.0.7499.4, Poppler 25.03.0); `Disposition` is the corpus
+attribution the strict gate reads, and these numbers are what `ratchet.json` records.
 
 | Case | Pages D/L | Severity | Disposition | SSIM | Ink F1 | Triage |
 |---|---:|---|---|---:|---:|---|
-| text-formatting | 1/1 | close | environment | 0.99730 | 0.96575 | Control case; fonts and small caps are close. |
-| merged-table | 1/1 | minor | unattributed | 0.96340 | 1.00000 | Ink geometry aligns; fill/border color dominates the perceptual delta and has not been reduced to a minimal case. |
-| numbered-lists | 1/1 | severe | reference-deviation | 0.99426 | 0.55580 | Whole content is about 28 px lower in Docxodus. The OOXML top margin is 1701 twips (113.4 px at 96 DPI), which matches Docxodus; LibreOffice appears to import it differently. Treat as a reference-specific deviation unless Word evidence says otherwise. |
-| multi-section | 6/6 | close | environment | 0.99932 | 0.99796 | Header/body/footer bands now sit at the distances `w:pgMar` declares (issue #377), across the landscape/portrait section transition. |
-| landscape-section | 1/1 | severe | environment | 0.92525 | 0.64655 | Page dimensions match; paragraph spacing/font wrapping differs. Re-triage after issue #379. |
-| running-content | 5/5 | close | environment | 0.99919 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved the vertical placement of the inherited stories themselves. |
-| inline-image | 1/1 | severe | environment | 0.93585 | 0.64828 | Image and text are separate source paragraphs; the discrepancy is indentation/font/wrapping, not an inline-flow failure. Re-triage after issue #379. |
-| chart | 1/1 | close | environment | 0.98651 | 0.96816 | Cached clustered column data now renders as accessible inline SVG at the stored extent. Other chart families and stacked groupings remain unsupported and are not yet in the corpus. |
-| shape | 1/1 | severe | renderer-bug | 0.97418 | 0.63170 | Column centering, paragraph offset, and 40%-of-margin relative width now match: horizontal bounds are exact and the top is within 1 px. The residual is auto-fit text/line height (the Docxodus box is 15 px shorter). |
-| fields-and-tabs | 1/1 | severe | renderer-bug | 0.89412 | 0.15994 | Right-tab page numbers now reach the declared 9350-twip target and leaders fill the rendered remainder. TOC line height and hyperlink styling remain renderer-side; the font contract made this measurement honest and lower. |
-| footnote | 1/1 | severe | environment | 0.99277 | 0.73700 | Note placement fixed (issue #378): note-text bottom flush with LibreOffice's, separator-to-note gap matches. Residual is same-font line-box metrics and LibreOffice-24.2's legacy separator width. |
-| tracked-deletion | 1/1 | severe | environment | 0.94833 | 0.58271 | Identical accepted-revision bytes are now compared. Improved by the shared Calibri Light pinning (issue #379); the residual is heading metrics and wrapping of the same fonts. |
+| text-formatting | 1/1 | close | environment | 0.99708 | 0.96770 | Control case; fonts and small caps are close. |
+| merged-table | 1/1 | minor | unattributed | 0.96348 | 1.00000 | Ink geometry aligns; fill/border color dominates the perceptual delta and has not been reduced to a minimal case. |
+| numbered-lists | 1/1 | close | reference-deviation | 0.99898 | 1.00000 | The "28 px lower" reading was the accumulated auto-line-spacing error (issue #396), not a top-margin deviation: ink geometry is now exact. |
+| multi-section | 6/6 | close | environment | 0.99986 | 1.00000 | Header/body/footer bands sit at the distances `w:pgMar` declares (issue #377); ink geometry now exact. |
+| landscape-section | 1/1 | major | environment | 0.94878 | 0.95533 | Page dimensions match; improved by issue #396. Residual is same-font wrapping and rasterization. |
+| running-content | 5/5 | close | environment | 0.99927 | 0.96486 | PR #372 resolved the missing page and inherited story semantics; issue #377 resolved their vertical placement. |
+| inline-image | 1/1 | major | environment | 0.93255 | 0.77340 | Improved by issue #396 (ink F1 0.64760 to 0.77340). Residual is indentation/wrapping of the same fonts, not an inline-flow failure. |
+| chart | 1/1 | close | environment | 0.98687 | 0.96817 | Cached clustered column data renders as accessible inline SVG at the stored extent. Other chart families remain unsupported. |
+| shape | 1/1 | close | renderer-bug | 0.98599 | 1.00000 | Auto-fit height now follows the laid-out text (issue #396): height error -16.0 px to +2.7 px, ink geometry exact. Residual is the CSS border adding to an auto height where DrawingML strokes `a:ln` on the shape boundary. |
+| fields-and-tabs | 1/1 | minor | renderer-bug | 0.96026 | 0.99775 | Tab targets and leaders correct since PR #380; entry line height correct since issue #396 (within 0.12 px). Remaining difference is hyperlink styling — issue #397. |
+| footnote | 1/1 | close | environment | 0.99502 | 0.99064 | Note placement fixed (issue #378); issue #396 stopped the superscript reference inflating its line box. Residual is substituted-font rasterization and LibreOffice-24.2 separator width. |
+| tracked-deletion | 1/1 | minor | environment | 0.97950 | 0.99667 | Identical accepted-revision bytes are compared. Improved by the font contract (issue #379) and issue #396; residual is same-font heading metrics and wrapping. |
 
 ## Fixes justified by the baseline
 
@@ -304,14 +381,18 @@ renderer heuristic.
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
 header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, footnote
 block vertical placement (issue #378), the font-substitution contract (issue #379), and the
-regression ratchet (issue #395) are resolved above. The remaining order is:
+regression ratchet (issue #395), and automatic line spacing (issue #396, which also resolved
+#397's line-box half and dissolved #398's premise) are resolved above. The remaining order is:
 
-1. Model auto-fit text/line height for DrawingML textboxes (`shape`, strict-gating).
-2. TOC line height and hyperlink styling (`fields-and-tabs`, strict-gating — now honestly
-   measured under the pinned contract).
-3. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it.
-4. Obtain Word evidence for the `numbered-lists` top margin to close or reclassify the
-   reference-deviation.
+1. Attribute the `fields-and-tabs` hyperlink styling difference (issue #397) — the last piece of
+   that case now that its line geometry is within 0.12 px.
+2. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it (issue
+   #399) — the corpus's last `unattributed` disposition.
+3. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
+   same-font layout cases (issue #404), which is what now stands between the corpus and a
+   strict run.
+4. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
+   is whether to keep a Word-evidence procedure (issue #402) for it at all.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
 supports Docxodus's use of the declared OOXML margin. LibreOffice is a comparison implementation, not

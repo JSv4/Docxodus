@@ -91,10 +91,12 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     categories: ['lists'],
     rationale: 'Multiple numbering definitions and indentation behavior.',
     disposition: {
-      kind: 'reference-deviation',
-      rationale: 'The declared OOXML top margin is 1701 twips (113.4 px at 96 DPI), which matches the ' +
-        'Docxodus placement; LibreOffice imports the margin differently. Pending contrary Word ' +
-        'evidence, Docxodus follows the file.',
+      kind: 'environment',
+      rationale: 'The "content sits 28 px lower" reading was never a top-margin deviation: it was the ' +
+        'accumulated automatic-line-spacing error (issue #396), which displaced every line by a ' +
+        'growing amount down the page. With auto spacing measured against the font line box the ' +
+        'case is close and ink geometry is exact (F1 1.00000), so the margin was never in ' +
+        'disagreement. The residual is substituted-font rasterization.',
     },
   },
   {
@@ -158,9 +160,14 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     categories: ['shapes'],
     rationale: 'Body-level shape rendering and anchoring.',
     disposition: {
-      kind: 'renderer-bug',
-      rationale: 'Anchor origin and width match LibreOffice exactly since PR #381; the Docxodus box is ' +
-        'still about 15 px shorter because auto-fit text/line height is not modeled.',
+      kind: 'reference-deviation',
+      rationale: 'Anchor origin and width match exactly since PR #381, and the auto-fit height now ' +
+        'follows the laid-out text since issue #396 (the box was 16 px short, it is now 2.7 px ' +
+        'tall against LibreOffice). The residual is the shape outline: CSS draws a border INSIDE ' +
+        'the border box and adds it to an auto height, while DrawingML strokes `a:ln` centered on ' +
+        'the shape boundary, so it does not enlarge the shape. Docxodus follows the declared ' +
+        'insets, which PR #381 pinned deliberately.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/396',
     },
   },
   {
@@ -170,10 +177,11 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     rationale: 'Field results, tab leaders, and right-aligned page numbers.',
     disposition: {
       kind: 'renderer-bug',
-      rationale: 'Tab targets and leaders are correct since PR #380; TOC line height and hyperlink ' +
-        'styling remain renderer-side differences. The font contract made the measurement honest ' +
-        'and lower: with Calibri Light pinned to Carlito in both engines, the line-height ' +
-        'mismatch no longer partially overlaps by accident.',
+      rationale: 'Tab targets and leaders are correct since PR #380, and TOC entry line height is ' +
+        'correct since issue #396 — entries now land within 0.12 px of LibreOffice, where they ' +
+        'were displaced by up to 15 px. The remaining difference is hyperlink styling, whose ' +
+        'attribution is issue #397.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/397',
     },
   },
   {
@@ -184,9 +192,10 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     disposition: {
       kind: 'environment',
       rationale: 'Note placement is fixed (issue #378): the last note line ends on the bottom margin ' +
-        'in both engines and the separator-to-note gap matches. The residual is line-box metrics ' +
-        'of the same font differing between the engines, and older LibreOffice drawing its ' +
-        '25%-column separator instead of the two-inch default.',
+        'in both engines and the separator-to-note gap matches. Issue #396 additionally stopped ' +
+        'the superscript reference from inflating its line box, which had pushed the body line ' +
+        'down the page; the case is now close. The residual is substituted-font rasterization, ' +
+        'and older LibreOffice drawing its 25%-column separator instead of the two-inch default.',
     },
   },
   {
