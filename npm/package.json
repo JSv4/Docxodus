@@ -32,7 +32,11 @@
     }
   },
   "files": [
-    "dist"
+    "dist/*.js",
+    "dist/*.js.map",
+    "dist/*.d.ts",
+    "dist/*.d.ts.map",
+    "dist/wasm/_framework"
   ],
   "scripts": {
     "build:wasm": "../scripts/build-wasm.sh",
@@ -44,15 +48,16 @@
     "build:embed-bundle": "esbuild src/embed.ts --bundle --format=esm --outfile=dist/embed.bundle.js && esbuild src/embed.ts --bundle --format=iife --global-name=Docxodus --outfile=dist/embed.iife.js",
     "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --outfile=dist/docxodus.worker.js && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js",
     "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:embed-bundle && npm run build:worker-bundle",
-    "pretest": "npm run test:demo-logic && npm run typecheck && cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp examples/editor.html dist/wasm/ && cp examples/embed.html dist/wasm/ && cp examples/ascii-animation.html dist/wasm/ && cp examples/ascii-animation-editor.html dist/wasm/ && cp ../docs/demo/ascii-scenes.js dist/wasm/ && cp ../docs/demo/player.html dist/wasm/player.html && cp ../docs/demo/index.html dist/wasm/demo-index.html && cp ../docs/demo/app.html dist/wasm/demo-app.html && cp ../docs/demo/observatory.html dist/wasm/demo-observatory.html && cp ../docs/demo/arcade.html dist/wasm/demo-arcade.html && cp ../docs/demo/ascii-arcade.js dist/wasm/ && cp ../docs/demo/freedoom-e1m1.js dist/wasm/ && cp ../docs/demo/docxodus-demo-guide.docx dist/wasm/docxodus-demo-guide.docx && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/editor.bundle.js dist/wasm/ && cp dist/embed.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js",
+    "pretest": "npm run test:demo-logic && npm run typecheck && cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp examples/editor.html dist/wasm/ && cp examples/embed.html dist/wasm/ && cp examples/ascii-animation.html dist/wasm/ && cp examples/ascii-animation-editor.html dist/wasm/ && cp ../docs/demo/ascii-scenes.js dist/wasm/ && cp ../docs/demo/player.html dist/wasm/player.html && cp ../docs/demo/index.html dist/wasm/demo-index.html && cp ../docs/demo/app.html dist/wasm/demo-app.html && cp ../docs/demo/observatory.html dist/wasm/demo-observatory.html && cp ../docs/demo/arcade.html dist/wasm/demo-arcade.html && cp ../docs/demo/ascii-arcade.js dist/wasm/ && cp ../docs/demo/freedoom-e1m1.js dist/wasm/ && cp ../docs/demo/docxodus-demo-guide.docx dist/wasm/docxodus-demo-guide.docx && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/editor.bundle.js dist/wasm/ && cp dist/embed.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js && npm run test:package-boundary",
     "test:demo-logic": "node ../docs/demo/tools/ascii-arcade.test.mjs && node ../docs/demo/tools/wad2cart.test.mjs",
+    "test:package-boundary": "node scripts/check-package-boundary.mjs",
     "test": "playwright test",
     "test:arcade:libreoffice": "npm run pretest && DOCXODUS_LO_PARITY=1 playwright test demo-arcade-libreoffice.spec.ts --project=chromium",
     "test:visual-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 playwright test visual-parity.spec.ts --project=chromium --reporter=line",
     "test:ui": "playwright test --ui",
     "demo": "npm run build && npm run demo:serve",
     "demo:serve": "cp dist/editor.bundle.js examples/editor.html dist/wasm/ && cp ../TestFiles/HC031-Complicated-Document.docx dist/wasm/sample.docx && echo '\\n>>> Open http://localhost:8088/editor.html\\n' && python3 -m http.server 8088 --directory dist/wasm",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run test:package-boundary"
   },
   "repository": {
     "type": "git",

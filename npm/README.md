@@ -515,7 +515,6 @@ public/
       dotnet.js
       dotnet.native.wasm
       ... (other framework files)
-    main.js
 ```
 
 ## Package and Runtime Size

@@ -35,6 +35,12 @@ node tools/wad2cart.mjs /path/to/freedoom/levels/e1m1.wad E1M1 freedoom-e1m1.js 
   --source-sha256=d8acd8cf992f1f3af907634587f8a40765d6c43ac15adef1bfa29a2ff1b9e83d
 ```
 
+The demo stays a documentation-site concern. Neither its runtime nor the
+Freedoom-derived data is included in the `docxodus` npm tarball: the package
+publishes an explicit allowlist of library JavaScript, declarations, and WASM
+runtime files, and `npm run test:package-boundary` audits the actual packed
+manifest after the Playwright webroot has been populated.
+
 The surface itself is **not** written here — it ships in the npm package
 (`npm/src/ribbon.ts`). These pages used to carry a hand-written toolbar each,
 which drifted until the demo advertised a smaller editor than the one that
