@@ -81,6 +81,37 @@ All notable changes to this project will be documented in this file.
   compacted pieces of a `w:br` from contributing a line box.
 
 ### Added
+- **A real Doom-format level is playable inside a Word document** — Arcade
+  cartridge 3, *Freedoom E1M1* (`docs/demo/freedoom-e1m1.js` +
+  `docs/demo/tools/wad2cart.mjs`; demo content only, no library changes). The
+  Docx Dungeon's DDA raycaster is now a level-pack player: the same renderer,
+  controls, and MAP-panel document round-trip run both the hand-drawn 24×16
+  maze and a 126×109 grid rasterized from the Freedoom project's E1M1
+  (only that derived data is BSD-3-Clause; Docxodus remains MIT, and the full
+  scoped notice plus immutable source provenance are retained in the generated
+  module). Demo and test assets are excluded from the npm tarball by an explicit
+  runtime-only allowlist and a package-boundary regression check. The MIT
+  notices now credit John Scrudato IV for Docxodus work while retaining the
+  inherited Microsoft notice required by the upstream license. `wad2cart.mjs`
+  parses the classic binary lumps (THINGS/LINEDEFS/SIDEDEFS/VERTEXES/SECTORS),
+  rasterizes blocking linedefs at 32 map units per cell (doors/lifts/stairs
+  resolved to their player-friendly state — the grid world has no door
+  mechanic), flood-fills walkability from the player-1 start, places `§`
+  sigils on the level's own keycard/armor/weapon spots and the `*` gate at the
+  exit switch, and BFS-proves every objective reachable before emitting.
+  Levels larger than the 24×16 MAP band scroll it as a player-following window
+  whose typed edits land on exactly the world cells it shows. The level's 45
+  single-player monster placements come along as a combat layer: billboard
+  enemies (zombieman/sergeant/imp/demon glyphs) with line-of-sight wake
+  checks and chase AI, melee damage, a Space-triggered hitscan sidearm along
+  the view center, HP/kills HUD, death + respawn-at-start with progress
+  kept, sigils that heal — and the MAP band round-trips enemies as entities,
+  so typing `&` into the paused document conjures one. Spec
+  `npm/tests/demo-arcade-freedoom.spec.ts` proves real play through the live
+  `raw.replaceXml` + `editor.refresh()` loop: a BFS autopilot drives the
+  game's own input seam to a Freedoom pickup (fighting the monsters that
+  find it on the way), and `DOCXODUS_DOOM_MARATHON=1` plays the entire
+  level — every sigil, then the exit — to the win banner.
 - **Visual-parity regression ratchet** (issue #395,
   `npm/tests/visual-parity/ratchet.ts` + `ratchet.json`): the weekly scheduled run
   now compares itself against a committed, numbers-only per-case record — page
@@ -136,23 +167,6 @@ All notable changes to this project will be documented in this file.
   entries default to `unattributed`, which gates, so an untriaged severe case cannot
   hide.
 
-### Fixed
-- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
-  anchors the footnote area to the bottom of the text column — the last note line
-  ends ON the bottom margin line, notes stack with no spacing of their own
-  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
-  drawn about one line above the first note. The paginated note container carried
-  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
-  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
-  `N.`-style number label — which together lifted the visible note ink ~13px off
-  the margin and drew ink no print renderer shows. The paginated registry now
-  renders the bare superscript number and no backref (the web-view `<ol>` section
-  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
-  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
-  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
-  separator-to-note gap matches. Generated-DOCX browser regression
-  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
-  separator separately.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo
@@ -179,6 +193,22 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
+  anchors the footnote area to the bottom of the text column — the last note line
+  ends ON the bottom margin line, notes stack with no spacing of their own
+  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
+  drawn about one line above the first note. The paginated note container carried
+  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
+  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
+  `N.`-style number label — which together lifted the visible note ink ~13px off
+  the margin and drew ink no print renderer shows. The paginated registry now
+  renders the bare superscript number and no backref (the web-view `<ol>` section
+  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
+  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
+  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
+  separator-to-note gap matches. Generated-DOCX browser regression
+  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
+  separator separately.
 - **Paginated headers, footers, and body text sit at the distances `w:pgMar`
   declares.** `w:header` and `w:footer` are distances from the PAPER EDGE to the
   top of the header story and the bottom of the footer story — four independent
@@ -213,11 +243,11 @@ All notable changes to this project will be documented in this file.
   behavior under test. Both now compare the part set and each part's bytes through the new
   `PackageEquivalence.AssertSamePackage`, which keeps the entire claim — same parts, same content —
   and drops only container metadata; two packages produced four seconds apart fail the old
-  assertion and satisfy the new one. `IrAlignerAdversarialTests`' anti-O(n²) scale guard divided
-  two sub-30 ms CPU samples and failed at 12.41x against a 12x limit; since scheduling noise can
-  only ADD CPU time, it now takes the MINIMUM ratio over up to three independent rounds (stopping
-  at the first that passes), which cannot be tripped by one noisy round and still fails a real
-  regression — that reads ~16x in every round. The true ratio measures ~4x.
+  assertion and satisfy the new one. `IrAlignerAdversarialTests`' scale guard divided tiny CPU
+  samples and repeatedly crossed its 12x cliff on unchanged code (12.41x, then 12.82x after all
+  three retry rounds). It now compares per-thread managed allocations for 4x input against the
+  same 12x limit: that deterministically catches quadratic materialization without treating
+  scheduling or CPU-cache pressure as a product regression.
 - **Floating DrawingML text boxes now honor their OOXML anchor geometry in paginated output.**
   The converter preserves page/margin/column/paragraph/line/character origins, offsets and
   alignments, stored extents, relative sizing, wrap clearances, and internal text insets; the
