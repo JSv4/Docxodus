@@ -13,10 +13,11 @@ import {
   parseSectionDimensions,
   ptToPx,
   pxToPt,
+  resolvePageBands,
 } from "./page-geometry.js";
-import type { PageDimensions } from "./page-geometry.js";
+import type { PageBands, PageDimensions } from "./page-geometry.js";
 
-export type { PageDimensions } from "./page-geometry.js";
+export type { PageBands, PageDimensions } from "./page-geometry.js";
 
 /**
  * Headers and footers for a specific section.
@@ -503,9 +504,9 @@ export class PaginationEngine {
    */
   private smallestEffectiveContentHeight(dims: PageDimensions, sectionIndex: number): number {
     return Math.min(
-      this.getEffectiveHeights(dims, sectionIndex, 1, 1).contentHeight,
-      this.getEffectiveHeights(dims, sectionIndex, 2, 1).contentHeight,
-      this.getEffectiveHeights(dims, sectionIndex, 2, 2).contentHeight
+      this.getPageBands(dims, sectionIndex, 1, 1).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 2, 1).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 2, 2).bodyHeight
     );
   }
 
@@ -1256,6 +1257,7 @@ export class PaginationEngine {
     pageBox: HTMLElement,
     footnoteIds: string[],
     dims: PageDimensions,
+    bands: PageBands,
     footnoteHeight: number,
     continuation?: FootnoteContinuation | null,
     partialFootnotes?: PartialFootnote[]
@@ -1274,13 +1276,15 @@ export class PaginationEngine {
     // Calculate max height for footnotes area (content height minus margin for body content)
     const maxFootnoteHeight = Math.min(
       footnoteHeight,
-      dims.contentHeight * MAX_FOOTNOTE_AREA_RATIO
+      bands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO
     );
 
     const footnotesDiv = document.createElement("div");
     footnotesDiv.className = `${this.cssPrefix}footnotes`;
     footnotesDiv.style.position = "absolute";
-    footnotesDiv.style.bottom = `${dims.marginBottom}pt`; // Above footer area
+    // Notes sit at the FOOT OF THE BODY BAND, not at the bottom margin: a footer taller than
+    // its margin raises that edge, and anchoring to the raw margin would draw notes over it.
+    footnotesDiv.style.bottom = `${dims.pageHeight - (bands.bodyTop + bands.bodyHeight)}pt`;
     footnotesDiv.style.left = `${dims.marginLeft}pt`;
     footnotesDiv.style.width = `${dims.contentWidth}pt`;
     footnotesDiv.style.boxSizing = "border-box";
@@ -1393,73 +1397,64 @@ export class PaginationEngine {
   }
 
   /**
-   * Computes effective header, footer, and content heights for a specific page position.
-   * Uses pre-measured header/footer heights from the registry.
-   * This method is deterministic - same inputs always produce same outputs.
-   * This enables lazy loading compatibility since available height can be computed
-   * for any page position without knowing the page's content.
+   * The header, body, and footer bands for one page position.
+   *
+   * The single owner of "where does anything sit vertically on this page" — placement in
+   * {@link createPage}, the body budget the flow loop spends, and the note area's anchor all
+   * read it, so those three cannot disagree about where the body ends.
+   *
+   * Deterministic: it depends only on the section's page setup and the registry's pre-measured
+   * story heights, never on the page's content, which is what keeps it lazy-loading compatible.
    */
-  private getEffectiveHeights(
+  private getPageBands(
     dims: PageDimensions,
     sectionIndex: number,
     pageInSection: number,
     globalPageNumber: number
-  ): { headerHeight: number; footerHeight: number; contentHeight: number } {
+  ): PageBands {
     const sectionHf = this.hfRegistry.get(sectionIndex);
+    return resolvePageBands(
+      dims,
+      this.selectStoryHeight(
+        sectionHf?.headerFirstHeight,
+        sectionHf?.headerEvenHeight,
+        sectionHf?.headerDefaultHeight,
+        pageInSection,
+        globalPageNumber
+      ),
+      this.selectStoryHeight(
+        sectionHf?.footerFirstHeight,
+        sectionHf?.footerEvenHeight,
+        sectionHf?.footerDefaultHeight,
+        pageInSection,
+        globalPageNumber
+      )
+    );
+  }
 
-    // Determine effective header height
-    let headerHeight = dims.marginTop;
-    if (sectionHf) {
-      let measuredHeaderHeight: number | undefined;
-
-      // Select the appropriate header height based on page position
-      if (pageInSection === 1 && sectionHf.headerFirstHeight != null) {
-        measuredHeaderHeight = sectionHf.headerFirstHeight;
-      } else if (globalPageNumber % 2 === 0 && sectionHf.headerEvenHeight != null) {
-        measuredHeaderHeight = sectionHf.headerEvenHeight;
-      } else if (sectionHf.headerDefaultHeight != null) {
-        measuredHeaderHeight = sectionHf.headerDefaultHeight;
-      }
-
-      if (measuredHeaderHeight != null) {
-        // Use the larger of margin height or measured content height
-        headerHeight = Math.max(dims.marginTop, measuredHeaderHeight);
-      }
-    }
-
-    // Determine effective footer height
-    let footerHeight = dims.marginBottom;
-    if (sectionHf) {
-      let measuredFooterHeight: number | undefined;
-
-      // Select the appropriate footer height based on page position
-      if (pageInSection === 1 && sectionHf.footerFirstHeight != null) {
-        measuredFooterHeight = sectionHf.footerFirstHeight;
-      } else if (globalPageNumber % 2 === 0 && sectionHf.footerEvenHeight != null) {
-        measuredFooterHeight = sectionHf.footerEvenHeight;
-      } else if (sectionHf.footerDefaultHeight != null) {
-        measuredFooterHeight = sectionHf.footerDefaultHeight;
-      }
-
-      if (measuredFooterHeight != null) {
-        // Use the larger of margin height or measured content height
-        footerHeight = Math.max(dims.marginBottom, measuredFooterHeight);
-      }
-    }
-
-    // Calculate effective content height
-    // contentHeight from dims is: pageHeight - marginTop - marginBottom
-    // We need to adjust for any header/footer expansion beyond margins
-    const headerExpansion = headerHeight - dims.marginTop;
-    const footerExpansion = footerHeight - dims.marginBottom;
-    const contentHeight = dims.contentHeight - headerExpansion - footerExpansion;
-
-    return { headerHeight, footerHeight, contentHeight };
+  /**
+   * The measured height of the running story this page position selects, mirroring
+   * {@link selectHeader}/{@link selectFooter}. Zero when the page has no such story.
+   */
+  private selectStoryHeight(
+    first: number | undefined,
+    even: number | undefined,
+    fallback: number | undefined,
+    pageInSection: number,
+    globalPageNumber: number
+  ): number {
+    if (pageInSection === 1 && first != null) return first;
+    if (globalPageNumber % 2 === 0 && even != null) return even;
+    return fallback ?? 0;
   }
 
   /**
    * Measures the content height of a header or footer element.
-   * This is needed because headers/footers can contain more content than fits in the margin area.
+   *
+   * This is what tells {@link resolvePageBands} whether the story stays inside its margin or
+   * pushes the body, so it must measure the story ALONE — any padding added here would have to
+   * be added to the rendered band too, and the two drifting apart is exactly how a header
+   * silently starts overlapping body text.
    */
   private measureHeaderFooterHeight(
     source: HTMLElement,
@@ -1471,8 +1466,6 @@ export class PaginationEngine {
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
     measureContainer.style.left = "-9999px";
-    // Add padding to match the actual rendering
-    measureContainer.style.paddingBottom = "4pt";
 
     // Clone and add the header/footer content
     for (const child of Array.from(source.childNodes)) {
@@ -1510,7 +1503,7 @@ export class PaginationEngine {
     let pageInSection = 1;
 
     // Get effective content height for first page (accounts for header/footer sizes)
-    let { contentHeight: effectiveContentHeight } = this.getEffectiveHeights(
+    let { bodyHeight: effectiveContentHeight } = this.getPageBands(
       dims, sectionIndex, pageInSection, pageNumber
     );
     let remainingHeight = effectiveContentHeight;
@@ -1568,8 +1561,8 @@ export class PaginationEngine {
       currentContent = [];
 
       // Get effective content height for new page position
-      const newHeights = this.getEffectiveHeights(dims, sectionIndex, pageInSection, pageNumber);
-      effectiveContentHeight = newHeights.contentHeight;
+      const newBands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
+      effectiveContentHeight = newBands.bodyHeight;
       remainingHeight = effectiveContentHeight;
 
       prevMarginBottomPt = 0; // Reset margin tracking for new page
@@ -1659,7 +1652,7 @@ export class PaginationEngine {
           const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
 
           if (currentChainHeight > currentAvailableHeight) {
-            const nextPageHeights = this.getEffectiveHeights(
+            const nextPageBands = this.getPageBands(
               dims,
               sectionIndex,
               pageInSection + 1,
@@ -1681,7 +1674,7 @@ export class PaginationEngine {
 
             if (
               freshChainBodyHeight + freshChainFootnoteHeight <=
-              nextPageHeights.contentHeight
+              nextPageBands.bodyHeight
             ) {
               finishPage();
             }
@@ -2198,8 +2191,8 @@ export class PaginationEngine {
     // first page, not from the document's.
     pageBox.dataset.pageInSection = String(pageInSection);
 
-    // Get pre-computed effective heights for this page position (no re-measurement needed)
-    const effectiveHeights = this.getEffectiveHeights(dims, sectionIndex, pageInSection, pageNumber);
+    // Where the three bands sit on this page (no re-measurement needed)
+    const bands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
 
     // Add header if available for this section/page
     const headerSource = this.selectHeader(sectionIndex, pageInSection, pageNumber);
@@ -2208,16 +2201,19 @@ export class PaginationEngine {
       const headerDiv = document.createElement("div");
       headerDiv.className = `${this.cssPrefix}header`;
       headerDiv.style.position = "absolute";
-      headerDiv.style.top = "0"; // Start at page top
+      // `w:header` is the distance to the TOP of the story, and the story grows downward from
+      // there; `flex-start` therefore pins the edge the OOXML actually declares, and content
+      // taller than the measurement clips at the bottom rather than sliding up the page.
+      headerDiv.style.top = `${bands.headerTop}pt`;
+      headerDiv.style.bottom = "auto";
       headerDiv.style.left = `${dims.marginLeft}pt`;
       headerDiv.style.width = `${dims.contentWidth}pt`;
-      headerDiv.style.height = `${effectiveHeights.headerHeight}pt`; // Use pre-computed effective height
+      headerDiv.style.height = `${bands.headerHeight}pt`;
       headerDiv.style.overflow = "hidden";
       headerDiv.style.boxSizing = "border-box";
       headerDiv.style.display = "flex";
       headerDiv.style.flexDirection = "column";
-      headerDiv.style.justifyContent = "flex-end"; // Align content to bottom of header area
-      headerDiv.style.paddingBottom = "4pt"; // Small gap before content area
+      headerDiv.style.justifyContent = "flex-start";
       // Clone the header content (skip the wrapper div's data attributes)
       for (const child of Array.from(headerSource.childNodes)) {
         const clonedheaderDiv = child.cloneNode(true) as HTMLElement;
@@ -2228,8 +2224,8 @@ export class PaginationEngine {
     }
 
     // Create content area using pre-computed effective heights
-    const contentAreaTop = effectiveHeights.headerHeight;
-    const contentAreaHeight = effectiveHeights.contentHeight;
+    const contentAreaTop = bands.bodyTop;
+    const contentAreaHeight = bands.bodyHeight;
 
     const contentArea = document.createElement("div");
     contentArea.className = `${this.cssPrefix}content`;
@@ -2250,7 +2246,7 @@ export class PaginationEngine {
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length > 0 || hasContinuation) {
-      this.addPageFootnotes(pageBox, footnoteIds, dims, footnoteHeight, continuation, partialFootnotes);
+      this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes);
 
     }
 
@@ -2260,16 +2256,18 @@ export class PaginationEngine {
       const footerDiv = document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
       footerDiv.style.position = "absolute";
-      footerDiv.style.bottom = "0"; // Start at page bottom
+      // `w:footer` is the distance to the BOTTOM of the story, and the story grows upward from
+      // there — the mirror of the header, so `flex-end` and a bottom anchor.
+      footerDiv.style.top = "auto";
+      footerDiv.style.bottom = `${dims.footerDistance}pt`;
       footerDiv.style.left = `${dims.marginLeft}pt`;
       footerDiv.style.width = `${dims.contentWidth}pt`;
-      footerDiv.style.height = `${effectiveHeights.footerHeight}pt`; // Use pre-computed effective height
+      footerDiv.style.height = `${bands.footerHeight}pt`;
       footerDiv.style.overflow = "hidden";
       footerDiv.style.boxSizing = "border-box";
       footerDiv.style.display = "flex";
       footerDiv.style.flexDirection = "column";
-      footerDiv.style.justifyContent = "flex-start"; // Align content to top of footer area
-      footerDiv.style.paddingTop = "4pt"; // Small gap after content area
+      footerDiv.style.justifyContent = "flex-end";
       // Clone the footer content (skip the wrapper div's data attributes)
       for (const child of Array.from(footerSource.childNodes)) {
         const clonedfooterDiv = child.cloneNode(true) as HTMLElement;

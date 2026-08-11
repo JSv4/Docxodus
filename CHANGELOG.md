@@ -31,6 +31,32 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Paginated headers, footers, and body text sit at the distances `w:pgMar`
+  declares.** `w:header` and `w:footer` are distances from the PAPER EDGE to the
+  top of the header story and the bottom of the footer story — four independent
+  numbers with `w:top`/`w:bottom`, not two nested boxes. The paginator ignored
+  both, anchoring the header bottom-aligned above the top margin and the footer
+  top-aligned below the bottom margin, which pulled the two stories toward the
+  body by exactly `margin − distance` (25 px on a Word-default page) and left the
+  top and bottom of the sheet blank. `resolvePageBands()`
+  (`npm/src/page-geometry.ts`) is now the single owner of the model — the header
+  grows down from `w:header`, the footer grows up from `w:footer`, and the body
+  band starts at `w:top` unless the header has already run past it and ends at
+  `w:bottom` unless the footer has already climbed above it — and
+  `PaginationEngine.getPageBands()` is the one place band placement, the flow
+  loop's page budget, and the footnote area's anchor all read, so they cannot
+  disagree about where the body ends. A story taller than its margin now pushes
+  the body instead of drawing over it, and the note block follows the body's real
+  bottom edge rather than the raw bottom margin. The generated
+  `pagination-running-content-geometry` regression pins first/even/odd header and
+  footer coordinates, the inheriting second section's own distances, band
+  disjointness, the overflowing-story case, and a header-less section. Against
+  LibreOffice, `DB001-Sections.docx` improves from severe (SSIM 0.99586, worst ink
+  F1 0.00000) to close (0.99934 / 0.99797) and `DB005-Headers-With-Images.docx`
+  from severe (0.99773 / 0.00000) to close (0.99921 / 0.96486);
+  `DB002-Landscape-Section.docx` also improves (0.91746 / 0.50174 →
+  0.92607 / 0.60042). `PageDimensions` gains correctly named `headerDistance` /
+  `footerDistance`; `headerHeight` / `footerHeight` remain as deprecated aliases.
 - **Two tests failed on evidence they never meant to assert — the wall clock and a shared
   runner's spare CPU.** `PreAcceptInputRevisionsTests` and `DocxCompareTests` each compared two
   SEPARATELY PRODUCED packages by raw `DocumentByteArray`, but a DOCX is a ZIP that stamps every

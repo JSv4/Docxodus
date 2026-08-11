@@ -101,4 +101,47 @@ public class PaginatedHeaderFooterContentTests
         Assert.Contains("2025", html);
         Assert.Contains("7", html);
     }
+
+    /// <summary>The declaration block of one CSS rule, e.g. <c>.page-header</c>.</summary>
+    private static string RuleBody(string css, string selector)
+    {
+        var start = css.IndexOf(selector + " {", System.StringComparison.Ordinal);
+        Assert.True(start >= 0, $"stylesheet has no `{selector}` rule");
+        var open = css.IndexOf('{', start);
+        var close = css.IndexOf('}', open);
+        return css.Substring(open + 1, close - open - 1);
+    }
+
+    /// <summary>
+    /// Issue #377 — the paginated stylesheet is the second owner of Word's band model, next to the
+    /// paginator's per-page inline geometry, and the two must agree.
+    /// </summary>
+    /// <remarks>
+    /// <c>w:header</c> is the distance from the paper's top edge to the TOP of the header story,
+    /// which then grows downward, and <c>w:footer</c> the distance to the BOTTOM of the footer
+    /// story, which grows upward. Bottom-aligning the header and top-aligning the footer — the
+    /// stylesheet's former shape, paired with <c>top: 0</c>/<c>bottom: 0</c> anchors — instead
+    /// pinned both stories to the MARGINS and pulled them toward the body by
+    /// <c>margin − distance</c>.
+    /// </remarks>
+    [Fact]
+    public void PHF011_RunningContentBandsAreAnchoredToTheirDeclaredDistances()
+    {
+        var html = PaginatedHtml(BuildDocWithTabbedFooter());
+
+        // The distances themselves reach the client: 720 twips = 36 pt.
+        Assert.Contains("data-header-height=\"36.0\"", html);
+        Assert.Contains("data-footer-height=\"36.0\"", html);
+
+        var header = RuleBody(html, ".page-header");
+        var footer = RuleBody(html, ".page-footer");
+
+        Assert.Contains("justify-content: flex-start;", header);
+        Assert.Contains("justify-content: flex-end;", footer);
+
+        // The paginator sets `top`/`bottom` per page from the section's own distances; a
+        // stylesheet edge would silently win for any band it happened to leave unset.
+        Assert.DoesNotContain("top:", header);
+        Assert.DoesNotContain("bottom:", footer);
+    }
 }

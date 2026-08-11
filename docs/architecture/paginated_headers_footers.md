@@ -183,6 +183,26 @@ Word's page margins include header/footer space:
 - `w:top`: Distance from page top to body content top
 - `w:bottom`: Distance from page bottom to body content bottom
 
+These are **four independent distances from the paper edge**, not two nested boxes. The header is
+laid out from `w:header` *downward*; the footer from `w:footer` *upward*. The body then starts at
+`w:top` unless the header has already run past it, and ends at `w:bottom` unless the footer has
+already climbed above it:
+
+```
+bodyTop    = max(w:top,    w:header + headerContentHeight)
+bodyBottom = min(pageHeight - w:bottom, pageHeight - w:footer - footerContentHeight)
+```
+
+A section with no story of that kind contributes nothing: the distance alone reserves no space,
+so a header-less document keeps its body on `w:top`. `resolvePageBands()` in
+`npm/src/page-geometry.ts` is the single owner of these four lines, and
+`PaginationEngine.getPageBands()` feeds it the registry's measured story heights.
+
+Anchoring the bands to the MARGINS instead — header bottom-aligned above `w:top`, footer
+top-aligned below `w:bottom` — collapses both toward the body by exactly `margin − distance`
+(25 px on a Word-default page) and leaves the top and bottom of the sheet blank. That was the
+shipped behavior until issue #377.
+
 ## Implementation Details
 
 ### C# Changes
@@ -408,36 +428,34 @@ private createPage(
 ): PageInfo {
   // ... existing page box and content area creation ...
 
-  const sectionHf = hfRegistry.get(sectionIndex);
+  const bands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
 
-  // Add header
-  const headerSource = this.selectHeader(sectionHf, pageInSection, pageNumber);
+  // Add header — anchored to w:header, growing downward
+  const headerSource = this.selectHeader(sectionIndex, pageInSection, pageNumber);
   if (headerSource) {
     const headerDiv = document.createElement('div');
     headerDiv.className = `${this.cssPrefix}header`;
-    headerDiv.style.cssText = `
-      position: absolute;
-      top: ${dims.headerHeight}pt;
-      left: ${dims.marginLeft}pt;
-      width: ${dims.contentWidth}pt;
-      overflow: hidden;
-    `;
+    headerDiv.style.top = `${bands.headerTop}pt`;
+    headerDiv.style.height = `${bands.headerHeight}pt`;
+    headerDiv.style.left = `${dims.marginLeft}pt`;
+    headerDiv.style.width = `${dims.contentWidth}pt`;
     headerDiv.appendChild(headerSource.cloneNode(true) as HTMLElement);
     pageBox.appendChild(headerDiv);
   }
 
-  // Add footer
-  const footerSource = this.selectFooter(sectionHf, pageInSection, pageNumber);
+  // Body — between whatever the two stories left
+  contentArea.style.top = `${bands.bodyTop}pt`;
+  contentArea.style.height = `${bands.bodyHeight}pt`;
+
+  // Add footer — anchored to w:footer, growing upward
+  const footerSource = this.selectFooter(sectionIndex, pageInSection, pageNumber);
   if (footerSource) {
     const footerDiv = document.createElement('div');
     footerDiv.className = `${this.cssPrefix}footer`;
-    footerDiv.style.cssText = `
-      position: absolute;
-      bottom: ${dims.footerHeight}pt;
-      left: ${dims.marginLeft}pt;
-      width: ${dims.contentWidth}pt;
-      overflow: hidden;
-    `;
+    footerDiv.style.bottom = `${dims.footerDistance}pt`;
+    footerDiv.style.height = `${bands.footerHeight}pt`;
+    footerDiv.style.left = `${dims.marginLeft}pt`;
+    footerDiv.style.width = `${dims.contentWidth}pt`;
     footerDiv.appendChild(footerSource.cloneNode(true) as HTMLElement);
     pageBox.appendChild(footerDiv);
   }
@@ -448,18 +466,30 @@ private createPage(
 
 ### CSS Additions
 
+The stylesheet owns only the band's INVARIANTS; the paginator sets `top`/`bottom`/`left`/`width`/
+`height` per page from the section's own distances. A stylesheet edge (`top: 0`, `bottom: 0`)
+would silently win for any band the paginator left unset, so there is none.
+
 ```css
 /* Paginated Header/Footer CSS */
+/* w:header is the distance to the TOP of the story, which grows downward. */
 .page-header {
   position: absolute;
   overflow: hidden;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
 }
 
+/* w:footer is the distance to the BOTTOM of the story, which grows upward. */
 .page-footer {
   position: absolute;
   overflow: hidden;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 /* Hide system page number when document has its own footer */
@@ -525,23 +555,36 @@ interface SectionHeaderFooter {
 }
 ```
 
-### Height Calculation
+### Band Resolution
 
-For any page position, the effective heights are computed deterministically:
+For any page position, the three bands are resolved deterministically:
 
 ```typescript
-private getEffectiveHeights(
+private getPageBands(
   dims: PageDimensions,
   sectionIndex: number,
   pageInSection: number,
   globalPageNumber: number
-): { headerHeight: number; footerHeight: number; contentHeight: number }
+): PageBands   // headerTop/headerHeight, bodyTop/bodyHeight, footerTop/footerHeight
 ```
 
-The effective header height is `max(marginTop, measuredHeaderHeight)`. This ensures:
-1. Headers always fit within their allocated space
-2. Content area adjusts to accommodate larger headers
-3. Page breaks are calculated with correct available space
+It selects the story heights the page's position calls for (mirroring `selectHeader`/
+`selectFooter`) and hands them to `resolvePageBands()`, which applies the margin model in
+[Margin Model](#margin-model) above. This is the **single owner** of "where does anything sit
+vertically on this page": band placement in `createPage`, the body budget the flow loop spends,
+and the footnote area's anchor all read the same object, so they cannot disagree about where the
+body ends. Consequences:
+
+1. A story taller than its margin pushes the body instead of drawing over it
+2. The note area follows the body's real bottom edge, not the raw bottom margin
+3. Page breaks are calculated with the space the page actually has
+
+A pathological story that would leave no body at all is capped, so the body band always keeps at
+least `MIN_BODY_BAND_PT`; the surplus is returned to whichever band over-claimed it.
+
+`measureHeaderFooterHeight()` therefore measures the story ALONE — no padding of its own. Padding
+added there and not to the rendered band (or vice versa) is exactly how a header silently starts
+overlapping body text.
 
 ### Flow Algorithm Integration
 
@@ -549,15 +592,15 @@ The `flowToPages()` algorithm uses dynamic content heights per page position:
 
 ```typescript
 for (const block of blocks) {
-  // Get effective height for CURRENT page position
-  const { contentHeight } = getEffectiveHeights(dims, sectionIndex, pageInSection, pageNumber);
+  // Get the body band for the CURRENT page position
+  const { bodyHeight } = getPageBands(dims, sectionIndex, pageInSection, pageNumber);
 
   if (blockFitsInRemainingSpace) {
     // Add to current page
   } else {
     // Start new page - recalculate for new position
-    const newHeights = getEffectiveHeights(dims, sectionIndex, pageInSection + 1, pageNumber + 1);
-    remainingHeight = newHeights.contentHeight;
+    const next = getPageBands(dims, sectionIndex, pageInSection + 1, pageNumber + 1);
+    remainingHeight = next.bodyHeight;
   }
 }
 ```

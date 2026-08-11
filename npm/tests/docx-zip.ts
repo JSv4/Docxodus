@@ -1,4 +1,13 @@
-export type ZipEntry = { name: string; data: Buffer };
+/**
+ * Minimal stored-entry ZIP writer, so a spec can GENERATE the DOCX it needs at runtime.
+ *
+ * Regressions that need an exotic `w:sectPr`, tab stop, or story layout would otherwise have to
+ * commit a binary fixture; the visual-parity corpus guard rejects those, and a committed binary
+ * hides the very XML the test is about. Building the package from readable strings keeps the
+ * document under review in the diff.
+ */
+
+type ZipEntry = { name: string; data: Buffer };
 
 const encoder = new TextEncoder();
 
@@ -12,7 +21,7 @@ function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-/** Creates the minimal uncompressed ZIP container used by generated DOCX regressions. */
+/** Packs `entries` with no compression (method 0) — smallest correct writer for a test. */
 export function storedZip(entries: ZipEntry[]): Uint8Array {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
@@ -53,6 +62,10 @@ export function storedZip(entries: ZipEntry[]): Uint8Array {
   return new Uint8Array(Buffer.concat([...localParts, centralDirectory, end]));
 }
 
+/** UTF-8 bytes of an XML part. */
 export function xml(value: string): Buffer {
   return Buffer.from(encoder.encode(value));
 }
+
+export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+export const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
