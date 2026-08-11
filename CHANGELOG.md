@@ -36,6 +36,28 @@ All notable changes to this project will be documented in this file.
   game's own input seam to a Freedoom pickup (fighting the monsters that
   find it on the way), and `DOCXODUS_DOOM_MARATHON=1` plays the entire
   level — every sigil, then the exit — to the win banner.
+- **Visual-parity regression ratchet** (issue #395,
+  `npm/tests/visual-parity/ratchet.ts` + `ratchet.json`): the weekly scheduled run
+  now compares itself against a committed, numbers-only per-case record — page
+  counts, severity, mean SSIM, worst ink F1, disposition; no images, no paths, no
+  artifact hashes — and fails when any case gets worse beyond a documented
+  tolerance (0.0005 SSIM, 0.001 ink F1). Previously the run uploaded an artifact
+  that expired in 14 days and nothing compared one run against the previous, so a
+  renderer regression was caught only if someone downloaded and eyeballed it in
+  time. The ratchet is deliberately **broader than strict mode**: strict gates only
+  severe cases the renderer owns, while the ratchet covers every case at every
+  severity, so a `close` case sliding to `minor` is caught. Because CI installs
+  LibreOffice from unpinned `ubuntu-latest` apt (issue #403), the record carries an
+  environment fingerprint (LibreOffice major.minor, Chromium major, `fonts.conf`
+  SHA-256); a mismatch reports `environment-changed` and demands a refresh rather
+  than blaming Docxodus for a reference-renderer release. Refresh the record
+  deliberately with `DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1` in the PR that changes
+  rendering, so improvements and accepted regressions are reviewed in the diff; a
+  passing run still lists every improvement it measured, so a stale record
+  announces itself. The comparison layer is pure and `visual-parity-ratchet.spec.ts`
+  exercises it on every pull request without LibreOffice or a renderer, which keeps
+  "a deliberately introduced regression fails, naming the case and the signal" a
+  continuously proven property. The full artifact upload is unchanged.
 - **Visual-parity font-substitution contract** (issue #379,
   `npm/tests/visual-parity/fonts.conf` + `font-contract.ts`): font policy for the
   LibreOffice benchmark is now a shared contract instead of a host observation.

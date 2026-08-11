@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      ratchet:
+        description: Fail if any case got worse than the committed record
+        required: false
+        default: true
+        type: boolean
   schedule:
     - cron: '41 8 * * 1'
 
@@ -55,11 +60,16 @@ jobs:
       - name: Install Chromium
         run: cd npm && npx playwright install --with-deps chromium
 
+      # The regression ratchet (issue #395) compares this run against the committed record and
+      # fails when any case got worse. A scheduled run has no `inputs`, so the expression falls
+      # through to '1' — the weekly run is the one that most needs the gate, because nobody is
+      # watching it. Refresh the record deliberately in the PR that changes rendering.
       - name: Compare stratified corpus with LibreOffice
         env:
           DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity
           DOCXODUS_VISUAL_PARITY_FILTER: ${{ inputs.filter }}
           DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
+          DOCXODUS_VISUAL_PARITY_RATCHET: ${{ github.event_name == 'workflow_dispatch' && !inputs.ratchet && '0' || '1' }}
         run: cd npm && npm run test:visual-parity
 
       - name: Upload visual comparison report
