@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md.",
+  "recordedAt": "2026-08-11",
+  "sourceCommit": "c4bf10521c08cdd56f9c4f578b5b1927c2f2b430",
+  "environment": {
+    "libreoffice": "25.8",
+    "chromium": "143",
+    "fontContractSha256": "65e32c507ebaa14eef364f04036f26c6853ab900779889d29b2f3d427c9937db"
+  },
+  "tolerance": {
+    "ssim": 0.0005,
+    "inkF1": 0.001
+  },
+  "cases": [
+    {
+      "id": "chart",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "close",
+      "ssim": 0.98687,
+      "worstInkF1": 0.96817
+    },
+    {
+      "id": "fields-and-tabs",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.89415,
+      "worstInkF1": 0.15913
+    },
+    {
+      "id": "footnote",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.99249,
+      "worstInkF1": 0.7033
+    },
+    {
+      "id": "inline-image",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.9366,
+      "worstInkF1": 0.6476
+    },
+    {
+      "id": "landscape-section",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.92607,
+      "worstInkF1": 0.60042
+    },
+    {
+      "id": "merged-table",
+      "disposition": "unattributed",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "minor",
+      "ssim": 0.96348,
+      "worstInkF1": 1
+    },
+    {
+      "id": "multi-section",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 6,
+        "libreoffice": 6
+      },
+      "severity": "close",
+      "ssim": 0.99934,
+      "worstInkF1": 0.99797
+    },
+    {
+      "id": "numbered-lists",
+      "disposition": "reference-deviation",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.99426,
+      "worstInkF1": 0.5558
+    },
+    {
+      "id": "running-content",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 5,
+        "libreoffice": 5
+      },
+      "severity": "close",
+      "ssim": 0.99921,
+      "worstInkF1": 0.96486
+    },
+    {
+      "id": "shape",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.97428,
+      "worstInkF1": 0.63049
+    },
+    {
+      "id": "text-formatting",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "close",
+      "ssim": 0.99725,
+      "worstInkF1": 0.9677
+    },
+    {
+      "id": "tracked-deletion",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.95011,
+      "worstInkF1": 0.62634
+    }
+  ]
+}

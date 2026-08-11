@@ -206,6 +206,40 @@ Severity counts, strict gating (`shape`, `fields-and-tabs`), and every dispositi
 `environment` now has a sharper meaning: the engines lay out the SAME fonts differently
 (line breaking, justification, rasterization) — never that they picked different fonts.
 
+## Regression ratchet — 2026-08-11 (issue #395)
+
+Every measurement above was a snapshot nothing defended. The scheduled run uploaded an artifact
+that expired in 14 days, and no run was compared against the previous one, so a renderer
+regression was caught only if a human downloaded and eyeballed the report in time.
+
+`ratchet.json` is now a committed, numbers-only record — one row per case carrying page counts,
+severity, mean SSIM, worst ink F1, and the disposition — and every run compares against it. It is
+deliberately broader than strict mode: strict gates only severe cases the renderer owns, whereas
+"no case may get worse than recorded" covers all twelve at every severity. Full-strict remains
+unreachable while two renderer-attributable severe cases stand; this is the part that is
+enforceable today.
+
+The record is seeded from a clean-worktree full-corpus run at `c4bf105` (the merge of issue #379)
+in the environment the baseline contract names: LibreOffice 25.8.7.3, Chromium 143.0.7499.4,
+Poppler 25.03.0. The `shape` and `chart` figures reproduce that run's recorded values to five
+decimal places; `footnote` and `tracked-deletion` differ from the 2026-08-11 *local* table below
+exactly as documented, because that table was measured under LibreOffice 24.2 with its legacy
+footnote separator.
+
+Two properties set the tolerances. Within one environment the benchmark is deterministic — two
+clean passes produced identical normalized metrics and identical SHA-256s for all 60 images — so
+0.0005 SSIM and 0.001 ink F1 are an order of magnitude below the smallest movement any recorded
+fix produced (the two-inch footnote separator, +0.000128 SSIM and +0.003537 ink F1). Across
+environments the numbers move materially, and CI's LibreOffice comes from unpinned
+`ubuntu-latest` apt (issue #403), so the record carries an environment fingerprint. A fingerprint
+mismatch reports `environment-changed` and demands a deliberate refresh — it is never reported as
+a renderer regression, because attributing a LibreOffice release to Docxodus is precisely the
+false accusation the font contract and the disposition field were built to prevent.
+
+The alarm itself is verified continuously rather than by anecdote: the comparison layer is pure,
+so `visual-parity-ratchet.spec.ts` feeds it deliberately worsened summaries on every pull request
+— no LibreOffice, no renderer, and no need to break rendering on purpose to prove the gate fires.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -269,8 +303,8 @@ renderer heuristic.
 
 The former first priority (blank charts), the PR #372 rerun, aligned tab geometry,
 header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, footnote
-block vertical placement (issue #378), and the font-substitution contract (issue #379) are
-resolved above. The remaining order is:
+block vertical placement (issue #378), the font-substitution contract (issue #379), and the
+regression ratchet (issue #395) are resolved above. The remaining order is:
 
 1. Model auto-fit text/line height for DrawingML textboxes (`shape`, strict-gating).
 2. TOC line height and hyperlink styling (`fields-and-tabs`, strict-gating — now honestly

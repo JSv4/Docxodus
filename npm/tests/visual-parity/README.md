@@ -102,10 +102,64 @@ Severity is assigned by the worst signal:
 | major | ≥ 0.85 | ≥ 0.75 | ≤ 0.15 | ≤ 1 px |
 | severe | below major | below major | above major | > 1 px |
 
-A page-count mismatch is always severe. Default runs are observational and succeed after producing
-the complete report; `DOCXODUS_VISUAL_PARITY_STRICT=1` turns renderer-attributable severe cases into
-a failing gate (see the disposition contract below). This keeps the baseline useful while known
-environment deltas and reference deviations are tracked without blocking.
+A page-count mismatch is always severe. `DOCXODUS_VISUAL_PARITY_STRICT=1` turns renderer-attributable
+severe cases into a failing gate (see the disposition contract below). This keeps the baseline useful
+while known environment deltas and reference deviations are tracked without blocking. Independently
+of strict mode, every run compares itself against the committed regression record described next.
+
+## Regression ratchet
+
+Full-strict mode stays unreachable while renderer-attributable severe cases remain, but *"no case
+may get worse than recorded"* is enforceable today (issue #395). `ratchet.json` is a committed,
+numbers-only record — one row per case: page counts, severity, mean SSIM, worst ink F1, and the
+disposition. No images, no paths, no artifact hashes, so it stays reviewable as a diff.
+
+The ratchet is deliberately **broader than strict mode**: strict gates only severe cases the
+renderer owns, while the ratchet covers every case at every severity. A `close` case sliding to
+`minor` is exactly the drift the weekly run existed to catch and previously could not — its
+artifact expired in 14 days and nothing compared one run to the next.
+
+| Signal | Fails when |
+|---|---|
+| page count | either engine's page count changes at all |
+| severity | the case moves down the severity ladder |
+| mean SSIM | falls more than `tolerance.ssim` (0.0005) below the record |
+| worst ink F1 | falls more than `tolerance.inkF1` (0.001) below the record |
+| conversion | the case errors where the record has none |
+| coverage | a recorded case is missing, or a measured case is unrecorded |
+
+The tolerances are tight because within one environment the benchmark is *deterministic* — two
+clean passes produced identical metrics and identical SHA-256s for all 60 images. They are not
+zero because the environment fingerprint is coarser than the environment itself. Every renderer
+movement BASELINE.md records for a real fix is at least an order of magnitude larger; the smallest
+is the two-inch footnote separator at +0.000128 SSIM and +0.003537 ink F1.
+
+**Environment fingerprint.** Across environments the numbers move materially — LibreOffice 24.2
+draws a different footnote separator than 25.8 — and CI installs LibreOffice from unpinned
+`ubuntu-latest` apt (pinning it is issue #403). The record therefore carries the LibreOffice
+major.minor, the Chromium major, and `fonts.conf`'s SHA-256. When they do not match, the run
+reports **`environment-changed`** and demands a refresh instead of claiming a regression, so a
+reference-renderer release can never be blamed on Docxodus. That outcome still fails the run: a
+stale record silently comparing across environments is worse than an explicit demand to refresh it.
+
+**Updating the record** is a deliberate act in the PR that changes rendering, so improvements and
+accepted regressions are reviewed in the diff:
+
+```bash
+DOCXODUS_VISUAL_PARITY_OUTPUT=/tmp/docxodus-visual-parity \
+DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 \
+npm run test:visual-parity
+```
+
+The update path refuses a filtered run, so a partial record cannot be committed. A passing run
+still lists every improvement it measured, so a stale record announces itself. Set
+`DOCXODUS_VISUAL_PARITY_RATCHET=0` to observe without gating; the comparison is reported either
+way. A filtered run compares only the cases it measured.
+
+The comparison layer (`ratchet.ts`) is pure, and `visual-parity-ratchet.spec.ts` exercises it on
+**every** pull request — no LibreOffice, no renderer. That is what keeps "a deliberately introduced
+regression fails, naming the case and the signal" a continuously proven property instead of a
+claim demonstrated once by hand.
 
 ## Attribution dispositions
 
