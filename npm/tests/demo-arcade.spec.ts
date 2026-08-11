@@ -14,7 +14,9 @@ import { test, expect, Page } from '@playwright/test';
 // the simulation, and the signature trick — pause, TYPE terrain into the
 // document, resume, and the level re-parses from the paragraph.
 
-const OVERRIDE = 'engine=./embed.bundle.js';
+// intro=0 skips the attract screen: these specs test the cartridges, and the
+// intro has its own dedicated coverage.
+const OVERRIDE = 'engine=./embed.bundle.js&intro=0';
 
 async function waitForBoot(page: Page) {
   await page.waitForFunction(
@@ -373,5 +375,50 @@ test.describe('THE DOCX ARCADE page', () => {
     expect(state.after.awake).toBe(true);
     expect(Math.abs(state.after.x - state.before.x)).toBeLessThan(0.1);
     expect(Math.abs(state.after.y - state.before.y)).toBeLessThan(0.1);
+  });
+
+  test('attract screen: OS LEGAL presents DOCXODUS, and Space drops the coin', async ({ page }) => {
+    // No intro=0 here — the title card animates on the same canvas paragraph
+    // the games use, so the whole per-frame path is already under test.
+    await page.goto('/demo-arcade.html?engine=./embed.bundle.js&cart=dungeon');
+    await waitForBoot(page);
+    // Wait past the sweep reveal until the blinking coin prompt is on screen.
+    // The rendered DOM preserves space runs as NBSP+space pairs and carries
+    // invisible direction marks between runs — normalize both before matching.
+    await page.waitForFunction(
+      () => ((window as any).__arcade.canvasText() as string)
+        .replace(/[\u200B-\u200F\uFEFF]/g, '')
+        .replace(/\u00A0/g, ' ')
+        .includes('PRESS  SPACE'),
+      null,
+      { timeout: 45000 },
+    );
+    const state = await page.evaluate(() => {
+      const a = (window as any).__arcade;
+      return {
+        intro: a.introActive() as boolean,
+        text: (a.canvasText() as string)
+          .replace(/[\u200B-\u200F\uFEFF]/g, '')
+          .replace(/\u00A0/g, ' '),
+        fallback: a.editor.lastReconcileFallback as string | null,
+      };
+    });
+    expect(state.intro).toBe(true);
+    expect(state.text).toContain('OS LEGAL');   // the credit line finished typing
+    expect(state.text).toMatch(/█/);            // the block title is on screen
+    expect(state.fallback).toBeNull();          // attract frames stay incremental
+    // Space is the coin drop: the selected cartridge takes over the same canvas.
+    await page.keyboard.press('Space');
+    await page.waitForFunction(
+      () => !(window as any).__arcade.introActive(),
+      null,
+      { timeout: 15000 },
+    );
+    await page.waitForFunction(
+      () => ((window as any).__arcade.canvasText() as string).includes('DUNGEON'),
+      null,
+      { timeout: 15000 },
+    );
+    expect(await page.evaluate(() => (window as any).__arcade.cart())).toBe('dungeon');
   });
 });

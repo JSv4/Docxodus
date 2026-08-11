@@ -17,7 +17,9 @@ import { test, expect, Page } from '@playwright/test';
 // proves real play in miniature: navigate the actual E1M1 corridors to the
 // nearest sigil and collect it.
 
-const OVERRIDE = 'engine=./embed.bundle.js';
+// intro=0 skips the attract screen: these specs test the cartridges, and the
+// intro has its own dedicated coverage.
+const OVERRIDE = 'engine=./embed.bundle.js&intro=0';
 
 async function bootFreedoom(page: Page) {
   // pace=0: unthrottled frames — the autopilot runs as fast as the document

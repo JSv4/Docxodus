@@ -172,6 +172,9 @@
           editor,
           session,
           cart: params.get("cart") ?? "quest",
+          // ?intro=0 skips the attract screen (specs use it; humans get the
+          // full "OS LEGAL presents DOCXODUS" title card).
+          intro: params.get("intro") !== "0",
           ui: {
             carts: document.getElementById("dockcarts"),
             playpause: document.getElementById("playpause"),
