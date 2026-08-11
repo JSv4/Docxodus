@@ -316,6 +316,44 @@ No severe case remains and the strict-gating set is empty, but strict mode is NO
 that is a separate decision, and two `major` cases still sit above the threshold a strict run
 would eventually want.
 
+## TOC hyperlink styling — 2026-08-11 (issue #397)
+
+Issue #397 named two residuals in the `fields-and-tabs` case, and they turned out to have opposite
+answers. Pinning them separately is what the issue asked for, and it is what the evidence supports.
+
+**Line-box height was ours.** TOC entries drifted further down the page with every entry — 7.3px,
+11.0px, 14.7px for the first three — because automatic line spacing was measured against font-size
+instead of the font's own line box. Fixed in issue #396 above; entries now land within **0.12px**
+of LibreOffice and the case's ink F1 is 0.99775.
+
+**Hyperlink styling is not.** The entry run in `HC022` carries `<w:rStyle w:val="Hyperlink"/>`, and
+the document's `Hyperlink` character style declares `w:color="0563C1"` with `w:u w:val="single"`.
+Sampling the two renders over the TOC entry rows:
+
+| Renderer | Dominant entry-text colour |
+|---|---|
+| Docxodus | **`#0563C1`** — the declared value, byte for byte |
+| LibreOffice | **`#000000`** — no hyperlink colour at all |
+
+Docxodus renders what the file declares. LibreOffice drops a character style that the run
+explicitly references, which is a deviation from the OOXML, not a Docxodus defect — and "the TOC
+came out blue and underlined" is the well-known consequence of Word's own `\h` table of contents
+applying this style. LibreOffice is a comparison implementation, not the correctness oracle, so the
+output is **not** changed to match it and the disposition moves `renderer-bug` →
+`reference-deviation`. This is the same standard applied when the `numbered-lists` margin was
+kept over LibreOffice's import.
+
+The claim only means something if the renderer is reading the style rather than decorating every
+hyperlink it sees, so `npm/tests/toc-line-geometry.spec.ts` generates a TOC containing both kinds
+of entry: one with `w:rStyle` and an otherwise identical one without. The styled entry must carry
+the declared colour and underline; the unstyled one must carry neither. Line geometry is pinned by
+separate assertions — the entry line box equals the OOXML multiple of the font's line box, and the
+entries are evenly spaced so displacement cannot accumulate — and one assertion pins that the two
+are independent, i.e. that applying the character style does not change the line box.
+
+With this, the corpus's remaining non-`environment` work is the `merged-table` colour delta (issue
+#399), the last `unattributed` case.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -334,7 +372,7 @@ attribution the strict gate reads, and these numbers are what `ratchet.json` rec
 | inline-image | 1/1 | major | environment | 0.93255 | 0.77340 | Improved by issue #396 (ink F1 0.64760 to 0.77340). Residual is indentation/wrapping of the same fonts, not an inline-flow failure. |
 | chart | 1/1 | close | environment | 0.98687 | 0.96817 | Cached clustered column data renders as accessible inline SVG at the stored extent. Other chart families remain unsupported. |
 | shape | 1/1 | close | renderer-bug | 0.98599 | 1.00000 | Auto-fit height now follows the laid-out text (issue #396): height error -16.0 px to +2.7 px, ink geometry exact. Residual is the CSS border adding to an auto height where DrawingML strokes `a:ln` on the shape boundary. |
-| fields-and-tabs | 1/1 | minor | renderer-bug | 0.96026 | 0.99775 | Tab targets and leaders correct since PR #380; entry line height correct since issue #396 (within 0.12 px). Remaining difference is hyperlink styling — issue #397. |
+| fields-and-tabs | 1/1 | minor | reference-deviation | 0.96026 | 0.99775 | Tab targets and leaders correct since PR #380; entry line height correct since issue #396 (within 0.12 px). The residual is hyperlink styling: the run references the `Hyperlink` character style, Docxodus paints its declared `#0563C1`, LibreOffice paints black (issue #397). |
 | footnote | 1/1 | close | environment | 0.99502 | 0.99064 | Note placement fixed (issue #378); issue #396 stopped the superscript reference inflating its line box. Residual is substituted-font rasterization and LibreOffice-24.2 separator width. |
 | tracked-deletion | 1/1 | minor | environment | 0.97950 | 0.99667 | Identical accepted-revision bytes are compared. Improved by the font contract (issue #379) and issue #396; residual is same-font heading metrics and wrapping. |
 
@@ -384,14 +422,12 @@ block vertical placement (issue #378), the font-substitution contract (issue #37
 regression ratchet (issue #395), and automatic line spacing (issue #396, which also resolved
 #397's line-box half and dissolved #398's premise) are resolved above. The remaining order is:
 
-1. Attribute the `fields-and-tabs` hyperlink styling difference (issue #397) — the last piece of
-   that case now that its line geometry is within 0.12 px.
-2. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it (issue
+1. Reduce the `merged-table` fill/border color delta to a minimal case and attribute it (issue
    #399) — the corpus's last `unattributed` disposition.
-3. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
+2. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
    same-font layout cases (issue #404), which is what now stands between the corpus and a
    strict run.
-4. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
+3. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
    is whether to keep a Word-evidence procedure (issue #402) for it at all.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence

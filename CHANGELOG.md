@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **TOC hyperlink styling attributed to the reference implementation, not the renderer**
+  (issue #397, `npm/tests/toc-line-geometry.spec.ts` + `visual-parity/corpus.ts`):
+  the `fields-and-tabs` benchmark case named two residuals, and they have opposite
+  answers. Entry line-box height was a renderer bug and is fixed (issue #396 —
+  entries were displaced by a growing 7.3/11.0/14.7px and now land within 0.12px of
+  LibreOffice). Hyperlink appearance is not: the entry runs carry
+  `<w:rStyle w:val="Hyperlink"/>` and that character style declares `w:color="0563C1"`
+  with `w:u w:val="single"`. Docxodus paints the declared colour byte for byte;
+  LibreOffice paints the entries black, dropping a style the run explicitly
+  references. `w:hyperlink` is a link, not a style, so the output is **not** changed
+  to match the comparison implementation and the case's disposition moves
+  `renderer-bug` → `reference-deviation`. A generated regression pins entry line
+  geometry and hyperlink appearance **separately**, and — because "we match Word"
+  would otherwise be indistinguishable from decorating every hyperlink by default —
+  includes an otherwise identical entry with no `w:rStyle` that must come out
+  undecorated. Documented in `docs/ooxml_corner_cases.md`.
+
 ### Fixed
 - **Automatic line spacing is a multiple of the font's line box, not of font-size**
   (issue #396, `Docxodus/WmlToHtmlConverter.cs`): OOXML's `w:lineRule="auto"` gives
