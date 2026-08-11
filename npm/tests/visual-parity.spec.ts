@@ -34,6 +34,13 @@ import {
   probeMarker,
 } from './visual-parity/font-contract.js';
 import { decodePng, encodePng } from './visual-parity/png.js';
+import {
+  RATCHET_RECORD_FILE,
+  buildRecord,
+  compareToRecord,
+  readRecord,
+  serializeRecord,
+} from './visual-parity/ratchet.js';
 
 test.skip(process.env.DOCXODUS_VISUAL_PARITY !== '1',
   'set DOCXODUS_VISUAL_PARITY=1 on a host with libreoffice and pdftoppm');
@@ -466,6 +473,32 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   const summaryPath = join(outputRoot, 'summary.json');
   writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`Visual parity report: ${summaryPath}`);
+
+  // The regression ratchet (issue #395). Broader than strict mode: it covers every case at every
+  // severity, so a `close` case sliding to `minor` is caught rather than merely archived in an
+  // artifact that expires in 14 days.
+  const complete = !process.env.DOCXODUS_VISUAL_PARITY_FILTER;
+  if (process.env.DOCXODUS_VISUAL_PARITY_UPDATE_RECORD === '1') {
+    if (!complete) {
+      throw new Error('Refusing to write a partial ratchet record: unset ' +
+        'DOCXODUS_VISUAL_PARITY_FILTER so every case is measured in the same run.');
+    }
+    const record = buildRecord(summary, new Date().toISOString().slice(0, 10));
+    writeFileSync(RATCHET_RECORD_FILE, serializeRecord(record));
+    console.log(`Ratchet record refreshed: ${RATCHET_RECORD_FILE}`);
+  } else {
+    const record = readRecord();
+    if (!record) {
+      console.log('No ratchet record yet; create one with DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1.');
+    } else {
+      const comparison = compareToRecord(record, summary, { expectComplete: complete });
+      console.log(`Ratchet [${comparison.status}]: ${comparison.message}`);
+      // Opt-out rather than opt-in: a ratchet nobody enables is the artifact nobody downloaded.
+      if (process.env.DOCXODUS_VISUAL_PARITY_RATCHET !== '0') {
+        expect(comparison.status, comparison.message).toBe('ok');
+      }
+    }
+  }
 
   if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') {
     expect(cases.filter(gatesStrictRun).map(result =>
