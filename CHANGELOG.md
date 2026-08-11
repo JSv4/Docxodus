@@ -91,23 +91,6 @@ All notable changes to this project will be documented in this file.
   entries default to `unattributed`, which gates, so an untriaged severe case cannot
   hide.
 
-### Fixed
-- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
-  anchors the footnote area to the bottom of the text column — the last note line
-  ends ON the bottom margin line, notes stack with no spacing of their own
-  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
-  drawn about one line above the first note. The paginated note container carried
-  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
-  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
-  `N.`-style number label — which together lifted the visible note ink ~13px off
-  the margin and drew ink no print renderer shows. The paginated registry now
-  renders the bare superscript number and no backref (the web-view `<ol>` section
-  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
-  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
-  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
-  separator-to-note gap matches. Generated-DOCX browser regression
-  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
-  separator separately.
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo
@@ -134,6 +117,22 @@ All notable changes to this project will be documented in this file.
   pause→type→resume loop, and the save round-trip.
 
 ### Fixed
+- **Paginated footnote area sits on the bottom margin line** (issue #378). Word
+  anchors the footnote area to the bottom of the text column — the last note line
+  ends ON the bottom margin line, notes stack with no spacing of their own
+  (FootnoteText is single-spaced, zero spacing-after), and the separator rule is
+  drawn about one line above the first note. The paginated note container carried
+  web chrome inside the bottom-anchored box — `line-height: 1.4`, 4pt inter-note
+  margins, a 6pt separator gap, a trailing `↩` back-reference link, and an
+  `N.`-style number label — which together lifted the visible note ink ~13px off
+  the margin and drew ink no print renderer shows. The paginated registry now
+  renders the bare superscript number and no backref (the web-view `<ol>` section
+  keeps both), and the note-area CSS uses `line-height: normal`, zero item margins,
+  and a 3pt separator gap. On the tracked `footnote` benchmark case the note-text
+  bottom now sits flush with LibreOffice's (row-exact at 96 DPI) and the
+  separator-to-note gap matches. Generated-DOCX browser regression
+  `npm/tests/pagination-footnote-geometry.spec.ts` pins the note block and the
+  separator separately.
 - **Paginated headers, footers, and body text sit at the distances `w:pgMar`
   declares.** `w:header` and `w:footer` are distances from the PAPER EDGE to the
   top of the header story and the bottom of the footer story — four independent
