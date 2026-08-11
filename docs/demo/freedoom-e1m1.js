@@ -1,17 +1,46 @@
-// Level geometry derived from the Freedoom project's E1M1 (freedoom.github.io),
-// rasterized by docs/demo/tools/wad2cart.mjs. Freedoom is © 2001-2024
-// Contributors to the Freedoom project, all rights reserved, and is
-// distributed under a BSD-style license: redistribution and use in source
-// and binary forms, with or without modification, are permitted provided
-// the copyright notice and license conditions are retained — see
-// https://github.com/freedoom/freedoom/blob/master/COPYING.adoc for the
-// full text (conditions + no-endorsement clause + warranty disclaimer).
+// THIRD-PARTY DATA NOTICE — SCOPE IS LIMITED TO FREEDOOM_LEVEL BELOW.
+// The Docxodus engine, converter, and repository remain MIT-licensed under
+// the root LICENSE. Only the derived level geometry and monster placements in
+// FREEDOOM_LEVEL come from the Freedoom project and carry its BSD-3-Clause terms.
+// Source: https://github.com/freedoom/freedoom/blob/d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85/levels/e1m1.wad
+// Git commit: d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85
+// Git blob: 98d3dac0a2aaff8d1647fe6f8948742647a46de3
+// WAD SHA-256: d8acd8cf992f1f3af907634587f8a40765d6c43ac15adef1bfa29a2ff1b9e83d
+//
+// Copyright © 2001-2024
+// Contributors to the Freedoom project.  All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//   * Redistributions of source code must retain the above copyright
+//     notice, this list of conditions and the following disclaimer.
+//   * Redistributions in binary form must reproduce the above copyright
+//     notice, this list of conditions and the following disclaimer in the
+//     documentation and/or other materials provided with the distribution.
+//   * Neither the name of the Freedoom project nor the names of its
+//     contributors may be used to endorse or promote products derived from
+//     this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS
+// IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+// TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+// PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+// OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // A real Doom-format level as an Arcade raycaster grid: '#' wall, '.' floor,
 // '§' sigil (the level's own key/weapon/powerup spots), '*' the exit switch.
 // 126×109 cells at 32 map units per cell.
 export const FREEDOOM_LEVEL = {
   name: "E1M1",
+  source: {"repository":"https://github.com/freedoom/freedoom","commit":"d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85","path":"levels/e1m1.wad","gitBlob":"98d3dac0a2aaff8d1647fe6f8948742647a46de3","sha256":"d8acd8cf992f1f3af907634587f8a40765d6c43ac15adef1bfa29a2ff1b9e83d","license":"BSD-3-Clause","scope":"FREEDOOM_LEVEL data only; Docxodus remains MIT"},
   w: 126,
   h: 109,
   spawn: {"x":10.5,"y":66.5,"dx":1,"dy":0},

@@ -25,10 +25,47 @@
 //      license notice carried along.
 //
 // Usage: node wad2cart.mjs <level.wad> <MAPxx|ExMy> <out.js> [--cell=64]
+//          --source=freedoom --source-ref=<40-hex commit>
+//          --source-path=<repo path> --source-blob=<40-hex git blob>
+//          --source-sha256=<64-hex digest>
 //        node wad2cart.mjs <level.wad> --inspect
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+
+// This is third-party notice text, not a license change for the converter.
+// wad2cart.mjs and the rest of Docxodus remain MIT-licensed. When the CLI is
+// explicitly told that an input is Freedoom data, formatLevelModule() embeds
+// this complete notice and scopes it only to the derived FREEDOOM_LEVEL data.
+export const FREEDOOM_BSD_3_CLAUSE = `Copyright © 2001-2024
+Contributors to the Freedoom project.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+  * Neither the name of the Freedoom project nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS
+IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`;
+
+const FREEDOOM_REPOSITORY = 'https://github.com/freedoom/freedoom';
 
 // ─── Binary lump parsing (classic Doom map format) ─────────────────────
 export function parseWad(buf) {
@@ -359,6 +396,76 @@ export function proveReachable(rows, spawn) {
   return missing;
 }
 
+function requiredHex(value, length, option) {
+  if (!new RegExp(`^[0-9a-f]{${length}}$`, 'i').test(value ?? '')) {
+    throw new Error(`${option} must be exactly ${length} hexadecimal characters`);
+  }
+  return value.toLowerCase();
+}
+
+function requiredRepoPath(value) {
+  if (!/^[A-Za-z0-9._/-]+$/.test(value ?? '') || value.startsWith('/') || value.split('/').includes('..')) {
+    throw new Error('--source-path must be a relative repository path without parent traversal');
+  }
+  return value;
+}
+
+/** Format a generated level module with explicit, locally complete source
+ * attribution. The converter never guesses a WAD's provenance or license:
+ * callers must opt into a supported source and supply immutable identifiers. */
+export function formatLevelModule(out, mapName, { source } = {}) {
+  if (source?.kind !== 'freedoom') {
+    throw new Error(
+      'refusing to emit unattributed level data; pass explicit Freedoom provenance ' +
+      '(--source=freedoom, --source-ref, --source-path, --source-blob, and --source-sha256)',
+    );
+  }
+  const sourceRef = requiredHex(source.ref, 40, '--source-ref');
+  const sourcePath = requiredRepoPath(source.path);
+  const sourceBlob = requiredHex(source.blob, 40, '--source-blob');
+  const sourceSha256 = requiredHex(source.sha256, 64, '--source-sha256');
+  const licenseComment = FREEDOOM_BSD_3_CLAUSE.split('\n')
+    .map((line) => `// ${line}`.trimEnd()).join('\n');
+  const notice = `// THIRD-PARTY DATA NOTICE — SCOPE IS LIMITED TO FREEDOOM_LEVEL BELOW.
+// The Docxodus engine, converter, and repository remain MIT-licensed under
+// the root LICENSE. Only the derived level geometry and monster placements in
+// FREEDOOM_LEVEL come from the Freedoom project and carry its BSD-3-Clause terms.
+// Source: ${FREEDOOM_REPOSITORY}/blob/${sourceRef}/${sourcePath}
+// Git commit: ${sourceRef}
+// Git blob: ${sourceBlob}
+// WAD SHA-256: ${sourceSha256}
+//
+${licenseComment}`;
+  return `${notice}
+
+// A real Doom-format level as an Arcade raycaster grid: '#' wall, '.' floor,
+// '§' sigil (the level's own key/weapon/powerup spots), '*' the exit switch.
+// ${out.w}×${out.h} cells at ${out.stats.cell} map units per cell.
+export const FREEDOOM_LEVEL = {
+  name: ${JSON.stringify(mapName)},
+  source: ${JSON.stringify({
+    repository: FREEDOOM_REPOSITORY,
+    commit: sourceRef,
+    path: sourcePath,
+    gitBlob: sourceBlob,
+    sha256: sourceSha256,
+    license: 'BSD-3-Clause',
+    scope: 'FREEDOOM_LEVEL data only; Docxodus remains MIT',
+  })},
+  w: ${out.w},
+  h: ${out.h},
+  spawn: ${JSON.stringify(out.spawn)},
+  rows: [
+${out.rows.map((r) => '    ' + JSON.stringify(r) + ',').join('\n')}
+  ],
+  // The level's own single-player monster placements (entities, not tiles).
+  monsters: [
+${out.monsters.map((m) => '    ' + JSON.stringify(m) + ',').join('\n')}
+  ],
+};
+`;
+}
+
 // ─── CLI ───────────────────────────────────────────────────────────────
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   cli();
@@ -367,7 +474,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 function cli() {
 const [, , wadPath, mapNameArg, outPath, ...rest] = process.argv;
 if (!wadPath) {
-  console.error('usage: node wad2cart.mjs <level.wad> <MAPxx|ExMy> <out.js> [--cell=64]');
+  console.error(
+    'usage: node wad2cart.mjs <level.wad> <MAPxx|ExMy> <out.js> [--cell=64] ' +
+    '--source=freedoom --source-ref=<commit> --source-path=<path> ' +
+    '--source-blob=<blob> --source-sha256=<digest>',
+  );
   process.exit(2);
 }
 const buf = readFileSync(wadPath);
@@ -380,6 +491,7 @@ if (mapNameArg === '--inspect' || !mapNameArg) {
 
 const cellArg = rest.find((a) => a.startsWith('--cell='));
 const cell = cellArg ? Number(cellArg.split('=')[1]) : 64;
+const option = (name) => rest.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const level = parseLevel(buf, mapLumps(wad, mapNameArg));
 const out = rasterize(level, { cell });
 const missing = proveReachable(out.rows, out.spawn);
@@ -393,33 +505,15 @@ console.log(`sigils ${out.sigils} · exit at (${out.exit[0]},${out.exit[1]}) · 
 console.log(out.rows.join('\n'));
 
 if (outPath) {
-  const notice = `// Level geometry derived from the Freedoom project's ${mapNameArg} (freedoom.github.io),
-// rasterized by docs/demo/tools/wad2cart.mjs. Freedoom is © 2001-2024
-// Contributors to the Freedoom project, all rights reserved, and is
-// distributed under a BSD-style license: redistribution and use in source
-// and binary forms, with or without modification, are permitted provided
-// the copyright notice and license conditions are retained — see
-// https://github.com/freedoom/freedoom/blob/master/COPYING.adoc for the
-// full text (conditions + no-endorsement clause + warranty disclaimer).
-`;
-  const body = `${notice}
-// A real Doom-format level as an Arcade raycaster grid: '#' wall, '.' floor,
-// '§' sigil (the level's own key/weapon/powerup spots), '*' the exit switch.
-// ${out.w}×${out.h} cells at ${cell} map units per cell.
-export const FREEDOOM_LEVEL = {
-  name: ${JSON.stringify(mapNameArg)},
-  w: ${out.w},
-  h: ${out.h},
-  spawn: ${JSON.stringify(out.spawn)},
-  rows: [
-${out.rows.map((r) => '    ' + JSON.stringify(r) + ',').join('\n')}
-  ],
-  // The level's own single-player monster placements (entities, not tiles).
-  monsters: [
-${out.monsters.map((m) => '    ' + JSON.stringify(m) + ',').join('\n')}
-  ],
-};
-`;
+  const sourceKind = option('source');
+  const source = sourceKind == null ? null : {
+    kind: sourceKind,
+    ref: option('source-ref'),
+    path: option('source-path'),
+    blob: option('source-blob'),
+    sha256: option('source-sha256'),
+  };
+  const body = formatLevelModule(out, mapNameArg, { source });
   writeFileSync(outPath, body);
   console.log(`wrote ${outPath}`);
 }

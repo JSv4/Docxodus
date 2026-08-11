@@ -444,8 +444,10 @@ const ENEMY_KINDS = {
   imp:      { glyph: '&', ink: 'C084FC', hp: 2, speed: 1.5, dps: 11 },
   demon:    { glyph: 'D', ink: 'FF6B6B', hp: 3, speed: 2.0, dps: 17 },
 };
-const ENEMY_BY_GLYPH = Object.fromEntries(
-  Object.entries(ENEMY_KINDS).map(([kind, k]) => [k.glyph, kind]));
+// Only '&' is authoring syntax. The other glyphs are render-only so ordinary
+// letters remain walls — critically, the classic dungeon's D.O.C.X pillars
+// must never parse as demons/zombies when an unchanged document resumes.
+const AUTHORED_ENEMY_GLYPH = '&';
 
 // ── Enemy stamps: original ASCII takes on the classic archetypes — a rifle
 // grunt, its armored sergeant, a horned imp, a big-jawed demon. Drawn on a
@@ -588,6 +590,7 @@ function raycastCart(pack) {
   const W = pack.w, H = pack.h, S = pack.wallScale;
   let map, px, py, dx, dy, plx, ply, state;
   let enemies, health, kills, killsTotal, fireCooldown, muzzleT, hurtT, deathT;
+  let nextEnemyId, renderedWindow;
 
   const cell = (x, y) => (x >= 0 && x < W && y >= 0 && y < H ? map[y][x] : '#');
   function sigilsLeft() {
@@ -644,9 +647,14 @@ function raycastCart(pack) {
     }
   }
 
-  const spawnEnemy = (x, y, kind) => enemies.push({
-    x, y, kind, hp: ENEMY_KINDS[kind].hp, awake: false, flashT: 0,
-  });
+  const spawnEnemy = (x, y, kind) => {
+    const enemy = {
+      id: nextEnemyId++, x, y, kind,
+      hp: ENEMY_KINDS[kind].hp, awake: false, flashT: 0,
+    };
+    enemies.push(enemy);
+    return enemy;
+  };
 
   function reset() {
     normalizeMap(pack.rows);
@@ -655,6 +663,8 @@ function raycastCart(pack) {
     dx = pack.spawn.dx / n; dy = pack.spawn.dy / n;
     plx = -dy * 0.577; ply = dx * 0.577; // FOV ≈ 60°
     enemies = [];
+    nextEnemyId = 1;
+    renderedWindow = null;
     for (const m of pack.monsters ?? []) spawnEnemy(m.x + 0.5, m.y + 0.5, m.kind);
     health = 100; kills = 0; killsTotal = enemies.length;
     fireCooldown = 0; muzzleT = 0; hurtT = 0; deathT = 0;
@@ -968,6 +978,8 @@ function raycastCart(pack) {
     // A level bigger than the band scrolls it as a window over the world.
     const [wx, wy] = winPos();
     const windowed = W > WIN_W || H > WIN_H;
+    const renderedEnemyIds = Array.from({ length: WIN_H }, () =>
+      Array.from({ length: WIN_W }, () => []));
     writeText(g, FIELD_TOP, BAND_X + 1,
       windowed ? `MAP @${wx},${wy} · edit!` : 'MAP · edit me!', '5EEAD4');
     // One ink for '.'/'#' (the glyphs already tell them apart) keeps a map
@@ -1014,6 +1026,7 @@ function raycastCart(pack) {
       if (ex >= 0 && ex < WIN_W && ey >= 0 && ey < WIN_H) {
         g.chars[MAP_TOP + ey][BAND_X + 1 + ex] = ENEMY_KINDS[e.kind].glyph;
         g.colors[MAP_TOP + ey][BAND_X + 1 + ex] = ENEMY_KINDS[e.kind].ink;
+        renderedEnemyIds[ey][ex].push(e.id);
       }
     }
     // Directional player marker — the map's compass for the 3-D camera.
@@ -1023,6 +1036,16 @@ function raycastCart(pack) {
         Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? '►' : '◄') : (dy > 0 ? '▼' : '▲');
       g.colors[MAP_TOP + pmy][BAND_X + 1 + pmx] = 'FF6B6B';
     }
+    // The exact text projection is the edit baseline for pause/resume. A
+    // character that comes back unchanged is presentation, not an edit: keep
+    // hidden terrain plus full entity state (HP, wake state, sub-cell position).
+    // Only cells whose text differs from this snapshot are interpreted below.
+    renderedWindow = {
+      wx, wy,
+      rows: Array.from({ length: WIN_H }, (_, y) =>
+        g.chars[MAP_TOP + y].slice(BAND_X + 1, BAND_X + 1 + WIN_W).join('')),
+      enemyIds: renderedEnemyIds,
+    };
     writeText(g, MAP_TOP + WIN_H + 1, BAND_X + 1, 'letters become walls', '46556B');
     writeText(g, MAP_TOP + WIN_H + 2, BAND_X + 1,
       killsTotal > 0 ? '$ heals  & = baddie' : '$ = treasure  @ = you', '46556B');
@@ -1034,19 +1057,17 @@ function raycastCart(pack) {
 
   /** Rebuild the world from the MAP band of the parsed document rows. Typed
    *  letters become walls; a moved '@' teleports the player. The band shows
-   *  the winPos() window, so edits land on exactly the world cells it shows —
-   *  the rest of a big level is untouched. */
+   *  the last rendered window, so edits land on exactly the world cells it
+   *  showed. Unchanged projection glyphs are ignored: a no-op resume preserves
+   *  hidden terrain and every entity's HP, wake state, and precise position. */
   function syncFromRows(rows) {
-    if (state !== 'run') return; // a banner is on screen, not the maze
-    const [wx, wy] = winPos();
+    if (state !== 'run' || !renderedWindow) return; // banner/initial placeholder, not a map
+    const { wx, wy, rows: baseline, enemyIds } = renderedWindow;
     const parsed = map.map((r) => r.slice());
     let atX = null, atY = null;
-    // Enemies inside the window are re-seeded from what the text says — same
-    // entity contract as the platformer's gremlins. Anything outside the
-    // window is beyond edit reach and survives untouched.
-    const inWindow = (x, y) => x >= wx && x < wx + WIN_W && y >= wy && y < wy + WIN_H;
-    enemies = enemies.filter((e) =>
-      e.hp > 0 && !inWindow(Math.floor(e.x), Math.floor(e.y)));
+    let changed = false;
+    const removeEnemyIds = new Set();
+    const enemySpawns = [];
     for (let y = 0; y < WIN_H; y++) {
       const line = rows[MAP_TOP + y];
       if (line == null) continue;
@@ -1054,29 +1075,36 @@ function raycastCart(pack) {
       if (div < 0) continue;
       const band = line.slice(div + 2, div + 2 + WIN_W); // skip │ + pad col
       for (let x = 0; x < WIN_W; x++) {
-        let ch = band[x] ?? parsed[wy + y][wx + x];
+        const shown = baseline[y][x];
+        let ch = band[x] ?? shown;
+        if (ch === shown) continue;
+        changed = true;
+        for (const id of enemyIds[y][x]) removeEnemyIds.add(id);
         // '@' is the typeable teleport; ►◄▲▼ is how the renderer draws the
-        // player, and '·' is the rendered view cone — all parse back to
-        // position-or-floor, never to walls. An enemy glyph is an entity:
-        // it respawns that enemy and leaves floor beneath (typing '&' — or
-        // any of the bestiary's letters — conjures one from the document).
+        // player, and '·' is the rendered view cone. They become floor only
+        // when the user actually moves/types them. '&' is the sole enemy
+        // authoring glyph; z/Z/D remain ordinary letter walls.
         if (ch === '@' || ch === '►' || ch === '◄' || ch === '▲' || ch === '▼') {
           atX = wx + x; atY = wy + y; ch = '.';
         } else if (ch === '·') {
           ch = '.';
-        } else if (ENEMY_BY_GLYPH[ch]) {
-          spawnEnemy(wx + x + 0.5, wy + y + 0.5, ENEMY_BY_GLYPH[ch]);
+        } else if (ch === AUTHORED_ENEMY_GLYPH) {
+          enemySpawns.push([wx + x + 0.5, wy + y + 0.5, 'imp']);
           ch = '.';
         }
         parsed[wy + y][wx + x] = ch;
       }
     }
-    killsTotal = Math.max(killsTotal, kills + enemies.filter((e) => e.hp > 0).length);
+    if (!changed) return;
+    enemies = enemies.filter((e) => e.hp > 0 && !removeEnemyIds.has(e.id));
+    for (const spawn of enemySpawns) spawnEnemy(...spawn);
+    killsTotal = kills + enemies.filter((e) => e.hp > 0).length;
     normalizeMap(parsed.map((r) => r.join('')));
     if (atX != null && (atX !== Math.floor(px) || atY !== Math.floor(py))) {
       px = atX + 0.5; py = atY + 0.5;
     }
     unstickPlayer();
+    renderedWindow = null; // the next game frame establishes the next baseline
   }
 
   return {

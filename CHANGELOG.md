@@ -11,7 +11,9 @@ All notable changes to this project will be documented in this file.
   Docx Dungeon's DDA raycaster is now a level-pack player: the same renderer,
   controls, and MAP-panel document round-trip run both the hand-drawn 24×16
   maze and a 126×109 grid rasterized from the Freedoom project's E1M1
-  (BSD-licensed; notice retained in the generated module). `wad2cart.mjs`
+  (only that derived data is BSD-3-Clause; Docxodus remains MIT, and the full
+  scoped notice plus immutable source provenance are retained in the generated
+  module). `wad2cart.mjs`
   parses the classic binary lumps (THINGS/LINEDEFS/SIDEDEFS/VERTEXES/SECTORS),
   rasterizes blocking linedefs at 32 map units per cell (doors/lifts/stairs
   resolved to their player-friendly state — the grid world has no door

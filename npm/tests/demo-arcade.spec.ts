@@ -73,6 +73,39 @@ async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon' | 'e1m1'
   );
 }
 
+async function replaceCanvasCharacter(page: Page, row: number, column: number, text: string) {
+  return page.evaluate(({ row, column, text }) => {
+    const a = (window as any).__arcade;
+    a.pause();
+    const el = a.canvasElement() as HTMLElement;
+    el.focus();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL);
+    let currentRow = 0;
+    let currentColumn = 0;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeName === 'BR') {
+        currentRow++;
+        currentColumn = 0;
+        continue;
+      }
+      if (node.nodeType !== Node.TEXT_NODE || currentRow !== row) continue;
+      const length = node.textContent?.length ?? 0;
+      if (column < currentColumn + length) {
+        const offset = column - currentColumn;
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return document.execCommand('insertText', false, text);
+      }
+      currentColumn += length;
+    }
+    return false;
+  }, { row, column, text });
+}
+
 test.describe('THE DOCX ARCADE page', () => {
   for (const cart of ['quest', 'dungeon', 'e1m1'] as const) {
     test(`${cart}: its very first frame reconciles incrementally`, async ({ page }) => {
@@ -287,5 +320,58 @@ test.describe('THE DOCX ARCADE page', () => {
       { timeout: 15000 },
     );
     await page.keyboard.up('ArrowLeft');
+  });
+
+  test('dungeon pause/resume preserves D.O.C.X walls and wounded enemy state', async ({ page }) => {
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=dungeon`);
+    await waitForBoot(page);
+    await page.waitForFunction(() => (window as any).__arcade.frames() >= 2, { timeout: 30000 });
+
+    // A completely unchanged document must not reinterpret the stock D pillar
+    // as a demon. Exercise the real pause → XML parse → resume path.
+    const unchanged = await page.evaluate(() => {
+      const a = (window as any).__arcade;
+      a.pause();
+      a.resume();
+      a.pause();
+      return {
+        row: a.game().mapRow(6) as string,
+        enemies: a.game().enemies.length as number,
+      };
+    });
+    expect(unchanged.row).toContain('D.O.C.X');
+    expect(unchanged.enemies).toBe(0);
+
+    // The map begins at display row 4 / column 67. Put an imp two cells in
+    // front of the east-facing spawn through the contenteditable document.
+    expect(await replaceCanvasCharacter(page, 4 + 8, 67 + 5, '&')).toBe(true);
+    await page.evaluate(() => (window as any).__arcade.resume());
+    await page.waitForFunction(() => (window as any).__arcade.game().enemies.length === 1);
+    await page.evaluate(() => {
+      const a = (window as any).__arcade;
+      a.input.set('Space', true);
+      const watcher = setInterval(() => {
+        if (a.game().enemies[0]?.hp !== 1) return;
+        a.input.set('Space', false);
+        a.pause();
+        clearInterval(watcher);
+      }, 1);
+    });
+    await page.waitForFunction(() => !(window as any).__arcade.playing());
+
+    const state = await page.evaluate(() => {
+      const a = (window as any).__arcade;
+      const before = a.game().enemies[0];
+      a.resume();
+      a.pause();
+      const after = a.game().enemies[0];
+      return { before, after };
+    });
+    expect(state.before.hp).toBe(1);
+    expect(state.before.awake).toBe(true);
+    expect(state.after.hp).toBe(1);
+    expect(state.after.awake).toBe(true);
+    expect(Math.abs(state.after.x - state.before.x)).toBeLessThan(0.1);
+    expect(Math.abs(state.after.y - state.before.y)).toBeLessThan(0.1);
   });
 });
