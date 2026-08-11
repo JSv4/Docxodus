@@ -1808,10 +1808,13 @@ namespace Docxodus
             sb.AppendLine();
             sb.AppendLine("/* Per-page Footnotes (Paginated Mode) */");
 
-            // Page footnotes container
+            // Page footnotes container. The note area is bottom-anchored at the body band's foot,
+            // so every point of extra leading or trailing space inside it lifts the visible ink
+            // off the bottom margin. Word's FootnoteText style is single-spaced (w:line 240 auto);
+            // `normal` matches that, where a web-style 1.4 floated the notes ~5px high per line.
             sb.AppendLine($".{prefix}footnotes {{");
             sb.AppendLine("    font-size: 0.85em;");
-            sb.AppendLine("    line-height: 1.4;");
+            sb.AppendLine("    line-height: normal;");
             sb.AppendLine("}");
 
             // Separator line above footnotes - using background instead of border
@@ -1825,13 +1828,17 @@ namespace Docxodus
             // not match either Word or LibreOffice's fixed default separator.
             sb.AppendLine("    width: 2in;");
             sb.AppendLine("    max-width: 100%;");
-            sb.AppendLine("    margin: 0 0 6pt 0;");
+            // Word draws the separator on the baseline of one empty FootnoteText line, putting the
+            // rule roughly a descent-plus-ascent (~6-8px) above the first note's ink; 6pt doubled it.
+            sb.AppendLine("    margin: 0 0 3pt 0;");
             sb.AppendLine("    opacity: 0.6;");
             sb.AppendLine("}");
 
-            // Individual footnote item (in registry and on page)
+            // Individual footnote item (in registry and on page). Word stacks notes with no
+            // spacing of its own — any inter-note gap belongs to the FootnoteText paragraph's
+            // w:spacing, which the paragraph carries inline when nonzero.
             sb.AppendLine(".footnote-item {");
-            sb.AppendLine("    margin-bottom: 4pt;");
+            sb.AppendLine("    margin-bottom: 0;");
             sb.AppendLine("}");
 
             // Footnote number - inline with superscript styling
@@ -3599,22 +3606,20 @@ namespace Docxodus
                     .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
                     .ToList();
 
-                // Create a footnote item div with data attribute for lookup
+                // Create a footnote item div with data attribute for lookup. The paginated note
+                // area is a print surface: Word and LibreOffice render the bare superscript
+                // number (no "N." label) and no back-reference link, so neither belongs here —
+                // the web-view <ol> section keeps both.
                 var footnoteItem = new XElement(Xhtml.div,
                     new XAttribute("data-footnote-id", footnoteId),
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-number"),
-                        new XText($"{displayNumber}. ")),
+                        new XText(displayNumber)),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
-                        content),
-                    new XText(" "),
-                    new XElement(Xhtml.a,
-                        new XAttribute("href", $"#fn-ref-{footnoteId}"),
-                        new XAttribute("class", "footnote-backref"),
-                        new XText("↩")));
+                        content));
 
                 registry.Add(footnoteItem);
             }

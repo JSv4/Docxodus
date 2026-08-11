@@ -14,7 +14,14 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { REQUIRED_VISUAL_CATEGORIES, VISUAL_PARITY_CORPUS, type VisualCorpusEntry } from './visual-parity/corpus.js';
+import {
+  GATING_DISPOSITION_KINDS,
+  REQUIRED_VISUAL_CATEGORIES,
+  VISUAL_DISPOSITION_KINDS,
+  VISUAL_PARITY_CORPUS,
+  type VisualCorpusEntry,
+  type VisualDisposition,
+} from './visual-parity/corpus.js';
 import { compareImages, VISUAL_THRESHOLDS, type PageMetrics, type VisualSeverity } from './visual-parity/metrics.js';
 import { decodePng, encodePng } from './visual-parity/png.js';
 
@@ -36,12 +43,24 @@ interface CaseResult {
   path: string;
   categories: string[];
   rationale: string;
+  disposition: VisualDisposition;
   docxodusPages: number;
   libreofficePages: number;
   pageCountDelta: number;
   severity: VisualSeverity;
   pages: PageResult[];
   error?: string;
+}
+
+/**
+ * A severe result gates a strict run only when its attribution says the renderer owns it:
+ * an established renderer bug, an untriaged discrepancy, or a case that failed to convert
+ * at all. Environment deltas and documented LibreOffice deviations are tracked but do not
+ * fail the gate — that separation is the point of the disposition field.
+ */
+function gatesStrictRun(result: CaseResult): boolean {
+  if (result.severity !== 'severe') return false;
+  return result.error !== undefined || GATING_DISPOSITION_KINDS.includes(result.disposition.kind);
 }
 
 function commandVersion(command: string, args: string[]): string {
@@ -60,6 +79,12 @@ function assertTrackedCorpus(entries: VisualCorpusEntry[]): void {
   if (missing.length) throw new Error(`Visual corpus misses required categories: ${missing.join(', ')}`);
 
   for (const entry of entries) {
+    if (!VISUAL_DISPOSITION_KINDS.includes(entry.disposition.kind)) {
+      throw new Error(`${entry.id} has an unknown disposition kind: ${entry.disposition.kind}`);
+    }
+    if (!entry.disposition.rationale.trim()) {
+      throw new Error(`${entry.id} disposition needs a rationale: a disposition is a reviewed claim`);
+    }
     if (isAbsolute(entry.path) || relative(repoRoot, resolve(repoRoot, entry.path)).startsWith('..')) {
       throw new Error(`${entry.id} escapes the repository: ${entry.path}`);
     }
@@ -247,12 +272,18 @@ function worse(a: VisualSeverity, b: VisualSeverity): VisualSeverity {
 function summarizeCases(cases: CaseResult[]) {
   const counts = Object.fromEntries(severityOrder.map(level =>
     [level, cases.filter(result => result.severity === level).length]));
+  const severeByDisposition = Object.fromEntries(VISUAL_DISPOSITION_KINDS.map(kind => [
+    kind,
+    cases.filter(result => result.severity === 'severe' && result.disposition.kind === kind).length,
+  ]));
   return {
     cases: cases.length,
     pagesCompared: cases.reduce((sum, result) => sum + result.pages.length, 0),
     pageCountMismatches: cases.filter(result => result.pageCountDelta !== 0).length,
     errors: cases.filter(result => result.error !== undefined).length,
     severityCounts: counts,
+    severeByDisposition,
+    strictGatingCases: cases.filter(gatesStrictRun).map(result => result.id),
     meanSsim: cases.flatMap(result => result.pages).reduce((sum, page) => sum + page.ssim, 0) /
       Math.max(1, cases.flatMap(result => result.pages).length),
     meanInkF1: cases.flatMap(result => result.pages).reduce((sum, page) => sum + page.tolerantInkF1, 0) /
@@ -339,7 +370,8 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       cases.push(result);
       writeFileSync(join(caseOutput, 'metrics.json'), `${JSON.stringify(result, null, 2)}\n`);
       console.log(`[${caseIndex + 1}/${corpus.length}] ${entry.id}: ` +
-        `${result.docxodusPages}/${result.libreofficePages} pages, ${result.severity}`);
+        `${result.docxodusPages}/${result.libreofficePages} pages, ${result.severity} ` +
+        `(${result.disposition.kind})`);
     } catch (error) {
       const result: CaseResult = {
         ...entry,
@@ -392,7 +424,10 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   console.log(`Visual parity report: ${summaryPath}`);
 
   if (process.env.DOCXODUS_VISUAL_PARITY_STRICT === '1') {
-    expect(cases.filter(result => result.severity === 'severe'),
-      'strict mode rejects severe page-count, geometry, or visual discrepancies').toEqual([]);
+    expect(cases.filter(gatesStrictRun).map(result =>
+      ({ id: result.id, severity: result.severity, disposition: result.disposition.kind, error: result.error })),
+      'strict mode rejects severe cases attributed to the renderer (renderer-bug or unattributed) ' +
+      'and conversion errors; environment and reference-deviation severes are reported, not gated',
+    ).toEqual([]);
   }
 });
