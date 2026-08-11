@@ -11,6 +11,14 @@ export const REQUIRED_VISUAL_CATEGORIES = [
   'footnotes',
   'tracked-changes',
   'page-geometry',
+  // Second-wave categories (issue #400): shapes the first corpus left invisible —
+  // one fixture per category had let a fixed `chart` case hide every unsupported
+  // chart family, and the library's legal-document positioning was uncovered.
+  'image-wrap',
+  'nested-tables',
+  'columns',
+  'endnotes',
+  'contract',
 ] as const;
 
 export type VisualCategory = typeof REQUIRED_VISUAL_CATEGORIES[number];
@@ -208,6 +216,137 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
         'the superscript reference from inflating its line box, which had pushed the body line ' +
         'down the page; the case is now close. The residual is substituted-font rasterization, ' +
         'and older LibreOffice drawing its 25%-column separator instead of the two-inch default.',
+    },
+  },
+  // --- Second wave (issue #400). Entries entered as `unattributed` (which strict-gates) and
+  // --- were triaged from the first measured run — see BASELINE.md's second-wave section for
+  // --- the measurements each disposition below cites.
+  {
+    id: 'chart-stacked',
+    path: 'TestFiles/VP/VP001-Chart-Stacked-Column.docx',
+    categories: ['charts'],
+    rationale: 'Stacked column chart family — HC043\'s clustered fixture regrouped as stacked, ' +
+      'so segment stacking and axis rescaling are exercised rather than cluster offsets.',
+    disposition: {
+      kind: 'unsupported-feature',
+      rationale: 'The cached-data SVG projection covers only clustered bar/column ' +
+        '(WmlToHtmlConverter.Charts.cs gates on grouping "clustered"); a stacked grouping ' +
+        'returns null and the chart extent renders blank — ink F1 0.00000.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/411',
+    },
+  },
+  {
+    id: 'chart-pie',
+    path: 'TestFiles/CU002-Chart-Cached-Data-02.docx',
+    categories: ['charts'],
+    rationale: 'Pie chart family (3-D pie with cached data, chart style/colors parts).',
+    disposition: {
+      kind: 'unsupported-feature',
+      rationale: 'pie3DChart is not projected (only clustered barChart is); the chart extent ' +
+        'renders blank — ink F1 0.00000.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/411',
+    },
+  },
+  {
+    id: 'chart-line',
+    path: 'TestFiles/CU004-Chart-Cached-Data-04.docx',
+    categories: ['charts'],
+    rationale: 'Line chart family (standard grouping, cached data).',
+    disposition: {
+      kind: 'unsupported-feature',
+      rationale: 'lineChart is not projected (only clustered barChart is); the chart extent ' +
+        'renders blank — ink F1 0.00000.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/411',
+    },
+  },
+  {
+    id: 'wrapped-image-square',
+    path: 'TestFiles/DB007-WhitePaper.docx',
+    categories: ['images', 'image-wrap'],
+    rationale: 'Floating picture with square wrap inside a real multi-paragraph document.',
+    disposition: {
+      kind: 'unsupported-feature',
+      rationale: 'Anchored-object text wrap is not implemented: the picture is placed, but ' +
+        'LibreOffice wraps five lines of the paragraph beside it while Docxodus resumes the ' +
+        'text below the image, displacing the page\'s lower half (ink F1 0.394).',
+      reference: 'https://github.com/JSv4/Docxodus/issues/412',
+    },
+  },
+  {
+    id: 'wrapped-image-tight',
+    path: 'TestFiles/VP/VP002-Image-Wrap-Tight.docx',
+    categories: ['images', 'image-wrap'],
+    rationale: 'Floating picture with tight wrap (wrapTight + wrapPolygon) and enough text to wrap.',
+    disposition: {
+      kind: 'unsupported-feature',
+      rationale: 'Same text-wrap gap as wrapped-image-square, on the wrapTight/wrapPolygon ' +
+        'shape: text resumes below the anchored picture instead of flowing around it ' +
+        '(ink F1 0.512).',
+      reference: 'https://github.com/JSv4/Docxodus/issues/412',
+    },
+  },
+  {
+    id: 'nested-table',
+    path: 'TestFiles/WC/WC043-Nested-Table.docx',
+    categories: ['tables', 'nested-tables'],
+    rationale: 'A table nested inside another table\'s cell — border collapse and width inheritance.',
+    disposition: {
+      kind: 'reference-deviation',
+      rationale: 'Both engines nest the table correctly and start it at the same margin row (96). ' +
+        'The outer ink band is 96–163 in Docxodus vs 96–152 in LibreOffice, and the ~11 px is the ' +
+        'document default `w:spacing w:after="160"` (10.7 px) on the "Before." paragraph that ' +
+        'precedes the nested table: Docxodus paints the declared spacing, LibreOffice suppresses ' +
+        'it. Nothing in the OOXML licenses the suppression; Word-behavior evidence for this exact ' +
+        'shape is the open question, as with the `numbered-lists` margin history.',
+    },
+  },
+  {
+    id: 'two-column-section',
+    path: 'TestFiles/VP/VP003-Two-Column-Section.docx',
+    categories: ['columns', 'page-geometry'],
+    rationale: 'Single-column title section followed by a continuous two-column (`w:cols`) section.',
+    disposition: {
+      kind: 'renderer-bug',
+      rationale: 'Two renderer-owned failures: the `w:type="continuous"` section start is ' +
+        'rendered as a page break (2/1 pages — LibreOffice keeps title and body on one page), ' +
+        'and `w:cols w:num="2"` is ignored entirely (the body renders as one full-width column, ' +
+        'ink F1 0.072). General multi-section support is fine (multi-section is close at 6/6); ' +
+        'it is specifically the continuous start type and column geometry.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/413',
+    },
+  },
+  {
+    id: 'endnote',
+    path: 'TestFiles/WC/WC036-Endnote-With-Table-Before.docx',
+    categories: ['endnotes'],
+    rationale: 'Endnote reference, end-of-document note placement, and a table inside the note.',
+    disposition: {
+      kind: 'renderer-bug',
+      rationale: 'The converter emits the endnotes section (docx2html output contains ' +
+        'class="endnotes" and the note\'s table), but pagination.ts has footnote handling only ' +
+        'and the section never reaches a page; the citation marker also renders decimal "1" ' +
+        'where Word\'s default endnote numbering is lowercase roman ("i").',
+      reference: 'https://github.com/JSv4/Docxodus/issues/414',
+    },
+  },
+  {
+    id: 'legal-contract',
+    path: 'TestFiles/VP/VP004-Legal-Contract.docx',
+    categories: ['contract', 'lists', 'fields', 'text'],
+    rationale: 'Realistic services agreement: cached TOC with hyperlink entries and PAGEREF ' +
+      'fields, multilevel heading numbering bound to Heading1/Heading2, (a)/(i) sub-clause ' +
+      'lists, cached REF cross-references, and a borderless signature table — the heavy-' +
+      'numbering legal shape the library\'s positioning makes central.',
+    disposition: {
+      kind: 'renderer-bug',
+      rationale: 'Dominant measured residual: the list-number suffix tab advances to the next ' +
+        'default tab stop instead of the declared text indent — the (a) marker lands at 145 px ' +
+        'in both engines, but the following text starts at 193 px (the next 720-twip default ' +
+        'stop) in Docxodus vs 169 px in LibreOffice, where the declared `w:ind w:left="1080"` ' +
+        'is 168 px — ~25 px right on every numbered clause. Secondary residuals: LibreOffice ' +
+        'drops heading space-before at the top of a page where Docxodus paints the declared ' +
+        'value, and the cached TOC carries the recorded issue-#397 hyperlink-style deviation.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/415',
     },
   },
   {
