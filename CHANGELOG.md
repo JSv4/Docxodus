@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Visual-parity font-substitution contract** (issue #379,
+  `npm/tests/visual-parity/fonts.conf` + `font-contract.ts`): font policy for the
+  LibreOffice benchmark is now a shared contract instead of a host observation.
+  `fonts.conf` pins each declared Office family to a license-safe metric-compatible
+  substitute (Calibri/Calibri Light → Carlito, Cambria → Caladea, Times New
+  Roman/Arial/Courier New → Liberation), and BOTH renderers load it via
+  `FONTCONFIG_FILE` — LibreOffice per subprocess, Chromium at browser launch
+  (scoped to the benchmark opt-in in `playwright.config.ts`, so ordinary specs and
+  committed snapshots keep host fonts). Enforcement is layered: an fc-match
+  assertion fails the run naming the package to install, an in-browser
+  canvas-width check catches a browser launched without the contract, and a
+  cross-renderer wrapping probe (one generated paragraph per family; line counts
+  must match) detects drift the other layers can't — negatively validated, since
+  Calibri Light wraps differently without the contract on a stock host. Every
+  `summary.json` records the resolved family/file/version set and the contract
+  file's SHA-256, so baseline deltas trace to the renderer or a declared contract
+  change, never silent host-font drift. On the corpus: nine cases byte-identical,
+  `tracked-deletion` improved (the shared Calibri Light pinning succeeds where the
+  rejected renderer-only fallback failed), `fields-and-tabs` now measures its
+  honest, lower score.
 - **Visual-parity attribution dispositions** (`npm/tests/visual-parity/corpus.ts`):
   every benchmark corpus case now carries a reviewed `disposition` — `renderer-bug`,
   `environment`, `reference-deviation`, `unsupported-feature`, or `unattributed` —
