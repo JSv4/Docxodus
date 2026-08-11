@@ -171,7 +171,7 @@ public class IrAlignerAdversarialTests
 
     [Trait("Category", "Perf")]
     [Fact]
-    public void Scale_guard_500_vs_2000_cpu_ratio_within_12x()
+    public void Scale_guard_1000_vs_4000_cpu_ratio_within_12x()
     {
         // Both inputs are the near-identical fixture (distinct clauses) self-paired with ONE edit, so
         // every block anchors uniquely and the only gap is a single 1-block Modified gap — i.e. NO large
@@ -184,17 +184,25 @@ public class IrAlignerAdversarialTests
         // estimate of the true algorithmic one, and makes a single noisy round unable to fail the test.
         // The guard keeps its teeth: a real O(n²) regression reads ~16x in EVERY round, so all three
         // have to exceed the limit before this fails. Rounds stop as soon as one comes in under.
+        //
+        // Sizes are 1000/4000 (was 500/2000): at 500 paragraphs the baseline sample sits at ~2-3 ms,
+        // where the independent per-size minimum is biased — the small input reaches its ideal sample
+        // far more often than the cache-pressured large one, inflating the ratio. CI tripped the 12x
+        // guard three times in a row on unchanged aligner code (12.20x, 12.29x, 15.37x best-of-rounds)
+        // with baselines of 2.28-2.97 ms. Quadrupling both sizes keeps the 4x scale and the limit's
+        // meaning while making the denominator large enough that scheduler noise stops deciding the
+        // verdict.
         const double limit = 12.0;
         const int rounds = 3;
 
         double bestRatio = double.MaxValue, bestSmall = 0, bestLarge = 0;
         for (int round = 0; round < rounds; round++)
         {
-            double small = BestSampleCpuMs(500);
-            double large = BestSampleCpuMs(2000);
+            double small = BestSampleCpuMs(1000);
+            double large = BestSampleCpuMs(4000);
             double ratio = large / Math.Max(small, 0.0001);
-            _out.WriteLine($"Scale guard CPU round {round + 1}: 500-para = {small:F2} ms, " +
-                $"2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
+            _out.WriteLine($"Scale guard CPU round {round + 1}: 1000-para = {small:F2} ms, " +
+                $"4000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
 
             if (ratio < bestRatio)
                 (bestRatio, bestSmall, bestLarge) = (ratio, small, large);
@@ -204,7 +212,7 @@ public class IrAlignerAdversarialTests
 
         Assert.True(bestRatio <= limit,
             $"Align CPU-time ratio {bestRatio:F2}x for 4x input exceeds the {limit:F0}x anti-O(n²) guard " +
-            $"in every one of {rounds} rounds (best round: 500={bestSmall:F2}ms, 2000={bestLarge:F2}ms).");
+            $"in every one of {rounds} rounds (best round: 1000={bestSmall:F2}ms, 4000={bestLarge:F2}ms).");
     }
 
     /// <summary>
