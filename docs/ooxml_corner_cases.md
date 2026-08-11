@@ -13,7 +13,10 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
 4. [Paragraph Layout](#paragraph-layout)
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
-5. [Contributing](#contributing)
+   - [LibreOffice ignores the `Hyperlink` character style on TOC field results](#libreoffice-ignores-the-hyperlink-character-style-on-toc-field-results)
+5. [Theme Colors](#theme-colors)
+   - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
+6. [Contributing](#contributing)
 
 ---
 
@@ -1240,6 +1243,150 @@ PR #372 introduced the native-line-box model but enabled it only for *empty* par
 which is what pagination parity needed at the time; populated paragraphs kept the percentage
 fallback. Issues #396 (DrawingML textbox auto-fit height) and #397 (TOC line height) were both
 traced to that remaining fallback.
+
+### LibreOffice ignores the `Hyperlink` character style on TOC field results
+
+#### Symptom
+
+A generated table of contents renders blue and underlined in Docxodus (and in Word) but plain black
+in LibreOffice, making a pixel comparison of any TOC document look like a Docxodus colour bug.
+
+#### Minimal XML reproducer
+
+```xml
+<w:hyperlink w:anchor="_Toc425251205" w:history="1">
+  <w:r>
+    <w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr>
+    <w:t>The first heading</w:t>
+  </w:r>
+</w:hyperlink>
+```
+
+with, in `styles.xml`:
+
+```xml
+<w:style w:type="character" w:styleId="Hyperlink">
+  <w:name w:val="Hyperlink"/><w:basedOn w:val="DefaultParagraphFont"/>
+  <w:rPr><w:color w:val="0563C1" w:themeColor="hyperlink"/><w:u w:val="single"/></w:rPr>
+</w:style>
+```
+
+#### The corner case
+
+`w:hyperlink` is a *link*, not a style — nothing about it implies an appearance. The appearance
+comes from the run's explicit `w:rStyle w:val="Hyperlink"` reference, and the referenced character
+style declares the colour and the underline. Word writes exactly this when it builds a TOC with the
+`\h` switch, which is why "my table of contents came out blue and underlined" is such a common Word
+question.
+
+Measured over the TOC entry rows of `HC022-Table-Of-Contents.docx` at 96 DPI:
+
+| Renderer | Dominant entry-text colour |
+|---|---|
+| Word | `Hyperlink` style applied (blue, underlined) |
+| Docxodus | `#0563C1` — the declared value, byte for byte |
+| LibreOffice | `#000000` — the character style is dropped |
+
+#### Analysis
+
+LibreOffice's writer import appears to treat a TOC field result as generated content it re-styles
+itself, discarding the character style the run references. The direction of the deviation is
+decisive: Docxodus emits the value the file declares, so no renderer change is warranted. The
+visual-parity corpus records `fields-and-tabs` as `reference-deviation` on this evidence.
+
+#### Relevant code
+
+- `Docxodus/WmlToHtmlConverter.cs` — character-style resolution emits `span.docx-Hyperlink` with
+  the declared `color`/`text-decoration`.
+
+#### Tests
+
+- `npm/tests/toc-line-geometry.spec.ts` — asserts a `w:rStyle`-carrying entry gets the declared
+  colour and underline, AND that an otherwise identical entry *without* `w:rStyle` gets neither.
+  The second half is what proves the renderer reads the style rather than decorating every
+  hyperlink; without it, "we match Word" would be indistinguishable from a lucky default.
+
+#### A trap when reducing this to a generated document
+
+A programmatically built package needs a **`DocumentSettingsPart`** for character-style resolution
+to run at all. Without `word/settings.xml`, the converter still emits the style's CSS *class* on the
+run but generates an **empty rule** for it, so `w:rStyle` silently loses every declared property and
+the reduced case appears to reproduce the LibreOffice behaviour. This is the same requirement
+CLAUDE.md notes for programmatic .NET test documents.
+
+## Theme Colors
+
+### `w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority
+
+#### Symptom
+
+None, in any file Word wrote — which is exactly what makes it worth documenting. Word rewrites the
+cached literal whenever it applies a theme, so the two always agree and a renderer that reads the
+wrong one is indistinguishable from a correct one. The divergence only surfaces in a document whose
+theme was replaced without the caches being rewritten (a template swap, a programmatic edit, or a
+producer other than Word).
+
+#### Minimal XML reproducer
+
+A table style declaring the same accent colour twice — once as a fill, once as a border — with a
+deliberately stale cache on both:
+
+```xml
+<w:tblBorders>
+  <w:top w:val="single" w:sz="4" w:color="0000FF" w:themeColor="accent5" w:themeTint="99"/>
+  <!-- … -->
+</w:tblBorders>
+<w:tblStylePr w:type="firstRow">
+  <w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="FF0000" w:themeFill="accent5"/></w:tcPr>
+</w:tblStylePr>
+```
+
+with `accent5` = `4472C4` in `theme1.xml`. A conforming consumer paints the header `#4472C4` and the
+border `#8EAADB` (accent5 at tint `0x99`), ignoring both stale literals.
+
+#### The corner case
+
+ECMA-376 treats the theme reference as authoritative and the `w:color`/`w:fill` attribute as the
+last computed value, retained so a consumer that cannot resolve themes still has something to draw.
+Word's tint formula is `value × tint + 255 × (1 − tint)`, floored — `4472C4` at tint `0x99` (153/255)
+gives `8EAADB`, and at tint `0x33` (51/255) gives `D9E2F3`, which is exactly what a real file's cache
+contains.
+
+Docxodus resolved this correctly for run colour and for shading, but **border colour read the
+literal**, so one table style could derive the same accent colour from two different sources.
+Fixed; the two paths now agree.
+
+#### Renderer comparison
+
+Measured on `HC029-Table-Merged-Cells.docx`, whose colours come entirely from the
+`Grid Table 4 Accent 5` style:
+
+| Renderer | Header fill | Band fill | Border |
+|---|---|---|---|
+| Word | accent5 | accent5 tint 33 | accent5 tint 99 |
+| LibreOffice | `#4472C4` | `#D9E2F3` | `#8EAADB` |
+| Docxodus | `#4472C4` | `#D9E2F3` | `#8EAADB` |
+
+All three agree, because that file's cache is in sync — which is why the tracked benchmark case
+could not decide the question and a generated one had to.
+
+#### A second requirement the reduced case exposed
+
+Word stamps every `w:tr`/`w:tc` with a `w:cnfStyle` listing the conditional formats that apply to
+it. Docxodus applies table-style conditional formatting (`w:tblStylePr` for `firstRow`, `band1Horz`,
+…) from those hints rather than deriving band membership from `w:tblLook` and the row index, so a
+hand-authored table without them renders with **no** header or band shading at all. Real files
+always carry them; a generated regression must emit them too.
+
+#### Relevant code
+
+- `Docxodus/WmlToHtmlConverter.cs` — `ResolveThemeColor` / `ApplyTintShade`, used by
+  `CreateStyleFromShd`, run colour, and (now) `GenerateBorderStyle`.
+
+#### Tests
+
+- `npm/tests/table-style-color.spec.ts` — a generated table whose cached literals disagree with the
+  theme, asserting the theme wins for header fill, band fill, and border colour independently.
 
 ---
 

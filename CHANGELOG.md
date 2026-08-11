@@ -4,34 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-- **Automatic line spacing is a multiple of the font's line box, not of font-size**
-  (issue #396, `Docxodus/WmlToHtmlConverter.cs`): OOXML's `w:lineRule="auto"` gives
-  line spacing in 240ths of a *line*, where a line is the font's own single-line
-  height. It was emitted as `line-height: <n>%`, and CSS percentages resolve against
-  **font-size**, so every line was short by the ratio between the font's natural line
-  box and its em square — about 19% for Calibri/Carlito, on `w:line="259"`, which is
-  Word's own default for documents created since Word 2013. PR #372 had already built
-  the correct model (`line-height: normal` plus `calc(1lh * multiplier)` on the
-  paragraph's inline children, so nothing font-specific is hard-coded) but enabled it
-  only for empty paragraph marks; it now applies to every paragraph, and the dead
-  percentage branch is gone. Measured against LibreOffice at 11pt, the line advance
-  goes from 15.69px to 19.33px, which is LibreOffice's exactly. Visible wherever the
-  laid-out text height *is* a rendered dimension: a `spAutoFit` DrawingML textbox's
-  height error falls from −16.0px to +2.7px, and TOC entries that were displaced by
-  up to 14.7px now land within 0.12px. Also resolves the "content sits 28px lower"
-  reading of the `numbered-lists` case, which was the accumulated error rather than a
-  page-margin disagreement. On the visual-parity corpus: **severe cases 7 → 0**, mean
-  ink F1 0.848523 → 0.981644, and the strict-gating set is now empty.
-- **A superscript or subscript no longer makes its line taller** (issue #396,
-  `GenerateDocumentLayoutCss`): CSS counts a `vertical-align: super` inline box when
-  it sizes the line box, so a paragraph grew merely because it carried a footnote
-  reference — 25.31px instead of 19.42px on the tracked case, pushing every glyph on
-  the line down. Word rides superscripts inside the existing line. `sup, sub {
-  line-height: 0 }` joins the always-emitted document-layout stylesheet as a third
-  Word layout invariant CSS defaults do not match, alongside over-long-word breaking
-  and table max-width. This is the same device the converter already used to keep the
-  compacted pieces of a `w:br` from contributing a line box.
+## [9.8.0] - 2026-08-11
 
 ### Added
 - **Arcade attract screen** (`docs/demo/ascii-arcade.js` `introFrame` +
@@ -156,7 +129,79 @@ All notable changes to this project will be documented in this file.
   `npm/tests/demo-arcade.spec.ts` drives boot, keyboard steering, the
   pause→type→resume loop, and the save round-trip.
 
+### Changed
+- **The `merged-table` visual-parity case is attributed** (issue #399,
+  `npm/tests/visual-parity/corpus.ts`): the corpus's last `unattributed` disposition.
+  The recorded premise — "the whole perceptual delta is fill/border *color*" — is
+  wrong. Both engines paint the identical theme-derived values (`#4472C4` header,
+  `#D9E2F3` bands, `#8EAADB` borders), and the style's cached literals equal those
+  values exactly under Word's tint formula, so there is nothing to disagree about.
+  Horizontal extents match to the pixel; the residual is row **height**, ~1px per row
+  accumulating to ~3px, which large solid fills amplify perceptually — which is how the
+  case holds ink F1 1.00000 while its SSIM sits at 0.96348. That isolates to font
+  line metrics by elimination: no `w:trHeight`, `w:tblCellMar` top/bottom both 0, and
+  `w:line="240"` single spacing, so a row IS one font line box. Moves to `environment`,
+  leaving the corpus with no `unattributed` case — a tidiness result, not a gating one,
+  since strict mode fires only on *severe* cases and this one is `minor`. Also records
+  that Docxodus applies table-style conditional formatting from Word's per-row/per-cell
+  `w:cnfStyle` hints rather than deriving band membership from `w:tblLook`, so a
+  hand-authored table without them renders unshaded.
+- **TOC hyperlink styling attributed to the reference implementation, not the renderer**
+  (issue #397, `npm/tests/toc-line-geometry.spec.ts` + `visual-parity/corpus.ts`):
+  the `fields-and-tabs` benchmark case named two residuals, and they have opposite
+  answers. Entry line-box height was a renderer bug and is fixed (issue #396 —
+  entries were displaced by a growing 7.3/11.0/14.7px and now land within 0.12px of
+  LibreOffice). Hyperlink appearance is not: the entry runs carry
+  `<w:rStyle w:val="Hyperlink"/>` and that character style declares `w:color="0563C1"`
+  with `w:u w:val="single"`. Docxodus paints the declared colour byte for byte;
+  LibreOffice paints the entries black, dropping a style the run explicitly
+  references. `w:hyperlink` is a link, not a style, so the output is **not** changed
+  to match the comparison implementation and the case's disposition moves
+  `renderer-bug` → `reference-deviation`. A generated regression pins entry line
+  geometry and hyperlink appearance **separately**, and — because "we match Word"
+  would otherwise be indistinguishable from decorating every hyperlink by default —
+  includes an otherwise identical entry with no `w:rStyle` that must come out
+  undecorated. Documented in `docs/ooxml_corner_cases.md`.
+
 ### Fixed
+- **Border colour resolves `w:themeColor` instead of its cached literal** (issue #399,
+  `Docxodus/WmlToHtmlConverter.cs`): `w:color` on a border is a *cache* of the last
+  theme resolution, not the authority — when `w:themeColor` is present, the theme
+  entry plus any `w:themeTint`/`w:themeShade` is what the border is. Shading already
+  resolved this way, so a single table style whose fill and border reference the same
+  accent colour derived them from two different sources. For any Word-written file the
+  two agree (Word rewrites the cache when it applies the theme), so no rendered output
+  changes and no benchmark number moves; it changes documents whose theme was swapped
+  without a cache rewrite. Found while reducing the `merged-table` benchmark case,
+  which could not expose it: a generated table that makes cache and theme **disagree**
+  can.
+- **Automatic line spacing is a multiple of the font's line box, not of font-size**
+  (issue #396, `Docxodus/WmlToHtmlConverter.cs`): OOXML's `w:lineRule="auto"` gives
+  line spacing in 240ths of a *line*, where a line is the font's own single-line
+  height. It was emitted as `line-height: <n>%`, and CSS percentages resolve against
+  **font-size**, so every line was short by the ratio between the font's natural line
+  box and its em square — about 19% for Calibri/Carlito, on `w:line="259"`, which is
+  Word's own default for documents created since Word 2013. PR #372 had already built
+  the correct model (`line-height: normal` plus `calc(1lh * multiplier)` on the
+  paragraph's inline children, so nothing font-specific is hard-coded) but enabled it
+  only for empty paragraph marks; it now applies to every paragraph, and the dead
+  percentage branch is gone. Measured against LibreOffice at 11pt, the line advance
+  goes from 15.69px to 19.33px, which is LibreOffice's exactly. Visible wherever the
+  laid-out text height *is* a rendered dimension: a `spAutoFit` DrawingML textbox's
+  height error falls from −16.0px to +2.7px, and TOC entries that were displaced by
+  up to 14.7px now land within 0.12px. Also resolves the "content sits 28px lower"
+  reading of the `numbered-lists` case, which was the accumulated error rather than a
+  page-margin disagreement. On the visual-parity corpus: **severe cases 7 → 0**, mean
+  ink F1 0.848523 → 0.981644, and the strict-gating set is now empty.
+- **A superscript or subscript no longer makes its line taller** (issue #396,
+  `GenerateDocumentLayoutCss`): CSS counts a `vertical-align: super` inline box when
+  it sizes the line box, so a paragraph grew merely because it carried a footnote
+  reference — 25.31px instead of 19.42px on the tracked case, pushing every glyph on
+  the line down. Word rides superscripts inside the existing line. `sup, sub {
+  line-height: 0 }` joins the always-emitted document-layout stylesheet as a third
+  Word layout invariant CSS defaults do not match, alongside over-long-word breaking
+  and table max-width. This is the same device the converter already used to keep the
+  compacted pieces of a `w:br` from contributing a line box.
 - **Paginated footnote area sits on the bottom margin line** (issue #378). Word
   anchors the footnote area to the bottom of the text column — the last note line
   ends ON the bottom margin line, notes stack with no spacing of their own
