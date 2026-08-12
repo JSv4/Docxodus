@@ -9014,11 +9014,11 @@ namespace Docxodus
                         var imgElement2 = imageHandler(imageInfo);
                         if (hyperlinkUri != null)
                         {
-                            return new XElement(XhtmlNoNamespace.a,
+                            return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
                                 new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                                imgElement2);
+                                imgElement2), containerElement);
                         }
-                        return imgElement2;
+                        return ApplyAnchorTextWrap(imgElement2, containerElement);
                     }
 
                     var imageInfo2 = new ImageInfo()
@@ -9034,11 +9034,11 @@ namespace Docxodus
                     var imgElement = imageHandler(imageInfo2);
                     if (hyperlinkUri != null)
                     {
-                        return new XElement(XhtmlNoNamespace.a,
+                        return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
                             new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                            imgElement);
+                            imgElement), containerElement);
                     }
-                    return imgElement;
+                    return ApplyAnchorTextWrap(imgElement, containerElement);
                 }
                 finally
                 {
@@ -9047,6 +9047,84 @@ namespace Docxodus
 #endif
                 }
             }
+        }
+
+        /// <summary>
+        /// Word flows body text around a floating picture whose anchor requests wrapSquare,
+        /// wrapTight, or wrapThrough; without a flow exclusion the picture behaves as an inline
+        /// object and every following line resumes below it. A CSS float is the closest
+        /// flow-level equivalent: it excludes the anchored rect from the line layout of the
+        /// current and following blocks in both continuous and paginated rendering. wrapTight's
+        /// polygon degrades to its bounding box (identical for the rectangular polygons Word
+        /// writes for photos); wrapTopAndBottom and wrapNone keep the existing placement.
+        /// </summary>
+        private static XElement ApplyAnchorTextWrap(XElement imageHtml, XElement drawingContainer)
+        {
+            if (imageHtml == null || drawingContainer == null || drawingContainer.Name != WP.anchor)
+                return imageHtml;
+
+            var wrap = drawingContainer.Elements().FirstOrDefault(e =>
+                e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
+            if (wrap == null)
+                return imageHtml;
+
+            var side = GetAnchorFloatSide(drawingContainer, wrap);
+            if (side == null)
+                return imageHtml;
+
+            // The anchor's dist* attributes are text clearance around the object, which is
+            // exactly what CSS margins are on a float.
+            var style = new Dictionary<string, string> { { "float", side } };
+            AddEmuPadding(style, "margin-top", (long?)drawingContainer.Attribute(NoNamespace.distT));
+            AddEmuPadding(style, "margin-right", (long?)drawingContainer.Attribute(NoNamespace.distR));
+            AddEmuPadding(style, "margin-bottom", (long?)drawingContainer.Attribute(NoNamespace.distB));
+            AddEmuPadding(style, "margin-left", (long?)drawingContainer.Attribute(NoNamespace.distL));
+
+            var wrapper = new XElement(Xhtml.span, imageHtml);
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        /// <summary>
+        /// Picks the edge the floated object hugs. An explicitly one-sided wrapText names where
+        /// the TEXT goes, so the object floats to the opposite edge; otherwise the anchor's own
+        /// horizontal position decides — an alignment token directly, or an offset-placed
+        /// object's center measured against the governing section's column (or page) center.
+        /// A centered object has no float equivalent and keeps its inline placement.
+        /// </summary>
+        private static string GetAnchorFloatSide(XElement anchor, XElement wrap)
+        {
+            var wrapText = (string)wrap.Attribute(NoNamespace.wrapText);
+            if (wrapText == "left")
+                return "right";
+            if (wrapText == "right")
+                return "left";
+
+            var positionH = anchor.Element(WP.positionH);
+            switch (positionH?.Element(WP.align)?.Value)
+            {
+                case "left":
+                case "inside":
+                    return "left";
+                case "right":
+                case "outside":
+                    return "right";
+                case "center":
+                    return null;
+            }
+
+            var offsetEmu = (long?)positionH?.Element(WP.posOffset) ?? 0L;
+            var extentEmu = (long?)anchor.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault() ?? 0L;
+
+            var sectPr = anchor.Annotation<SectionAnnotation>()?.SectionElement;
+            var dims = PageDimensions.FromSectionProperties(sectPr);
+            var referencePt = (string)positionH?.Attribute(NoNamespace.relativeFrom) == "page"
+                ? dims.PageWidthPt
+                : dims.ContentWidthPt;
+
+            var objectCenterEmu = offsetEmu + extentEmu / 2.0;
+            return objectCenterEmu <= referencePt * 12700.0 / 2.0 ? "left" : "right";
         }
 
         private static XElement ProcessPictureOrObject(WordprocessingDocument wordDoc,

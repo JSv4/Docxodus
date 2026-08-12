@@ -1288,6 +1288,40 @@ public class HtmlConversionOpsTests
         Assert.Contains("position: absolute", html);
     }
 
+    // A floating picture anchored with wp:wrapSquare must exclude body text from its rect
+    // (issue #412): Word wraps the paragraph's lines beside the picture, while an inline
+    // <img> pushes every following line below it. The picture in DB007 is offset-placed
+    // against the column with its center past the column midpoint, so it floats right; the
+    // anchor's 114300 EMU distL/distR become 9pt clearance margins.
+    [Fact]
+    public void HCO092_AnchoredPictureWithSquareWrap_FloatsRight()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "DB007-WhitePaper.docx"));
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("float: right", html);
+        Assert.Contains("margin-left: 9pt", html);
+        Assert.Contains("margin-right: 9pt", html);
+    }
+
+    // wrapTight's polygon degrades to its bounding box. This picture sits at column offset 0,
+    // so its center is left of the column midpoint and it floats left.
+    [Fact]
+    public void HCO093_AnchoredPictureWithTightWrap_FloatsLeft()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "VP", "VP002-Image-Wrap-Tight.docx"));
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("float: left", html);
+        Assert.DoesNotContain("float: right", html);
+    }
+
     // Some legacy Word documents keep the modern DrawingML text-box body in a related XML
     // part. The synthetic package deliberately uses a distinct VML fallback so this verifies
     // that the supported choice gains its external body without rendering both copies.
