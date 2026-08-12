@@ -437,6 +437,73 @@ public class HtmlConversionOpsTests
         Assert.Contains(bars, bar => (string?)bar.Attribute("fill") == "#ED7D31");
     }
 
+    private static XElement ConvertFixtureChartSvg(string fixture)
+    {
+        var bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            Path.Combine(fixture.Split('/'))));
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+        return root.Descendants().Single(element => element.Name.LocalName == "svg");
+    }
+
+    [Fact]
+    public void HCO088_CachedStackedColumnChart_RendersOneStackPerCategory()
+    {
+        var svg = ConvertFixtureChartSvg("VP/VP001-Chart-Stacked-Column.docx");
+        var bars = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-bar")
+            .ToList();
+
+        Assert.Equal("column-stacked", (string?)svg.Attribute("data-chart-type"));
+        // Three series across four categories, cached fully: 12 stacked segments.
+        Assert.Equal(12, bars.Count);
+        // Segments of one category stack on a single x, one on top of another.
+        var firstCategory = bars
+            .Where(bar => (string?)bar.Attribute("data-chart-category") == "0")
+            .ToList();
+        Assert.Equal(3, firstCategory.Count);
+        Assert.Single(firstCategory.Select(bar => (string?)bar.Attribute("x")).Distinct());
+        Assert.Equal(3, firstCategory.Select(bar => (string?)bar.Attribute("y")).Distinct().Count());
+        Assert.Contains("Series 1", svg.Value);
+    }
+
+    [Fact]
+    public void HCO089_CachedPie3DChart_RendersSlicesWithPerPointColors()
+    {
+        var svg = ConvertFixtureChartSvg("CU002-Chart-Cached-Data-02.docx");
+        var slices = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-slice")
+            .ToList();
+
+        Assert.Equal("pie", (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal(4, slices.Count);
+        // Each data point carries its own accent color, so all slices differ.
+        Assert.Equal(4, slices.Select(slice => (string?)slice.Attribute("fill")).Distinct().Count());
+        Assert.Equal("320", (string?)slices[0].Attribute("data-chart-value"));
+        // The pie legend lists categories, not the single series.
+        Assert.Contains("Cars", svg.Value);
+        Assert.Contains("Boats", svg.Value);
+    }
+
+    [Fact]
+    public void HCO090_CachedLineChart_RendersOnePolylinePerSeriesWithDateCategories()
+    {
+        var svg = ConvertFixtureChartSvg("CU004-Chart-Cached-Data-04.docx");
+        var lines = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-line")
+            .ToList();
+
+        Assert.Equal("line", (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal(3, lines.Count);
+        Assert.All(lines, line => Assert.Equal(20,
+            ((string?)line.Attribute("points"))!.Split(' ').Length));
+        Assert.Equal(3, lines.Select(line => (string?)line.Attribute("stroke")).Distinct().Count());
+        // The date axis caches serial day numbers (41518 = 9/1/2013); labels render as dates.
+        Assert.Contains("9/1/2013", svg.Value);
+        Assert.Contains("Car", svg.Value);
+    }
+
     [Fact]
     public void HCO020_BulletListMarker_RendersUnicodeBullet()
     {
