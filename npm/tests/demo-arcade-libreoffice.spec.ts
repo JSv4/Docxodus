@@ -11,7 +11,9 @@ import { pathToFileURL } from 'node:url';
 test.skip(process.env.DOCXODUS_LO_PARITY !== '1',
   'set DOCXODUS_LO_PARITY=1 on a host with libreoffice and pdftoppm');
 
-const OVERRIDE = 'engine=./embed.bundle.js';
+// intro=0 skips the attract screen: these specs test the cartridges, and the
+// intro has its own dedicated coverage.
+const OVERRIDE = 'engine=./embed.bundle.js&intro=0';
 const backgrounds = {
   quest: [14, 28, 48],
   dungeon: [10, 15, 26],

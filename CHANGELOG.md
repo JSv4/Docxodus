@@ -39,6 +39,17 @@ All notable changes to this project will be documented in this file.
 ## [9.8.0] - 2026-08-11
 
 ### Added
+- **Arcade attract screen** (`docs/demo/ascii-arcade.js` `introFrame` +
+  `startArcade({ intro })`): the Arcade now opens on a title card — "OS LEGAL
+  presents DOCXODUS", drawn with an original 7×5 ASCII block font over a
+  twinkling starfield, a typewriter credit line, a left-to-right sweep reveal,
+  and a blinking "PRESS SPACE TO START" prompt — rendered on the SAME canvas
+  paragraph as the games through the per-frame `raw.replaceXml` +
+  `editor.refresh()` loop, so the title screen is a Word paragraph too (pause
+  it, put your caret in it). Space (or picking a cartridge, or Restart) drops
+  the coin into the selected cartridge; `?intro=0` skips it, which the
+  cartridge specs use; a dedicated spec covers the reveal, the incremental
+  frame path, and the coin drop.
 - **A real Doom-format level is playable inside a Word document** — Arcade
   cartridge 3, *Freedoom E1M1* (`docs/demo/freedoom-e1m1.js` +
   `docs/demo/tools/wad2cart.mjs`; demo content only, no library changes). The
@@ -124,6 +135,7 @@ All notable changes to this project will be documented in this file.
   of failing on every severe case regardless of whose difference it is. New corpus
   entries default to `unattributed`, which gates, so an untriaged severe case cannot
   hide.
+
 - **THE DOCX ARCADE** (`docs/demo/arcade.html` + `docs/demo/ascii-arcade.js`):
   playable video games whose screen is a live Word paragraph inside the shipped
   ribbon editor — the interactive sequel to the DOCX Observatory, and pure demo

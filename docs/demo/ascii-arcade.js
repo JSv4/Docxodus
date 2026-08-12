@@ -1196,6 +1196,97 @@ export function seedArcade(session) {
   return { titleAnchor, canvasAnchor, captionAnchor, openTag };
 }
 
+// ─── The attract screen ───────────────────────────────────────────────
+// "OS LEGAL presents DOCXODUS" — the arcade's title card, drawn on the SAME
+// canvas paragraph as the games (starfield, typewriter credit, a left-to-right
+// sweep reveal of the block title, blinking coin prompt). Pure function of t,
+// like every Observatory scene: replays identically, and pausing mid-reveal
+// leaves an ordinary editable paragraph with half a title in it.
+
+// Original 7×5 block font for the six letters the title needs.
+const INTRO_FONT = {
+  D: ['######.', '##...##', '##...##', '##...##', '######.'],
+  O: ['.#####.', '##...##', '##...##', '##...##', '.#####.'],
+  C: ['.######', '##.....', '##.....', '##.....', '.######'],
+  X: ['##...##', '.##.##.', '..###..', '.##.##.', '##...##'],
+  U: ['##...##', '##...##', '##...##', '##...##', '.#####.'],
+  S: ['.######', '##.....', '.#####.', '.....##', '######.'],
+};
+const INTRO_TITLE = 'DOCXODUS';
+const INTRO_LETTER_W = 7, INTRO_LETTER_GAP = 2;
+const INTRO_TITLE_W =
+  INTRO_TITLE.length * INTRO_LETTER_W + (INTRO_TITLE.length - 1) * INTRO_LETTER_GAP;
+
+const centerX = (text) => Math.floor((COLS - text.length) / 2);
+
+/** One attract frame at t seconds. Exported for the Playwright spec and the
+ *  headless logic checks. */
+export function introFrame(t) {
+  const g = makeGrid();
+
+  // Starfield: sparse, twinkling on a deterministic schedule.
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const r = hash2(x, y * 3 + 7);
+      if (r < 0.985) continue;
+      const phase = (r * 900 + t * 0.9) % 3;
+      g.chars[y][x] = phase < 1.6 ? '·' : '+';
+      g.colors[y][x] = phase < 1.6 ? '33465B' : '9CB3C9';
+    }
+  }
+
+  // Credit line, typed out one character at a time.
+  const credit = 'OS LEGAL  PRESENTS';
+  const typed = Math.max(0, Math.floor((t - 0.4) / 0.07));
+  if (typed > 0) {
+    writeText(g, 5, centerX(credit), credit.slice(0, typed), 'FFD166');
+    if (typed <= credit.length) {
+      // Typing cursor rides the leading edge, then vanishes.
+      g.chars[5][centerX(credit) + Math.min(typed, credit.length - 1) + 1] = '_';
+      g.colors[5][centerX(credit) + Math.min(typed, credit.length - 1) + 1] = 'FFD166';
+    }
+  }
+
+  // The block title sweeps in left→right; the sweep front glows white for a
+  // few columns before settling into teal.
+  const x0 = Math.floor((COLS - INTRO_TITLE_W) / 2);
+  const reveal = (t - 1.7) / 2.2; // 0..1 across the title's width
+  if (reveal > 0) {
+    const front = reveal * (INTRO_TITLE_W + 4);
+    for (let li = 0; li < INTRO_TITLE.length; li++) {
+      const glyph = INTRO_FONT[INTRO_TITLE[li]];
+      const lx = x0 + li * (INTRO_LETTER_W + INTRO_LETTER_GAP);
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col < INTRO_LETTER_W; col++) {
+          if (glyph[row][col] !== '#') continue;
+          const rel = lx + col - x0;
+          if (rel > front) continue;
+          const edge = front - rel;
+          g.chars[9 + row][lx + col] = edge < 1.5 ? '░' : edge < 3 ? '▓' : '█';
+          g.colors[9 + row][lx + col] = edge < 3 ? 'F3FBFF' : '5EEAD4';
+        }
+      }
+    }
+  }
+
+  if (t > 4.1) {
+    const sub = '·  T H E   D O C X   A R C A D E  ·';
+    writeText(g, 16, centerX(sub), sub, '9CB3C9');
+  }
+  if (t > 4.5) {
+    const foot = 'a video game running inside a live Word document';
+    writeText(g, 18, centerX(foot), foot, '46556B');
+    const foot2 = 'every frame is one paragraph · pause anytime and edit it';
+    writeText(g, 19, centerX(foot2), foot2, '46556B');
+  }
+  if (t > 4.9 && (t % 1.1) < 0.75) {
+    const prompt = '▶  PRESS  SPACE  TO  START  ◀';
+    writeText(g, 22, centerX(prompt), prompt, 'FFD166');
+  }
+
+  return { grid: g, bg: '0A1020' };
+}
+
 // ─── The editor-hosted driver ─────────────────────────────────────────
 
 /**
@@ -1208,9 +1299,12 @@ export function seedArcade(session) {
  * hands the keyboard back to the game.
  *
  * `ui`: { carts, playpause, restart, pace, stats, hint, pad? } — dock DOM.
- * Returns the controller the host page publishes as `window.__arcade`.
+ * `intro` (default true) opens on the attract screen — the same canvas
+ * paragraph running the title card until Space (or any dock action) drops
+ * the coin. Returns the controller the host page publishes as
+ * `window.__arcade`.
  */
-export function startArcade({ editor, session, ui, cart: startCart }) {
+export function startArcade({ editor, session, ui, cart: startCart, intro = true }) {
   if (typeof editor.refresh !== 'function') {
     throw new Error('This engine predates DocxEditor.refresh() — the Arcade needs docxodus ≥ 9.6.0.');
   }
@@ -1221,6 +1315,8 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
   const carts = [platformerCart(), dungeonCart(), freedoomCart()];
   let cart = carts.find((c) => c.name === startCart) ?? carts[0];
 
+  let mode = intro ? 'intro' : 'game';
+  let introT = 0;
   let playing = false;
   let timer = 0;
   let lastWall = performance.now();
@@ -1237,14 +1333,22 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
   const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
 
   function setCaption() {
+    if (mode === 'intro') {
+      session.replaceText(seeded.captionAnchor,
+        'OS Legal presents **DOCXODUS** — press **Space** to start. ' +
+        'This title card is a Word paragraph too: pause and put your caret in it.');
+      ui.hint.innerHTML =
+        '<b>Space</b> starts the selected cartridge · pick one above · ' +
+        '<b>Esc</b> pauses — even the title screen is just a document';
+      return;
+    }
     session.replaceText(seeded.captionAnchor, cart.caption);
     ui.hint.innerHTML = cart.hint +
       ' · <b>Esc</b> pauses/resumes · <b>Undo</b> rewinds frames · <b>Save</b> ships the frame as .docx';
   }
 
-  function drawFrame() {
-    const { grid, bg } = cart.render();
-    const { xml, runs } = frameXml(openTag, grid, bg);
+  function paintGrid(frame, label) {
+    const { xml, runs } = frameXml(openTag, frame.grid, frame.bg);
     lastRuns = runs;
     const t0 = performance.now();
     const res = session.raw.replaceXml(canvasAnchor, xml);
@@ -1263,10 +1367,29 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
 
     const fb = editor.lastReconcileFallback;
     ui.stats.innerHTML =
-      `<b>${cart.label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+      `<b>${label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
       `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
       `<b>${lastRuns}</b> runs · ` +
       (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+  }
+
+  function drawFrame() {
+    if (mode === 'intro') paintGrid(introFrame(introT), 'attract mode');
+    else paintGrid(cart.render(), cart.label);
+  }
+
+  /** Drop the coin: leave the attract screen and hand the canvas (and the
+   *  keyboard) to the selected cartridge. */
+  function startGame() {
+    if (mode !== 'intro') return;
+    mode = 'game';
+    setCaption();
+    if (playing) {
+      lastWall = performance.now();
+    } else {
+      drawFrame();
+      setPlaying(true);
+    }
   }
 
   function loop() {
@@ -1275,9 +1398,20 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
     const dt = Math.min(0.2, (started - lastWall) / 1000);
     lastWall = started;
     try {
-      cart.tick(dt, input);
-      input.endTick();
-      drawFrame();
+      if (mode === 'intro') {
+        introT += dt;
+        const start = input.took('Space');
+        input.endTick();
+        if (start) {
+          startGame(); // startGame paints the cartridge's own first frame
+        } else {
+          drawFrame();
+        }
+      } else {
+        cart.tick(dt, input);
+        input.endTick();
+        drawFrame();
+      }
     } catch (e) {
       playing = false;
       ui.stats.textContent = 'halted: ' + e.message;
@@ -1303,7 +1437,9 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
     let tag = xml.slice(0, gt + 1);
     if (tag.endsWith('/>')) tag = tag.slice(0, -2) + '>';
     openTag = tag;
-    cart.syncFromRows(rowsFromXml(xml));
+    // The attract screen has no game world to parse back — whatever was typed
+    // into the title card simply stays until the next frame repaints it.
+    if (mode !== 'intro') cart.syncFromRows(rowsFromXml(xml));
     // Sweep paragraphs an Enter-split stranded between screen and caption, so
     // pausing to edit can never slowly litter the document.
     const ids = session.findByKind('p', 'body').map((r) => r.id);
@@ -1346,6 +1482,11 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
     cart = next;
     cart.reset();
     cartBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
+    if (mode === 'intro') {
+      // Picking a cartridge on the title screen IS the coin drop.
+      startGame();
+      return;
+    }
     setCaption();
     if (!playing) {
       // Paint the new cartridge's own frame BEFORE resuming, so the resume
@@ -1358,6 +1499,7 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
   ui.playpause.addEventListener('click', () => setPlaying(!playing));
   ui.restart.addEventListener('click', () => {
     cart.reset();
+    if (mode === 'intro') { startGame(); return; }
     if (!playing) { drawFrame(); setPlaying(true); }
   });
   ui.pace.addEventListener('change', () => { interval = Number(ui.pace.value); });
@@ -1400,6 +1542,8 @@ export function startArcade({ editor, session, ui, cart: startCart }) {
     setCart,
     game: () => cart.state(),
     playing: () => playing,
+    introActive: () => mode === 'intro',
+    start: startGame,
     pause: () => setPlaying(false),
     resume: () => setPlaying(true),
     input,
