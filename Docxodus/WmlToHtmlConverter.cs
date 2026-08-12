@@ -5279,6 +5279,30 @@ namespace Docxodus
                         div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                     }
 
+                    // The section's start type (w:type). The paginated view needs it to know a
+                    // "continuous" section keeps filling the page its predecessor started
+                    // instead of opening a fresh one; absent means Word's default, nextPage.
+                    var sectionType = (string)sectAnnotation?.SectionElement.Element(W.type)?.Attribute(W.val);
+                    if (sectionType != null)
+                        div.Add(new XAttribute("data-section-type", sectionType));
+
+                    // The section's column geometry (w:cols). Word lays a multi-column section
+                    // out as N equal columns separated by w:space; CSS multicol reproduces that,
+                    // so the count/gap are stamped for the paginator and the same geometry is
+                    // applied inline for the continuous view. (Unequal explicit w:col widths
+                    // collapse to the equal-column approximation.)
+                    var cols = sectAnnotation?.SectionElement.Element(W.cols);
+                    var colsNum = (int?)cols?.Attribute(W.num) ?? 1;
+                    if (colsNum > 1)
+                    {
+                        var colGapPt = ((int?)cols.Attribute(W.space) ?? 720) / 20m;
+                        var colGap = colGapPt.ToString("F1", NumberFormatInfo.InvariantInfo);
+                        div.Add(new XAttribute("data-cols", colsNum));
+                        div.Add(new XAttribute("data-col-gap", colGap));
+                        div.Add(new XAttribute("style",
+                            $"column-count: {colsNum}; column-gap: {colGap}pt;"));
+                    }
+
                     // The section's page numbering (w:pgNumType), which is what an unswitched
                     // PAGE field renders through. Emitted per attribute: absent means "continue
                     // the previous section" / "Word's default format", not a value.

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Continuous section breaks no longer render as page breaks, and `w:cols`
+  multi-column sections lay out as columns** (issue #413) — the converter now
+  stamps the section wrapper with its start type (`data-section-type`, from
+  `w:type`) and column geometry (`data-cols`/`data-col-gap`, from `w:cols`,
+  with the same geometry applied inline as CSS `column-count`/`column-gap` for
+  the continuous view). The paginator groups a `w:type="continuous"` section
+  into the page run its predecessor started — provided the page box (size and
+  margins) is unchanged, Word's own condition for honoring the break — instead
+  of always opening a fresh page, and flows a multi-column section as balanced
+  CSS-multicol container blocks that split across pages at block boundaries.
+  Unequal explicit `w:col` widths collapse to the equal-column approximation,
+  and pages of a merged run carry the leading section's headers/footers and
+  page numbering.
 - **Body text now wraps around floating anchored pictures** (issue #412) —
   `WmlToHtmlConverter` renders a picture anchored with `wp:wrapSquare`,
   `wp:wrapTight`, or `wp:wrapThrough` as a CSS float instead of an inline

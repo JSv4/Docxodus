@@ -4169,6 +4169,41 @@ namespace OxPt
         }
 
         /// <summary>
+        /// A section's start type and column geometry are properties of the document, so the
+        /// wrapper carries them in every render mode: the paginator needs w:type="continuous"
+        /// to keep filling the current page instead of opening a fresh one, and w:cols to lay
+        /// the section out as CSS columns (which the continuous view gets inline). Issue #413.
+        /// </summary>
+        [Fact]
+        public void HC062_ContinuousSectionAndColumns_StampedOnWrapper()
+        {
+            var sourceDocx = new FileInfo("../../../../TestFiles/VP/VP003-Two-Column-Section.docx");
+            var wmlDocument = new WmlDocument(sourceDocx.FullName);
+            using var streamDoc = new OpenXmlMemoryStreamDocument(wmlDocument);
+            using var wDoc = streamDoc.GetWordprocessingDocument();
+
+            var html = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings());
+
+            var sectionDivs = html
+                .Descendants()
+                .Where(e => e.Attribute("data-section-index") != null)
+                .OrderBy(e => (int)e.Attribute("data-section-index"))
+                .ToList();
+            Assert.Equal(2, sectionDivs.Count);
+
+            // The single-column title section is neither typed continuous nor columned.
+            Assert.Null(sectionDivs[0].Attribute("data-section-type"));
+            Assert.Null(sectionDivs[0].Attribute("data-cols"));
+
+            // The trailing section is continuous and two-column with a 720-twip (36pt) gap,
+            // stamped for the paginator and applied inline for the continuous view.
+            Assert.Equal("continuous", (string)sectionDivs[1].Attribute("data-section-type"));
+            Assert.Equal("2", (string)sectionDivs[1].Attribute("data-cols"));
+            Assert.Equal("36.0", (string)sectionDivs[1].Attribute("data-col-gap"));
+            Assert.Equal("column-count: 2; column-gap: 36.0pt;", (string)sectionDivs[1].Attribute("style"));
+        }
+
+        /// <summary>
         /// Word's fixed table layout makes the authored column widths binding: content wraps
         /// inside a column instead of widening it. Map it to CSS's fixed layout, with the grid
         /// (not the first row) supplying the widths, exactly as Word records them.
