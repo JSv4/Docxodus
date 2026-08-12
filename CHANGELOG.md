@@ -7,21 +7,26 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **List-number suffix tabs now advance to the paragraph's text indent instead
   of overshooting to the next default tab stop** (issue #415) — the
-  unknown-font text-width estimation charged a flat 0.6 em per character,
+  unknown-font text-width estimation charges a flat 0.6 em per character,
   roughly double the real width of narrow-glyph list markers like `(a)`/`(iii)`
   (Times New Roman `(a)` at 12 pt is ~0.94 em, not 1.8 em). The overestimated
   marker pushed the computed pen position past the paragraph's text-indent tab
   stop, so the marker's suffix tab resolved to the next `w:defaultTabStop`
   multiple and every numbered clause body started ~0.25" too far right — in
   exactly the hanging-indent legal-list shape (`w:ind w:left="1080"
-  w:hanging="360"`) where the marker plainly fits. `MetricsGetter` now exposes
-  a shared character-class-aware `EstimateTextWidth` (hairline / narrow / wide
-  / uppercase / CJK-fullwidth em classes modeled on Times New Roman & Calibri
-  averages, zero-width characters at 0), and all four estimation fallbacks
-  (WASM build, unavailable font, measurement error, and the HTML converter's
-  unknown-font path) route through it, so the suffix tab lands on the text
-  indent whenever the number genuinely ends before it — matching Word's rule
-  and LibreOffice's rendering.
+  w:hanging="360"`) where the marker plainly fits. Generated list-marker runs
+  now measure through a character-class-aware estimate
+  (`MetricsGetter.EstimateTextWidth`: hairline / narrow / wide / uppercase /
+  CJK-fullwidth em classes modeled on Times New Roman & Calibri averages), so
+  the suffix tab lands on the text indent whenever the number genuinely ends
+  before it — matching Word's rule and LibreOffice's rendering. The
+  character-class estimate is deliberately scoped to marker runs: general tab
+  layout reserves (stop − estimated following-text width) ahead of the
+  browser's real glyphs, and browser fallback fonts advance at ~0.6 em, so the
+  flat general estimate must stay put or column-edge tab lines (TOC entries)
+  would overflow and wrap; a marker's wrapper is (chosen stop − marker start)
+  with a flex tab absorbing any glyph-width error, so only its stop choice
+  needs realistic widths.
 - **Paginated print layout no longer drops the endnotes section, and endnote
   markers render in Word's default lowercase-roman format** (issue #414) — in
   `PaginationMode.Paginated` the converter emitted `section.endnotes` as a

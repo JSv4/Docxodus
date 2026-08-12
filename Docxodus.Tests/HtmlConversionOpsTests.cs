@@ -223,9 +223,9 @@ public class HtmlConversionOpsTests
     }
 
     [Theory]
-    [InlineData("right", "W", "3.692", "width: 3.859in")]
-    [InlineData("center", "WWWW", "3.550", "width: 3.717in")]
-    [InlineData("decimal", "12.34", "3.667", "width: 3.834in")]
+    [InlineData("right", "W", "3.500", "width: 3.900in")]
+    [InlineData("center", "WWWW", "3.400", "width: 3.800in")]
+    [InlineData("decimal", "12.34", "3.400", "width: 3.800in")]
     public void HCO088_AlignedTabWidth_MeasuresOnlyFollowingText(
         string alignment, string after, string expectedTabWidth, string expectedPrecedingWidth)
     {
@@ -281,11 +281,11 @@ public class HtmlConversionOpsTests
         var wideCurrent = Geometry("iiiiiiii", "W");
         var wideFollowing = Geometry("iiii", "WWWWW");
 
-        Assert.Equal(3.69m, narrowCurrent.TabWidth);
-        Assert.Equal(3.53m, wideCurrent.TabWidth);
+        Assert.Equal(3.50m, narrowCurrent.TabWidth);
+        Assert.Equal(3.10m, wideCurrent.TabWidth);
         Assert.Equal(narrowCurrent.PrecedingWidth, wideCurrent.PrecedingWidth);
-        Assert.Equal(3.859m, narrowCurrent.PrecedingWidth);
-        Assert.Equal(3.293m, wideFollowing.PrecedingWidth);
+        Assert.Equal(3.900m, narrowCurrent.PrecedingWidth);
+        Assert.Equal(3.500m, wideFollowing.PrecedingWidth);
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public class HtmlConversionOpsTests
 
         Assert.Equal("right", (string?)leader.Attribute("data-docx-tab"));
         Assert.Empty(leader.Value);
-        Assert.Contains("width: 3.69in", (string?)leader.Attribute("style"));
+        Assert.Contains("width: 3.50in", (string?)leader.Attribute("style"));
         Assert.Contains("border-bottom: 1px dotted currentColor", (string?)leader.Attribute("style"));
     }
 
@@ -313,11 +313,12 @@ public class HtmlConversionOpsTests
     {
         // Issue #415: on a hanging-indent numbered paragraph (marker at left − hanging, text at
         // left), the marker's suffix tab must advance to the paragraph's text indent when the
-        // number ends before it — not to the next w:defaultTabStop multiple. The old flat
-        // 0.6 em/char width estimate nearly doubled "(a)"/"(iii)", overshooting the text-indent
-        // stop. The marker wrapper's width equals (chosen stop − marker start), so the correct
-        // stop makes every wrapper exactly hanging-width wide (360 twips = 0.25") regardless of
-        // the estimated marker width.
+        // number ends before it — not to the next w:defaultTabStop multiple. The flat general
+        // 0.6 em/char width estimate nearly doubles "(a)"/"(iii)", overshooting the text-indent
+        // stop; marker runs therefore measure through the character-class estimate. The marker
+        // wrapper's width equals (chosen stop − marker start), so the correct stop makes every
+        // wrapper exactly hanging-width wide (360 twips = 0.25") regardless of the estimated
+        // marker width.
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream,
                    DocumentFormat.OpenXml.WordprocessingDocumentType.Document))

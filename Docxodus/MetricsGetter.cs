@@ -105,18 +105,25 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Deterministic text-width estimate for text that cannot be measured with real font
-        /// metrics (WASM builds, and hosts where the requested font is not installed).
+        /// Character-class-aware text-width estimate for LIST-MARKER runs whose font cannot be
+        /// measured with real metrics (WASM builds, and hosts where the font is not installed).
         /// Returns width in font-size units — (summed per-character em fractions) × (sz / 2)
         /// points — the same unit convention the measurement path returns.
         ///
-        /// The previous estimate charged a flat 0.6 em for every character, which roughly
-        /// doubles the width of narrow-glyph strings such as the list markers "(a)"/"(iii)".
-        /// That pushed the computed pen position of a numbered paragraph past its text-indent
-        /// tab stop, so the marker's suffix tab resolved to the next default tab stop and every
-        /// clause body started ~0.25" too far right (issue #415). The per-class widths below
-        /// track Times New Roman / Calibri averages closely enough that "does the number end
-        /// before the text indent" decisions match real renderers.
+        /// The general fallback (a flat 0.6 em per character) roughly doubles the width of
+        /// narrow-glyph markers such as "(a)"/"(iii)", pushing the computed pen position of a
+        /// numbered paragraph past its text-indent tab stop so the marker's suffix tab resolved
+        /// to the next default tab stop — every clause body ~0.25" too far right (issue #415).
+        /// The per-class widths below track Times New Roman / Calibri averages closely enough
+        /// that "does the number end before the text indent" decisions match real renderers.
+        ///
+        /// This is deliberately NOT the general text fallback. For ordinary tab runs the HTML
+        /// layout reserves (tab stop − estimated following-text width) and the browser paints
+        /// the real glyphs after that reservation, so the flat 0.6 em estimate must stay at or
+        /// above browser fallback-font advances (monospace fixtures and DejaVu-class fallbacks
+        /// sit at ~0.6 em) or lines near the column edge overflow and wrap. A list marker is
+        /// safe: its wrapper is (chosen stop − marker start) with a flex tab absorbing any
+        /// glyph-width error, so only the stop choice needs realistic widths.
         /// </summary>
         public static int EstimateTextWidth(decimal sz, string text)
         {
@@ -153,8 +160,13 @@ namespace Docxodus
         private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
 #if WASM_BUILD
-            // In WASM builds, return an estimate since we don't have SkiaSharp for text measurement
-            return EstimateTextWidth(sz, text);
+            // In WASM builds, return an estimate based on character count and font size
+            // This is a rough approximation since we don't have SkiaSharp for text measurement
+            if (string.IsNullOrEmpty(text))
+                return 0;
+            // Approximate character width: ~0.6 of the font size for most fonts
+            float charWidth = (float)sz * 0.6f / 2f;
+            return (int)(text.Length * charWidth);
 #else
             try
             {
@@ -167,14 +179,20 @@ namespace Docxodus
 
                 // If measurement returns 0 (font unavailable), use estimation
                 if (result == 0 && !string.IsNullOrEmpty(text))
-                    return EstimateTextWidth(sz, text);
+                {
+                    float charWidth = (float)sz * 0.6f / 2f;
+                    return (int)(text.Length * charWidth);
+                }
 
                 return result;
             }
             catch
             {
                 // Fallback to estimation on any error
-                return EstimateTextWidth(sz, text);
+                if (string.IsNullOrEmpty(text))
+                    return 0;
+                float charWidth = (float)sz * 0.6f / 2f;
+                return (int)(text.Length * charWidth);
             }
 #endif
         }
@@ -210,7 +228,10 @@ namespace Docxodus
             {
                 // This happened on Azure but interestingly enough not while testing locally.
                 // Use estimation instead of returning 0
-                return EstimateTextWidth(sz, text);
+                if (string.IsNullOrEmpty(text))
+                    return 0;
+                float charWidth = (float)sz * 0.6f / 2f;
+                return (int)(text.Length * charWidth);
             }
         }
 

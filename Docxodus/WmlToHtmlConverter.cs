@@ -7401,7 +7401,10 @@ namespace Docxodus
                     var dummyRun3 = new XElement(W.r, fontNameAtt, languageTypeAtt,
                         runContainingTabToReplace.Elements(W.rPr),
                         currentElement);
-                    var widthOfText = CalcWidthOfRunInTwips(dummyRun3);
+                    // A generated list-number run measures with the narrow-glyph-aware estimate
+                    // so its suffix tab resolves against a realistic pen position (issue #415).
+                    var widthOfText = CalcWidthOfRunInTwips(dummyRun3,
+                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null);
 
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal) widthOfText/1440m)));
@@ -7467,7 +7470,7 @@ namespace Docxodus
 
         private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
-        private static int CalcWidthOfRunInTwips(XElement r)
+        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
         {
             var fontName = (string)r.Attribute(PtOpenXml.pt + "FontName") ??
                            (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
@@ -7524,7 +7527,24 @@ namespace Docxodus
                 // Character-based estimation starts in point space (w:sz is half-points), while
                 // the rest of this method consumes CSS-pixel widths. Normalize it to the same
                 // 96-DPI coordinate space before converting the result to twips below.
-                w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
+                //
+                // List-marker runs use the character-class estimate: the flat 0.6 em/char
+                // average roughly doubles narrow-glyph markers like "(a)", which pushed the
+                // suffix tab past the paragraph's text-indent stop (issue #415). General text
+                // must KEEP the flat average — HTML tab layout reserves (stop − this estimate)
+                // ahead of the browser's real glyphs, and browser fallback fonts advance at
+                // ~0.6 em, so a lower general estimate makes column-edge tab lines overflow
+                // and wrap. A marker's wrapper is (chosen stop − marker start) with a flex tab
+                // absorbing the difference, so only its stop CHOICE needs realistic widths.
+                if (isListMarker)
+                {
+                    w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
+                }
+                else
+                {
+                    float charWidth = (float)sz * 0.6f / 2f;
+                    w = (int)(runText.Length * charWidth * 96f / 72f);
+                }
             }
             else
             {
