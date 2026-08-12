@@ -1015,6 +1015,50 @@ saved package.
 
 ---
 
+## Endnotes: the default `w:numFmt` is lowerRoman, not decimal
+
+### The behavior
+
+Footnote and endnote markers do **not** share a default numbering format. With no `w:numFmt`
+declared anywhere — no `w:footnotePr`/`w:endnotePr` in the settings part, none in any `w:sectPr` —
+Word and LibreOffice number footnotes `1, 2, 3…` but endnotes `i, ii, iii…` (lowercase roman).
+ECMA-376 pins this: `w:numFmt`'s default is `decimal` in a footnote context (§17.11.17/§17.11.18)
+but `lowerRoman` in an endnote context (§17.11.17/§17.11.19). A typical Word-authored package
+carries a `w:endnotePr` in settings.xml that declares only the two reserved separator notes and
+**no** `w:numFmt` at all, so the spec default is what actually renders.
+
+Precedence when the format IS declared: a `w:numFmt` inside a section's `w:sectPr/w:endnotePr`
+overrides the document-wide declaration in settings.xml for that section.
+
+### Minimal reproducer
+
+```xml
+<!-- word/settings.xml — Word's usual shape: endnotePr present, numFmt absent -->
+<w:endnotePr>
+  <w:endnote w:id="-1"/>
+  <w:endnote w:id="0"/>
+</w:endnotePr>
+```
+
+Cite one endnote from the body (`TestFiles/WC/WC036-Endnote-With-Table-Before.docx` is exactly
+this shape).
+
+### Renderer comparison
+
+| Renderer | Endnote marker | Footnote marker |
+|----------|----------------|-----------------|
+| Word | `i` | `1` |
+| LibreOffice | `i` | `1` |
+| Docxodus (before fix) | `1` | `1` |
+| Docxodus (issue #414 fix) | `i` | `1` |
+
+### Relevant code
+
+`WmlToHtmlConverter.GetNoteNumberFormat` resolves the effective token (sectPr-level `notePr` →
+settings-part `notePr` → spec default), `FormatNoteNumber` renders the glyph via
+`ListItemTextGetter_Default.GetListItemText`, and the footnotes/endnotes section `<ol>` carries
+the matching CSS `list-style-type` (`NoteListStyleType`).
+
 ## Layout: Word's line breaking and table sizing have no matching CSS default
 
 ### The behavior

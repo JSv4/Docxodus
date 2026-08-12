@@ -858,6 +858,99 @@ namespace OxPt
         }
 
         [Fact]
+        public void HC008f_Endnotes_PaginatedMode_FlowInsideStagingSection()
+        {
+            // Issue #414: the paginator only flows content found inside [data-section-index]
+            // wrappers within #pagination-staging. The endnotes section used to be emitted as a
+            // body-level SIBLING of the staging/container divs, so it never reached any page and
+            // vanished from the print layout. It must be the last child of the last section div.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC036-Endnote-With-Table-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var endnoteSections = html.Descendants()
+                        .Where(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "endnotes")
+                        .ToList();
+
+                    // Exactly one endnotes section — no duplicate outside the staging area
+                    var endnotesSection = Assert.Single(endnoteSections);
+
+                    // It flows as content of a section div inside the staging area
+                    Assert.Contains(endnotesSection.Ancestors(),
+                        a => a.Attribute("data-section-index") != null);
+                    Assert.Contains(endnotesSection.Ancestors(),
+                        a => (string)a.Attribute("id") == "pagination-staging");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008g_EndnoteMarkers_DefaultLowerRoman()
+        {
+            // Issue #414: Word's default endnote w:numFmt is lowerRoman (footnotes are decimal),
+            // so with no w:endnotePr override the citation marker must render "i", not "1", and
+            // the endnotes list must number in lowercase roman.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC036-Endnote-With-Table-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // Citation marker: <a class="endnote-ref ..."><sup>i</sup></a>
+                    // (FabricateCssClasses appends a fabricated pt-* class after endnote-ref)
+                    var endnoteRef = html.Descendants()
+                        .First(e => e.Name.LocalName == "a" &&
+                            ((string)e.Attribute("class") ?? "").Contains("endnote-ref"));
+                    var sup = endnoteRef.Elements().First(e => e.Name.LocalName == "sup");
+                    Assert.Equal("i", sup.Value);
+
+                    // Endnotes section list numbers in lowercase roman
+                    var endnotesSection = html.Descendants()
+                        .First(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "endnotes");
+                    var ol = endnotesSection.Elements().First(e => e.Name.LocalName == "ol");
+                    Assert.Contains("lower-roman", (string)ol.Attribute("style"));
+
+                    // Footnote markers keep their decimal default
+                    var footnoteRef = html.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "a" &&
+                            ((string)e.Attribute("class") ?? "").Contains("footnote-ref"));
+                    if (footnoteRef != null)
+                    {
+                        var fnSup = footnoteRef.Elements().First(e => e.Name.LocalName == "sup");
+                        Assert.Equal("1", fnSup.Value);
+                    }
+                }
+            }
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
