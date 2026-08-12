@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Body text now wraps around floating anchored pictures** (issue #412) —
+  `WmlToHtmlConverter` renders a picture anchored with `wp:wrapSquare`,
+  `wp:wrapTight`, or `wp:wrapThrough` as a CSS float instead of an inline
+  object, so surrounding lines flow beside the image the way Word and
+  LibreOffice lay them out rather than resuming below it. The float side comes
+  from a one-sided `wrapText`, the anchor's `wp:align` token, or the
+  offset-placed object's center against the governing section's column (or
+  page) center; the anchor's `distT/R/B/L` clearances become margins.
+  `wrapTight`'s polygon degrades to its bounding box; `wrapTopAndBottom`,
+  `wrapNone`, and a centered object keep their previous placement.
+
 ### Added
 - **Chart families beyond clustered bar/column render from cached data**
   (issue #411) — `WmlToHtmlConverter` now projects stacked and percent-stacked
