@@ -104,6 +104,59 @@ namespace Docxodus
             return metrics;
         }
 
+        /// <summary>
+        /// Character-class-aware text-width estimate for LIST-MARKER runs whose font cannot be
+        /// measured with real metrics (WASM builds, and hosts where the font is not installed).
+        /// Returns width in font-size units — (summed per-character em fractions) × (sz / 2)
+        /// points — the same unit convention the measurement path returns.
+        ///
+        /// The general fallback (a flat 0.6 em per character) roughly doubles the width of
+        /// narrow-glyph markers such as "(a)"/"(iii)", pushing the computed pen position of a
+        /// numbered paragraph past its text-indent tab stop so the marker's suffix tab resolved
+        /// to the next default tab stop — every clause body ~0.25" too far right (issue #415).
+        /// The per-class widths below track Times New Roman / Calibri averages closely enough
+        /// that "does the number end before the text indent" decisions match real renderers.
+        ///
+        /// This is deliberately NOT the general text fallback. For ordinary tab runs the HTML
+        /// layout reserves (tab stop − estimated following-text width) and the browser paints
+        /// the real glyphs after that reservation, so the flat 0.6 em estimate must stay at or
+        /// above browser fallback-font advances (monospace fixtures and DejaVu-class fallbacks
+        /// sit at ~0.6 em) or lines near the column edge overflow and wrap. A list marker is
+        /// safe: its wrapper is (chosen stop − marker start) with a flex tab absorbing any
+        /// glyph-width error, so only the stop choice needs realistic widths.
+        /// </summary>
+        public static int EstimateTextWidth(decimal sz, string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 0;
+            float em = 0f;
+            foreach (var c in text)
+                em += EstimateCharWidthEm(c);
+            return (int)(em * (float)sz / 2f);
+        }
+
+        private static float EstimateCharWidthEm(char c)
+        {
+            switch (c)
+            {
+                case 'i': case 'j': case 'l': case '.': case ',': case '\'': case '|': case '`':
+                    return 0.25f;
+                case 't': case 'f': case 'r': case 'I': case '!': case ';': case ':':
+                case '(': case ')': case '[': case ']': case '{': case '}':
+                case '"': case '/': case '\\': case ' ': case '-':
+                    return 0.33f;
+                case 'm': case 'w': case 'M': case 'W': case '@': case '%':
+                    return 0.85f;
+                case '\u00AD': case '\u200B': case '\u200C': case '\u200D':
+                    return 0f; // soft hyphen / zero-width characters
+                default:
+                    // CJK ideographs, Hangul syllables, and fullwidth forms occupy a full em.
+                    if (c >= 0x2E80 && (c <= 0xD7A3 || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF01 && c <= 0xFF60)))
+                        return 1.0f;
+                    return char.IsUpper(c) ? 0.7f : 0.5f;
+            }
+        }
+
         private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
 #if WASM_BUILD

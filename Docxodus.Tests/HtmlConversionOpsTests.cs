@@ -309,6 +309,96 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO094_ListMarkerSuffixTab_AdvancesToTextIndentNotNextDefaultStop()
+    {
+        // Issue #415: on a hanging-indent numbered paragraph (marker at left − hanging, text at
+        // left), the marker's suffix tab must advance to the paragraph's text indent when the
+        // number ends before it — not to the next w:defaultTabStop multiple. The flat general
+        // 0.6 em/char width estimate nearly doubles "(a)"/"(iii)", overshooting the text-indent
+        // stop; marker runs therefore measure through the character-class estimate. The marker
+        // wrapper's width equals (chosen stop − marker start), so the correct stop makes every
+        // wrapper exactly hanging-width wide (360 twips = 0.25") regardless of the estimated
+        // marker width.
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+
+            static Wp.Paragraph ListParagraph(int ilvl, string text) => new(
+                new Wp.ParagraphProperties(
+                    new Wp.NumberingProperties(
+                        new Wp.NumberingLevelReference { Val = ilvl },
+                        new Wp.NumberingId { Val = 1 })),
+                new Wp.Run(new Wp.Text(text)));
+
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    ListParagraph(0, "Confidential Information definition."),
+                    ListParagraph(1, "advisory and analysis services;"),
+                    ListParagraph(1, "implementation and configuration services; and"),
+                    ListParagraph(1, "training and knowledge-transfer services."),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 12240, Height = 15840 },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+
+            static Wp.Level NumberingLevel(
+                int ilvl, Wp.NumberFormatValues format, string text, int left) => new(
+                new Wp.StartNumberingValue { Val = 1 },
+                new Wp.NumberingFormat { Val = format },
+                new Wp.LevelText { Val = text },
+                new Wp.LevelJustification { Val = Wp.LevelJustificationValues.Left },
+                new Wp.PreviousParagraphProperties(
+                    new Wp.Indentation { Left = left.ToString(), Hanging = "360" }))
+            {
+                LevelIndex = ilvl,
+            };
+
+            main.AddNewPart<NumberingDefinitionsPart>().Numbering = new Wp.Numbering(
+                new Wp.AbstractNum(
+                    NumberingLevel(0, Wp.NumberFormatValues.LowerLetter, "(%1)", 1080),
+                    NumberingLevel(1, Wp.NumberFormatValues.LowerRoman, "(%2)", 1800))
+                {
+                    AbstractNumberId = 0,
+                },
+                new Wp.NumberingInstance(
+                    new Wp.AbstractNumId { Val = 0 })
+                {
+                    NumberID = 1,
+                });
+
+            // An unavailable font forces the deterministic character-class width estimate.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts
+                            {
+                                Ascii = "MissingTabGeometryFont",
+                                HighAnsi = "MissingTabGeometryFont",
+                            },
+                            new Wp.FontSize { Val = "24" }))));
+            main.Document.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(stream.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+
+        // The outer marker wrapper (number + suffix tab) carries the width; markers themselves
+        // render as "(a)", "(i)", "(ii)", "(iii)".
+        var wrappers = root.Descendants()
+            .Where(element => (string?)element.Attribute("data-list-marker") == "true" &&
+                ((string?)element.Attribute("style") ?? "").Contains("width:"))
+            .ToList();
+
+        Assert.Equal(4, wrappers.Count);
+        Assert.Equal(new[] { "(a)", "(i)", "(ii)", "(iii)" }, wrappers.Select(w => w.Value.Trim()));
+        Assert.All(wrappers, wrapper =>
+            Assert.Contains("width: 0.250in", (string?)wrapper.Attribute("style")));
+    }
+
+    [Fact]
     public void HCO086_PaginatedFootnoteSeparator_UsesWordDefaultTwoInchWidth()
     {
         // The CSS is emitted only when note rendering is enabled. Use an independently generated
