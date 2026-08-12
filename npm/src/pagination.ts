@@ -20,6 +20,22 @@ import type { PageBands, PageDimensions } from "./page-geometry.js";
 export type { PageBands, PageDimensions } from "./page-geometry.js";
 
 /**
+ * Whether two sections describe the same physical page box. A continuous section
+ * break is only honorable when it does — a changed page size or margin set forces
+ * a real page break, which is Word's behavior too.
+ */
+function samePageBox(a: PageDimensions, b: PageDimensions): boolean {
+  return (
+    a.pageWidth === b.pageWidth &&
+    a.pageHeight === b.pageHeight &&
+    a.marginTop === b.marginTop &&
+    a.marginRight === b.marginRight &&
+    a.marginBottom === b.marginBottom &&
+    a.marginLeft === b.marginLeft
+  );
+}
+
+/**
  * Headers and footers for a specific section.
  */
 export interface SectionHeaderFooter {
@@ -246,24 +262,65 @@ export class PaginationEngine {
     const sectionsToProcess =
       sections.length > 0 ? Array.from(sections) : [this.stagingElement];
 
+    // Group adjacent sections into page runs. A `w:type="continuous"` section keeps
+    // filling the page its predecessor started rather than opening a fresh one, so it
+    // joins the previous run — provided the page box (size and margins) is unchanged,
+    // which is also Word's own condition for honoring a continuous break. Pages of a
+    // merged run carry the run's leading section index, so its headers/footers and
+    // page numbering govern the shared pages.
+    interface PageRun {
+      sections: HTMLElement[];
+      sectionIndex: number;
+      dims: PageDimensions;
+    }
+    const runs: PageRun[] = [];
     for (const section of sectionsToProcess) {
-      const sectionIndex = parseInt(section.dataset.sectionIndex || "0", 10);
       const dims = parseSectionDimensions(section);
+      const previous = runs[runs.length - 1];
+      if (
+        previous &&
+        section.dataset.sectionType === "continuous" &&
+        samePageBox(previous.dims, dims)
+      ) {
+        previous.sections.push(section);
+      } else {
+        runs.push({
+          sections: [section],
+          sectionIndex: parseInt(section.dataset.sectionIndex || "0", 10),
+          dims,
+        });
+      }
+    }
 
+    for (const run of runs) {
       // Make staging visible for measurement
       this.stagingElement.style.visibility = "hidden";
       this.stagingElement.style.position = "absolute";
       this.stagingElement.style.left = "-9999px";
       this.stagingElement.style.display = "block";
 
-      // Set width for accurate line wrapping
-      section.style.width = `${dims.contentWidth}pt`;
+      const blocks: MeasuredBlock[] = [];
+      for (const section of run.sections) {
+        // Set width for accurate line wrapping
+        section.style.width = `${run.dims.contentWidth}pt`;
 
-      // Measure all blocks in this section
-      const blocks = this.measureBlocks(section, dims);
+        const columnCount = parseInt(section.dataset.cols || "1", 10);
+        if (columnCount > 1) {
+          const gap = parseFloat(section.dataset.colGap || "");
+          blocks.push(...this.buildColumnBlocks(
+            section,
+            run.dims,
+            run.sectionIndex,
+            columnCount,
+            Number.isFinite(gap) ? gap : 36
+          ));
+        } else {
+          blocks.push(...this.measureBlocks(section, run.dims));
+        }
+      }
 
       // Flow blocks into pages
-      const sectionPages = this.flowToPages(blocks, dims, pageNumber, sectionIndex);
+      const sectionPages = this.flowToPages(blocks, run.dims, pageNumber, run.sectionIndex);
       pages.push(...sectionPages);
       pageNumber += sectionPages.length;
     }
@@ -380,6 +437,80 @@ export class PaginationEngine {
         pageBreakBefore: child.dataset.pageBreakBefore === "true",
         isPageBreak,
       });
+    }
+
+    return blocks;
+  }
+
+  /**
+   * Flows a multi-column (`w:cols`) section's children into CSS-multicol container
+   * blocks. Word lays such a section out as N columns inside the same body extent;
+   * a balanced `column-count` container reproduces that geometry, and the paginator
+   * then places each container as one ordinary measured block. A container grows
+   * greedily until its balanced height would exceed the smallest page body available
+   * to the section, so a long columned section still splits across pages at block
+   * boundaries. Each child lands in exactly one container, so anchors never
+   * duplicate. An explicit page break child passes through as its own block, which
+   * ends the current container and lets the normal flow logic turn the page.
+   */
+  private buildColumnBlocks(
+    section: HTMLElement,
+    dims: PageDimensions,
+    sectionIndex: number,
+    columnCount: number,
+    columnGapPt: number
+  ): MeasuredBlock[] {
+    const children = Array.from(section.children) as HTMLElement[];
+    const blocks: MeasuredBlock[] = [];
+    const maxFragmentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
+
+    const isBreak = (child: HTMLElement) =>
+      child.dataset.pageBreak === "true" ||
+      child.classList.contains(`${this.cssPrefix}break`);
+
+    const makeContainer = (slice: HTMLElement[]): HTMLElement => {
+      const container = document.createElement("div");
+      container.style.columnCount = String(columnCount);
+      container.style.columnGap = `${columnGapPt}pt`;
+      for (const child of slice) {
+        container.appendChild(child.cloneNode(true));
+      }
+      return container;
+    };
+
+    let start = 0;
+    while (start < children.length) {
+      if (isBreak(children[start])) {
+        blocks.push(this.measureElement(children[start], dims));
+        start++;
+        continue;
+      }
+
+      // Grow the container one child at a time. Even a single oversized child is
+      // emitted alone, preserving the established oversized-block fallback.
+      let end = start + 1;
+      let container = makeContainer(children.slice(start, end));
+      let measured = this.measureElement(container, dims);
+      while (end < children.length && !isBreak(children[end])) {
+        const candidate = makeContainer(children.slice(start, end + 1));
+        const candidateMeasured = this.measureElement(candidate, dims);
+        if (candidateMeasured.heightPt > maxFragmentHeight) break;
+        container = candidate;
+        measured = candidateMeasured;
+        end++;
+      }
+
+      blocks.push({
+        element: container,
+        heightPt: measured.heightPt,
+        marginTopPt: measured.marginTopPt,
+        marginBottomPt: measured.marginBottomPt,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      });
+      start = end;
     }
 
     return blocks;
