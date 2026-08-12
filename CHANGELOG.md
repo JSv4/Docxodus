@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Paginated print layout no longer drops the endnotes section, and endnote
+  markers render in Word's default lowercase-roman format** (issue #414) — in
+  `PaginationMode.Paginated` the converter emitted `section.endnotes` as a
+  body-level sibling of the pagination staging/container divs, but the
+  paginator only flows content found inside `[data-section-index]` wrappers in
+  the staging area, so the endnotes never reached a page. The section is now
+  appended inside the last section div in the staging area and flows onto the
+  final page(s) as an ordinary block, the way Word and LibreOffice lay endnotes
+  out. Independently, footnote/endnote display numbers were hardcoded decimal:
+  the converter now resolves the effective `w:numFmt` (section-level
+  `w:footnotePr`/`w:endnotePr` over the settings-part declaration, falling back
+  to the spec defaults — decimal for footnotes, **lowerRoman for endnotes**),
+  renders citation markers and paginated-registry labels in that format, and
+  stamps the notes-section `<ol>` with the matching CSS `list-style-type`.
 - **Continuous section breaks no longer render as page breaks, and `w:cols`
   multi-column sections lay out as columns** (issue #413) — the converter now
   stamps the section wrapper with its start type (`data-section-type`, from

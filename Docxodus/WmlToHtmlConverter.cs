@@ -699,6 +699,17 @@ namespace Docxodus
         /// Endnote XML IDs in document order (for rendering endnotes section).
         /// </summary>
         public List<string> EndnoteIdsInOrder { get; } = new List<string>();
+
+        /// <summary>
+        /// Effective ST_NumberFormat token for footnote markers. Word's default is decimal.
+        /// </summary>
+        public string FootnoteNumberFormat { get; set; } = "decimal";
+
+        /// <summary>
+        /// Effective ST_NumberFormat token for endnote markers. Word's default is lowerRoman
+        /// (i, ii, iii…) — endnotes do NOT share the footnotes' decimal default.
+        /// </summary>
+        public string EndnoteNumberFormat { get; set; } = "lowerRoman";
     }
 
     /// <summary>
@@ -952,6 +963,8 @@ namespace Docxodus
             if (htmlConverterSettings.RenderFootnotesAndEndnotes)
             {
                 BuildFootnoteNumberingTracker(rootElement, footnoteTracker);
+                footnoteTracker.FootnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.footnotePr, "decimal");
+                footnoteTracker.EndnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.endnotePr, "lowerRoman");
             }
             rootElement.AddAnnotation(footnoteTracker);
 
@@ -2695,10 +2708,16 @@ namespace Docxodus
                             bodyContent.Add(footnotesSection);
                     }
 
-                    // Endnotes always render at document end (not per-page)
-                    var endnotesSection = RenderEndnotesSection(wordDoc, settings);
-                    if (endnotesSection != null)
-                        bodyContent.Add(endnotesSection);
+                    // Endnotes render at document end. In paginated mode CreateSectionDivs has
+                    // already placed them inside the staging area (last section div) so they
+                    // flow onto the final page(s); adding them here too would duplicate them
+                    // outside any page.
+                    if (!usePaginatedFootnotes)
+                    {
+                        var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                        if (endnotesSection != null)
+                            bodyContent.Add(endnotesSection);
+                    }
                 }
 
                 // Add footers at the bottom if enabled (non-paginated mode only)
@@ -3354,11 +3373,11 @@ namespace Docxodus
             if (footnoteId == null)
                 return null;
 
-            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            // Get display number from tracker (sequential, rendered in the effective w:numFmt)
             var root = element.AncestorsAndSelf().Last();
             var tracker = root.Annotation<FootnoteNumberingTracker>();
             var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
-                ? num.ToString()
+                ? FormatNoteNumber(num, tracker.FootnoteNumberFormat)
                 : footnoteId; // Fallback to XML ID if not found
 
             // Put <sup> inside anchor like LibreOffice does for clean inline rendering
@@ -3384,11 +3403,12 @@ namespace Docxodus
             if (endnoteId == null)
                 return null;
 
-            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            // Get display number from tracker (sequential, rendered in the effective w:numFmt —
+            // Word's default for endnotes is lowerRoman, so an unconfigured document shows i, ii…)
             var root = element.AncestorsAndSelf().Last();
             var tracker = root.Annotation<FootnoteNumberingTracker>();
             var displayNumber = tracker?.EndnoteIdToDisplayNumber.TryGetValue(endnoteId, out var num) == true
-                ? num.ToString()
+                ? FormatNoteNumber(num, tracker.EndnoteNumberFormat)
                 : endnoteId; // Fallback to XML ID if not found
 
             // Put <sup> inside anchor like LibreOffice does for clean inline rendering
@@ -3442,6 +3462,7 @@ namespace Docxodus
                 new XAttribute("class", "footnotes"),
                 new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
+                    new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.FootnoteNumberFormat ?? "decimal")};"),
                     orderedFootnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "fn", tracker))));
 
             return footnotesSection;
@@ -3488,6 +3509,7 @@ namespace Docxodus
                 new XAttribute("class", "endnotes"),
                 new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
+                    new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.EndnoteNumberFormat ?? "lowerRoman")};"),
                     orderedEndnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "en", tracker))));
 
             return endnotesSection;
@@ -3606,9 +3628,9 @@ namespace Docxodus
                 if (footnoteId == null)
                     continue;
 
-                // Get display number from tracker
+                // Get display number from tracker, rendered in the effective w:numFmt
                 var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
-                    ? num.ToString()
+                    ? FormatNoteNumber(num, tracker.FootnoteNumberFormat)
                     : footnoteId;
 
                 // Convert the content of the footnote
@@ -5337,6 +5359,21 @@ namespace Docxodus
                     var footnoteRegistry = RenderPaginatedFootnoteRegistry(wordDoc, settings);
                     if (footnoteRegistry != null)
                         stagingContent.Add(footnoteRegistry);
+
+                    // Endnotes are document content and must FLOW after the last body block —
+                    // Word and LibreOffice both lay them out at the end of the document, on a
+                    // page. The paginator only pages content found inside [data-section-index]
+                    // wrappers within the staging area, so the non-paginated placement (a
+                    // body-level sibling of the staging/container divs) never reaches any page
+                    // and the endnotes silently vanish from the print layout. Appending the
+                    // section to the LAST section div makes it an ordinary measured block that
+                    // lands on the final page(s).
+                    if (divList.Count > 0)
+                    {
+                        var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                        if (endnotesSection != null)
+                            divList[divList.Count - 1].Add(endnotesSection);
+                    }
                 }
 
                 // Add section content
@@ -6522,6 +6559,52 @@ namespace Docxodus
                 }
             }
         }
+
+        /// <summary>
+        /// Resolves the effective ST_NumberFormat token for footnote or endnote markers.
+        /// A w:numFmt inside a section's w:footnotePr/w:endnotePr wins over the document-wide
+        /// declaration in settings.xml; with neither present, Word's spec defaults apply —
+        /// decimal for footnotes but lowerRoman for endnotes (ECMA-376 §17.11.17/§17.11.19).
+        /// </summary>
+        private static string GetNoteNumberFormat(WordprocessingDocument wordDoc, XName notePrName, string specDefault)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            var sectionFormat = body?.Descendants(W.sectPr)
+                .Select(sectPr => (string)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
+                .FirstOrDefault(v => v != null);
+            if (sectionFormat != null)
+                return sectionFormat;
+
+            var settingsFormat = (string)GetSettingsXDocumentOrDefault(wordDoc)?.Root
+                ?.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val);
+            return settingsFormat ?? specDefault;
+        }
+
+        /// <summary>
+        /// Renders a note's sequential display number in the given ST_NumberFormat token
+        /// (e.g. 1 → "i" for lowerRoman). Tokens without a numbering algorithm fall back
+        /// to the decimal spelling so a marker never renders as empty text.
+        /// </summary>
+        private static string FormatNoteNumber(int number, string numFmt)
+        {
+            var text = ListItemTextGetter_Default.GetListItemText("en-US", number, numFmt);
+            return string.IsNullOrEmpty(text) ? number.ToString() : text;
+        }
+
+        /// <summary>
+        /// CSS list-style-type equivalent of an ST_NumberFormat token, for the footnotes/endnotes
+        /// section &lt;ol&gt; — the li elements carry numeric value attributes, and the browser
+        /// renders those values in this style. Unmapped tokens fall back to decimal.
+        /// </summary>
+        private static string NoteListStyleType(string numFmt) => numFmt switch
+        {
+            "lowerRoman" => "lower-roman",
+            "upperRoman" => "upper-roman",
+            "lowerLetter" => "lower-alpha",
+            "upperLetter" => "upper-alpha",
+            "decimalZero" => "decimal-leading-zero",
+            _ => "decimal",
+        };
 
         /// <summary>
         /// Maps Windows system color names to hex values.
