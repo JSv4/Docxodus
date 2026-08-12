@@ -223,9 +223,9 @@ public class HtmlConversionOpsTests
     }
 
     [Theory]
-    [InlineData("right", "W", "3.500", "width: 3.900in")]
-    [InlineData("center", "WWWW", "3.400", "width: 3.800in")]
-    [InlineData("decimal", "12.34", "3.400", "width: 3.800in")]
+    [InlineData("right", "W", "3.692", "width: 3.859in")]
+    [InlineData("center", "WWWW", "3.550", "width: 3.717in")]
+    [InlineData("decimal", "12.34", "3.667", "width: 3.834in")]
     public void HCO088_AlignedTabWidth_MeasuresOnlyFollowingText(
         string alignment, string after, string expectedTabWidth, string expectedPrecedingWidth)
     {
@@ -281,11 +281,11 @@ public class HtmlConversionOpsTests
         var wideCurrent = Geometry("iiiiiiii", "W");
         var wideFollowing = Geometry("iiii", "WWWWW");
 
-        Assert.Equal(3.50m, narrowCurrent.TabWidth);
-        Assert.Equal(3.10m, wideCurrent.TabWidth);
+        Assert.Equal(3.69m, narrowCurrent.TabWidth);
+        Assert.Equal(3.53m, wideCurrent.TabWidth);
         Assert.Equal(narrowCurrent.PrecedingWidth, wideCurrent.PrecedingWidth);
-        Assert.Equal(3.900m, narrowCurrent.PrecedingWidth);
-        Assert.Equal(3.500m, wideFollowing.PrecedingWidth);
+        Assert.Equal(3.859m, narrowCurrent.PrecedingWidth);
+        Assert.Equal(3.293m, wideFollowing.PrecedingWidth);
     }
 
     [Fact]
@@ -304,8 +304,97 @@ public class HtmlConversionOpsTests
 
         Assert.Equal("right", (string?)leader.Attribute("data-docx-tab"));
         Assert.Empty(leader.Value);
-        Assert.Contains("width: 3.50in", (string?)leader.Attribute("style"));
+        Assert.Contains("width: 3.69in", (string?)leader.Attribute("style"));
         Assert.Contains("border-bottom: 1px dotted currentColor", (string?)leader.Attribute("style"));
+    }
+
+    [Fact]
+    public void HCO094_ListMarkerSuffixTab_AdvancesToTextIndentNotNextDefaultStop()
+    {
+        // Issue #415: on a hanging-indent numbered paragraph (marker at left − hanging, text at
+        // left), the marker's suffix tab must advance to the paragraph's text indent when the
+        // number ends before it — not to the next w:defaultTabStop multiple. The old flat
+        // 0.6 em/char width estimate nearly doubled "(a)"/"(iii)", overshooting the text-indent
+        // stop. The marker wrapper's width equals (chosen stop − marker start), so the correct
+        // stop makes every wrapper exactly hanging-width wide (360 twips = 0.25") regardless of
+        // the estimated marker width.
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+
+            static Wp.Paragraph ListParagraph(int ilvl, string text) => new(
+                new Wp.ParagraphProperties(
+                    new Wp.NumberingProperties(
+                        new Wp.NumberingLevelReference { Val = ilvl },
+                        new Wp.NumberingId { Val = 1 })),
+                new Wp.Run(new Wp.Text(text)));
+
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    ListParagraph(0, "Confidential Information definition."),
+                    ListParagraph(1, "advisory and analysis services;"),
+                    ListParagraph(1, "implementation and configuration services; and"),
+                    ListParagraph(1, "training and knowledge-transfer services."),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 12240, Height = 15840 },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+
+            static Wp.Level NumberingLevel(
+                int ilvl, Wp.NumberFormatValues format, string text, int left) => new(
+                new Wp.StartNumberingValue { Val = 1 },
+                new Wp.NumberingFormat { Val = format },
+                new Wp.LevelText { Val = text },
+                new Wp.LevelJustification { Val = Wp.LevelJustificationValues.Left },
+                new Wp.PreviousParagraphProperties(
+                    new Wp.Indentation { Left = left.ToString(), Hanging = "360" }))
+            {
+                LevelIndex = ilvl,
+            };
+
+            main.AddNewPart<NumberingDefinitionsPart>().Numbering = new Wp.Numbering(
+                new Wp.AbstractNum(
+                    NumberingLevel(0, Wp.NumberFormatValues.LowerLetter, "(%1)", 1080),
+                    NumberingLevel(1, Wp.NumberFormatValues.LowerRoman, "(%2)", 1800))
+                {
+                    AbstractNumberId = 0,
+                },
+                new Wp.NumberingInstance(
+                    new Wp.AbstractNumId { Val = 0 })
+                {
+                    NumberID = 1,
+                });
+
+            // An unavailable font forces the deterministic character-class width estimate.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts
+                            {
+                                Ascii = "MissingTabGeometryFont",
+                                HighAnsi = "MissingTabGeometryFont",
+                            },
+                            new Wp.FontSize { Val = "24" }))));
+            main.Document.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(stream.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        var root = XElement.Parse(html);
+
+        // The outer marker wrapper (number + suffix tab) carries the width; markers themselves
+        // render as "(a)", "(i)", "(ii)", "(iii)".
+        var wrappers = root.Descendants()
+            .Where(element => (string?)element.Attribute("data-list-marker") == "true" &&
+                ((string?)element.Attribute("style") ?? "").Contains("width:"))
+            .ToList();
+
+        Assert.Equal(4, wrappers.Count);
+        Assert.Equal(new[] { "(a)", "(i)", "(ii)", "(iii)" }, wrappers.Select(w => w.Value.Trim()));
+        Assert.All(wrappers, wrapper =>
+            Assert.Contains("width: 0.250in", (string?)wrapper.Attribute("style")));
     }
 
     [Fact]

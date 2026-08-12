@@ -77,7 +77,8 @@ test.describe('generated tab-stop geometry', () => {
     expect(narrowCurrent.followingRight).toBeCloseTo(TAB_TARGET_PX, 0);
     expect(wideCurrent.followingRight).toBeCloseTo(TAB_TARGET_PX, 0);
     expect(wideFollowing.followingRight).toBeCloseTo(TAB_TARGET_PX, 0);
-    expect(narrowCurrent.tabWidth - wideCurrent.tabWidth).toBeCloseTo(0.4 * 96, 0);
+    // Four extra 'i' characters at the estimator's 0.25 em/char and 12 pt: 4 × 4px.
+    expect(narrowCurrent.tabWidth - wideCurrent.tabWidth).toBeCloseTo(16, 0);
     expect(narrowCurrent.followingLeft - wideFollowing.followingLeft)
       .toBeCloseTo(wideFollowing.followingWidth - narrowCurrent.followingWidth, 0);
   });

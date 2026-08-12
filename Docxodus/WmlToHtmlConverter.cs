@@ -7524,8 +7524,7 @@ namespace Docxodus
                 // Character-based estimation starts in point space (w:sz is half-points), while
                 // the rest of this method consumes CSS-pixel widths. Normalize it to the same
                 // 96-DPI coordinate space before converting the result to twips below.
-                float charWidth = (float)sz * 0.6f / 2f;
-                w = (int)(runText.Length * charWidth * 96f / 72f);
+                w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
             }
             else
             {

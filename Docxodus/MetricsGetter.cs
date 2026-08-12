@@ -104,16 +104,57 @@ namespace Docxodus
             return metrics;
         }
 
+        /// <summary>
+        /// Deterministic text-width estimate for text that cannot be measured with real font
+        /// metrics (WASM builds, and hosts where the requested font is not installed).
+        /// Returns width in font-size units — (summed per-character em fractions) × (sz / 2)
+        /// points — the same unit convention the measurement path returns.
+        ///
+        /// The previous estimate charged a flat 0.6 em for every character, which roughly
+        /// doubles the width of narrow-glyph strings such as the list markers "(a)"/"(iii)".
+        /// That pushed the computed pen position of a numbered paragraph past its text-indent
+        /// tab stop, so the marker's suffix tab resolved to the next default tab stop and every
+        /// clause body started ~0.25" too far right (issue #415). The per-class widths below
+        /// track Times New Roman / Calibri averages closely enough that "does the number end
+        /// before the text indent" decisions match real renderers.
+        /// </summary>
+        public static int EstimateTextWidth(decimal sz, string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 0;
+            float em = 0f;
+            foreach (var c in text)
+                em += EstimateCharWidthEm(c);
+            return (int)(em * (float)sz / 2f);
+        }
+
+        private static float EstimateCharWidthEm(char c)
+        {
+            switch (c)
+            {
+                case 'i': case 'j': case 'l': case '.': case ',': case '\'': case '|': case '`':
+                    return 0.25f;
+                case 't': case 'f': case 'r': case 'I': case '!': case ';': case ':':
+                case '(': case ')': case '[': case ']': case '{': case '}':
+                case '"': case '/': case '\\': case ' ': case '-':
+                    return 0.33f;
+                case 'm': case 'w': case 'M': case 'W': case '@': case '%':
+                    return 0.85f;
+                case '\u00AD': case '\u200B': case '\u200C': case '\u200D':
+                    return 0f; // soft hyphen / zero-width characters
+                default:
+                    // CJK ideographs, Hangul syllables, and fullwidth forms occupy a full em.
+                    if (c >= 0x2E80 && (c <= 0xD7A3 || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF01 && c <= 0xFF60)))
+                        return 1.0f;
+                    return char.IsUpper(c) ? 0.7f : 0.5f;
+            }
+        }
+
         private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
 #if WASM_BUILD
-            // In WASM builds, return an estimate based on character count and font size
-            // This is a rough approximation since we don't have SkiaSharp for text measurement
-            if (string.IsNullOrEmpty(text))
-                return 0;
-            // Approximate character width: ~0.6 of the font size for most fonts
-            float charWidth = (float)sz * 0.6f / 2f;
-            return (int)(text.Length * charWidth);
+            // In WASM builds, return an estimate since we don't have SkiaSharp for text measurement
+            return EstimateTextWidth(sz, text);
 #else
             try
             {
@@ -126,20 +167,14 @@ namespace Docxodus
 
                 // If measurement returns 0 (font unavailable), use estimation
                 if (result == 0 && !string.IsNullOrEmpty(text))
-                {
-                    float charWidth = (float)sz * 0.6f / 2f;
-                    return (int)(text.Length * charWidth);
-                }
+                    return EstimateTextWidth(sz, text);
 
                 return result;
             }
             catch
             {
                 // Fallback to estimation on any error
-                if (string.IsNullOrEmpty(text))
-                    return 0;
-                float charWidth = (float)sz * 0.6f / 2f;
-                return (int)(text.Length * charWidth);
+                return EstimateTextWidth(sz, text);
             }
 #endif
         }
@@ -175,10 +210,7 @@ namespace Docxodus
             {
                 // This happened on Azure but interestingly enough not while testing locally.
                 // Use estimation instead of returning 0
-                if (string.IsNullOrEmpty(text))
-                    return 0;
-                float charWidth = (float)sz * 0.6f / 2f;
-                return (int)(text.Length * charWidth);
+                return EstimateTextWidth(sz, text);
             }
         }
 
