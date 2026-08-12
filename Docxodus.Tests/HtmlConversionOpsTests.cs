@@ -416,49 +416,50 @@ public class HtmlConversionOpsTests
         Assert.DoesNotContain("width: 33%;", html);
     }
 
-    [Theory]
-    [InlineData("col", "column")]
-    [InlineData("bar", "bar")]
-    public void HCO087_CachedClusteredChart_RendersAccessibleSvgAtStoredExtent(
-        string barDirection, string expectedChartType)
+    // Chart namespace for the generated chart-package tests below (HCO087/HCO095-HCO098).
+    private static readonly XNamespace ChartC =
+        "http://schemas.openxmlformats.org/drawingml/2006/chart";
+
+    private static XElement GeneratedChartSeries(int index, string name, double[] values)
     {
-        // Build the package independently: chart caches are the portable OOXML display source,
-        // while the embedded workbook is optional and must not be needed by the browser renderer.
+        var c = ChartC;
+        var categories = new[] { "Alpha", "Beta", "Gamma" };
+        return new XElement(c + "ser",
+            new XElement(c + "idx", new XAttribute("val", index)),
+            new XElement(c + "order", new XAttribute("val", index)),
+            new XElement(c + "tx",
+                new XElement(c + "strRef",
+                    new XElement(c + "strCache",
+                        new XElement(c + "ptCount", new XAttribute("val", 1)),
+                        new XElement(c + "pt", new XAttribute("idx", 0),
+                            new XElement(c + "v", name))))),
+            new XElement(c + "cat",
+                new XElement(c + "strRef",
+                    new XElement(c + "strCache",
+                        new XElement(c + "ptCount", new XAttribute("val", categories.Length)),
+                        categories.Select((value, point) =>
+                            new XElement(c + "pt", new XAttribute("idx", point),
+                                new XElement(c + "v", value)))))),
+            new XElement(c + "val",
+                new XElement(c + "numRef",
+                    new XElement(c + "numCache",
+                        new XElement(c + "formatCode", "General"),
+                        new XElement(c + "ptCount", new XAttribute("val", values.Length)),
+                        values.Select((value, point) =>
+                            new XElement(c + "pt", new XAttribute("idx", point),
+                                new XElement(c + "v",
+                                    value.ToString("R", System.Globalization.CultureInfo.InvariantCulture))))))));
+    }
+
+    // Build the package independently: chart caches are the portable OOXML display source,
+    // while the embedded workbook is optional and must not be needed by the browser renderer.
+    private static byte[] GeneratedChartDocxBytes(params XElement[] plotAreaChildren)
+    {
         XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
         XNamespace wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
         XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
-        XNamespace c = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+        var c = ChartC;
         XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
-        static XElement Series(XNamespace c, int index, string name, double[] values)
-        {
-            var categories = new[] { "Alpha", "Beta", "Gamma" };
-            return new XElement(c + "ser",
-                new XElement(c + "idx", new XAttribute("val", index)),
-                new XElement(c + "order", new XAttribute("val", index)),
-                new XElement(c + "tx",
-                    new XElement(c + "strRef",
-                        new XElement(c + "strCache",
-                            new XElement(c + "ptCount", new XAttribute("val", 1)),
-                            new XElement(c + "pt", new XAttribute("idx", 0),
-                                new XElement(c + "v", name))))),
-                new XElement(c + "cat",
-                    new XElement(c + "strRef",
-                        new XElement(c + "strCache",
-                            new XElement(c + "ptCount", new XAttribute("val", categories.Length)),
-                            categories.Select((value, point) =>
-                                new XElement(c + "pt", new XAttribute("idx", point),
-                                    new XElement(c + "v", value)))))),
-                new XElement(c + "val",
-                    new XElement(c + "numRef",
-                        new XElement(c + "numCache",
-                            new XElement(c + "formatCode", "General"),
-                            new XElement(c + "ptCount", new XAttribute("val", values.Length)),
-                            values.Select((value, point) =>
-                                new XElement(c + "pt", new XAttribute("idx", point),
-                                    new XElement(c + "v",
-                                        value.ToString("R", System.Globalization.CultureInfo.InvariantCulture))))))));
-        }
 
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream,
@@ -471,15 +472,7 @@ public class HtmlConversionOpsTests
                 new XElement(c + "chartSpace",
                     new XElement(c + "chart",
                         new XElement(c + "title"),
-                        new XElement(c + "plotArea",
-                            new XElement(c + "barChart",
-                                new XElement(c + "barDir", new XAttribute("val", barDirection)),
-                                new XElement(c + "grouping", new XAttribute("val", "clustered")),
-                                Series(c, 0, "North", new[] { 2.0, 4.0, 3.0 }),
-                                Series(c, 1, "South", new[] { 3.0, 1.0, 5.0 }),
-                                new XElement(c + "gapWidth", new XAttribute("val", 150))),
-                            new XElement(c + "valAx",
-                                new XElement(c + "scaling"))),
+                        new XElement(c + "plotArea", plotAreaChildren),
                         new XElement(c + "legend")))));
             main.PutXDocument(new XDocument(
                 new XElement(w + "document",
@@ -506,11 +499,33 @@ public class HtmlConversionOpsTests
                                                     new XAttribute(r + "id", chartRelationshipId)))))))),
                         new XElement(w + "sectPr")))));
         }
+        return stream.ToArray();
+    }
 
-        var html = HtmlConversionOps.ConvertToHtml(stream.ToArray(),
+    private static XElement ConvertChartSvg(byte[] bytes)
+    {
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
             new HtmlConversionOptions { FabricateCssClasses = false });
         var root = XElement.Parse(html);
-        var svg = root.Descendants().Single(element => element.Name.LocalName == "svg");
+        return root.Descendants().Single(element => element.Name.LocalName == "svg");
+    }
+
+    [Theory]
+    [InlineData("col", "column")]
+    [InlineData("bar", "bar")]
+    public void HCO087_CachedClusteredChart_RendersAccessibleSvgAtStoredExtent(
+        string barDirection, string expectedChartType)
+    {
+        var c = ChartC;
+        var svg = ConvertChartSvg(GeneratedChartDocxBytes(
+            new XElement(c + "barChart",
+                new XElement(c + "barDir", new XAttribute("val", barDirection)),
+                new XElement(c + "grouping", new XAttribute("val", "clustered")),
+                GeneratedChartSeries(0, "North", new[] { 2.0, 4.0, 3.0 }),
+                GeneratedChartSeries(1, "South", new[] { 3.0, 1.0, 5.0 }),
+                new XElement(c + "gapWidth", new XAttribute("val", 150))),
+            new XElement(c + "valAx",
+                new XElement(c + "scaling"))));
         var bars = svg.Descendants()
             .Where(element => (string?)element.Attribute("class") == "docx-chart-bar")
             .ToList();
@@ -527,15 +542,9 @@ public class HtmlConversionOpsTests
         Assert.Contains(bars, bar => (string?)bar.Attribute("fill") == "#ED7D31");
     }
 
-    private static XElement ConvertFixtureChartSvg(string fixture)
-    {
-        var bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
-            Path.Combine(fixture.Split('/'))));
-        string html = HtmlConversionOps.ConvertToHtml(bytes,
-            new HtmlConversionOptions { FabricateCssClasses = false });
-        var root = XElement.Parse(html);
-        return root.Descendants().Single(element => element.Name.LocalName == "svg");
-    }
+    private static XElement ConvertFixtureChartSvg(string fixture) =>
+        ConvertChartSvg(File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            Path.Combine(fixture.Split('/')))));
 
     [Fact]
     public void HCO088_CachedStackedColumnChart_RendersOneStackPerCategory()
@@ -592,6 +601,97 @@ public class HtmlConversionOpsTests
         // The date axis caches serial day numbers (41518 = 9/1/2013); labels render as dates.
         Assert.Contains("9/1/2013", svg.Value);
         Assert.Contains("Car", svg.Value);
+    }
+
+    [Fact]
+    public void HCO095_CachedPercentStackedColumnChart_NormalizesEveryCategoryTo100()
+    {
+        var c = ChartC;
+        var svg = ConvertChartSvg(GeneratedChartDocxBytes(
+            new XElement(c + "barChart",
+                new XElement(c + "barDir", new XAttribute("val", "col")),
+                new XElement(c + "grouping", new XAttribute("val", "percentStacked")),
+                GeneratedChartSeries(0, "North", new[] { 1.0, 3.0, 2.0 }),
+                GeneratedChartSeries(1, "South", new[] { 3.0, 1.0, 6.0 })),
+            new XElement(c + "valAx",
+                new XElement(c + "scaling"))));
+        var bars = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-bar")
+            .ToList();
+
+        Assert.Equal("column-percent-stacked", (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal(6, bars.Count);
+        // Unequal raw totals per category all normalize to a full-height 100% stack.
+        foreach (var category in bars.GroupBy(bar => (string?)bar.Attribute("data-chart-category")))
+            Assert.Equal(100.0, category.Sum(bar => double.Parse(
+                (string)bar.Attribute("data-chart-value")!,
+                System.Globalization.CultureInfo.InvariantCulture)), 6);
+        // The value axis pins at 100% with %-suffixed ticks instead of adding tick headroom.
+        Assert.Contains(svg.Descendants().Where(element => element.Name.LocalName == "text"),
+            text => text.Value == "100%");
+    }
+
+    [Fact]
+    public void HCO096_CachedDoughnutChart_RendersRingSlicesWithHole()
+    {
+        var c = ChartC;
+        var svg = ConvertChartSvg(GeneratedChartDocxBytes(
+            new XElement(c + "doughnutChart",
+                GeneratedChartSeries(0, "Share", new[] { 5.0, 3.0, 2.0 }),
+                new XElement(c + "holeSize", new XAttribute("val", 50)))));
+        var slices = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-slice")
+            .ToList();
+
+        Assert.Equal("doughnut", (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal(3, slices.Count);
+        // A doughnut slice is a ring segment (outer arc + inner hole arc), never a wedge
+        // reaching the center like a pie slice.
+        Assert.All(slices, slice =>
+            Assert.Equal(2, ((string)slice.Attribute("d")!).Split('A').Length - 1));
+        // The pie-family legend lists categories, not the single series.
+        Assert.Contains("Alpha", svg.Value);
+        Assert.Contains("Gamma", svg.Value);
+    }
+
+    [Fact]
+    public void HCO097_CachedStackedAreaChart_StacksSecondBandOnFirst()
+    {
+        var c = ChartC;
+        var svg = ConvertChartSvg(GeneratedChartDocxBytes(
+            new XElement(c + "areaChart",
+                new XElement(c + "grouping", new XAttribute("val", "stacked")),
+                GeneratedChartSeries(0, "North", new[] { 2.0, 4.0, 3.0 }),
+                GeneratedChartSeries(1, "South", new[] { 3.0, 1.0, 5.0 })),
+            new XElement(c + "valAx",
+                new XElement(c + "scaling"))));
+        var areas = svg.Descendants()
+            .Where(element => (string?)element.Attribute("class") == "docx-chart-area")
+            .ToList();
+
+        Assert.Equal("area-stacked", (string?)svg.Attribute("data-chart-type"));
+        Assert.Equal(2, areas.Count);
+        static string[] Points(XElement area) => ((string)area.Attribute("points")!).Split(' ');
+        Assert.All(areas, area => Assert.Equal(6, Points(area).Length));
+        // The second band's bottom edge is the first band's top edge: stacked, not overlaid.
+        Assert.Equal(Points(areas[0]).Take(3),
+            Points(areas[1]).Skip(3).Reverse());
+    }
+
+    [Fact]
+    public void HCO098_UnsupportedChartFamily_DegradesToBlankExtentWithoutCrash()
+    {
+        // Scatter has no cached-values projection; the drawing must degrade to the established
+        // no-chart output (blank extent) rather than fail the whole conversion.
+        var c = ChartC;
+        string html = HtmlConversionOps.ConvertToHtml(GeneratedChartDocxBytes(
+                new XElement(c + "scatterChart",
+                    new XElement(c + "scatterStyle", new XAttribute("val", "lineMarker")),
+                    GeneratedChartSeries(0, "North", new[] { 2.0, 4.0, 3.0 }))),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.DoesNotContain(XElement.Parse(html).Descendants(),
+            element => element.Name.LocalName == "svg");
     }
 
     [Fact]
