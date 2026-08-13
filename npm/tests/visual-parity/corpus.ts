@@ -122,6 +122,9 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
         'growing amount down the page. With auto spacing measured against the font line box the ' +
         'case is close and ink geometry is exact (F1 1.00000), so the margin was never in ' +
         'disagreement. The residual is substituted-font rasterization.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/398',
+      wordEvidence: 'At 96 DPI, the Microsoft Graph conversion starts first-line ink at row 117, ' +
+        'matching LibreOffice exactly and lying within one raster row of Docxodus (118).',
     },
   },
   {
