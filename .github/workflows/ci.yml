@@ -78,6 +78,48 @@ jobs:
       - name: TypeScript type check
         run: cd npm && npx tsc --noEmit
 
+  # The docx-scalpel (python/) suite is a client of the .NET core: pyhost.csproj
+  # project-references Docxodus.csproj, so a core change that breaks a DocxSession
+  # op fails here. That is the point of running it on every PR rather than
+  # path-filtering on python/**. python-publish.yml covers the packaged wheel per
+  # RID at release time; this job covers the full suite against the working tree.
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      # Surface both interpreters' failures in one run.
+      fail-fast: false
+      matrix:
+        # Ends of the range declared by requires-python = ">=3.10" and the
+        # classifiers. 3.11/3.12 sit between them.
+        python-version: ['3.10', '3.13']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # A framework-dependent host is fine here: setup-dotnet makes .NET 10 the
+      # runner's primary runtime, so the apphost resolves it without DOTNET_ROOT.
+      # _host_locator.py's dev fallback then discovers this path by walking up to
+      # Docxodus.sln — no staging into _bin/ and no DOCXODUS_HOST needed.
+      - name: Build docxodus-pyhost
+        run: dotnet build tools/python-host/pyhost.csproj -c Release
+
+      - name: Install docx-scalpel (editable)
+        run: python -m pip install --upgrade pip && python -m pip install -e './python[test]'
+
+      - name: Run Python tests
+        run: python -m pytest python/tests -v
+
   build-matrix:
     runs-on: ${{ matrix.os }}
     strategy:
