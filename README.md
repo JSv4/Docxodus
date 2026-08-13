@@ -226,7 +226,7 @@ TypeScript API and React hooks.
 |---|---|---|
 | .NET 10 library | [`Docxodus`](https://www.nuget.org/packages/Docxodus) (NuGet) | The engine. Everything else wraps it. |
 | Browser / Node | [`docxodus`](https://www.npmjs.com/package/docxodus) (npm) | .NET WASM + TypeScript. Runs fully client-side; Web Worker and React hooks included. |
-| Python | [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (PyPI) | Long-running host process, so an agent can issue dozens of edits against one open session. *Alpha; linux-x64 wheels.* |
+| Python | [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (PyPI) | Long-running host process, so an agent can issue dozens of edits against one open session. *Beta; wheels for linux-x64/arm64, osx-arm64, win-x64.* |
 | CLI | `Redline`, `Docx2Html`, `Docx2OC` | `dotnet tool install -g`, or download a self-contained binary. |
 
 ---

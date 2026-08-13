@@ -1,6 +1,8 @@
-# python-docxodus — Planned Python Wrapper for `DocxSession`
+# docx-scalpel — Python Wrapper for `DocxSession`
 
-**Status:** .NET-side foundation landed (`Docxodus.Internal.{SessionRegistry, DocxSessionOps, DocxSessionJson}` + `tools/python-host/` stdio NDJSON host). Python package itself is a follow-up PR.
+**Status:** Shipped. The package is published to PyPI as [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (`python/`, released on its own `docx-scalpel-v*` tag — see [`python/RELEASING.md`](../../python/RELEASING.md)); the .NET-side foundation it rides on is `Docxodus.Internal.{SessionRegistry, DocxSessionOps, DocxSessionJson}` + the `tools/python-host/` stdio NDJSON host.
+
+> This document is the original design spec, written before the package existed and kept for the wire-protocol and type-mapping rationale below. It says "python-docxodus" throughout because that was the working name; the shipped distribution is `docx-scalpel`. For the current API surface, see [`python/README.md`](../../python/README.md).
 
 ## Context
 

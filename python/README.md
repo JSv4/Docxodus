@@ -4,7 +4,7 @@
 
 `docx-scalpel` exposes Docxodus' stateful DOCX editor over a long-running .NET subprocess (`docxodus-pyhost`). The session lives in the host's memory until you explicitly release it, so an LLM agent can issue dozens of small edits against one document without paying the OOXML parse + Unid annotation + projection cost on every call.
 
-> **Status:** Alpha. linux-x64 wheels ship with a bundled `docxodus-pyhost`; other RIDs require a dev clone of Docxodus until the wheel matrix is extended (tracked in `RELEASING.md`).
+> **Status:** Beta. Wheels ship a bundled `docxodus-pyhost` for linux-x64, linux-arm64, osx-arm64, and win-x64; any other platform installs from the sdist and needs a host of its own (see below).
 
 ## Installation
 
@@ -12,11 +12,7 @@
 pip install docx-scalpel
 ```
 
-linux-x64 today; pre-release tags ship as `0.1.0a*`, so use `--pre` if you want to opt in:
-
-```bash
-pip install --pre docx-scalpel
-```
+That resolves a wheel on linux-x64, linux-arm64, osx-arm64, or win-x64 — each carrying a self-contained `docxodus-pyhost` built from the same commit as the release, so there's no .NET runtime to install and no version to pin.
 
 Source installs (`pip install` of the sdist, or `pip install -e .` from a dev clone) don't include a bundled host. Set `DOCXODUS_HOST=/path/to/docxodus-pyhost` to point at one you built, or run `dotnet build tools/python-host/pyhost.csproj` inside a Docxodus monorepo clone — the locator auto-discovers it.
 
@@ -91,6 +87,12 @@ This produces `tools/python-host/bin/Release/net10.0/docxodus-pyhost`. `_host_lo
 
 For non-monorepo development, set `DOCXODUS_HOST=/path/to/docxodus-pyhost` to override the discovery path.
 
+A `dotnet build` host is framework-dependent, so it needs the .NET 10 runtime at launch. If your *system* `dotnet` is older and .NET 10 lives elsewhere (e.g. `~/.dotnet`), the host will exit with `You must install or update .NET to run this application`; export `DOTNET_ROOT` to point at the newer install. Released wheels are unaffected — they bundle a self-contained host with no runtime lookup.
+
+```bash
+export DOTNET_ROOT="$HOME/.dotnet"
+```
+
 ### Editable install + tests
 
 ```bash
@@ -113,13 +115,19 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 
 | Tier | Methods |
 |---|---|
-| **Lifecycle** | `save`, `close`, `undo`, `redo` |
+| **Lifecycle** | `save`, `close`, `undo`, `redo`, `to_html` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
-| **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `delete_range`, `delete_section` |
+| **Inspection** | `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
+| **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
-| **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership`, `apply_list_format`, `apply_list_format_range` |
+| **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering` |
+| **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote` |
+| **B: native comments** | `add_comment`, `add_comment_to_revision`, `add_comment_reply`, `update_comment`, `set_comment_resolved`, `remove_comment`, `list_comments` |
+| **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership`, `apply_list_format`, `apply_list_format_range`, `set_list_start_override`, `clear_list_start_override` |
 | **D: tables** | `replace_cell_content` |
+| **D: tracked changes** | `set_tracked_changes`, `set_revision_author`, `list_revisions`, `accept_revision`, `reject_revision` |
+| **E: annotations** | `add_annotation`, `remove_annotation`, `update_annotation`, `move_annotation` |
 | **Raw XML** | `session.raw.get_xml`, `session.raw.insert_xml`, `session.raw.replace_xml` |
 
 Every mutation method returns an `EditResult` envelope — transport-level failures raise `DocxodusTransportError`, but a business outcome (`anchor_not_found`, `malformed_markdown`, etc.) returns `EditResult(success=False, error=EditError(...))`. **Never** an exception across the API boundary.
