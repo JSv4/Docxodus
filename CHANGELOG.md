@@ -54,6 +54,20 @@ All notable changes to this project will be documented in this file.
     dispositions were re-triaged from the new evidence.
 
 ### Fixed
+- **Paragraph space-before is suppressed at the top of later pages, matching
+  Word's section-aware pagination rule** (issue #428) — page placement now
+  treats converted `p` and outline-heading blocks as Word paragraphs: the
+  authored top spacing participates in normal same-page margin collapsing and
+  remains visible on the first page of a document or section, but the clone
+  placed first on a later page drops that spacing. Natural overflow,
+  `w:pageBreakBefore`, hard-break markers, and keep-with-next measurement all
+  use the same decision, while table and other non-paragraph margins remain
+  untouched. A generated four-page DOCX pins natural and forced breaks,
+  section-start and same-page controls; direct paginator probes cover outlined
+  headings, hard breaks, and non-paragraph scope. On the tracked legal contract,
+  page-2/page-3 first ink moved from row 115 to 99 px (Word 100, LibreOffice 99),
+  and a same-environment filtered rerun improved mean SSIM 0.69467 → 0.72874
+  and mean ink F1 0.57203 → 0.70363.
 - **Mobile Chrome no longer garbles the arcade/observatory animations with
   extra wrapped rows, and the converter opts document text out of
   device-driven inflation** — on Android the demo's 92-cell frame rows render

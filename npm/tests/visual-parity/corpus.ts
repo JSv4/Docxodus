@@ -376,10 +376,11 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
       rationale: 'The formerly dominant residual — the list-number suffix tab advancing to the ' +
         'next default stop instead of the declared text indent — was fixed by PR #421, with a ' +
         'small corpus effect (ink F1 0.52148 to 0.52440), so the case\'s severity was never ' +
-        'that one defect alone. Remaining measured residuals, renderer side: heading ' +
-        'space-before painted at page tops where LibreOffice drops it (16 px per page top), ' +
-        'and accumulated per-clause offsets across the three pages; the cached TOC also ' +
-        'carries the recorded issue-#397 hyperlink-style deviation (not gating).',
+        'that one defect alone. Issue #428 then removed the independently Word-confirmed ' +
+        'page-top spacing residual (Docxodus first ink 115 to 99 px on pages 2/3; Word 100, ' +
+        'LibreOffice 99). The case remains renderer-owned because accumulated per-clause ' +
+        'offsets still span the three pages; the cached TOC also carries the recorded ' +
+        'issue-#397 hyperlink-style deviation (not gating).',
       reference: 'https://github.com/JSv4/Docxodus/issues/415',
     },
   },

@@ -92,6 +92,8 @@ export interface MeasuredBlock {
   pageBreakBefore: boolean;
   /** Whether this is a page break marker */
   isPageBreak: boolean;
+  /** Whether the block is a Word paragraph whose top margin represents paragraph space-before */
+  isWordParagraph?: boolean;
 }
 
 /**
@@ -436,6 +438,7 @@ export class PaginationEngine {
         keepLines: child.dataset.keepLines === "true",
         pageBreakBefore: child.dataset.pageBreakBefore === "true",
         isPageBreak,
+        isWordParagraph: this.isWordParagraphElement(child),
       });
     }
 
@@ -509,6 +512,7 @@ export class PaginationEngine {
         keepLines: false,
         pageBreakBefore: false,
         isPageBreak: false,
+        isWordParagraph: false,
       });
       start = end;
     }
@@ -545,6 +549,7 @@ export class PaginationEngine {
       isPageBreak:
         element.dataset.pageBreak === "true" ||
         element.classList.contains(`${this.cssPrefix}break`),
+      isWordParagraph: this.isWordParagraphElement(element),
     };
 
     this.stagingElement.removeChild(measurementHost);
@@ -586,14 +591,18 @@ export class PaginationEngine {
   private measureKeepWithNextChainBodyHeight(
     chain: MeasuredBlock[],
     previousMarginBottomPt: number,
-    isFirstOnPage: boolean
+    isFirstOnPage: boolean,
+    pageInSection: number
   ): number {
     const firstBlock = chain[0];
     if (!firstBlock) return 0;
 
-    const firstMarginTop = isFirstOnPage
-      ? firstBlock.marginTopPt
-      : Math.max(firstBlock.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+    const firstMarginTop = this.effectiveBlockMarginTop(
+      firstBlock,
+      previousMarginBottomPt,
+      isFirstOnPage,
+      pageInSection
+    );
     let bodyHeight = firstMarginTop + firstBlock.heightPt;
 
     for (let index = 1; index < chain.length; index++) {
@@ -603,6 +612,54 @@ export class PaginationEngine {
     }
 
     return bodyHeight;
+  }
+
+  /** Word paragraphs render as `p`, or as `h1`–`h6` when their style has an outline level. */
+  private isWordParagraphElement(element: HTMLElement): boolean {
+    return element.tagName === "P" || /^H[1-6]$/.test(element.tagName);
+  }
+
+  private shouldSuppressPageTopSpacing(
+    block: MeasuredBlock,
+    isFirstOnPage: boolean,
+    pageInSection: number
+  ): boolean {
+    return isFirstOnPage && pageInSection > 1 && block.isWordParagraph === true;
+  }
+
+  /**
+   * Resolves the part of a block's top margin that consumes the current page.
+   *
+   * In Word's native DOCX layout, paragraph space-before is suppressed when a paragraph is the
+   * first body block on a later page of the SAME section. The first page of a document/section is
+   * the exception and keeps its spacing. Tables and other block margins are not paragraph spacing,
+   * so they continue to use the ordinary CSS collapsing rule.
+   */
+  private effectiveBlockMarginTop(
+    block: MeasuredBlock,
+    previousMarginBottomPt: number,
+    isFirstOnPage: boolean,
+    pageInSection: number
+  ): number {
+    if (this.shouldSuppressPageTopSpacing(block, isFirstOnPage, pageInSection)) {
+      return 0;
+    }
+    return isFirstOnPage
+      ? block.marginTopPt
+      : Math.max(block.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+  }
+
+  /** Clone a source block with the same page-top spacing decision used by the height budget. */
+  private cloneBlockForPage(
+    block: MeasuredBlock,
+    isFirstOnPage: boolean,
+    pageInSection: number
+  ): HTMLElement {
+    const clone = block.element.cloneNode(true) as HTMLElement;
+    if (this.shouldSuppressPageTopSpacing(block, isFirstOnPage, pageInSection)) {
+      clone.style.setProperty("margin-top", "0", "important");
+    }
+    return clone;
   }
 
   /**
@@ -1777,7 +1834,8 @@ export class PaginationEngine {
             this.measureKeepWithNextChainBodyHeight(
               keepChain,
               prevMarginBottomPt,
-              currentContent.length === 0
+              currentContent.length === 0,
+              pageInSection
             ) +
             additionalChainFootnoteHeight;
           const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
@@ -1792,7 +1850,8 @@ export class PaginationEngine {
             const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
               keepChain,
               0,
-              true
+              true,
+              pageInSection + 1
             );
             // finishPage transfers this continuation to the new page's
             // currentContinuation state, so include it in the destination
@@ -1835,11 +1894,12 @@ export class PaginationEngine {
       // Calculate the effective height this block will consume
       // Account for margin collapsing: the gap between blocks is max(prevBottom, currTop), not sum
       const isFirstOnPage = currentContent.length === 0;
-      let effectiveMarginTop = block.marginTopPt;
-      if (!isFirstOnPage) {
-        // Margin collapsing: use the larger of the two adjacent margins
-        effectiveMarginTop = Math.max(block.marginTopPt, prevMarginBottomPt) - prevMarginBottomPt;
-      }
+      const effectiveMarginTop = this.effectiveBlockMarginTop(
+        block,
+        prevMarginBottomPt,
+        isFirstOnPage,
+        pageInSection
+      );
       // Visible height = top margin gap + content + footnote space
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
@@ -1875,7 +1935,7 @@ export class PaginationEngine {
       // Check if block fits on current page (including its footnotes)
       if (blockSpace <= effectiveRemainingHeight) {
         // Block fits with current footnote allocation
-        currentContent.push(block.element.cloneNode(true) as HTMLElement);
+        currentContent.push(this.cloneBlockForPage(block, isFirstOnPage, pageInSection));
         remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
         // Add new footnotes to current page
@@ -1883,7 +1943,10 @@ export class PaginationEngine {
           currentFootnoteIds.push(...newFootnoteIds);
           currentFootnoteHeight += additionalFootnoteHeight;
         }
-      } else if (block.heightPt + block.marginTopPt <= effectiveContentHeight) {
+      } else if (
+        block.heightPt + this.effectiveBlockMarginTop(block, 0, true, pageInSection + 1) <=
+        effectiveContentHeight
+      ) {
         // Block doesn't fit with current allocation - try expanding footnote area
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
 
@@ -1894,7 +1957,7 @@ export class PaginationEngine {
 
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
           // Block itself fits, but footnotes don't - expand footnote area
-          currentContent.push(block.element.cloneNode(true) as HTMLElement);
+          currentContent.push(this.cloneBlockForPage(block, isFirstOnPage, pageInSection));
           remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
           prevMarginBottomPt = block.marginBottomPt;
 
@@ -1962,7 +2025,7 @@ export class PaginationEngine {
 
           if (blockSpaceWithoutFootnotes <= bodySpaceAfterExpansion - bodyContentUsed) {
             // Block fits after expanding footnote area.
-            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            currentContent.push(this.cloneBlockForPage(block, isFirstOnPage, pageInSection));
             // `remainingHeight` tracks BODY consumption only — every other branch maintains it
             // that way, and the footnote reserve is applied separately via `effectiveRemainingHeight`
             // at the top of each iteration. Assigning `bodySpaceAfterExpansion - …` here folded the
@@ -1979,8 +2042,10 @@ export class PaginationEngine {
             const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
               ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
               : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
-            const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
-            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            const newPageMarginTop = this.effectiveBlockMarginTop(
+              block, 0, true, pageInSection);
+            const newPageSpace = newPageMarginTop + block.heightPt + block.marginBottomPt;
+            currentContent.push(this.cloneBlockForPage(block, true, pageInSection));
             remainingHeight = effectiveContentHeight - newPageSpace;
             prevMarginBottomPt = block.marginBottomPt;
             // Merge, never replace: finishPage() may have just seeded this page with notes deferred
@@ -1996,9 +2061,10 @@ export class PaginationEngine {
           const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
             ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
             : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
-          // Include full top margin
-          const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
-          currentContent.push(block.element.cloneNode(true) as HTMLElement);
+          const newPageMarginTop = this.effectiveBlockMarginTop(
+            block, 0, true, pageInSection);
+          const newPageSpace = newPageMarginTop + block.heightPt + block.marginBottomPt;
+          currentContent.push(this.cloneBlockForPage(block, true, pageInSection));
           remainingHeight = effectiveContentHeight - newPageSpace;
           prevMarginBottomPt = block.marginBottomPt;
           // Merge, never replace: finishPage() may have just seeded this page with notes deferred
@@ -2025,7 +2091,7 @@ export class PaginationEngine {
         if (currentContent.length > 0) {
           finishPage();
         }
-        currentContent.push(block.element.cloneNode(true) as HTMLElement);
+        currentContent.push(this.cloneBlockForPage(block, true, pageInSection));
         // Merge, never replace: finishPage() may have just seeded this page with notes deferred
           // from the previous one, and overwriting here dropped them from the document.
           currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
