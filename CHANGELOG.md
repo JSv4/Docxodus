@@ -54,6 +54,38 @@ All notable changes to this project will be documented in this file.
     dispositions were re-triaged from the new evidence.
 
 ### Fixed
+- **The arcade/observatory canvas no longer tilts on devices whose monospace
+  font lacks the block-drawing glyphs** — the follow-on to the wrapped-rows
+  fix below, and the same root question asked of the other grid property. The
+  canvas is a 92×26 character grid, which holds only if every cell advances
+  the same width; that is a property of the font the device actually resolves,
+  which the document cannot state. The art draws with box drawing (U+2500…),
+  block elements (`█ ░ ▓`) and geometric shapes (`▶ ◀ ▲ ▼`), and Android's
+  monospace face covers none of them — each lands in a PROPORTIONAL fallback
+  (Noto Sans Symbols 2), displacing every cell after it by a different amount
+  on each row. Measured on the phone rig with that font situation reproduced:
+  the attract screen's five block-letter rows come out 8–13% wider than their
+  neighbours, a **12.1-cell** spread — the title card's `X` reads as a `K` and
+  the logo smears off the right edge, worst exactly where the art is densest.
+  The canvas is now pinned to a self-hosted 17 KB subset,
+  `docs/demo/fonts/docxodus-canvas-mono.woff2` (DejaVu Sans Mono 2.37 under
+  the Bitstream Vera license, renamed as that license requires; built and
+  hash-pinned by `docs/demo/tools/build-canvas-font.sh`), whose every one of
+  538 codepoints advances identically — taking the platform out of the loop
+  rather than hoping its fallback matches. Same spread with the pin: **0.01
+  cells**. `createCanvasPin` also neutralizes kerning, ligatures and inherited
+  letter/word spacing, which are per-glyph adjustments a grid cannot survive
+  either; the bespoke `npm/examples/ascii-animation.html` driver, which never
+  called the pin, now does (so it gains the wrapped-rows guarantee too). The
+  saved `.docx` is unchanged and still says Courier New — this is a display
+  pin, and Word has the real font. Guarded on both sides: a headless test
+  (`docs/demo/tools/canvas-font.test.mjs`, in `npm run test:demo-logic`)
+  drives all four phenomena, the whole title-card sweep and all three
+  cartridges and asserts every character they can draw is inside the shipped
+  subset, and `demo-arcade-mobile.spec.ts` asserts sub-0.1-cell row-width
+  spread on the attract screen and all three cartridges, one-cell advance for
+  every character actually on screen, and — as the control that keeps the
+  others honest — that aborting the font request restores the >1-cell tilt.
 - **Mobile Chrome no longer garbles the arcade/observatory animations with
   extra wrapped rows, and the converter opts document text out of
   device-driven inflation** — on Android the demo's 92-cell frame rows render

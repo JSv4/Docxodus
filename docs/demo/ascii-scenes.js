@@ -302,20 +302,62 @@ export function frameXml(openTag, grid, bg) {
   return { xml: parts.join(''), runs };
 }
 
-/** The canvas rows must NEVER wrap. The grid is authored for Courier New at
- *  8pt — 92 columns ≈ 6.1in, inside the 6.5in text column — but a platform
- *  can render it wider than authored: Android has no Courier New (Chrome
- *  substitutes a wider monospace face), and mobile Chrome's text autosizer
- *  (the OS "Text scaling" accessibility setting) inflates text-heavy blocks
- *  outright. Either way an over-wide row folds onto a second line and the
- *  frame stacks into garbage — extra lines that multiply as the animation
- *  fills the grid. Pinning `white-space: pre` keeps every row exactly one
- *  line, so the worst case degrades to a clipped right edge instead.
- *
- *  Returns a `pin(canvasAnchor)` the driver calls once per frame: the rule is
+// ─── The canvas grid pin ──────────────────────────────────────────────
+// The canvas paragraph is a character GRID — COLS×ROWS cells, authored for
+// Courier New at 8pt (92 columns ≈ 6.1in, inside the blank document's 6.5in
+// text column). Two grid properties have to hold on every device, and NEITHER
+// is something the document can state:
+//
+//   1. One row is one line. A platform can render the rows wider than
+//      authored — Android has no Courier New (Chrome substitutes a different
+//      monospace face) and mobile Chrome's text autosizer (the OS "Text
+//      scaling" accessibility setting) inflates text-heavy blocks outright —
+//      and an over-wide row folds onto a second line, stacking the frame into
+//      garbage as the animation fills the grid.
+//
+//   2. Every cell advances the same width. The canvas draws with box drawing
+//      (U+2500…), block elements (█ ░ ▓) and geometric shapes (▶ ◀ ▲ ▼).
+//      Android's monospace face covers none of those, so each one lands in a
+//      PROPORTIONAL fallback whose advance is not the cell — displacing every
+//      cell after it, by a different amount on each row. That is the tilt: the
+//      title card's X reads as a K and the logo smears off the right edge,
+//      worst exactly where the art is densest.
+//
+// So the pin states both, and takes the platform out of the loop for the
+// second one by shipping the font itself: docs/demo/fonts/, a 17 KB subset
+// whose every glyph advances identically (see tools/build-canvas-font.sh).
+// The saved .docx still says Courier New — this is a display pin, not a
+// document change, and Word has the real thing.
+const CANVAS_FONT_FAMILY = 'Docxodus Canvas Mono';
+const CANVAS_FONT_URL = new URL('./fonts/docxodus-canvas-mono.woff2', import.meta.url).href;
+
+/** Everything that could put a cell off its column, said explicitly. The font
+ *  is first in the stack (Courier New and the generic remain as the fallback
+ *  if the file ever fails to load); ligatures, kerning and letter/word spacing
+ *  are neutralized because they too are per-glyph adjustments the grid cannot
+ *  survive, and a host page's `letter-spacing` would otherwise inherit in. */
+const CANVAS_GRID_RULES =
+  ` font-family: "${CANVAS_FONT_FAMILY}", "Courier New", monospace !important;` +
+  ' font-kerning: none !important; font-variant-ligatures: none !important;' +
+  ' font-feature-settings: "liga" 0, "clig" 0, "calt" 0 !important;' +
+  ' letter-spacing: 0 !important; word-spacing: 0 !important;' +
+  ' white-space: pre !important;' +
+  ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important;';
+
+/** Returns a `pin(canvasAnchor)` the driver calls once per frame: the rules are
  *  keyed to the canvas paragraph's Unid (stable across frames, so this is a
- *  no-op except on first paint and after the canvas is rebuilt). */
+ *  no-op except on first paint and after the canvas is rebuilt). The
+ *  `@font-face` is declared once, up front, so the file is already in flight
+ *  before the first frame lands. */
 export function createCanvasPin() {
+  const face = document.head.appendChild(document.createElement('style'));
+  face.textContent =
+    `@font-face { font-family: "${CANVAS_FONT_FAMILY}";` +
+    ` src: url("${CANVAS_FONT_URL}") format("woff2");` +
+    // `swap` rather than `block`: a frame or two of the platform's own font
+    // beats an invisible game screen while a same-origin 17 KB file lands.
+    ' font-weight: normal; font-style: normal; font-display: swap; }';
+
   const style = document.head.appendChild(document.createElement('style'));
   let pinned = '';
   return (canvasAnchor) => {
@@ -323,9 +365,7 @@ export function createCanvasPin() {
     if (!unid || unid === pinned) return;
     pinned = unid;
     style.textContent =
-      `[data-anchor="${unid}"], [data-anchor="${unid}"] span {` +
-      ' white-space: pre !important;' +
-      ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }\n' +
+      `[data-anchor="${unid}"], [data-anchor="${unid}"] span {${CANVAS_GRID_RULES} }\n` +
       `[data-anchor="${unid}"] { overflow-x: hidden; }`;
   };
 }

@@ -129,7 +129,7 @@
     import { dotnet } from './_framework/dotnet.js';
     // ascii-scenes.js lives in docs/demo/ (the Pages deploy needs the physical
     // copy); pretest copies it into this webroot beside the page.
-    import { COLS, ROWS, SCENES, frameXml, seedObservatory } from './ascii-scenes.js';
+    import { COLS, ROWS, SCENES, frameXml, seedObservatory, createCanvasPin } from './ascii-scenes.js';
 
     const $ = (id) => document.getElementById(id);
     const boot = (msg) => { $('stats').textContent = msg; };
@@ -173,6 +173,12 @@
       let canvasEl = docEl.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
       if (!canvasEl) throw new Error('canvas block not found in rendered HTML');
 
+      // This page drives its own loop rather than the editor's, so it has to
+      // pin the canvas grid itself — same guarantee the shipped drivers get:
+      // rows never wrap, and every cell advances one width (see createCanvasPin).
+      const pinCanvas = createCanvasPin();
+      pinCanvas(canvasAnchor);
+
       // ─── Animation loop ─────────────────────────────────────────────
       let scene = SCENES[0];
       let playing = true;
@@ -200,6 +206,7 @@
         // The Unid-preserving path reports Modified; adopt Created defensively
         // if a frame ever loses the attribute so the loop self-heals.
         canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+        pinCanvas(canvasAnchor);
 
         const html = session.renderBlock(canvasAnchor);
         const t2 = performance.now();

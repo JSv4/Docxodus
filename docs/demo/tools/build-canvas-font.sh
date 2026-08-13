@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Rebuild docs/demo/fonts/docxodus-canvas-mono.woff2 — the font the ASCII
+# canvas (the Observatory's phenomena and the Arcade's game screen) is pinned
+# to.
+#
+# WHY THE CANVAS SHIPS ITS OWN FONT
+# ---------------------------------
+# The canvas is a character GRID: 92 columns × 26 rows of one Word paragraph,
+# authored for Courier New at 8pt. A grid only holds if every cell advances the
+# same width — and that is a property of the FONT ACTUALLY USED, which the page
+# does not otherwise control. The canvas draws box drawing (U+2500…), block
+# elements (U+2588 █, U+2591 ░, U+2593 ▓) and geometric shapes (U+25B6 ▶).
+# Android has no Courier New; Chrome substitutes Roboto Mono, which does not
+# cover those blocks, so each one lands in a PROPORTIONAL fallback (Noto Sans
+# Symbols 2) whose advance is not the mono cell. Every cell after a block glyph
+# is then displaced, by a different amount on each row — the title card's X
+# reads as a K and the logo smears off the right edge.
+#
+# Pinning a self-hosted subset removes the platform from the loop entirely: one
+# file, one advance for every glyph in it, identical on every device. The saved
+# .docx still says Courier New, which is correct — Word has it, and this is a
+# display pin, not a document change.
+#
+# SOURCE AND LICENSE
+# ------------------
+# DejaVu Sans Mono 2.37 (Book), whose 3322 mapped glyphs all advance exactly
+# 1233/2048 em — a single-advance font by construction, which is the property
+# we need. Licensed under the Bitstream Vera Fonts license (see
+# docs/demo/fonts/LICENSE.txt), which permits subsetting provided the result is
+# renamed away from "Bitstream"/"Vera" — hence "Docxodus Canvas Mono".
+#
+#   file    DejaVuSansMono.ttf, version 2.37
+#   sha256  c805f9436dbc268644c1d9584f01a601a653e028e08fd74b9b949f6cf8304d88
+#   from    https://dejavu-fonts.github.io/ (Debian: fonts-dejavu-core)
+#
+# USAGE
+# -----
+#   pip install 'fonttools[woff]'
+#   docs/demo/tools/build-canvas-font.sh [path/to/DejaVuSansMono.ttf]
+#
+# The script refuses to run against a source whose hash it does not recognize:
+# a different font may not be single-advance, and the whole point is the
+# guarantee. It writes the .woff2 and the .json manifest the tests read.
+set -euo pipefail
+
+SRC="${1:-/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf}"
+EXPECT_SHA=c805f9436dbc268644c1d9584f01a601a653e028e08fd74b9b949f6cf8304d88
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT_DIR="$HERE/../fonts"
+FAMILY="Docxodus Canvas Mono"
+
+# The repertoire, as ranges rather than the exact 97 characters the demos
+# happen to draw today: a scene reaching for one more box-drawing corner, or a
+# player typing a curly quote into the paused screen, must not silently drop
+# back to a proportional fallback. Everything here is single-advance in the
+# source font (asserted below), so the grid holds for all of it.
+UNICODES="U+0020-00FF,U+2010-2027,U+2030-203A,U+2190-21BB,U+2500-257F,U+2580-259F,U+25A0-25FF,U+2660-266F"
+
+if ! command -v pyftsubset >/dev/null 2>&1; then
+  echo "pyftsubset not found — pip install 'fonttools[woff]'" >&2
+  exit 1
+fi
+[ -f "$SRC" ] || { echo "source font not found: $SRC" >&2; exit 1; }
+
+ACTUAL_SHA=$(sha256sum "$SRC" | cut -d' ' -f1)
+if [ "$ACTUAL_SHA" != "$EXPECT_SHA" ]; then
+  echo "source font hash mismatch" >&2
+  echo "  expected $EXPECT_SHA" >&2
+  echo "  actual   $ACTUAL_SHA" >&2
+  echo "Refusing to build: the canvas font's contract is that EVERY glyph in it" >&2
+  echo "advances identically, which was verified against the pinned source." >&2
+  exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+pyftsubset "$SRC" \
+  --unicodes="$UNICODES" \
+  --layout-features='' --no-hinting --desubroutinize \
+  --drop-tables+=DSIG,kern,GPOS,GSUB,FFTM \
+  --name-IDs='*' --name-legacy \
+  --flavor=woff2 \
+  --output-file="$OUT_DIR/docxodus-canvas-mono.woff2"
+
+# Rename (the Bitstream Vera license requires it for a modified font), assert
+# the single-advance contract, and emit the manifest the tests read.
+python3 - "$OUT_DIR/docxodus-canvas-mono.woff2" "$FAMILY" "$SRC" "$EXPECT_SHA" <<'PY'
+import json, sys, pathlib
+from fontTools.ttLib import TTFont
+
+path, family, src, sha = sys.argv[1:5]
+font = TTFont(path)
+
+for record in font["name"].names:
+    if record.nameID in (1, 3, 4, 16):
+        record.string = family
+    elif record.nameID == 6:
+        record.string = family.replace(" ", "")
+font.save(path)
+
+font = TTFont(path)
+cmap = font.getBestCmap()
+upem = font["head"].unitsPerEm
+advances = {font["hmtx"][name][0] for name in font.getGlyphOrder()}
+if len(advances) != 1:
+    sys.exit(f"NOT single-advance: {sorted(advances)} — the grid guarantee would not hold")
+advance = advances.pop()
+
+ranges, codepoints = [], sorted(cmap)
+for cp in codepoints:
+    if ranges and cp == ranges[-1][1] + 1:
+        ranges[-1][1] = cp
+    else:
+        ranges.append([cp, cp])
+
+manifest = {
+    "_comment": "Generated by docs/demo/tools/build-canvas-font.sh — do not hand-edit.",
+    "family": family,
+    "file": pathlib.Path(path).name,
+    "source": "DejaVu Sans Mono 2.37 (Book), Bitstream Vera Fonts license — see LICENSE.txt",
+    "sourceFile": pathlib.Path(src).name,
+    "sourceSha256": sha,
+    "unitsPerEm": upem,
+    "advanceUnits": advance,
+    "advanceEm": round(advance / upem, 6),
+    "codepointCount": len(codepoints),
+    "ranges": ranges,
+}
+pathlib.Path(path).with_suffix(".json").write_text(json.dumps(manifest, indent=2) + "\n")
+size = pathlib.Path(path).stat().st_size
+print(f"{path}: {size} bytes, {len(codepoints)} codepoints, "
+      f"one advance {advance}/{upem} = {advance / upem:.5f} em")
+PY
