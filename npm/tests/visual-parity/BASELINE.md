@@ -478,9 +478,9 @@ issue where one exists:
    LibreOffice, where the declared `w:ind w:left="1080"` is 168 px. The list-number suffix tab
    advances to the next default stop instead of the declared text indent, ~25 px right on every
    numbered clause — the heavy-numbering legal shape the library's positioning makes central.
-   Secondary residuals: LibreOffice drops heading space-before at the top of a page where
-   Docxodus paints the declared `w:spacing w:before` (16 px at each page top), and the cached
-   TOC carries the recorded issue-#397 hyperlink-style deviation. Everything else about the
+   The secondary page-top residual was subsequently resolved by issue #428: Word evidence
+   confirmed suppression, and Docxodus now matches the page-top row within 1 px. The cached TOC
+   still carries the recorded issue-#397 hyperlink-style deviation. Everything else about the
    case — cached TOC entries, leaders, PAGEREF results, multilevel heading numbers, cached REF
    cross-references, the signature table — renders with content parity.
 6. **Nested table (`reference-deviation`).** Both engines nest correctly and start the outer
@@ -574,6 +574,39 @@ now the honest seven (`chart-pie`,
 refresh teaches: a renderer PR that changes corpus numbers must refresh the record in the same
 diff — the improvements list printed by every passing run announces exactly when this is owed.
 
+## Page-top paragraph spacing — 2026-08-13 (issue #428)
+
+The Microsoft Graph Word capture attached to issue #428 decided the structural question left open
+above. On pages 2 and 3 of `legal-contract`, Word's first ink is row **100**, LibreOffice's is row
+**99**, and the old Docxodus render was row **115**: both office engines suppress the Heading 1
+style's 12 pt `w:spacing/@w:before` when natural pagination places it at the top of a later page.
+
+The fix lives in page placement rather than conversion. A measured block records whether it is a
+Word paragraph (`p`, or `h1`–`h6` for an outline-level paragraph), and one shared margin decision is
+used for keep-chain fit calculations, ordinary body budgeting, and the cloned block that is painted.
+It suppresses space-before only for the first paragraph on page 2+ of the same section. The first
+page of a document/section retains the authored spacing, ordinary inter-paragraph margin collapsing
+is unchanged, and non-paragraph block margins are outside the rule. Natural overflow,
+`w:pageBreakBefore`, and explicit page-break markers all converge on that placement state.
+
+A generated four-page DOCX asserts geometry rather than glyph pixels: 18 pt space-before is removed
+after natural and paragraph-format breaks, retained at document/section starts, and retained between
+same-page paragraphs. Direct paginator probes add the hard-break and non-paragraph controls. The
+tracked corpus rerun then moved Docxodus first ink to row **99** on both pages 2 and 3 — one pixel
+from Word and exact with LibreOffice. In the same LibreOffice 25.8.7.3 / Chromium 143 /
+Poppler 25.03 environment, before → after was:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Mean SSIM, 3 pages | 0.69467 | **0.72874** |
+| Mean tolerant ink F1, 3 pages | 0.57203 | **0.70363** |
+| Page 2 SSIM / ink F1 | 0.61400 / 0.52821 | **0.66282 / 0.68928** |
+| Page 3 SSIM / ink F1 | 0.74653 / 0.52440 | **0.79992 / 0.75813** |
+
+This was a filtered evidence run, and the host's Poppler 25.03 differs from the committed ratchet's
+24.02 fingerprint, so these measurements are recorded here without rewriting the full-corpus
+ratchet. The within-environment before/after comparison and the exact first-ink rows remain valid.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -646,7 +679,8 @@ regression ratchet (issue #395), automatic line spacing (issue #396, which also 
 first implementations behind #411/#412/#413/#414/#415 (PRs #417–#421, whose numbers the
 2026-08-13 refresh banked), the reference-version contract (issue #403), the Word-reference
 evidence framework (issue #402 — tooling and procedure; measurements await a Word license),
-and the #404 reductions are resolved above. The remaining order is:
+the #404 reductions, and Word-confirmed page-top paragraph spacing (issue #428) are resolved above.
+The remaining order is:
 
 1. The re-triage debt the 2026-08-13 refresh made explicit: `endnote`'s systematic body shift
    and the two wrapped-image residuals (all `unattributed`, all strict-gating until triaged).
