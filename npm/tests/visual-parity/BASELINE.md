@@ -276,7 +276,8 @@ Two dimensions the error was directly visible in:
 - **`fields-and-tabs` (issue #397's line-box half).** TOC entries were displaced by a growing
   amount down the page — 7.3px, 11.0px, 14.7px for the first three. They now land at 140.05,
   166.13, 192.20 against LibreOffice's 140.17, 166.17, 192.17: **within 0.12px**. Ink F1 goes from
-  0.15913 to 0.99775. The remaining difference is hyperlink styling, which issue #397 attributes.
+  0.15913 to 0.99775. At this point hyperlink styling remained; the Word capture in issue #427
+  later established it as a renderer bug and the dedicated section below records the fix.
 
 The corpus rerun also dissolved a standing attribution. `numbered-lists` was `reference-deviation`
 on the reading that "the whole content is about 28px lower, so LibreOffice must import the 1701-twip
@@ -319,43 +320,25 @@ No severe case remains and the strict-gating set is empty, but strict mode is NO
 that is a separate decision, and two `major` cases still sit above the threshold a strict run
 would eventually want.
 
-## TOC hyperlink styling — 2026-08-11 (issue #397)
+## TOC field-result presentation — 2026-08-13 (issue #427)
 
-Issue #397 named two residuals in the `fields-and-tabs` case, and they turned out to have opposite
-answers. Pinning them separately is what the issue asked for, and it is what the evidence supports.
+Issue #397 correctly fixed TOC line geometry but inferred hyperlink presentation from OOXML alone.
+The Word-reference capture resolves the disputed behavior: in the measured TOC entry region
+`(90,135)–(730,220)`, Word contains **0 blue pixels**, while blue content elsewhere on the same page
+proves the export did not globally discard color. Cached `TOC` field-result links are black and not
+underlined in Word despite their `Hyperlink` character style.
 
-**Line-box height was ours.** TOC entries drifted further down the page with every entry — 7.3px,
-11.0px, 14.7px for the first three — because automatic line spacing was measured against font-size
-instead of the font's own line box. Fixed in issue #396 above; entries now land within **0.12px**
-of LibreOffice and the case's ink F1 is 0.99775.
+The fix follows the renderer's existing field architecture. `FieldRetriever` now recognizes `TOC`
+and reports cached-result membership from the annotated complex-field stack. After normal run-style
+resolution, the HTML converter removes hyperlink color and underline only when a run is both inside
+`w:hyperlink` and inside that field result. It does not force black, so underlying TOC formatting is
+still authoritative. An ordinary link using the same `TOC1` paragraph style and `Hyperlink`
+character style remains blue and underlined.
 
-**Hyperlink styling is not.** The entry run in `HC022` carries `<w:rStyle w:val="Hyperlink"/>`, and
-the document's `Hyperlink` character style declares `w:color="0563C1"` with `w:u w:val="single"`.
-Sampling the two renders over the TOC entry rows:
-
-| Renderer | Dominant entry-text colour |
-|---|---|
-| Docxodus | **`#0563C1`** — the declared value, byte for byte |
-| LibreOffice | **`#000000`** — no hyperlink colour at all |
-
-Docxodus renders what the file declares. LibreOffice drops a character style that the run
-explicitly references, which is a deviation from the OOXML, not a Docxodus defect — and "the TOC
-came out blue and underlined" is the well-known consequence of Word's own `\h` table of contents
-applying this style. LibreOffice is a comparison implementation, not the correctness oracle, so the
-output is **not** changed to match it and the disposition moves `renderer-bug` →
-`reference-deviation`. This is the same standard applied when the `numbered-lists` margin was
-kept over LibreOffice's import.
-
-The claim only means something if the renderer is reading the style rather than decorating every
-hyperlink it sees, so `npm/tests/toc-line-geometry.spec.ts` generates a TOC containing both kinds
-of entry: one with `w:rStyle` and an otherwise identical one without. The styled entry must carry
-the declared colour and underline; the unstyled one must carry neither. Line geometry is pinned by
-separate assertions — the entry line box equals the OOXML multiple of the font's line box, and the
-entries are evenly spaced so displacement cannot accumulate — and one assertion pins that the two
-are independent, i.e. that applying the character style does not change the line box.
-
-With this, the corpus's remaining non-`environment` work is the `merged-table` colour delta (issue
-#399), the last `unattributed` case.
+The filtered `fields-and-tabs` rerun (LibreOffice 25.8.7.3, Chromium 143.0.7499.4, Poppler 25.03.0)
+remains **minor**, with SSIM **0.95942** and tolerant ink F1 **0.99868**. The tracked Word region now
+has **0 `#0563C1` or blue-dominant pixels** in Docxodus as well. Its disposition moves from
+`reference-deviation` to `environment`; the remaining delta is same-font rasterization/line metrics.
 
 ## The merged-table colour delta — 2026-08-11 (issue #399)
 
@@ -627,7 +610,7 @@ all 21 together.
 | inline-image | 1/1 | major | environment | 0.93255 | 0.77340 | Improved by issue #396 (ink F1 0.64760 to 0.77340). Residual is indentation/wrapping of the same fonts, not an inline-flow failure. |
 | chart | 1/1 | close | environment | 0.98687 | 0.96817 | Cached clustered column data renders as accessible inline SVG at the stored extent. Other chart families remain unsupported. |
 | shape | 1/1 | close | renderer-bug | 0.98599 | 1.00000 | Auto-fit height now follows the laid-out text (issue #396): height error -16.0 px to +2.7 px, ink geometry exact. Residual is the CSS border adding to an auto height where DrawingML strokes `a:ln` on the shape boundary. |
-| fields-and-tabs | 1/1 | minor | reference-deviation | 0.96026 | 0.99775 | Tab targets and leaders correct since PR #380; entry line height correct since issue #396 (within 0.12 px). The residual is hyperlink styling: the run references the `Hyperlink` character style, Docxodus paints its declared `#0563C1`, LibreOffice paints black (issue #397). |
+| fields-and-tabs | 1/1 | minor | environment | 0.95942 | 0.99868 | Word evidence shows 0 blue pixels in the cached TOC result; issue #427 now suppresses hyperlink presentation from semantic field context. Remaining delta is rasterization/line metrics. |
 | footnote | 1/1 | close | environment | 0.99502 | 0.99064 | Note placement fixed (issue #378); issue #396 stopped the superscript reference inflating its line box. Residual is substituted-font rasterization and LibreOffice-24.2 separator width. |
 | tracked-deletion | 1/1 | minor | environment | 0.97950 | 0.99667 | Identical accepted-revision bytes are compared. Improved by the font contract (issue #379) and issue #396; residual is same-font heading metrics and wrapping. |
 

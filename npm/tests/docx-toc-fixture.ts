@@ -1,15 +1,14 @@
 import { storedZip, xml } from './docx-zip.js';
 
 /**
- * A generated table of contents (issue #397) — heading, dotted-leader entries, right-aligned page
- * numbers, and hyperlink runs — reduced to the two things the case is about: how tall a TOC entry's
- * line box is, and where its hyperlink appearance comes from.
+ * A generated cached table of contents (issues #397/#427) — an actual complex TOC field around
+ * dotted-leader entries and an ordinary hyperlink control after the field result. Both kinds of
+ * link use the same character style, so field context is the only styling variable.
  *
  * The interesting property is that the entry text carries `w:rStyle w:val="Hyperlink"`, and the
- * `Hyperlink` character style declares a color and an underline. That is the ONLY source of
- * hyperlink appearance in the file: `w:hyperlink` is a link, not a style. A renderer that paints a
- * hyperlink blue without being told to is fabricating, and one that ignores the declared style is
- * dropping — the fixture can tell the two apart because it emits both kinds of entry.
+ * `Hyperlink` character style declares a color and an underline. Word suppresses that presentation
+ * for hyperlinks inside the cached TOC result, but applies it to the otherwise-identical ordinary
+ * link. A renderer must therefore use field semantics, not paragraph-style or anchor heuristics.
  */
 
 const w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -31,30 +30,38 @@ export const TOC_TAB_TWIPS = 9350;
 export interface TocEntry {
   text: string;
   page: string;
-  /** Apply the `Hyperlink` character style to the entry text, as Word's `\h` TOC does. */
-  styled: boolean;
 }
 
 export const TOC_ENTRIES: TocEntry[] = [
-  { text: 'The first heading of the generated document', page: '1', styled: true },
-  { text: 'The second heading of the generated document', page: '2', styled: true },
-  { text: 'The third heading of the generated document', page: '3', styled: true },
-  // The control: identical markup MINUS w:rStyle. Nothing in the file asks for hyperlink
-  // appearance here, so anything blue or underlined would be the renderer's invention.
-  { text: 'An entry whose run carries no character style', page: '4', styled: false },
+  { text: 'The first heading of the generated document', page: '1' },
+  { text: 'The second heading of the generated document', page: '2' },
+  { text: 'The third heading of the generated document', page: '3' },
 ];
+export const ORDINARY_HYPERLINK_TEXT = 'An ordinary hyperlink using the same character style';
 
 function entryXml(entry: TocEntry, index: number): string {
-  const rStyle = entry.styled ? '<w:rStyle w:val="Hyperlink"/>' : '';
+  const fieldStart = index === 0
+    ? '<w:r><w:fldChar w:fldCharType="begin"/></w:r>' +
+      '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r>' +
+      '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+    : '';
+  const fieldEnd = index === TOC_ENTRIES.length - 1
+    ? '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    : '';
   // `w:webHidden` on the leader/page-number runs is what Word writes; they stay visible in print.
   return `<w:p><w:pPr><w:pStyle w:val="TOC1"/>` +
     `<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${TOC_TAB_TWIPS}"/></w:tabs>` +
-    `</w:pPr>` +
+    `</w:pPr>${fieldStart}` +
     `<w:hyperlink w:anchor="_Toc${index}" w:history="1">` +
-    `<w:r><w:rPr>${rStyle}<w:noProof/></w:rPr><w:t xml:space="preserve">${entry.text}</w:t></w:r>` +
+    `<w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr>` +
+    `<w:t xml:space="preserve">${entry.text}</w:t></w:r>` +
     `<w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:tab/></w:r>` +
+    `<w:r><w:fldChar w:fldCharType="begin"/></w:r>` +
+    `<w:r><w:instrText xml:space="preserve"> PAGEREF _Toc${index} \\h </w:instrText></w:r>` +
+    `<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
     `<w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:t>${entry.page}</w:t></w:r>` +
-    `</w:hyperlink></w:p>`;
+    `<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+    `</w:hyperlink>${fieldEnd}</w:p>`;
 }
 
 export function generateTocDocx(): Uint8Array {
@@ -65,6 +72,13 @@ export function generateTocDocx(): Uint8Array {
   <w:body>
     <w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>
     ${body}
+    <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>
+      <w:hyperlink w:anchor="_Ordinary" w:history="1">
+        <w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr>
+          <w:t>${ORDINARY_HYPERLINK_TEXT}</w:t>
+        </w:r>
+      </w:hyperlink>
+    </w:p>
     <w:sectPr>
       <w:pgSz w:w="12240" w:h="15840"/>
       <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"

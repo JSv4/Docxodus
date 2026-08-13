@@ -80,6 +80,35 @@ namespace Docxodus
             return "{" + instrText + "}";
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="element"/> is in the cached result of a complex field
+        /// of <paramref name="fieldType"/>. Nested fields are considered independently, so a
+        /// PAGEREF result nested inside a TOC result still reports both contexts correctly.
+        /// </summary>
+        internal static bool IsFieldResult(XElement element, string fieldType)
+        {
+            if (element == null || string.IsNullOrWhiteSpace(fieldType))
+                return false;
+
+            var stack = element.Annotation<Stack<FieldElementTypeInfo>>();
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            if (stack == null || root == null)
+                return false;
+
+            return stack
+                .Where(info => info.FieldElementType == FieldElementTypeEnum.Result)
+                .Select(info => InstrText(root, info.Id).TrimStart('{').TrimEnd('}'))
+                .Select(instruction => instruction
+                    .Split(
+                        new[] { ' ', '\t', '\r', '\n' },
+                        StringSplitOptions.RemoveEmptyEntries)
+                    .FirstOrDefault())
+                .Any(type => string.Equals(
+                    type,
+                    fieldType,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
         public static void AnnotateWithFieldInfo(OpenXmlPart part)
         {
             XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";

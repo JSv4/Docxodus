@@ -245,7 +245,11 @@ When adjacent cells have different borders, priority is determined by:
 ```
 
 The anchor suppresses browser-default link presentation. Explicit Word run styling inside the link
-still wins, while unstyled cached field runs inherit the surrounding document color.
+still wins in ordinary links. Cached `TOC` field results are the semantic exception: Word suppresses
+hyperlink color and underline there even when a run references the `Hyperlink` character style.
+`FieldRetriever` annotates the complex-field stack before transformation, and run conversion removes
+only those two presentation properties when the run is both inside `w:hyperlink` and inside a `TOC`
+result. Removing rather than replacing them exposes the document's underlying TOC formatting.
 
 **HYPERLINK fields** (detected via `FieldRetriever`):
 ```html

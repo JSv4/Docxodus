@@ -216,15 +216,16 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     categories: ['fields', 'text'],
     rationale: 'Field results, tab leaders, and right-aligned page numbers.',
     disposition: {
-      kind: 'reference-deviation',
+      kind: 'environment',
       rationale: 'Tab targets and leaders are correct since PR #380, and TOC entry line height is ' +
         'correct since issue #396 — entries land within 0.12 px of LibreOffice, where they were ' +
-        'displaced by up to 14.7 px, and ink F1 is 0.99775. The residual is hyperlink styling, ' +
-        'attributed in issue #397: the entry runs carry `w:rStyle w:val="Hyperlink"`, and that ' +
-        'character style declares `w:color 0563C1` and `w:u single`. Docxodus paints exactly the ' +
-        'declared colour; LibreOffice paints the entries black, ignoring the style the file ' +
-        'applies. Docxodus follows the OOXML, so the output is not changed to match.',
-      reference: 'https://github.com/JSv4/Docxodus/issues/397',
+        'displaced by up to 14.7 px. Issue #427 established the remaining presentation rule from ' +
+        'Word evidence: cached TOC field-result links suppress hyperlink colour and underline. ' +
+        'Docxodus now applies that rule from the annotated field stack; the remaining minor ' +
+        'pixel delta is same-font rasterization and line metrics.',
+      reference: 'https://github.com/JSv4/Docxodus/issues/427',
+      wordEvidence: 'The measured Word TOC region (x=90..730, y=135..220) contains 0 blue pixels; ' +
+        'blue content elsewhere on the page proves this is scoped to the cached field result.',
     },
   },
   {

@@ -14,7 +14,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 4. [Paragraph Layout](#paragraph-layout)
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
    - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
-   - [LibreOffice ignores the `Hyperlink` character style on TOC field results](#libreoffice-ignores-the-hyperlink-character-style-on-toc-field-results)
+   - [Cached TOC field results suppress hyperlink presentation](#cached-toc-field-results-suppress-hyperlink-presentation)
 5. [Theme Colors](#theme-colors)
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Contributing](#contributing)
@@ -1342,22 +1342,26 @@ residual (substituted-font rasterization), not a `reference-deviation`.
   cite Word evidence unless the corresponding measurement is committed.
 - `npm/tests/visual-parity/ratchet.json` records the current Docxodus/LibreOffice F1 of 1.00000.
 
-### LibreOffice ignores the `Hyperlink` character style on TOC field results
+### Cached TOC field results suppress hyperlink presentation
 
 #### Symptom
 
-A generated table of contents renders blue and underlined in Docxodus (and in Word) but plain black
-in LibreOffice, making a pixel comparison of any TOC document look like a Docxodus colour bug.
+A cached table of contents rendered blue and underlined in Docxodus while both Word and
+LibreOffice rendered its entries black. An ordinary hyperlink using the same paragraph and
+character styles remained blue and underlined in Word.
 
 #### Minimal XML reproducer
 
 ```xml
-<w:hyperlink w:anchor="_Toc425251205" w:history="1">
-  <w:r>
-    <w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr>
-    <w:t>The first heading</w:t>
-  </w:r>
+<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+<w:r><w:instrText> TOC \o "1-3" \h </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:hyperlink w:anchor="_Toc425251205">
+  <w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>
+    <w:t>The first heading</w:t></w:r>
 </w:hyperlink>
+<!-- cached entries may span paragraphs -->
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
 ```
 
 with, in `styles.xml`:
@@ -1371,45 +1375,47 @@ with, in `styles.xml`:
 
 #### The corner case
 
-`w:hyperlink` is a *link*, not a style — nothing about it implies an appearance. The appearance
-comes from the run's explicit `w:rStyle w:val="Hyperlink"` reference, and the referenced character
-style declares the colour and the underline. Word writes exactly this when it builds a TOC with the
-`\h` switch, which is why "my table of contents came out blue and underlined" is such a common Word
-question.
+`w:hyperlink` alone does not imply an appearance. Here the run explicitly references the
+`Hyperlink` character style, which declares blue and underline, but Word applies a higher-level
+presentation rule to hyperlinks in the cached result of a complex `TOC` field. That field context,
+not the `TOC1` paragraph style or the anchor name, suppresses those two properties.
 
-Measured over the TOC entry rows of `HC022-Table-Of-Contents.docx` at 96 DPI:
+The Word-reference capture of `HC022-Table-Of-Contents.docx` was rasterized at 96 DPI. In the TOC
+entry region `(90,135)–(730,220)`, Word contains **0 blue pixels**, while blue content elsewhere on
+the same page rules out a global color or export artifact.
 
-| Renderer | Dominant entry-text colour |
+| Context | Word presentation |
 |---|---|
-| Word | `Hyperlink` style applied (blue, underlined) |
-| Docxodus | `#0563C1` — the declared value, byte for byte |
-| LibreOffice | `#000000` — the character style is dropped |
+| Hyperlink inside the cached `TOC` result | Underlying TOC color; no underline |
+| Ordinary hyperlink with the same `TOC1` + `Hyperlink` styles | `#0563C1`; underlined |
 
 #### Analysis
 
-LibreOffice's writer import appears to treat a TOC field result as generated content it re-styles
-itself, discarding the character style the run references. The direction of the deviation is
-decisive: Docxodus emits the value the file declares, so no renderer change is warranted. The
-visual-parity corpus records `fields-and-tabs` as `reference-deviation` on this evidence.
+The renderer already annotates every OOXML element with its enclosing complex-field stack before
+HTML transformation. `FieldRetriever` now recognizes `TOC` and exposes whether a run belongs to its
+cached result. Run styling then removes `color` and only the `underline` decoration for a
+`w:hyperlink` in that context. Removing the properties instead of forcing black preserves an
+intentional color supplied by the underlying TOC paragraph/run formatting.
 
 #### Relevant code
 
-- `Docxodus/WmlToHtmlConverter.cs` — character-style resolution emits `span.docx-Hyperlink` with
-  the declared `color`/`text-decoration`.
+- `Docxodus/FieldRetriever.cs` — parses `TOC` and identifies its cached result across paragraphs.
+- `Docxodus/WmlToHtmlConverter.cs` — applies cached-field presentation after normal run-style
+  resolution.
 
 #### Tests
 
-- `npm/tests/toc-line-geometry.spec.ts` — asserts a `w:rStyle`-carrying entry gets the declared
-  colour and underline, AND that an otherwise identical entry *without* `w:rStyle` gets neither.
-  The second half is what proves the renderer reads the style rather than decorating every
-  hyperlink; without it, "we match Word" would be indistinguishable from a lucky default.
+- `Docxodus.Tests/FieldRetrieverTests.cs` — pins cross-paragraph result scope and proves it ends at
+  `w:fldCharType="end"`.
+- `npm/tests/toc-line-geometry.spec.ts` — uses an actual cached `TOC` field plus an ordinary
+  same-style hyperlink control; it pins both presentation contexts and unchanged line geometry.
 
 #### A trap when reducing this to a generated document
 
 A programmatically built package needs a **`DocumentSettingsPart`** for character-style resolution
 to run at all. Without `word/settings.xml`, the converter still emits the style's CSS *class* on the
 run but generates an **empty rule** for it, so `w:rStyle` silently loses every declared property and
-the reduced case appears to reproduce the LibreOffice behaviour. This is the same requirement
+the reduced case appears to pass without exercising suppression. This is the same requirement
 CLAUDE.md notes for programmatic .NET test documents.
 
 ## Theme Colors
