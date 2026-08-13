@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.9.0] - 2026-08-13
+
 ### Added
 - **Visual-parity evidence framework: LibreOffice reference-version contract,
   Word-reference evidence store, and reduced environment cases** (issues #402,
@@ -52,6 +54,36 @@ All notable changes to this project will be documented in this file.
     to five decimal places and re-measured the eight cases moved by renderer
     PRs #417–#421 (which had landed without a record refresh); their corpus
     dispositions were re-triaged from the new evidence.
+- **Chart families beyond clustered bar/column render from cached data**
+  (issue #411) — `WmlToHtmlConverter` now projects stacked and percent-stacked
+  bar/column charts, pie and doughnut charts (per-point `c:dPt` colors,
+  `c:firstSliceAng`/`c:holeSize` honored), line charts, and area charts into
+  inline SVG, with 3-D variants (`bar3DChart`, `pie3DChart`, `line3DChart`,
+  `area3DChart`) rendered as their 2-D projection. Previously everything but a
+  clustered `c:barChart` rendered as a blank extent. Line-series colors are
+  read from the stroke (`a:ln/a:solidFill`), date axes (`c:dateAx`) format
+  cached serial day numbers as dates, dense category axes thin their labels to
+  fit, and a percent-stacked value axis pins at 100% with `%`-suffixed ticks.
+  New SVG element classes `docx-chart-slice`, `docx-chart-line`, and
+  `docx-chart-area` join `docx-chart-bar`; `data-chart-type` gains
+  `column-stacked`/`bar-stacked`/`-percent-stacked` suffixes plus `pie`,
+  `doughnut`, `line`, and `area`.
+- **Visual-parity corpus second wave** (issue #400) — nine new tracked cases
+  covering the shapes one-fixture-per-category coverage had left invisible:
+  stacked/pie/line chart families, floating square- and tight-wrapped images,
+  nested tables, a continuous two-column (`w:cols`) section, endnotes, and a
+  realistic legal contract (cached TOC + multilevel heading numbering +
+  (a)/(i) sub-clauses + cached REF cross-references + signature table). Five
+  fixtures are existing tracked TestFiles; four are authored deterministically
+  by `TestFiles/VP/make-vp-fixtures.py` and committed under the same blob-hash
+  guard. All nine entered `unattributed` (strict-gating) and were triaged from
+  the first measured run — surfacing three renderer bugs (continuous section
+  breaks render as page breaks and `w:cols` is ignored, #413; the paginated
+  print layout drops the endnotes section, #414; the list-number suffix tab
+  overshoots the declared text indent to the next default tab stop, #415) and
+  pinning the chart-family (#411) and floating-image text-wrap (#412) feature
+  gaps as measured, non-hidden corpus results. `ratchet.json` now records all
+  21 cases; BASELINE.md carries the first measured run and each case's triage.
 
 ### Fixed
 - **The arcade/observatory canvas no longer tilts on devices whose monospace
@@ -195,38 +227,6 @@ All notable changes to this project will be documented in this file.
   page) center; the anchor's `distT/R/B/L` clearances become margins.
   `wrapTight`'s polygon degrades to its bounding box; `wrapTopAndBottom`,
   `wrapNone`, and a centered object keep their previous placement.
-
-### Added
-- **Chart families beyond clustered bar/column render from cached data**
-  (issue #411) — `WmlToHtmlConverter` now projects stacked and percent-stacked
-  bar/column charts, pie and doughnut charts (per-point `c:dPt` colors,
-  `c:firstSliceAng`/`c:holeSize` honored), line charts, and area charts into
-  inline SVG, with 3-D variants (`bar3DChart`, `pie3DChart`, `line3DChart`,
-  `area3DChart`) rendered as their 2-D projection. Previously everything but a
-  clustered `c:barChart` rendered as a blank extent. Line-series colors are
-  read from the stroke (`a:ln/a:solidFill`), date axes (`c:dateAx`) format
-  cached serial day numbers as dates, dense category axes thin their labels to
-  fit, and a percent-stacked value axis pins at 100% with `%`-suffixed ticks.
-  New SVG element classes `docx-chart-slice`, `docx-chart-line`, and
-  `docx-chart-area` join `docx-chart-bar`; `data-chart-type` gains
-  `column-stacked`/`bar-stacked`/`-percent-stacked` suffixes plus `pie`,
-  `doughnut`, `line`, and `area`.
-- **Visual-parity corpus second wave** (issue #400) — nine new tracked cases
-  covering the shapes one-fixture-per-category coverage had left invisible:
-  stacked/pie/line chart families, floating square- and tight-wrapped images,
-  nested tables, a continuous two-column (`w:cols`) section, endnotes, and a
-  realistic legal contract (cached TOC + multilevel heading numbering +
-  (a)/(i) sub-clauses + cached REF cross-references + signature table). Five
-  fixtures are existing tracked TestFiles; four are authored deterministically
-  by `TestFiles/VP/make-vp-fixtures.py` and committed under the same blob-hash
-  guard. All nine entered `unattributed` (strict-gating) and were triaged from
-  the first measured run — surfacing three renderer bugs (continuous section
-  breaks render as page breaks and `w:cols` is ignored, #413; the paginated
-  print layout drops the endnotes section, #414; the list-number suffix tab
-  overshoots the declared text indent to the next default tab stop, #415) and
-  pinning the chart-family (#411) and floating-image text-wrap (#412) feature
-  gaps as measured, non-hidden corpus results. `ratchet.json` now records all
-  21 cases; BASELINE.md carries the first measured run and each case's triage.
 
 ## [9.8.0] - 2026-08-11
 
