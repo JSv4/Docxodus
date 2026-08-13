@@ -33,6 +33,10 @@ import {
   probeLineCountsFromPdfText,
   probeMarker,
 } from './visual-parity/font-contract.js';
+import {
+  assertLibreOfficeContract,
+  popplerVersionOutput,
+} from './visual-parity/environment-contract.js';
 import { decodePng, encodePng } from './visual-parity/png.js';
 import {
   RATCHET_RECORD_FILE,
@@ -41,6 +45,7 @@ import {
   readRecord,
   serializeRecord,
 } from './visual-parity/ratchet.js';
+import { readWordReference } from './visual-parity/word-reference.js';
 
 test.skip(process.env.DOCXODUS_VISUAL_PARITY !== '1',
   'set DOCXODUS_VISUAL_PARITY=1 on a host with libreoffice and pdftoppm');
@@ -346,6 +351,9 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   test.setTimeout(20 * 60 * 1000);
   assertTrackedCorpus(VISUAL_PARITY_CORPUS);
   const fontContract = fontContractReport(repoRoot); // throws if the host misses the contract
+  // The reference-version contract (issue #403): fail in the first second with install guidance
+  // rather than after twenty minutes at the ratchet's fingerprint check.
+  const libreofficeVersion = assertLibreOfficeContract();
   const corpus = selectedCorpus();
   const outputRoot = resolve(process.env.DOCXODUS_VISUAL_PARITY_OUTPUT ??
     join(tmpdir(), 'docxodus-visual-parity'));
@@ -457,8 +465,8 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
     environment: {
       browserName,
       chromium: page.context().browser()?.version() ?? 'unknown',
-      libreoffice: commandVersion('libreoffice', ['--version']),
-      pdftoppm: commandVersion('pdftoppm', ['-v']).split('\n')[0],
+      libreoffice: libreofficeVersion,
+      pdftoppm: popplerVersionOutput(),
       fontContract,
       locale: 'C.UTF-8',
       timezone: 'UTC',
@@ -467,6 +475,16 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       category,
       VISUAL_PARITY_CORPUS.filter(entry => entry.categories.includes(category)).map(entry => entry.id),
     ])),
+    // Word-evidence coverage (issue #402): which cases have recorded Word measurements backing
+    // their dispositions, and which are still pending capture.
+    wordReference: (() => {
+      const record = readWordReference();
+      if (!record) return { measured: [], pending: VISUAL_PARITY_CORPUS.map(entry => entry.id) };
+      return {
+        measured: record.cases.filter(entry => entry.status === 'measured').map(entry => entry.id),
+        pending: record.cases.filter(entry => entry.status === 'pending').map(entry => entry.id),
+      };
+    })(),
     aggregate: summarizeCases(cases),
     cases,
   };
@@ -519,6 +537,7 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
 test('declared font families wrap identically in Chromium and LibreOffice', async ({ page }) => {
   test.setTimeout(5 * 60 * 1000);
   assertFontContract();
+  assertLibreOfficeContract();
 
   const work = mkdtempSync(join(tmpdir(), 'docxodus-font-probe-'));
   try {

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "description": "Word-reference evidence store (issue #402). Numbers only: page counts, page geometry, ink extents, and named per-case measurements taken from Microsoft Word PDF exports of the tracked corpus fixtures, rasterized under the same 96-DPI Poppler contract as the benchmark. No binaries and no image corpus are ever committed. Word renders with the genuine Office fonts (not the issue-#379 substitutes), so these measurements decide STRUCTURAL questions; pixel scores against Word are advisory. See WORD_REFERENCE.md for the capture procedure.",
+  "procedure": "npm/tests/visual-parity/WORD_REFERENCE.md",
+  "environment": null,
+  "cases": [
+    { "id": "chart", "status": "pending" },
+    { "id": "chart-line", "status": "pending" },
+    { "id": "chart-pie", "status": "pending" },
+    { "id": "chart-stacked", "status": "pending" },
+    { "id": "endnote", "status": "pending" },
+    { "id": "fields-and-tabs", "status": "pending" },
+    { "id": "footnote", "status": "pending" },
+    { "id": "inline-image", "status": "pending" },
+    { "id": "landscape-section", "status": "pending" },
+    { "id": "legal-contract", "status": "pending" },
+    { "id": "merged-table", "status": "pending" },
+    { "id": "multi-section", "status": "pending" },
+    { "id": "nested-table", "status": "pending" },
+    { "id": "numbered-lists", "status": "pending" },
+    { "id": "running-content", "status": "pending" },
+    { "id": "shape", "status": "pending" },
+    { "id": "text-formatting", "status": "pending" },
+    { "id": "tracked-deletion", "status": "pending" },
+    { "id": "two-column-section", "status": "pending" },
+    { "id": "wrapped-image-square", "status": "pending" },
+    { "id": "wrapped-image-tight", "status": "pending" }
+  ]
+}

@@ -493,6 +493,84 @@ Corpus aggregate after the wave (21 cases, 32 paired pages, 0 conversion errors)
 `two-column-section`, `endnote`, `legal-contract` — renderer-owned work now visible instead of
 hidden, which is the acceptance criterion of issue #400.
 
+## The evidence contracts — 2026-08-13 (issues #402, #403, #404)
+
+The disposition system separated "our bug" from "system difference", but its evidence chain had
+three gaps, closed together because they are one design: the LibreOffice side of the comparison
+was not contractually pinned (#403), Word evidence had nowhere to live (#402), and the
+`environment` attributions rested on whole-fixture impressions rather than reduced cases (#404).
+
+**Reference-version contract (#403).** The benchmark is contracted to LibreOffice 25.8, declared
+once in `environment-contract.ts` and enforced twice: `assertLibreOfficeContract()` fails the run
+at start with install guidance (the TDF 25.8.7.3 archive, the bundled-font removal step, the known
+cross-version differences), and the ratchet fingerprint — which now also carries the Poppler
+major.minor, record schema 2 — refuses to compare numbers across reference changes. CI installs
+the exact TDF build instead of `ubuntu-latest` apt, which carries 24.2: **every scheduled run
+since the record was seeded under 25.8 would have rendered for twenty minutes and then died at
+the fingerprint check**; now it fails in the first second or not at all. The failure mode is
+proven purely on every pull request, alongside new assertions that the declared contract, the
+committed record, and the corpus stay mutually consistent.
+
+**Word-reference evidence store (#402).** `word-reference.json` is the committed, numbers-only
+answer to "unless Word evidence says otherwise": page counts, page geometry, ink extents, named
+per-case measurements, and the Word/OS versions used — never binaries, never an image corpus.
+The manual step shrinks to exporting each fixture to PDF with a licensed Word;
+`npm run capture:word-reference` does everything downstream under the benchmark's own contract
+(Poppler at 96 DPI, the shared ink model) and can record advisory three-way comparisons against
+a benchmark run. The honesty boundary is explicit: Word renders with genuine Office fonts, not
+the contract substitutes, so Word evidence decides STRUCTURAL questions (spacing suppressed or
+painted, page counts, block positions); pixel scores against Word stay advisory. Dispositions
+cite recorded data via `wordEvidence`, which the pure spec refuses unless the cited case is
+measured. All 21 cases are seeded `pending` — **the measurements themselves require a Word
+license and are the open half of issue #402**; WORD_REFERENCE.md lists the open questions the
+first capture should decide (the `nested-table` spacing suppression first among them).
+
+**Reduced environment cases (#404).** The issue's premise had gone stale — it names three severe
+cases at ink F1 0.58–0.65, but issue #396 had since moved `tracked-deletion` to minor (0.99667)
+and the other two to major. What remained owed was the reduction: `visual-parity-reductions.spec.ts`
+(now part of the benchmark run) reduces each case to a minimal generated document measured
+identically in both engines, and the dispositions now cite those numbers instead of impressions:
+
+| Reduction | Observable | Docxodus | LibreOffice | Residual isolated |
+|---|---|---:|---:|---|
+| `landscape-spacing` | pitch of four identical single-line Calibri paragraphs, landscape section | 29 px/paragraph, uniform | 30 px/paragraph, uniform | 1 px/line same-font line-box delta; ink bands 12 vs 14 rows (rasterization spread) |
+| `inline-image` | 150x75 px `wp:extent` between text paragraphs | exactly 150x75 at the margin | 151x75, 1 px offset | extent and flow agree; text resumes 20 vs 16 px below the image |
+| `heading-metrics` | Calibri Light (Carlito) heading over Calibri body | 24 px advance | 24 px advance | advance IDENTICAL; heading ink 17 vs 19 rows — rasterization, not layout |
+
+Structure agrees completely in every reduction (band counts, x-extents, page geometry), so the
+`environment` disposition now means something falsifiable: the engines lay the same fonts out
+with sub-pixel-accumulating metric differences, and nothing else. Whether Docxodus's choices are
+also Word-correct is exactly what the #402 capture will decide; no renderer change was made,
+matching the issue's "no change solely to imitate LibreOffice".
+
+**The record refresh, and what it caught.** The contract environment was reconstructed for this
+work (TDF LibreOffice 25.8.7.3 with bundled fonts removed, Chromium 143.0.7499.4, Poppler
+24.02.0 — the version CI's `ubuntu-latest` actually has, unlike the 25.03 the previous record
+was measured under). A clean full-corpus run reproduced **13 of 21 cases to five decimal
+places**, which both proves the reconstruction faithful and shows Poppler 24.02-vs-25.03 benign
+for unchanged cases — the new fingerprint field guards the boundary anyway. The other eight
+cases had moved because renderer PRs #417–#421 landed real fixes without refreshing the record;
+this refresh banks them, and their dispositions were re-triaged from the new evidence:
+
+| Case | Movement | Re-triage |
+|---|---|---|
+| chart-stacked | severe 0.94151/0.00000 → minor 0.97053/0.97696 | `unsupported-feature` → `environment`: stacked charts project since PR #417; residual mirrors the clustered `chart` control case |
+| chart-pie | 0.95467/0.00000 → 0.94359/0.67052 | → `renderer-bug`: the pie renders; slice angle/ordering, 3-D perspective, and label placement are renderer-owned geometry |
+| chart-line | 0.93289/0.00000 → 0.90389/0.50465 | → `renderer-bug`: the dominant residual is measured — cached date-serial categories print raw (`41518`) where LibreOffice formats dates (`9/1/2013`) |
+| wrapped-image-square | 0.74176/0.39352 → 0.75039/0.53248 | `unsupported-feature` → `unattributed`: wrap works since PR #418; the remaining severe residual is un-triaged and gates until it is |
+| wrapped-image-tight | 0.73466/0.51179 → 0.84881/0.94860 | → `unattributed`: nearly major-boundary; same re-triage debt |
+| two-column-section | 2/1 pages 0.80838/0.07207 → 1/1 0.70903/0.45891 | stays `renderer-bug`: #413's two failures fixed by PR #419; residual is the column fill/split point |
+| endnote | 0.84081/0.93747 → 0.82594/0.91258 | `renderer-bug` → `unattributed`: PR #420 changed the case materially (endnotes now flow); the systematic body shift needs fresh triage |
+| legal-contract | 0.69140/0.52148 → 0.69413/0.52440 | stays `renderer-bug`: PR #421's tab fix moved this fixture barely — the severity was never that one defect alone |
+
+Corpus aggregate after the refresh (21 cases, 32 paired pages, 0 conversion errors; mean SSIM
+0.929572, mean ink F1 0.867257): 7 close, 4 minor, 2 major, 8 severe; the strict-gating set is
+now the honest seven (`chart-pie`,
+`chart-line`, `two-column-section`, `legal-contract` as renderer-bug; `endnote`,
+`wrapped-image-square`, `wrapped-image-tight` as unattributed re-triage debt). The lesson the
+refresh teaches: a renderer PR that changes corpus numbers must refresh the record in the same
+diff — the improvements list printed by every passing run announces exactly when this is owed.
+
 ## Current case results and triage
 
 `SSIM` is the mean over paired pages. `Ink F1` is the worst paired-page value, so it exposes a
@@ -561,21 +639,21 @@ The former first priority (blank charts), the PR #372 rerun, aligned tab geometr
 header/body/footer vertical placement (issue #377), DrawingML textbox anchor geometry, footnote
 block vertical placement (issue #378), the font-substitution contract (issue #379), the
 regression ratchet (issue #395), automatic line spacing (issue #396, which also resolved
-#397's line-box half and dissolved #398's premise), and the second-wave corpus (issue #400,
-which replaced the invisible gaps with nine measured cases) are resolved above. The remaining
-order is:
+#397's line-box half and dissolved #398's premise), the second-wave corpus (issue #400), the
+first implementations behind #411/#412/#413/#414/#415 (PRs #417–#421, whose numbers the
+2026-08-13 refresh banked), the reference-version contract (issue #403), the Word-reference
+evidence framework (issue #402 — tooling and procedure; measurements await a Word license),
+and the #404 reductions are resolved above. The remaining order is:
 
-1. The three renderer-bug severes the second wave surfaced, largest bang first: the list-number
-   suffix tab overshooting the declared text indent (issue #415 — every numbered clause in every
-   legal document), continuous section breaks rendered as page breaks + `w:cols` ignored
-   (issue #413 — the corpus's only page-count mismatch), and the paginated endnotes drop
-   (issue #414).
-2. The chart-family (issue #411) and floating-image text-wrap (issue #412) feature gaps, now
-   measured instead of hidden.
-3. Reduce the two remaining `major` cases (`inline-image`, `landscape-section`) to minimal
-   same-font layout cases (issue #404).
-4. Close issue #398: the `numbered-lists` top margin was never in disagreement, so the question
-   is whether to keep a Word-evidence procedure (issue #402) for it at all.
+1. The re-triage debt the 2026-08-13 refresh made explicit: `endnote`'s systematic body shift
+   and the two wrapped-image residuals (all `unattributed`, all strict-gating until triaged).
+2. The measured renderer-bug severes: `chart-line`'s date-serial axis labels and `chart-pie`'s
+   slice geometry (issue #411 follow-on), `two-column-section`'s column fill/split point
+   (issue #413 follow-on), and `legal-contract`'s remaining per-clause offsets (issue #415).
+3. The first Word-reference capture (issue #402's open half): export the corpus from a licensed
+   Word and run `npm run capture:word-reference` — deciding at least the `nested-table` spacing
+   suppression, the `legal-contract` heading space-before, and whether the #404 reductions'
+   same-font layout choices are Word-correct.
 
 The list-margin discrepancy should not be changed merely to imitate LibreOffice: current evidence
 supports Docxodus's use of the declared OOXML margin. LibreOffice is a comparison implementation, not
