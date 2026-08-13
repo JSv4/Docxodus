@@ -282,7 +282,10 @@ The corpus rerun also dissolved a standing attribution. `numbered-lists` was `re
 on the reading that "the whole content is about 28px lower, so LibreOffice must import the 1701-twip
 top margin differently". It was the accumulated line-spacing error: the case is now close with
 **exact ink geometry (F1 1.00000)**, so the two engines never disagreed about the margin. Issue #398
-was opened to obtain Word evidence for that margin; the premise is gone.
+obtained the independent Word evidence: the Microsoft Graph conversion's first ink is row 117 at
+96 DPI, exactly matching LibreOffice and within one raster row of Docxodus (118). The premise is
+gone, and the case is correctly attributed to the substituted-font environment rather than a
+reference deviation.
 
 **One regression, found and fixed by the change itself.** With taller line boxes, `footnote`'s ink
 F1 fell 0.70330 → 0.58697: CA008's single body line sat 2px lower, and on a page carrying ~1230 ink

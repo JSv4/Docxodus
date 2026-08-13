@@ -28,6 +28,17 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
+// Synthetic records below intentionally measure only one or two cases. Strip the committed
+// corpus's real citations here; the dedicated citation test adds its own, while the committed-
+// record test validates the real corpus unchanged.
+const UNIT_CORPUS: VisualCorpusEntry[] = VISUAL_PARITY_CORPUS.map(entry => ({
+  ...entry,
+  disposition: {
+    kind: entry.disposition.kind,
+    rationale: entry.disposition.rationale,
+    ...(entry.disposition.reference ? { reference: entry.disposition.reference } : {}),
+  },
+}));
 
 function image(width: number, height: number, draw?: (data: Uint8Array) => void): RgbaImage {
   const data = new Uint8Array(width * height * 4).fill(255);
@@ -55,7 +66,7 @@ function measuredCase(overrides: Partial<WordReferenceCase> = {}): WordReference
 
 function recordWith(cases: WordReferenceCase[]): WordReferenceRecord {
   let record: WordReferenceRecord = {
-    ...emptyRecord(VISUAL_PARITY_CORPUS),
+    ...emptyRecord(UNIT_CORPUS),
     environment: { word: 'Word 365', os: 'Windows 11' },
   };
   for (const entry of cases) record = upsertCase(record, entry);
@@ -90,24 +101,24 @@ test.describe('word-reference measurement', () => {
 
 test.describe('word-reference validation', () => {
   test('the seeded record validates against the corpus', () => {
-    expect(validateWordReference(emptyRecord(VISUAL_PARITY_CORPUS), VISUAL_PARITY_CORPUS))
+    expect(validateWordReference(emptyRecord(UNIT_CORPUS), UNIT_CORPUS))
       .toEqual([]);
   });
 
   test('a measured case validates and coexists with pending rows', () => {
-    expect(validateWordReference(recordWith([measuredCase()]), VISUAL_PARITY_CORPUS)).toEqual([]);
+    expect(validateWordReference(recordWith([measuredCase()]), UNIT_CORPUS)).toEqual([]);
   });
 
   test('a missing corpus row is a problem — coverage cannot silently shrink', () => {
-    const record = emptyRecord(VISUAL_PARITY_CORPUS);
+    const record = emptyRecord(UNIT_CORPUS);
     record.cases = record.cases.filter(entry => entry.id !== 'nested-table');
-    expect(validateWordReference(record, VISUAL_PARITY_CORPUS).join(' '))
+    expect(validateWordReference(record, UNIT_CORPUS).join(' '))
       .toContain('nested-table has no word-reference row');
   });
 
   test('a row matching no corpus case is a problem — evidence cannot outlive its case', () => {
     const record = recordWith([measuredCase({ id: 'retired-case' } as WordReferenceCase)]);
-    expect(validateWordReference(record, VISUAL_PARITY_CORPUS).join(' '))
+    expect(validateWordReference(record, UNIT_CORPUS).join(' '))
       .toContain('retired-case matches no corpus case');
   });
 
@@ -115,30 +126,30 @@ test.describe('word-reference validation', () => {
     const record = recordWith([
       { id: 'shape', status: 'pending', pageCount: 1 } as WordReferenceCase,
     ]);
-    expect(validateWordReference(record, VISUAL_PARITY_CORPUS).join(' '))
+    expect(validateWordReference(record, UNIT_CORPUS).join(' '))
       .toContain('shape is pending but carries measurement fields');
   });
 
   test('measured rows need a fixture hash and internally consistent pages', () => {
     expect(validateWordReference(
-      recordWith([measuredCase({ fixtureSha256: undefined })]), VISUAL_PARITY_CORPUS).join(' '))
+      recordWith([measuredCase({ fixtureSha256: undefined })]), UNIT_CORPUS).join(' '))
       .toContain('without a valid fixtureSha256');
     expect(validateWordReference(
-      recordWith([measuredCase({ pageCount: 2 })]), VISUAL_PARITY_CORPUS).join(' '))
+      recordWith([measuredCase({ pageCount: 2 })]), UNIT_CORPUS).join(' '))
       .toContain('pageCount/pages disagree');
     expect(validateWordReference(
       recordWith([measuredCase({
         pages: [{ page: 1, width: 816, height: 1056, inkBounds: { left: 500, top: 0, right: 10, bottom: 5 }, inkPixelRatio: 0.01 }],
-      })]), VISUAL_PARITY_CORPUS).join(' '))
+      })]), UNIT_CORPUS).join(' '))
       .toContain('ink bounds are inconsistent');
   });
 
   test('a wordEvidence citation without a measurement is a problem — the #402 contract', () => {
-    const corpusWithCitation: VisualCorpusEntry[] = VISUAL_PARITY_CORPUS.map(entry =>
+    const corpusWithCitation: VisualCorpusEntry[] = UNIT_CORPUS.map(entry =>
       entry.id === 'nested-table'
         ? { ...entry, disposition: { ...entry.disposition, wordEvidence: 'Word suppresses the spacing' } }
         : entry);
-    expect(validateWordReference(emptyRecord(VISUAL_PARITY_CORPUS), corpusWithCitation).join(' '))
+    expect(validateWordReference(emptyRecord(UNIT_CORPUS), corpusWithCitation).join(' '))
       .toContain('nested-table disposition cites wordEvidence but the word-reference row is pending');
     // The same citation is fine once the row is measured.
     expect(validateWordReference(
@@ -147,7 +158,7 @@ test.describe('word-reference validation', () => {
 
   test('measured cases without a recorded Word/OS environment are a problem', () => {
     const record = { ...recordWith([measuredCase()]), environment: null };
-    expect(validateWordReference(record, VISUAL_PARITY_CORPUS).join(' '))
+    expect(validateWordReference(record, UNIT_CORPUS).join(' '))
       .toContain('no environment');
   });
 
