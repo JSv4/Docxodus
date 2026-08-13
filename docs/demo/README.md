@@ -1,7 +1,7 @@
 # GitHub Pages demo
 
 Five static pages, no application server. All host the **same** editor
-surface — `createRibbonEditor` from the pinned `docxodus@9.7.0` embed bundle on
+surface — `createRibbonEditor` from the pinned `docxodus@9.9.0` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
 | Page | What it is |
@@ -102,8 +102,8 @@ it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
-1. Publish `docxodus@9.7.0` and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@9.7.0/dist/embed.bundle.js` returns JavaScript.
+1. Publish `docxodus@9.9.0` and confirm
+   `https://cdn.jsdelivr.net/npm/docxodus@9.9.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
    running Jekyll.
