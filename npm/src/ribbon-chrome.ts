@@ -74,6 +74,7 @@ export const RIBBON_CSS = `
   color: var(--dxr-ink);
   background: var(--dxr-desk);
   -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 .dxr *, .dxr *::before, .dxr *::after { box-sizing: border-box; }
 

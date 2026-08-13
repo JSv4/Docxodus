@@ -4232,6 +4232,9 @@ namespace OxPt
         /// A word wider than its column must break rather than overflow, and a table must never
         /// exceed the text column. CSS's defaults do the opposite of Word on both counts, so the
         /// converter emits the rules that restore Word's behavior in EVERY render mode.
+        /// Mobile Chrome's text autosizer must also be opted out on every document element
+        /// (text-size-adjust is non-inherited and Blink consults its own cluster roots), or the
+        /// device re-breaks lines the document authored at a fixed column width.
         /// </summary>
         [Fact]
         public void HC056_DocumentLayoutCss_IsAlwaysEmitted()
@@ -4241,6 +4244,9 @@ namespace OxPt
             Assert.Contains("overflow-wrap: break-word;", htmlString);
             Assert.Contains("max-width: 100%;", htmlString);
             Assert.Contains("overflow-wrap: anywhere;", htmlString);
+            Assert.Contains("body, body * {", htmlString);
+            Assert.Contains("-webkit-text-size-adjust: 100%;", htmlString);
+            Assert.Contains("text-size-adjust: 100%;", htmlString);
         }
 
         /// <summary>

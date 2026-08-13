@@ -27,6 +27,17 @@
        power-on screen shown when the page is embedded in an iframe. */
     html, body { height: 100%; }
     body { margin: 0; background: #e8ecf2; }
+    /* Chrome on Android's text autosizer (the system "Text scaling"
+       accessibility setting) inflates text-heavy blocks while the document's
+       authored column width stays fixed, re-breaking every line — the game
+       screen garbles into extra wrapped rows as frames fill in. A document
+       viewer never inflates document text (the fit-to-width zoom is the
+       legibility affordance), so opt the whole cabinet out. The property is
+       non-inherited and Blink consults the autosizing cluster roots it picks
+       itself (an ancestor-only rule demonstrably does not stick on Android),
+       hence the universal selector. Newer engines emit this inside the
+       document render too; page-level covers the pinned engine today. */
+    html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     #app { height: 100%; }
     #home {
       position: fixed; top: 10px; right: 12px; z-index: 50;

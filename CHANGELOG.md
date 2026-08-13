@@ -54,6 +54,35 @@ All notable changes to this project will be documented in this file.
     dispositions were re-triaged from the new evidence.
 
 ### Fixed
+- **Mobile Chrome no longer garbles the arcade/observatory animations with
+  extra wrapped rows, and the converter opts document text out of
+  device-driven inflation** — on Android the demo's 92-cell frame rows render
+  WIDER than authored: the system has no Courier New (Chrome substitutes a
+  wider monospace face), and mobile Chrome's text autosizer (the system "Text
+  scaling" accessibility setting) inflates text-heavy blocks outright while
+  the section's authored column width stays fixed. Once a row outgrows the
+  6.5in text column, `overflow-wrap: break-word` folds it onto a second line
+  and the frame stacks into garbage — extra lines multiplying as the animation
+  fills the grid (sparse early frames stay narrow, which is why screens
+  "initially looked good" and degraded as the logo swept in). Three layers:
+  (1) the converter's always-emitted document-layout CSS now carries
+  `-webkit-text-size-adjust: 100%; text-size-adjust: 100%` on EVERY document
+  element, not just `body` — the property is non-inherited, and the field
+  evidence shows an intermediate-ancestor rule (the ribbon chrome's existing
+  `.dxr` opt-out, present in the shipped bundle) does not protect the document
+  inside it on a real phone; a word processor never inflates document text —
+  the viewport's fit-to-width zoom is the legibility affordance. (2) The
+  GitHub Pages demo pages carry the same page-level opt-out so the live site
+  (pinned to a released engine) is fixed without waiting for a release.
+  (3) The arcade/observatory drivers pin the canvas paragraph to
+  `white-space: pre` (keyed to its stable Unid), the mechanism-agnostic
+  guarantee: a frame row can never wrap no matter what a platform does to
+  glyph widths — the worst case degrades to a clipped right edge instead of
+  stacked rows. Guarded by `demo-arcade-mobile.spec.ts` under the new
+  `chromium-pixel5` Playwright project, which recreates the phone's condition
+  directly (inflates the document text 175% past the column and asserts the
+  frame stays 26 line boxes; without the pin it measures 130+), and by HC056
+  asserting the new layout-CSS rule.
 - **List-number suffix tabs now advance to the paragraph's text indent instead
   of overshooting to the next default tab stop** (issue #415) — the
   unknown-font text-width estimation charges a flat 0.6 em per character,

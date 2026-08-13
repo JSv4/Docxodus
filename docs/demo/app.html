@@ -43,6 +43,14 @@
        dead strip the surface can never scroll into. */
     /* Matches the surface's --dxr-desk so the page never flashes a different gray. */
     body { margin: 0; height: 100dvh; background: #f1f5f9; overscroll-behavior: none; }
+    /* Chrome on Android's text autosizer (the system "Text scaling" setting)
+       inflates text-heavy blocks while the document's authored column width
+       stays fixed, re-breaking every line the document says. Opt the editor
+       surface out; the property is non-inherited and Blink consults the
+       autosizing cluster roots it picks itself, hence the universal selector.
+       Newer engines emit this inside the document render too; page-level
+       covers the pinned engine today. */
+    html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     #app { height: 100%; }
 
     /* A single "back to the landing page" affordance, docked over the ribbon's own

@@ -14,6 +14,14 @@
        is the observatory dock pinned under the document. */
     html, body { height: 100%; }
     body { margin: 0; background: #e8ecf2; }
+    /* Chrome on Android's text autosizer (the system "Text scaling" setting)
+       inflates text-heavy blocks while the document's authored column width
+       stays fixed, re-breaking every line the document says. Opt the editor
+       surface out; the property is non-inherited and Blink consults the
+       autosizing cluster roots it picks itself, hence the universal selector.
+       Newer engines emit this inside the document render too; page-level
+       covers the pinned engine today. */
+    html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     #app { height: 100%; }
     #home {
       position: fixed; top: 10px; right: 12px; z-index: 50;
