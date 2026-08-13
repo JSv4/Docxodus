@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Visual-parity evidence framework: LibreOffice reference-version contract,
+  Word-reference evidence store, and reduced environment cases** (issues #402,
+  #403, #404) — the disposition system now has a contracted evidence chain on
+  both sides of the comparison:
+  - *Reference-version contract (#403)*: the benchmark is contracted to
+    **LibreOffice 25.8** (declared once in
+    `npm/tests/visual-parity/environment-contract.ts`), asserted at run start
+    with install guidance mirroring the font contract's failure mode — an
+    out-of-contract host fails in the first second naming the TDF build to
+    install, the bundled-font removal step, and the known cross-version
+    rendering differences (starting with the 24.2-vs-25.8 footnote separator).
+    CI installs that exact TDF build instead of unpinned `ubuntu-latest` apt
+    (which carries 24.2 — every scheduled run would have died at the
+    fingerprint check after twenty minutes of rendering). The ratchet's
+    environment fingerprint additionally gains the **Poppler major.minor**
+    (record schema 2): pdftoppm sits between the reference PDF and every
+    recorded number. The pure ratchet spec proves the failure message and the
+    contract/record/CI agreement on every pull request without LibreOffice.
+  - *Word-reference evidence store (#402)*: `word-reference.json` is a
+    committed, numbers-only record of what Microsoft Word renders for each
+    corpus fixture — page counts, page geometry, ink extents, named per-case
+    measurements, and the Word/OS versions used; never binaries, never an
+    image corpus. The only manual step is exporting each fixture to PDF with a
+    licensed Word; `npm run capture:word-reference` automates everything
+    downstream under the benchmark's own 96-DPI Poppler contract and shared
+    ink model, optionally recording advisory three-way comparisons against a
+    benchmark run. Dispositions cite recorded data via
+    `disposition.wordEvidence`, which the pure spec refuses unless the cited
+    case is actually measured. All 21 corpus cases are seeded `pending`; the
+    capture procedure is documented in
+    `npm/tests/visual-parity/WORD_REFERENCE.md`.
+  - *Reduced environment cases (#404)*: `visual-parity-reductions.spec.ts`
+    (now part of `npm run test:visual-parity`) reduces the three
+    environment-attributed cases to minimal generated documents measured
+    identically in both engines: `landscape-section` to paragraph pitch
+    (uniform in both engines, 29 vs 30 px/paragraph — a 1 px/line same-font
+    line-box delta), `inline-image` to extent fidelity (the declared
+    `wp:extent` renders exactly in both engines; following text resumes 20 vs
+    16 px below), and `tracked-deletion` to the heading line box (identical
+    24 px advance; 17- vs 19-row glyph rasterization spread). Each corpus
+    disposition now cites its reduced case instead of a whole-fixture
+    impression.
+  - The ratchet record was refreshed from a clean full-corpus run in the
+    reconstructed contract environment, which reproduced all untouched cases
+    to five decimal places and re-measured the eight cases moved by renderer
+    PRs #417–#421 (which had landed without a record refresh); their corpus
+    dispositions were re-triaged from the new evidence.
+
 ### Fixed
 - **List-number suffix tabs now advance to the paragraph's text indent instead
   of overshooting to the next default tab stop** (issue #415) — the

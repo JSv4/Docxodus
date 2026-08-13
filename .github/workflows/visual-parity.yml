@@ -48,8 +48,28 @@ jobs:
       - name: Install deterministic rendering tools and fonts
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          libreoffice-writer poppler-utils fonts-liberation2
+          poppler-utils fonts-liberation2
           fonts-crosextra-carlito fonts-crosextra-caladea
+
+      # The LibreOffice reference-version contract (issue #403): the benchmark's numbers are only
+      # meaningful against the version ratchet.json was recorded under, so CI installs that exact
+      # TDF build instead of whatever `ubuntu-latest` apt carries. The bundled Carlito/Caladea/
+      # Liberation copies are removed because they silently override the font-substitution
+      # contract inside LibreOffice only (the issue-#400 finding). Keep the version here in step
+      # with LIBREOFFICE_CONTRACT in npm/tests/visual-parity/environment-contract.ts — the run
+      # fails at start, with this same guidance, when they drift.
+      - name: Install pinned LibreOffice 25.8.7.3 (reference-version contract)
+        run: |
+          curl -sSL -o /tmp/libreoffice.tar.gz \
+            "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
+          tar -xzf /tmp/libreoffice.tar.gz -C /tmp
+          sudo dpkg -i /tmp/LibreOffice_*_Linux_x86-64_deb/DEBS/*.deb
+          sudo rm -f /opt/libreoffice25.8/share/fonts/truetype/Carlito*.ttf \
+            /opt/libreoffice25.8/share/fonts/truetype/Caladea*.ttf \
+            /opt/libreoffice25.8/share/fonts/truetype/Liberation*.ttf
+          sudo ln -sf /opt/libreoffice25.8/program/soffice /usr/local/bin/libreoffice
+          sudo ln -sf /opt/libreoffice25.8/program/soffice /usr/local/bin/soffice
+          libreoffice --version
 
       - name: Install npm dependencies
         run: cd npm && npm ci

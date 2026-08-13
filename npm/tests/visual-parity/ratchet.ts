@@ -31,7 +31,10 @@ import type { VisualSeverity } from './metrics.js';
  * to catch and never did.
  */
 
-export const RATCHET_SCHEMA_VERSION = 1;
+// Schema 2 (issue #403): the environment fingerprint gained `poppler` — pdftoppm's rasterizer
+// sits between LibreOffice's PDF and every recorded number, so a distro bump must surface as
+// environment drift, not as a silent shift attributed to the renderer.
+export const RATCHET_SCHEMA_VERSION = 2;
 
 /**
  * The committed record. It lives beside the corpus it describes so a rendering PR touches the
@@ -64,10 +67,12 @@ export const RATCHET_PRECISION = 5;
 const SEVERITY_ORDER: VisualSeverity[] = ['close', 'minor', 'major', 'severe'];
 
 export interface RatchetEnvironment {
-  /** LibreOffice major.minor — the reference renderer, unpinned in CI until issue #403. */
+  /** LibreOffice major.minor — pinned by the reference-version contract (issue #403). */
   libreoffice: string;
   /** Chromium major. */
   chromium: string;
+  /** Poppler (pdftoppm) major.minor — the rasterizer between the reference PDF and every number. */
+  poppler: string;
   /** SHA-256 of `fonts.conf`; changing the contract is a deliberate, reviewable act. */
   fontContractSha256: string;
 }
@@ -112,6 +117,7 @@ export interface RatchetSummary {
   environment: {
     chromium?: string;
     libreoffice?: string;
+    pdftoppm?: string;
     fontContract?: { sha256?: string };
   };
   cases: RatchetSummaryCase[];
@@ -168,10 +174,17 @@ export function chromiumFingerprint(version: string | undefined): string {
   return match ? match[1] : 'unknown';
 }
 
+/** pdftoppm reports e.g. `pdftoppm version 24.02.0`; major.minor is the release boundary. */
+export function popplerFingerprint(version: string | undefined): string {
+  const match = (version ?? '').match(/(\d+)\.(\d+)/);
+  return match ? `${match[1]}.${match[2]}` : 'unknown';
+}
+
 export function environmentOf(summary: RatchetSummary): RatchetEnvironment {
   return {
     libreoffice: libreofficeFingerprint(summary.environment?.libreoffice),
     chromium: chromiumFingerprint(summary.environment?.chromium),
+    poppler: popplerFingerprint(summary.environment?.pdftoppm),
     fontContractSha256: summary.environment?.fontContract?.sha256 ?? 'unknown',
   };
 }
@@ -233,7 +246,7 @@ export function readRecord(file: string = RATCHET_RECORD_FILE): RatchetRecord | 
 
 function environmentDrift(record: RatchetRecord, measured: RatchetEnvironment): string[] {
   const drift: string[] = [];
-  for (const key of ['libreoffice', 'chromium', 'fontContractSha256'] as const) {
+  for (const key of ['libreoffice', 'chromium', 'poppler', 'fontContractSha256'] as const) {
     if (record.environment[key] !== measured[key]) {
       drift.push(`${key}: recorded ${record.environment[key]}, measured ${measured[key]}`);
     }

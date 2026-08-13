@@ -82,6 +82,36 @@ declared contract change — never to silent host-font drift. `environment` disp
 "the two engines lay out the SAME substitute differently" (rasterization, justification, line
 breaking), not "the two engines picked different fonts".
 
+## Reference-version contract
+
+With fonts pinned, the LibreOffice version was the last uncontracted variable in the comparison
+(issue #403): different LibreOffice releases render the same document differently, so a
+runner-image bump could shift weekly numbers and masquerade as a renderer change. The benchmark
+is therefore contracted to **LibreOffice 25.8** (exact major.minor; known-good build 25.8.7.3),
+declared once in `environment-contract.ts` and enforced twice:
+
+- `assertLibreOfficeContract()` fails the run **at start** when the host's LibreOffice is not
+  the contract minor, naming the version found, the TDF archive to install, the bundled-font
+  removal step, and the known cross-version differences — mirroring the font contract's failure
+  mode. Fail fast beats discovering the mismatch twenty minutes later at the ratchet.
+- The ratchet's environment fingerprint (below) refuses to compare numbers across LibreOffice,
+  Chromium, Poppler, or font-contract changes, so even a deliberately out-of-contract run
+  (`DOCXODUS_VISUAL_PARITY_ALLOW_VERSION_DRIFT=1`, for exploratory cross-version reproduction)
+  can never be misread as a renderer regression, and can never refresh the record.
+
+CI installs the contract build from the TDF archive rather than `ubuntu-latest` apt (which
+carries whatever the runner image's Ubuntu shipped — 24.2 on 24.04). The pure spec
+`visual-parity-ratchet.spec.ts` proves the failure message and asserts the declared version,
+the committed record's fingerprint, and the CI pin cannot drift apart, on every pull request,
+without LibreOffice installed.
+
+Known cross-version rendering differences the corpus is sensitive to (each new finding joins
+`KNOWN_LIBREOFFICE_VERSION_DIFFERENCES` so the failure message teaches it):
+
+| Versions | Difference | Sensitive cases |
+|---|---|---|
+| 24.2 vs ≥ 25.8 | Footnote separator width: 24.2 draws its legacy 25%-of-column separator where 25.8 draws the two-inch Word default. | `footnote` |
+
 ## Metrics and thresholds
 
 Every paired page reports:
@@ -135,9 +165,10 @@ movement BASELINE.md records for a real fix is at least an order of magnitude la
 is the two-inch footnote separator at +0.000128 SSIM and +0.003537 ink F1.
 
 **Environment fingerprint.** Across environments the numbers move materially — LibreOffice 24.2
-draws a different footnote separator than 25.8 — and CI installs LibreOffice from unpinned
-`ubuntu-latest` apt (pinning it is issue #403). The record therefore carries the LibreOffice
-major.minor, the Chromium major, and `fonts.conf`'s SHA-256. When they do not match, the run
+draws a different footnote separator than 25.8. The record therefore carries the LibreOffice
+major.minor (contract-pinned since issue #403), the Chromium major, the Poppler major.minor
+(pdftoppm's rasterizer sits between the reference PDF and every number), and `fonts.conf`'s
+SHA-256. When they do not match, the run
 reports **`environment-changed`** and demands a refresh instead of claiming a regression, so a
 reference-renderer release can never be blamed on Docxodus. That outcome still fails the run: a
 stale record silently comparing across environments is worse than an explicit demand to refresh it.
@@ -182,19 +213,40 @@ new evidence changes the triage. A disposition is a claim about the *dominant re
 discrepancy — it never justifies masking, and changing one to make a gate pass requires the same
 evidence bar as a renderer fix: OOXML semantics, Word behavior where available, and a reduced case.
 
+## Word-reference evidence
+
+"Word behavior where available" used to be an inference. `word-reference.json` (issue #402) makes
+it recorded data: a committed, numbers-only store of what Microsoft Word renders for each corpus
+fixture — page counts, page geometry, ink extents, and named per-case measurements — plus the
+Word/OS versions they were taken under. The only manual step is exporting each fixture to PDF
+with a licensed Word; `npm run capture:word-reference` automates everything downstream with the
+benchmark's own contract (Poppler at 96 DPI, the shared ink model). See
+[WORD_REFERENCE.md](WORD_REFERENCE.md) for the procedure, and for the honesty boundary: Word
+renders with genuine Office fonts, not the contract substitutes, so Word evidence decides
+STRUCTURAL questions (spacing suppressed or painted, page counts, block positions) while pixel
+scores against Word stay advisory.
+
+Every corpus case has a row; new cases enter `pending`, and the pure spec
+`visual-parity-word-reference.spec.ts` keeps the store consistent with the corpus on every pull
+request. A disposition citing Word data does it in `disposition.wordEvidence`, which the spec
+refuses unless the cited case is actually `measured` — a rationale can never claim Word evidence
+that was never captured. `summary.json` records each run's evidence coverage under
+`wordReference`.
+
 ## Run locally
 
-Prerequisites: `libreoffice-writer` (a bare `libreoffice-core` install fails every case with
-"source file could not be loaded"), `poppler-utils` (`pdftoppm`/`pdftotext`), the contract fonts
-(`fonts-crosextra-carlito`, `fonts-crosextra-caladea`, `fonts-liberation2` — the run fails with
-install instructions when missing), Chromium installed for Playwright, and the repository's npm
-dependencies.
+Prerequisites: a Writer-capable LibreOffice of the **contract minor** (see the reference-version
+contract above; a bare `libreoffice-core` install fails every case with "source file could not
+be loaded", and an out-of-contract version fails at run start with install guidance),
+`poppler-utils` (`pdftoppm`/`pdftotext`), the contract fonts (`fonts-crosextra-carlito`,
+`fonts-crosextra-caladea`, `fonts-liberation2` — the run fails with install instructions when
+missing), Chromium installed for Playwright, and the repository's npm dependencies.
 
-Prefer a distro LibreOffice package: TDF-packaged builds bundle their own
-Caladea/Carlito/Liberation copies under `share/fonts/truetype/`, which silently override the
-font contract inside LibreOffice only. The wrapping probe fails against the bundled versions —
-if it names a contract family, remove the bundled duplicates so both engines resolve the same
-system fonts (see the issue-#400 baseline entry).
+When your distro does not package the contract minor, use the TDF archive build named in the
+failure message — but TDF-packaged builds bundle their own Caladea/Carlito/Liberation copies
+under `share/fonts/truetype/`, which silently override the font contract inside LibreOffice
+only. Remove the bundled duplicates so both engines resolve the same system fonts (the wrapping
+probe fails naming the family if you forget — see the issue-#400 baseline entry).
 
 ```bash
 cd npm

@@ -6,6 +6,12 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VISUAL_PARITY_CORPUS } from './visual-parity/corpus.js';
 import {
+  KNOWN_LIBREOFFICE_VERSION_DIFFERENCES,
+  LIBREOFFICE_CONTRACT,
+  LIBREOFFICE_DRIFT_ENV,
+  checkLibreOfficeContract,
+} from './visual-parity/environment-contract.js';
+import {
   RATCHET_PRECISION,
   RATCHET_RECORD_FILE,
   RATCHET_SCHEMA_VERSION,
@@ -14,6 +20,7 @@ import {
   chromiumFingerprint,
   compareToRecord,
   libreofficeFingerprint,
+  popplerFingerprint,
   readRecord,
   serializeRecord,
   type RatchetSummary,
@@ -37,6 +44,7 @@ const repoRoot = resolve(__dirname, '../..');
 const ENVIRONMENT = {
   chromium: '143.0.7499.4',
   libreoffice: 'LibreOffice 25.8.7.3 580(Build:3)',
+  pdftoppm: 'pdftoppm version 24.02.0',
   fontContract: { sha256: 'abc123' },
 };
 
@@ -242,6 +250,17 @@ test.describe('visual parity ratchet', () => {
     expect(libreofficeFingerprint(undefined)).toBe('unknown');
     expect(chromiumFingerprint('143.0.7499.4')).toBe('143');
     expect(chromiumFingerprint(undefined)).toBe('unknown');
+    expect(popplerFingerprint('pdftoppm version 24.02.0')).toBe('24.02');
+    expect(popplerFingerprint(undefined)).toBe('unknown');
+  });
+
+  test('a Poppler bump is an environment change: the rasterizer is part of the measurement', () => {
+    const comparison = compareToRecord(BASELINE_RECORD, {
+      ...BASELINE_SUMMARY,
+      environment: { ...ENVIRONMENT, pdftoppm: 'pdftoppm version 25.03.0' },
+    });
+    expect(comparison.status).toBe('environment-changed');
+    expect(comparison.environmentDrift.join(' ')).toContain('poppler: recorded 24.02, measured 25.03');
   });
 
   test('a case dropped from an unfiltered run fails, but not from a filtered one', () => {
@@ -279,6 +298,58 @@ test.describe('visual parity ratchet', () => {
     expect(serializeRecord(BASELINE_RECORD).endsWith('\n')).toBe(true);
     // Sorted by id so corpus reordering cannot churn the committed diff.
     expect(BASELINE_RECORD.cases.map(entry => entry.id)).toEqual(['multi-section', 'shape']);
+  });
+});
+
+/**
+ * The reference-version contract (issue #403). Pure decision layer, so — like the ratchet alarm
+ * itself — the failure mode is proven on every pull request without installing an out-of-contract
+ * LibreOffice on purpose.
+ */
+test.describe('LibreOffice reference-version contract', () => {
+  test('accepts any build of the contract minor', () => {
+    expect(checkLibreOfficeContract('LibreOffice 25.8.7.3 580(Build:3)').ok).toBe(true);
+    expect(checkLibreOfficeContract('LibreOffice 25.8.9.1 580(Build:9)').ok).toBe(true);
+  });
+
+  test('rejects an out-of-contract version with install guidance, never a silent number shift', () => {
+    const check = checkLibreOfficeContract('LibreOffice 24.2.7.2 420(Build:2)');
+    expect(check.ok).toBe(false);
+    expect(check.fingerprint).toBe('24.2');
+    expect(check.message).toContain(`contract requires ${LIBREOFFICE_CONTRACT.version}`);
+    expect(check.message).toContain(LIBREOFFICE_CONTRACT.archiveUrl);
+    // The TDF bundled-font trap (issue #400 finding) travels with the install guidance.
+    expect(check.message).toContain('REMOVE its bundled Carlito/Caladea/Liberation fonts');
+    expect(check.message).toContain(LIBREOFFICE_DRIFT_ENV);
+  });
+
+  test('cites the known cross-version rendering differences in the failure', () => {
+    const check = checkLibreOfficeContract('LibreOffice 24.2.7.2 420(Build:2)');
+    for (const difference of KNOWN_LIBREOFFICE_VERSION_DIFFERENCES) {
+      expect(check.message).toContain(difference.behavior);
+    }
+    // The catalogue must stay non-empty: the footnote-separator finding is the reason the
+    // contract exists, and each future finding lands here so the failure message teaches it.
+    expect(KNOWN_LIBREOFFICE_VERSION_DIFFERENCES.length).toBeGreaterThan(0);
+  });
+
+  test('a missing LibreOffice reads as unknown and still fails with guidance', () => {
+    const check = checkLibreOfficeContract('');
+    expect(check.ok).toBe(false);
+    expect(check.fingerprint).toBe('unknown');
+    expect(check.message).toContain('no version output');
+  });
+
+  test('agrees with the committed record: one declared version, two enforcement points', () => {
+    // The contract module owns the version; the record's fingerprint must be the SAME version,
+    // or the run-start assertion and the ratchet's environment check would disagree about which
+    // LibreOffice the numbers mean anything against.
+    expect(readRecord()!.environment.libreoffice).toBe(LIBREOFFICE_CONTRACT.version);
+  });
+
+  test('the declared build belongs to the declared minor', () => {
+    expect(LIBREOFFICE_CONTRACT.build.startsWith(`${LIBREOFFICE_CONTRACT.version}.`)).toBe(true);
+    expect(LIBREOFFICE_CONTRACT.archiveUrl).toContain(LIBREOFFICE_CONTRACT.build);
   });
 });
 

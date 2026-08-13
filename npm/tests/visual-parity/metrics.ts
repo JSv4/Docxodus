@@ -33,7 +33,9 @@ interface Pixel {
   b: number;
 }
 
-function background(image: RgbaImage): [number, number, number] {
+/** Dominant border color — the page background. Exported so the Word-reference capture
+ * (word-reference.ts) measures ink with the SAME background model as the pairwise metrics. */
+export function background(image: RgbaImage): [number, number, number] {
   const counts = new Map<number, number>();
   const border = Math.min(12, Math.ceil(Math.min(image.width, image.height) / 4));
   let best = 0xffffff;
