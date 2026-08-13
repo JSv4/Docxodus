@@ -13,6 +13,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
 4. [Paragraph Layout](#paragraph-layout)
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
+   - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
    - [LibreOffice ignores the `Hyperlink` character style on TOC field results](#libreoffice-ignores-the-hyperlink-character-style-on-toc-field-results)
 5. [Theme Colors](#theme-colors)
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
@@ -1287,6 +1288,59 @@ PR #372 introduced the native-line-box model but enabled it only for *empty* par
 which is what pagination parity needed at the time; populated paragraphs kept the percentage
 fallback. Issues #396 (DrawingML textbox auto-fit height) and #397 (TOC line height) were both
 traced to that remaining fallback.
+
+### An accumulated line-spacing error can resemble a top-margin deviation
+
+#### Symptom
+
+In `DB012-Lists-With-Different-Numberings.docx`, later list lines once appeared about 28px lower
+in Docxodus than in LibreOffice. Because the section declares a 1701-twip top margin and the first
+content is a list, the shift was initially attributed to different top-margin import behavior.
+
+#### Relevant XML
+
+```xml
+<w:sectPr>
+  <w:pgSz w:w="11906" w:h="16838"/>
+  <w:pgMar w:top="1701" w:right="1134" w:bottom="1701" w:left="1134"
+           w:header="708" w:footer="708" w:gutter="0"/>
+</w:sectPr>
+```
+
+At 96 DPI, 1701 twips is 113.4px. Glyph ink begins a few pixels below that content edge because
+the ink bounds measure the font's painted pixels, not the top of its line box.
+
+#### Renderer comparison
+
+The fixture was rendered through Microsoft Graph's Word DOCX-to-PDF conversion and rasterized
+under the benchmark's 96-DPI contract. The current Docxodus and LibreOffice artifacts use the
+same page size and font-substitution contract.
+
+| Renderer | Page (px) | First ink row | Last ink row |
+|---|---:|---:|---:|
+| Microsoft Graph Word conversion | 794 × 1123 | **117** | 365 |
+| LibreOffice 25.8.7.3 | 794 × 1123 | **117** | 365 |
+| Docxodus | 794 × 1123 | **118** | 365 |
+
+The one-row first-glyph difference is rasterization, not layout. Docxodus and LibreOffice have
+exact tolerant ink geometry (F1 1.00000), while Word independently confirms the same page-top
+position. There is no top-margin deviation to emulate or renderer fix to make.
+
+#### Analysis
+
+The apparent 28px displacement grew with each line. That is the signature of the automatic line
+spacing defect described above, not a constant page-origin offset. Once `w:lineRule="auto"` was
+measured against the font's native line box, the accumulated displacement disappeared without any
+change to `w:pgMar` handling. The `numbered-lists` corpus case is therefore an `environment`
+residual (substituted-font rasterization), not a `reference-deviation`.
+
+#### Evidence and tests
+
+- `npm/tests/visual-parity/word-reference.json` records the Word page geometry, ink bounds,
+  fixture hash, capture environment, and first-line measurement.
+- `npm/tests/visual-parity-word-reference.spec.ts` validates that the corpus disposition cannot
+  cite Word evidence unless the corresponding measurement is committed.
+- `npm/tests/visual-parity/ratchet.json` records the current Docxodus/LibreOffice F1 of 1.00000.
 
 ### LibreOffice ignores the `Hyperlink` character style on TOC field results
 
