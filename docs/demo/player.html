@@ -33,6 +33,14 @@
     :root { color-scheme: dark; --teal: #2DD4BF; --teal-soft: #5EEAD4; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
+    /* Chrome on Android's text autosizer (the system "Text scaling" setting)
+       inflates text-heavy blocks while the document's authored column width
+       stays fixed, re-breaking every line the document says. Opt the editor
+       surface out; the property is non-inherited and Blink consults the
+       autosizing cluster roots it picks itself, hence the universal selector.
+       Newer engines emit this inside the document render too; page-level
+       covers the pinned engine today. */
+    html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     body { position: relative; margin: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui,
       -apple-system, "Segoe UI", sans-serif; background: #0F172A; color: #F8FAFC; display: flex; flex-direction: column; }
     body::before { position: absolute; inset: 0; content: ""; pointer-events: none; background:

@@ -172,6 +172,15 @@
     /* The editor mount. Height is fixed so the surface scrolls the DOCUMENT rather than
        the page — the ribbon has to stay reachable while you scroll a long contract. */
     #workspace { height: clamp(560px, 78vh, 820px); }
+    /* Chrome on Android's text autosizer (the system "Text scaling" setting)
+       would inflate the embedded document's text while its authored column
+       width stays fixed, re-breaking every line the document says — so the
+       editor workspace opts out (the page's own prose keeps autosizing). The
+       property is non-inherited and Blink consults the autosizing cluster
+       roots it picks itself, hence the universal selector. Newer engines emit
+       this inside the document render too; page-level covers the pinned
+       engine today. */
+    #workspace, #workspace * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
     .feature-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 18px; overflow: hidden;
       border: 1px solid var(--line); border-radius: 16px; background: var(--line); box-shadow: var(--shadow-md); }

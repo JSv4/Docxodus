@@ -2477,6 +2477,18 @@ namespace Docxodus
         ///    line-height of the raised box removes it from that calculation while leaving its
         ///    own glyph untouched — the same device the converter already uses to keep the two
         ///    compacted pieces of a <c>w:br</c> from contributing a line box.
+        /// 4. <b>The device does not resize the document's text.</b> Chrome on Android runs a
+        ///    "text autosizer" (driven by the OS/browser Text-scaling accessibility setting and
+        ///    the minimum-font-size preference) that multiplies the font size of text-heavy
+        ///    blocks — while the section's authored column width stays fixed, so every line
+        ///    re-breaks and the render no longer matches what the document says (garbling
+        ///    fixed-grid content outright). A word processor never inflates document text; the
+        ///    viewer's zoom is the legibility affordance. <c>text-size-adjust: 100%</c> is the
+        ///    standard opt-out. It is a non-inherited property that Blink consults on the
+        ///    autosizing cluster ROOTS it picks itself (observed on Android: a rule on an
+        ///    intermediate ancestor such as the editor chrome's root does NOT protect the
+        ///    document inside it), so it is emitted on every element of the document rather
+        ///    than only on <c>body</c>.
         /// </remarks>
         private static string GenerateDocumentLayoutCss()
         {
@@ -2484,6 +2496,10 @@ namespace Docxodus
             sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
             sb.AppendLine("body {");
             sb.AppendLine("    overflow-wrap: break-word;");
+            sb.AppendLine("}");
+            sb.AppendLine("body, body * {");
+            sb.AppendLine("    -webkit-text-size-adjust: 100%;");
+            sb.AppendLine("    text-size-adjust: 100%;");
             sb.AppendLine("}");
             sb.AppendLine("table {");
             sb.AppendLine("    max-width: 100%;");

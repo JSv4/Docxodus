@@ -26,7 +26,7 @@
 // Playwright webroot gets a pretest copy. It is demo content, not library
 // machinery, and is deliberately NOT shipped in the npm package.
 
-import { COLS, ROWS, frameXml } from './ascii-scenes.js';
+import { COLS, ROWS, frameXml, createCanvasPin } from './ascii-scenes.js';
 import { FREEDOOM_LEVEL } from './freedoom-e1m1.js';
 
 // ─── Screen geometry ──────────────────────────────────────────────────
@@ -1311,6 +1311,8 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   const seeded = seedArcade(session);
   let canvasAnchor = seeded.canvasAnchor;
   let openTag = seeded.openTag;
+  const pinCanvas = createCanvasPin();
+  pinCanvas(canvasAnchor);
 
   const carts = [platformerCart(), dungeonCart(), freedoomCart()];
   let cart = carts.find((c) => c.name === startCart) ?? carts[0];
@@ -1355,6 +1357,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     const t1 = performance.now();
     if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
     canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+    pinCanvas(canvasAnchor);
     editor.refresh();
     const t2 = performance.now();
 

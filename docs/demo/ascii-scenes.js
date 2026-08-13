@@ -302,6 +302,34 @@ export function frameXml(openTag, grid, bg) {
   return { xml: parts.join(''), runs };
 }
 
+/** The canvas rows must NEVER wrap. The grid is authored for Courier New at
+ *  8pt — 92 columns ≈ 6.1in, inside the 6.5in text column — but a platform
+ *  can render it wider than authored: Android has no Courier New (Chrome
+ *  substitutes a wider monospace face), and mobile Chrome's text autosizer
+ *  (the OS "Text scaling" accessibility setting) inflates text-heavy blocks
+ *  outright. Either way an over-wide row folds onto a second line and the
+ *  frame stacks into garbage — extra lines that multiply as the animation
+ *  fills the grid. Pinning `white-space: pre` keeps every row exactly one
+ *  line, so the worst case degrades to a clipped right edge instead.
+ *
+ *  Returns a `pin(canvasAnchor)` the driver calls once per frame: the rule is
+ *  keyed to the canvas paragraph's Unid (stable across frames, so this is a
+ *  no-op except on first paint and after the canvas is rebuilt). */
+export function createCanvasPin() {
+  const style = document.head.appendChild(document.createElement('style'));
+  let pinned = '';
+  return (canvasAnchor) => {
+    const unid = canvasAnchor.split(':')[2];
+    if (!unid || unid === pinned) return;
+    pinned = unid;
+    style.textContent =
+      `[data-anchor="${unid}"], [data-anchor="${unid}"] span {` +
+      ' white-space: pre !important;' +
+      ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }\n' +
+      `[data-anchor="${unid}"] { overflow-x: hidden; }`;
+  };
+}
+
 // ─── The document itself ──────────────────────────────────────────────
 
 /** Seed a freshly opened blank session with the Observatory document — title,
@@ -367,6 +395,8 @@ export function startObservatory({ editor, session, ui }) {
   const seeded = seedObservatory(session);
   let canvasAnchor = seeded.canvasAnchor;
   const openTag = seeded.openTag;
+  const pinCanvas = createCanvasPin();
+  pinCanvas(canvasAnchor);
   editor.refresh();
 
   const unidOf = (anchor) => anchor.split(':')[2];
@@ -398,6 +428,7 @@ export function startObservatory({ editor, session, ui }) {
     const t1 = performance.now();
     if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
     canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
+    pinCanvas(canvasAnchor);
 
     editor.refresh();
     const t2 = performance.now();
