@@ -102,8 +102,9 @@ Maintained as dispositions change; see each case's `rationale` in `corpus.ts` fo
   on the paragraph preceding a nested table? (Docxodus paints; LibreOffice suppresses.)
 - `legal-contract` — does Word drop heading space-before at the top of a page? (LibreOffice
   drops; Docxodus paints the declared value.)
-- `fields-and-tabs` — does Word paint the `Hyperlink` character style's declared color on TOC
-  entries? (Docxodus paints `#0563C1`; LibreOffice paints black.)
+- `fields-and-tabs` — **resolved by issue #427:** Word records 0 blue pixels in the cached TOC
+  result, so field context suppresses hyperlink presentation; an ordinary same-style link remains
+  blue and underlined.
 - `shape` — does the `a:ln` outline enlarge an auto-fit shape in Word? (DrawingML says no;
   CSS borders do.)
 - The #404 reductions (`landscape-section`, `inline-image`, `tracked-deletion`) — whether

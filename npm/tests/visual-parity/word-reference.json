@@ -12,7 +12,37 @@
     { "id": "chart-pie", "status": "pending" },
     { "id": "chart-stacked", "status": "pending" },
     { "id": "endnote", "status": "pending" },
-    { "id": "fields-and-tabs", "status": "pending" },
+    {
+      "id": "fields-and-tabs",
+      "status": "measured",
+      "fixtureSha256": "254cded895a2987f5e0b88917f6cfd710a38b447d00ffb090e6496df54d009e6",
+      "pageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 118,
+            "right": 718,
+            "bottom": 409
+          },
+          "inkPixelRatio": 0.01476
+        }
+      ],
+      "keyMeasurements": {
+        "tocEntryRegionLeftPx": 90,
+        "tocEntryRegionTopPx": 135,
+        "tocEntryRegionRightPx": 730,
+        "tocEntryRegionBottomPx": 220,
+        "tocEntryBluePixels": 0,
+        "tocEntryInkTopPx": 144,
+        "tocEntryInkBottomPx": 208
+      },
+      "notes": "Word renders the cached TOC field-result entries black in the measured region while retaining blue content elsewhere on the page.",
+      "capturedAt": "2026-08-13"
+    },
     { "id": "footnote", "status": "pending" },
     { "id": "inline-image", "status": "pending" },
     { "id": "landscape-section", "status": "pending" },

@@ -68,6 +68,13 @@ All notable changes to this project will be documented in this file.
   page-2/page-3 first ink moved from row 115 to 99 px (Word 100, LibreOffice 99),
   and a same-environment filtered rerun improved mean SSIM 0.69467 → 0.72874
   and mean ink F1 0.57203 → 0.70363.
+- **Cached TOC field-result hyperlinks now match Word's black, undecorated presentation**
+  (issue #427): measured Word output contains zero blue pixels across the cached TOC entries even
+  though their runs reference the blue, underlined `Hyperlink` character style; an ordinary link
+  with the same styles remains decorated. The converter now derives that exception from the
+  existing complex-field annotations: `FieldRetriever` recognizes `TOC`, and run styling removes
+  only hyperlink color and underline while inside its cached result. A generated DOCX and a native
+  cross-paragraph field-scope test prevent paragraph-style, anchor-name, and blanket-link fixes.
 - **Mobile Chrome no longer garbles the arcade/observatory animations with
   extra wrapped rows, and the converter opts document text out of
   device-driven inflation** — on Android the demo's 92-cell frame rows render
@@ -331,22 +338,6 @@ All notable changes to this project will be documented in this file.
   that Docxodus applies table-style conditional formatting from Word's per-row/per-cell
   `w:cnfStyle` hints rather than deriving band membership from `w:tblLook`, so a
   hand-authored table without them renders unshaded.
-- **TOC hyperlink styling attributed to the reference implementation, not the renderer**
-  (issue #397, `npm/tests/toc-line-geometry.spec.ts` + `visual-parity/corpus.ts`):
-  the `fields-and-tabs` benchmark case named two residuals, and they have opposite
-  answers. Entry line-box height was a renderer bug and is fixed (issue #396 —
-  entries were displaced by a growing 7.3/11.0/14.7px and now land within 0.12px of
-  LibreOffice). Hyperlink appearance is not: the entry runs carry
-  `<w:rStyle w:val="Hyperlink"/>` and that character style declares `w:color="0563C1"`
-  with `w:u w:val="single"`. Docxodus paints the declared colour byte for byte;
-  LibreOffice paints the entries black, dropping a style the run explicitly
-  references. `w:hyperlink` is a link, not a style, so the output is **not** changed
-  to match the comparison implementation and the case's disposition moves
-  `renderer-bug` → `reference-deviation`. A generated regression pins entry line
-  geometry and hyperlink appearance **separately**, and — because "we match Word"
-  would otherwise be indistinguishable from decorating every hyperlink by default —
-  includes an otherwise identical entry with no `w:rStyle` that must come out
-  undecorated. Documented in `docs/ooxml_corner_cases.md`.
 
 ### Fixed
 - **Border colour resolves `w:themeColor` instead of its cached literal** (issue #399,

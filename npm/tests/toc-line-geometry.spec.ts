@@ -4,11 +4,12 @@ import {
   TOC_ENTRIES,
   TOC_HYPERLINK_RGB,
   TOC_LINE_TWIPS,
+  ORDINARY_HYPERLINK_TEXT,
   generateTocDocx,
 } from './docx-toc-fixture.js';
 
 /**
- * Issue #397 — TOC entry line geometry and hyperlink appearance in print layout.
+ * Issues #397/#427 — TOC entry line geometry and field-result appearance in print layout.
  *
  * The issue named two things, and they turned out to have different answers, so they are pinned
  * SEPARATELY here and neither can hide behind the other:
@@ -17,15 +18,12 @@ import {
  *    entry because automatic line spacing was measured against font-size instead of the font's own
  *    line box (issue #396). Fixed; on the tracked HC022 fixture entries now land within 0.12px of
  *    LibreOffice, where they were off by up to 14.7px.
- *  - **Hyperlink appearance is NOT a renderer bug.** The entry run carries
- *    `w:rStyle w:val="Hyperlink"`, and that character style declares `w:color` and `w:u`. Docxodus
- *    paints exactly the declared color; LibreOffice paints the entries black, ignoring the style it
- *    was given. Docxodus follows the file, so the difference is a reference deviation and the
- *    output must not be changed to match the comparison implementation.
+ *  - **Cached TOC hyperlink appearance is field semantics.** Microsoft Word renders the result
+ *    entries black despite their `Hyperlink` character style, while an ordinary hyperlink using
+ *    the same style remains blue and underlined. The outer TOC field is the deciding context.
  *
- * The second point only means anything if the renderer is proven to be READING the style rather
- * than decorating every `w:hyperlink` it sees. The fixture therefore also contains an entry with
- * identical markup minus `w:rStyle`, and the test requires that one to be undecorated.
+ * The generated fixture uses the same `TOC1` paragraph style and `Hyperlink` character style for
+ * its ordinary-link control, so neither a CSS selector nor a style-name heuristic can pass.
  */
 
 const PT_TO_PX = 4 / 3;
@@ -68,8 +66,7 @@ async function renderToc(page: import('@playwright/test').Page) {
     const pageBox = document.querySelector('#toc-root .page-box') as HTMLElement;
     const paragraphs = Array.from(pageBox.querySelectorAll('p'));
     const entries = paragraphs
-      .filter(p => (p.textContent || '').includes('heading of the generated document') ||
-        (p.textContent || '').includes('no character style'))
+      .filter(p => (p.textContent || '').includes('heading of the generated document'))
       .map(p => {
         const rect = p.getBoundingClientRect();
         // The entry's own text run — NOT the leader/page-number runs, whose appearance is a
@@ -77,8 +74,7 @@ async function renderToc(page: import('@playwright/test').Page) {
         // document order, so the LAST span carrying the entry text is the innermost one: the run
         // that actually holds the character style.
         const carriers = Array.from(p.querySelectorAll('span'))
-          .filter(span => (span.textContent || '').includes('generated document') ||
-            (span.textContent || '').includes('no character style'));
+          .filter(span => (span.textContent || '').includes('generated document'));
         const run = carriers[carriers.length - 1] as HTMLElement;
         const runStyle = getComputedStyle(run);
         return {
@@ -113,7 +109,22 @@ async function renderToc(page: import('@playwright/test').Page) {
     const nativeLineBox = probe.getBoundingClientRect().height;
     probe.remove();
 
-    return { entries: entries as EntryGeometry[], nativeLineBox };
+    const ordinaryParagraph = paragraphs.find(p =>
+      (p.textContent || '').includes('ordinary hyperlink')) as HTMLElement;
+    const ordinaryCarriers = Array.from(ordinaryParagraph.querySelectorAll('span'))
+      .filter(span => (span.textContent || '').includes('ordinary hyperlink'));
+    const ordinaryRun = ordinaryCarriers[ordinaryCarriers.length - 1] as HTMLElement;
+    const ordinaryStyle = getComputedStyle(ordinaryRun);
+
+    return {
+      entries: entries as EntryGeometry[],
+      nativeLineBox,
+      ordinary: {
+        text: ordinaryParagraph.textContent || '',
+        color: ordinaryStyle.color,
+        textDecorationLine: ordinaryStyle.textDecorationLine,
+      },
+    };
   }, bytes);
 }
 
@@ -151,45 +162,28 @@ test.describe('TOC entry line geometry', () => {
 });
 
 test.describe('TOC hyperlink appearance', () => {
-  /**
-   * The reference deviation, pinned as a positive statement about our own output: the declared
-   * character style is applied. LibreOffice renders these entries black — see BASELINE.md — but it
-   * is a comparison implementation, not the correctness oracle, and the file says otherwise.
-   */
-  test('an entry run styled `Hyperlink` gets the character style\'s declared color and underline',
+  test('cached TOC result links suppress the Hyperlink character style presentation',
     async ({ page }) => {
       const { entries } = await renderToc(page);
-      const styled = entries.filter((_, index) => TOC_ENTRIES[index].styled);
-      expect(styled.length).toBeGreaterThan(0);
-
-      for (const entry of styled) {
-        expect(entry.color, `${entry.text}: color`).toBe(TOC_HYPERLINK_RGB);
-        expect(entry.textDecorationLine, `${entry.text}: decoration`).toContain('underline');
+      for (const entry of entries) {
+        expect(entry.color, `${entry.text}: color`).toBe('rgb(0, 0, 0)');
+        expect(entry.textDecorationLine, `${entry.text}: decoration`).not.toContain('underline');
       }
     });
 
-  /**
-   * The control that makes the assertion above meaningful. `w:hyperlink` is a link, not a style: a
-   * renderer that decorated every hyperlink would pass the previous test while actually ignoring
-   * the style, and LibreOffice would then be the one following the file.
-   */
-  test('an identical entry WITHOUT the character style is not decorated', async ({ page }) => {
-    const { entries } = await renderToc(page);
-    const unstyledIndex = TOC_ENTRIES.findIndex(entry => !entry.styled);
-    expect(unstyledIndex).toBeGreaterThanOrEqual(0);
-    const unstyled = entries[unstyledIndex];
-
-    expect(unstyled.color, 'an unstyled hyperlink run must not be painted hyperlink blue')
-      .not.toBe(TOC_HYPERLINK_RGB);
-    expect(unstyled.textDecorationLine,
-      'an unstyled hyperlink run must not be underlined by the renderer')
-      .not.toContain('underline');
-  });
+  test('an ordinary link using the same paragraph and character styles remains decorated',
+    async ({ page }) => {
+      const { ordinary } = await renderToc(page);
+      expect(ordinary.text).toBe(ORDINARY_HYPERLINK_TEXT);
+      expect(ordinary.color).toBe(TOC_HYPERLINK_RGB);
+      expect(ordinary.textDecorationLine).toContain('underline');
+    });
 
   test('hyperlink appearance is independent of line geometry', async ({ page }) => {
     const { entries } = await renderToc(page);
     const boxes = new Set(entries.map(entry => Math.round(entry.lineBox * 100)));
-    // Styled and unstyled entries share one line box: colour and underline must not change height.
+    // Field-suppressed and ordinary presentation share one line box: appearance does not change
+    // geometry.
     expect(boxes.size, 'the character style must not alter the line box').toBe(1);
   });
 });

@@ -5977,6 +5977,7 @@ namespace Docxodus
                 return null;
 
             var style = DefineRunStyle(run);
+            ApplyFieldResultPresentation(run, style);
             if (paragraphHasExactLineHeight)
             {
                 // CSS line boxes are allowed to grow when baseline-aligned runs use font
@@ -6205,6 +6206,36 @@ namespace Docxodus
             }
 
             return content;
+        }
+
+        /// <summary>
+        /// Applies presentation semantics that belong to a cached field result rather than to an
+        /// individual run. Word suppresses hyperlink color and underline inside cached TOC
+        /// results, even when those runs reference the Hyperlink character style. The same run
+        /// outside the TOC field keeps its declared character style.
+        /// </summary>
+        private static void ApplyFieldResultPresentation(
+            XElement run,
+            Dictionary<string, string> style)
+        {
+            if (!run.Ancestors(W.hyperlink).Any() || !FieldRetriever.IsFieldResult(run, "TOC"))
+                return;
+
+            // Removing these properties exposes the underlying TOC paragraph/run formatting; it
+            // does not force black onto a document whose TOC style intentionally uses another
+            // color. Preserve any non-underline decoration that may coexist on the run.
+            style.Remove("color");
+            if (!style.TryGetValue("text-decoration", out var decoration))
+                return;
+
+            var remaining = decoration
+                .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(value => !string.Equals(value, "underline", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (remaining.Length == 0)
+                style.Remove("text-decoration");
+            else
+                style["text-decoration"] = string.Join(" ", remaining);
         }
 
         private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
