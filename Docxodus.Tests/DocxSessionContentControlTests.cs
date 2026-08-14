@@ -454,7 +454,7 @@ public sealed class DocxSessionContentControlTests
     }
 
     [Fact]
-    public void CC015_RepeatingClone_RejectsCustomXmlMoveAndParagraphIdentities()
+    public void CC015_RepeatingClone_RejectsCloneSensitiveMarkup()
     {
         var cases = new Action<XElement>[]
         {
@@ -465,6 +465,27 @@ public sealed class DocxSessionContentControlTests
                     new XAttribute(W + "id", "7"))),
             item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "paraId", "12345678"),
             item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "textId", "87654321"),
+            item =>
+            {
+                var run = item.Descendants(W + "r").First();
+                run.ReplaceWith(new XElement(W + "ins",
+                    new XAttribute(W + "id", "31"),
+                    new XAttribute(W + "author", "reviewer"), run));
+            },
+            item =>
+            {
+                var run = item.Descendants(W + "r").First();
+                run.Descendants(W + "t").Single().Name = W + "delText";
+                run.ReplaceWith(new XElement(W + "del",
+                    new XAttribute(W + "id", "32"),
+                    new XAttribute(W + "author", "reviewer"), run));
+            },
+            item => item.Descendants(W + "r").First().AddFirst(
+                new XElement(W + "rPr",
+                    new XElement(W + "rPrChange",
+                        new XAttribute(W + "id", "33"),
+                        new XAttribute(W + "author", "reviewer"),
+                        new XElement(W + "rPr")))),
         };
         foreach (var arrange in cases)
         {
@@ -472,9 +493,19 @@ public sealed class DocxSessionContentControlTests
                 arrange(ControlByNativeId(document, "109")));
             using var session = new DocxSession(fixture);
             var section = session.ListContentControls().Single(control => control.NativeId == "108");
-            Assert.Equal(EditErrorCode.RepeatingSectionConstraint,
-                session.AddRepeatingSectionItem(section.AnchorId).Error!.Code);
+            Assert.False(section.CanMutate);
+            var bytesBefore = session.Save();
+            var versionBefore = session.Version;
+            var registryBefore = JsonSerializer.Serialize(session.ListContentControls());
+            var revisionsBefore = JsonSerializer.Serialize(session.ListRevisions());
+            var result = session.AddRepeatingSectionItem(section.AnchorId);
+            Assert.Equal(EditErrorCode.RepeatingSectionConstraint, result.Error!.Code);
             Assert.Equal(0, session.UndoCount);
+            Assert.Equal(0, session.RedoCount);
+            Assert.Equal(versionBefore, session.Version);
+            Assert.Equal(bytesBefore, session.Save());
+            Assert.Equal(registryBefore, JsonSerializer.Serialize(session.ListContentControls()));
+            Assert.Equal(revisionsBefore, JsonSerializer.Serialize(session.ListRevisions()));
         }
     }
 
@@ -708,6 +739,15 @@ public sealed class DocxSessionContentControlTests
                 new XElement(W + "id", new XAttribute(W + "val", "901"))), "exactly one w:id"),
             (control => control.Element(W + "sdtPr")!.Add(
                 new XElement(W + "date")), "mutually exclusive"),
+            (control => control.Element(W + "sdtPr")!.AddFirst(
+                new XElement(W + "lock", new XAttribute(W + "val", "unlocked")),
+                new XElement(W + "lock", new XAttribute(W + "val", "contentLocked"))),
+                "at most one w:lock"),
+            (control => control.Element(W + "sdtPr")!.AddFirst(
+                new XElement(W + "lock", new XAttribute(W + "val", "not-a-lock"))),
+                "supported w:val"),
+            (control => control.Element(W + "sdtPr")!.AddFirst(
+                new XElement(W + "lock")), "supported w:val"),
         };
 
         foreach (var (arrange, diagnostic) in malformedFixtures)
@@ -718,9 +758,17 @@ public sealed class DocxSessionContentControlTests
             var target = malformedSession.ListContentControls().Single(control => control.Text == "inner");
             Assert.False(target.CanMutate);
             Assert.Contains(diagnostic, target.UnsupportedReason, StringComparison.Ordinal);
+            var bytesBefore = malformedSession.Save();
+            var versionBefore = malformedSession.Version;
+            var registryBefore = JsonSerializer.Serialize(malformedSession.ListContentControls());
             var result = malformedSession.FillContentControlText(target.AnchorId, "must not apply");
             Assert.Equal(EditErrorCode.ContentControlMalformed, result.Error?.Code);
             Assert.Equal(0, malformedSession.UndoCount);
+            Assert.Equal(0, malformedSession.RedoCount);
+            Assert.Equal(versionBefore, malformedSession.Version);
+            Assert.Equal(bytesBefore, malformedSession.Save());
+            Assert.Equal(registryBefore,
+                JsonSerializer.Serialize(malformedSession.ListContentControls()));
             Assert.Equal("inner", malformedSession.GetContentControl(target.AnchorId)?.Text);
         }
 
@@ -891,6 +939,14 @@ public sealed class DocxSessionContentControlTests
     [Fact]
     public void CC025_PictureFill_RejectsZeroMultipleAndLinkedCandidatesBeforeHistory()
     {
+        using (var validSession = new DocxSession(BuildPictureFixture()))
+        {
+            var valid = validSession.ListContentControls()
+                .Single(control => control.NativeId == "113");
+            Assert.True(valid.CanMutate, valid.UnsupportedReason);
+            Assert.Null(valid.UnsupportedReason);
+        }
+
         var fixtures = new (byte[] Bytes, EditErrorCode Error)[]
         {
             (Transform(BuildPictureFixture(), document =>
@@ -918,9 +974,19 @@ public sealed class DocxSessionContentControlTests
             using var pictureSession = new DocxSession(bytes);
             var picture = pictureSession.ListContentControls()
                 .Single(control => control.NativeId == "113");
+            Assert.False(picture.CanMutate);
+            Assert.NotNull(picture.UnsupportedReason);
+            var bytesBefore = pictureSession.Save();
+            var versionBefore = pictureSession.Version;
+            var registryBefore = JsonSerializer.Serialize(pictureSession.ListContentControls());
             var result = pictureSession.FillContentControlPicture(picture.AnchorId, Png(4, 5));
             Assert.Equal(expected, result.Error?.Code);
+            Assert.Equal(versionBefore, pictureSession.Version);
             Assert.Equal(0, pictureSession.UndoCount);
+            Assert.Equal(0, pictureSession.RedoCount);
+            Assert.Equal(bytesBefore, pictureSession.Save());
+            Assert.Equal(registryBefore,
+                JsonSerializer.Serialize(pictureSession.ListContentControls()));
         }
     }
 
@@ -1000,6 +1066,148 @@ public sealed class DocxSessionContentControlTests
         Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
             validationErrors.Select(validation =>
                 $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+    }
+
+    [Fact]
+    public void CC028_EmptyAndNestedOnlyRowCellControls_UseOwningContentModel()
+    {
+        static XElement EmptyControl(string id) =>
+            new(W + "sdt",
+                new XElement(W + "sdtPr",
+                    new XElement(W + "id", new XAttribute(W + "val", id)),
+                    new XElement(W + "text")),
+                new XElement(W + "sdtContent"));
+
+        static XElement ContainerControl(string id, XElement child) =>
+            new(W + "sdt",
+                new XElement(W + "sdtPr",
+                    new XElement(W + "id", new XAttribute(W + "val", id)),
+                    new XElement(W + "richText")),
+                new XElement(W + "sdtContent", child));
+
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var body = document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!;
+            body.AddFirst(new XElement(W + "tbl",
+                new XElement(W + "tblPr"),
+                new XElement(W + "tblGrid", new XElement(W + "gridCol")),
+                EmptyControl("301"),
+                ContainerControl("302", EmptyControl("303")),
+                new XElement(W + "tr",
+                    EmptyControl("304"),
+                    ContainerControl("305", EmptyControl("306")))));
+        });
+        using var session = new DocxSession(fixture);
+        var controls = session.ListContentControls();
+        Assert.All(new[] { "301", "302", "303" }, id =>
+            Assert.Equal(ContentControlPlacement.Row,
+                controls.Single(control => control.NativeId == id).Placement));
+        Assert.All(new[] { "304", "305", "306" }, id =>
+            Assert.Equal(ContentControlPlacement.Cell,
+                controls.Single(control => control.NativeId == id).Placement));
+
+        foreach (var id in new[] { "301", "303", "304", "306" })
+        {
+            var target = controls.Single(control => control.NativeId == id);
+            Assert.False(target.CanMutate);
+            var bytesBefore = session.Save();
+            var versionBefore = session.Version;
+            var registryBefore = JsonSerializer.Serialize(session.ListContentControls());
+            var result = session.FillContentControlText(target.AnchorId, "must not apply");
+            Assert.Equal(EditErrorCode.ContentControlPlacementUnsupported, result.Error?.Code);
+            Assert.Equal(versionBefore, session.Version);
+            Assert.Equal(0, session.UndoCount);
+            Assert.Equal(0, session.RedoCount);
+            Assert.Equal(bytesBefore, session.Save());
+            Assert.Equal(registryBefore, JsonSerializer.Serialize(session.ListContentControls()));
+        }
+
+        using var saved = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(saved)
+            .Where(IsMaterialValidationError).ToList();
+        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
+            validationErrors.Select(validation =>
+                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+    }
+
+    [Fact]
+    public void CC029_MalformedAncestorLock_FailsChildMutationWithoutStateChange()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var properties = ControlByNativeId(document, "100").Element(W + "sdtPr")!;
+            properties.AddFirst(
+                new XElement(W + "lock", new XAttribute(W + "val", "unlocked")),
+                new XElement(W + "lock", new XAttribute(W + "val", "contentLocked")));
+        });
+        using var session = new DocxSession(fixture);
+        var child = session.ListContentControls().Single(control => control.NativeId == "101");
+        Assert.False(child.CanMutate);
+        Assert.Contains("ancestor content control is malformed", child.UnsupportedReason,
+            StringComparison.Ordinal);
+        Assert.Contains("at most one w:lock", child.UnsupportedReason, StringComparison.Ordinal);
+        var bytesBefore = session.Save();
+        var versionBefore = session.Version;
+        var registryBefore = JsonSerializer.Serialize(session.ListContentControls());
+
+        var result = session.FillContentControlText(child.AnchorId, "must not apply");
+
+        Assert.Equal(EditErrorCode.ContentControlMalformed, result.Error?.Code);
+        Assert.Equal(versionBefore, session.Version);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+        Assert.Equal(bytesBefore, session.Save());
+        Assert.Equal(registryBefore, JsonSerializer.Serialize(session.ListContentControls()));
+    }
+
+    [Fact]
+    public void CC030_EmptyInlineRichText_UsesSchemaSafePayloadAndPreservesUndoReceipt()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var properties = ControlByNativeId(document, "101").Element(W + "sdtPr")!;
+            properties.Element(W + "text")!.ReplaceWith(new XElement(W + "richText"));
+            properties.Element(W + "id")!.AddAfterSelf(
+                new XElement(W + "placeholder", new XElement(W + "docPart",
+                    new XAttribute(W + "val", "DefaultPlaceholder_22675703"))),
+                new XElement(W + "showingPlcHdr"));
+        });
+        using var session = new DocxSession(fixture);
+        var target = session.ListContentControls().Single(control => control.NativeId == "101");
+        Assert.Equal(ContentControlType.RichText, target.Type);
+        Assert.Equal(ContentControlPlacement.Inline, target.Placement);
+        Assert.True(target.IsShowingPlaceholder);
+
+        var result = session.FillContentControlRichText(target.AnchorId, string.Empty);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(result.Created);
+        Assert.Empty(result.Removed);
+        Assert.Equal(target.AnchorId, Assert.Single(result.Modified).Id);
+        var filled = session.GetContentControl(target.AnchorId)!;
+        Assert.Equal(string.Empty, filled.Text);
+        Assert.False(filled.IsShowingPlaceholder);
+        using (var saved = WordprocessingDocument.Open(new MemoryStream(session.Save()), false))
+        {
+            var control = ControlByNativeId(saved, "101");
+            Assert.NotNull(control.Element(W + "sdtPr")!.Element(W + "placeholder"));
+            Assert.Null(control.Element(W + "sdtPr")!.Element(W + "showingPlcHdr"));
+            Assert.Equal(W + "r", Assert.Single(control.Element(W + "sdtContent")!.Elements()).Name);
+            var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(saved)
+                .Where(IsMaterialValidationError).ToList();
+            Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
+                validationErrors.Select(validation =>
+                    $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        }
+
+        Assert.True(session.Undo());
+        var undone = session.GetContentControl(target.AnchorId)!;
+        Assert.Equal("inner", undone.Text);
+        Assert.True(undone.IsShowingPlaceholder);
+        Assert.True(session.Redo());
+        var redone = session.GetContentControl(target.AnchorId)!;
+        Assert.Equal(string.Empty, redone.Text);
+        Assert.False(redone.IsShowingPlaceholder);
     }
 
     private static string[] ParagraphAnchors(DocxSession session) => session.Project().AnchorIndex.Values

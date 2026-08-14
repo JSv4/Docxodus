@@ -17,9 +17,11 @@ anchors but are not mutable. Repeating-item clones receive fresh native ids befo
 their anchors are made public.
 
 Mutation also requires an exact SDT envelope: one `w:sdtPr`, one `w:sdtContent`,
-one `w:id`, and no more than one mutually exclusive family marker. Malformed controls
-stay enumerable under diagnostic anchors and fail before an undo snapshot. A repeating
-template is cloneable only when every nested SDT satisfies the same invariant.
+one `w:id`, no more than one mutually exclusive family marker, and at most one
+`w:lock` carrying a native lock value. The same malformed-envelope gate applies through
+ancestors, so a valid child cannot bypass a malformed outer lock. Malformed controls stay
+enumerable under diagnostic anchors and fail before an undo snapshot. A repeating template
+is cloneable only when every nested SDT satisfies the same invariant.
 
 `sdt` is an AnchorIndex kind in both the WML projector and the immutable IR emitter.
 The IR captures projector-order anchor facts while its private package is open, so
@@ -43,11 +45,18 @@ The typed surface is deliberately operation-specific:
 
 Fills preserve `w:sdt`, `w:sdtPr`, `w:sdtEndPr`, and metadata not owned by the
 operation. Text fills retain representative run/paragraph properties and clear only
-the showing-placeholder marker. Picture fills replace the image relationship without
-rebuilding the wrapper. Repeating clones freshen every nested content-control id and
+the showing-placeholder marker. Empty rich-text input normalizes to one schema-safe
+empty paragraph or run payload, preserving the wrapper and placeholder definition while
+clearing its showing-state marker. Picture fills replace the image relationship without
+rebuilding the wrapper. Discovery and fill share the same picture topology gate: exactly
+one canonical, embedded, mutable image must belong to the control, so `CanMutate` cannot
+advertise zero-image, multi-image, linked, or unsupported picture controls as writable.
+Repeating clones freshen every nested content-control id and
 drawing `docPr` id, and reject clone-sensitive bookmark, comment, permission, custom
 XML container/range, move, note-reference, and `w14:paraId`/`w14:textId` markup. The
-final item cannot be removed.
+clone gate also rejects every live tracked-revision carrier recognized by the revision
+registry; duplicating such markup would duplicate its native revision ids and make later
+resolution ambiguous. The final item cannot be removed.
 
 Dropdown selection writes the selected item's native `w:lastValue` as well as its
 displayed text. Combo boxes do the same for a listed item and also accept custom text;
@@ -68,6 +77,8 @@ remain enumerable; picture and repeating-section operations use their own struct
 shape checks instead of the text-placement rule. Whole-control fills are rejected in
 `render_inline` tracked-change mode because they do not yet have a faithful replacement
 revision encoding; surgical text/format operations inside a control remain available.
+Empty and nested-SDT-only payloads derive row/cell/block/inline placement from their nearest
+owning content-model boundary rather than defaulting to block placement.
 
 ## Anchor and receipt lifecycle
 

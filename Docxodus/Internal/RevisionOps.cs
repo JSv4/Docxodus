@@ -984,7 +984,10 @@ internal static class RevisionOps
         }
     }
 
-    private static bool IsRecognizedRevisionMarker(XElement element)
+    /// <summary>True for every live tracked-change carrier the native revision registry
+    /// inventories, including malformed/orphan payload markers. Structural clone operations
+    /// use this shared vocabulary so copied markup cannot manufacture duplicate live ids.</summary>
+    internal static bool IsRecognizedRevisionMarker(XElement element)
     {
         var name = element.Name;
         return RevWrapperNames.Contains(name)

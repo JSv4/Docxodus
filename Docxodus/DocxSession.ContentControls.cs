@@ -109,7 +109,13 @@ public sealed partial class DocxSession
         XElement Element,
         ContentControlIdentity.Entry Identity,
         ContentControlInfo Info,
-        string? MalformedReason);
+        string? MalformedReason,
+        string? MalformedAncestorReason);
+
+    private sealed record PictureContentControlTarget(
+        ImageCandidate? Image,
+        EditErrorCode? ErrorCode,
+        string? Diagnostic);
 
     public IReadOnlyList<ContentControlInfo> ListContentControls(
         ProjectionScopes scopes = ProjectionScopes.All)
@@ -236,26 +242,18 @@ public sealed partial class DocxSession
             return NestedFillError(anchorId);
         var binary = ValidateImageBytes(imageBytes, anchorId);
         if (binary.Error is not null) return binary.Error;
-        var images = EnumerateImageCandidates(ProjectionScopes.All).Where(image =>
-            ReferenceEquals(image.Outer, candidate!.Element)
-            || image.Outer.Ancestors().Any(ancestor => ReferenceEquals(ancestor, candidate!.Element)))
-            .ToList();
-        if (images.Count != 1)
-            return EditResult.Fail(EditErrorCode.ContentControlMalformed,
-                $"picture content control must contain exactly one mutable image; found {images.Count}", anchorId);
-        var image = images[0];
-        if (image.Info.IsLinked)
-            return EditResult.Fail(EditErrorCode.LinkedImageReadOnly,
-                "a linked picture content control is read-only", anchorId);
-        if (!image.Info.CanMutate || image.Blip is null)
-            return EditResult.Fail(EditErrorCode.UnsupportedImageMarkup,
-                image.Info.UnsupportedReason ?? "picture content control uses unsupported image markup", anchorId);
+        var target = ResolvePictureContentControlTarget(candidate!.Element,
+            EnumerateImageCandidates(ProjectionScopes.All));
+        if (target.ErrorCode is { } errorCode)
+            return EditResult.Fail(errorCode, target.Diagnostic!, anchorId);
+        var image = target.Image!;
+        var blip = image.Blip!;
 
         return MutateContentControl(candidate!, options, () =>
         {
             var relationship = OwnedPartRelationships.FindOrAddImagePart(_doc!, candidate!.Owner.Part,
                 imageBytes, binary.ContentType!, binary.Format);
-            image.Blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
+            blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
             candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
             OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part, ImageR + "embed", ImageR + "link");
         });
@@ -383,7 +381,11 @@ public sealed partial class DocxSession
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
         if (parsed.Blocks.Count == 0)
-            parsed = MarkdownPayloadParser.Parse("");
+            parsed = ParseResult.Ok(new[]
+            {
+                new ParsedBlock(ParserBlockKind.Paragraph, 0,
+                    new[] { new XElement(W.r) }),
+            });
         if (candidate.Info.Placement == ContentControlPlacement.Inline && parsed.Blocks.Count != 1)
             return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
                 "an inline rich-text control accepts exactly one markdown block", anchorId);
@@ -399,15 +401,12 @@ public sealed partial class DocxSession
             var content = candidate.Element.Element(W.sdtContent)!;
             if (candidate.Info.Placement == ContentControlPlacement.Inline)
             {
-                var block = parsed.Blocks.Count == 0
-                    ? new ParsedBlock(ParserBlockKind.Paragraph, 0, Array.Empty<XElement>())
-                    : parsed.Blocks[0];
+                var block = parsed.Blocks[0];
                 content.ReplaceNodes(block.RunElements.Select(element => new XElement(element)));
             }
             else
             {
                 var blocks = parsed.Blocks.Select(BuildParagraphFromParsedBlock).ToList();
-                if (blocks.Count == 0) blocks.Add(new XElement(W.p));
                 content.ReplaceNodes(blocks);
             }
             candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
@@ -447,10 +446,12 @@ public sealed partial class DocxSession
                 $"content control not found: {anchorId}", anchorId);
             return false;
         }
-        if (candidate.MalformedReason is not null || !candidate.Identity.HasMutableIdentity)
+        if (candidate.MalformedReason is not null || candidate.MalformedAncestorReason is not null
+            || !candidate.Identity.HasMutableIdentity)
         {
             error = EditResult.Fail(EditErrorCode.ContentControlMalformed,
-                candidate.MalformedReason ?? candidate.Info.UnsupportedReason
+                candidate.MalformedReason ?? candidate.MalformedAncestorReason
+                    ?? candidate.Info.UnsupportedReason
                     ?? "content control has no unique valid native w:id", anchorId);
             return false;
         }
@@ -638,6 +639,7 @@ public sealed partial class DocxSession
     private IReadOnlyList<ContentControlCandidate> BuildContentControlRegistry(ProjectionScopes scopes)
     {
         var result = new List<ContentControlCandidate>();
+        IReadOnlyList<ImageCandidate>? imageCandidates = null;
         var owners = OwnedPartRelationships.StoryParts(_doc!);
         var roots = owners.Select(owner => owner.Part.GetXDocument().Root)
             .Where(root => root is not null).Cast<XElement>().ToList();
@@ -656,6 +658,9 @@ public sealed partial class DocxSession
             {
                 var element = identity.Element;
                 var malformed = ValidateContentControlStructure(element);
+                var malformedAncestor = element.Ancestors(W.sdt)
+                    .Select(ValidateContentControlStructure)
+                    .FirstOrDefault(reason => reason is not null);
                 var props = element.Element(W.sdtPr);
                 var type = ClassifyContentControl(props);
                 var placement = DetectContentControlPlacement(element);
@@ -664,6 +669,8 @@ public sealed partial class DocxSession
                 var lockToken = (string?)props?.Element(ContentControlW + "lock")?.Attribute(W.val);
                 string? unsupported = null;
                 if (malformed is not null) unsupported = malformed;
+                else if (malformedAncestor is not null)
+                    unsupported = $"ancestor content control is malformed: {malformedAncestor}";
                 else if (!identity.HasValidNativeId) unsupported = "missing or invalid native w:sdtPr/w:id";
                 else if (identity.IsDuplicateNativeId) unsupported = "duplicate native w:sdtPr/w:id in package";
                 else if (placement == ContentControlPlacement.Unknown) unsupported = "unsupported or malformed OOXML placement";
@@ -685,6 +692,13 @@ public sealed partial class DocxSession
                     unsupported = "whole-control fill is unsupported when the target contains nested controls";
                 if (unsupported is null)
                     unsupported = RepeatingMutationConstraint(element, type);
+                if (unsupported is null && type == ContentControlType.Picture)
+                {
+                    imageCandidates ??= EnumerateImageCandidates(ProjectionScopes.All);
+                    var pictureTarget = ResolvePictureContentControlTarget(element, imageCandidates);
+                    if (pictureTarget.ErrorCode is not null)
+                        unsupported = pictureTarget.Diagnostic;
+                }
                 bool defaultMutable = unsupported is null && !locked && !wrapperLocked
                     && !targetBound && !ancestorBound;
 
@@ -726,10 +740,32 @@ public sealed partial class DocxSession
                     ItemValues = items,
                 };
                 result.Add(new ContentControlCandidate(owner, element, byElement[element], info,
-                    malformed));
+                    malformed, malformedAncestor));
             }
         }
         return result;
+    }
+
+    /// <summary>Apply the picture topology contract once for both discovery and mutation.
+    /// A picture SDT is mutable only when it owns exactly one canonical embedded image.</summary>
+    private static PictureContentControlTarget ResolvePictureContentControlTarget(
+        XElement control, IReadOnlyList<ImageCandidate> imageCandidates)
+    {
+        var images = imageCandidates.Where(image =>
+            ReferenceEquals(image.Outer, control)
+            || image.Outer.Ancestors().Any(ancestor => ReferenceEquals(ancestor, control)))
+            .ToList();
+        if (images.Count != 1)
+            return new PictureContentControlTarget(null, EditErrorCode.ContentControlMalformed,
+                $"picture content control must contain exactly one mutable image; found {images.Count}");
+        var image = images[0];
+        if (image.Info.IsLinked)
+            return new PictureContentControlTarget(null, EditErrorCode.LinkedImageReadOnly,
+                "a linked picture content control is read-only");
+        if (!image.Info.CanMutate || image.Blip is null)
+            return new PictureContentControlTarget(null, EditErrorCode.UnsupportedImageMarkup,
+                image.Info.UnsupportedReason ?? "picture content control uses unsupported image markup");
+        return new PictureContentControlTarget(image, null, null);
     }
 
     private static bool ScopeIncluded(string scope, ProjectionScopes scopes) => scope switch
@@ -768,6 +804,12 @@ public sealed partial class DocxSession
         if (!ContentControlIdentity.TryCanonicalizeNativeId(
                 (string?)ids[0].Attribute(W.val), out _))
             return "w:sdtPr/w:id must have a signed 32-bit integer w:val";
+        var locks = properties[0].Elements(ContentControlW + "lock").ToList();
+        if (locks.Count > 1)
+            return $"w:sdtPr must contain at most one w:lock; found {locks.Count}";
+        if (locks.Count == 1 && (string?)locks[0].Attribute(W.val)
+                is not ("unlocked" or "sdtLocked" or "contentLocked" or "sdtContentLocked"))
+            return "w:sdtPr/w:lock must have a supported w:val";
         var family = properties[0].Elements().Where(element =>
             !ContentControlMetadata.Contains(element.Name)).ToList();
         if (family.Count > 1)
@@ -805,10 +847,11 @@ public sealed partial class DocxSession
         if (content is null) return ContentControlPlacement.Unknown;
         var children = content.Elements().ToList();
         if (children.Count == 0)
-        {
-            if (control.Ancestors(W.p).Any()) return ContentControlPlacement.Inline;
-            return ContentControlPlacement.Block;
-        }
+            return DetectContentControlPlacementFromContext(control);
+        // A nested SDT is valid in every placement grammar, so an sdt-only payload is
+        // intrinsically ambiguous from children alone. Its parent context is authoritative.
+        if (children.All(element => element.Name == W.sdt))
+            return DetectContentControlPlacementFromContext(control);
         bool allInline = children.All(element => element.Name == W.r || element.Name == W.hyperlink
             || element.Name == W.fldSimple || element.Name == W.sdt || element.Name == W.smartTag
             || element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd
@@ -821,6 +864,25 @@ public sealed partial class DocxSession
         if (children.All(element => element.Name == W.p || element.Name == W.tbl
                 || element.Name == W.sdt || element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd))
             return ContentControlPlacement.Block;
+        return ContentControlPlacement.Unknown;
+    }
+
+    /// <summary>An empty or nested-SDT-only sdtContent has no unambiguous child grammar from
+    /// which to infer its typed SDT context. Use the nearest OOXML content-model boundary
+    /// instead, walking transparently through nested SDTs and revision/custom-XML carriers.</summary>
+    private static ContentControlPlacement DetectContentControlPlacementFromContext(XElement control)
+    {
+        foreach (var ancestor in control.Ancestors())
+        {
+            if (ancestor.Name == W.p) return ContentControlPlacement.Inline;
+            if (ancestor.Name == W.tc || ancestor.Name == W.body || ancestor.Name == W.hdr
+                || ancestor.Name == W.ftr || ancestor.Name == W.footnote
+                || ancestor.Name == W.endnote || ancestor.Name == W.comment
+                || ancestor.Name == W.txbxContent)
+                return ContentControlPlacement.Block;
+            if (ancestor.Name == W.tr) return ContentControlPlacement.Cell;
+            if (ancestor.Name == W.tbl) return ContentControlPlacement.Row;
+        }
         return ContentControlPlacement.Unknown;
     }
 
@@ -876,6 +938,8 @@ public sealed partial class DocxSession
         foreach (var control in item.DescendantsAndSelf(W.sdt))
             if (ValidateContentControlStructure(control) is { } malformed)
                 return $"malformed content control: {malformed}";
+        var revision = item.Descendants().FirstOrDefault(RevisionOps.IsRecognizedRevisionMarker);
+        if (revision is not null) return $"tracked revision {revision.Name.LocalName}";
         var unsafeNames = new HashSet<XName>
         {
             W.bookmarkStart, W.bookmarkEnd, W.commentRangeStart, W.commentRangeEnd,
