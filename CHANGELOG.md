@@ -35,6 +35,35 @@ All notable changes to this project will be documented in this file.
 
     Demo-site content only; no library, WASM, or npm-package surface changes.
 
+### Removed
+- **BREAKING — the vendored CPOL-licensed PEG parser and the Excel formula path
+  built on it.** `Docxodus/PegBase.cs` carried a 2008 third-party header reading
+  `Licence:CPOL` (Code Project Open License) beneath the repository's own
+  `Licensed under the MIT license` banner — two incompatible license claims in one
+  file. CPOL is not OSI-approved and is generally treated as incompatible with MIT
+  redistribution, yet the file shipped inside a package declaring
+  `<PackageLicenseExpression>MIT</PackageLicenseExpression>`, and neither `LICENSE`
+  nor `README.md` disclosed it. Deleted rather than disclosed, because the code it
+  supported was unreachable in practice:
+  - `Docxodus/PegBase.cs` (2109 lines, CPOL), `Docxodus/ExcelFormula.cs` (833
+    lines, machine-generated in 2012 from an `ExcelFormula.txt` grammar that is
+    not in the repository, so it could not be regenerated or maintained) and
+    `Docxodus/SSFormula.cs` (105 lines).
+  - The public namespaces `Peg.Base` and `ExcelFormula` disappear with them
+    (`PegNode`, `PegBaseParser`, `PegByteParser`, `PegCharParser`, `PegException`,
+    `ParseFormula`, `FileLoader`, `TreePrint`, and the rest — 20 public types).
+  - `WorksheetAccessor.FormulaReplaceSheetName` and `WorksheetAccessor.CopyCellRange`,
+    the only two consumers, are removed with it. Both had **zero callers** anywhere
+    in the library, tests, CLI tools, WASM bridge, npm package or Python client, and
+    `WorksheetAccessor` has no test coverage at all. `CopyCellRange` was not kept in
+    a formula-unaware form on purpose: copying a range while leaving relative
+    references unadjusted silently corrupts a workbook, which is worse than not
+    offering the operation.
+
+  No replacement is provided. Callers needing Excel formula rewriting should use a
+  dedicated spreadsheet library. This removes public API and so requires a major
+  version bump at release time.
+
 ### Fixed
 - **A `DocxSession` mutation that threw partway through left the document
   partially mutated, permanently** — and reported it to the caller as an

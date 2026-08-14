@@ -8,7 +8,6 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using System.Xml;
-using ExcelFormula;
 
 namespace Docxodus
 {
@@ -474,58 +473,6 @@ namespace Docxodus
             }
             element.SetAttributeValue(NoNamespace.fullCalcOnLoad, "1");
             document.WorkbookPart.PutXDocument();
-        }
-
-        public static void FormulaReplaceSheetName(SpreadsheetDocument document, string oldName, string newName)
-        {
-            foreach (WorksheetPart sheetPart in document.WorkbookPart.WorksheetParts)
-            {
-                XDocument sheetDoc = sheetPart.GetXDocument();
-                bool changed = false;
-                foreach (XElement formula in sheetDoc.Descendants(S.f))
-                {
-                    ParseFormula parser = new ParseFormula(formula.Value);
-                    string newFormula = parser.ReplaceSheetName(oldName, newName);
-                    if (newFormula != formula.Value)
-                    {
-                        formula.SetValue(newFormula);
-                        changed = true;
-                    }
-                }
-                if (changed)
-                {
-                    sheetPart.PutXDocument();
-                    ForceCalculateOnLoad(document);
-                }
-            }
-        }
-
-        // Copy all cells in the specified range to a new location
-        public static void CopyCellRange(SpreadsheetDocument document, WorksheetPart worksheet, int startRow, int startColumn, int endRow, int endColumn,
-            int toRow, int toColumn)
-        {
-            int rowOffset = toRow - startRow;
-            int columnOffset = toColumn - startColumn;
-            XDocument worksheetXDocument = worksheet.GetXDocument();
-            for (int row = startRow; row <= endRow; row++)
-                for (int column = startColumn; column <= endColumn; column++)
-                {
-                    XElement oldCell = GetCell(worksheetXDocument, column, row);
-                    if (oldCell != null)
-                    {
-                        XElement newCell = new XElement(oldCell);
-                        newCell.SetAttributeValue(NoNamespace.r, GetColumnId(column + columnOffset) + (row + rowOffset).ToString());
-                        XElement formula = newCell.Element(S.f);
-                        if (formula != null)
-                        {
-                            ParseFormula parser = new ParseFormula(formula.Value);
-                            formula.SetValue(parser.ReplaceRelativeCell(rowOffset, columnOffset));
-                        }
-                        SetCell(worksheetXDocument, newCell);
-                    }
-                }
-            worksheet.PutXDocument();
-            ForceCalculateOnLoad(document);
         }
 
         // Creates a pivot table in the specified sheet using the specified range name
