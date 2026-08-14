@@ -98,11 +98,21 @@ const CSS = `
   margin: 0 0 7px; padding: 0 0 7px;
   border-bottom: 1px solid #1f2a3f;
 }
+/* Telemetry is one long line; in the wide dock it scrolls sideways, but in the
+   sheet there is a column to wrap into and nothing to scroll it with. */
+.dxa-controls[data-compact="true"] .dxa-stats {
+  white-space: normal; overflow-x: visible; text-align: center;
+}
 
 /* Thumb controls. The wrapper spans the host so the two clusters can sit in
    its bottom corners; only the clusters themselves take pointer events, so
    the document between them stays tappable (and tapping it still pauses). */
 .dxa-controls[data-compact="true"] .dxa-pad { display: block; }
+/* The pad sits a fixed distance above the dock, so an opened sheet — which
+   grows the dock upward — would be covered by it, and the sheet's own controls
+   would be unreachable under a D-pad. While the menu is open you are not
+   steering anything, so the pad stands down. */
+.dxa-controls[data-menu="open"] .dxa-pad { display: none; }
 .dxa-pad {
   position: absolute; left: 0; right: 0;
   bottom: calc(58px + env(safe-area-inset-bottom));
@@ -233,6 +243,7 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
 
   const setMenu = (open) => {
     sheet.dataset.open = String(open);
+    controls.dataset.menu = open ? 'open' : 'closed';
     more.setAttribute('aria-expanded', String(open));
   };
   more.addEventListener('click', () => setMenu(sheet.dataset.open !== 'true'));
