@@ -4141,18 +4141,11 @@ internal static class IrMarkupRenderer
         var startName = IsDeleteGrade(kind) ? W.customXmlDelRangeStart : W.customXmlInsRangeStart;
         var endName = IsDeleteGrade(kind) ? W.customXmlDelRangeEnd : W.customXmlInsRangeEnd;
 
-        // Range A begins immediately before the control and ends as the first sdtContent child, so it contains
-        // the opening tag. Range B begins as the last sdtContent child and ends immediately after the control,
-        // so it contains the closing tag. AcceptDeletedAndMovedFromContentControls intersects those two sets.
-        var before = new XElement(startName, state.RevisionAttributes());
-        var beforeId = (string?)before.Attribute(W.id) ?? "";
-        content.AddFirst(new XElement(endName, new XAttribute(W.id, beforeId)));
-
-        var afterStart = new XElement(startName, state.RevisionAttributes());
-        var afterId = (string?)afterStart.Attribute(W.id) ?? "";
-        content.Add(afterStart);
-        var after = new XElement(endName, new XAttribute(W.id, afterId));
-        return (before, after);
+        return Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(
+            content,
+            startName,
+            endName,
+            name => new XElement(name, state.RevisionAttributes()));
     }
 
     /// <summary>

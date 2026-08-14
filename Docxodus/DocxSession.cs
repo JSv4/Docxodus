@@ -4274,9 +4274,15 @@ public sealed class DocxSession : IDisposable
     /// <c>w:pPr/w:rPr/w:del</c>; each table row gets a <c>w:trPr/w:del</c> marker with
     /// its cell paragraphs wrapped recursively. Anchors stay live (<see cref="EditResult.Modified"/>
     /// instead of <see cref="EditResult.Removed"/>) so callers can re-address the same
-    /// blocks before changes are accepted. Block-level elements other than <c>w:p</c>
-    /// and <c>w:tbl</c> (e.g. <c>w:sdt</c>) are still structurally removed in this mode
-    /// — issue #177 follow-up if a consumer needs them tracked.
+    /// blocks before changes are accepted. Block-level <c>w:sdt</c> content controls use
+    /// paired <c>w:customXmlDelRangeStart</c>/<c>End</c> ranges for their envelopes plus
+    /// recursively tracked payload blocks (issue #473). Locked and data-bound controls use
+    /// the same shape: their metadata remains untouched until the revision is resolved.
+    /// Ranges containing <c>w:customXml</c> are rejected with
+    /// <see cref="EditErrorCode.IncompatibleElementType"/> before mutation because this API
+    /// does not yet implement reversible deletion of that wrapper. Any other structural
+    /// fall-through is reported in <see cref="EditResult.Removed"/> rather than silently
+    /// disappearing.
     /// </remarks>
     public EditResult DeleteRange(string fromAnchorId, string toAnchorIdExclusive)
     {
@@ -4325,8 +4331,8 @@ public sealed class DocxSession : IDisposable
     /// "Level" is the same notion <see cref="WmlToMarkdownConverter"/> uses for the projection:
     /// <c>Heading1</c> = 1, <c>Heading2</c> = 2, etc.; <c>Title</c> = 1, <c>Subtitle</c> = 2.
     /// Tracked-change mode inherits <see cref="DeleteRange"/>'s behavior via the shared
-    /// <c>DeleteSiblingRangeCore</c> helper: paragraphs and tables are wrapped in
-    /// <c>w:del</c> markup rather than removed.
+    /// <c>DeleteSiblingRangeCore</c> helper, including native <c>w:sdt</c> envelope
+    /// deletion, anchor accounting, and the pre-mutation <c>w:customXml</c> refusal.
     /// </remarks>
     public EditResult DeleteSection(string headingAnchorId)
     {
@@ -4386,6 +4392,16 @@ public sealed class DocxSession : IDisposable
                 "'to' anchor does not follow 'from' in document order",
                 anchorForPatchScope.Anchor.Id);
 
+        if (_trackedChanges == TrackedChangeMode.RenderInline &&
+            toRemove.Any(element =>
+                element.Name == W.customXml || element.Descendants(W.customXml).Any()))
+        {
+            return EditResult.Fail(
+                EditErrorCode.IncompatibleElementType,
+                "Tracked DeleteRange/DeleteSection does not support w:customXml wrappers; no changes were made.",
+                anchorForPatchScope.Anchor.Id);
+        }
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -4396,43 +4412,59 @@ public sealed class DocxSession : IDisposable
             {
                 // Tracked-change path: mark each block with w:del markup rather than
                 // removing it. Anchors stay live in the document tree so callers can
-                // re-address the same blocks before changes are accepted. Only the
-                // top-level block anchors are reported as Modified — descendants stay
-                // resolvable too, but enumerating them all would be noise (matches
-                // DeleteBlock's single-anchor contract in tracked mode).
+                // re-address the same blocks before changes are accepted. Ordinary
+                // paragraphs/tables retain DeleteBlock's single top-level-anchor
+                // contract. Structured wrappers have no anchor of their own, so every
+                // descendant anchor they keep live is reported as Modified. A remaining
+                // structural fall-through is a real removal and is reported as such.
                 var modified = new List<Anchor>();
+                var trackedRemoved = new List<Anchor>();
+                var modifiedIds = new HashSet<string>(StringComparer.Ordinal);
+                var trackedRemovedIds = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var el in toRemove)
                 {
-                    var elUnid = (string?)el.Attribute(PtOpenXml.Unid);
-                    if (elUnid is not null)
-                    {
-                        foreach (var kv in index)
-                            if (kv.Value.Unid == elUnid)
-                                modified.Add(kv.Value.Anchor);
-                    }
                     if (el.Name == W.p)
+                    {
+                        CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
                         MarkParagraphAsTrackedDeleted(el);
+                    }
                     else if (el.Name == W.tbl)
+                    {
+                        CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
                         MarkTableAsTrackedDeleted(el);
+                    }
+                    else if (el.Name == W.sdt)
+                    {
+                        CollectAnchors(el, includeDescendants: true, index, modified, modifiedIds);
+                        MarkStructuredBlockAsTrackedDeleted(el);
+                    }
                     else
-                        // Block kinds beyond w:p/w:tbl (e.g. w:sdt) — v1 falls back
-                        // to structural removal for these, per the issue-#177 docstring.
+                    {
+                        CollectAnchors(
+                            el,
+                            includeDescendants: true,
+                            index,
+                            trackedRemoved,
+                            trackedRemovedIds);
                         el.Remove();
+                    }
                 }
                 InvalidateProjectionCache();
                 return new EditResult
                 {
                     Success = true,
                     Modified = modified,
+                    Removed = trackedRemoved,
                     Patch = PatchFor(anchorForPatchScope),
                 };
             }
 
             var removed = new List<Anchor>();
+            var removedIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var el in toRemove)
             {
                 // Collect this element's anchor plus every descendant anchor.
-                CollectAnchorsForRemoval(el, index, removed);
+                CollectAnchors(el, includeDescendants: true, index, removed, removedIds);
                 el.Remove();
             }
             InvalidateProjectionCache();
@@ -4451,25 +4483,21 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    private static void CollectAnchorsForRemoval(
+    private static void CollectAnchors(
         XElement el,
+        bool includeDescendants,
         IReadOnlyDictionary<string, AnchorTarget> index,
-        List<Anchor> removed)
+        List<Anchor> destination,
+        HashSet<string> seenIds)
     {
-        var elUnid = (string?)el.Attribute(PtOpenXml.Unid);
-        if (elUnid is not null)
+        var candidates = includeDescendants ? el.DescendantsAndSelf() : new[] { el };
+        foreach (var candidate in candidates)
         {
-            foreach (var kv in index)
-                if (kv.Value.Unid == elUnid)
-                    removed.Add(kv.Value.Anchor);
-        }
-        foreach (var desc in el.Descendants())
-        {
-            var dUnid = (string?)desc.Attribute(PtOpenXml.Unid);
-            if (dUnid is null) continue;
-            foreach (var kv in index)
-                if (kv.Value.Unid == dUnid)
-                    removed.Add(kv.Value.Anchor);
+            var unid = (string?)candidate.Attribute(PtOpenXml.Unid);
+            if (unid is null) continue;
+            var anchor = index.Values.FirstOrDefault(target => target.Unid == unid)?.Anchor;
+            if (anchor is { } found && seenIds.Add(found.Id))
+                destination.Add(found);
         }
     }
 
@@ -9801,12 +9829,7 @@ public sealed class DocxSession : IDisposable
             pPr = new XElement(W.pPr);
             paragraph.AddFirst(pPr);
         }
-        var rPr = pPr.Element(W.rPr);
-        if (rPr is null)
-        {
-            rPr = new XElement(W.rPr);
-            pPr.AddFirst(rPr);
-        }
+        var rPr = GetOrCreatePPrChild(pPr, W.rPr);
         if (rPr.Element(W.del) is null)
         {
             var author = _revisionAuthor ?? "docxodus";
@@ -9843,14 +9866,65 @@ public sealed class DocxSession : IDisposable
             foreach (var cell in row.Elements(W.tc))
             {
                 foreach (var child in cell.Elements().ToList())
-                {
-                    if (child.Name == W.p)
-                        MarkParagraphAsTrackedDeleted(child);
-                    else if (child.Name == W.tbl)
-                        MarkTableAsTrackedDeleted(child);
-                }
+                    MarkTrackedStructuredContentChild(child);
             }
         }
+    }
+
+    /// <summary>
+    /// Tracks deletion of a block <c>w:sdt</c> wrapper without
+    /// discarding its ownership metadata. Two paired custom-XML deletion ranges cross
+    /// the opening and closing tags, while every payload block receives its ordinary
+    /// paragraph/table deletion markup. Accept therefore removes both wrapper and
+    /// payload; reject restores the original wrapper and content.
+    /// </summary>
+    private void MarkStructuredBlockAsTrackedDeleted(XElement wrapper)
+    {
+        if (wrapper.Name != W.sdt)
+            throw new InvalidOperationException($"unsupported structured wrapper: {wrapper.Name}");
+
+        var contentContainer = wrapper.Element(W.sdtContent)
+            ?? throw new InvalidOperationException("block w:sdt has no w:sdtContent");
+
+        foreach (var child in contentContainer.Elements().ToList())
+            MarkTrackedStructuredContentChild(child);
+
+        var author = _revisionAuthor ?? "docxodus";
+        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var boundaries = Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(
+            contentContainer,
+            W.customXmlDelRangeStart,
+            W.customXmlDelRangeEnd,
+            name => CreateRevisionEnvelope(name, author, date));
+        wrapper.AddBeforeSelf(boundaries.Before);
+        wrapper.AddAfterSelf(boundaries.After);
+    }
+
+    /// <summary>
+    /// Recursively marks one block payload node. Nested SDT wrappers receive their own
+    /// reversible envelope; other transparent containers are preserved while their
+    /// block-bearing descendants are marked.
+    /// </summary>
+    private void MarkTrackedStructuredContentChild(XElement child)
+    {
+        if (child.Name == W.p)
+        {
+            MarkParagraphAsTrackedDeleted(child);
+            return;
+        }
+        if (child.Name == W.tbl)
+        {
+            MarkTableAsTrackedDeleted(child);
+            return;
+        }
+        if (child.Name == W.sdt)
+        {
+            MarkStructuredBlockAsTrackedDeleted(child);
+            return;
+        }
+
+        foreach (var nested in child.Elements().ToList())
+            MarkTrackedStructuredContentChild(nested);
     }
 
     private void PromoteHyperlinkRelationships(XElement paragraph)

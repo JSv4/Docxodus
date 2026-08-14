@@ -89,6 +89,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Tracked `DeleteRange` / `DeleteSection` no longer hard-remove block content
+  controls.** Block `w:sdt` envelopes now use Word-native paired custom-XML
+  deletion ranges while paragraphs, tables, and nested controls are marked
+  recursively, so accept removes the selection and reject restores locked or
+  data-bound controls intact. Anchors retained beneath a control are reported as
+  `Modified`, structural fall-through anchors as `Removed`, and ranges containing
+  unsupported `w:customXml` wrappers fail atomically with
+  `IncompatibleElementType` instead of silently deleting them. Paragraph-mark
+  revision properties are also inserted in schema order for styled headings.
 - One undo step is now always retained even when a single snapshot exceeds the whole
   budget, so undo cannot silently become unavailable on exactly the large documents
   where a mistaken edit is most expensive to lose.
