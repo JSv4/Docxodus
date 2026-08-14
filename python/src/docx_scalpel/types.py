@@ -53,6 +53,10 @@ __all__ = [
     "MarkdownPatch",
     "AnchorTarget",
     "AnchorInfo",
+    "PreconditionTarget",
+    "PreconditionFailure",
+    "TextRangePrecondition",
+    "MutationPreconditions",
     "BlockMetadata",
     "BulkEditResult",
     "FillOptions",
@@ -315,6 +319,8 @@ class AnchorInfo:
     kind: str
     scope: str
     text_preview: str
+    content_hash: str | None = None
+    visible_text: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorInfo":
@@ -323,7 +329,90 @@ class AnchorInfo:
             kind=d["kind"],
             scope=d["scope"],
             text_preview=d.get("textPreview", ""),
+            content_hash=d.get("contentHash"),
+            visible_text=d.get("visibleText"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PreconditionTarget:
+    """Current target metadata returned when an optimistic guard fails."""
+
+    exists: bool
+    anchor_id: str | None = None
+    kind: str | None = None
+    scope: str | None = None
+    content_hash: str | None = None
+    visible_text: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PreconditionTarget":
+        return cls(
+            exists=bool(d.get("exists", False)),
+            anchor_id=d.get("anchorId"),
+            kind=d.get("kind"),
+            scope=d.get("scope"),
+            content_hash=d.get("contentHash"),
+            visible_text=d.get("visibleText"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreconditionFailure:
+    """Expected/actual detail for ``PRECONDITION_FAILED``."""
+
+    condition: str
+    expected: Any
+    actual: Any
+    current_version: int
+    current_target: PreconditionTarget | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PreconditionFailure":
+        target = d.get("currentTarget")
+        return cls(
+            condition=str(d.get("condition", "")),
+            expected=d.get("expected"),
+            actual=d.get("actual"),
+            current_version=int(d.get("currentVersion", 0)),
+            current_target=PreconditionTarget._from_wire(target) if target else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TextRangePrecondition:
+    start: int
+    length: int
+    text: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"start": self.start, "length": self.length, "text": self.text}
+
+
+@dataclass(frozen=True, slots=True)
+class MutationPreconditions:
+    """Optional optimistic guards evaluated immediately before a mutation."""
+
+    expected_version: int | None = None
+    anchor_id: str | None = None
+    expected_content_hash: str | None = None
+    expected_text: str | None = None
+    expected_text_range: TextRangePrecondition | None = None
+    expected_kind: str | None = None
+    expected_scope: str | None = None
+    expected_match_count: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.expected_version is not None: out["expectedVersion"] = self.expected_version
+        if self.anchor_id is not None: out["anchorId"] = self.anchor_id
+        if self.expected_content_hash is not None: out["expectedContentHash"] = self.expected_content_hash
+        if self.expected_text is not None: out["expectedText"] = self.expected_text
+        if self.expected_text_range is not None: out["expectedTextRange"] = self.expected_text_range.to_wire()
+        if self.expected_kind is not None: out["expectedKind"] = self.expected_kind
+        if self.expected_scope is not None: out["expectedScope"] = self.expected_scope
+        if self.expected_match_count is not None: out["expectedMatchCount"] = self.expected_match_count
+        return out
 
 
 class NumberFormat(str, Enum):
@@ -756,6 +845,7 @@ class EditError:
     code: EditErrorCode
     message: str
     anchor_id: str | None = None
+    precondition: PreconditionFailure | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditError":
@@ -763,6 +853,8 @@ class EditError:
             code=EditErrorCode(d["code"]),
             message=d.get("message", ""),
             anchor_id=d.get("anchorId"),
+            precondition=PreconditionFailure._from_wire(d["precondition"])
+            if d.get("precondition") else None,
         )
 
 
@@ -1105,11 +1197,15 @@ class ReplaceOptions:
 
     ignore_case: bool = False
     max_replacements: int | None = None
+    expected_match_count: int | None = None
+    preconditions: MutationPreconditions | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.ignore_case: out["ignoreCase"] = True
         if self.max_replacements is not None: out["maxReplacements"] = self.max_replacements
+        if self.expected_match_count is not None: out["expectedMatchCount"] = self.expected_match_count
+        if self.preconditions is not None: out["preconditions"] = self.preconditions.to_wire()
         return out
 
 

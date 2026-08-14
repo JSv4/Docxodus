@@ -21,7 +21,8 @@ not run at all during interpreter shutdown.
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -67,6 +68,7 @@ from .types import (
     HtmlOptions,
     ListMembership,
     MarkdownProjection,
+    MutationPreconditions,
     NumberFormat,
     ParagraphFormatOp,
     ReplaceOptions,
@@ -358,11 +360,12 @@ class DocxSession:
     Construct via :func:`open_session`; never instantiate directly.
     """
 
-    __slots__ = ("_handle", "_closed")
+    __slots__ = ("_handle", "_closed", "_active_preconditions")
 
     def __init__(self, handle: int) -> None:
         self._handle = handle
         self._closed = False
+        self._active_preconditions: MutationPreconditions | None = None
 
     # -- lifecycle --------------------------------------------------------
 
@@ -452,11 +455,43 @@ class DocxSession:
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""
-        return bool(self._call("undo", {}))
+        result = self._call("undo", {})
+        return bool(result.get("success")) if isinstance(result, dict) else bool(result)
 
     def redo(self) -> bool:
         """Redo one snapshot. Returns ``True`` if the redo ring had something to pop."""
-        return bool(self._call("redo", {}))
+        result = self._call("redo", {})
+        return bool(result.get("success")) if isinstance(result, dict) else bool(result)
+
+    def get_version(self) -> int:
+        """Return the monotonic version of the live document state."""
+        result = self._call("get_version", {})
+        if not isinstance(result, dict) or not isinstance(result.get("version"), int):
+            raise TypeError(f"get_version: expected {{version: int}}, got {result!r}")
+        return int(result["version"])
+
+    def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
+        """Evaluate guards without mutating the document or advancing its version."""
+        return EditResult._from_wire(
+            self._call("check_preconditions", {"preconditions": preconditions.to_wire()})
+        )
+
+    @contextmanager
+    def preconditioned(
+        self, preconditions: MutationPreconditions
+    ) -> Iterator["DocxSession"]:
+        """Attach guards to each mutation request made inside the context.
+
+        The host evaluates them immediately before that request's mutation. Nested
+        contexts restore the previous guard on exit. A session should not be shared
+        across threads while a precondition context is active.
+        """
+        previous = self._active_preconditions
+        self._active_preconditions = preconditions
+        try:
+            yield self
+        finally:
+            self._active_preconditions = previous
 
     # -- projection -------------------------------------------------------
 
@@ -1507,6 +1542,8 @@ class DocxSession:
     def _call(self, op: str, args: dict[str, Any]) -> Any:
         if self._closed:
             raise ValueError(f"session {self._handle} is closed")
+        if self._active_preconditions is not None and "preconditions" not in args:
+            args = {**args, "preconditions": self._active_preconditions.to_wire()}
         payload = {"handle": self._handle, **args}
         return _call(op, payload)
 

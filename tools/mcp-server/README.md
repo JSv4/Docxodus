@@ -112,7 +112,12 @@ them):
   with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
 - **`docxodus_mutations`'s `preview` mode is apply-then-undo**, not a true no-op dry run;
   it uses the session's bounded undo ring, so it composes with everything else but is not
-  free of history-depth pressure.
+  free of history-depth pressure. Its caller-visible document version is restored after
+  rollback, so merely previewing does not stale a guarded edit plan.
+- **Optimistic guards are common to every mutation tool.** Pass `preconditions` with
+  `expectedVersion` and/or an anchor hash/exact text/range/kind/scope; replacement may
+  also require `expectedMatchCount`. `docxodus_get_content` formats `version` and
+  `check_preconditions` expose the read side. Batch-level and per-step guards use the same shape.
 
 ## License
 

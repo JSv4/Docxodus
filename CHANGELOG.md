@@ -29,6 +29,20 @@ All notable changes to this project will be documented in this file.
   preserved; emitting new tracked table revisions remains #455. Coverage:
   `DocxSessionTableAddressingTests` DT250–DT257, the existing table/MCP suites, and
   `python/tests/test_table_addressing.py`.
+- **Optimistic mutation preconditions and a monotonic document version** (issue
+  #447). Every `DocxSession` starts at version `0` and advances exactly once for
+  each committed mutation, undo, or redo; failures and successful no-ops leave it
+  unchanged. `MutationPreconditions` can guard the expected version, target
+  anchor/hash/exact visible text or range/kind/scope, and find/replace occurrence
+  count. A mismatch returns `PreconditionFailed` with structured expected/actual
+  values plus the current version and target metadata, without changing bytes or
+  undo history. The same camel-case shape is exposed by the WASM/npm, stdio/Python,
+  and MCP transports; `AnchorInfo` now includes `contentHash` and `visibleText`.
+- **Exact occurrence-count replacement.** `ReplaceOptions.ExpectedMatchCount`
+  requires the live literal-match count before `ReplaceTextRange` proceeds. Guard
+  evaluation, counting, and the whole multi-match rewrite share one mutation gate
+  and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
+  replacement.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:

@@ -18,6 +18,67 @@ Three design forces, in order of weight:
 
 **Errors must be pattern-matchable, not stringly-typed.** Every mutation returns an `EditResult` envelope; failure carries a typed `EditErrorCode` with a remediation message. The same enum is exposed as a snake-case string union in TypeScript, so JS agents pattern-match the same way C# callers do. No method on the session throws across the boundary (the constructor and `Save()` are the only places that can — and only for fatal conditions like an invalid DOCX or IO failure).
 
+## Document version and optimistic preconditions
+
+Every session exposes a monotonic `long Version`. It is `0` when the document is
+opened and advances exactly once for each committed document mutation. A
+multi-match `ReplaceTextRange` is one mutation. `Undo()` and `Redo()` also advance
+the version—restoring older content never restores an older caller-visible
+version. Validation failures, precondition failures, exceptions that roll back,
+and successful no-ops do not advance it. Version state is carried in internal
+snapshots so rollback and speculative preview restoration cannot leak a version
+change.
+
+Callers that derived an edit from an earlier projection can guard the mutation:
+
+```csharp
+var info = session.GetAnchorInfo(anchor)!;
+var result = session.ExecuteMutation(
+    new MutationPreconditions
+    {
+        ExpectedVersion = session.Version,
+        AnchorId = anchor,
+        ExpectedContentHash = info.ContentHash,
+        ExpectedText = info.VisibleText,
+        ExpectedKind = info.Kind,
+        ExpectedScope = info.Scope,
+    },
+    s => s.ReplaceText(anchor, replacement));
+```
+
+`MutationPreconditions` fields are optional and ANDed:
+
+| .NET | wire | Meaning |
+|---|---|---|
+| `ExpectedVersion` | `expectedVersion` | The session version used to derive the plan. |
+| `AnchorId` | `anchorId` | Guard target. Mutation façades infer their primary target when omitted. |
+| `ExpectedContentHash` | `expectedContentHash` | Hash of the target's current OOXML subtree, also returned by `GetAnchorInfo`. |
+| `ExpectedText` | `expectedText` | Exact current visible text, also returned as `AnchorInfo.VisibleText`. |
+| `ExpectedTextRange` | `expectedTextRange: {start,length,text}` | Exact ordinal substring guard over visible text. |
+| `ExpectedKind` / `ExpectedScope` | `expectedKind` / `expectedScope` | Current canonical anchor metadata. A stale kind prefix still resolves by Unid and reports the new kind. |
+| `ExpectedMatchCount` | `expectedMatchCount` | Exact live occurrence count for `ReplaceTextRange`. |
+
+`EvaluatePreconditions`/transport `checkPreconditions` are read-only probes.
+`ExecuteMutation` is the direct .NET gated primitive used by the shared façade.
+`ReplaceTextRange` holds the same gate across initial guard evaluation, live match
+enumeration/counting, and every replacement, so another mutation cannot slip
+between count and commit.
+
+On mismatch, no document bytes or history entry change and the result has code
+`PreconditionFailed` (`precondition_failed` on the wire). Its `precondition` member
+contains `condition`, `expected`, `actual`, `currentVersion`, and `currentTarget`
+(`exists`, canonical anchor id/kind/scope, content hash, and exact visible text).
+That is enough for an agent to decide whether to rebase, retarget, or abandon the
+edit without an extra diagnostic round trip.
+
+The common wire object is available throughout the stack: npm exposes
+`getVersion`, `checkPreconditions`, and `runWithPreconditions`; Python exposes
+`get_version`, `check_preconditions`, and a `session.preconditioned(...)` context
+that attaches the guard to each mutation request; stdio accepts top-level
+`preconditions`; MCP mutation tools and individual batch steps accept the same
+property. MCP batches may additionally carry a batch-start guard. Preview mode
+restores the starting version after it undoes its speculative edits.
+
 ## Architecture
 
 ```
@@ -1238,7 +1299,9 @@ session.ReplaceMatch(textMatch, replace)                       // convenience fo
 session.ReplaceTextAtSpan(anchor, spanStart, spanLength, repl) // exact-span variant when several identical needles share a block
 ```
 
-`ReplaceOptions`: `IgnoreCase` (case-insensitive find) and `MaxReplacements` (cap on how many to apply).
+`ReplaceOptions`: `IgnoreCase` (case-insensitive find), `MaxReplacements` (cap on
+how many to apply), `ExpectedMatchCount` (require the exact live count before the
+cap), and `Preconditions` (the common optimistic guard object).
 
 ### Formatting-preservation contract
 
@@ -1254,7 +1317,7 @@ Revision wrappers stay inside a match's hyperlink, run-level SDT, `smartTag`, or
 
 ### Ordering and atomicity
 
-Multiple matches in the same paragraph are applied in **reverse document order** so each earlier-offset match's span stays valid after later edits land — the same trick the projector uses for tracked-change accept passes. The whole call records **one** snapshot; `Undo()` rolls every replacement back together.
+Multiple matches in the same paragraph are applied in **reverse document order** so each earlier-offset match's span stays valid after later edits land — the same trick the projector uses for tracked-change accept passes. The whole call records **one** snapshot; `Undo()` rolls every replacement back together. Preconditions, exact occurrence counting, and the rewrite execute under one mutation gate; a count mismatch returns one failed result and leaves bytes, version, and undo history unchanged.
 
 ### When to reach for the span-addressed variant
 
@@ -1521,6 +1584,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 
 | The agent should… | When it sees these codes |
 |---|---|
+| Re-read the current version/target metadata in `error.precondition`, rebase or abandon the stale edit, then retry with fresh guards | `PreconditionFailed` |
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
 | Re-list revisions (`ListRevisions`) and reissue with a current id | `RevisionNotFound` |
 | Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |

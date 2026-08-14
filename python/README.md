@@ -116,7 +116,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 
 | Tier | Methods |
 |---|---|
-| **Lifecycle** | `save`, `close`, `undo`, `redo`, `to_html` |
+| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `to_html` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **Inspection** | `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
@@ -132,6 +132,14 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 | **Raw XML** | `session.raw.get_xml`, `session.raw.insert_xml`, `session.raw.replace_xml` |
 
 Every mutation method returns an `EditResult` envelope — transport-level failures raise `DocxodusTransportError`, but a business outcome (`anchor_not_found`, `malformed_markdown`, etc.) returns `EditResult(success=False, error=EditError(...))`. **Never** an exception across the API boundary.
+
+For optimistic concurrency, build a `MutationPreconditions` object and use
+`session.check_preconditions(...)` for a read-only probe or
+`with session.preconditioned(guards): ...` to attach it to each mutation request in
+the block. The guard can require the document version, anchor hash/exact visible
+text or range/kind/scope, and an exact replacement match count. A mismatch returns
+`EditErrorCode.PRECONDITION_FAILED` with structured expected/actual/current target
+metadata and leaves bytes, version, and undo history unchanged.
 
 ### Stateless functions
 

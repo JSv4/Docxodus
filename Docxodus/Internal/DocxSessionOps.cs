@@ -13,6 +13,22 @@ namespace Docxodus.Internal;
 /// </summary>
 internal static class DocxSessionOps
 {
+    private static MutationPreconditions? ForTarget(MutationPreconditions? preconditions, string? anchorId) =>
+        preconditions is not null && preconditions.AnchorId is null && anchorId is not null
+            ? preconditions with { AnchorId = anchorId }
+            : preconditions;
+
+    private static string Mutate(
+        int handle,
+        MutationPreconditions? preconditions,
+        string? targetAnchorId,
+        System.Func<DocxSession, EditResult> mutation)
+    {
+        var session = SessionRegistry.Get(handle);
+        return DocxSessionJson.Serialize(
+            session.ExecuteMutation(ForTarget(preconditions, targetAnchorId), mutation));
+    }
+
     // ─── Lifecycle ──────────────────────────────────────────────────────
 
     public static int OpenSession(byte[] bytes, DocxSessionSettings? settings) =>
@@ -41,6 +57,23 @@ internal static class DocxSessionOps
     /// </summary>
     public static byte[] SaveWithAnchorIds(int handle) =>
         SessionRegistry.Get(handle).Save(persistAnchorIds: true);
+
+    public static long GetVersion(int handle) => SessionRegistry.Get(handle).Version;
+
+    public static string GetVersionJson(int handle) =>
+        DocxSessionJson.SerializeVersion(GetVersion(handle));
+
+    /// <summary>Read-only optimistic guard evaluation for dry runs and transport diagnostics.</summary>
+    public static string CheckPreconditions(int handle, MutationPreconditions? preconditions)
+    {
+        var error = SessionRegistry.Get(handle).EvaluatePreconditions(preconditions);
+        return DocxSessionJson.Serialize(error is null
+            ? new EditResult { Success = true }
+            : new EditResult { Success = false, Error = error });
+    }
+
+    internal static void RestorePreviewVersion(int handle, long version) =>
+        SessionRegistry.Get(handle).RestorePreviewVersion(version);
 
     // ─── Projection + discovery ─────────────────────────────────────────
 
@@ -208,27 +241,39 @@ internal static class DocxSessionOps
 
     // ─── Tier A: text mutations ─────────────────────────────────────────
 
-    public static string ReplaceText(int handle, string anchorId, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceText(anchorId, markdown));
+    public static string ReplaceText(int handle, string anchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ReplaceText(anchorId, markdown));
 
-    public static string DeleteBlock(int handle, string anchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteBlock(anchorId));
+    public static string DeleteBlock(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.DeleteBlock(anchorId));
 
-    public static string DeleteRange(int handle, string fromAnchorId, string toAnchorIdExclusive) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteRange(fromAnchorId, toAnchorIdExclusive));
+    public static string DeleteRange(int handle, string fromAnchorId, string toAnchorIdExclusive,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, fromAnchorId,
+            s => s.DeleteRange(fromAnchorId, toAnchorIdExclusive));
 
-    public static string DeleteSection(int handle, string headingAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteSection(headingAnchorId));
+    public static string DeleteSection(int handle, string headingAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, headingAnchorId, s => s.DeleteSection(headingAnchorId));
 
     public static string ReplaceTextRange(int handle, string anchorId, string find, string replace,
-        ReplaceOptions? options) =>
-        DocxSessionJson.SerializeEditResults(
+        ReplaceOptions? options, MutationPreconditions? preconditions = null)
+    {
+        if (preconditions is not null)
+            options = (options ?? new ReplaceOptions()) with
+            {
+                Preconditions = ForTarget(preconditions, anchorId),
+            };
+        return DocxSessionJson.SerializeEditResults(
             SessionRegistry.Get(handle).ReplaceTextRange(anchorId, find, replace, options));
+    }
 
     public static string ReplaceTextAtSpan(int handle, string anchorId, int spanStart, int spanLength,
-        string replace) =>
-        DocxSessionJson.Serialize(
-            SessionRegistry.Get(handle).ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
+        string replace, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
 
     /// <summary>
     /// Bracket-aware variant of <see cref="ReplaceTextAtSpan"/>. Parses the brackets out
@@ -241,29 +286,31 @@ internal static class DocxSessionOps
     /// (Fragments, ContextBefore, …) would be wasteful.
     /// </summary>
     public static string ReplaceInner(int handle, string matchText, string anchorId,
-        int spanStart, int spanLength, string newInner)
+        int spanStart, int spanLength, string newInner, MutationPreconditions? preconditions = null)
     {
-        int lb = matchText.IndexOf('[');
-        int rb = matchText.LastIndexOf(']');
-        if (lb < 0 || rb <= lb)
-            return DocxSessionJson.Serialize(new EditResult
-            {
-                Success = false,
-                Error = new EditError(EditErrorCode.MalformedMarkdown,
-                    $"match text has no balanced brackets: '{matchText}'", anchorId),
-            });
-        var prefix = matchText[..lb];
-        var suffix = matchText[(rb + 1)..];
-        return DocxSessionJson.Serialize(
-            SessionRegistry.Get(handle).ReplaceTextAtSpan(anchorId, spanStart, spanLength, prefix + newInner + suffix));
+        return Mutate(handle, preconditions, anchorId, s =>
+        {
+            int lb = matchText.IndexOf('[');
+            int rb = matchText.LastIndexOf(']');
+            if (lb < 0 || rb <= lb)
+                return new EditResult
+                {
+                    Success = false,
+                    Error = new EditError(EditErrorCode.MalformedMarkdown,
+                        $"match text has no balanced brackets: '{matchText}'", anchorId),
+                };
+            var prefix = matchText[..lb];
+            var suffix = matchText[(rb + 1)..];
+            return s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, prefix + newInner + suffix);
+        });
     }
 
     // ─── Tier B: structural ─────────────────────────────────────────────
 
     public static string MoveBlock(int handle, string sourceAnchorId, string targetAnchorId,
-        Position position) =>
-        DocxSessionJson.Serialize(
-            SessionRegistry.Get(handle).MoveBlock(sourceAnchorId, targetAnchorId, position));
+        Position position, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, sourceAnchorId,
+            s => s.MoveBlock(sourceAnchorId, targetAnchorId, position));
 
     /// <summary>The blocks <paramref name="sourceAnchorId"/> may legally move next to, and on which
     /// side — what a drag UI gates its drop targets on, so it never offers a drop the engine
@@ -272,19 +319,25 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeMoveTargets(
             SessionRegistry.Get(handle).ValidMoveTargets(sourceAnchorId));
 
-    public static string InsertParagraph(int handle, string anchorId, Position position, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertParagraph(anchorId, position, markdown));
+    public static string InsertParagraph(int handle, string anchorId, Position position, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertParagraph(anchorId, position, markdown));
 
-    public static string SplitParagraph(int handle, string anchorId, int characterOffset) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SplitParagraph(anchorId, characterOffset));
+    public static string SplitParagraph(int handle, string anchorId, int characterOffset,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.SplitParagraph(anchorId, characterOffset));
 
-    public static string MergeParagraphs(int handle, string firstAnchorId, string secondAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MergeParagraphs(firstAnchorId, secondAnchorId));
+    public static string MergeParagraphs(int handle, string firstAnchorId, string secondAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, firstAnchorId,
+            s => s.MergeParagraphs(firstAnchorId, secondAnchorId));
 
-    public static string InsertHorizontalRule(int handle, string anchorId, Position position, string ruleJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertHorizontalRule(
-            anchorId, position,
-            string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
+    public static string InsertHorizontalRule(int handle, string anchorId, Position position, string ruleJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.InsertHorizontalRule(
+            anchorId, position, string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
 
     private static ParagraphBorderEdge? ParseRuleEdge(string json)
     {
@@ -296,93 +349,124 @@ internal static class DocxSessionOps
 
     // ─── Headers / footers / page numbers ───────────────────────────────
 
-    public static string SetHeaderText(int handle, string anchorId, HeaderFooterKind kind, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetHeaderText(anchorId, kind, markdown));
+    public static string SetHeaderText(int handle, string anchorId, HeaderFooterKind kind, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetHeaderText(anchorId, kind, markdown));
 
-    public static string SetFooterText(int handle, string anchorId, HeaderFooterKind kind, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetFooterText(anchorId, kind, markdown));
+    public static string SetFooterText(int handle, string anchorId, HeaderFooterKind kind, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetFooterText(anchorId, kind, markdown));
 
     public static string InsertPageNumberField(
-        int handle, string anchorId, PageNumberField field, NumberFormat? format = null) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertPageNumberField(anchorId, field, format));
+        int handle, string anchorId, PageNumberField field, NumberFormat? format = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertPageNumberField(anchorId, field, format));
 
-    public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).EnsureHeaderFooterVisible(anchorId, kind));
+    public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.EnsureHeaderFooterVisible(anchorId, kind));
 
-    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp op) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetPageNumbering(anchorId, op));
+    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetPageNumbering(anchorId, op));
 
-    public static string ClearPageNumbering(int handle, string anchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ClearPageNumbering(anchorId));
+    public static string ClearPageNumbering(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ClearPageNumbering(anchorId));
 
     // ─── Footnotes / endnotes ───────────────────────────────────────────
 
-    public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertFootnote(anchorId, characterOffset, markdown));
+    public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertFootnote(anchorId, characterOffset, markdown));
 
-    public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertEndnote(anchorId, characterOffset, markdown));
+    public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertEndnote(anchorId, characterOffset, markdown));
 
     // ─── Comments (issue #300) ──────────────────────────────────────────
 
     public static string AddComment(int handle, string anchorId, CharSpan? span, string author,
-        string? initials, string? dateIso, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddComment(
+        string? initials, string? dateIso, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.AddComment(
             anchorId, span, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
 
     public static string AddCommentToRevision(int handle, string revisionId, string author,
-        string? initials, string? dateIso, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddCommentToRevision(
+        string? initials, string? dateIso, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AddCommentToRevision(
             revisionId, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
 
     public static string AddCommentReply(int handle, string parentCommentAnchorId, string author,
-        string? initials, string? dateIso, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddCommentReply(
+        string? initials, string? dateIso, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, parentCommentAnchorId, s => s.AddCommentReply(
             parentCommentAnchorId, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
 
-    public static string UpdateComment(int handle, string commentAnchorId, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateComment(commentAnchorId, markdown));
+    public static string UpdateComment(int handle, string commentAnchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId, s => s.UpdateComment(commentAnchorId, markdown));
 
-    public static string SetCommentResolved(int handle, string commentAnchorId, bool resolved) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetCommentResolved(commentAnchorId, resolved));
+    public static string SetCommentResolved(int handle, string commentAnchorId, bool resolved,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId,
+            s => s.SetCommentResolved(commentAnchorId, resolved));
 
-    public static string RemoveComment(int handle, string commentAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveComment(commentAnchorId));
+    public static string RemoveComment(int handle, string commentAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId, s => s.RemoveComment(commentAnchorId));
 
     public static string ListComments(int handle) =>
         DocxSessionJson.SerializeCommentList(SessionRegistry.Get(handle).ListComments());
 
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
-    public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyFormat(anchorId, span, op));
+    public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ApplyFormat(anchorId, span, op));
 
-    public static string ApplyFormatBySubstring(int handle, string anchorId, string substring, FormatOp op) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyFormatToSubstring(anchorId, substring, op));
+    public static string ApplyFormatBySubstring(int handle, string anchorId, string substring, FormatOp op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ApplyFormatToSubstring(anchorId, substring, op));
 
-    public static string SetParagraphStyle(int handle, string anchorId, string styleId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphStyle(anchorId, styleId));
+    public static string SetParagraphStyle(int handle, string anchorId, string styleId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetParagraphStyle(anchorId, styleId));
 
-    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp op) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphFormat(anchorId, op));
+    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetParagraphFormat(anchorId, op));
 
-    public static string SetListLevel(int handle, string anchorId, int levelDelta) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetListLevel(anchorId, levelDelta));
+    public static string SetListLevel(int handle, string anchorId, int levelDelta,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListLevel(anchorId, levelDelta));
 
-    public static string RemoveListMembership(int handle, string anchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveListMembership(anchorId));
+    public static string RemoveListMembership(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.RemoveListMembership(anchorId));
 
-    public static string ApplyListFormat(int handle, string anchorId, ListFormat kind) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormat(anchorId, kind));
+    public static string ApplyListFormat(int handle, string anchorId, ListFormat kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ApplyListFormat(anchorId, kind));
 
-    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat kind) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormatRange(firstAnchorId, lastAnchorId, kind));
+    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, firstAnchorId,
+            s => s.ApplyListFormatRange(firstAnchorId, lastAnchorId, kind));
 
-    public static string SetListStartOverride(int handle, string anchorId, int value) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetListStartOverride(anchorId, value));
+    public static string SetListStartOverride(int handle, string anchorId, int value,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListStartOverride(anchorId, value));
 
-    public static string ClearListStartOverride(int handle, string anchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ClearListStartOverride(anchorId));
+    public static string ClearListStartOverride(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ClearListStartOverride(anchorId));
 
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
@@ -399,64 +483,78 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeTableCellResolutionResult(
             SessionRegistry.Get(handle).ResolveTableCellCoordinate(tableAnchorId, rowIndex, columnIndex));
 
-    public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceCellContent(cellAnchorId, markdown));
+    public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.ReplaceCellContent(cellAnchorId, markdown));
 
-    public static string InsertTable(int handle, string anchorId, Position position, int rows, int cols, string optionsJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTable(
+    public static string InsertTable(int handle, string anchorId, Position position, int rows, int cols,
+        string optionsJson, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.InsertTable(
             anchorId, position, rows, cols, DocxSessionJson.ParseTableInsertOptions(optionsJson)));
 
-    public static string InsertTableRow(int handle, string cellAnchorId, Position position) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTableRow(cellAnchorId, position));
+    public static string InsertTableRow(int handle, string cellAnchorId, Position position,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableRow(cellAnchorId, position));
 
-    public static string InsertTableColumn(int handle, string cellAnchorId, Position position) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTableColumn(cellAnchorId, position));
+    public static string InsertTableColumn(int handle, string cellAnchorId, Position position,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableColumn(cellAnchorId, position));
 
-    public static string DeleteTableRow(int handle, string cellAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableRow(cellAnchorId));
+    public static string DeleteTableRow(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.DeleteTableRow(cellAnchorId));
 
-    public static string DeleteTableColumn(int handle, string cellAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableColumn(cellAnchorId));
+    public static string DeleteTableColumn(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.DeleteTableColumn(cellAnchorId));
 
     // ─── Cell merge / unmerge (issue #340 Stage B) ──────────────────────
 
     /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
     /// what happens to the content of the cells the merge absorbs.</summary>
     public static string MergeCells(int handle, string cellAnchorId, int rowSpan, int colSpan,
-        string? content) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MergeCells(cellAnchorId, rowSpan, colSpan,
+        string? content, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.MergeCells(cellAnchorId, rowSpan, colSpan,
             new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) }));
 
-    public static string UnmergeCells(int handle, string cellAnchorId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UnmergeCells(cellAnchorId));
+    public static string UnmergeCells(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.UnmergeCells(cellAnchorId));
 
     // ─── Table styling (issue #315 Stage A) ─────────────────────────────
 
     /// <summary><paramref name="widthsJson"/> is a JSON array of per-column twip widths
     /// (one positive value per column, left→right).</summary>
-    public static string SetColumnWidths(int handle, string cellAnchorId, string widthsJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetColumnWidths(
-            cellAnchorId, DocxSessionJson.ParseIntArray(widthsJson)));
+    public static string SetColumnWidths(int handle, string cellAnchorId, string widthsJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.SetColumnWidths(cellAnchorId, DocxSessionJson.ParseIntArray(widthsJson)));
 
     /// <summary><paramref name="specJson"/> is a TableBorderSpec object
     /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
-    public static string SetTableBorders(int handle, string cellAnchorId, string specJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetTableBorders(
-            cellAnchorId, DocxSessionJson.ParseTableBorderSpec(specJson)));
+    public static string SetTableBorders(int handle, string cellAnchorId, string specJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.SetTableBorders(cellAnchorId, DocxSessionJson.ParseTableBorderSpec(specJson)));
 
     /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
     /// <paramref name="scope"/> is "cell" | "row".</summary>
-    public static string SetCellShading(int handle, string cellAnchorId, string fill, string scope) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetCellShading(
+    public static string SetCellShading(int handle, string cellAnchorId, string fill, string scope,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
             cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill,
             DocxSessionJson.ParseTableShadingScope(scope)));
 
-    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetRepeatHeaderRow(cellAnchorId, repeat));
+    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.SetRepeatHeaderRow(cellAnchorId, repeat));
 
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
-        bool? allowBreakAcrossPages, int? heightTwips, string? heightRule) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetTableRowOptions(cellAnchorId,
+        bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId,
             new TableRowOptions
             {
                 RepeatHeader = repeatHeader,
@@ -470,30 +568,34 @@ internal static class DocxSessionOps
     public static string RawGetXml(int handle, string anchorId) =>
         SessionRegistry.Get(handle).Raw.GetXml(anchorId);
 
-    public static string RawInsertXml(int handle, string anchorId, Position position, string xml) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).Raw.InsertXml(anchorId, position, xml));
+    public static string RawInsertXml(int handle, string anchorId, Position position, string xml,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.Raw.InsertXml(anchorId, position, xml));
 
-    public static string RawReplaceXml(int handle, string anchorId, string xml) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).Raw.ReplaceXml(anchorId, xml));
+    public static string RawReplaceXml(int handle, string anchorId, string xml,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.Raw.ReplaceXml(anchorId, xml));
 
     // ─── Tier E: annotations ────────────────────────────────────────────
 
     public static string AddAnnotation(int handle, string anchorId, CharSpan? span,
-        string annotationJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddAnnotation(
+        string annotationJson, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.AddAnnotation(
             anchorId, span, DocxSessionJson.DeserializeAnnotation(annotationJson)));
 
-    public static string RemoveAnnotation(int handle, string annotationId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveAnnotation(annotationId));
+    public static string RemoveAnnotation(int handle, string annotationId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RemoveAnnotation(annotationId));
 
-    public static string UpdateAnnotation(int handle, string annotationId, string updateJson) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateAnnotation(
+    public static string UpdateAnnotation(int handle, string annotationId, string updateJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.UpdateAnnotation(
             annotationId, DocxSessionJson.DeserializeAnnotationUpdate(updateJson)));
 
     public static string MoveAnnotation(int handle, string annotationId, string newAnchorId,
-        CharSpan? newSpan) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MoveAnnotation(
-            annotationId, newAnchorId, newSpan));
+        CharSpan? newSpan, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, newAnchorId,
+            s => s.MoveAnnotation(annotationId, newAnchorId, newSpan));
 
     // ─── Tracked revisions (issue #318) ─────────────────────────────────
 
@@ -502,17 +604,29 @@ internal static class DocxSessionOps
     public static string ListRevisions(int handle) =>
         DocxSessionJson.SerializeRevisionList(SessionRegistry.Get(handle).ListRevisions());
 
-    public static string AcceptRevision(int handle, string revisionId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AcceptRevision(revisionId));
+    public static string AcceptRevision(int handle, string revisionId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptRevision(revisionId));
 
-    public static string RejectRevision(int handle, string revisionId) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectRevision(revisionId));
+    public static string RejectRevision(int handle, string revisionId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
 
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();
 
     public static bool Redo(int handle) => SessionRegistry.Get(handle).Redo();
+
+    public static string UndoChecked(int handle, MutationPreconditions? preconditions) =>
+        Mutate(handle, preconditions, null, s => s.Undo()
+            ? new EditResult { Success = true }
+            : EditResult.Fail(EditErrorCode.NothingToUndo, "nothing to undo"));
+
+    public static string RedoChecked(int handle, MutationPreconditions? preconditions) =>
+        Mutate(handle, preconditions, null, s => s.Redo()
+            ? new EditResult { Success = true }
+            : EditResult.Fail(EditErrorCode.NothingToRedo, "nothing to redo"));
 
     // ─── Session configuration (issue #304) ─────────────────────────────
 

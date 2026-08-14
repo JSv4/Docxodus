@@ -1049,6 +1049,8 @@ export interface DocxodusWasmExports {
     CloseSession: (handle: number) => void;
     CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
+    GetVersion: (handle: number) => string;
+    CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
     /** Ordered top-level render units per scope container (JSON {@link RenderPlan}) —
      *  what the editor's incremental reconciler diffs its DOM against. Optional:
@@ -1293,6 +1295,7 @@ export type EditErrorCode =
   | "empty_annotation_span"
   | "empty_comment_span"
   | "revision_not_found"
+  | "precondition_failed"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1306,6 +1309,43 @@ export interface EditError {
   code: EditErrorCode;
   message: string;
   anchorId?: string;
+  precondition?: PreconditionFailure;
+}
+
+export interface PreconditionTarget {
+  exists: boolean;
+  anchorId?: string;
+  kind?: string;
+  scope?: string;
+  contentHash?: string;
+  visibleText?: string;
+}
+
+export interface PreconditionFailure {
+  condition: string;
+  expected: unknown;
+  actual: unknown;
+  currentVersion: number;
+  currentTarget?: PreconditionTarget;
+}
+
+export interface TextRangePrecondition {
+  start: number;
+  length: number;
+  text: string;
+}
+
+/** Optimistic guards checked immediately before a mutation. */
+export interface MutationPreconditions {
+  expectedVersion?: number;
+  /** Optional explicit target; target-addressed methods infer their own anchor when omitted. */
+  anchorId?: string;
+  expectedContentHash?: string;
+  expectedText?: string;
+  expectedTextRange?: TextRangePrecondition;
+  expectedKind?: string;
+  expectedScope?: string;
+  expectedMatchCount?: number;
 }
 
 export interface MarkdownPatch {
@@ -1786,6 +1826,10 @@ export interface ReplaceOptions {
   ignoreCase?: boolean;
   /** Cap the number of replacements; omitted = unlimited. */
   maxReplacements?: number;
+  /** Require exactly this many occurrences before applying any replacement. */
+  expectedMatchCount?: number;
+  /** Optional document/anchor guards evaluated before searching. */
+  preconditions?: MutationPreconditions;
 }
 
 /**
@@ -2022,6 +2066,10 @@ export interface AnchorInfo {
   kind: string;
   scope: string;
   textPreview: string;
+  /** Exact live subtree hash suitable for expectedContentHash. */
+  contentHash: string;
+  /** Exact (untruncated) reader-visible text suitable for expectedText. */
+  visibleText: string;
   /** Resolved auto-numbering prefix (e.g. "1.", "First") when the element carries
    *  numbering. Absent for un-numbered paragraphs or non-paragraph kinds. */
   autoNumberPrefix?: string;
