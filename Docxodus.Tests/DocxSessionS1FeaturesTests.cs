@@ -320,9 +320,13 @@ public class DocxSessionS1FeaturesTests
         });
         Assert.True(r.Success, r.Error?.Message);
 
-        // Each created cell anchor is addressable for a subsequent edit.
+        // InsertTable reports canonical cells; resolve the cell's created paragraph for text CRUD.
         var cellAnchor = r.Created.First();
-        var fill = session.ReplaceText(cellAnchor.Id, "FILLED");
+        Assert.Equal("tc", cellAnchor.Kind);
+        var resolved = session.ResolveTableCellAnchor(cellAnchor.Id);
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        var paragraphAnchor = Assert.Single(resolved.Cell!.ParagraphAnchors);
+        var fill = session.ReplaceText(paragraphAnchor.Id, "FILLED");
         Assert.True(fill.Success, fill.Error?.Message);
         Assert.Contains("FILLED", DocumentXml(session.Save()).Descendants(W + "tbl").Single().Value);
     }
