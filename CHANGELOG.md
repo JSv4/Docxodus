@@ -63,8 +63,6 @@ All notable changes to this project will be documented in this file.
 - One undo step is now always retained even when a single snapshot exceeds the whole
   budget, so undo cannot silently become unavailable on exactly the large documents
   where a mistaken edit is most expensive to lose.
-
-### Fixed
 - **A `DocxSession` mutation that threw partway through left the document
   partially mutated, permanently** — and reported it to the caller as an
   ordinary failed `EditResult`. Every mutation records a pre-op snapshot before
