@@ -688,6 +688,12 @@ internal static class Dispatcher
 
     private static string RunTableAction(DocSession session, string action, JsonElement args) => action switch
     {
+        "get_metadata" => DocxSessionOps.GetTableMetadata(
+            session.Handle, Str(args, "tableAnchorId")),
+        "resolve_cell_anchor" => DocxSessionOps.ResolveTableCellAnchor(
+            session.Handle, Str(args, "cellAnchorId")),
+        "resolve_cell_coordinate" => DocxSessionOps.ResolveTableCellCoordinate(
+            session.Handle, Str(args, "tableAnchorId"), Int(args, "rowIndex"), Int(args, "columnIndex")),
         "insert" => DocxSessionOps.InsertTable(
             session.Handle, Str(args, "anchorId"), ParsePos(args),
             Int(args, "rows"), Int(args, "columns"), BuildTableInsertOptionsJson(args)),

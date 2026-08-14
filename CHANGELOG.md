@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Canonical table addressing and complete table-operation ripple (#450, absorbing
+  #471).** Tables now expose explicit stable identities for the `w:tbl`, every
+  `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus
+  `GetTableMetadata`, `ResolveTableCellAnchor`, and
+  `ResolveTableCellCoordinate` for bidirectional anchor ↔ zero-based Word-grid
+  coordinates. All cell operations now consume one unambiguous canonical `tc`
+  anchor; a legacy paragraph inside a cell is translated to its nearest cell for
+  the compatibility window, while `tbl`/`tr`/unrelated anchors fail with
+  `TableAnchorMigrationRequired` and remediation. This also fixes nested-table
+  operations accidentally retargeting an outer cell. Shape-changing edits return
+  `EditResult.TableAnchors` with deterministic retained (before/after location),
+  added, and invalidated table/row/column/cell identities. Missing or
+  underspecified `tblGrid` columns are read-only virtual metadata until a column or
+  width transaction materializes real `gridCol` anchors and reports the virtual
+  identities invalidated. `DocumentStructure` keeps its path-based `Id` for
+  compatibility and adds canonical `AnchorId`; its table geometry now honors
+  `gridBefore`/`gridAfter`, horizontal spans, and actual vertical-merge row spans.
+  Rippled through JSON/ops, WASM/npm (including `SetTableRowOptions`), the Python
+  host/client (all table operations), and MCP. MCP table actions now use distinct
+  schema fields: `anchorId` for insertion, `tableAnchorId` for table reads, and
+  `cellAnchorId` for every cell operation. Existing merge OOXML semantics are
+  preserved; emitting new tracked table revisions remains #455. Coverage:
+  `DocxSessionTableAddressingTests` DT250–DT257, the existing table/MCP suites, and
+  `python/tests/test_table_addressing.py`.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:

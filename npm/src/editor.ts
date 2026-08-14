@@ -2919,17 +2919,19 @@ export class DocxEditor {
 
   // ─── Table row / column editing (active block must be inside a table cell) ──────────
 
-  /** Run a table-structure op on the active cell (a cell-paragraph block) and re-render. */
+  /** Run a table-structure op on the active cell's canonical tc anchor and re-render. */
   private tableEdit(run: (cellAnchor: string) => string): void {
     const block = this.activeBlock;
-    if (this.closed || !block || !block.closest("table")) return;
+    const cell = block?.closest<HTMLElement>("td, th");
+    if (this.closed || !block || !cell || !block.closest("table")) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.anchorIdOf(block);
-    if (!fullId) return;
+    const paragraphId = this.anchorIdOf(block);
+    const cellId = this.anchorIdOf(cell);
+    if (!paragraphId || !cellId) return;
     const idx = this.blockIndex(block);
-    fullId = this.syncBlock(block, fullId); // flush uncommitted cell text first
-    const res = this.parseEdit(run(fullId));
+    this.syncBlock(block, paragraphId); // flush uncommitted cell text first
+    const res = this.parseEdit(run(cellId));
     if (!res.success) return;
     this.refreshAfter(block, idx, false);
   }

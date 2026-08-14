@@ -236,11 +236,24 @@ public static partial class DocxSessionBridge
     /// <summary>
     /// Insert a rows×cols table before/after the anchor. <paramref name="optionsJson"/> is a
     /// TableInsertOptions object ({ borderless?, cellContents?: string[], cellAlignment? }).
-    /// Returns an EditResult whose <c>created</c> lists the cell-paragraph anchors (row-major).
+    /// Returns an EditResult whose <c>created</c> lists canonical <c>tc</c> anchors (row-major).
     /// </summary>
     [JSExport]
     public static string InsertTable(int h, string anchor, string posStr, int rows, int cols, string optionsJson) =>
         DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParsePos(posStr), rows, cols, optionsJson);
+
+    [JSExport]
+    public static string GetTableMetadata(int h, string tableAnchor) =>
+        DocxSessionOps.GetTableMetadata(h, tableAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellAnchor(int h, string cellAnchor) =>
+        DocxSessionOps.ResolveTableCellAnchor(h, cellAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellCoordinate(
+        int h, string tableAnchor, int rowIndex, int columnIndex) =>
+        DocxSessionOps.ResolveTableCellCoordinate(h, tableAnchor, rowIndex, columnIndex);
 
     [JSExport]
     public static string InsertTableRow(int h, string cellAnchor, string posStr) =>
@@ -297,6 +310,12 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string SetRepeatHeaderRow(int h, string cellAnchor, bool repeat) =>
         DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
+
+    [JSExport]
+    public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,
+        bool? allowBreakAcrossPages, int? heightTwips, string heightRule) =>
+        DocxSessionOps.SetTableRowOptions(h, cellAnchor, repeatHeader, allowBreakAcrossPages,
+            heightTwips, heightRule);
 
     /// <summary>
     /// Set the section's running header story (<paramref name="anchor"/> = any body block in the

@@ -21,7 +21,7 @@ not run at all during interpreter shutdown.
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -74,6 +74,11 @@ from .types import (
     SectionInfo,
     TemplatePlaceholder,
     TextMatch,
+    TableBorderSpec,
+    TableCellResolutionResult,
+    TableInsertOptions,
+    TableMetadataResult,
+    TableRowOptions,
 )
 
 __all__ = [
@@ -1378,7 +1383,111 @@ class DocxSession:
 
     # -- Tier D: tables ---------------------------------------------------
 
+    def get_table_metadata(self, table_anchor_id: str) -> TableMetadataResult:
+        """Resolve a canonical ``tbl`` anchor to explicit table/row/column/cell identities."""
+        return TableMetadataResult._from_wire(
+            self._call("get_table_metadata", {"tableAnchorId": table_anchor_id})
+        )
+
+    def resolve_table_cell_anchor(self, cell_anchor_id: str) -> TableCellResolutionResult:
+        """Resolve a canonical ``tc`` anchor to its zero-based table-grid coordinate."""
+        return TableCellResolutionResult._from_wire(
+            self._call("resolve_table_cell_anchor", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def resolve_table_cell_coordinate(
+        self, table_anchor_id: str, row_index: int, column_index: int
+    ) -> TableCellResolutionResult:
+        """Resolve a table-grid coordinate to the physical ``tc`` covering it."""
+        return TableCellResolutionResult._from_wire(
+            self._call("resolve_table_cell_coordinate", {
+                "tableAnchorId": table_anchor_id,
+                "rowIndex": row_index,
+                "columnIndex": column_index,
+            })
+        )
+
+    def insert_table(
+        self, anchor_id: str, position: Position, rows: int, columns: int,
+        options: TableInsertOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table", {
+            "anchorId": anchor_id, "position": position.value, "rows": rows,
+            "columns": columns, "options": options.to_wire() if options else {},
+        }))
+
+    def insert_table_row(self, cell_anchor_id: str, position: Position) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table_row", {
+            "cellAnchorId": cell_anchor_id, "position": position.value,
+        }))
+
+    def insert_table_column(self, cell_anchor_id: str, position: Position) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table_column", {
+            "cellAnchorId": cell_anchor_id, "position": position.value,
+        }))
+
+    def delete_table_row(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("delete_table_row", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def delete_table_column(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("delete_table_column", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def merge_cells(
+        self, cell_anchor_id: str, row_span: int, column_span: int,
+        content: str = "append",
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("merge_cells", {
+            "cellAnchorId": cell_anchor_id, "rowSpan": row_span,
+            "columnSpan": column_span, "content": content,
+        }))
+
+    def unmerge_cells(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("unmerge_cells", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def set_column_widths(self, cell_anchor_id: str, widths: Sequence[int]) -> EditResult:
+        return EditResult._from_wire(self._call("set_column_widths", {
+            "cellAnchorId": cell_anchor_id, "widths": list(widths),
+        }))
+
+    def set_table_borders(
+        self, cell_anchor_id: str, spec: TableBorderSpec | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_table_borders", {
+            "cellAnchorId": cell_anchor_id, "spec": spec.to_wire() if spec else {},
+        }))
+
+    def set_cell_shading(
+        self, cell_anchor_id: str, fill: str | None, scope: str = "cell",
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_cell_shading", {
+            "cellAnchorId": cell_anchor_id, "fill": fill, "scope": scope,
+        }))
+
+    def set_repeat_header_row(self, cell_anchor_id: str, repeat: bool) -> EditResult:
+        return EditResult._from_wire(self._call("set_repeat_header_row", {
+            "cellAnchorId": cell_anchor_id, "repeat": repeat,
+        }))
+
+    def set_table_row_options(
+        self, cell_anchor_id: str, options: TableRowOptions,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_table_row_options", {
+            "cellAnchorId": cell_anchor_id,
+            "repeatHeader": options.repeat_header,
+            "allowBreakAcrossPages": options.allow_break_across_pages,
+            "heightTwips": options.height_twips,
+            "heightRule": options.height_rule,
+        }))
+
     def replace_cell_content(self, cell_anchor_id: str, markdown: str) -> EditResult:
+        """Replace content of the canonical ``tc`` anchor. Legacy paragraph-in-cell anchors
+        remain translated during the documented compatibility window."""
         return EditResult._from_wire(
             self._call(
                 "replace_cell_content",

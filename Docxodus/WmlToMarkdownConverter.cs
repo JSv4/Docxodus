@@ -569,6 +569,7 @@ public static class WmlToMarkdownConverter
         if (n == W.tbl) return "tbl";
         if (n == W.tr) return "tr";
         if (n == W.tc) return "tc";
+        if (n == W.gridCol) return "col";
         if (n == W.sectPr) return "sec";
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";
