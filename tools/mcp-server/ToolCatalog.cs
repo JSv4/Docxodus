@@ -502,12 +502,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "transactionId": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Optional caller identity for an APPLYING batch only. The first terminal response is retained in this open session; an identical retry returns that exact serialized response without executing or rechecking preconditions. Reusing the id for a different canonical request returns transaction_conflict. Preview/dry-run rejects this field." },
                 "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
                 "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: isolated dry-run shorthand using atomic policy unless previewPolicy says best_effort." },
                 "preview": { "type": "boolean", "default": false, "description": "Dry-run mode for mode=atomic or mode=best_effort. The complete package is cloned and the live document, version, caches, configuration, and undo/redo history are never touched." },
@@ -520,7 +521,7 @@ internal static class ToolCatalog
                     "type": "object",
                     "properties": {
                       "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_content_controls", "docxodus_track_changes"] },
-                      "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
+                      "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch). transactionId is forbidden here; it belongs only at the batch root." }
                     },
                     "required": ["tool", "args"]
                   }
