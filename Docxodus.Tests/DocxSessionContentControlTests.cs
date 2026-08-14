@@ -21,6 +21,7 @@ namespace Docxodus.Tests;
 public sealed class DocxSessionContentControlTests
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly XNamespace W14 = "http://schemas.microsoft.com/office/word/2010/wordml";
     private static readonly XNamespace W15 = "http://schemas.microsoft.com/office/word/2012/wordml";
 
@@ -39,6 +40,8 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal(ContentControlPlacement.Block, outer.Placement);
         Assert.Equal("outer-tag", outer.Tag);
         Assert.Equal("Outer alias", outer.Alias);
+        Assert.False(outer.CanMutate);
+        Assert.Contains("nested controls", outer.UnsupportedReason, StringComparison.Ordinal);
         Assert.Equal(outer.AnchorId, inner.ParentAnchorId);
         Assert.Equal(1, inner.Depth);
         Assert.Equal(ContentControlPlacement.Inline, inner.Placement);
@@ -254,11 +257,21 @@ public sealed class DocxSessionContentControlTests
             Assert.Equal("invalid_content_control_value", invalidOptions.RootElement
                 .GetProperty("error").GetProperty("code").GetString());
 
+            var dateAnchor = controls.Single(control => control.TryGetProperty("nativeId", out var id)
+                    && id.GetString() == "103").GetProperty("anchorId").GetString()!;
+            using var emptyDisplayDate = JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.SetContentControlDate(
+                    handle, dateAnchor, "2031-05-06T00:00:00Z", "", "{}"));
+            Assert.True(emptyDisplayDate.RootElement.GetProperty("success").GetBoolean());
+            using var relisted = JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.ListContentControls(handle));
+            Assert.Equal(string.Empty, relisted.RootElement.EnumerateArray().Single(control =>
+                control.TryGetProperty("nativeId", out var id) && id.GetString() == "103")
+                .GetProperty("text").GetString());
+
             using var invalidDate = JsonDocument.Parse(
                 Docxodus.Internal.DocxSessionOps.SetContentControlDate(
-                handle, controls.Single(control => control.TryGetProperty("nativeId", out var id)
-                    && id.GetString() == "103")
-                        .GetProperty("anchorId").GetString()!, "not-a-date", null, "{}"));
+                    handle, dateAnchor, "not-a-date", null, "{}"));
             Assert.Equal("invalid_content_control_value", invalidDate.RootElement
                 .GetProperty("error").GetProperty("code").GetString());
         }
@@ -295,9 +308,388 @@ public sealed class DocxSessionContentControlTests
             .Where(IsMaterialValidationError));
     }
 
+    [Fact]
+    public void CC010_Office2013Binding_IsEnumeratedAndFailsClosedUntilExplicitlyDetached()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var properties = ControlByNativeId(document, "101").Element(W + "sdtPr")!;
+            properties.Add(new XElement(W15 + "dataBinding",
+                new XAttribute(W + "storeItemID", "{11111111-1111-1111-1111-111111111111}"),
+                new XAttribute(W + "xpath", "/root/value"),
+                new XAttribute(W + "prefixMappings", "xmlns:x='urn:test'")));
+        });
+        var customBefore = CustomXmlBytes(fixture);
+        using var session = new DocxSession(fixture);
+        var bound = session.ListContentControls().Single(control => control.NativeId == "101");
+        Assert.True(bound.IsBound);
+        Assert.True(bound.CanDetachTargetBinding);
+        Assert.Equal("/root/value", bound.Binding!.XPath);
+
+        var refused = session.FillContentControlText(bound.AnchorId, "refused");
+        Assert.Equal(EditErrorCode.ContentControlBound, refused.Error!.Code);
+        Assert.Equal(0, session.UndoCount);
+        Assert.True(session.FillContentControlText(bound.AnchorId, "detached",
+            new ContentControlFillOptions
+            {
+                BindingPolicy = ContentControlBindingPolicy.DetachTarget,
+            }).Success);
+
+        var saved = session.Save();
+        Assert.Equal(customBefore, CustomXmlBytes(saved));
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        Assert.Null(ControlByNativeId(document, "101").Element(W + "sdtPr")?
+            .Element(W15 + "dataBinding"));
+    }
+
+    [Fact]
+    public void CC011_CheckboxMissingChecked_UndoRestoresExactMissingPropertyShape()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+            ControlByNativeId(document, "102").Descendants(W14 + "checked").Single().Remove());
+        using var session = new DocxSession(fixture);
+        var checkbox = session.ListContentControls().Single(control => control.NativeId == "102");
+        Assert.True(session.SetContentControlChecked(checkbox.AnchorId, true).Success);
+        Assert.True(session.Undo());
+
+        using var document = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        Assert.Empty(ControlByNativeId(document, "102").Descendants(W14 + "checked"));
+    }
+
+    [Fact]
+    public void CC012_RowAndCellTextControls_ReportUnsupportedPlacementBeforeHistory()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var body = document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!;
+            var rowControl = new XElement(W + "sdt",
+                new XElement(W + "sdtPr",
+                    new XElement(W + "id", new XAttribute(W + "val", "201")),
+                    new XElement(W + "text")),
+                new XElement(W + "sdtContent",
+                    new XElement(W + "tr",
+                        new XElement(W + "tc",
+                            new XElement(W + "p",
+                                new XElement(W + "r", new XElement(W + "t", "row")))))));
+            var cellControl = new XElement(W + "sdt",
+                new XElement(W + "sdtPr",
+                    new XElement(W + "id", new XAttribute(W + "val", "202")),
+                    new XElement(W + "text")),
+                new XElement(W + "sdtContent",
+                    new XElement(W + "tc",
+                        new XElement(W + "p",
+                            new XElement(W + "r", new XElement(W + "t", "cell"))))));
+            body.AddFirst(new XElement(W + "tbl", rowControl,
+                new XElement(W + "tr", cellControl)));
+        });
+        using var session = new DocxSession(fixture);
+        var controls = session.ListContentControls();
+        var row = controls.Single(control => control.NativeId == "201");
+        var cell = controls.Single(control => control.NativeId == "202");
+        Assert.Equal(ContentControlPlacement.Row, row.Placement);
+        Assert.Equal(ContentControlPlacement.Cell, cell.Placement);
+        Assert.False(row.CanMutate);
+        Assert.False(cell.CanMutate);
+        Assert.Contains("inline and block", row.UnsupportedReason);
+        Assert.Equal(EditErrorCode.ContentControlPlacementUnsupported,
+            session.FillContentControlText(row.AnchorId, "x").Error!.Code);
+        Assert.Equal(EditErrorCode.ContentControlPlacementUnsupported,
+            session.FillContentControlText(cell.AnchorId, "x").Error!.Code);
+        Assert.Equal(0, session.UndoCount);
+    }
+
+    [Fact]
+    public void CC013_PictureFill_RefusesNestedControlWithoutBypassingChildLock()
+    {
+        var fixture = Transform(BuildPictureFixture(), document =>
+        {
+            var outer = ControlByNativeId(document, "113");
+            var run = outer.Descendants(W + "r").Single(value => value.Descendants(W + "drawing").Any());
+            run.ReplaceWith(new XElement(W + "sdt",
+                new XElement(W + "sdtPr",
+                    new XElement(W + "id", new XAttribute(W + "val", "114")),
+                    new XElement(W + "lock", new XAttribute(W + "val", "contentLocked")),
+                    new XElement(W + "picture")),
+                new XElement(W + "sdtContent", new XElement(run))));
+        });
+        using var session = new DocxSession(fixture);
+        var outer = session.ListContentControls().Single(control => control.NativeId == "113");
+        var child = session.ListContentControls().Single(control => control.NativeId == "114");
+        Assert.False(outer.CanMutate);
+        Assert.Contains("nested controls", outer.UnsupportedReason, StringComparison.Ordinal);
+        var before = Assert.Single(session.ListImages()).IntrinsicWidthPixels;
+        Assert.Equal(EditErrorCode.ContentControlNestedFillUnsupported,
+            session.FillContentControlPicture(outer.AnchorId, Png(7, 9)).Error!.Code);
+        Assert.Equal(EditErrorCode.ContentControlLocked,
+            session.FillContentControlPicture(child.AnchorId, Png(7, 9)).Error!.Code);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(before, Assert.Single(session.ListImages()).IntrinsicWidthPixels);
+    }
+
+    [Fact]
+    public void CC014_RepeatingClone_AssignsDistinctDocumentPropertyIdsToEveryDrawing()
+    {
+        var fixture = Transform(BuildPictureFixture(), document =>
+        {
+            var drawingRun = ControlByNativeId(document, "113").Descendants(W + "r")
+                .Single(value => value.Descendants(W + "drawing").Any());
+            var first = new XElement(drawingRun);
+            var second = new XElement(drawingRun);
+            first.Descendants().Single(value => value.Name.LocalName == "docPr")
+                .SetAttributeValue("id", "501");
+            second.Descendants().Single(value => value.Name.LocalName == "docPr")
+                .SetAttributeValue("id", "502");
+            ControlByNativeId(document, "109").Element(W + "sdtContent")!
+                .ReplaceNodes(new XElement(W + "p", first, second));
+        });
+        using var session = new DocxSession(fixture);
+        var section = session.ListContentControls().Single(control => control.NativeId == "108");
+        Assert.True(session.AddRepeatingSectionItem(section.AnchorId).Success);
+        var saved = session.Save();
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        XNamespace wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        var ids = document.MainDocumentPart!.GetXDocument().Descendants(wp + "docPr")
+            .Select(value => (string)value.Attribute("id")!).ToList();
+        Assert.Equal(ids.Count, ids.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void CC015_RepeatingClone_RejectsCustomXmlMoveAndParagraphIdentities()
+    {
+        var cases = new Action<XElement>[]
+        {
+            item => item.Element(W + "sdtContent")!.AddFirst(
+                new XElement(W + "customXml", new XElement(W + "p"))),
+            item => item.Element(W + "sdtContent")!.AddFirst(
+                new XElement(W + "customXmlMoveFromRangeStart",
+                    new XAttribute(W + "id", "7"))),
+            item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "paraId", "12345678"),
+            item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "textId", "87654321"),
+        };
+        foreach (var arrange in cases)
+        {
+            var fixture = Transform(BuildFixture(), document =>
+                arrange(ControlByNativeId(document, "109")));
+            using var session = new DocxSession(fixture);
+            var section = session.ListContentControls().Single(control => control.NativeId == "108");
+            Assert.Equal(EditErrorCode.RepeatingSectionConstraint,
+                session.AddRepeatingSectionItem(section.AnchorId).Error!.Code);
+            Assert.Equal(0, session.UndoCount);
+        }
+    }
+
+    [Fact]
+    public void CC016_DuplicateNativeIdsAcrossStories_AreStableDiagnosticsAndNotMutable()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var header = document.MainDocumentPart!.AddNewPart<HeaderPart>();
+            header.PutXDocument(new XDocument(new XElement(W + "hdr",
+                BlockSdt("101", new XElement(W + "text"), "header duplicate"))));
+        });
+        using var session = new DocxSession(fixture);
+        var duplicates = session.ListContentControls().Where(control => control.NativeId == "101").ToList();
+        Assert.Equal(2, duplicates.Count);
+        Assert.All(duplicates, control =>
+        {
+            Assert.True(control.HasDuplicateNativeId);
+            Assert.False(control.CanMutate);
+            Assert.Equal(EditErrorCode.ContentControlMalformed,
+                session.FillContentControlText(control.AnchorId, "x").Error!.Code);
+        });
+        var anchors = duplicates.Select(control => control.AnchorId).OrderBy(value => value).ToArray();
+        using var reopened = new DocxSession(session.Save());
+        Assert.Equal(anchors, reopened.ListContentControls()
+            .Where(control => control.NativeId == "101")
+            .Select(control => control.AnchorId).OrderBy(value => value).ToArray());
+    }
+
+    [Fact]
+    public void CC017_WholeFill_ProtectsBookmarksIncludingTargetsRemovedByTheReplacement()
+    {
+        static void AddBookmark(XElement control, string name)
+        {
+            var content = control.Element(W + "sdtContent")!;
+            content.AddFirst(new XElement(W + "bookmarkStart",
+                new XAttribute(W + "id", "31"), new XAttribute(W + "name", name)));
+            content.Add(new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "31")));
+        }
+
+        var externallyReferenced = Transform(BuildFixture(), document =>
+        {
+            AddBookmark(ControlByNativeId(document, "101"), "InnerTarget");
+            document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Add(
+                new XElement(W + "p", new XElement(W + "hyperlink",
+                    new XAttribute(W + "anchor", "InnerTarget"),
+                    new XElement(W + "r", new XElement(W + "t", "jump")))));
+        });
+        using (var session = new DocxSession(externallyReferenced))
+        {
+            var target = session.ListContentControls().Single(control => control.NativeId == "101");
+            var refused = session.FillContentControlText(target.AnchorId, "replacement");
+            Assert.Equal(EditErrorCode.BookmarkInUse, refused.Error!.Code);
+            Assert.Equal(0, session.UndoCount);
+            Assert.Equal("inner", session.GetContentControl(target.AnchorId)!.Text);
+        }
+
+        var replacementTarget = Transform(BuildFixture(), document =>
+        {
+            var control = ControlByNativeId(document, "101");
+            control.Element(W + "sdtPr")!.Element(W + "text")!
+                .ReplaceWith(new XElement(W + "richText"));
+            AddBookmark(control, "RemovedTarget");
+        });
+        using (var session = new DocxSession(replacementTarget))
+        {
+            var target = session.ListContentControls().Single(control => control.NativeId == "101");
+            var refused = session.FillContentControlRichText(target.AnchorId,
+                "[dangling](#RemovedTarget)");
+            Assert.Equal(EditErrorCode.MissingBookmarkTarget, refused.Error!.Code);
+            Assert.Equal(0, session.UndoCount);
+            Assert.Equal("inner", session.GetContentControl(target.AnchorId)!.Text);
+        }
+    }
+
+    [Fact]
+    public void CC018_WholeFill_PromotesNewLinksSweepsOldRelationshipsAndImages_ThroughUndoRedo()
+    {
+        const string oldUri = "https://old.example.test/value";
+        const string newUri = "https://new.example.test/value";
+        var fixture = Transform(BuildPictureFixture(), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var control = ControlByNativeId(document, "113");
+            control.Element(W + "sdtPr")!.Element(W + "picture")!
+                .ReplaceWith(new XElement(W + "richText"));
+            var textRun = control.Descendants(W + "r").First(run => run.Descendants(W + "t").Any());
+            var relationship = main.AddHyperlinkRelationship(new Uri(oldUri), true);
+            textRun.ReplaceWith(new XElement(W + "hyperlink",
+                new XAttribute(R + "id", relationship.Id), new XElement(textRun)));
+        });
+
+        using var session = new DocxSession(fixture);
+        var target = session.ListContentControls().Single(control => control.NativeId == "113");
+        Assert.True(session.FillContentControlRichText(target.AnchorId,
+            $"[new link]({newUri})").Success);
+        Assert.Empty(session.ListImages());
+        Assert.Equal(newUri, Assert.Single(session.ListHyperlinks()).Target);
+
+        Assert.True(session.Undo());
+        Assert.Single(session.ListImages());
+        Assert.Equal(oldUri, Assert.Single(session.ListHyperlinks()).Target);
+
+        Assert.True(session.Redo());
+        Assert.Empty(session.ListImages());
+        Assert.Equal(newUri, Assert.Single(session.ListHyperlinks()).Target);
+        using var saved = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        Assert.Empty(saved.MainDocumentPart!.ImageParts);
+        var liveRelationship = Assert.Single(saved.MainDocumentPart.HyperlinkRelationships);
+        Assert.Equal(newUri, liveRelationship.Uri.ToString());
+        Assert.Equal(liveRelationship.Id, saved.MainDocumentPart.GetXDocument().Descendants(W + "hyperlink")
+            .Single().Attribute(R + "id")?.Value);
+    }
+
+    [Fact]
+    public void CC019_RepeatingRemoval_ProtectsBookmarksCleansRelationshipsAndFailsClosedWhenTracked()
+    {
+        static XElement AddSecondItem(WordprocessingDocument document)
+        {
+            var first = ControlByNativeId(document, "109");
+            var second = new XElement(first);
+            second.Element(W + "sdtPr")!.Element(W + "id")!
+                .SetAttributeValue(W + "val", "209");
+            first.AddAfterSelf(second);
+            return second;
+        }
+
+        var bookmarked = Transform(BuildFixture(), document =>
+        {
+            var second = AddSecondItem(document);
+            var paragraph = second.Descendants(W + "p").Single();
+            paragraph.AddFirst(new XElement(W + "bookmarkStart",
+                new XAttribute(W + "id", "41"), new XAttribute(W + "name", "RepeatedTarget")));
+            paragraph.Add(new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "41")));
+            document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Add(
+                new XElement(W + "p", new XElement(W + "hyperlink",
+                    new XAttribute(W + "anchor", "RepeatedTarget"),
+                    new XElement(W + "r", new XElement(W + "t", "jump")))));
+        });
+        using (var session = new DocxSession(bookmarked))
+        {
+            var item = session.ListContentControls().Single(control => control.NativeId == "209");
+            var refused = session.RemoveRepeatingSectionItem(item.AnchorId);
+            Assert.Equal(EditErrorCode.BookmarkInUse, refused.Error!.Code);
+            Assert.Equal(0, session.UndoCount);
+            Assert.Equal(2, session.ListContentControls().Count(control =>
+                control.Type == ContentControlType.RepeatingSectionItem));
+        }
+
+        const string oldUri = "https://removed.example.test/value";
+        var relationshipFixture = Transform(BuildPictureFixture(), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var second = AddSecondItem(document);
+            var drawingRun = ControlByNativeId(document, "113").Descendants(W + "r")
+                .Single(run => run.Descendants(W + "drawing").Any());
+            drawingRun.Remove();
+            ControlByNativeId(document, "113").Remove();
+            var relationship = main.AddHyperlinkRelationship(new Uri(oldUri), true);
+            second.Element(W + "sdtContent")!.ReplaceNodes(new XElement(W + "p",
+                drawingRun,
+                new XElement(W + "hyperlink", new XAttribute(R + "id", relationship.Id),
+                    new XElement(W + "r", new XElement(W + "t", "removed link")))));
+        });
+
+        using (var tracked = new DocxSession(relationshipFixture))
+        {
+            tracked.SetTrackedChanges(TrackedChangeMode.RenderInline);
+            var item = tracked.ListContentControls().Single(control => control.NativeId == "209");
+            Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+                tracked.RemoveRepeatingSectionItem(item.AnchorId).Error!.Code);
+            Assert.Equal(0, tracked.UndoCount);
+            Assert.Single(tracked.ListImages());
+        }
+
+        using (var session = new DocxSession(relationshipFixture))
+        {
+            var item = session.ListContentControls().Single(control => control.NativeId == "209");
+            Assert.True(session.RemoveRepeatingSectionItem(item.AnchorId).Success);
+            Assert.Empty(session.ListImages());
+            Assert.Empty(session.ListHyperlinks());
+            Assert.True(session.Undo());
+            Assert.Single(session.ListImages());
+            Assert.Equal(oldUri, Assert.Single(session.ListHyperlinks()).Target);
+            Assert.True(session.Redo());
+            Assert.Empty(session.ListImages());
+            Assert.Empty(session.ListHyperlinks());
+        }
+    }
+
     private static string[] ParagraphAnchors(DocxSession session) => session.Project().AnchorIndex.Values
         .Where(value => value.Anchor.Kind is "p" or "h" or "li")
         .Select(value => value.Anchor.Id).Distinct().ToArray();
+
+    private static XElement ControlByNativeId(WordprocessingDocument document, string nativeId) =>
+        document.MainDocumentPart!.GetXDocument().Descendants(W + "sdt").Concat(
+            document.MainDocumentPart.HeaderParts.SelectMany(header =>
+                header.GetXDocument().Descendants(W + "sdt")))
+        .Single(value => (string?)value.Element(W + "sdtPr")?.Element(W + "id")?
+            .Attribute(W + "val") == nativeId);
+
+    private static byte[] Transform(byte[] bytes, Action<WordprocessingDocument> transform)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(bytes);
+        stream.Position = 0;
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            transform(document);
+            document.MainDocumentPart!.PutXDocument();
+            foreach (var header in document.MainDocumentPart.HeaderParts)
+                header.PutXDocument();
+        }
+        return stream.ToArray();
+    }
 
     internal static byte[] BuildFixture()
     {

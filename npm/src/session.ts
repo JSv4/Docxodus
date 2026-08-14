@@ -1064,7 +1064,7 @@ export class DocxSession {
     options: ContentControlFillOptions = {}): EditResult {
     const timestamp = value instanceof Date ? value.toISOString() : value;
     return JSON.parse(this.wasm.SetContentControlDate(
-      this.handle, anchorId, timestamp, displayText ?? "", JSON.stringify(options))) as EditResult;
+      this.handle, anchorId, timestamp, displayText ?? null, JSON.stringify(options))) as EditResult;
   }
 
   selectContentControlItem(anchorId: string, value: string,

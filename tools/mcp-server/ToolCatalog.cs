@@ -454,7 +454,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_content_controls",
-            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Whole-control fills are refused in render_inline tracked-change mode.",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Whole-control fills are refused for row/cell placements, nested targets, and render_inline tracked-change mode.",
             """
             {
               "type": "object",
@@ -472,7 +472,7 @@ internal static class ToolCatalog
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
                 "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
-                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own w:dataBinding; a bound ancestor still fails closed." }
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." }
               },
               "required": ["sessionId", "action"]
             }

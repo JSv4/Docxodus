@@ -616,9 +616,8 @@ public static partial class DocxSessionBridge
 
     [JSExport]
     public static string SetContentControlDate(int h, string anchorId, string value,
-        string displayText, string optionsJson) =>
-        DocxSessionOps.SetContentControlDate(h, anchorId, value,
-            string.IsNullOrEmpty(displayText) ? null : displayText, optionsJson);
+        string? displayText, string optionsJson) =>
+        DocxSessionOps.SetContentControlDate(h, anchorId, value, displayText, optionsJson);
 
     [JSExport]
     public static string SelectContentControlItem(int h, string anchorId, string value,

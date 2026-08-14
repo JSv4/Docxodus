@@ -11,10 +11,10 @@ owning part/scope, nesting parent/depth, current text/list values, and mutation 
 The public anchor is `sdt:{scope}:{unid}`. For a unique, valid signed 32-bit
 `w:sdtPr/w:id`, `unid` is a deterministic hash of that native id; the scope identifies
 the owning story. It therefore survives value edits and a normal clean save/reopen,
-even though `PtOpenXml:Unid` bookkeeping is stripped. Missing, invalid, or duplicate
-native ids remain enumerable under deterministic diagnostic anchors but are not
-mutable. Repeating-item clones receive fresh native ids before their anchors are made
-public.
+even though `PtOpenXml:Unid` bookkeeping is stripped. Missing, invalid, or
+package-wide duplicate native ids remain enumerable under deterministic diagnostic
+anchors but are not mutable. Repeating-item clones receive fresh native ids before
+their anchors are made public.
 
 `sdt` is an AnchorIndex kind in both the WML projector and the immutable IR emitter.
 The IR captures projector-order anchor facts while its private package is open, so
@@ -39,11 +39,22 @@ operation. Text fills retain representative run/paragraph properties and clear o
 the showing-placeholder marker. Picture fills replace the image relationship without
 rebuilding the wrapper. Repeating clones freshen every nested content-control id and
 drawing `docPr` id, and reject clone-sensitive bookmark, comment, permission, custom
-XML range, and note-reference markup. The final item cannot be removed.
+XML container/range, move, note-reference, and `w14:paraId`/`w14:textId` markup. The
+final item cannot be removed.
 
-Every successful operation is one undo/redo step. Whole-control fills are explicitly
-rejected in `render_inline` tracked-change mode until issue #455 defines revision
-semantics; surgical text/format operations inside a control remain available.
+Whole-content replacement and repeating-item removal use the same bookmark-removal
+gate as other structural edits: crossing or externally referenced ranges fail before
+history changes. Rich-text links are validated against the document that will remain
+after replacement, so a payload cannot target a bookmark it simultaneously removes.
+After a successful replacement/removal, owner-local hyperlink relationships are
+promoted or reference-counted away and unreferenced image parts are swept. Undo/redo
+restores that XML and package relationship topology together.
+
+Every successful operation is one undo/redo step. Whole-control fills support inline
+and block controls; row/cell controls remain enumerable but report `CanMutate=false`
+and reject typed fills. Whole-control fills are also rejected in `render_inline`
+tracked-change mode until issue #455 defines revision semantics; surgical text/format
+operations inside a control remain available.
 
 ## Locks, bindings, and nesting
 
@@ -51,10 +62,11 @@ Content locks are effective through ancestors. A locked target or ancestor fails
 without changing history. A whole-content replacement that would discard a nested
 control is also refused; callers address the nested child directly.
 
-Bindings fail closed by default. `bindingPolicy: "detach_target"` is the only opt-in:
-it removes the selected control's own `w:dataBinding` before the mutation. It never
-removes an ancestor binding and never edits or regenerates a Custom XML data part.
-A target inside a bound ancestor is always refused.
+Bindings fail closed by default. Both `w:dataBinding` and the Office 2013
+`w15:dataBinding` form are recognized. `bindingPolicy: "detach_target"` is the only
+opt-in: it removes the selected control's own native binding element before the
+mutation. It never removes an ancestor binding and never edits or regenerates a
+Custom XML data part. A target inside a bound ancestor is always refused.
 
 ## Transports
 
@@ -64,6 +76,8 @@ is `bindingPolicy`, with `preserve` (default) or `detach_target`. The MCP groupe
 is `docxodus_content_controls`; its mutating actions participate in
 `docxodus_mutations` apply/preview rollback, while `list` is read-only and rejected as
 a batch step. Picture bytes cross JSON transports only as base64.
+An omitted date `displayText` selects the invariant default; an explicitly empty
+string remains empty through the JSON, WASM, and TypeScript layers.
 
 Failures are structured `EditErrorCode` values, including not found, malformed,
 unsupported family/placement, wrong type, locked, bound, invalid value, unsafe nested

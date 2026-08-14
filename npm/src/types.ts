@@ -1210,7 +1210,7 @@ export interface DocxodusWasmExports {
     FillContentControlText: (handle: number, anchorId: string, text: string, optionsJson: string) => string;
     FillContentControlRichText: (handle: number, anchorId: string, markdown: string, optionsJson: string) => string;
     SetContentControlChecked: (handle: number, anchorId: string, isChecked: boolean, optionsJson: string) => string;
-    SetContentControlDate: (handle: number, anchorId: string, value: string, displayText: string, optionsJson: string) => string;
+    SetContentControlDate: (handle: number, anchorId: string, value: string, displayText: string | null, optionsJson: string) => string;
     SelectContentControlItem: (handle: number, anchorId: string, value: string, optionsJson: string) => string;
     FillContentControlPicture: (handle: number, anchorId: string, imageBase64: string, optionsJson: string) => string;
     AddRepeatingSectionItem: (handle: number, sectionAnchorId: string, afterItemAnchorId: string, optionsJson: string) => string;

@@ -378,7 +378,10 @@ public sealed partial class DocxSession
     /// <summary>Validate Markdown parser's detached href markers before a mutation snapshots or
     /// changes XML. This gives <c>[text](#bookmark)</c> the same structured target rules as the
     /// first-class API.</summary>
-    private EditResult? ValidatePendingHyperlinks(IEnumerable<XElement> elements, string? anchorId)
+    private EditResult? ValidatePendingHyperlinks(
+        IEnumerable<XElement> elements,
+        string? anchorId,
+        XElement? replacementRoot = null)
     {
         foreach (var link in elements.SelectMany(e => e.DescendantsAndSelf(W.hyperlink)))
         {
@@ -388,6 +391,12 @@ public sealed partial class DocxSession
                 ? HyperlinkTarget.Internal(href.Substring(1))
                 : HyperlinkTarget.External(href);
             if (ValidateHyperlinkTarget(target, anchorId) is { } error) return error;
+            if (replacementRoot is not null && target.Kind == HyperlinkKind.Internal
+                && BookmarkStarts(target.Target).Any(start => ReferenceEquals(start, replacementRoot)
+                    || start.Ancestors().Any(ancestor => ReferenceEquals(ancestor, replacementRoot))))
+                return EditResult.Fail(EditErrorCode.MissingBookmarkTarget,
+                    $"replacement would remove the bookmark targeted by an internal hyperlink: {target.Target}",
+                    anchorId);
         }
         return null;
     }

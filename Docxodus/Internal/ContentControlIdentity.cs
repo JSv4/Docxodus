@@ -44,51 +44,78 @@ internal static class ContentControlIdentity
 
     internal static IReadOnlyList<Entry> AssignStableUnids(XElement storyRoot, out bool changed)
     {
-        ArgumentNullException.ThrowIfNull(storyRoot);
+        var byRoot = AssignStableUnids(new[] { storyRoot }, out changed);
+        return byRoot[storyRoot];
+    }
+
+    /// <summary>
+    /// Assign identities across every story in one package. Native <c>w:id</c> uniqueness is a
+    /// document-wide invariant, so callers that decide mutability must use this overload rather
+    /// than validating each part in isolation. Diagnostic Unids for duplicates remain scoped to
+    /// their owning story: cross-story duplicates can therefore be marked non-writable without
+    /// changing otherwise stable <c>sdt:{scope}:...</c> anchors, while duplicates inside one story
+    /// retain distinct local ordinals and cannot collide in that story's anchor index.
+    /// </summary>
+    internal static IReadOnlyDictionary<XElement, IReadOnlyList<Entry>> AssignStableUnids(
+        IReadOnlyList<XElement> storyRoots, out bool changed)
+    {
+        ArgumentNullException.ThrowIfNull(storyRoots);
         changed = false;
-        var controls = storyRoot.DescendantsAndSelf(W.sdt).ToList();
-        if (controls.Count == 0) return Array.Empty<Entry>();
+        foreach (var root in storyRoots) ArgumentNullException.ThrowIfNull(root);
 
-        var parsed = controls.Select((element, ordinal) =>
-        {
-            var raw = (string?)element.Element(W.sdtPr)?.Element(W.id)?.Attribute(W.val);
-            var valid = TryCanonicalizeNativeId(raw, out var canonical);
-            return (element, ordinal, raw, valid, canonical);
-        }).ToList();
-
-        var counts = parsed.Where(value => value.valid)
+        var parsedByRoot = storyRoots.ToDictionary(root => root, root =>
+            root.DescendantsAndSelf(W.sdt).Select((element, ordinal) =>
+            {
+                var raw = (string?)element.Element(W.sdtPr)?.Element(W.id)?.Attribute(W.val);
+                var valid = TryCanonicalizeNativeId(raw, out var canonical);
+                return (element, ordinal, raw, valid, canonical);
+            }).ToList());
+        var globalCounts = parsedByRoot.Values.SelectMany(values => values)
+            .Where(value => value.valid)
             .GroupBy(value => value.canonical!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        var duplicateOrdinals = new Dictionary<string, int>(StringComparer.Ordinal);
-        var result = new List<Entry>(parsed.Count);
-
-        foreach (var value in parsed)
+        var result = new Dictionary<XElement, IReadOnlyList<Entry>>();
+        int documentOrdinal = 0;
+        foreach (var root in storyRoots)
         {
-            int duplicateOrdinal = 0;
-            bool duplicate = value.valid && counts[value.canonical!] > 1;
-            if (duplicate)
+            var parsed = parsedByRoot[root];
+            var localCounts = parsed.Where(value => value.valid)
+                .GroupBy(value => value.canonical!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            var localOrdinals = new Dictionary<string, int>(StringComparer.Ordinal);
+            var entries = new List<Entry>(parsed.Count);
+            foreach (var value in parsed)
             {
-                duplicateOrdinals.TryGetValue(value.canonical!, out duplicateOrdinal);
-                duplicateOrdinals[value.canonical!] = duplicateOrdinal + 1;
-            }
+                int duplicateOrdinal = 0;
+                bool localDuplicate = value.valid && localCounts[value.canonical!] > 1;
+                bool packageDuplicate = value.valid && globalCounts[value.canonical!] > 1;
+                if (localDuplicate)
+                {
+                    localOrdinals.TryGetValue(value.canonical!, out duplicateOrdinal);
+                    localOrdinals[value.canonical!] = duplicateOrdinal + 1;
+                }
 
-            // Unique, valid native ids are location- and content-independent. The fallback
-            // discriminator is intentionally only for non-writable malformed documents.
-            var seed = value.valid
-                ? duplicate
-                    ? $"duplicate\0{value.canonical}\0{duplicateOrdinal}"
-                    : $"native\0{value.canonical}"
-                : $"malformed\0{value.ordinal}\0{value.raw ?? "<missing>"}";
-            var unid = HashToUnid(seed);
-            if (!string.Equals((string?)value.element.Attribute(PtOpenXml.Unid), unid,
-                StringComparison.Ordinal))
-            {
-                value.element.SetAttributeValue(PtOpenXml.Unid, unid);
-                changed = true;
+                // Unique, valid native ids are location- and content-independent. Duplicate
+                // ordinals are local to a story because scope is already part of the public
+                // anchor; this keeps a package-wide duplicate diagnostic idempotent with the
+                // legacy single-story assignment performed by projection helpers.
+                var seed = value.valid
+                    ? localDuplicate
+                        ? $"duplicate\0{value.canonical}\0{duplicateOrdinal}"
+                        : $"native\0{value.canonical}"
+                    : $"malformed\0{value.ordinal}\0{value.raw ?? "<missing>"}";
+                var unid = HashToUnid(seed);
+                if (!string.Equals((string?)value.element.Attribute(PtOpenXml.Unid), unid,
+                    StringComparison.Ordinal))
+                {
+                    value.element.SetAttributeValue(PtOpenXml.Unid, unid);
+                    changed = true;
+                }
+                entries.Add(new Entry(value.element, unid,
+                    value.valid ? value.canonical : value.raw,
+                    value.valid, packageDuplicate, documentOrdinal++, duplicateOrdinal));
             }
-            result.Add(new Entry(value.element, unid,
-                value.valid ? value.canonical : value.raw,
-                value.valid, duplicate, value.ordinal, duplicateOrdinal));
+            result[root] = entries;
         }
         return result;
     }

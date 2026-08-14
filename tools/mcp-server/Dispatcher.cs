@@ -650,14 +650,14 @@ internal static class Dispatcher
         "set_checked" => DocxSessionOps.SetContentControlChecked(session.Handle,
             Str(args, "anchorId"), RequiredBool(args, "checked"), BuildContentControlOptionsJson(args)),
         "set_date" => DocxSessionOps.SetContentControlDate(session.Handle,
-            Str(args, "anchorId"), Str(args, "value"), OptStr(args, "displayText"),
+            Str(args, "anchorId"), Str(args, "value"), OptionalStringValue(args, "displayText"),
             BuildContentControlOptionsJson(args)),
         "select_item" => DocxSessionOps.SelectContentControlItem(session.Handle,
             Str(args, "anchorId"), Str(args, "value"), BuildContentControlOptionsJson(args)),
         "fill_picture" => DocxSessionOps.FillContentControlPicture(session.Handle,
             Str(args, "anchorId"), Str(args, "imageBase64"), BuildContentControlOptionsJson(args)),
         "add_repeating_item" => DocxSessionOps.AddRepeatingSectionItem(session.Handle,
-            Str(args, "sectionAnchorId"), OptStr(args, "afterItemAnchorId"),
+            Str(args, "sectionAnchorId"), OptionalStringValue(args, "afterItemAnchorId"),
             BuildContentControlOptionsJson(args)),
         "remove_repeating_item" => DocxSessionOps.RemoveRepeatingSectionItem(session.Handle,
             Str(args, "itemAnchorId")),
@@ -666,7 +666,7 @@ internal static class Dispatcher
 
     private static string BuildContentControlOptionsJson(JsonElement args)
     {
-        var policy = OptStr(args, "bindingPolicy");
+        var policy = OptionalStringValue(args, "bindingPolicy");
         return policy is null ? "{}" : JsonSerializer.Serialize(new { bindingPolicy = policy });
     }
 
