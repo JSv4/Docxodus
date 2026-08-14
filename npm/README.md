@@ -99,6 +99,23 @@ Bundler users get the same API from `docxodus/embed`; classic-script pages can l
 `convertWmlToMarkdown()` renders the document as markdown where **every block carries a stable id**,
 so an agent can point at a clause and edit it — and `openDocxSession()` writes back to that same id.
 
+Multi-step plans are atomic by default. Each callback may call any synchronous
+session mutation; success is one version/undo unit, while a failure or throw
+restores the complete package and history checkpoint:
+
+```ts
+const result = session.executeBatch([
+  { tool: 'docx_edit', action: 'replace_text',
+    mutation: () => session.replaceText(firstAnchor, 'Replacement text') },
+  { tool: 'docx_create', action: 'set_header_text',
+    mutation: () => session.setHeaderText(firstAnchor, 'default', 'Confidential') },
+]);
+
+if (!result.success) console.error(result.failure);
+```
+
+Pass `'best_effort'` explicitly only when partial successes should be retained.
+
 ![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
 
 ---

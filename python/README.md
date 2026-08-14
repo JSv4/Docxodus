@@ -49,6 +49,34 @@ with open("filled.docx", "wb") as f:
     f.write(new_bytes)
 ```
 
+### Atomic mutation batches
+
+Use `execute_batch` when a plan spans several edits that must either all land or
+all disappear. Atomic is the default; success is one version/undo unit and failure
+returns the indexed operation error after restoring the complete package and
+history state:
+
+```python
+from docx_scalpel import MutationBatchStep
+
+result = session.execute_batch([
+    MutationBatchStep("replace_text", {
+        "anchorId": first_p.id,
+        "markdown": "Replacement text",
+    }),
+    MutationBatchStep("set_header_text", {
+        "anchorId": first_p.id,
+        "kind": "default",
+        "markdown": "Confidential",
+    }),
+])
+if not result.success:
+    print(result.failure.index, result.failure.action, result.failure.error)
+```
+
+Select `MutationBatchMode.BEST_EFFORT` explicitly only when retaining successful
+steps after another step fails is intended.
+
 The `with` block is the documented lifecycle path — it calls `session.close()` on the way out, which releases the session from the host's `SessionRegistry`. A `__del__` finalizer is a fallback for forgotten sessions but should not be relied on; interpreter shutdown may skip it.
 
 ## Why a subprocess?
@@ -116,7 +144,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 
 | Tier | Methods |
 |---|---|
-| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
+| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `execute_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **Inspection** | `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |

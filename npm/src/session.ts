@@ -42,6 +42,11 @@ import type {
   ListFormat,
   GrepOptions,
   ListMembership,
+  MutationBatchFailure,
+  MutationBatchMode,
+  MutationBatchResult,
+  MutationBatchStep,
+  MutationBatchStepResult,
   MutationPreconditions,
   ReplaceOptions,
   RevisionListEntry,
@@ -124,6 +129,114 @@ export class DocxSession {
   ): EditResult {
     const checked = this.checkPreconditions(preconditions);
     return checked.success ? mutation() : checked;
+  }
+
+  /**
+   * Execute synchronous mutations atomically by default. Atomic success is one undo/version
+   * unit; any failed or thrown step restores the exact package and history checkpoint.
+   */
+  executeBatch(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode = "atomic",
+  ): MutationBatchResult {
+    if (mode !== "atomic" && mode !== "best_effort") {
+      throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
+    }
+    const internalFailure = (value: unknown): EditResult => ({
+      success: false,
+      error: { code: "internal_error", message: value instanceof Error ? value.message : String(value) },
+      created: [], removed: [], modified: [],
+    });
+    const run = (step: MutationBatchStep): readonly EditResult[] => {
+      try {
+        const value = step.mutation();
+        const results = Array.isArray(value) ? value : [value];
+        if (results.length === 0 || results.some(result =>
+          result === null || typeof result !== "object" || typeof result.success !== "boolean")) {
+          return [internalFailure("batch mutation returned no valid edit results")];
+        }
+        return results;
+      } catch (error) {
+        return [internalFailure(error)];
+      }
+    };
+    const failureOf = (
+      step: MutationBatchStepResult,
+      rolledBack: boolean,
+    ): MutationBatchFailure => ({
+      index: step.index,
+      tool: step.tool,
+      action: step.action,
+      error: step.results.find(result => !result.success)?.error
+        ?? { code: "internal_error", message: "batch step failed without an error" },
+      rolledBack,
+    });
+
+    const preflightOne = (step: MutationBatchStep): EditError | undefined => {
+      try { return step.preflight?.(); } catch (error) { return internalFailure(error).error; }
+    };
+    if (mode === "atomic") {
+      const preflight = steps.map(preflightOne);
+      const failedPreflight = preflight.findIndex(error => error !== undefined);
+      if (failedPreflight >= 0) {
+        const source = steps[failedPreflight]!;
+        const failed: MutationBatchStepResult = {
+          index: failedPreflight, tool: source.tool, action: source.action,
+          success: false, rolledBack: true,
+          results: [{ success: false, error: preflight[failedPreflight]!, created: [], removed: [], modified: [] }],
+        };
+        return { mode, status: "failed", success: false, rolledBack: true,
+          steps: [failed], failure: failureOf(failed, true) };
+      }
+
+      const transaction = this.wasm.BeginTransaction(this.handle);
+      const completed: MutationBatchStepResult[] = [];
+      try {
+        for (let index = 0; index < steps.length; index++) {
+          const source = steps[index]!;
+          const results = run(source);
+          const step: MutationBatchStepResult = {
+            index, tool: source.tool, action: source.action,
+            success: results.every(result => result.success), rolledBack: false, results,
+          };
+          completed.push(step);
+          if (!step.success) {
+            this.wasm.RollbackTransaction(transaction);
+            const rolledBack = completed.map(value => ({ ...value, rolledBack: true }));
+            const failed = rolledBack[rolledBack.length - 1]!;
+            return { mode, status: "failed", success: false, rolledBack: true,
+              steps: rolledBack, failure: failureOf(failed, true) };
+          }
+        }
+        this.wasm.CommitTransaction(transaction);
+        return { mode, status: "ok", success: true, rolledBack: false, steps: completed };
+      } catch (error) {
+        try { this.wasm.RollbackTransaction(transaction); } catch { /* preserve the original */ }
+        throw error;
+      }
+    }
+
+    // Preserve sequential best-effort semantics: a later preflight can observe state created by
+    // an earlier successful step, so run it immediately before that step rather than up front.
+    const completed: MutationBatchStepResult[] = steps.map((source, index) => {
+      const preflight = preflightOne(source);
+      const results = preflight
+        ? [{ success: false, error: preflight, created: [], removed: [], modified: [] }]
+        : run(source);
+      return {
+        index, tool: source.tool, action: source.action,
+        success: results.every(result => result.success), rolledBack: false, results,
+      };
+    });
+    const failed = completed.find(step => !step.success);
+    return {
+      mode,
+      status: failed ? (completed.some(step => step.success) ? "partial" : "failed") : "ok",
+      success: failed === undefined,
+      rolledBack: false,
+      steps: completed,
+      failure: failed ? failureOf(failed, false) : undefined,
+    };
   }
 
   /**
@@ -1333,5 +1446,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationBatchFailure, MutationBatchMode, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

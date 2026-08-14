@@ -917,6 +917,159 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>Parse one standard EditResult envelope or an array of them for batch adapters.</summary>
+    public static IReadOnlyList<EditResult> DeserializeEditResults(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.ValueKind == JsonValueKind.Array
+            ? doc.RootElement.EnumerateArray().Select(ParseEditResult).ToArray()
+            : new[] { ParseEditResult(doc.RootElement) };
+    }
+
+    private static EditResult ParseEditResult(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("success", out var success)
+            || success.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            return EditResult.Fail(EditErrorCode.InternalError, "batch step returned a non-EditResult payload");
+
+        EditError? error = null;
+        if (root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.Object)
+        {
+            var codeText = TryGetString(e, "code", "internal_error") ?? "internal_error";
+            var code = Enum.GetValues<EditErrorCode>()
+                .Where(c => string.Equals(EnumToSnake(c), codeText, StringComparison.Ordinal))
+                .Cast<EditErrorCode?>()
+                .FirstOrDefault() ?? EditErrorCode.InternalError;
+            error = new EditError(
+                code,
+                TryGetString(e, "message", "batch step failed") ?? "batch step failed",
+                TryGetString(e, "anchorId", null));
+            if (e.TryGetProperty("precondition", out var p) && p.ValueKind == JsonValueKind.Object)
+            {
+                PreconditionTarget? target = null;
+                if (p.TryGetProperty("currentTarget", out var t) && t.ValueKind == JsonValueKind.Object)
+                {
+                    target = new PreconditionTarget
+                    {
+                        Exists = t.TryGetProperty("exists", out var exists) && exists.ValueKind == JsonValueKind.True,
+                        AnchorId = TryGetString(t, "anchorId", null),
+                        Kind = TryGetString(t, "kind", null),
+                        Scope = TryGetString(t, "scope", null),
+                        ContentHash = TryGetString(t, "contentHash", null),
+                        VisibleText = TryGetString(t, "visibleText", null),
+                    };
+                }
+                error = error with
+                {
+                    Precondition = new PreconditionFailure(
+                        TryGetString(p, "condition", "unknown") ?? "unknown",
+                        p.TryGetProperty("expected", out var expected) ? expected.Clone() : null,
+                        p.TryGetProperty("actual", out var actual) ? actual.Clone() : null,
+                        p.TryGetProperty("currentVersion", out var version) && version.ValueKind == JsonValueKind.Number
+                            ? version.GetInt64() : 0,
+                        target),
+                };
+            }
+        }
+
+        static IReadOnlyList<Anchor> Anchors(JsonElement root, string name)
+        {
+            if (!root.TryGetProperty(name, out var a) || a.ValueKind != JsonValueKind.Array)
+                return Array.Empty<Anchor>();
+            return a.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.Object)
+                .Select(x => new Anchor(
+                    TryGetString(x, "id", "") ?? "",
+                    TryGetString(x, "kind", "") ?? "",
+                    TryGetString(x, "scope", "") ?? "",
+                    TryGetString(x, "unid", "") ?? ""))
+                .ToArray();
+        }
+
+        MarkdownPatch? patch = null;
+        if (root.TryGetProperty("patch", out var pch) && pch.ValueKind == JsonValueKind.Object)
+            patch = new MarkdownPatch(
+                TryGetString(pch, "scopeAnchorId", "") ?? "",
+                TryGetString(pch, "markdown", "") ?? "");
+
+        return new EditResult
+        {
+            Success = success.GetBoolean(),
+            Error = error,
+            Created = Anchors(root, "created"),
+            Removed = Anchors(root, "removed"),
+            Modified = Anchors(root, "modified"),
+            AnnotationId = TryGetString(root, "annotationId", null),
+            Patch = patch,
+        };
+    }
+
+    /// <summary>Common structured wire shape for core and transport mutation batches.</summary>
+    public static string SerializeMutationBatchResult(MutationBatchResult result)
+    {
+        var sb = new StringBuilder(512);
+        var mode = result.Mode == MutationBatchMode.Atomic ? "atomic" : "best_effort";
+        var status = result.Success ? "ok"
+            : result.Mode == MutationBatchMode.BestEffort && result.Steps.Any(s => s.Success)
+                ? "partial" : "failed";
+        sb.Append("{\"mode\":").Append(JsonString(mode))
+          .Append(",\"status\":").Append(JsonString(status))
+          .Append(",\"success\":").Append(result.Success ? "true" : "false")
+          .Append(",\"rolledBack\":").Append(result.RolledBack ? "true" : "false")
+          .Append(",\"steps\":[");
+        for (int i = 0; i < result.Steps.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var step = result.Steps[i];
+            sb.Append("{\"index\":").Append(step.Index)
+              .Append(",\"tool\":").Append(JsonString(step.Tool))
+              .Append(",\"action\":").Append(JsonString(step.Action))
+              .Append(",\"success\":").Append(step.Success ? "true" : "false")
+              .Append(",\"rolledBack\":").Append(step.RolledBack ? "true" : "false")
+              .Append(",\"results\":").Append(SerializeEditResults(step.Results))
+              .Append('}');
+        }
+        sb.Append(']')
+          .Append(",\"editsApplied\":").Append(
+              result.RolledBack ? 0 : result.Steps.Count(s => s.Success))
+          .Append(",\"results\":[");
+        for (int i = 0; i < result.Steps.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var stepResults = result.Steps[i].Results;
+            sb.Append(stepResults.Count == 1
+                ? Serialize(stepResults[0])
+                : SerializeEditResults(stepResults));
+        }
+        sb.Append("],\"errors\":[");
+        bool firstError = true;
+        foreach (var step in result.Steps.Where(s => !s.Success))
+        {
+            var failedError = step.Results.FirstOrDefault(r => !r.Success)?.Error;
+            if (failedError is null) continue;
+            if (!firstError) sb.Append(',');
+            firstError = false;
+            var failedJson = Serialize(new EditResult { Success = false, Error = failedError });
+            using var failedDoc = JsonDocument.Parse(failedJson);
+            sb.Append(failedDoc.RootElement.GetProperty("error").GetRawText());
+        }
+        sb.Append(']');
+        if (result.Failure is { } failure)
+        {
+            var errorJson = Serialize(new EditResult { Success = false, Error = failure.Error });
+            using var errorDoc = JsonDocument.Parse(errorJson);
+            sb.Append(",\"failure\":{\"index\":").Append(failure.Index)
+              .Append(",\"tool\":").Append(JsonString(failure.Tool))
+              .Append(",\"action\":").Append(JsonString(failure.Action))
+              .Append(",\"error\":").Append(errorDoc.RootElement.GetProperty("error").GetRawText())
+              .Append(",\"rolledBack\":").Append(failure.RolledBack ? "true" : "false")
+              .Append('}');
+        }
+        sb.Append('}');
+        return sb.ToString();
+    }
+
     public static void AppendAnchorArray(StringBuilder sb, IReadOnlyList<Anchor> anchors)
     {
         sb.Append('[');

@@ -1054,6 +1054,9 @@ export interface DocxodusWasmExports {
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
+    BeginTransaction: (handle: number) => number;
+    CommitTransaction: (transactionHandle: number) => void;
+    RollbackTransaction: (transactionHandle: number) => void;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
     ProjectAnchorWithCitations: (
       handle: number,
@@ -1317,6 +1320,7 @@ export type EditErrorCode =
   | "empty_comment_span"
   | "revision_not_found"
   | "precondition_failed"
+  | "invalid_batch_step"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1367,6 +1371,43 @@ export interface MutationPreconditions {
   expectedKind?: string;
   expectedScope?: string;
   expectedMatchCount?: number;
+}
+
+export type MutationBatchMode = "atomic" | "best_effort";
+
+/** One synchronous npm batch step. Atomic is the default execution mode. */
+export interface MutationBatchStep {
+  tool: string;
+  action: string;
+  mutation: () => EditResult | readonly EditResult[];
+  /** Optional read-only validation: all run up front in atomic mode, per-step in best-effort. */
+  preflight?: () => EditError | undefined;
+}
+
+export interface MutationBatchStepResult {
+  index: number;
+  tool: string;
+  action: string;
+  success: boolean;
+  rolledBack: boolean;
+  results: readonly EditResult[];
+}
+
+export interface MutationBatchFailure {
+  index: number;
+  tool: string;
+  action: string;
+  error: EditError;
+  rolledBack: boolean;
+}
+
+export interface MutationBatchResult {
+  mode: MutationBatchMode;
+  status: "ok" | "failed" | "partial";
+  success: boolean;
+  rolledBack: boolean;
+  steps: readonly MutationBatchStepResult[];
+  failure?: MutationBatchFailure;
 }
 
 export interface MarkdownPatch {

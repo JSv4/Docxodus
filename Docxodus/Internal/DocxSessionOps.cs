@@ -87,6 +87,26 @@ internal static class DocxSessionOps
     internal static void RestorePreviewVersion(int handle, long version) =>
         SessionRegistry.Get(handle).RestorePreviewVersion(version);
 
+    public static string ExecuteBatch(
+        int handle,
+        MutationBatchMode mode,
+        System.Collections.Generic.IEnumerable<MutationBatchStep> steps) =>
+        DocxSessionJson.SerializeMutationBatchResult(
+            SessionRegistry.Get(handle).ExecuteBatch(steps, mode));
+
+    public static DocxSessionTransaction BeginTransaction(int handle) =>
+        SessionRegistry.Get(handle).BeginTransaction();
+
+    internal static MutationBatchStep SerializedBatchStep(
+        string tool,
+        string action,
+        System.Func<string> mutation,
+        System.Func<EditError?>? preflight = null) => new(
+            tool,
+            action,
+            _ => DocxSessionJson.DeserializeEditResults(mutation()),
+            preflight is null ? null : _ => preflight());
+
     // ─── Projection + discovery ─────────────────────────────────────────
 
     public static string Project(int handle) =>

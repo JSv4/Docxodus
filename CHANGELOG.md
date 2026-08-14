@@ -41,6 +41,16 @@ All notable changes to this project will be documented in this file.
   `navigateToPageCitation` expose materialization and preview navigation. The MCP inline
   preview remains explicitly continuous pending #434. See
   [`docs/architecture/page_map.md`](docs/architecture/page_map.md).
+- **Atomic multi-step mutation batches** (issue #445). `DocxSession.ExecuteBatch`
+  and the reusable nested-safe `BeginTransaction` primitive checkpoint the complete
+  OPC package, relationship topology, anchor/revision generators, mutable session
+  configuration, version, and both undo/redo cursors. Atomic mode is the default:
+  all available preflights run before step zero; success advances the version once
+  and creates one undo unit; any failed or thrown step restores the exact package
+  and history state and returns its index/tool/action/error with `rolledBack: true`.
+  Explicit `best_effort` retains sequential partial-success behavior. The contract
+  is available through .NET/Ops/JSON, WASM/npm, stdio/Python, and MCP;
+  MCP's legacy `apply` spelling is now a deprecated alias for `best_effort`.
 - **Optimistic mutation preconditions and a monotonic document version** (issue
   #447). Every `DocxSession` starts at version `0` and advances exactly once for
   each committed mutation, undo, or redo; failures and successful no-ops leave it
