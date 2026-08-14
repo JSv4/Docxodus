@@ -123,7 +123,7 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **`SplitParagraph` keeps the original Unid on the first half.** Reason: external systems (LLM context windows, search indices) bias toward the pre-split anchor position; keeping the prefix-half stable minimizes invalidation downstream.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
-**Tracked-change mode shifts the semantics for `ReplaceText` and `DeleteBlock`.** When `Settings.TrackedChanges = RenderInline`, deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
+**Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
@@ -322,11 +322,30 @@ wraps each removed paragraph's runs in `w:del` and marks the paragraph mark
 itself as deleted via `w:pPr/w:rPr/w:del`. Tables get `w:trPr/w:del` on every
 row (Word's row-deletion convention — there is no table-level "delete" markup),
 plus the same run/paragraph-mark wrapping inside every cell. Nested tables
-recurse. Anchors stay live in the document tree, so the top-level block anchors
-land in `EditResult.Modified` instead of `Removed` and callers can re-address
-them before accepting the changes. Block kinds outside `w:p` / `w:tbl` (e.g.
-`w:sdt` content controls in the middle of a range) still fall back to structural
-removal in tracked mode — file a follow-up if a consumer needs them tracked.
+recurse.
+
+Block-level `w:sdt` content controls are reversible too. Two paired
+`w:customXmlDelRangeStart` / `w:customXmlDelRangeEnd` ranges cross the control's
+opening and closing tags, matching Word's native content-control deletion shape.
+Payload paragraphs and tables receive their normal deletion markup recursively;
+nested block controls receive their own paired ranges. Accepting the revisions
+therefore removes the control and its payload, while rejecting restores the
+original wrapper, metadata, and content. Locked (`w:lock`) and data-bound
+(`w:dataBinding`) controls use the same shape—the lock and binding metadata are
+preserved until the revision is resolved.
+
+Anchor accounting describes what actually happened. Ordinary paragraph/table
+top-level anchors remain the compact `Modified` contract. A structured wrapper
+has no anchor of its own, so every anchored descendant retained under that
+wrapper appears in `Modified`, without duplicates. A remaining structural
+fall-through that must be hard-removed appears in `Removed`; it is never silently
+omitted from both lists.
+
+`w:customXml` wrappers are deliberately unsupported in tracked bulk deletion.
+If any selected block contains one, the operation fails before taking an undo
+snapshot or changing the document with `IncompatibleElementType` and a message
+identifying `w:customXml`. This is the explicit unsupported branch of the
+custom-XML deletion contract; accepted-mode bulk deletion remains unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal
 
@@ -339,9 +358,9 @@ If the target heading has no sibling-heading boundary after it, the section
 extends to the end of the parent.
 
 Built on `DeleteRange` semantics via the shared `DeleteSiblingRangeCore` helper:
-same undo, same EditResult shape, same tracked-change behavior (paragraphs and
-tables get `w:del` markup, anchors stay live, block kinds outside `w:p`/`w:tbl`
-fall back to structural removal).
+same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
+recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
+same reported structural fall-through.
 
 ## Finding anchors via tagged annotations
 
@@ -794,7 +813,7 @@ rendering notes, appeared as a stray empty footnote with no citation.
   "reference note N again" op.
 - **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
   in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
-  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange` track.
+  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange`/`DeleteSection` track.
 - **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
   `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
