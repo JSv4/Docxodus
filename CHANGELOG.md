@@ -79,6 +79,17 @@ All notable changes to this project will be documented in this file.
   evaluation, counting, and the whole multi-match rewrite share one mutation gate
   and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
   replacement.
+- **First-class native image inspection and editing across every session surface (#453).**
+  `DocxSession` now enumerates image occurrences across body, headers, footers, footnotes,
+  endnotes, and comments. It can insert, replace, resize, describe, reposition, or remove the
+  canonical DrawingML subset. PNG/JPEG/GIF/BMP/TIFF bytes are validated by signature and dimensions;
+  WebP, external links, legacy VML, multi-picture/non-canonical DrawingML, and unsupported
+  floating layouts remain truthfully enumerable but read-only. Image relationships are owned by
+  the actual story part, identical media is reused across owners, orphan cleanup understands both
+  DrawingML and VML references, and undo/redo restores bytes, content type, exact media URI,
+  owner-local relationship ids, and external targets. Runtime capabilities, points-versus-EMU
+  units, 96-DPI default sizing, size caps, and base64-only JSON transports are exposed through
+  .NET, JSON ops, WASM/npm, stdio/Python, and MCP (`docxodus_images`).
 - **First-class hyperlinks and bookmarks across every editing surface (#448/#451/#469/#470).**
   `DocxSession` can enumerate and mutate external or bookmark-target hyperlinks and paired,
   multi-paragraph bookmarks with exact character spans. External relationships are owned and

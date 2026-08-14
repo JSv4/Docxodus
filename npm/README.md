@@ -137,6 +137,23 @@ External links own their relationship in the actual body/header/footer/footnote/
 internal links are relationship-free bookmark targets. Bookmark rename retargets inbound links
 atomically, and unsafe removal or cross-part ranges return typed `EditResult` errors.
 
+Native images are occurrence-addressed too, with bytes kept explicit at the API boundary:
+
+```ts
+const capabilities = session.getImageCapabilities();
+const inserted = session.insertImage(paragraph, 0, pngBytes, {
+  widthPoints: 144,
+  altText: 'Revenue by quarter',
+});
+const image = session.listImages().find(value => value.id === inserted.imageId)!;
+session.setImageDimensions(image.id, { widthPoints: 108 });
+```
+
+PNG/JPEG/GIF/BMP/TIFF are writable. Existing WebP, external links, legacy VML, and unsupported
+DrawingML remain enumerable with `canMutate: false`. Dimensions use points; floating offsets use
+exact EMUs, and omitted insert dimensions use 96 DPI. The browser API accepts `Uint8Array` and
+does not fetch image URLs or read paths.
+
 ---
 
 ## Everything else

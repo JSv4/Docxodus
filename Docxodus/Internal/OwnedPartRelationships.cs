@@ -16,7 +16,7 @@ namespace Docxodus.Internal;
 /// Hyperlinks use this today; image authoring can reuse the same owner lookup/reference-counted
 /// cleanup without learning anything about hyperlink markup.
 /// </summary>
-internal static class OwnedPartRelationships
+internal static partial class OwnedPartRelationships
 {
     internal readonly record struct Owner(OpenXmlPart Part, string Scope)
     {
@@ -36,6 +36,8 @@ internal static class OwnedPartRelationships
         foreach (var part in main.FooterParts) result.Add(new Owner(part, "ftr" + ++n));
         if (main.FootnotesPart is not null) result.Add(new Owner(main.FootnotesPart, "fn"));
         if (main.EndnotesPart is not null) result.Add(new Owner(main.EndnotesPart, "en"));
+        if (main.WordprocessingCommentsPart is not null)
+            result.Add(new Owner(main.WordprocessingCommentsPart, "cmt"));
         return result;
     }
 

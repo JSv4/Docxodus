@@ -10,9 +10,9 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus thirteen
-/// grouped-intent tools, each accepting an <c>action</c> discriminator and action-specific
-/// arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus fourteen
+/// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
+/// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
 /// </summary>
 internal static class ToolCatalog
@@ -430,6 +430,29 @@ internal static class ToolCatalog
             }
             """),
         new ToolDefinition(
+            "docxodus_images",
+            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, and TIFF are writable; WebP, legacy VML, external links, and unsupported DrawingML remain inspection-only. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string", "description": "Required except for capabilities." },
+                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
+                "anchorId": { "type": "string", "description": "insert: paragraph anchor." },
+                "characterOffset": { "type": "integer", "minimum": 0 },
+                "imageId": { "type": "string", "description": "replace/set/remove: id from list or insert." },
+                "imageBase64": { "type": "string", "description": "insert/replace only; raw image bytes encoded as base64." },
+                "options": { "type": "object", "description": "insert options: placement inline|floating, widthPoints, heightPoints, preserveAspect, altText, title, and optional floatingLayout." },
+                "dimensions": { "type": "object", "description": "set_dimensions: widthPoints and/or heightPoints plus preserveAspect (default true)." },
+                "altText": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
+                "title": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
+                "layout": { "type": "object", "description": "set_floating_layout: none/square wrap; typed references/alignments; exact EMU positions/distances and flags." }
+              },
+              "required": ["action"]
+            }
+            """),
+        new ToolDefinition(
             "docxodus_track_changes",
             "List, selectively accept/reject (by revisionId), or bulk-resolve tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:*PrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
             """
@@ -450,7 +473,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
             """
             {
               "type": "object",
@@ -467,7 +490,7 @@ internal static class ToolCatalog
                   "items": {
                     "type": "object",
                     "properties": {
-                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links"] },
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images"] },
                       "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
                     },
                     "required": ["tool", "args"]

@@ -1621,6 +1621,15 @@ public enum EditErrorCode
     UnsupportedInlineBoundary,
     TrackedOperationUnsupported,
 
+    ImageNotFound,
+    InvalidImageData,
+    UnsupportedImageFormat,
+    ImageTooLarge,
+    InvalidImageDimensions,
+    UnsupportedImageMarkup,
+    LinkedImageReadOnly,
+    InvalidImageLayout,
+
     /// <summary>A zero-length span passed to <see cref="DocxSession.AddComment"/>, or a
     /// whole-block comment requested on a paragraph with no text — a comment range must
     /// cover at least one character.</summary>
@@ -1662,6 +1671,9 @@ public sealed class EditResult
     /// <summary>The affected native hyperlink/bookmark identity, when applicable.</summary>
     public string? HyperlinkId { get; init; }
     public string? BookmarkName { get; init; }
+
+    /// <summary>The affected native image occurrence identity, when applicable.</summary>
+    public string? ImageId { get; init; }
 
     internal static EditResult Fail(EditErrorCode code, string message, string? anchorId = null) =>
         new() { Success = false, Error = new EditError(code, message, anchorId) };
@@ -2672,7 +2684,7 @@ public sealed partial class DocxSession : IDisposable
         try
         {
             var removedElements = Internal.RevisionOps.Apply(group, accept);
-            Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owningPart, R.id);
+            SweepOrphanedStoryRelationships(owningPart);
 
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -5676,6 +5688,11 @@ public sealed partial class DocxSession : IDisposable
     {
         ThrowIfDisposed();
 
+        // A save is the package-wide normalization boundary. Some higher-level transforms can
+        // remove image markup without passing through the native image operations, so sweep every
+        // story owner here as a final defense against dangling media relationships.
+        SweepOrphanedStoryImageRelationships();
+
         if (persistAnchorIds)
         {
             // Flush every projected part's cached XDocument to its stream first.
@@ -5897,8 +5914,11 @@ public sealed partial class DocxSession : IDisposable
             }
             PromoteHyperlinkRelationships(element);
             if (hyperlinkOwner is { } owner)
+            {
                 foreach (var relationshipId in oldHyperlinkIds)
                     Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
+                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part, R.embed, R.link);
+            }
 
             InvalidateProjectionCache();
             return new EditResult
@@ -6005,7 +6025,7 @@ public sealed partial class DocxSession : IDisposable
             }
             element.Remove();
             if (hyperlinkOwner is { } owner)
-                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
+                SweepOrphanedStoryRelationships(owner.Part);
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -6219,7 +6239,7 @@ public sealed partial class DocxSession : IDisposable
                     }
                 }
                 if (hyperlinkOwner is { } trackedOwner)
-                    Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(trackedOwner.Part, R.id);
+                    SweepOrphanedStoryRelationships(trackedOwner.Part);
                 InvalidateProjectionCache();
                 return new EditResult
                 {
@@ -6239,7 +6259,7 @@ public sealed partial class DocxSession : IDisposable
                 el.Remove();
             }
             if (hyperlinkOwner is { } owner)
-                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
+                SweepOrphanedStoryRelationships(owner.Part);
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -7222,6 +7242,7 @@ public sealed partial class DocxSession : IDisposable
 
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+        var relationshipOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
 
         int baselineErrors = _settings.ValidateRawOps ? CountRealValidationErrors() : 0;
         _history.RecordPreOp(TakeSnapshot());
@@ -7236,6 +7257,9 @@ public sealed partial class DocxSession : IDisposable
                 if (preOp.ok) RestoreSnapshot(preOp.snapshot);
                 return EditResult.Fail(EditErrorCode.ValidationFailed, "OpenXmlValidator found new errors", anchorId);
             }
+
+            if (relationshipOwner is { } owner)
+                SweepOrphanedStoryRelationships(owner.Part);
 
             InvalidateProjectionCache();
             var freshIndex = AnchorIndex();
@@ -7364,8 +7388,11 @@ public sealed partial class DocxSession : IDisposable
                 PromoteHyperlinkRelationships(p);
             }
             if (hyperlinkOwner is { } owner)
+            {
                 foreach (var relationshipId in oldHyperlinkIds)
                     Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
+                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part, R.embed, R.link);
+            }
             // A table cell must contain at least one paragraph per OOXML schema.
             if (!cell.Elements(W.p).Any())
                 cell.Add(new XElement(W.p));
@@ -8063,6 +8090,7 @@ public sealed partial class DocxSession : IDisposable
             foreach (var p in paras) PromoteHyperlinkRelationships(p);
             foreach (var relationshipId in oldHyperlinkIds)
                 Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(part, relationshipId, R.id);
+            Internal.OwnedPartRelationships.SweepOrphanedImages(part, R.embed, R.link);
 
             // Visibility flags so Word actually shows the First/Even stories.
             if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
@@ -9199,6 +9227,7 @@ public sealed partial class DocxSession : IDisposable
                 paras[paras.Count - 1].SetAttributeValue(W14.paraId, preservedParaId);
             foreach (var p in paras) UnidHelper.AssignToSelfAndDescendants(p);
             main.WordprocessingCommentsPart.PutXDocument();
+            SweepOrphanedStoryRelationships(main.WordprocessingCommentsPart);
 
             InvalidateProjectionCache();
 
@@ -9777,7 +9806,7 @@ public sealed partial class DocxSession : IDisposable
             }
 
             if (hyperlinkOwner is { } owner)
-                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
+                SweepOrphanedStoryRelationships(owner.Part);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -9859,7 +9888,7 @@ public sealed partial class DocxSession : IDisposable
             }
 
             if (hyperlinkOwner is { } owner)
-                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
+                SweepOrphanedStoryRelationships(owner.Part);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -10013,7 +10042,7 @@ public sealed partial class DocxSession : IDisposable
             }
 
             if (hyperlinkOwner is { } owner)
-                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
+                SweepOrphanedStoryRelationships(owner.Part);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -11277,7 +11306,10 @@ public sealed partial class DocxSession : IDisposable
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts,
-        System.Collections.Generic.IReadOnlyList<(string PartUri, string RelId, string Uri, bool IsExternal)> HyperlinkRelationships)
+        System.Collections.Generic.IReadOnlyList<(string PartUri, string RelId, string Uri, bool IsExternal)> HyperlinkRelationships,
+        System.Collections.Generic.IReadOnlyList<(string PartUri, string ContentType, byte[] Bytes)> ImageParts,
+        System.Collections.Generic.IReadOnlyList<(string OwnerPartUri, string RelId, string TargetPartUri)> ImageRelationships,
+        System.Collections.Generic.IReadOnlyList<(string OwnerPartUri, string RelId, string TargetUri)> LinkedImageRelationships)
     {
         /// <summary>
         /// Optional exact package checkpoint used by transaction boundaries. Unlike the selective
@@ -11298,7 +11330,8 @@ public sealed partial class DocxSession : IDisposable
         /// </summary>
         internal long ApproximateBytes =>
             _approximateBytes ??= PackageBytes?.LongLength
-                ?? Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
+                ?? (Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml))
+                    + ImageParts.Sum(p => (long)p.Bytes.Length));
 
         private long? _approximateBytes;
     }
@@ -11314,6 +11347,9 @@ public sealed partial class DocxSession : IDisposable
         var commentParts = new System.Collections.Generic.List<(string, string)>();
         var commentThreadingParts = new System.Collections.Generic.List<(string, bool, string)>();
         var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
+        var imageParts = new System.Collections.Generic.List<(string, string, byte[])>();
+        var imageRelationships = new System.Collections.Generic.List<(string, string, string)>();
+        var linkedImageRelationships = new System.Collections.Generic.List<(string, string, string)>();
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
@@ -11333,11 +11369,24 @@ public sealed partial class DocxSession : IDisposable
                     main.WordprocessingCommentsIdsPart.Uri.ToString()));
         }
         foreach (var owner in Internal.OwnedPartRelationships.StoryParts(_doc!))
+        {
             foreach (var relationship in owner.Part.HyperlinkRelationships)
                 hyperlinkRelationships.Add((owner.PartUri, relationship.Id,
                     relationship.Uri.ToString(), relationship.IsExternal));
+            foreach (var relationship in Internal.OwnedPartRelationships.ImageRelationships(owner.Part))
+            {
+                imageRelationships.Add((owner.PartUri, relationship.RelationshipId,
+                    relationship.Target.Uri.ToString()));
+                if (imageParts.All(part => part.Item1 != relationship.Target.Uri.ToString()))
+                    imageParts.Add((relationship.Target.Uri.ToString(), relationship.Target.ContentType,
+                        Internal.OwnedPartRelationships.ReadPartBytes(relationship.Target)));
+            }
+            foreach (var relationship in Internal.OwnedPartRelationships.ExternalImageRelationships(owner.Part))
+                linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
+        }
         return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts,
-            commentThreadingParts, hyperlinkRelationships);
+            commentThreadingParts, hyperlinkRelationships, imageParts, imageRelationships,
+            linkedImageRelationships);
     }
 
     /// <summary>
@@ -11355,7 +11404,10 @@ public sealed partial class DocxSession : IDisposable
             Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
             Array.Empty<(string RelId, string PartUri)>(),
             Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>(),
-            Array.Empty<(string PartUri, string RelId, string Uri, bool IsExternal)>())
+            Array.Empty<(string PartUri, string RelId, string Uri, bool IsExternal)>(),
+            Array.Empty<(string PartUri, string ContentType, byte[] Bytes)>(),
+            Array.Empty<(string OwnerPartUri, string RelId, string TargetPartUri)>(),
+            Array.Empty<(string OwnerPartUri, string RelId, string TargetUri)>())
         {
             PackageBytes = bytes,
             RevisionCounter = _revisionCounter,
@@ -11540,6 +11592,10 @@ public sealed partial class DocxSession : IDisposable
                 newPart.PutXDocument(new XDocument(annXml));
             }
         }
+
+        // Binary media restoration can require recreating an exact OPC part URI. It is last
+        // because it reopens the SDK package graph after low-level part/relationship repair.
+        RestoreImageRelationships(snapshot);
 
         _version = snapshot.Version;
         InvalidateProjectionCache();

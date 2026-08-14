@@ -564,6 +564,38 @@ public static partial class DocxSessionBridge
         DocxSessionOps.RemoveHyperlink(h, hyperlinkId);
 
     [JSExport]
+    public static string GetImageCapabilities() => DocxSessionOps.GetImageCapabilities();
+
+    [JSExport]
+    public static string ListImages(int h, int scopes) =>
+        DocxSessionOps.ListImages(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string InsertImage(int h, string anchor, int characterOffset,
+        string imageBase64, string optionsJson) =>
+        DocxSessionOps.InsertImage(h, anchor, characterOffset, imageBase64, optionsJson);
+
+    [JSExport]
+    public static string ReplaceImage(int h, string imageId, string imageBase64) =>
+        DocxSessionOps.ReplaceImage(h, imageId, imageBase64);
+
+    [JSExport]
+    public static string SetImageDimensions(int h, string imageId, string dimensionsJson) =>
+        DocxSessionOps.SetImageDimensions(h, imageId, dimensionsJson);
+
+    [JSExport]
+    public static string SetImageMetadata(int h, string imageId, string altText, string title) =>
+        DocxSessionOps.SetImageMetadata(h, imageId, altText, title);
+
+    [JSExport]
+    public static string SetImageFloatingLayout(int h, string imageId, string layoutJson) =>
+        DocxSessionOps.SetImageFloatingLayout(h, imageId, layoutJson);
+
+    [JSExport]
+    public static string RemoveImage(int h, string imageId) =>
+        DocxSessionOps.RemoveImage(h, imageId);
+
+    [JSExport]
     public static string ListBookmarks(int h, int scopes) =>
         DocxSessionOps.ListBookmarks(h, (ProjectionScopes)scopes);
 
