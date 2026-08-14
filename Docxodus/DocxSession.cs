@@ -415,6 +415,9 @@ public sealed record TextMatch
 
     /// <summary>Regex capture groups (index 0 is always the whole match; named groups appear at their numeric index).</summary>
     public IReadOnlyList<string> Groups { get; init; } = Array.Empty<string>();
+
+    /// <summary>Null unless the search requested page citations.</summary>
+    public PageCitation? Citation { get; init; }
 }
 
 /// <summary>
@@ -463,6 +466,9 @@ public sealed record CrossBlockMatch
 
     /// <summary>Regex capture groups (index 0 is always the whole match; named groups appear at their numeric index).</summary>
     public IReadOnlyList<string> Groups { get; init; } = Array.Empty<string>();
+
+    /// <summary>One citation per <see cref="EnclosingAnchors"/> entry when requested.</summary>
+    public IReadOnlyList<PageCitation>? Citations { get; init; }
 }
 
 /// <summary>Options that tune the <c>FindBy*</c> helpers on <see cref="DocxSession"/>.</summary>
@@ -494,6 +500,9 @@ public sealed record FindOptions
     /// as a further narrowing — set both to restrict to one specific part inside
     /// a category. Most callers should use <see cref="Scopes"/> instead.</summary>
     public string? ScopeFilter { get; init; }
+
+    /// <summary>Attach citations only if this exact registered layout is still valid.</summary>
+    public PageCitationRequest? CitationRequest { get; init; }
 }
 
 /// <summary>Convenience predicates over the <see cref="ProjectionScopes"/> flag set.</summary>
@@ -1369,6 +1378,7 @@ public sealed class DocxSession : IDisposable
     private MarkdownProjection? _initialProjection;
     private bool _disposed;
     private long _version;
+    private PageMap? _registeredPageMap;
     private readonly object _mutationGate = new();
     private int _revisionCounter = 1000;
     private long _lastFormatRevisionTicks;
@@ -1409,6 +1419,302 @@ public sealed class DocxSession : IDisposable
     /// and successful no-ops leave it unchanged.
     /// </summary>
     public long Version => _version;
+
+    /// <summary>
+    /// Validate and register an externally materialized layout map. Registration is read-only:
+    /// it neither changes the document version nor participates in undo. A later committed
+    /// mutation/undo/redo makes the map stale automatically because its document version no
+    /// longer matches <see cref="Version"/>.
+    /// </summary>
+    public PageMapRegistrationResult RegisterPageMap(
+        PageMap pageMap, string? expectedRendererFingerprint = null)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(pageMap);
+
+        PageMapRegistrationResult Fail(PageMapRegistrationError error, string message) =>
+            new() { Success = false, Error = error, Message = message };
+
+        if (pageMap.SchemaVersion != PageMap.CurrentSchemaVersion)
+            return Fail(PageMapRegistrationError.UnsupportedSchemaVersion,
+                $"unsupported PageMap schemaVersion {pageMap.SchemaVersion}; expected {PageMap.CurrentSchemaVersion}");
+        if (pageMap.DocumentVersion != _version)
+            return Fail(PageMapRegistrationError.StaleDocumentVersion,
+                $"PageMap documentVersion {pageMap.DocumentVersion} does not match session version {_version}");
+        if (!Enum.IsDefined(pageMap.Mode) || !Enum.IsDefined(pageMap.Availability))
+            return Fail(PageMapRegistrationError.InvalidMap, "PageMap mode or availability discriminator is invalid");
+        if (string.IsNullOrWhiteSpace(pageMap.RendererFingerprint))
+            return Fail(PageMapRegistrationError.InvalidMap, "rendererFingerprint must be non-empty");
+        if (pageMap.Pages is null || pageMap.Fragments is null)
+            return Fail(PageMapRegistrationError.InvalidMap, "PageMap pages and fragments arrays are required");
+        if (expectedRendererFingerprint is not null
+            && !string.Equals(pageMap.RendererFingerprint, expectedRendererFingerprint, StringComparison.Ordinal))
+            return Fail(PageMapRegistrationError.RendererFingerprintMismatch,
+                "PageMap rendererFingerprint does not match the expected renderer");
+
+        if (pageMap.Mode == PageMapMode.Continuous)
+        {
+            if (pageMap.Availability != PageMapAvailability.Unavailable
+                || pageMap.Pages.Count != 0 || pageMap.Fragments.Count != 0)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "continuous PageMaps must be unavailable and contain no pages or fragments");
+        }
+        else if (pageMap.Availability != PageMapAvailability.Available)
+        {
+            return Fail(PageMapRegistrationError.InvalidMap,
+                "paginated PageMaps must be explicitly available");
+        }
+        else if (pageMap.Pages.Count == 0 || pageMap.Fragments.Count == 0)
+        {
+            return Fail(PageMapRegistrationError.InvalidMap,
+                "an available paginated PageMap must contain at least one page and fragment");
+        }
+
+        var pagesByNumber = new Dictionary<int, PageMapPage>();
+        var seenSectionIndices = new HashSet<int>();
+        PageMapPage? previousPage = null;
+        for (var pageIndex = 0; pageIndex < pageMap.Pages.Count; pageIndex++)
+        {
+            var page = pageMap.Pages[pageIndex];
+            if (page is null)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "PageMap pages cannot contain null entries");
+            if (page.PageNumber < 1 || page.PageInSection < 1
+                || !double.IsFinite(page.Width) || page.Width <= 0
+                || !double.IsFinite(page.Height) || page.Height <= 0
+                || string.IsNullOrWhiteSpace(page.PageName)
+                || page.SectionIndex is < 0)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "pages require non-negative sectionIndex, positive numbering, a pageName, and finite positive geometry");
+            if (page.PageNumber != pageIndex + 1)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "pages must appear in contiguous document order starting at 1");
+
+            if (pageIndex == 0)
+            {
+                if (page.PageInSection != 1)
+                    return Fail(PageMapRegistrationError.InvalidMap,
+                        "the first page must start at pageInSection 1");
+                if (page.SectionIndex is int firstSection) seenSectionIndices.Add(firstSection);
+            }
+            else if (page.PageInSection == 1)
+            {
+                if (page.SectionIndex is int newSection
+                    && !seenSectionIndices.Add(newSection))
+                    return Fail(PageMapRegistrationError.InvalidMap,
+                        $"sectionIndex {newSection} appears in multiple discontiguous page runs");
+                if (page.SectionIndex == previousPage!.SectionIndex
+                    && page.SectionIndex is not null)
+                    return Fail(PageMapRegistrationError.InvalidMap,
+                        $"pageInSection resets within sectionIndex {page.SectionIndex}");
+            }
+            else if (page.PageInSection != previousPage!.PageInSection + 1
+                || page.SectionIndex != previousPage.SectionIndex)
+            {
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "pageInSection must be contiguous and reset to 1 when the section changes");
+            }
+
+            pagesByNumber[page.PageNumber] = page;
+            previousPage = page;
+        }
+
+        var fragmentIds = new HashSet<string>(StringComparer.Ordinal);
+        var fragmentSequence = new Dictionary<string, (int NextIndex, int LastPage)>(StringComparer.Ordinal);
+        var lastFragmentPage = 0;
+        foreach (var fragment in pageMap.Fragments)
+        {
+            if (fragment is null || fragment.Geometry is null)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "PageMap fragments and fragment geometry cannot be null");
+            if (string.IsNullOrWhiteSpace(fragment.FragmentId)
+                || !fragmentIds.Add(fragment.FragmentId)
+                || string.IsNullOrWhiteSpace(fragment.AnchorId)
+                || !Enum.IsDefined(fragment.Story)
+                || fragment.FragmentIndex < 0
+                || !pagesByNumber.ContainsKey(fragment.PageNumber)
+                || !ValidRect(fragment.Geometry))
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "fragments require unique ids, canonical anchors, mapped pages, and finite non-negative geometry");
+            if (fragment.PageNumber < lastFragmentPage)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    "PageMap fragments must appear in nondecreasing page order");
+            lastFragmentPage = fragment.PageNumber;
+
+            var target = FindAnchor(fragment.AnchorId);
+            if (target is null || !string.Equals(target.Anchor.Id, fragment.AnchorId, StringComparison.Ordinal))
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap fragment refers to unknown or non-canonical anchor: {fragment.AnchorId}");
+
+            if (!StoryMatchesScope(fragment.Story, target.Anchor.Scope))
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap story does not match anchor scope: {fragment.AnchorId}");
+
+            var element = target.Resolve(_doc!);
+            var actuallyInTableCell = target.Anchor.Kind == "tc"
+                || (element?.AncestorsAndSelf(W.tc).Any() ?? false);
+            // A comment's canonical source lives in comments.xml, while its inline presentation
+            // lives at the referenced range in the main story. A true table flag therefore must
+            // be proven from a live body-side marker; false also validly describes the definition,
+            // endnote-style, margin, or an out-of-table inline presentation.
+            if (fragment.Story == PageMapStory.Comment
+                && fragment.InTableCell
+                && !CommentHasTableCellPresentation(element))
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap comment has no table-cell presentation: {fragment.AnchorId}");
+            if (fragment.Story != PageMapStory.Comment
+                && fragment.InTableCell != actuallyInTableCell)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap inTableCell does not match anchor ownership: {fragment.AnchorId}");
+
+            var page = pagesByNumber[fragment.PageNumber];
+            const double geometryTolerance = 0.25;
+            if (fragment.Geometry.X + fragment.Geometry.Width > page.Width + geometryTolerance
+                || fragment.Geometry.Y + fragment.Geometry.Height > page.Height + geometryTolerance)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap fragment geometry exceeds page {fragment.PageNumber}");
+
+            if (!fragmentSequence.TryGetValue(fragment.AnchorId, out var sequence))
+                sequence = (NextIndex: 0, LastPage: fragment.PageNumber);
+            if (fragment.FragmentIndex != sequence.NextIndex)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap fragmentIndex values must appear contiguously from 0: {fragment.AnchorId}");
+            if (fragment.PageNumber < sequence.LastPage)
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap fragment pages run backward for anchor: {fragment.AnchorId}");
+            fragmentSequence[fragment.AnchorId] = (sequence.NextIndex + 1, fragment.PageNumber);
+        }
+
+        _registeredPageMap = pageMap with
+        {
+            Pages = pageMap.Pages.ToArray(),
+            Fragments = pageMap.Fragments.ToArray(),
+        };
+        return new PageMapRegistrationResult { Success = true };
+    }
+
+    /// <summary>Return explicit availability for the currently registered map.</summary>
+    public PageMapStatus GetPageMapStatus(PageCitationRequest? request = null)
+    {
+        ThrowIfDisposed();
+        var map = _registeredPageMap;
+        if (map is null)
+            return new PageMapStatus
+            {
+                Availability = PageMapAvailability.Unavailable,
+                UnavailableReason = PageCitationUnavailableReason.NoPageMap,
+                DocumentVersion = _version,
+            };
+        if (map.DocumentVersion != _version || (request is not null && request.DocumentVersion != _version))
+            return new PageMapStatus
+            {
+                Availability = PageMapAvailability.Unavailable,
+                UnavailableReason = PageCitationUnavailableReason.StaleDocumentVersion,
+                DocumentVersion = _version,
+                RendererFingerprint = map.RendererFingerprint,
+                Mode = map.Mode,
+            };
+        if (request is not null && !string.Equals(
+                request.RendererFingerprint, map.RendererFingerprint, StringComparison.Ordinal))
+            return new PageMapStatus
+            {
+                Availability = PageMapAvailability.Unavailable,
+                UnavailableReason = PageCitationUnavailableReason.RendererFingerprintMismatch,
+                DocumentVersion = _version,
+                RendererFingerprint = map.RendererFingerprint,
+                Mode = map.Mode,
+            };
+        if (map.Mode == PageMapMode.Continuous || map.Availability == PageMapAvailability.Unavailable)
+            return new PageMapStatus
+            {
+                Availability = PageMapAvailability.Unavailable,
+                UnavailableReason = PageCitationUnavailableReason.ContinuousMode,
+                DocumentVersion = _version,
+                RendererFingerprint = map.RendererFingerprint,
+                Mode = map.Mode,
+            };
+        return new PageMapStatus
+        {
+            Availability = PageMapAvailability.Available,
+            DocumentVersion = _version,
+            RendererFingerprint = map.RendererFingerprint,
+            Mode = map.Mode,
+        };
+    }
+
+    /// <summary>Resolve every rendered fragment for one canonical anchor.</summary>
+    public PageCitation GetPageCitation(string anchorId, PageCitationRequest request)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchorId);
+        ArgumentNullException.ThrowIfNull(request);
+        var status = GetPageMapStatus(request);
+        if (status.Availability == PageMapAvailability.Unavailable)
+            return UnavailableCitation(anchorId, request, status.UnavailableReason!.Value);
+
+        var fragments = _registeredPageMap!.Fragments
+            .Where(fragment => string.Equals(fragment.AnchorId, anchorId, StringComparison.Ordinal))
+            .OrderBy(fragment => fragment.PageNumber)
+            .ThenBy(fragment => fragment.FragmentIndex)
+            .ToArray();
+        if (fragments.Length == 0)
+            return UnavailableCitation(anchorId, request, PageCitationUnavailableReason.AnchorNotMapped);
+        var citedPageNumbers = fragments.Select(fragment => fragment.PageNumber).ToHashSet();
+        var pages = _registeredPageMap.Pages
+            .Where(page => citedPageNumbers.Contains(page.PageNumber))
+            .OrderBy(page => page.PageNumber)
+            .ToArray();
+        return new PageCitation
+        {
+            AnchorId = anchorId,
+            Availability = PageMapAvailability.Available,
+            DocumentVersion = _version,
+            RendererFingerprint = request.RendererFingerprint,
+            Pages = pages,
+            Fragments = fragments,
+        };
+    }
+
+    private static bool ValidRect(PageMapRect rect) =>
+        rect is not null
+        && double.IsFinite(rect.X) && rect.X >= 0
+        && double.IsFinite(rect.Y) && rect.Y >= 0
+        && double.IsFinite(rect.Width) && rect.Width > 0
+        && double.IsFinite(rect.Height) && rect.Height > 0;
+
+    private static bool StoryMatchesScope(PageMapStory story, string scope) => story switch
+    {
+        PageMapStory.Header => scope.StartsWith("hdr", StringComparison.Ordinal),
+        PageMapStory.Footer => scope.StartsWith("ftr", StringComparison.Ordinal),
+        PageMapStory.Footnote => scope == "fn",
+        PageMapStory.Endnote => scope == "en",
+        PageMapStory.Comment => scope == "cmt",
+        _ => scope == "body",
+    };
+
+    private bool CommentHasTableCellPresentation(XElement? source)
+    {
+        var commentId = (string?)source?.AncestorsAndSelf(W.comment).FirstOrDefault()?.Attribute(W.id);
+        var mainRoot = _doc?.MainDocumentPart?.GetXDocument().Root;
+        if (commentId is null || mainRoot is null) return false;
+        return mainRoot.Descendants()
+            .Where(element => element.Name == W.commentRangeStart
+                || element.Name == W.commentRangeEnd
+                || element.Name == W.commentReference)
+            .Any(element => (string?)element.Attribute(W.id) == commentId
+                && element.Ancestors(W.tc).Any());
+    }
+
+    private PageCitation UnavailableCitation(
+        string anchorId, PageCitationRequest request, PageCitationUnavailableReason reason) =>
+        new()
+        {
+            AnchorId = anchorId,
+            Availability = PageMapAvailability.Unavailable,
+            UnavailableReason = reason,
+            DocumentVersion = _version,
+            RendererFingerprint = request.RendererFingerprint,
+        };
 
     /// <summary>
     /// Set when a mutation threw AND the subsequent rollback to its pre-op snapshot ALSO threw —
@@ -1492,7 +1798,8 @@ public sealed class DocxSession : IDisposable
     /// <exception cref="InvalidOperationException">If <paramref name="anchorId"/> isn't in the AnchorIndex.</exception>
     public MarkdownProjection ProjectAnchor(
         string anchorId,
-        ProjectionDepth depth = ProjectionDepth.SubtreeAndFollowingSiblings)
+        ProjectionDepth depth = ProjectionDepth.SubtreeAndFollowingSiblings,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(anchorId);
@@ -1560,10 +1867,18 @@ public sealed class DocxSession : IDisposable
                 filteredIndex[key] = value;
         }
 
+        var citations = citationRequest is null
+            ? null
+            : filteredIndex.Values
+                .Select(t => t.Anchor.Id)
+                .Distinct(StringComparer.Ordinal)
+                .ToDictionary(id => id, id => GetPageCitation(id, citationRequest), StringComparer.Ordinal);
+
         return new MarkdownProjection
         {
             Markdown = sb.ToString().TrimEnd('\n'),
             AnchorIndex = filteredIndex,
+            PageCitations = citations,
         };
     }
 
@@ -2398,7 +2713,8 @@ public sealed class DocxSession : IDisposable
         ProjectionScopes scope = ProjectionScopes.Body,
         int contextChars = 80,
         WhitespaceMode whitespace = WhitespaceMode.Preserve,
-        ContextBoundary boundary = ContextBoundary.Char)
+        ContextBoundary boundary = ContextBoundary.Char,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(pattern)) return Array.Empty<TextMatch>();
@@ -2480,6 +2796,9 @@ public sealed class DocxSession : IDisposable
                     ContextBefore = ctxBefore,
                     ContextAfter = ctxAfter,
                     Groups = groups,
+                    Citation = citationRequest is null
+                        ? null
+                        : GetPageCitation(target.Anchor.Id, citationRequest),
                 });
             }
         }
@@ -2515,7 +2834,8 @@ public sealed class DocxSession : IDisposable
         ProjectionScopes scope = ProjectionScopes.Body,
         int contextChars = 80,
         WhitespaceMode whitespace = WhitespaceMode.Preserve,
-        ContextBoundary boundary = ContextBoundary.Char)
+        ContextBoundary boundary = ContextBoundary.Char,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(pattern)) return Array.Empty<CrossBlockMatch>();
@@ -2638,6 +2958,9 @@ public sealed class DocxSession : IDisposable
                     ContextBefore = ctxBefore,
                     ContextAfter = ctxAfter,
                     Groups = groups2,
+                    Citations = citationRequest is null
+                        ? null
+                        : anchors.Select(a => GetPageCitation(a.Anchor.Id, citationRequest)).ToArray(),
                 });
             }
         }
@@ -2681,7 +3004,10 @@ public sealed class DocxSession : IDisposable
     /// All anchors of a given kind (and optionally scope), in document order. Direct read
     /// over the projection's <c>AnchorIndex</c>; no text scan, so no <see cref="FindOptions"/>.
     /// </summary>
-    public IReadOnlyList<AnchorTarget> FindByKind(string kind, string? scope = null)
+    public IReadOnlyList<AnchorTarget> FindByKind(
+        string kind,
+        string? scope = null,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         var result = new List<AnchorTarget>();
@@ -2689,7 +3015,7 @@ public sealed class DocxSession : IDisposable
         {
             if (target.Anchor.Kind != kind) continue;
             if (scope is not null && target.Anchor.Scope != scope) continue;
-            result.Add(target);
+            result.Add(AttachCitation(target, citationRequest));
         }
         return result;
     }
@@ -2708,7 +3034,8 @@ public sealed class DocxSession : IDisposable
             regexOptions,
             options.Scopes,
             contextChars: 0,
-            whitespace: options.IgnoreWhitespace ? WhitespaceMode.Normalize : WhitespaceMode.Preserve);
+            whitespace: options.IgnoreWhitespace ? WhitespaceMode.Normalize : WhitespaceMode.Preserve,
+            citationRequest: options.CitationRequest);
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<AnchorTarget>();
@@ -2718,7 +3045,7 @@ public sealed class DocxSession : IDisposable
             if (options.KindFilter is not null && anchor.Anchor.Kind != options.KindFilter) continue;
             if (options.ScopeFilter is not null && anchor.Anchor.Scope != options.ScopeFilter) continue;
             if (!seen.Add(anchor.Anchor.Id)) continue;
-            result.Add(anchor);
+            result.Add(AttachCitation(anchor, options.CitationRequest));
         }
         return result;
     }
@@ -2764,7 +3091,9 @@ public sealed class DocxSession : IDisposable
     /// yield each in document order. A finer-grained <see cref="CharSpan"/>-aware return
     /// is left to a follow-up (see the issue's "Out of scope for v1").
     /// </remarks>
-    public IReadOnlyList<AnchorTarget> FindByAnnotation(string annotationId)
+    public IReadOnlyList<AnchorTarget> FindByAnnotation(
+        string annotationId,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(annotationId)) return Array.Empty<AnchorTarget>();
@@ -2772,7 +3101,8 @@ public sealed class DocxSession : IDisposable
             .FirstOrDefault(a => string.Equals(a.Id, annotationId, StringComparison.Ordinal));
         if (ann is null || string.IsNullOrEmpty(ann.BookmarkName))
             return Array.Empty<AnchorTarget>();
-        return ResolveBookmarkAnchors(ann.BookmarkName);
+        return ResolveBookmarkAnchors(ann.BookmarkName)
+            .Select(target => AttachCitation(target, citationRequest)).ToArray();
     }
 
     /// <summary>
@@ -2782,7 +3112,9 @@ public sealed class DocxSession : IDisposable
     /// multiple regions (e.g. three separate "WARRANTY" annotations). Annotations whose
     /// bookmark is missing or resolves to no anchors are omitted from the result.
     /// </summary>
-    public IReadOnlyDictionary<string, IReadOnlyList<AnchorTarget>> FindByLabel(string labelId)
+    public IReadOnlyDictionary<string, IReadOnlyList<AnchorTarget>> FindByLabel(
+        string labelId,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         var map = new Dictionary<string, IReadOnlyList<AnchorTarget>>(StringComparer.Ordinal);
@@ -2791,8 +3123,9 @@ public sealed class DocxSession : IDisposable
         {
             if (!string.Equals(ann.LabelId, labelId, StringComparison.Ordinal)) continue;
             if (string.IsNullOrEmpty(ann.BookmarkName)) continue;
-            var anchors = ResolveBookmarkAnchors(ann.BookmarkName);
-            if (anchors.Count > 0) map[ann.Id] = anchors;
+            var anchors = ResolveBookmarkAnchors(ann.BookmarkName)
+                .Select(target => AttachCitation(target, citationRequest)).ToArray();
+            if (anchors.Length > 0) map[ann.Id] = anchors;
         }
         return map;
     }
@@ -2803,12 +3136,28 @@ public sealed class DocxSession : IDisposable
     /// bookmark name is unknown or its end marker is missing. Use this for raw bookmark
     /// names that didn't come from <see cref="AnnotationManager"/>.
     /// </summary>
-    public IReadOnlyList<AnchorTarget> FindByBookmark(string bookmarkName)
+    public IReadOnlyList<AnchorTarget> FindByBookmark(
+        string bookmarkName,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(bookmarkName)) return Array.Empty<AnchorTarget>();
-        return ResolveBookmarkAnchors(bookmarkName);
+        return ResolveBookmarkAnchors(bookmarkName)
+            .Select(target => AttachCitation(target, citationRequest)).ToArray();
     }
+
+    private AnchorTarget AttachCitation(AnchorTarget target, PageCitationRequest? request) =>
+        request is null
+            ? target
+            : new AnchorTarget
+            {
+                Anchor = target.Anchor,
+                PartUri = target.PartUri,
+                Unid = target.Unid,
+                TextPreview = target.TextPreview,
+                AutoNumberPrefix = target.AutoNumberPrefix,
+                Citation = GetPageCitation(target.Anchor.Id, request),
+            };
 
     /// <summary>
     /// Enumerates every annotation persisted in the document — id, label id/text, color,
@@ -3156,7 +3505,8 @@ public sealed class DocxSession : IDisposable
         PlaceholderKinds kinds = PlaceholderKinds.All,
         ProjectionScopes scope = ProjectionScopes.Body,
         int contextChars = 80,
-        ContextBoundary boundary = ContextBoundary.Char)
+        ContextBoundary boundary = ContextBoundary.Char,
+        PageCitationRequest? citationRequest = null)
     {
         ThrowIfDisposed();
         if (kinds == 0) return Array.Empty<TemplatePlaceholder>();
@@ -3166,7 +3516,7 @@ public sealed class DocxSession : IDisposable
         // crossing into a sibling bracket pair on the same line.
         var matches = Grep(@"\$?\[[^\[\]]+\]",
             System.Text.RegularExpressions.RegexOptions.None, scope,
-            contextChars, WhitespaceMode.Preserve, boundary);
+            contextChars, WhitespaceMode.Preserve, boundary, citationRequest);
         var results = new List<TemplatePlaceholder>(matches.Count);
         foreach (var m in matches)
         {

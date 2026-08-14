@@ -48,6 +48,37 @@ function stagingHtml(bodyBlocks: number, citing: number, noteLines: number): str
     <div id="container"></div>`;
 }
 
+/** The document's final body block cites several whole notes, forcing at least one to defer. */
+function finalBlockDeferralHtml(): string {
+  const notes = Array.from({ length: 4 }, (_, i) => `
+    <div class="footnote-item" data-footnote-id="last${i}">
+      <span class="footnote-number">${i + 1}. </span>
+      <span class="footnote-content">${
+        Array.from({ length: 10 }, () => `<p>last note ${i} line</p>`).join('')
+      }</span>
+    </div>`).join('');
+  const citations = Array.from({ length: 4 }, (_, i) =>
+    `<sup data-footnote-id="last${i}">${i + 1}</sup>`).join('');
+  return `
+    <style>
+      #staging { font: 16px/16px Arial; }
+      .body { height: 100pt; margin: 0; }
+      .footnote-item { margin: 0; }
+      .footnote-content > p { height: 10pt; margin: 0; }
+    </style>
+    <div id="staging">
+      <div id="pagination-footnote-registry">${notes}</div>
+      <div data-section-index="0"
+           data-page-width="312" data-page-height="312"
+           data-content-width="300" data-content-height="300"
+           data-margin-top="6" data-margin-right="6"
+           data-margin-bottom="6" data-margin-left="6">
+        <p class="body">only and final body block ${citations}</p>
+      </div>
+    </div>
+    <div id="container"></div>`;
+}
+
 /**
  * Geometry of every rendered page. `usedPct` is BODY + NOTES against the content box: notes
  * legitimately consume page height, so body extent alone understates how full a page is — the
@@ -80,9 +111,8 @@ const MEASURE = () => {
 /** Every note id cited on a page must be rendered somewhere in the document. */
 const MEASURE_NOTES = () => {
   const container = document.getElementById('container') as HTMLElement;
-  const rendered = new Set(
-    Array.from(container.querySelectorAll('.footnote-item')).map((i) => i.getAttribute('data-footnote-id')),
-  );
+  const renderedItems = Array.from(container.querySelectorAll<HTMLElement>('.footnote-item'));
+  const rendered = new Set(renderedItems.map((i) => i.getAttribute('data-footnote-id')));
   const cited = Array.from(
     new Set(Array.from(container.querySelectorAll('[data-footnote-id]'))
       .filter((e) => e.tagName === 'SUP' || e.tagName === 'A')
@@ -93,6 +123,24 @@ const MEASURE_NOTES = () => {
     rendered: rendered.size,
     lost: cited.filter((id) => !rendered.has(id)),
     nested: container.querySelectorAll('.footnote-item .footnote-item').length,
+    clipped: renderedItems.filter((item) => {
+      const band = item.closest('.page-footnotes');
+      if (!band) return true;
+      const itemRect = item.getBoundingClientRect();
+      const bandRect = band.getBoundingClientRect();
+      return itemRect.top < bandRect.top - 1 || itemRect.bottom > bandRect.bottom + 1;
+    }).map((item) => {
+      const band = item.closest('.page-footnotes')!;
+      const itemRect = item.getBoundingClientRect();
+      const bandRect = band.getBoundingClientRect();
+      return {
+        id: item.dataset.footnoteId,
+        itemTop: Math.round(itemRect.top),
+        itemBottom: Math.round(itemRect.bottom),
+        bandTop: Math.round(bandRect.top),
+        bandBottom: Math.round(bandRect.bottom),
+      };
+    }),
   };
 };
 
@@ -172,5 +220,32 @@ test.describe('Paginated footnote layout', () => {
       wasteful,
       `pages left nearly empty: ${JSON.stringify(wasteful)} of ${pages.length}`,
     ).toEqual([]);
+  });
+
+  test('whole notes deferred from the final body block drain onto note-only pages', async ({ page }) => {
+    await page.setContent(finalBlockDeferralHtml());
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+    const result = await page.evaluate(
+      ({ measure }: { measure: string }) => {
+        const staging = document.getElementById('staging') as HTMLElement;
+        const container = document.getElementById('container') as HTMLElement;
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+        // eslint-disable-next-line no-eval
+        const notes = (0, eval)(`(${measure})`)();
+        return {
+          ...notes,
+          noteOnlyPages: Array.from(container.querySelectorAll('.page-box')).filter((box) =>
+            box.querySelector('.page-footnotes') && !box.querySelector('.page-content')?.children.length,
+          ).length,
+        };
+      },
+      { measure: MEASURE_NOTES.toString() },
+    );
+    expect(result.cited).toBe(4);
+    expect(result.lost, `notes cited but never rendered: ${JSON.stringify(result.lost)}`).toEqual([]);
+    expect(result.clipped, `notes rendered outside their visible band: ${JSON.stringify(result.clipped)}`)
+      .toEqual([]);
+    expect(result.noteOnlyPages).toBeGreaterThan(0);
   });
 });

@@ -63,6 +63,18 @@ internal static class DocxSessionOps
     public static string GetVersionJson(int handle) =>
         DocxSessionJson.SerializeVersion(GetVersion(handle));
 
+    public static string RegisterPageMap(
+        int handle, PageMap pageMap, string? expectedRendererFingerprint = null) =>
+        DocxSessionJson.SerializePageMapRegistration(
+            SessionRegistry.Get(handle).RegisterPageMap(pageMap, expectedRendererFingerprint));
+
+    public static string GetPageMapStatus(int handle, PageCitationRequest? request = null) =>
+        DocxSessionJson.SerializePageMapStatus(SessionRegistry.Get(handle).GetPageMapStatus(request));
+
+    public static string GetPageCitation(int handle, string anchorId, PageCitationRequest request) =>
+        DocxSessionJson.SerializePageCitation(
+            SessionRegistry.Get(handle).GetPageCitation(anchorId, request));
+
     /// <summary>Read-only optimistic guard evaluation for dry runs and transport diagnostics.</summary>
     public static string CheckPreconditions(int handle, MutationPreconditions? preconditions)
     {
@@ -104,8 +116,10 @@ internal static class DocxSessionOps
     public static string ListAnchors(int handle) =>
         DocxSessionJson.SerializeAnchorIndex(SessionRegistry.Get(handle).AnchorIndex());
 
-    public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth) =>
-        DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth));
+    public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth,
+        PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeProjection(
+            SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth, citationRequest));
 
     /// <summary>
     /// Render a single block from the live session to faithful HTML — the editor's
@@ -171,28 +185,39 @@ internal static class DocxSessionOps
         });
 
     public static string Grep(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
+        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary,
+        PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializeMatches(
-            SessionRegistry.Get(handle).Grep(pattern, regexOpts, scope, contextChars, whitespace, boundary));
+            SessionRegistry.Get(handle).Grep(
+                pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest));
 
     public static string GrepCrossBlock(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
+        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary,
+        PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializeCrossBlockMatches(
-            SessionRegistry.Get(handle).GrepCrossBlock(pattern, regexOpts, scope, contextChars, whitespace, boundary));
+            SessionRegistry.Get(handle).GrepCrossBlock(
+                pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest));
 
     public static string FindPlaceholders(int handle, PlaceholderKinds kinds, ProjectionScopes scope,
-        int contextChars, ContextBoundary boundary) =>
+        int contextChars, ContextBoundary boundary, PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializePlaceholders(
-            SessionRegistry.Get(handle).FindPlaceholders(kinds, scope, contextChars, boundary));
+            SessionRegistry.Get(handle).FindPlaceholders(
+                kinds, scope, contextChars, boundary, citationRequest));
 
-    public static string FindByAnnotation(int handle, string annotationId) =>
-        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByAnnotation(annotationId));
+    public static string FindByAnnotation(
+        int handle, string annotationId, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeAnchorTargets(
+            SessionRegistry.Get(handle).FindByAnnotation(annotationId, citationRequest));
 
-    public static string FindByLabel(int handle, string labelId) =>
-        DocxSessionJson.SerializeAnchorTargetMap(SessionRegistry.Get(handle).FindByLabel(labelId));
+    public static string FindByLabel(
+        int handle, string labelId, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeAnchorTargetMap(
+            SessionRegistry.Get(handle).FindByLabel(labelId, citationRequest));
 
-    public static string FindByBookmark(int handle, string bookmarkName) =>
-        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByBookmark(bookmarkName));
+    public static string FindByBookmark(
+        int handle, string bookmarkName, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeAnchorTargets(
+            SessionRegistry.Get(handle).FindByBookmark(bookmarkName, citationRequest));
 
     public static string ListAnnotations(int handle) =>
         DocxSessionJson.SerializeAnnotations(SessionRegistry.Get(handle).ListAnnotations());
@@ -227,8 +252,10 @@ internal static class DocxSessionOps
     public static string FindByRegex(int handle, string pattern, RegexOptions regexOptions, FindOptions? options) =>
         DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(pattern, regexOptions, options));
 
-    public static string FindByKind(int handle, string kind, string? scope) =>
-        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByKind(kind, scope));
+    public static string FindByKind(
+        int handle, string kind, string? scope, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeAnchorTargets(
+            SessionRegistry.Get(handle).FindByKind(kind, scope, citationRequest));
 
     public static string GetEditSummary(int handle) =>
         DocxSessionJson.SerializeEditSummary(SessionRegistry.Get(handle).GetEditSummary());

@@ -1050,8 +1050,17 @@ export interface DocxodusWasmExports {
     CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
     GetVersion: (handle: number) => string;
+    RegisterPageMap: (handle: number, pageMapJson: string, expectedRendererFingerprint: string) => string;
+    GetPageMapStatus: (handle: number, requestJson: string) => string;
+    GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
+    ProjectAnchorWithCitations: (
+      handle: number,
+      anchorId: string,
+      depth: number,
+      requestJson: string,
+    ) => string;
     /** Ordered top-level render units per scope container (JSON {@link RenderPlan}) —
      *  what the editor's incremental reconciler diffs its DOM against. Optional:
      *  absent on older WASM bundles. */
@@ -1210,17 +1219,29 @@ export interface DocxodusWasmExports {
       newInner: string,
     ) => string;
     FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number, boundary: number) => string;
+    FindPlaceholdersWithCitations: (
+      handle: number,
+      kinds: number,
+      scope: number,
+      contextChars: number,
+      boundary: number,
+      requestJson: string,
+    ) => string;
     GetEditSummary: (handle: number) => string;
     RemainingPlaceholders: (handle: number, kinds: number) => string;
     GetDiff: (handle: number, format: number) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
+    FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
+    FindByLabelWithCitations: (handle: number, labelId: string, requestJson: string) => string;
     FindByBookmark: (handle: number, bookmarkName: string) => string;
+    FindByBookmarkWithCitations: (handle: number, bookmarkName: string, requestJson: string) => string;
     Exists: (handle: number, anchorId: string) => boolean;
     FindByText: (handle: number, needle: string, optionsJson: string) => string;
     FindAllByText: (handle: number, needle: string, optionsJson: string) => string;
     FindByRegex: (handle: number, pattern: string, regexOptions: number, optionsJson: string) => string;
     FindByKind: (handle: number, kind: string, scope: string) => string;
+    FindByKindWithCitations: (handle: number, kind: string, scope: string, requestJson: string) => string;
     GetAnchorInfo: (handle: number, anchorId: string) => string;
     GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
     GetBlockMetadata: (handle: number, anchorId: string) => string;
@@ -1741,6 +1762,63 @@ export interface DocxSessionProjection {
     scope: string;
     textPreview: string;
   }>;
+  /** Present only when projectAnchor requested citations. */
+  pageCitations?: Record<string, PageCitation>;
+}
+
+export interface PageCitationRequest {
+  documentVersion: number;
+  rendererFingerprint: string;
+}
+
+export type PageCitationUnavailableReason =
+  | "no_page_map"
+  | "continuous_mode"
+  | "stale_document_version"
+  | "renderer_fingerprint_mismatch"
+  | "anchor_not_mapped";
+
+export interface PageCitationFragment {
+  fragmentId: string;
+  anchorId: string;
+  fragmentIndex: number;
+  pageNumber: number;
+  geometry: { x: number; y: number; width: number; height: number };
+  story: "body" | "header" | "footer" | "footnote" | "endnote" | "comment";
+  inTableCell: boolean;
+}
+
+export interface PageCitationPage {
+  pageNumber: number;
+  pageInSection: number;
+  width: number;
+  height: number;
+  sectionIndex?: number;
+  pageName: string;
+}
+
+export interface PageCitation {
+  anchorId: string;
+  availability: "available" | "unavailable";
+  unavailableReason?: PageCitationUnavailableReason;
+  documentVersion: number;
+  rendererFingerprint: string;
+  pages: PageCitationPage[];
+  fragments: PageCitationFragment[];
+}
+
+export interface PageMapRegistrationResult {
+  success: boolean;
+  error?: "unsupported_schema_version" | "stale_document_version" | "renderer_fingerprint_mismatch" | "invalid_map";
+  message?: string;
+}
+
+export interface PageMapStatus {
+  availability: "available" | "unavailable";
+  unavailableReason?: PageCitationUnavailableReason;
+  documentVersion: number;
+  rendererFingerprint?: string;
+  mode?: "paginated" | "continuous";
 }
 
 /**
@@ -1784,6 +1862,8 @@ export interface TextMatch {
   contextAfter: string;
   /** Regex capture groups; index 0 is always the whole match. */
   groups: string[];
+  /** Present only when grep requested a citation for this exact render. */
+  citation?: PageCitation;
 }
 
 /**
@@ -1816,6 +1896,8 @@ export interface CrossBlockMatch {
   contextAfter: string;
   /** Regex capture groups; index 0 is always the whole match. */
   groups: string[];
+  /** One per enclosingAnchors entry when requested. */
+  citations?: PageCitation[];
 }
 
 /**
@@ -2013,6 +2095,8 @@ export interface GrepOptions {
    * `contextChars`.
    */
   boundary?: number;
+  /** Attach citations only if this exact registered layout is still valid. */
+  citation?: PageCitationRequest;
 }
 
 /**
@@ -2039,6 +2123,8 @@ export interface FindOptions {
    * for whole-category filtering; this is for the rare single-part case.
    */
   scopeFilter?: string;
+  /** Attach citations only if this exact registered layout is still valid. */
+  citation?: PageCitationRequest;
 }
 
 /**
@@ -2054,6 +2140,8 @@ export interface AnchorTargetRef extends AnchorRef {
   /** Resolved auto-numbering prefix (e.g. "1.", "First") when the element carries
    *  numbering. Absent otherwise. See {@link MarkdownAnchorTarget.autoNumberPrefix}. */
   autoNumberPrefix?: string;
+  /** Present only when the discovery call requested an exact page citation. */
+  citation?: PageCitation;
 }
 
 /**
@@ -2903,6 +2991,8 @@ export interface DocumentMetadata {
   hasComments: boolean;
   /** Estimated total page count (heuristic based on content volume and page sizes) */
   estimatedPageCount: number;
+  /** Explicit provenance: always "heuristic"; use PageMap for authoritative pages. */
+  estimatedPageCountSource: "heuristic";
 }
 
 // ============================================================================

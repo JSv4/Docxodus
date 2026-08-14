@@ -80,6 +80,13 @@ export type {
   ListMembership,
   MarkdownPatch,
   NumberFormat,
+  PageCitation,
+  PageCitationFragment,
+  PageCitationPage,
+  PageCitationRequest,
+  PageCitationUnavailableReason,
+  PageMapRegistrationResult,
+  PageMapStatus,
   PageNumberField,
   PageNumberingOp,
   ParagraphBorderEdge,
@@ -171,9 +178,23 @@ export type {
   PageInfo,
   PaginationResult,
   PaginationOptions,
+  PageMap,
+  PageMapPage,
+  PageMapFragment,
+  PageMapRect,
+  PageMapMode,
+  PageMapAvailability,
+  PageMapStory,
+  PageCitationNavigation,
 } from "./pagination.js";
 
-export { PaginationEngine, paginateHtml } from "./pagination.js";
+export {
+  PaginationEngine,
+  clearPageCitationHighlight,
+  createUnavailablePageMap,
+  navigateToPageCitation,
+  paginateHtml,
+} from "./pagination.js";
 
 // Page geometry is the document's own page setup (w:sectPr), read off the section wrappers
 // the converter stamps in every render mode, plus the fit-to-width zoom a view applies to it.
@@ -1786,6 +1807,7 @@ export async function getDocumentMetadata(
     hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
     hasComments: parsed.HasComments ?? parsed.hasComments,
     estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
+    estimatedPageCountSource: parsed.EstimatedPageCountSource ?? parsed.estimatedPageCountSource ?? "heuristic",
   };
 }
 

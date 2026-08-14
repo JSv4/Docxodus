@@ -71,6 +71,11 @@ from .types import (
     MutationPreconditions,
     NumberFormat,
     ParagraphFormatOp,
+    PageCitation,
+    PageCitationRequest,
+    PageMap,
+    PageMapRegistrationResult,
+    PageMapStatus,
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
@@ -470,6 +475,37 @@ class DocxSession:
             raise TypeError(f"get_version: expected {{version: int}}, got {result!r}")
         return int(result["version"])
 
+    def register_page_map(
+        self, page_map: PageMap, expected_renderer_fingerprint: str | None = None
+    ) -> PageMapRegistrationResult:
+        """Register browser-produced pagination without mutating the document."""
+        result = self._call(
+            "register_page_map",
+            {
+                "pageMap": page_map.to_wire(),
+                "expectedRendererFingerprint": expected_renderer_fingerprint,
+            },
+        )
+        return PageMapRegistrationResult._from_wire(result)
+
+    def get_page_map_status(
+        self, citation: PageCitationRequest | None = None
+    ) -> PageMapStatus:
+        args: dict[str, Any] = {}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        return PageMapStatus._from_wire(self._call("get_page_map_status", args))
+
+    def get_page_citation(
+        self, anchor_id: str, citation: PageCitationRequest
+    ) -> PageCitation:
+        return PageCitation._from_wire(
+            self._call(
+                "get_page_citation",
+                {"anchorId": anchor_id, "citation": citation.to_wire()},
+            )
+        )
+
     def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
         """Evaluate guards without mutating the document or advancing its version."""
         return EditResult._from_wire(
@@ -503,14 +539,13 @@ class DocxSession:
         self,
         anchor_id: str,
         depth: ProjectionDepth = ProjectionDepth.SUBTREE_AND_FOLLOWING_SIBLINGS,
+        citation: PageCitationRequest | None = None,
     ) -> MarkdownProjection:
         """Scoped re-projection rooted at ``anchor_id``."""
-        return MarkdownProjection._from_wire(
-            self._call(
-                "project_anchor",
-                {"anchorId": anchor_id, "depth": int(depth)},
-            )
-        )
+        args: dict[str, Any] = {"anchorId": anchor_id, "depth": int(depth)}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        return MarkdownProjection._from_wire(self._call("project_anchor", args))
 
     # -- discovery: grep + find -------------------------------------------
 
@@ -522,17 +557,21 @@ class DocxSession:
         context_chars: int = 80,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[TextMatch, ...]:
+        args: dict[str, Any] = {
+            "pattern": pattern,
+            "regexOptions": int(regex_options),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "whitespace": int(whitespace),
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "grep",
-            {
-                "pattern": pattern,
-                "regexOptions": int(regex_options),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "whitespace": int(whitespace),
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(TextMatch._from_wire(m) for m in result)
 
@@ -544,17 +583,21 @@ class DocxSession:
         context_chars: int = 80,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[CrossBlockMatch, ...]:
+        args: dict[str, Any] = {
+            "pattern": pattern,
+            "regexOptions": int(regex_options),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "whitespace": int(whitespace),
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "grep_cross_block",
-            {
-                "pattern": pattern,
-                "regexOptions": int(regex_options),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "whitespace": int(whitespace),
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(CrossBlockMatch._from_wire(m) for m in result)
 
@@ -564,15 +607,19 @@ class DocxSession:
         scope: ProjectionScopes = ProjectionScopes.BODY,
         context_chars: int = 80,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[TemplatePlaceholder, ...]:
+        args: dict[str, Any] = {
+            "kinds": int(kinds),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "find_placeholders",
-            {
-                "kinds": int(kinds),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(TemplatePlaceholder._from_wire(p) for p in result)
 
@@ -717,26 +764,48 @@ class DocxSession:
         result = self._call("find_by_regex", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_kind(self, kind: str, scope: str | None = None) -> tuple[AnchorTarget, ...]:
+    def find_by_kind(
+        self,
+        kind: str,
+        scope: str | None = None,
+        citation: PageCitationRequest | None = None,
+    ) -> tuple[AnchorTarget, ...]:
         args: dict[str, Any] = {"kind": kind}
         if scope is not None:
             args["scope"] = scope
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call("find_by_kind", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_annotation(self, annotation_id: str) -> tuple[AnchorTarget, ...]:
-        result = self._call("find_by_annotation", {"annotationId": annotation_id})
+    def find_by_annotation(
+        self, annotation_id: str, citation: PageCitationRequest | None = None
+    ) -> tuple[AnchorTarget, ...]:
+        args: dict[str, Any] = {"annotationId": annotation_id}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_annotation", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_label(self, label_id: str) -> Mapping[str, tuple[AnchorTarget, ...]]:
-        result = self._call("find_by_label", {"labelId": label_id})
+    def find_by_label(
+        self, label_id: str, citation: PageCitationRequest | None = None
+    ) -> Mapping[str, tuple[AnchorTarget, ...]]:
+        args: dict[str, Any] = {"labelId": label_id}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_label", args)
         return {
             ann_id: tuple(AnchorTarget._from_wire(a) for a in anchors)
             for ann_id, anchors in result.items()
         }
 
-    def find_by_bookmark(self, bookmark_name: str) -> tuple[AnchorTarget, ...]:
-        result = self._call("find_by_bookmark", {"bookmarkName": bookmark_name})
+    def find_by_bookmark(
+        self, bookmark_name: str, citation: PageCitationRequest | None = None
+    ) -> tuple[AnchorTarget, ...]:
+        args: dict[str, Any] = {"bookmarkName": bookmark_name}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_bookmark", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
