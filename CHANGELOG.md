@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`DocxSession.Batch` / `BeginBatch` / `EndBatch`** — apply a sequence of mutations
+  as one logical operation: **one pre-op snapshot, one undo step**, and all-or-nothing
+  application by default. Every mutation records a snapshot, and a snapshot deep-clones
+  every projected part, so its cost scales with the *document* rather than the edit: a
+  forty-edit sequence over `TestFiles/NVCA-Model-COI.docx` paid forty ≈7.5 MB clones and
+  consumed forty entries of a twenty-deep ring — meaning the sequence a caller had just
+  applied was already only half reversible by the time it finished. Both are properties
+  of the loop, not of the work. Agent callers hit this hardest, because a plan is
+  naturally a list of edits.
+  - `Batch(steps, options)` takes the steps as `Func<EditResult>` closures and pairs the
+    open/close for you. `BeginBatch`/`EndBatch` is the explicit form for callers whose
+    steps cannot be expressed as delegates — a JSON dispatcher running its own switch.
+  - `BatchOptions.Atomic` (default true) reverses everything on the first failure.
+    Best-effort (`Atomic = false`) tolerates only the failures that provably did not
+    touch the document; a step that **threw partway or was rejected by the validator
+    still reverses the whole batch**, because no per-step snapshot survives to unpick
+    that step alone. Batching therefore cannot be used to opt out of the
+    half-applied-mutation guarantee that per-op rollback exists to provide.
+  - Nesting joins the enclosing batch rather than opening a second snapshot, so the whole
+    tree stays one undo step and the outermost close owns the outcome.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:
@@ -21,6 +41,16 @@ All notable changes to this project will be documented in this file.
   explain why undo stops short of the configured depth instead of appearing broken.
 
 ### Changed
+- **`docxodus_mutations` is now genuinely atomic rather than "atomic-feeling"**
+  (`tools/mcp-server/Dispatcher.cs`): the step loop runs inside a session batch, so a
+  forty-step agent plan costs one snapshot and one undo step instead of forty of each.
+  Two behaviour changes follow. `mode: "preview"` restores the batch's single snapshot
+  instead of issuing N `Undo()` calls with N counted by hand — the old loop silently
+  under-reverted whenever a step consumed more than one ring entry, so "nothing is left
+  changed" was a promise the tool could not keep. And a step that mutated before failing
+  now reverses the whole batch, reported as a new `rolledBack` field with `editsApplied`
+  forced to `0`, rather than leaving a half-applied document described as a partial
+  success. The wire schema is otherwise unchanged; no new tool, no new arguments.
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
   navigation, and gives the arcade thumb controls** — three fixes to the same
   problem, that the demo's mobile visit was its worst one:

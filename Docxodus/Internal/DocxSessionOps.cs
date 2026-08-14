@@ -495,6 +495,26 @@ internal static class DocxSessionOps
     public static string RejectRevision(int handle, string revisionId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectRevision(revisionId));
 
+    // ─── Batch ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Open a batch on the session: every mutation until <see cref="EndBatch"/> shares one pre-op
+    /// snapshot and collapses into one undo step.
+    /// </summary>
+    /// <remarks>
+    /// The explicit begin/end pair rather than a delegate, because the transports that need this
+    /// most — the MCP dispatcher, the stdio host — run their steps through their own JSON switch
+    /// and cannot hand the session a list of <c>Func&lt;EditResult&gt;</c>. Callers who CAN should
+    /// prefer <c>DocxSession.Batch</c>, which pairs them and cannot leak an open batch.
+    /// </remarks>
+    public static bool BeginBatch(int handle, bool atomic = true, bool stopOnError = true) =>
+        SessionRegistry.Get(handle).BeginBatch(
+            new BatchOptions { Atomic = atomic, StopOnError = stopOnError });
+
+    /// <summary>Close the batch, keeping its edits as one undo step or reversing them.</summary>
+    public static string EndBatch(int handle, bool commit) =>
+        DocxSessionJson.SerializeBatchResult(SessionRegistry.Get(handle).EndBatch(commit));
+
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();

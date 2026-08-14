@@ -599,10 +599,41 @@ internal static class Dispatcher
         if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
             throw new McpToolException("docxodus_mutations requires an array \"steps\"");
 
+        // One snapshot and one undo step for the whole sequence — the batch is the unit the caller
+        // asked for, so it is the unit the ring should hold. A forty-step plan used to cost forty
+        // whole-document clones and consume forty entries of a twenty-deep ring, which meant the
+        // plan an agent had just applied was already only half reversible by the time it finished.
+        //
+        // Best-effort, because this tool has always applied what it could and reported the rest.
+        // That is a policy about CLEAN failures only: the session still reverses the whole batch if
+        // a step mutated before failing, and no argument here can opt out of that.
+        //
+        // Preview is the same batch closed the other way. It used to be a loop of N Undo() calls
+        // with N tracked by hand, which under-reverted whenever a step consumed more than one ring
+        // entry — a "nothing is left changed" promise the tool could not actually keep. Now the one
+        // snapshot the batch opened with is the one thing restored.
+        if (!DocxSessionOps.BeginBatch(session.Handle, atomic: false, stopOnError: false))
+            throw new McpToolException("session is disposed");
+
+        try
+        {
+            return RunMutationSteps(session, stepsEl, mode);
+        }
+        catch
+        {
+            // A malformed step throws out of the loop. Whatever earlier steps applied is not a
+            // state the caller asked for, and the batch is the only thing holding the snapshot that
+            // can undo it, so reverse before the exception leaves this frame.
+            DocxSessionOps.EndBatch(session.Handle, commit: false);
+            throw;
+        }
+    }
+
+    private static string RunMutationSteps(DocSession session, JsonElement stepsEl, string mode)
+    {
         var results = new List<string>();
         var errors = new List<string>();
         int applied = 0;
-        int mutatingSteps = 0;
 
         foreach (var step in stepsEl.EnumerateArray())
         {
@@ -657,7 +688,6 @@ internal static class Dispatcher
             }
             catch (JsonException) { /* non-EditResult shape (shouldn't happen for batchable tools); assume success */ }
 
-            mutatingSteps++;
             if (succeeded) applied++;
             else
             {
@@ -666,17 +696,32 @@ internal static class Dispatcher
             }
         }
 
-        if (mode == "preview")
+        // Preview keeps nothing; apply keeps what succeeded. Either way the session gets the final
+        // word: a step that mutated before failing reverses the batch whatever is asked for here.
+        var close = DocxSessionOps.EndBatch(session.Handle, commit: mode == "apply");
+        bool reversed;
+        using (var closeDoc = JsonDocument.Parse(close))
         {
-            for (int i = 0; i < mutatingSteps; i++)
-                DocxSessionOps.Undo(session.Handle);
+            reversed = closeDoc.RootElement.TryGetProperty("rolledBack", out var rb)
+                && rb.ValueKind == JsonValueKind.True;
+        }
+
+        // A reversal the caller did not ask for makes every "applied" count a lie, so say so
+        // plainly rather than reporting partial success over a document that no longer has it.
+        if (reversed && mode == "apply")
+        {
+            applied = 0;
+            errors.Add(JsonRpcIo.JsonString(
+                "a step mutated before failing; the whole batch was reversed and the document is unchanged"));
         }
 
         var status = errors.Count == 0 ? "ok" : applied == 0 ? "failed" : "partial";
         return "{\"status\":\"" + status + "\",\"editsApplied\":" + applied
+            + ",\"rolledBack\":" + (reversed ? "true" : "false")
             + ",\"results\":[" + string.Join(",", results) + "]"
             + ",\"errors\":[" + string.Join(",", errors) + "]}";
     }
+
 
     // ─── Table ──────────────────────────────────────────────────────────
 
