@@ -168,6 +168,7 @@ class EditErrorCode(str, Enum):
     DISALLOWED_NAMESPACE = "disallowed_namespace"
     INCOMPATIBLE_ELEMENT_TYPE = "incompatible_element_type"
     VALIDATION_FAILED = "validation_failed"
+    PRECONDITION_FAILED = "precondition_failed"
     NOTHING_TO_UNDO = "nothing_to_undo"
     NOTHING_TO_REDO = "nothing_to_redo"
     DUPLICATE_ANNOTATION_ID = "duplicate_annotation_id"

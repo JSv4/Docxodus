@@ -523,6 +523,12 @@ public sealed record ReplaceOptions
 
     /// <summary>Cap the number of replacements; null = unlimited.</summary>
     public int? MaxReplacements { get; init; }
+
+    /// <summary>Require exactly this many occurrences before applying any replacement.</summary>
+    public int? ExpectedMatchCount { get; init; }
+
+    /// <summary>Optional optimistic session/anchor guards evaluated before searching.</summary>
+    public MutationPreconditions? Preconditions { get; init; }
 }
 
 /// <summary>
@@ -716,6 +722,12 @@ public sealed record AnchorInfo(string Id, string Kind, string Scope, string Tex
     /// <see cref="AnchorTarget.AutoNumberPrefix"/> for the full rationale.
     /// </summary>
     public string? AutoNumberPrefix { get; init; }
+
+    /// <summary>Hash of the live anchor subtree, excluding projector Unids and note ids.</summary>
+    public string ContentHash { get; init; } = string.Empty;
+
+    /// <summary>Exact visible text used by optimistic preconditions (never preview-truncated).</summary>
+    public string VisibleText { get; init; } = string.Empty;
 
     /// <summary>What a reader sees: <see cref="AutoNumberPrefix"/> + space + <see cref="TextPreview"/>
     /// when a prefix is present, otherwise just <see cref="TextPreview"/>.</summary>
@@ -1106,7 +1118,50 @@ public sealed record CompactResult
     public int RunsRemoved { get; init; }
 }
 
-public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null);
+/// <summary>The current state of a precondition target, returned even when it no longer exists.</summary>
+public sealed record PreconditionTarget
+{
+    public bool Exists { get; init; }
+    public string? AnchorId { get; init; }
+    public string? Kind { get; init; }
+    public string? Scope { get; init; }
+    public string? ContentHash { get; init; }
+    public string? VisibleText { get; init; }
+}
+
+/// <summary>Structured expected/actual detail for <see cref="EditErrorCode.PreconditionFailed"/>.</summary>
+public sealed record PreconditionFailure(
+    string Condition,
+    object? Expected,
+    object? Actual,
+    long CurrentVersion,
+    PreconditionTarget? CurrentTarget);
+
+/// <summary>
+/// Optimistic guards evaluated immediately before a mutation. Anchor-specific fields use
+/// <see cref="AnchorId"/> as their target; a stale kind prefix still resolves by Unid, just like
+/// ordinary mutation addressing. <see cref="ExpectedTextRange"/> is measured against the exact
+/// <see cref="AnchorInfo.VisibleText"/> value.
+/// </summary>
+public sealed record MutationPreconditions
+{
+    public long? ExpectedVersion { get; init; }
+    public string? AnchorId { get; init; }
+    public string? ExpectedContentHash { get; init; }
+    public string? ExpectedText { get; init; }
+    public TextRangePrecondition? ExpectedTextRange { get; init; }
+    public string? ExpectedKind { get; init; }
+    public string? ExpectedScope { get; init; }
+    public int? ExpectedMatchCount { get; init; }
+}
+
+/// <summary>An exact substring assertion within an anchor's visible text.</summary>
+public sealed record TextRangePrecondition(int Start, int Length, string Text);
+
+public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null)
+{
+    public PreconditionFailure? Precondition { get; init; }
+}
 
 public enum EditErrorCode
 {
@@ -1186,6 +1241,9 @@ public enum EditErrorCode
     /// markup — never listed, already resolved, or removed by resolving an enclosing
     /// revision. Re-<see cref="DocxSession.ListRevisions"/> for the current set.</summary>
     RevisionNotFound,
+
+    /// <summary>An optimistic mutation guard did not match the current session or target state.</summary>
+    PreconditionFailed,
 
     InternalError,
 }
@@ -1310,6 +1368,8 @@ public sealed class DocxSession : IDisposable
     private MarkdownProjection? _cachedProjection;
     private MarkdownProjection? _initialProjection;
     private bool _disposed;
+    private long _version;
+    private readonly object _mutationGate = new();
     private int _revisionCounter = 1000;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
@@ -1329,7 +1389,9 @@ public sealed class DocxSession : IDisposable
         _history = new Internal.UndoRing<DocumentSnapshot>(
             _settings.UndoDepth,
             _settings.UndoMemoryBudgetBytes,
-            static snapshot => snapshot.ApproximateBytes);
+            static snapshot => snapshot.ApproximateBytes,
+            onRecordPreOp: _ => AdvanceVersion(),
+            onPopUndo: snapshot => _version = snapshot.Version);
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
@@ -1340,6 +1402,13 @@ public sealed class DocxSession : IDisposable
     }
 
     public Exception? LastInternalError { get; private set; }
+
+    /// <summary>
+    /// Monotonic in-session document version. Starts at 0 and advances once after each
+    /// committed mutation and each successful undo/redo. Failed calls, failed preconditions,
+    /// and successful no-ops leave it unchanged.
+    /// </summary>
+    public long Version => _version;
 
     /// <summary>
     /// Set when a mutation threw AND the subsequent rollback to its pre-op snapshot ALSO threw —
@@ -2011,9 +2080,12 @@ public sealed class DocxSession : IDisposable
         _ = Project(); // AnchorInfo's product IS the enrichment — never serve the index-only (empty-preview) entries.
         var target = FindAnchor(anchorId);
         if (target is null) return null;
+        var element = target.Resolve(_doc!);
         return new AnchorInfo(target.Anchor.Id, target.Anchor.Kind, target.Anchor.Scope, target.TextPreview)
         {
             AutoNumberPrefix = target.AutoNumberPrefix,
+            ContentHash = element is null ? string.Empty : UnidHelper.ContentHash(element),
+            VisibleText = element is null ? string.Empty : ExactVisibleText(target, element),
         };
     }
 
@@ -2035,14 +2107,146 @@ public sealed class DocxSession : IDisposable
             if (id is null) continue;
             if (result.ContainsKey(id)) continue;
             var target = FindAnchor(id);
-            result[id] = target is null
+            var element = target?.Resolve(_doc!);
+            result[id] = target is null || element is null
                 ? null
                 : new AnchorInfo(target.Anchor.Id, target.Anchor.Kind, target.Anchor.Scope, target.TextPreview)
                 {
                     AutoNumberPrefix = target.AutoNumberPrefix,
+                    ContentHash = UnidHelper.ContentHash(element),
+                    VisibleText = ExactVisibleText(target, element),
                 };
         }
         return result;
+    }
+
+    private static string FlatElementText(XElement element) =>
+        string.Concat(element.Descendants(W.t).Select(t => (string)t));
+
+    private string ExactVisibleText(AnchorTarget target, XElement element)
+    {
+        var text = FlatElementText(element);
+        var prefix = target.Anchor.Kind is "p" or "h" or "li" && target.Anchor.Scope == "body"
+            ? target.AutoNumberPrefix ?? Internal.ListNumberResolver.Resolve(element, _doc!)
+            : null;
+        return string.IsNullOrEmpty(prefix)
+            ? text
+            : string.IsNullOrEmpty(text) ? prefix : prefix + " " + text;
+    }
+
+    private PreconditionTarget CurrentPreconditionTarget(string? anchorId)
+    {
+        if (string.IsNullOrEmpty(anchorId)) return new PreconditionTarget { Exists = false };
+        var target = FindAnchor(anchorId);
+        var element = target?.Resolve(_doc!);
+        if (target is null || element is null)
+            return new PreconditionTarget { Exists = false, AnchorId = anchorId };
+        return new PreconditionTarget
+        {
+            Exists = true,
+            AnchorId = target.Anchor.Id,
+            Kind = target.Anchor.Kind,
+            Scope = target.Anchor.Scope,
+            ContentHash = UnidHelper.ContentHash(element),
+            VisibleText = ExactVisibleText(target, element),
+        };
+    }
+
+    private EditError PreconditionError(
+        string condition, object? expected, object? actual, string? anchorId,
+        PreconditionTarget? currentTarget = null) =>
+        new(EditErrorCode.PreconditionFailed,
+            $"precondition failed: {condition} expected {expected ?? "null"}, actual {actual ?? "null"}",
+            anchorId)
+        {
+            Precondition = new PreconditionFailure(
+                condition, expected, actual, _version,
+                currentTarget ?? (anchorId is null ? null : CurrentPreconditionTarget(anchorId))),
+        };
+
+    /// <summary>
+    /// Evaluate optimistic guards without mutating the document, consuming undo history, or
+    /// advancing <see cref="Version"/>. Returns null when every supplied guard matches.
+    /// <paramref name="actualMatchCount"/> is supplied by find/replace after it has enumerated
+    /// the live matches; other callers leave it null.
+    /// </summary>
+    public EditError? EvaluatePreconditions(
+        MutationPreconditions? preconditions,
+        int? actualMatchCount = null)
+    {
+        if (preconditions is null) return null;
+        if (_disposed) return new EditError(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = !string.IsNullOrEmpty(preconditions.AnchorId)
+            ? CurrentPreconditionTarget(preconditions.AnchorId)
+            : null;
+        if (preconditions.ExpectedVersion is { } expectedVersion && expectedVersion != _version)
+            return PreconditionError("document_version", expectedVersion, _version,
+                preconditions.AnchorId, target);
+
+        bool hasAnchorGuard = preconditions.ExpectedContentHash is not null
+            || preconditions.ExpectedText is not null
+            || preconditions.ExpectedTextRange is not null
+            || preconditions.ExpectedKind is not null
+            || preconditions.ExpectedScope is not null;
+        if (hasAnchorGuard && string.IsNullOrEmpty(preconditions.AnchorId))
+            return PreconditionError("anchor_id", "present", "missing", null);
+        if (hasAnchorGuard && target is not { Exists: true })
+            return PreconditionError("anchor_exists", true, false, preconditions.AnchorId, target);
+
+        if (preconditions.ExpectedKind is { } expectedKind
+            && !string.Equals(expectedKind, target!.Kind, StringComparison.Ordinal))
+            return PreconditionError("anchor_kind", expectedKind, target.Kind,
+                preconditions.AnchorId, target);
+        if (preconditions.ExpectedScope is { } expectedScope
+            && !string.Equals(expectedScope, target!.Scope, StringComparison.Ordinal))
+            return PreconditionError("anchor_scope", expectedScope, target.Scope,
+                preconditions.AnchorId, target);
+        if (preconditions.ExpectedContentHash is { } expectedHash
+            && !string.Equals(expectedHash, target!.ContentHash, StringComparison.OrdinalIgnoreCase))
+            return PreconditionError("anchor_content_hash", expectedHash, target.ContentHash,
+                preconditions.AnchorId, target);
+        if (preconditions.ExpectedText is { } expectedText
+            && !string.Equals(expectedText, target!.VisibleText, StringComparison.Ordinal))
+            return PreconditionError("anchor_text", expectedText, target.VisibleText,
+                preconditions.AnchorId, target);
+        if (preconditions.ExpectedTextRange is { } range)
+        {
+            var visible = target!.VisibleText ?? string.Empty;
+            object actual;
+            if (range.Start < 0 || range.Length < 0 || range.Start > visible.Length - range.Length)
+                actual = new { start = range.Start, length = range.Length, availableLength = visible.Length };
+            else
+                actual = visible.Substring(range.Start, range.Length);
+            if (actual is not string actualText
+                || !string.Equals(range.Text, actualText, StringComparison.Ordinal))
+                return PreconditionError("anchor_text_range", range.Text, actual,
+                    preconditions.AnchorId, target);
+        }
+        if (preconditions.ExpectedMatchCount is { } expectedCount
+            && actualMatchCount is { } count && expectedCount != count)
+            return PreconditionError("match_count", expectedCount, count,
+                preconditions.AnchorId, target);
+        return null;
+    }
+
+    /// <summary>
+    /// Atomically evaluate guards and invoke one synchronous mutation. This is the direct .NET
+    /// primitive shared facades use; future atomic batches can evaluate their guards under the
+    /// same gate before taking their aggregate snapshot.
+    /// </summary>
+    public EditResult ExecuteMutation(
+        MutationPreconditions? preconditions,
+        Func<DocxSession, EditResult> mutation)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        lock (_mutationGate)
+        {
+            var error = EvaluatePreconditions(preconditions);
+            return error is null
+                ? mutation(this)
+                : new EditResult { Success = false, Error = error };
+        }
     }
 
     /// <summary>
@@ -2720,10 +2924,32 @@ public sealed class DocxSession : IDisposable
         string replace,
         ReplaceOptions? options = null)
     {
+        lock (_mutationGate)
+            return ReplaceTextRangeCore(anchorId, find, replace, options);
+    }
+
+    private IReadOnlyList<EditResult> ReplaceTextRangeCore(
+        string anchorId,
+        string find,
+        string replace,
+        ReplaceOptions? options)
+    {
         if (_disposed)
             return new[] { EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed") };
         if (string.IsNullOrEmpty(find))
             return new[] { EditResult.Fail(EditErrorCode.MalformedMarkdown, "find must be non-empty", anchorId) };
+
+        var opts = options ?? new ReplaceOptions();
+        var guards = opts.Preconditions;
+        if (guards is not null && guards.AnchorId is null)
+            guards = guards with { AnchorId = anchorId };
+        if (opts.ExpectedMatchCount is { } expectedCount)
+            guards = (guards ?? new MutationPreconditions { AnchorId = anchorId }) with
+            {
+                ExpectedMatchCount = expectedCount,
+            };
+        if (EvaluatePreconditions(guards) is { } initialPreconditionError)
+            return new[] { new EditResult { Success = false, Error = initialPreconditionError } };
 
         var target = FindAnchor(anchorId);
         if (target is null)
@@ -2732,7 +2958,6 @@ public sealed class DocxSession : IDisposable
             return new[] { EditResult.Fail(EditErrorCode.AnchorWrongKind,
                 $"ReplaceTextRange requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}", anchorId) };
 
-        var opts = options ?? new ReplaceOptions();
         var regexOpts = opts.IgnoreCase
             ? System.Text.RegularExpressions.RegexOptions.IgnoreCase
             : System.Text.RegularExpressions.RegexOptions.None;
@@ -2742,6 +2967,8 @@ public sealed class DocxSession : IDisposable
         var matches = Grep(pattern, regexOpts)
             .Where(m => m.EnclosingAnchor.Anchor.Id == target.Anchor.Id)
             .ToList();
+        if (EvaluatePreconditions(guards, matches.Count) is { } countPreconditionError)
+            return new[] { new EditResult { Success = false, Error = countPreconditionError } };
         if (opts.MaxReplacements is int cap) matches = matches.Take(cap).ToList();
         if (matches.Count == 0) return Array.Empty<EditResult>();
 
@@ -9359,6 +9586,7 @@ public sealed class DocxSession : IDisposable
             part.PutXDocument();
         }
         if (removed > 0) InvalidateProjectionCache();
+        else _ = _history.PopForUndo();
         return new CompactResult { RunsRemoved = removed };
     }
 
@@ -9434,22 +9662,34 @@ public sealed class DocxSession : IDisposable
     public bool Undo()
     {
         if (_disposed) return false;
+        var nextVersion = NextVersion();
         var (preOp, ok) = _history.PopForUndo();
         if (!ok) return false;
         _history.RecordForRedo(TakeSnapshot());
         RestoreSnapshot(preOp);
+        _version = nextVersion;
         return true;
     }
 
     public bool Redo()
     {
         if (_disposed) return false;
+        var nextVersion = NextVersion();
         var (postOp, ok) = _history.PopForRedo();
         if (!ok) return false;
         _history.PushBackForUndo(TakeSnapshot());
         RestoreSnapshot(postOp);
+        _version = nextVersion;
         return true;
     }
+
+    private long NextVersion() => checked(_version + 1);
+
+    private void AdvanceVersion() => _version = NextVersion();
+
+    /// <summary>Restore the caller-visible version after rolling back speculative preview work.
+    /// Internal by design: committed undo/redo must remain monotonic.</summary>
+    internal void RestorePreviewVersion(long version) => _version = version;
 
     public void Dispose()
     {
@@ -9489,6 +9729,7 @@ public sealed class DocxSession : IDisposable
     /// <param name="CommentThreadingParts">The same, for commentsExtended/commentsIds, which
     /// AddCommentReply/SetCommentResolved create when upgrading a flat comment.</param>
     internal sealed record DocumentSnapshot(
+        long Version,
         System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
@@ -9534,7 +9775,7 @@ public sealed class DocxSession : IDisposable
                 commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsIdsPart), false,
                     main.WordprocessingCommentsIdsPart.Uri.ToString()));
         }
-        return new DocumentSnapshot(parts, hfParts, noteParts, commentParts, commentThreadingParts);
+        return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts, commentThreadingParts);
     }
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
@@ -9614,6 +9855,7 @@ public sealed class DocxSession : IDisposable
             }
         }
 
+        _version = snapshot.Version;
         InvalidateProjectionCache();
     }
 

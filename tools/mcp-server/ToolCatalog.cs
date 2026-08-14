@@ -64,8 +64,9 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info"], "description": "markdown/text: anchor-addressed markdown projection (text strips the markdown syntax). html: fully rendered HTML. blocks: structural metadata for every addressable block. info: section/page-setup facts plus a document edit summary." },
-                "anchorId": { "type": "string", "description": "Optional. Scope markdown/html/text output to one block and its descendants instead of the whole document. Anchors in body, header (hdr*), footer (ftr*), note, and comment scopes are accepted." }
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions"], "description": "markdown/text: projection; html: rendered HTML; blocks: metadata; info: version plus page/edit facts; version: monotonic document version; check_preconditions: read-only guard evaluation." },
+                "anchorId": { "type": "string", "description": "Optional scope/target anchor." },
+                "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
             }
@@ -109,6 +110,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
                 "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
@@ -135,6 +137,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format"] },
                 "anchorId": { "type": "string" },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
@@ -201,6 +204,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
                 "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
@@ -230,6 +234,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership"] },
                 "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range. remove accepts paragraph, heading, or list-item anchors and overrides style-inherited numbering when necessary." },
                 "startValue": { "type": "integer", "description": "set_start: the number the item restarts at (>= 0), e.g. 5 to make this item render as '5.'" },
@@ -249,6 +254,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["add", "reply", "resolve", "update", "remove", "list"] },
                 "anchorId": { "type": "string", "description": "add: the body paragraph to comment on. Mutually exclusive with revisionId." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add: character range within the paragraph. Omit to comment on the whole block." },
@@ -271,6 +277,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["add", "update", "remove", "move", "list", "find"] },
                 "anchorId": { "type": "string", "description": "add/move: block to attach the annotation to." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add/move: character range within the block. Omit to annotate the whole block." },
@@ -302,6 +309,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
                 "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' reads revisions directly off the live markup — each entry carries a stable id, the markup's true author/date, its text, and the containing block's anchorId. 'accept'/'reject' resolve ONE revision by revisionId (undoable via docxodus_undo; other revisions keep their ids). 'accept_all'/'reject_all' resolve the whole document (not undoable — the session is rebound to the transformed bytes). 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
                 "revisionId": { "type": "string", "description": "accept/reject: the id from 'list' (e.g. 'rev101'). Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
@@ -320,6 +328,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
                 "mode": { "type": "string", "enum": ["apply", "preview"], "description": "preview applies every step, records the result, then undoes them all before returning — nothing is left changed." },
                 "steps": {
                   "type": "array",
@@ -344,6 +353,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
                 "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },

@@ -408,6 +408,15 @@ is `ok`/`partial`/`failed`). `mode: preview` runs every step exactly the same wa
 `DocxSessionOps.Undo` once per step that actually mutated before returning — see Known gaps for
 why this is "apply-then-undo" rather than a true no-op dry run.
 
+The batch itself and each step's `args` may carry `preconditions`, using the same
+camel-case guard object as the core API (`expectedVersion`, `anchorId`,
+`expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
+failure is the standard structured `precondition_failed` result and does not
+mutate that step. `docxodus_get_content` with `format: "version"` reads the current
+monotonic document version; `format: "check_preconditions"` evaluates guards
+without mutating. Preview restores its starting version after undoing speculative
+steps, so a dry-run does not make an otherwise-current plan stale.
+
 ### `docxodus_table` — tables
 
 `insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,

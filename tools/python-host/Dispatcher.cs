@@ -22,7 +22,25 @@ namespace Docxodus.PyHost;
 /// </summary>
 internal static class Dispatcher
 {
-    public static string Dispatch(string op, JsonElement args) => op switch
+    public static string Dispatch(string op, JsonElement args)
+    {
+        var preconditions = ParsePreconditions(args);
+        if (preconditions is not null && IsMutation(op) && op != "replace_text_range")
+        {
+            if (op == "undo") return DocxSessionOps.UndoChecked(Handle(args), preconditions);
+            if (op == "redo") return DocxSessionOps.RedoChecked(Handle(args), preconditions);
+
+            // The stdio host dispatches one complete request at a time, so the check and
+            // mutation below cannot be interleaved by another protocol request.
+            var check = DocxSessionOps.CheckPreconditions(Handle(args), preconditions);
+            using var parsed = JsonDocument.Parse(check);
+            if (!parsed.RootElement.GetProperty("success").GetBoolean()) return check;
+        }
+
+        return DispatchCore(op, args);
+    }
+
+    private static string DispatchCore(string op, JsonElement args) => op switch
     {
         "ping" => Ping(),
         "open_session" => OpenSession(args),
@@ -44,6 +62,8 @@ internal static class Dispatcher
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
             (ProjectionDepth)IntOptional(args, "depth", 2)),
+        "get_version" => DocxSessionOps.GetVersionJson(Handle(args)),
+        "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -559,15 +579,61 @@ internal static class Dispatcher
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
-        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("options", out var o) || o.ValueKind != JsonValueKind.Object)
-            return null;
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        var hasOptions = args.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Object;
+        var preconditions = ParsePreconditions(args);
+        if (preconditions is null && hasOptions
+            && o.TryGetProperty("preconditions", out var nestedPreconditions))
+            preconditions = DocxSessionJson.ParseMutationPreconditions(nestedPreconditions);
+        if (!hasOptions && preconditions is null) return null;
         return new ReplaceOptions
         {
-            IgnoreCase = DocxSessionJson.TryGetBool(o, "ignoreCase", false),
-            MaxReplacements = o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
+            IgnoreCase = hasOptions && DocxSessionJson.TryGetBool(o, "ignoreCase", false),
+            MaxReplacements = hasOptions && o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
                 ? mr.GetInt32() : (int?)null,
+            ExpectedMatchCount = hasOptions && o.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
+                ? emc.GetInt32() : (int?)null,
+            Preconditions = preconditions,
         };
     }
+
+    private static MutationPreconditions? ParsePreconditions(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("preconditions", out var p)
+            || p.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        var parsed = DocxSessionJson.ParseMutationPreconditions(p);
+        if (parsed is null || parsed.AnchorId is not null) return parsed;
+        foreach (var targetName in new[]
+        {
+            "anchorId", "cellAnchorId", "sourceAnchorId", "fromAnchorId",
+            "firstAnchorId", "headingAnchorId", "parentAnchorId", "newAnchorId",
+        })
+        {
+            if (args.TryGetProperty(targetName, out var target) && target.ValueKind == JsonValueKind.String)
+                return parsed with { AnchorId = target.GetString() };
+        }
+        return parsed;
+    }
+
+    private static bool IsMutation(string op) => op is
+        "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
+        or "replace_text_range" or "replace_text_at_span" or "replace_inner"
+        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
+        or "set_header_text" or "set_footer_text" or "insert_page_number_field"
+        or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
+        or "insert_footnote" or "insert_endnote"
+        or "add_comment" or "add_comment_reply" or "update_comment"
+        or "set_comment_resolved" or "remove_comment"
+        or "accept_revision" or "reject_revision"
+        or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
+        or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
+        or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
+        or "clear_list_start_override" or "replace_cell_content"
+        or "raw_insert_xml" or "raw_replace_xml"
+        or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
+        or "undo" or "redo";
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
 

@@ -184,6 +184,39 @@ internal static class DocxSessionJson
         };
     }
 
+    /// <summary>Parse the common optimistic-mutation guard object used by every transport.</summary>
+    public static MutationPreconditions? ParseMutationPreconditions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return ParseMutationPreconditions(doc.RootElement);
+    }
+
+    public static MutationPreconditions? ParseMutationPreconditions(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        TextRangePrecondition? range = null;
+        if (root.TryGetProperty("expectedTextRange", out var r) && r.ValueKind == JsonValueKind.Object
+            && r.TryGetProperty("start", out var start) && start.ValueKind == JsonValueKind.Number
+            && r.TryGetProperty("length", out var length) && length.ValueKind == JsonValueKind.Number
+            && r.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+        {
+            range = new TextRangePrecondition(start.GetInt32(), length.GetInt32(), text.GetString() ?? string.Empty);
+        }
+        return new MutationPreconditions
+        {
+            ExpectedVersion = root.TryGetProperty("expectedVersion", out var version)
+                && version.ValueKind == JsonValueKind.Number ? version.GetInt64() : null,
+            AnchorId = TryGetString(root, "anchorId", null),
+            ExpectedContentHash = TryGetString(root, "expectedContentHash", null),
+            ExpectedText = TryGetString(root, "expectedText", null),
+            ExpectedTextRange = range,
+            ExpectedKind = TryGetString(root, "expectedKind", null),
+            ExpectedScope = TryGetString(root, "expectedScope", null),
+            ExpectedMatchCount = TryGetIntNullable(root, "expectedMatchCount"),
+        };
+    }
+
     /// <summary>
     /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
     /// indentDelta?: int (twips), firstLineIndent?/hangingIndent?: int (twips, mutually exclusive),
@@ -416,6 +449,33 @@ internal static class DocxSessionJson
               .Append(",\"message\":").Append(JsonString(r.Error.Message));
             if (r.Error.AnchorId is not null)
                 sb.Append(",\"anchorId\":").Append(JsonString(r.Error.AnchorId));
+            if (r.Error.Precondition is { } p)
+            {
+                sb.Append(",\"precondition\":{")
+                  .Append("\"condition\":").Append(JsonString(p.Condition))
+                  .Append(",\"expected\":");
+                AppendJsonValue(sb, p.Expected);
+                sb.Append(",\"actual\":");
+                AppendJsonValue(sb, p.Actual);
+                sb.Append(",\"currentVersion\":").Append(p.CurrentVersion);
+                if (p.CurrentTarget is { } target)
+                {
+                    sb.Append(",\"currentTarget\":{")
+                      .Append("\"exists\":").Append(target.Exists ? "true" : "false");
+                    if (target.AnchorId is not null)
+                        sb.Append(",\"anchorId\":").Append(JsonString(target.AnchorId));
+                    if (target.Kind is not null)
+                        sb.Append(",\"kind\":").Append(JsonString(target.Kind));
+                    if (target.Scope is not null)
+                        sb.Append(",\"scope\":").Append(JsonString(target.Scope));
+                    if (target.ContentHash is not null)
+                        sb.Append(",\"contentHash\":").Append(JsonString(target.ContentHash));
+                    if (target.VisibleText is not null)
+                        sb.Append(",\"visibleText\":").Append(JsonString(target.VisibleText));
+                    sb.Append('}');
+                }
+                sb.Append('}');
+            }
             sb.Append('}');
         }
         sb.Append(",\"created\":"); AppendAnchorArray(sb, r.Created);
@@ -559,6 +619,21 @@ internal static class DocxSessionJson
           .Append(",\"scope\":").Append(JsonString(anchor.Scope))
           .Append(",\"unid\":").Append(JsonString(anchor.Unid))
           .Append('}');
+    private static void AppendJsonValue(StringBuilder sb, object? value)
+    {
+        switch (value)
+        {
+            case null: sb.Append("null"); break;
+            case string s: sb.Append(JsonString(s)); break;
+            case bool b: sb.Append(b ? "true" : "false"); break;
+            case int i: sb.Append(i); break;
+            case long l: sb.Append(l); break;
+            default: sb.Append(JsonSerializer.Serialize(value)); break;
+        }
+    }
+
+    public static string SerializeVersion(long version) =>
+        "{\"version\":" + version.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}";
 
     public static string SerializeEditResults(IReadOnlyList<EditResult> results)
     {
@@ -1060,7 +1135,9 @@ internal static class DocxSessionJson
         sb.Append("{\"id\":").Append(JsonString(info.Id))
           .Append(",\"kind\":").Append(JsonString(info.Kind))
           .Append(",\"scope\":").Append(JsonString(info.Scope))
-          .Append(",\"textPreview\":").Append(JsonString(info.TextPreview));
+          .Append(",\"textPreview\":").Append(JsonString(info.TextPreview))
+          .Append(",\"contentHash\":").Append(JsonString(info.ContentHash))
+          .Append(",\"visibleText\":").Append(JsonString(info.VisibleText));
         if (info.AutoNumberPrefix is { } prefix)
             sb.Append(",\"autoNumberPrefix\":").Append(JsonString(prefix));
         sb.Append('}');

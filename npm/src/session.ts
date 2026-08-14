@@ -38,6 +38,7 @@ import type {
   ListFormat,
   GrepOptions,
   ListMembership,
+  MutationPreconditions,
   ReplaceOptions,
   RevisionListEntry,
   SectionInfo,
@@ -69,6 +70,31 @@ export class DocxSession {
 
   project(): DocxSessionProjection {
     return JSON.parse(this.wasm.Project(this.handle)) as DocxSessionProjection;
+  }
+
+  /** Monotonic document version (0 at open; +1 per committed mutation/undo/redo). */
+  getVersion(): number {
+    return (JSON.parse(this.wasm.GetVersion(this.handle)) as { version: number }).version;
+  }
+
+  /** Evaluate optimistic guards without mutating or advancing the version. */
+  checkPreconditions(preconditions: MutationPreconditions): EditResult {
+    return JSON.parse(
+      this.wasm.CheckPreconditions(this.handle, JSON.stringify(preconditions)),
+    ) as EditResult;
+  }
+
+  /**
+   * Guard any synchronous mutation. WASM calls are synchronous and single-threaded, so the
+   * check and callback form one uninterrupted client-side operation. Prefer a method's native
+   * `preconditions` option where it has one (notably replaceTextRange's match-count guard).
+   */
+  runWithPreconditions(
+    preconditions: MutationPreconditions,
+    mutation: () => EditResult,
+  ): EditResult {
+    const checked = this.checkPreconditions(preconditions);
+    return checked.success ? mutation() : checked;
   }
 
   /**
@@ -122,12 +148,26 @@ export class DocxSession {
 
   // ─── Tier A: text CRUD ───────────────────────────────────────────────
 
-  replaceText(anchorId: string, markdown: string): EditResult {
-    return JSON.parse(this.wasm.ReplaceText(this.handle, anchorId, markdown)) as EditResult;
+  replaceText(
+    anchorId: string,
+    markdown: string,
+    preconditions?: MutationPreconditions,
+  ): EditResult {
+    const apply = () => JSON.parse(
+      this.wasm.ReplaceText(this.handle, anchorId, markdown),
+    ) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
   }
 
-  deleteBlock(anchorId: string): EditResult {
-    return JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
+  deleteBlock(anchorId: string, preconditions?: MutationPreconditions): EditResult {
+    const apply = () => JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
   }
 
   /** Reorder one top-level paragraph/heading/list/table block relative to another. */
@@ -1245,5 +1285,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationPreconditions, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

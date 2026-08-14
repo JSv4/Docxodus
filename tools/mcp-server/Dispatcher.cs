@@ -163,8 +163,15 @@ internal static class Dispatcher
                         break;
                     }
                 }
-                return $"{{\"editSummary\":{editSummary},\"sectionInfo\":{sectionInfo}}}";
+                return $"{{\"version\":{DocxSessionOps.GetVersion(session.Handle)},\"editSummary\":{editSummary},\"sectionInfo\":{sectionInfo}}}";
             }
+
+            case "version":
+                return DocxSessionOps.GetVersionJson(session.Handle);
+
+            case "check_preconditions":
+                return DocxSessionOps.CheckPreconditions(
+                    session.Handle, ParsePreconditions(args, OptStr(args, "anchorId")));
 
             default:
                 throw new McpToolException($"unknown format: {format}");
@@ -270,14 +277,25 @@ internal static class Dispatcher
     /// <summary>Shared by <see cref="Edit"/> and <see cref="Mutations"/> (batched steps route
     /// through the same per-tool functions so there's exactly one place each action's argument
     /// parsing lives).</summary>
-    private static string RunEditAction(DocSession session, string action, JsonElement args) => action switch
+    private static string RunEditAction(DocSession session, string action, JsonElement args)
     {
+        var preconditions = ParsePreconditions(args, MutationTarget(args));
+        if (action == "undo")
+            return preconditions is null
+                ? BoolResult(DocxSessionOps.Undo(session.Handle))
+                : DocxSessionOps.UndoChecked(session.Handle, preconditions);
+        if (action == "redo")
+            return preconditions is null
+                ? BoolResult(DocxSessionOps.Redo(session.Handle))
+                : DocxSessionOps.RedoChecked(session.Handle, preconditions);
+        return Guarded(session, preconditions, () => action switch
+        {
         "insert_paragraph" => DocxSessionOps.InsertParagraph(
             session.Handle, Str(args, "anchorId"), ParsePos(args), Str(args, "markdown")),
         "replace_text" => DocxSessionOps.ReplaceText(session.Handle, Str(args, "anchorId"), Str(args, "markdown")),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
-            new ReplaceOptions { IgnoreCase = !BoolOpt(args, "caseSensitive", false) }),
+            new ReplaceOptions { IgnoreCase = !BoolOpt(args, "caseSensitive", false) }, preconditions),
         "delete_block" => DocxSessionOps.DeleteBlock(session.Handle, Str(args, "anchorId")),
         "move_block" => DocxSessionOps.MoveBlock(
             session.Handle, Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"), ParsePos(args)),
@@ -288,10 +306,9 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "characterOffset")),
         "merge_paragraphs" => DocxSessionOps.MergeParagraphs(
             session.Handle, Str(args, "anchorId"), Str(args, "secondAnchorId")),
-        "undo" => BoolResult(DocxSessionOps.Undo(session.Handle)),
-        "redo" => BoolResult(DocxSessionOps.Redo(session.Handle)),
         _ => throw new McpToolException($"unknown docxodus_edit action: {action}"),
-    };
+        });
+    }
 
     private static bool IsMutatingEditAction(string action) => action is not ("undo" or "redo");
 
@@ -305,8 +322,9 @@ internal static class Dispatcher
         return RunFormatAction(session, Str(args, "action"), args);
     }
 
-    private static string RunFormatAction(DocSession session, string action, JsonElement args) => action switch
-    {
+    private static string RunFormatAction(DocSession session, string action, JsonElement args) =>
+        Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+        {
         "apply_format" => DocxSessionOps.ApplyFormat(
             session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"), ParseFormatOp(args)),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(
@@ -321,7 +339,7 @@ internal static class Dispatcher
         "apply_list_format" => DocxSessionOps.ApplyListFormat(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
         _ => throw new McpToolException($"unknown docxodus_format action: {action}"),
-    };
+        });
 
     private static FormatOp ParseFormatOp(JsonElement args) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty("format", out var f) && f.ValueKind == JsonValueKind.Object
@@ -341,8 +359,9 @@ internal static class Dispatcher
         return RunCreateAction(session, Str(args, "action"), args);
     }
 
-    private static string RunCreateAction(DocSession session, string action, JsonElement args) => action switch
-    {
+    private static string RunCreateAction(DocSession session, string action, JsonElement args) =>
+        Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+        {
         "insert_paragraph" => DocxSessionOps.InsertParagraph(
             session.Handle, Str(args, "anchorId"), ParsePos(args), Str(args, "markdown")),
         "insert_heading" => DocxSessionOps.InsertParagraph(
@@ -371,7 +390,7 @@ internal static class Dispatcher
             session.Handle, Str(args, "bodyAnchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
         _ => throw new McpToolException($"unknown docxodus_create action: {action}"),
-    };
+        });
 
     private static string BuildTableInsertOptionsJson(JsonElement args)
     {
@@ -401,8 +420,12 @@ internal static class Dispatcher
         return RunListAction(session, Str(args, "action"), args);
     }
 
-    private static string RunListAction(DocSession session, string action, JsonElement args) => action switch
+    private static string RunListAction(DocSession session, string action, JsonElement args)
     {
+        if (action == "get_membership")
+            return DocxSessionOps.GetListMembership(session.Handle, Str(args, "anchorId"));
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+        {
         "apply_format" => DocxSessionOps.ApplyListFormat(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
         "apply_format_range" => DocxSessionOps.ApplyListFormatRange(
@@ -413,9 +436,9 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "startValue")),
         "clear_start" => DocxSessionOps.ClearListStartOverride(session.Handle, Str(args, "anchorId")),
         "remove" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
-        "get_membership" => DocxSessionOps.GetListMembership(session.Handle, Str(args, "anchorId")),
         _ => throw new McpToolException($"unknown docxodus_list action: {action}"),
-    };
+        });
+    }
 
     private static bool IsMutatingListAction(string action) => action != "get_membership";
 
@@ -427,8 +450,12 @@ internal static class Dispatcher
         return RunCommentAction(session, Str(args, "action"), args);
     }
 
-    private static string RunCommentAction(DocSession session, string action, JsonElement args) => action switch
+    private static string RunCommentAction(DocSession session, string action, JsonElement args)
     {
+        if (action == "list")
+            return $"{{\"comments\":{DocxSessionOps.ListComments(session.Handle)}}}";
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+        {
         "add" => AddComment(session, args),
         "reply" => DocxSessionOps.AddCommentReply(
             session.Handle, Str(args, "commentAnchorId"), Str(args, "author"),
@@ -438,9 +465,9 @@ internal static class Dispatcher
         "resolve" => DocxSessionOps.SetCommentResolved(
             session.Handle, Str(args, "commentAnchorId"), BoolOpt(args, "resolved", true)),
         "remove" => DocxSessionOps.RemoveComment(session.Handle, Str(args, "commentAnchorId")),
-        "list" => $"{{\"comments\":{DocxSessionOps.ListComments(session.Handle)}}}",
         _ => throw new McpToolException($"unknown docxodus_comment action: {action}"),
-    };
+        });
+    }
 
     private static bool IsMutatingCommentAction(string action) => action != "list";
 
@@ -468,39 +495,36 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var action = Str(args, "action");
-        switch (action)
+        if (action == "list")
+            return $"{{\"annotations\":{DocxSessionOps.ListAnnotations(session.Handle)}}}";
+        if (action == "find")
+            return $"{{\"anchors\":{DocxSessionOps.FindByAnnotation(session.Handle, Str(args, "query"))}}}";
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
         {
-            case "add":
-            {
-                var annotationJson = JsonSerializer.Serialize(new
-                {
-                    id = OptStr(args, "annotationId") ?? "",
-                    labelId = OptStr(args, "labelId") ?? "",
-                    label = OptStr(args, "label") ?? "",
-                    color = OptStr(args, "color") ?? "#FFEB3B",
-                    author = OptStr(args, "author") ?? "",
-                });
-                return DocxSessionOps.AddAnnotation(
-                    session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"), annotationJson);
-            }
-            case "update":
-            {
-                var updateEl = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("update", out var u) && u.ValueKind == JsonValueKind.Object
-                    ? u.GetRawText() : "{}";
-                return DocxSessionOps.UpdateAnnotation(session.Handle, Str(args, "annotationId"), updateEl);
-            }
-            case "remove":
-                return DocxSessionOps.RemoveAnnotation(session.Handle, Str(args, "annotationId"));
-            case "move":
-                return DocxSessionOps.MoveAnnotation(
-                    session.Handle, Str(args, "annotationId"), Str(args, "newAnchorId"), ParseSpan(args, "newSpan"));
-            case "list":
-                return $"{{\"annotations\":{DocxSessionOps.ListAnnotations(session.Handle)}}}";
-            case "find":
-                return $"{{\"anchors\":{DocxSessionOps.FindByAnnotation(session.Handle, Str(args, "query"))}}}";
-            default:
-                throw new McpToolException($"unknown docxodus_annotate action: {action}");
-        }
+            "add" => AddAnnotation(session, args),
+            "update" => DocxSessionOps.UpdateAnnotation(
+                session.Handle, Str(args, "annotationId"),
+                args.TryGetProperty("update", out var u) && u.ValueKind == JsonValueKind.Object
+                    ? u.GetRawText() : "{}"),
+            "remove" => DocxSessionOps.RemoveAnnotation(session.Handle, Str(args, "annotationId")),
+            "move" => DocxSessionOps.MoveAnnotation(
+                session.Handle, Str(args, "annotationId"), Str(args, "newAnchorId"), ParseSpan(args, "newSpan")),
+            _ => throw new McpToolException($"unknown docxodus_annotate action: {action}"),
+        });
+    }
+
+    private static string AddAnnotation(DocSession session, JsonElement args)
+    {
+        var annotationJson = JsonSerializer.Serialize(new
+        {
+            id = OptStr(args, "annotationId") ?? "",
+            labelId = OptStr(args, "labelId") ?? "",
+            label = OptStr(args, "label") ?? "",
+            color = OptStr(args, "color") ?? "#FFEB3B",
+            author = OptStr(args, "author") ?? "",
+        });
+        return DocxSessionOps.AddAnnotation(
+            session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"), annotationJson);
     }
 
     // ─── Track changes ──────────────────────────────────────────────────
@@ -521,23 +545,35 @@ internal static class Dispatcher
                 return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"));
             }
             case "accept":
-                return DocxSessionOps.AcceptRevision(session.Handle, Str(args, "revisionId"));
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.AcceptRevision(session.Handle, Str(args, "revisionId")));
             case "reject":
-                return DocxSessionOps.RejectRevision(session.Handle, Str(args, "revisionId"));
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.RejectRevision(session.Handle, Str(args, "revisionId")));
             case "accept_all":
             {
+                var preconditions = ParsePreconditions(args, MutationTarget(args));
+                var check = Check(session, preconditions);
+                if (check is not null) return check;
+                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
                 // SaveWithAnchorIds (not Save) so the transformed bytes still carry the
                 // PtOpenXml:Unid attributes Rebind's reopen needs to keep anchor ids stable.
                 var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
                 var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("session.docx", bytes));
                 store.Rebind(session, accepted.DocumentByteArray);
+                DocxSessionOps.RestorePreviewVersion(session.Handle, nextVersion);
                 return "{\"success\":true}";
             }
             case "reject_all":
             {
+                var preconditions = ParsePreconditions(args, MutationTarget(args));
+                var check = Check(session, preconditions);
+                if (check is not null) return check;
+                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
                 var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
                 var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("session.docx", bytes));
                 store.Rebind(session, rejected.DocumentByteArray);
+                DocxSessionOps.RestorePreviewVersion(session.Handle, nextVersion);
                 return "{\"success\":true}";
             }
             case "set_mode":
@@ -599,10 +635,14 @@ internal static class Dispatcher
         if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
             throw new McpToolException("docxodus_mutations requires an array \"steps\"");
 
+        var batchCheck = Check(session, ParsePreconditions(args, MutationTarget(args)));
+        if (batchCheck is not null) return batchCheck;
+
         var results = new List<string>();
         var errors = new List<string>();
+        var startingVersion = DocxSessionOps.GetVersion(session.Handle);
         int applied = 0;
-        int mutatingSteps = 0;
+        int committed = 0;
 
         foreach (var step in stepsEl.EnumerateArray())
         {
@@ -626,6 +666,7 @@ internal static class Dispatcher
                 throw new McpToolException($"docxodus_mutations does not accept the read-only action \"{stepAction}\" on {stepTool}");
 
             string resultJson;
+            var stepStartingVersion = DocxSessionOps.GetVersion(session.Handle);
             try
             {
                 resultJson = stepTool switch
@@ -657,8 +698,12 @@ internal static class Dispatcher
             }
             catch (JsonException) { /* non-EditResult shape (shouldn't happen for batchable tools); assume success */ }
 
-            mutatingSteps++;
-            if (succeeded) applied++;
+            if (succeeded)
+            {
+                applied++;
+                var versionDelta = DocxSessionOps.GetVersion(session.Handle) - stepStartingVersion;
+                committed = checked(committed + checked((int)versionDelta));
+            }
             else
             {
                 using var rdoc = JsonDocument.Parse(resultJson);
@@ -668,8 +713,9 @@ internal static class Dispatcher
 
         if (mode == "preview")
         {
-            for (int i = 0; i < mutatingSteps; i++)
+            for (int i = 0; i < committed; i++)
                 DocxSessionOps.Undo(session.Handle);
+            DocxSessionOps.RestorePreviewVersion(session.Handle, startingVersion);
         }
 
         var status = errors.Count == 0 ? "ok" : applied == 0 ? "failed" : "partial";
@@ -694,6 +740,8 @@ internal static class Dispatcher
             session.Handle, Str(args, "cellAnchorId")),
         "resolve_cell_coordinate" => DocxSessionOps.ResolveTableCellCoordinate(
             session.Handle, Str(args, "tableAnchorId"), Int(args, "rowIndex"), Int(args, "columnIndex")),
+        _ => Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+        {
         "insert" => DocxSessionOps.InsertTable(
             session.Handle, Str(args, "anchorId"), ParsePos(args),
             Int(args, "rows"), Int(args, "columns"), BuildTableInsertOptionsJson(args)),
@@ -721,6 +769,7 @@ internal static class Dispatcher
             OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
             OptStr(args, "heightRule")),
         _ => throw new McpToolException($"unknown docxodus_table action: {action}"),
+        }),
     };
 
     /// <summary>The raw JSON text of a required array argument (passed through to the Ops-layer
@@ -746,6 +795,49 @@ internal static class Dispatcher
     }
 
     // ─── Arg helpers ────────────────────────────────────────────────────
+
+    private static MutationPreconditions? ParsePreconditions(JsonElement args, string? inferredAnchorId)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("preconditions", out var p)
+            || p.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        var parsed = DocxSessionJson.ParseMutationPreconditions(p);
+        return parsed is not null && parsed.AnchorId is null && inferredAnchorId is not null
+            ? parsed with { AnchorId = inferredAnchorId }
+            : parsed;
+    }
+
+    private static string? MutationTarget(JsonElement args)
+    {
+        foreach (var name in new[]
+        {
+            "anchorId", "cellAnchorId", "sourceAnchorId", "fromAnchorId", "firstAnchorId",
+            "headingAnchorId", "bodyAnchorId", "commentAnchorId", "newAnchorId",
+        })
+        {
+            if (args.ValueKind == JsonValueKind.Object
+                && args.TryGetProperty(name, out var target)
+                && target.ValueKind == JsonValueKind.String)
+                return target.GetString();
+        }
+        return null;
+    }
+
+    private static string? Check(DocSession session, MutationPreconditions? preconditions)
+    {
+        if (preconditions is null) return null;
+        var result = DocxSessionOps.CheckPreconditions(session.Handle, preconditions);
+        using var doc = JsonDocument.Parse(result);
+        return doc.RootElement.GetProperty("success").GetBoolean() ? null : result;
+    }
+
+    private static string Guarded(
+        DocSession session, MutationPreconditions? preconditions, Func<string> mutation)
+    {
+        var failure = Check(session, preconditions);
+        return failure ?? mutation();
+    }
 
     private static DocSession Session(SessionStore store, JsonElement args) => store.Get(Str(args, "sessionId"));
 

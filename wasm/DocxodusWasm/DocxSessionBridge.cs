@@ -37,6 +37,16 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string Project(int handle) => DocxSessionOps.Project(handle);
 
+    /// <summary>Current monotonic session document version as <c>{"version":N}</c>.</summary>
+    [JSExport]
+    public static string GetVersion(int handle) => DocxSessionOps.GetVersionJson(handle);
+
+    /// <summary>Read-only optimistic guard evaluation. A successful result applies no mutation.</summary>
+    [JSExport]
+    public static string CheckPreconditions(int handle, string preconditionsJson) =>
+        DocxSessionOps.CheckPreconditions(
+            handle, DocxSessionJson.ParseMutationPreconditions(preconditionsJson));
+
     /// <summary>
     /// Ordered top-level render units per scope container (body / footnotes /
     /// endnotes), as JSON: <c>{"body":[{"id","kind"},…],"footnotes":[…],"endnotes":[…]}</c>.
@@ -596,6 +606,9 @@ public static partial class DocxSessionBridge
                 IgnoreCase = DocxSessionJson.TryGetBool(root, "ignoreCase", false),
                 MaxReplacements = root.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
                     ? mr.GetInt32() : (int?)null,
+                ExpectedMatchCount = DocxSessionJson.TryGetIntNullable(root, "expectedMatchCount"),
+                Preconditions = root.TryGetProperty("preconditions", out var p)
+                    ? DocxSessionJson.ParseMutationPreconditions(p) : null,
             };
         }
         return DocxSessionOps.ReplaceTextRange(h, anchor, find, replace, opts);

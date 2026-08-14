@@ -886,6 +886,9 @@ public class McpServerDispatcherTests : IDisposable
 
         var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
+        var versionBefore = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
+            .GetProperty("version").GetInt64();
 
         var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
             $$"""
@@ -902,6 +905,40 @@ public class McpServerDispatcherTests : IDisposable
         var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
         Assert.Equal(before, after);
+        var versionAfter = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
+            .GetProperty("version").GetInt64();
+        Assert.Equal(versionBefore, versionAfter);
+    }
+
+    [Fact]
+    public void MCP093_StalePrecondition_ReturnsStructuredFailureWithoutMutation()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "committed").GetProperty("success").GetBoolean());
+
+        var failed = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "action": "replace_text",
+              "anchorId": "{{anchor}}",
+              "markdown": "must not apply",
+              "preconditions": { "expectedVersion": 0 }
+            }
+            """)));
+
+        Assert.False(failed.GetProperty("success").GetBoolean());
+        var error = failed.GetProperty("error");
+        Assert.Equal("precondition_failed", error.GetProperty("code").GetString());
+        Assert.Equal(1, error.GetProperty("precondition").GetProperty("currentVersion").GetInt64());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString()!;
+        Assert.Contains("committed", markdown);
+        Assert.DoesNotContain("must not apply", markdown);
     }
 
     [Fact]
