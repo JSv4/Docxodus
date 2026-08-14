@@ -945,10 +945,15 @@ internal static class RevisionOps
         foreach (var marker in root.Descendants()
             .Where(IsRecognizedRevisionMarker)
             .Where(marker => !represented.Contains(marker))
+            // w:delText/w:delInstrText are payload, not independent revisions, when
+            // they sit beneath a deletion wrapper already claimed by the registry.
+            // Orphan instances still need an explicit fail-closed entry.
+            .Where(marker => !IsClaimedDeletionPayload(marker, represented))
             .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name))))
         {
             var type = marker.Name == W.ins ? TypeInsert
-                : marker.Name == W.del ? TypeDelete
+                : marker.Name == W.del || marker.Name == W.delText
+                    || marker.Name == W.delInstrText ? TypeDelete
                 : marker.Name == W.moveFrom || marker.Name == W.moveTo
                     || MoveRangeNames.Contains(marker.Name) ? TypeMove
                 : PropsChangeNames.Contains(marker.Name) || marker.Name == W.numberingChange
@@ -988,8 +993,13 @@ internal static class RevisionOps
             || UnsupportedRangeNames.Contains(name)
             || PropsChangeNames.Contains(name)
             || name == W.cellIns || name == W.cellDel || name == W.cellMerge
-            || name == W.numberingChange;
+            || name == W.numberingChange || name == W.delText || name == W.delInstrText;
     }
+
+    private static bool IsClaimedDeletionPayload(
+        XElement marker, IReadOnlySet<XElement> represented) =>
+        (marker.Name == W.delText || marker.Name == W.delInstrText)
+        && marker.Ancestors(W.del).Any(represented.Contains);
 
     /// <summary>
     /// Word records one cell-structure action as live cell marks plus associated table,

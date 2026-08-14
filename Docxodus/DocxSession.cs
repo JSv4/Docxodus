@@ -7810,8 +7810,14 @@ public sealed partial class DocxSession : IDisposable
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
         if (RefuseNestedTrackedParagraphPropertyChange(element, anchorId) is { } pending) return pending;
 
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && !Internal.StyleFactory.HasParagraphStyle(_doc!, styleId))
+            return TrackedStructureUnsupported(
+                $"SetParagraphStyle requiring synthesis of style '{styleId}'", anchorId);
+
         // Style synthesis mutates the styles part. Capture before it so rejecting the generated
-        // pPrChange (or undoing this op) restores package state as well as the paragraph XML.
+        // pPrChange (or undoing this direct-mode op) restores package state as well as paragraph XML.
+        // Tracked mode preflights above because native pPrChange has no styles-part before-image.
         var preOp = TakeSnapshot();
 
         // Find-or-create well-known built-in styles (Title, Subtitle, Heading1-9) the document
@@ -11036,6 +11042,11 @@ public sealed partial class DocxSession : IDisposable
         if (next < 0 || next > 8)
             return EditResult.Fail(EditErrorCode.InvalidListLevel,
                 $"resulting list level {next} out of [0,8]", anchorId);
+        if (_trackedChanges == TrackedChangeMode.RenderInline && effectiveNumId.HasValue
+            && Internal.NumberingFactory.WouldEnsureLevelDefinedMutate(
+                _doc!, effectiveNumId.Value, next))
+            return TrackedStructureUnsupported(
+                $"SetListLevel requiring numbering level {next} synthesis", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
@@ -11163,6 +11174,11 @@ public sealed partial class DocxSession : IDisposable
 
         var oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
         bool insertedNumPr = oldPPr.Element(W.numPr) is null && kind != ListFormat.None;
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && kind != ListFormat.None && !insertedNumPr
+            && Internal.NumberingFactory.WouldEnsureNumberingMutate(_doc!, kind))
+            return TrackedStructureUnsupported(
+                $"ApplyListFormat requiring synthesis of {kind} numbering", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -11753,10 +11769,6 @@ public sealed partial class DocxSession : IDisposable
         _version = snapshot.Version;
     }
 
-    /// <summary>Restore the caller-visible version after rolling back speculative preview work.
-    /// Internal by design: committed undo/redo must remain monotonic.</summary>
-    internal void RestoreVersionAfterRebind(long version) => _version = version;
-
     /// <summary>
     /// Dispose the session and abandon any active transactions. Active scopes may only be
     /// abandoned by their owner thread; otherwise this throws and leaves the session usable so
@@ -11819,6 +11831,8 @@ public sealed partial class DocxSession : IDisposable
     /// AddComment creates on a document that had no comments.</param>
     /// <param name="CommentThreadingParts">The same, for commentsExtended/commentsIds, which
     /// AddCommentReply/SetCommentResolved create when upgrading a flat comment.</param>
+    /// <param name="StyleParts">The styles relationship/URI when present, so undo can remove a
+    /// styles part synthesized by a direct-mode style mutation or recreate it on redo.</param>
     /// <param name="NumberingParts">The numbering relationship/URI when present, so undo and
     /// tracked rejection can remove a part created by a list mutation or recreate one on redo.</param>
     internal sealed record DocumentSnapshot(
@@ -11828,6 +11842,7 @@ public sealed partial class DocxSession : IDisposable
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts,
+        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> StyleParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> NumberingParts,
         System.Collections.Generic.IReadOnlyList<(string PartUri, string RelId, string Uri, bool IsExternal)> HyperlinkRelationships,
         System.Collections.Generic.IReadOnlyList<(string PartUri, string ContentType, byte[] Bytes)> ImageParts,
@@ -11869,6 +11884,7 @@ public sealed partial class DocxSession : IDisposable
         var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
         var commentParts = new System.Collections.Generic.List<(string, string)>();
         var commentThreadingParts = new System.Collections.Generic.List<(string, bool, string)>();
+        var styleParts = new System.Collections.Generic.List<(string, string)>();
         var numberingParts = new System.Collections.Generic.List<(string, string)>();
         var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
         var imageParts = new System.Collections.Generic.List<(string, string, byte[])>();
@@ -11891,6 +11907,9 @@ public sealed partial class DocxSession : IDisposable
             if (main.WordprocessingCommentsIdsPart is not null)
                 commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsIdsPart), false,
                     main.WordprocessingCommentsIdsPart.Uri.ToString()));
+            if (main.StyleDefinitionsPart is not null)
+                styleParts.Add((main.GetIdOfPart(main.StyleDefinitionsPart),
+                    main.StyleDefinitionsPart.Uri.ToString()));
             if (main.NumberingDefinitionsPart is not null)
                 numberingParts.Add((main.GetIdOfPart(main.NumberingDefinitionsPart),
                     main.NumberingDefinitionsPart.Uri.ToString()));
@@ -11912,7 +11931,7 @@ public sealed partial class DocxSession : IDisposable
                 linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
         }
         return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts,
-            commentThreadingParts, numberingParts, hyperlinkRelationships, imageParts,
+            commentThreadingParts, styleParts, numberingParts, hyperlinkRelationships, imageParts,
             imageRelationships, linkedImageRelationships);
     }
 
@@ -11931,6 +11950,7 @@ public sealed partial class DocxSession : IDisposable
             Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
             Array.Empty<(string RelId, string PartUri)>(),
             Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>(),
+            Array.Empty<(string RelId, string PartUri)>(),
             Array.Empty<(string RelId, string PartUri)>(),
             Array.Empty<(string PartUri, string RelId, string Uri, bool IsExternal)>(),
             Array.Empty<(string PartUri, string ContentType, byte[] Bytes)>(),
@@ -12088,6 +12108,7 @@ public sealed partial class DocxSession : IDisposable
             // Reply/resolve can introduce commentsExtended/commentsIds; reconcile their topology
             // after restoring the base comments part.
             ReconcileCommentThreadingParts(main, snapshot, byUri);
+            ReconcileStylePart(main, snapshot, byUri);
             ReconcileNumberingPart(main, snapshot, byUri);
         }
 
@@ -12334,6 +12355,31 @@ public sealed partial class DocxSession : IDisposable
             && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
         {
             var restored = main.AddNewPart<NumberingDefinitionsPart>(snapshotPart.RelId);
+            restored.PutXDocument(new XDocument(xml));
+        }
+    }
+
+    /// <summary>Restore styles-part topology as well as content. Style synthesis can create the
+    /// optional part, so an ordinary undo must remove it and redo must recreate it.</summary>
+    private static void ReconcileStylePart(
+        MainDocumentPart main, DocumentSnapshot snapshot,
+        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+    {
+        var snapshotPart = snapshot.StyleParts.FirstOrDefault();
+        var live = main.StyleDefinitionsPart;
+
+        if (live is not null
+            && (snapshotPart.RelId is null
+                || !string.Equals(main.GetIdOfPart(live), snapshotPart.RelId, StringComparison.Ordinal)))
+        {
+            main.DeletePart(live);
+            live = null;
+        }
+
+        if (live is null && snapshotPart.RelId is not null
+            && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
+        {
+            var restored = main.AddNewPart<StyleDefinitionsPart>(snapshotPart.RelId);
             restored.PutXDocument(new XDocument(xml));
         }
     }

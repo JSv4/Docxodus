@@ -102,6 +102,28 @@ internal static class NumberingFactory
         return (int)num.Attribute(W + "numId")!;
     }
 
+    /// <summary>
+    /// Return whether <see cref="EnsureNumbering"/> would have to add either the
+    /// Docxodus-owned abstract definition or its concrete <c>w:num</c> instance.
+    /// This is a read-only preflight for tracked operations: a paragraph revision can
+    /// restore <c>w:numPr</c>, but cannot carry a before-image for numbering.xml.
+    /// </summary>
+    internal static bool WouldEnsureNumberingMutate(WordprocessingDocument doc, ListFormat fmt)
+    {
+        if (fmt == ListFormat.None) return false;
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        if (root is null) return true;
+
+        string nsid = NsidFor(fmt);
+        var abstractNum = root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Element(W + "nsid")?.Attribute(W + "val") == nsid);
+        if (abstractNum is null) return true;
+
+        var abstractId = (string?)abstractNum.Attribute(W + "abstractNumId");
+        return abstractId is null || !root.Elements(W + "num").Any(n =>
+            (string?)n.Element(W + "abstractNumId")?.Attribute(W + "val") == abstractId);
+    }
+
     private static int NextId(XElement root, string elemLocalName, string idAttrLocalName)
     {
         int max = 0;
@@ -359,5 +381,24 @@ internal static class NumberingFactory
             part.PutXDocument();
         }
         return mutated;
+    }
+
+    /// <summary>
+    /// Return whether <see cref="EnsureLevelDefined"/> would mutate the live abstract
+    /// numbering definition. Missing/invalid numbering references return false because
+    /// <see cref="EnsureLevelDefined"/> would likewise make no package change.
+    /// </summary>
+    internal static bool WouldEnsureLevelDefinedMutate(
+        WordprocessingDocument doc, int numId, int targetIlvl)
+    {
+        if (targetIlvl < 0 || targetIlvl > 8) return false;
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root?.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+        var abstractId = (string?)num?.Element(W + "abstractNumId")?.Attribute(W + "val");
+        var abstractNum = abstractId is null ? null : root?.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Attribute(W + "abstractNumId") == abstractId);
+        return abstractNum is not null && !abstractNum.Elements(W + "lvl").Any(level =>
+            (string?)level.Attribute(W + "ilvl") == targetIlvl.ToString());
     }
 }

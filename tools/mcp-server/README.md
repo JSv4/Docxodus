@@ -104,11 +104,10 @@ exposed, because the underlying Docxodus engine doesn't have them (rather than f
 these are called out so agents/tooling built against this server know to route around
 them):
 
-- **Exotic revision families aren't individually resolvable.** `docxodus_track_changes`
-  lists and selectively resolves inserts/deletes/moves/format changes by `revisionId`
-  (issue #318), but `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del
-  ranges, and `w:numPr` numbering-ins markers are not enumerated — `accept_all`/
-  `reject_all` still resolve those.
+- **Unsafe revision topology fails closed.** `docxodus_track_changes` lists cell,
+  content-control, numbering, text, move, row, and property revisions with stable ids.
+  Unsupported, malformed, or ambiguous native markup remains visible with a diagnostic;
+  individual and bulk resolution return a typed error without changing the session.
 - **New lists inserted via markdown don't get real numbering** unless promoted afterward
   with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
 - **Generated-id previews are semantic rather than necessarily byte-identical.** Preview runs

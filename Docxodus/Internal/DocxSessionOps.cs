@@ -84,9 +84,6 @@ internal static class DocxSessionOps
             : new EditResult { Success = false, Error = error });
     }
 
-    internal static void RestoreVersionAfterRebind(int handle, long version) =>
-        SessionRegistry.Get(handle).RestoreVersionAfterRebind(version);
-
     public static string ExecuteBatch(
         int handle,
         MutationBatchMode mode,

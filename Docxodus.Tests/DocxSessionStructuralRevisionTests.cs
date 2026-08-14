@@ -618,6 +618,358 @@ public class DocxSessionStructuralRevisionTests
         Assert.Empty(session.ListRevisions());
     }
 
+    [Theory]
+    [InlineData("level")]
+    [InlineData("switch_format")]
+    public void DS45519_TrackedListMutation_RequiringNumberingSidePartChangeFailsClosed(
+        string operation)
+    {
+        var baseline = BuildSingleLevelBulletDocument();
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+        });
+        var anchor = FirstBodyTextAnchor(session);
+        var operationBaseline = session.Save();
+        var beforeNumbering = NumberingPartBytes(operationBaseline);
+
+        var result = operation == "level"
+            ? session.SetListLevel(anchor, 1)
+            : session.ApplyListFormat(anchor, ListFormat.Decimal);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+        Assert.Empty(session.ListRevisions());
+        var after = session.Save();
+        Assert.True(beforeNumbering.SequenceEqual(NumberingPartBytes(after)));
+        Assert.True(XNode.DeepEquals(MainRoot(operationBaseline), MainRoot(after)));
+        PackageEquivalence.AssertSamePackage(
+            new WmlDocument("baseline.docx", operationBaseline),
+            new WmlDocument("after.docx", after));
+        Assert.False(session.Undo());
+    }
+
+    [Fact]
+    public void DS45520_TrackedListFormat_UsingExistingDefinitionRejectsWithPackageParity()
+    {
+        var baseline = BuildBulletAndDecimalDocument();
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "List Reviewer",
+        });
+        var anchor = FirstBodyTextAnchor(session);
+        var operationBaseline = session.Save();
+        var beforeNumbering = NumberingPartBytes(operationBaseline);
+
+        var edit = session.ApplyListFormat(anchor, ListFormat.Decimal);
+
+        Assert.True(edit.Success, edit.Error?.Message);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionFamily.PropertiesChange, revision.Family);
+        Assert.True(session.RejectRevision(revision.Id).Success);
+        var after = session.Save();
+        Assert.True(beforeNumbering.SequenceEqual(NumberingPartBytes(after)));
+        Assert.True(XNode.DeepEquals(MainRoot(operationBaseline), MainRoot(after)));
+        Assert.Equal(PackagePartUris(operationBaseline), PackagePartUris(after));
+    }
+
+    [Fact]
+    public void DS45521_TrackedParagraphStyleRequiresExistingDefinitionAndStyleTopologyUndoes()
+    {
+        var baseline = BuildDocumentWithoutStylesPart();
+        Assert.False(HasStylesPart(baseline));
+        using (var tracked = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+        }))
+        {
+            var anchor = FirstBodyTextAnchor(tracked);
+            var operationBaseline = tracked.Save();
+            var result = tracked.SetParagraphStyle(anchor, "Heading2");
+
+            Assert.False(result.Success);
+            Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+            Assert.Empty(tracked.ListRevisions());
+            var after = tracked.Save();
+            Assert.False(HasStylesPart(after));
+            Assert.True(XNode.DeepEquals(MainRoot(operationBaseline), MainRoot(after)));
+            PackageEquivalence.AssertSamePackage(
+                new WmlDocument("baseline.docx", operationBaseline),
+                new WmlDocument("after.docx", after));
+            Assert.False(tracked.Undo());
+        }
+
+        using var direct = new DocxSession(baseline);
+        Assert.True(direct.SetParagraphStyle(
+            FirstBodyTextAnchor(direct), "Heading2").Success);
+        Assert.True(HasStylesPart(direct.Save()));
+        Assert.True(direct.Undo());
+        Assert.False(HasStylesPart(direct.Save()));
+        Assert.True(direct.Redo());
+        Assert.True(HasStylesPart(direct.Save()));
+    }
+
+    [Fact]
+    public void DS45522_TrackedParagraphStyleRejectDoesNotChangeStylesPart()
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+        });
+        var anchor = FirstBodyTextAnchor(session);
+        var operationBaseline = session.Save();
+        var beforeStyles = StylesPartBytes(operationBaseline);
+
+        Assert.True(session.SetParagraphStyle(anchor, "Heading2").Success);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+
+        var after = session.Save();
+        Assert.True(beforeStyles.SequenceEqual(StylesPartBytes(after)));
+        Assert.True(XNode.DeepEquals(MainRoot(operationBaseline), MainRoot(after)));
+        Assert.Equal(PackagePartUris(operationBaseline), PackagePartUris(after));
+    }
+
+    [Theory]
+    [InlineData("del_text", true)]
+    [InlineData("del_text", false)]
+    [InlineData("del_instr_text", true)]
+    [InlineData("del_instr_text", false)]
+    public void DS45523_OrphanDeletedPayload_IsListedAndBlocksBulk(
+        string shape, bool accept)
+    {
+        var input = BuildOrphanDeletedPayloadDocument(shape);
+        using var session = new DocxSession(input);
+        var before = MainRoot(session.Save());
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionFamily.Unsupported, revision.Family);
+        Assert.Equal(RevisionResolutionStatus.Unsupported, revision.ResolutionStatus);
+        Assert.Equal("unsupported_revision_family", revision.Diagnostic!.Code);
+
+        var result = accept
+            ? session.AcceptAllRevisions()
+            : session.RejectAllRevisions();
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.RevisionUnsupported, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
+        Assert.False(session.Undo());
+    }
+
+    [Theory]
+    [InlineData("del_text")]
+    [InlineData("del_instr_text")]
+    public void DS45524_DeletedPayloadInsideClaimedWrapper_IsNotDoubleCounted(string shape)
+    {
+        using var session = new DocxSession(BuildOrdinaryDeletionDocument(shape));
+
+        var revision = Assert.Single(session.ListRevisions());
+
+        Assert.Equal(RevisionFamily.ContentDelete, revision.Family);
+        Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+    }
+
+    [Theory]
+    [InlineData("outer_accept_inner_accept")]
+    [InlineData("inner_accept_outer_accept")]
+    [InlineData("outer_accept_inner_reject")]
+    [InlineData("inner_reject_outer_accept")]
+    public void DS45525_NestedIndependentRevisions_ResolveInEitherOrder(string order)
+    {
+        using var session = new DocxSession(BuildNestedRevisionDocument());
+        var initial = session.ListRevisions();
+        Assert.Equal(2, initial.Count);
+        var outer = Assert.Single(initial, revision =>
+            revision.ConstituentIds.SequenceEqual(new[] { "901" }));
+        var inner = Assert.Single(initial, revision =>
+            revision.ConstituentIds.SequenceEqual(new[] { "902" }));
+        bool innerAccepted = order.Contains("inner_accept", StringComparison.Ordinal);
+
+        if (order.StartsWith("outer", StringComparison.Ordinal))
+        {
+            Assert.True(session.AcceptRevision(outer.Id).Success);
+            var remaining = Assert.Single(session.ListRevisions());
+            Assert.Equal(inner.Id, remaining.Id);
+            Assert.True((innerAccepted
+                ? session.AcceptRevision(remaining.Id)
+                : session.RejectRevision(remaining.Id)).Success);
+        }
+        else
+        {
+            Assert.True((innerAccepted
+                ? session.AcceptRevision(inner.Id)
+                : session.RejectRevision(inner.Id)).Success);
+            var remaining = Assert.Single(session.ListRevisions());
+            Assert.Equal(outer.Id, remaining.Id);
+            Assert.True(session.AcceptRevision(remaining.Id).Success);
+        }
+
+        Assert.Empty(session.ListRevisions());
+        Assert.Equal(innerAccepted ? "outer-before outer-after" : "outer-before inner outer-after",
+            MainRoot(session.Save()).Descendants(W.p).First().Value);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS45526_NestedIndependentRevisions_BulkMatchesProcessor(bool accept)
+    {
+        var input = BuildNestedRevisionDocument();
+        var expected = accept
+            ? RevisionProcessor.AcceptRevisions(new WmlDocument("accept.docx", input)).DocumentByteArray
+            : RevisionProcessor.RejectRevisions(new WmlDocument("reject.docx", input)).DocumentByteArray;
+        using var session = new DocxSession(input);
+
+        var result = accept
+            ? session.AcceptAllRevisions()
+            : session.RejectAllRevisions();
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var actual = session.Save();
+        Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)),
+            FirstDifference(MainRoot(expected), MainRoot(actual)));
+    }
+
+    private static byte[] BuildSingleLevelBulletDocument()
+    {
+        byte[] listed;
+        using (var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs()))
+        {
+            Assert.True(session.ApplyListFormat(
+                FirstBodyTextAnchor(session), ListFormat.Bullet).Success);
+            listed = session.Save();
+        }
+
+        using var stream = new MemoryStream();
+        stream.Write(listed);
+        stream.Position = 0;
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var numbering = document.MainDocumentPart!.NumberingDefinitionsPart!;
+            var root = numbering.GetXDocument().Root!;
+            var abstractNum = Assert.Single(root.Elements(W.abstractNum));
+            foreach (var extra in abstractNum.Elements(W.lvl).Skip(1).ToList()) extra.Remove();
+            var multiLevelType = abstractNum.Element(W.multiLevelType);
+            if (multiLevelType is null)
+                abstractNum.AddFirst(new XElement(W.multiLevelType, new XAttribute(W.val, "singleLevel")));
+            else
+                multiLevelType.SetAttributeValue(W.val, "singleLevel");
+            numbering.PutXDocument();
+        }
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildBulletAndDecimalDocument()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchors = session.Project().AnchorIndex.Values
+            .Where(anchor => anchor.Anchor.Scope == "body" && anchor.Anchor.Kind == "p")
+            .Select(anchor => anchor.Anchor.Id).Take(2).ToArray();
+        Assert.True(session.ApplyListFormat(anchors[0], ListFormat.Bullet).Success);
+        Assert.True(session.ApplyListFormat(anchors[1], ListFormat.Decimal).Success);
+        return session.Save();
+    }
+
+    private static byte[] BuildDocumentWithoutStylesPart()
+    {
+        using var stream = new MemoryStream();
+        stream.Write(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        stream.Position = 0;
+        using (var document = WordprocessingDocument.Open(stream, true))
+        {
+            var main = document.MainDocumentPart!;
+            if (main.StyleDefinitionsPart is { } styles) main.DeletePart(styles);
+        }
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildOrphanDeletedPayloadDocument(string shape) =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var name = shape switch
+            {
+                "del_text" => W.delText,
+                "del_instr_text" => W.delInstrText,
+                _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+            };
+            root.Descendants(W.p).First().ReplaceNodes(
+                new XElement(W.r, new XElement(name, "orphan deleted payload")));
+        });
+
+    private static byte[] BuildOrdinaryDeletionDocument(string shape) =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var name = shape switch
+            {
+                "del_text" => W.delText,
+                "del_instr_text" => W.delInstrText,
+                _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+            };
+            root.Descendants(W.p).First().ReplaceNodes(
+                new XElement(W.del,
+                    new XAttribute(W.id, "900"),
+                    new XAttribute(W.author, "Reviewer"),
+                    new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                    new XElement(W.r, new XElement(name, "ordinary deletion"))));
+        });
+
+    private static byte[] BuildNestedRevisionDocument() =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            root.Descendants(W.p).First().ReplaceNodes(
+                new XElement(W.ins,
+                    new XAttribute(W.id, "901"),
+                    new XAttribute(W.author, "Outer Reviewer"),
+                    new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                    new XElement(W.r, new XElement(W.t, "outer-before ")),
+                    new XElement(W.del,
+                        new XAttribute(W.id, "902"),
+                        new XAttribute(W.author, "Inner Reviewer"),
+                        new XAttribute(W.date, "2026-01-02T00:00:00Z"),
+                        new XElement(W.r, new XElement(W.delText, "inner "))),
+                    new XElement(W.r, new XElement(W.t, "outer-after"))));
+        });
+
+    private static byte[] NumberingPartBytes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        using var partStream = document.MainDocumentPart!.NumberingDefinitionsPart!.GetStream();
+        using var copy = new MemoryStream();
+        partStream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    private static bool HasStylesPart(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return document.MainDocumentPart!.StyleDefinitionsPart is not null;
+    }
+
+    private static byte[] StylesPartBytes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        using var partStream = document.MainDocumentPart!.StyleDefinitionsPart!.GetStream();
+        using var copy = new MemoryStream();
+        partStream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    private static string[] PackagePartUris(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return document.GetPackage().GetParts()
+            .Select(part => part.Uri.ToString())
+            .OrderBy(uri => uri, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static EditResult ApplyPropertyMutation(DocxSession session, string operation)
     {
         if (operation.StartsWith("paragraph", StringComparison.Ordinal))

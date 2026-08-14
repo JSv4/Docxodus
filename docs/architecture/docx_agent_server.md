@@ -47,7 +47,7 @@ tools/mcp-server/Program.cs        — JSON-RPC transport: initialize, tools/lis
      ▼
 tools/mcp-server/Dispatcher.cs     — (tool, action) → Docxodus API call; arg parsing only
      │                                also: tools/mcp-server/SessionStore.cs (external session_id
-     │                                → DocxSessionOps handle + opened-from location + settings)
+     │                                → DocxSessionOps handle + opened-from location)
      │
      ├──▶ IDocumentStore  ─────────  where bytes come from and go to (see Document storage)
      │      LocalFileDocumentStore    scope-rooted local filesystem — the only backend today
@@ -59,7 +59,7 @@ Docxodus.DocxSession   (the real work — see docs/architecture/docx_mutation_ap
 ```
 
 `SessionStore` is the one piece of state this server owns that `DocxSessionOps` doesn't: a
-string `session_id` → `{ handle, location, settings }` map. The external protocol uses that
+string `session_id` → `{ handle, location }` map. The external protocol uses that
 unguessable id as its document capability, while `docxodus_save` uses the remembered location
 to write back without requiring the caller to repeat the path. Tracked-revision resolution now
 mutates the live session through `DocxSessionOps`; it does not rebind a whole-document transform.
