@@ -1304,6 +1304,15 @@ public sealed class DocxSession : IDisposable
 
     public Exception? LastInternalError { get; private set; }
 
+    /// <summary>
+    /// Set when a mutation threw AND the subsequent rollback to its pre-op snapshot ALSO threw —
+    /// the one case in which a failed op can leave the document partially mutated. Null on a
+    /// healthy session, including one that has seen ordinary <see cref="LastInternalError"/>
+    /// failures (those rolled back cleanly). Treat a non-null value as "this session's document is
+    /// no longer trustworthy": reopen from the last known-good bytes rather than continuing to edit.
+    /// </summary>
+    public Exception? LastRollbackError { get; private set; }
+
     /// <summary>How subsequent mutations are recorded — switchable mid-session (issue #304).</summary>
     public TrackedChangeMode TrackedChanges => _trackedChanges;
 
@@ -1833,7 +1842,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
@@ -2644,8 +2653,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return new[] { EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId) };
         }
     }
@@ -2770,8 +2778,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -4031,6 +4038,20 @@ public sealed class DocxSession : IDisposable
         // driven by DocumentSnapshot.CommentThreadingParts below.
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+
+        // Settings and styles are not walked by the PROJECTOR, but they are WRITTEN by ops, which is
+        // what decides snapshot membership. InsertFootnote/InsertEndnote declare w:footnotePr /
+        // w:endnotePr in settings and find-or-create the FootnoteText/FootnoteReference styles;
+        // EnsureHeaderFooterVisible writes w:titlePg / w:evenAndOddHeaders; AddComment creates the
+        // CommentText/CommentReference styles. Leaving them out did not merely weaken the error path
+        // — it made those writes SURVIVE AN ORDINARY Undo(), so undoing the first footnote in a
+        // document left w:footnotePr and two orphan styles behind permanently.
+        if (main.DocumentSettingsPart is not null) yield return main.DocumentSettingsPart;
+        if (main.StyleDefinitionsPart is not null) yield return main.StyleDefinitionsPart;
+
+        // The NUMBERING part is deliberately NOT here: list ops are additive-only by design
+        // (ApplyListStartOverride clones a fresh w:num rather than mutating a possibly shared one),
+        // which is what keeps undo correct without snapshotting it. See ApplyListStartOverride.
         var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
         if (annotationsPart is not null) yield return annotationsPart;
     }
@@ -4088,7 +4109,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -4186,7 +4207,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -4377,7 +4398,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorForPatchScope.Anchor.Id);
         }
     }
@@ -4591,8 +4612,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, sourceAnchorId);
         }
     }
@@ -5084,7 +5104,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5192,7 +5212,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5272,7 +5292,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
@@ -5387,8 +5407,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5463,8 +5482,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5560,7 +5578,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -5682,8 +5700,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5746,7 +5763,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -5964,7 +5981,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6023,7 +6040,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6131,7 +6148,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6244,7 +6261,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6305,7 +6322,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6483,7 +6500,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -6627,7 +6644,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -7046,7 +7063,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, errorTargetId);
         }
     }
@@ -7195,7 +7212,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, parentCommentAnchorId);
         }
     }
@@ -7277,7 +7294,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, commentAnchorId);
         }
     }
@@ -7370,7 +7387,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            RestoreSnapshot(_history.PopForUndo().snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, commentAnchorId);
         }
     }
@@ -7505,7 +7522,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -7771,7 +7788,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -7840,7 +7857,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -7874,7 +7891,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -7924,7 +7941,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8088,7 +8105,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8165,7 +8182,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8300,7 +8317,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8360,7 +8377,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8415,7 +8432,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8504,7 +8521,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
         }
     }
@@ -8700,7 +8717,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -8803,8 +8820,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, firstAnchorId);
         }
     }
@@ -8915,8 +8931,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -9003,8 +9018,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
@@ -9024,8 +9038,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
@@ -9047,8 +9060,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
@@ -9074,8 +9086,7 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            var preOp = _history.PopForUndo();
-            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, newAnchorId);
         }
     }
@@ -9167,6 +9178,45 @@ public sealed class DocxSession : IDisposable
     }
 
     // ─── Undo / Redo ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Roll the document back to the pre-op snapshot after a mutation threw partway through.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every mutation calls <see cref="UndoRing{T}.RecordPreOp"/> before entering its
+    /// <c>try</c>, so a throw from inside can leave the document HALF-MUTATED — an op that removes
+    /// a footnote's body cross-references and then fails before removing the definition has already
+    /// stripped the references. Discarding the snapshot without applying it (the historical
+    /// <c>_ = _history.PopForUndo()</c>) makes that partial state permanent AND unreachable by
+    /// <see cref="Undo"/>, because the record that could have reversed it is the one being thrown
+    /// away. Restoring instead is the only outcome that keeps the typed <see cref="EditResult"/>
+    /// envelope's implicit promise: a failed op did not change the document.</para>
+    ///
+    /// <para>Safe to call even when nothing was mutated before the throw — the restore just
+    /// re-installs identical XML — so error paths need not reason about how far the op got.
+    /// Distinct from the CLEAN-failure paths (<c>else _ = _history.PopForUndo()</c>), which
+    /// discard deliberately: those ops detected a problem and returned WITHOUT mutating, so their
+    /// snapshot is genuinely spare and must not evict a real edit from the bounded ring.</para>
+    ///
+    /// <para>A failure of the restore itself is swallowed into <see cref="LastRollbackError"/>
+    /// rather than thrown: the caller is already receiving an <see cref="EditErrorCode.InternalError"/>
+    /// for the original fault, and replacing that with a secondary one would hide the real cause.
+    /// A non-null <see cref="LastRollbackError"/> is the signal that the document may be
+    /// inconsistent and the session should be reopened from bytes.</para>
+    /// </remarks>
+    private void RollbackFailedOp()
+    {
+        var (preOp, ok) = _history.PopForUndo();
+        if (!ok) return;
+        try
+        {
+            RestoreSnapshot(preOp);
+        }
+        catch (Exception rollbackEx)
+        {
+            LastRollbackError = rollbackEx;
+        }
+    }
 
     public bool Undo()
     {
