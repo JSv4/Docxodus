@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **A `DocxSession` mutation that threw partway through left the document
+  partially mutated, permanently** — and reported it to the caller as an
+  ordinary failed `EditResult`. Every mutation records a pre-op snapshot before
+  entering its `try`, but 34 of the 44 `catch` blocks discarded that snapshot
+  (`_ = _history.PopForUndo()`) instead of applying it, so whatever the op had
+  already changed survived AND the record that could have reversed it was thrown
+  away. Eight more restored without checking `PopForUndo().ok`, which would
+  dereference a null snapshot and throw an unhandled `NullReferenceException`
+  straight out of the typed-error envelope. All 44 now route through one
+  `RollbackFailedOp()` helper that restores the pre-op snapshot and cannot throw.
+  The failure is reachable from ordinary input, not just synthetic faults: a
+  stray `U+0000` or unpaired surrogate in a markdown payload — routine in LLM
+  output and pasted text — throws from XML writing deep inside
+  `InsertFootnote` / `SetHeaderText` / `AddComment` / `ReplaceText`, after those
+  ops have already created parts. Clean-failure paths (an op that detected a
+  problem and returned *without* mutating) still discard deliberately, so a
+  rejected edit cannot evict a real one from the bounded undo ring.
+  `DocxSession.LastRollbackError` is new and is non-null only in the one case
+  that remains unrecoverable — the rollback itself failing — signalling that the
+  session should be reopened from bytes.
+- **`Undo()` did not revert writes to `settings.xml` or `styles.xml`.** Snapshot
+  membership followed what the *projector reads* rather than what *ops write*, so
+  both parts sat outside it. Undoing the first `InsertFootnote` in a document left
+  the `w:footnotePr` settings declaration and the generated
+  `FootnoteText`/`FootnoteReference` styles behind forever; the same applied to
+  `EnsureHeaderFooterVisible`'s `w:titlePg`/`w:evenAndOddHeaders` and to
+  `AddComment`'s `CommentText`/`CommentReference` styles. Both parts are now
+  snapshot-scoped. The numbering part remains deliberately excluded — list ops are
+  additive-only by design, which is what keeps undo correct without it.
+
 ## [9.9.0] - 2026-08-13
 
 ### Added
