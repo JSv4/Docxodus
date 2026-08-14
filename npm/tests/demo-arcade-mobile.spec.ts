@@ -239,6 +239,56 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     expect(await canvasLineBoxes(page)).toBe(26);
   });
 
+  test('the cabinet hands a phone thumb controls, and a way to fire', async ({ page }) => {
+    // The controls the cabinet drew before this were one wrapped bar under the
+    // document: four 44px arrows on a row of their own beneath the cartridge
+    // chips, the transport row and the telemetry — a stack that ate the bottom
+    // of a phone screen, sat nowhere near a thumb, and offered no Space at all,
+    // so Freedoom could be walked but never fought on a touch screen.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=e1m1`);
+    await page.locator('#boot').click();
+    await waitForBoot(page);
+    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
+
+    await expect(page.locator('.dxa-controls')).toHaveAttribute('data-compact', 'true');
+    await expect(page.locator('#pad .dxa-fire')).toBeVisible();
+    await expect(page.locator('#dockcarts')).toBeHidden();
+
+    // Thumb reach: bottom corners, clear of the game screen's middle, and hit
+    // targets no smaller than the 44px both platform guidelines ask for.
+    const geometry = await page.evaluate(() => {
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const dpad = box('.dxa-dpad');
+      const fire = box('.dxa-fire');
+      return {
+        bothLow: dpad.top > window.innerHeight / 2 && fire.top > window.innerHeight / 2,
+        opposedCorners: dpad.right < window.innerWidth / 2 && fire.left > window.innerWidth / 2,
+        onScreen: dpad.bottom <= window.innerHeight && fire.bottom <= window.innerHeight,
+        tapTargets: Math.min(dpad.width / 3, dpad.height / 3, fire.width, fire.height),
+      };
+    });
+    expect(geometry.bothLow).toBe(true);
+    expect(geometry.opposedCorners).toBe(true);
+    expect(geometry.onScreen).toBe(true);
+    expect(geometry.tapTargets).toBeGreaterThanOrEqual(40);
+
+    // Real taps, on the touch rig: turning is the raycaster's own input path.
+    const heading = await page.evaluate(() => (window as any).__arcade.game().player.dx as number);
+    await page.locator('.dxa-right').dispatchEvent('pointerdown');
+    await page.waitForFunction(
+      (dx0) => Math.abs((window as any).__arcade.game().player.dx - dx0) > 0.05,
+      heading,
+      { timeout: 30000 },
+    );
+    await page.locator('.dxa-right').dispatchEvent('pointerup');
+
+    // And the button a phone never had: Space, held, which is the trigger.
+    await page.locator('.dxa-fire').dispatchEvent('pointerdown');
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(true);
+    await page.locator('.dxa-fire').dispatchEvent('pointerup');
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(false);
+  });
+
   test('every character on the canvas advances exactly one cell', async ({ page }) => {
     // Directly the grid's contract, measured glyph by glyph in the font the
     // canvas actually resolved to — the property that makes the art align at
