@@ -236,7 +236,7 @@ public class DocxSessionS1FeaturesTests
             CellContents = new[] { "Texas", "7370", "01-0627671", "(State)", "(SIC)", "(IRS)" },
         });
         Assert.True(r.Success, r.Error?.Message);
-        Assert.Equal(6, r.Created.Count); // one cell-paragraph anchor per cell
+        Assert.Equal(6, r.Created.Count); // one canonical tc anchor per cell
 
         var root = DocumentXml(session.Save());
         var tbl = root.Descendants(W + "tbl").Single();

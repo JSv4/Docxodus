@@ -131,6 +131,38 @@ internal static class Dispatcher
         "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
             Handle(args), Str(args, "anchorId")),
 
+        "get_table_metadata" => DocxSessionOps.GetTableMetadata(
+            Handle(args), Str(args, "tableAnchorId")),
+        "resolve_table_cell_anchor" => DocxSessionOps.ResolveTableCellAnchor(
+            Handle(args), Str(args, "cellAnchorId")),
+        "resolve_table_cell_coordinate" => DocxSessionOps.ResolveTableCellCoordinate(
+            Handle(args), Str(args, "tableAnchorId"), Int(args, "rowIndex"), Int(args, "columnIndex")),
+        "insert_table" => DocxSessionOps.InsertTable(
+            Handle(args), Str(args, "anchorId"), ParsePos(args, "position"),
+            Int(args, "rows"), Int(args, "columns"), RawObjectOrEmpty(args, "options")),
+        "insert_table_row" => DocxSessionOps.InsertTableRow(
+            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+        "insert_table_column" => DocxSessionOps.InsertTableColumn(
+            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+        "delete_table_row" => DocxSessionOps.DeleteTableRow(Handle(args), Str(args, "cellAnchorId")),
+        "delete_table_column" => DocxSessionOps.DeleteTableColumn(Handle(args), Str(args, "cellAnchorId")),
+        "merge_cells" => DocxSessionOps.MergeCells(
+            Handle(args), Str(args, "cellAnchorId"), Int(args, "rowSpan"), Int(args, "columnSpan"),
+            OptStr(args, "content")),
+        "unmerge_cells" => DocxSessionOps.UnmergeCells(Handle(args), Str(args, "cellAnchorId")),
+        "set_column_widths" => DocxSessionOps.SetColumnWidths(
+            Handle(args), Str(args, "cellAnchorId"), RawArray(args, "widths")),
+        "set_table_borders" => DocxSessionOps.SetTableBorders(
+            Handle(args), Str(args, "cellAnchorId"), RawObjectOrEmpty(args, "spec")),
+        "set_cell_shading" => DocxSessionOps.SetCellShading(
+            Handle(args), Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
+            OptStr(args, "scope") ?? "cell"),
+        "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
+            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeat") ?? true),
+        "set_table_row_options" => DocxSessionOps.SetTableRowOptions(
+            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeatHeader"),
+            OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
+            OptStr(args, "heightRule")),
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             Handle(args), Str(args, "cellAnchorId"), Str(args, "markdown")),
 
@@ -449,6 +481,26 @@ internal static class Dispatcher
         return args.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
             ? v.GetBoolean() : null;
     }
+
+    private static int? OptInt(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32() : null;
+    }
+
+    private static string RawArray(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind != JsonValueKind.Array)
+            throw new FormatException($"args missing array \"{name}\"");
+        return v.GetRawText();
+    }
+
+    private static string RawObjectOrEmpty(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.Object
+                ? v.GetRawText() : "";
 
     private static PageNumberingOp ParsePageNumberingOp(JsonElement args, string name)
     {

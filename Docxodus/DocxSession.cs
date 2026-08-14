@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using GridCell = Docxodus.Internal.TableGridCell;
 
 namespace Docxodus;
 
@@ -1157,6 +1158,12 @@ public enum EditErrorCode
     /// no merge markup.</summary>
     InvalidTableMerge,
 
+    /// <summary>The supplied anchor is not the canonical <c>tc</c> cell anchor and cannot be
+    /// translated by the compatibility shim. During the compatibility window only a legacy
+    /// paragraph/heading/list-item anchor physically inside the intended cell is translated;
+    /// use table metadata or coordinate resolution to obtain the cell's <c>tc</c> anchor.</summary>
+    TableAnchorMigrationRequired,
+
     MalformedXml,
     DisallowedNamespace,
     IncompatibleElementType,
@@ -1191,6 +1198,9 @@ public sealed class EditResult
     public IReadOnlyList<Anchor> Removed { get; init; } = Array.Empty<Anchor>();
     public IReadOnlyList<Anchor> Modified { get; init; } = Array.Empty<Anchor>();
     public MarkdownPatch? Patch { get; init; }
+
+    /// <summary>Structural identity mapping populated by table shape mutations.</summary>
+    public TableAnchorMapping? TableAnchors { get; init; }
 
     /// <summary>
     /// Populated by AddAnnotation/RemoveAnnotation/UpdateAnnotation/MoveAnnotation
@@ -2048,6 +2058,76 @@ public sealed class DocxSession : IDisposable
         var target = FindAnchor(anchorId);
         return target is null ? null : Internal.BlockMetadataOps.GetBlockMetadata(_doc!, target);
     }
+
+    /// <summary>Resolve a canonical <c>tbl</c> anchor to the live table's complete structural
+    /// metadata. This never climbs from a nested table to an enclosing table.</summary>
+    public TableMetadataResult GetTableMetadata(string tableAnchorId)
+    {
+        if (_disposed) return new TableMetadataResult
+        {
+            Error = new EditError(EditErrorCode.SessionDisposed, "session disposed", tableAnchorId),
+        };
+        var target = FindAnchor(tableAnchorId);
+        if (target is null) return new TableMetadataResult
+        {
+            Error = new EditError(EditErrorCode.AnchorNotFound, "table anchor not found", tableAnchorId),
+        };
+        var table = target.Resolve(_doc!);
+        if (target.Anchor.Kind != "tbl" || table?.Name != W.tbl) return new TableMetadataResult
+        {
+            Error = new EditError(EditErrorCode.AnchorWrongKind,
+                "GetTableMetadata requires the table's canonical tbl anchor", tableAnchorId),
+        };
+        return new TableMetadataResult
+        {
+            Success = true,
+            Metadata = Internal.TableGridModel.BuildMetadata(table, AnchorForElement),
+        };
+    }
+
+    /// <summary>Resolve a canonical <c>tc</c> anchor to its table-grid coordinate and spans.</summary>
+    public TableCellResolutionResult ResolveTableCellAnchor(string cellAnchorId)
+    {
+        if (_disposed) return CellResolutionFail(EditErrorCode.SessionDisposed, "session disposed", cellAnchorId);
+        var target = FindAnchor(cellAnchorId);
+        if (target is null)
+            return CellResolutionFail(EditErrorCode.AnchorNotFound, "cell anchor not found", cellAnchorId);
+        var cell = target.Resolve(_doc!);
+        if (target.Anchor.Kind != "tc" || cell?.Name != W.tc)
+            return CellResolutionFail(EditErrorCode.TableAnchorMigrationRequired,
+                "ResolveTableCellAnchor requires a canonical tc anchor; obtain one from table metadata or ResolveTableCellCoordinate",
+                cellAnchorId);
+        var row = cell.Ancestors(W.tr).FirstOrDefault();
+        var table = row?.Ancestors(W.tbl).FirstOrDefault();
+        if (row is null || table is null)
+            return CellResolutionFail(EditErrorCode.InternalError, "malformed table cell", cellAnchorId);
+        var metadata = Internal.TableGridModel.BuildMetadata(table, AnchorForElement);
+        var resolved = metadata.Rows.SelectMany(item => item.Cells)
+            .FirstOrDefault(item => item.Anchor.Id == target.Anchor.Id);
+        return resolved is null
+            ? CellResolutionFail(EditErrorCode.InternalError, "cell is absent from its table grid", cellAnchorId)
+            : new TableCellResolutionResult { Success = true, Cell = resolved };
+    }
+
+    /// <summary>Resolve a zero-based table-grid coordinate to the physical cell covering it.
+    /// Coordinates omitted by <c>w:gridBefore</c>/<c>w:gridAfter</c> resolve as not found;
+    /// every coordinate covered by a <c>w:gridSpan</c> resolves to the same cell anchor.</summary>
+    public TableCellResolutionResult ResolveTableCellCoordinate(
+        string tableAnchorId, int rowIndex, int columnIndex)
+    {
+        var tableResult = GetTableMetadata(tableAnchorId);
+        if (!tableResult.Success)
+            return new TableCellResolutionResult { Error = tableResult.Error };
+        var cell = Internal.TableGridModel.CellAt(tableResult.Metadata!, rowIndex, columnIndex);
+        return cell is null
+            ? CellResolutionFail(EditErrorCode.AnchorNotFound,
+                $"no table cell covers coordinate ({rowIndex}, {columnIndex})", tableAnchorId)
+            : new TableCellResolutionResult { Success = true, Cell = cell };
+    }
+
+    private static TableCellResolutionResult CellResolutionFail(
+        EditErrorCode code, string message, string? anchorId) =>
+        new() { Error = new EditError(code, message, anchorId) };
 
     /// <summary>
     /// Bulk variant of <see cref="GetBlockMetadata"/>. Unknown anchor ids map
@@ -5613,24 +5693,17 @@ public sealed class DocxSession : IDisposable
 
     public EditResult ReplaceCellContent(string cellAnchorId, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        var target = FindAnchor(cellAnchorId);
-        if (target is null)
-            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", cellAnchorId);
-        if (target.Anchor.Kind != "tc")
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ReplaceCellContent requires a cell anchor", cellAnchorId);
+        if (ResolveCell(cellAnchorId, out _, out var cell, out _, out _, out var target) is { } resolveError)
+            return resolveError;
 
         var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, cellAnchorId);
 
-        var cell = target.Resolve(_doc!);
-        if (cell is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", cellAnchorId);
-
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            foreach (var p in cell.Elements(W.p).ToList()) p.Remove();
+            foreach (var p in cell!.Elements(W.p).ToList()) p.Remove();
 
             foreach (var block in parsed.Blocks)
             {
@@ -5647,8 +5720,8 @@ public sealed class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Modified = new[] { target.Anchor },
-                Patch = PatchFor(target),
+                Modified = new[] { target!.Anchor },
+                Patch = PatchFor(target!),
             };
         }
         catch (Exception ex)
@@ -7491,8 +7564,7 @@ public sealed class DocxSession : IDisposable
     /// <summary>
     /// Insert a <paramref name="rows"/>×<paramref name="cols"/> table before/after the block named
     /// by <paramref name="anchorId"/>. <paramref name="options"/> controls borders, per-cell markdown
-    /// (row-major), and cell alignment. Returns the created cell-paragraph anchors (row-major), so the
-    /// caller can address and fill/format each cell.
+    /// (row-major), and cell alignment. Returns the created canonical <c>tc</c> anchors (row-major).
     /// </summary>
     public EditResult InsertTable(string anchorId, Position pos, int rows, int cols, TableInsertOptions? options = null)
     {
@@ -7540,6 +7612,7 @@ public sealed class DocxSession : IDisposable
 
             var tbl = new XElement(W.tbl, tblPr, tblGrid);
             var cellParagraphs = new List<XElement>();
+            var cells = new List<XElement>();
 
             for (int r = 0; r < rows; r++)
             {
@@ -7554,6 +7627,7 @@ public sealed class DocxSession : IDisposable
                     var paras = BuildCellParagraphs(md, opts.CellAlignment);
                     foreach (var p in paras) tc.Add(p);
                     cellParagraphs.AddRange(paras);
+                    cells.Add(tc);
                     tr.Add(tc);
                 }
                 tbl.Add(tr);
@@ -7579,19 +7653,14 @@ public sealed class DocxSession : IDisposable
             foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);
 
             InvalidateProjectionCache();
-            var index = AnchorIndex();
-            var created = new List<Anchor>();
-            foreach (var p in cellParagraphs)
-            {
-                var unid = (string)p.Attribute(PtOpenXml.Unid)!;
-                if (AnchorForUnid(unid, PartUriOf(p)) is { } a)
-                    created.Add(a);
-            }
+            var created = ResolveAnchorsForElements(cells);
+            var metadata = Internal.TableGridModel.BuildMetadata(tbl, AnchorForElement);
 
             return new EditResult
             {
                 Success = true,
                 Created = created,
+                TableAnchors = Internal.TableGridModel.Map(null, metadata),
                 Patch = PatchFor(target),
             };
         }
@@ -7648,7 +7717,7 @@ public sealed class DocxSession : IDisposable
         return bdr;
     }
 
-    // ─── Table editing (row / column CRUD), addressed by a cell-paragraph anchor ──────────
+    // ─── Table editing (row / column CRUD), addressed by a canonical tc anchor ─────────────
     //
     // The grid model (issue #340): a row's cells tile w:tblGrid columns left→right, each
     // covering w:gridSpan columns (default 1) from an origin shifted by w:trPr/w:gridBefore.
@@ -7658,8 +7727,11 @@ public sealed class DocxSession : IDisposable
     // one narrows it, and a merge a structural edit cannot preserve is rejected — never
     // silently torn.
 
-    /// <summary>Resolve a cell-paragraph anchor to its (paragraph, cell, row, table, anchor
-    /// target). Returns a failure EditResult on any miss, else null.</summary>
+    /// <summary>Resolve the canonical <c>tc</c> anchor to its cell/row/table. For the documented
+    /// compatibility window, a legacy paragraph/heading/list-item anchor is translated to its
+    /// nearest ancestor cell; every returned target is canonicalized to that cell. Structural
+    /// anchors are never climbed through, which prevents a nested <c>tc</c>/<c>tr</c>/<c>tbl</c>
+    /// from silently retargeting its enclosing outer cell.</summary>
     private EditResult? ResolveCell(string cellAnchorId, out XElement? p, out XElement? tc,
         out XElement? tr, out XElement? tbl, out AnchorTarget? target)
     {
@@ -7670,64 +7742,46 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {cellAnchorId}", cellAnchorId);
         p = target.Resolve(_doc!);
         if (p is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", cellAnchorId);
-        tc = p.Ancestors(W.tc).FirstOrDefault();
+        if (target.Anchor.Kind == "tc" && p.Name == W.tc)
+            tc = p;
+        else if (target.Anchor.Kind is "p" or "h" or "li")
+            tc = p.Ancestors(W.tc).FirstOrDefault();
         if (tc is null)
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
-                "table row/column ops require an anchor inside a table cell", cellAnchorId);
+            return EditResult.Fail(EditErrorCode.TableAnchorMigrationRequired,
+                "table cell operations require a canonical tc anchor; legacy p/h/li anchors are translated only when physically inside the intended cell. Use GetTableMetadata or ResolveTableCellCoordinate to obtain the tc anchor.",
+                cellAnchorId);
         tr = tc.Ancestors(W.tr).FirstOrDefault();
         tbl = tr?.Ancestors(W.tbl).FirstOrDefault();
         if (tr is null || tbl is null)
             return EditResult.Fail(EditErrorCode.InternalError, "malformed table (cell has no row/table)", cellAnchorId);
+        var canonical = AnchorForElement(tc);
+        if (canonical is null || FindAnchor(canonical.Value.Id) is not { } canonicalTarget)
+            return EditResult.Fail(EditErrorCode.InternalError, "cell has no canonical tc anchor", cellAnchorId);
+        target = canonicalTarget;
         return null;
     }
 
-    /// <summary>A cell's geometry inside its row: the element, its first w:tblGrid column and
-    /// how many columns it spans. <see cref="End"/> is exclusive.</summary>
-    private readonly record struct GridCell(XElement Tc, int Start, int Span)
-    {
-        internal int End => Start + Span;
-    }
-
-    private static int? ValOf(XElement? e) => e is null ? null : (int?)e.Attribute(W.val);
-
-    /// <summary>The row's cells with their grid-column geometry, left→right.</summary>
-    private static List<GridCell> RowGrid(XElement tr)
-    {
-        int col = ValOf(tr.Element(W.trPr)?.Element(W.gridBefore)) ?? 0;
-        var cells = new List<GridCell>();
-        foreach (var tc in tr.Elements(W.tc))
-        {
-            int span = Math.Max(1, ValOf(tc.Element(W.tcPr)?.Element(W.gridSpan)) ?? 1);
-            cells.Add(new GridCell(tc, col, span));
-            col += span;
-        }
-        return cells;
-    }
+    /// <summary>The row's cells with their shared-model grid geometry, left→right.</summary>
+    private static List<GridCell> RowGrid(XElement tr) => Internal.TableGridModel.RowGrid(tr);
 
     /// <summary>The cell covering <paramref name="gridCol"/>, or null when the row has none.</summary>
-    private static GridCell? CellCovering(IEnumerable<GridCell> grid, int gridCol)
-    {
-        foreach (var c in grid) if (gridCol >= c.Start && gridCol < c.End) return c;
-        return null;
-    }
+    private static GridCell? CellCovering(IEnumerable<GridCell> grid, int gridCol) =>
+        Internal.TableGridModel.CellCovering(grid, gridCol);
 
     /// <summary>The cell of <paramref name="tr"/> occupying exactly <paramref name="shape"/>'s grid
     /// columns — how a vertical-merge run is followed from row to row.</summary>
-    private static XElement? AlignedCell(XElement tr, GridCell shape)
-    {
-        foreach (var c in RowGrid(tr))
-            if (c.Start == shape.Start && c.End == shape.End) return c.Tc;
-        return null;
-    }
+    private static XElement? AlignedCell(XElement tr, GridCell shape) =>
+        Internal.TableGridModel.AlignedCell(tr, shape);
 
     /// <summary>The cell's vertical-merge role: null = none, true = <c>w:vMerge w:val="restart"</c>
     /// (a merge's lead cell), false = a continuation (bare <c>w:vMerge</c>, or val="continue").</summary>
-    private static bool? VMergeRestart(XElement tc)
-    {
-        var vm = tc.Element(W.tcPr)?.Element(W.vMerge);
-        if (vm is null) return null;
-        return string.Equals((string?)vm.Attribute(W.val), "restart", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool? VMergeRestart(XElement tc) =>
+        Internal.TableGridModel.VerticalMergeRole(tc) switch
+        {
+            TableVerticalMergeRole.Restart => true,
+            TableVerticalMergeRole.Continue => false,
+            _ => null,
+        };
 
     private static void SetVMerge(XElement tc, bool? restart)
     {
@@ -7759,9 +7813,45 @@ public sealed class DocxSession : IDisposable
         tcW.SetAttributeValue(W._w, Math.Max(0, ((int?)tcW.Attribute(W._w) ?? 0) + delta));
     }
 
+    private static void SetRowGridOmission(XElement row, XName name, int value)
+    {
+        var property = row.Element(W.trPr)?.Element(name);
+        if (value <= 0)
+        {
+            property?.Remove();
+            return;
+        }
+        if (property is null)
+            throw new InvalidOperationException($"row has no existing {name.LocalName} omission to adjust");
+        property.SetAttributeValue(W.val, value);
+    }
+
     private static List<int> GridColWidths(XElement tbl) =>
         tbl.Element(W.tblGrid)?.Elements(W.gridCol).Select(g => (int?)g.Attribute(W._w) ?? 0).ToList()
         ?? new List<int>();
+
+    /// <summary>Materialize real gridCol elements only inside a structural transaction. Metadata
+    /// inspection remains read-only and reports virtual columns; the before/after mapping then
+    /// invalidates those virtual identities and adds these real anchors explicitly.</summary>
+    private static void EnsureGridColumnsForMutation(XElement table)
+    {
+        int count = GridColumnCount(table);
+        var grid = table.Element(W.tblGrid);
+        if (grid is null)
+        {
+            grid = new XElement(W.tblGrid);
+            var properties = table.Element(W.tblPr);
+            if (properties is null) table.AddFirst(grid);
+            else properties.AddAfterSelf(grid);
+        }
+        int missing = count - grid.Elements(W.gridCol).Count();
+        for (int index = 0; index < missing; index++)
+        {
+            var column = new XElement(W.gridCol);
+            UnidHelper.AssignToSelfAndDescendants(column);
+            grid.Add(column);
+        }
+    }
 
     private static int SumGridWidths(List<int> widths, int from, int toExclusive)
     {
@@ -7771,27 +7861,34 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>The table's grid width — w:tblGrid's column count, falling back to the widest row.</summary>
-    private static int GridColumnCount(XElement tbl)
-    {
-        int cols = tbl.Element(W.tblGrid)?.Elements(W.gridCol).Count() ?? 0;
-        if (cols > 0) return cols;
-        return tbl.Elements(W.tr).Select(tr => RowGrid(tr) is { Count: > 0 } g ? g[^1].End : 0)
-            .DefaultIfEmpty(0).Max();
-    }
+    private static int GridColumnCount(XElement tbl) => Internal.TableGridModel.GridColumnCount(tbl);
 
-    /// <summary>After a structural edit, resolve the freshly-projected anchors for the given paragraphs.</summary>
-    private List<Anchor> ResolveAnchorsForParagraphs(IEnumerable<XElement> paras)
+    /// <summary>After a structural edit, resolve freshly-projected anchors for live elements.</summary>
+    private List<Anchor> ResolveAnchorsForElements(IEnumerable<XElement> elements)
     {
-        var index = AnchorIndex();
+        _ = AnchorIndex();
         var result = new List<Anchor>();
-        foreach (var para in paras)
+        foreach (var element in elements)
         {
-            var unid = (string?)para.Attribute(PtOpenXml.Unid);
-            if (unid is not null && AnchorForUnid(unid, PartUriOf(para)) is { } a)
+            var unid = (string?)element.Attribute(PtOpenXml.Unid);
+            if (unid is not null && AnchorForUnid(unid, PartUriOf(element)) is { } a)
                 result.Add(a);
         }
         return result;
     }
+
+    private TableMetadata CaptureTableMetadata(XElement table) =>
+        Internal.TableGridModel.BuildMetadata(table, AnchorForElement);
+
+    private TableAnchorMapping CompleteTableMapping(TableMetadata before, XElement table) =>
+        Internal.TableGridModel.Map(before,
+            table.Parent is null ? null : Internal.TableGridModel.BuildMetadata(table, AnchorForElement));
+
+    private static IReadOnlyList<Anchor> InvalidatedCellAnchors(TableAnchorMapping mapping) =>
+        mapping.Invalidated
+            .Where(location => location.EntityKind == TableAnchorEntityKind.Cell)
+            .Select(location => location.Anchor)
+            .ToList();
 
     /// <summary>An empty clone of <paramref name="referenceCell"/>'s shell (width, borders, shading,
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
@@ -7816,12 +7913,13 @@ public sealed class DocxSession : IDisposable
     /// <summary>Insert a row before/after the row containing <paramref name="cellAnchorId"/>. The new
     /// row mirrors the reference row's grid shape (cell widths and <c>w:gridSpan</c>s) and starts
     /// empty; where a vertical merge crosses the insertion boundary the new row joins it as a
-    /// continuation rather than punching a hole through it. Returns the new cell-paragraph anchors.</summary>
+    /// continuation rather than punching a hole through it. Returns the new canonical cell anchors.</summary>
     public EditResult InsertTableRow(string cellAnchorId, Position pos)
     {
-        if (ResolveCell(cellAnchorId, out _, out _, out var tr, out _, out var target) is { } err)
+        if (ResolveCell(cellAnchorId, out _, out _, out var tr, out var tbl, out var target) is { } err)
             return err;
 
+        var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -7839,14 +7937,14 @@ public sealed class DocxSession : IDisposable
                 .Select(e => new XElement(e)).ToList();
             if (shape is { Count: > 0 }) newTr.Add(new XElement(W.trPr, shape));
 
-            var newParas = new List<XElement>();
+            var newCells = new List<XElement>();
             foreach (var g in RowGrid(tr))
             {
                 var newTc = NewEmptyCellLike(g.Tc, keepSpan: true);
                 if (acrossGrid is not null && CellCovering(acrossGrid, g.Start) is { } across
                     && VMergeRestart(across.Tc) == false)
                     SetVMerge(newTc, restart: false);
-                newParas.Add(newTc.Element(W.p)!);
+                newCells.Add(newTc);
                 newTr.Add(newTc);
             }
             UnidHelper.AssignToSelfAndDescendants(newTr);
@@ -7857,7 +7955,8 @@ public sealed class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Created = ResolveAnchorsForParagraphs(newParas),
+                Created = ResolveAnchorsForElements(newCells),
+                TableAnchors = CompleteTableMapping(before, tbl!),
                 Patch = PatchFor(target!),
             };
         }
@@ -7873,7 +7972,7 @@ public sealed class DocxSession : IDisposable
     /// a new empty cell in every row (cloning that column's width) plus a matching w:gridCol. A row
     /// whose cell straddles the new boundary — a horizontal merge spanning it — widens by one
     /// column instead of gaining a cell, so the grid stays consistent. Returns the new
-    /// cell-paragraph anchors (top→bottom); rows that only widened contribute none.</summary>
+    /// canonical cell anchors (top→bottom); rows that only widened contribute none.</summary>
     public EditResult InsertTableColumn(string cellAnchorId, Position pos)
     {
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
@@ -7882,9 +7981,11 @@ public sealed class DocxSession : IDisposable
         var anchorCell = RowGrid(tr!).First(g => g.Tc == tc);
         int boundary = pos == Position.Before ? anchorCell.Start : anchorCell.End;
 
+        var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            EnsureGridColumnsForMutation(tbl!);
             // Mirror the structural change in w:tblGrid first, so the new column's width is
             // known before the cells that must carry it are written.
             var widths = GridColWidths(tbl!);
@@ -7893,15 +7994,30 @@ public sealed class DocxSession : IDisposable
             int newWidth = widths.Count > 0 ? widths[srcCol] : 0;
             if (tbl!.Element(W.tblGrid) is { } grid && grid.Elements(W.gridCol).ToList() is { Count: > 0 } cols)
             {
-                var clone = new XElement(cols[srcCol]);
+                var clone = new XElement(W.gridCol,
+                    cols[srcCol].Attributes().Where(attribute => attribute.Name != PtOpenXml.Unid));
+                UnidHelper.AssignToSelfAndDescendants(clone);
                 if (boundary >= cols.Count) cols[^1].AddAfterSelf(clone);
                 else cols[boundary].AddBeforeSelf(clone);
             }
 
-            var newParas = new List<XElement>();
+            var newCells = new List<XElement>();
             foreach (var row in tbl.Elements(W.tr))
             {
                 var rowGrid = RowGrid(row);
+                int gridBefore = Internal.TableGridModel.GridBefore(row);
+                int rowEnd = rowGrid.Count == 0 ? gridBefore : rowGrid[^1].End;
+                int gridAfter = Internal.TableGridModel.GridAfter(row);
+                if (boundary < gridBefore)
+                {
+                    SetRowGridOmission(row, W.gridBefore, gridBefore + 1);
+                    continue;
+                }
+                if (boundary > rowEnd && boundary <= rowEnd + gridAfter)
+                {
+                    SetRowGridOmission(row, W.gridAfter, gridAfter + 1);
+                    continue;
+                }
                 // A cell straddling the boundary extends rather than splits: inserting "inside"
                 // a horizontal merge widens it.
                 if (rowGrid.FirstOrDefault(c => c.Start < boundary && c.End > boundary) is { Tc: not null } straddle)
@@ -7917,7 +8033,7 @@ public sealed class DocxSession : IDisposable
                 var newTc = NewEmptyCellLike(refTc);
                 if (newWidth > 0) SetCellWidth(newTc, newWidth);
                 UnidHelper.AssignToSelfAndDescendants(newTc);
-                newParas.Add(newTc.Element(W.p)!);
+                newCells.Add(newTc);
                 if (left.Tc is not null) left.Tc.AddAfterSelf(newTc);
                 else right.Tc!.AddBeforeSelf(newTc);
             }
@@ -7926,7 +8042,8 @@ public sealed class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Created = ResolveAnchorsForParagraphs(newParas),
+                Created = ResolveAnchorsForElements(newCells),
+                TableAnchors = CompleteTableMapping(before, tbl),
                 Patch = PatchFor(target!),
             };
         }
@@ -7946,12 +8063,11 @@ public sealed class DocxSession : IDisposable
         if (ResolveCell(cellAnchorId, out _, out _, out var tr, out var tbl, out var target) is { } err)
             return err;
 
+        var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = AnchorIndex();
-            var removed = CellParagraphAnchorsIn(tr!);
-            if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
+            if (tbl!.Elements(W.tr).Count() <= 1) tbl.Remove();
             else
             {
                 if (tr!.ElementsAfterSelf(W.tr).FirstOrDefault() is { } next)
@@ -7962,7 +8078,14 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
+            var mapping = CompleteTableMapping(before, tbl);
+            return new EditResult
+            {
+                Success = true,
+                Removed = InvalidatedCellAnchors(mapping),
+                TableAnchors = mapping,
+                Patch = PatchFor(target!),
+            };
         }
         catch (Exception ex)
         {
@@ -7983,28 +8106,41 @@ public sealed class DocxSession : IDisposable
 
         int doomed = RowGrid(tr!).First(g => g.Tc == tc).Start;
 
+        var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = AnchorIndex();
+            EnsureGridColumnsForMutation(tbl!);
             var grid = tbl!.Element(W.tblGrid);
             int colCount = GridColumnCount(tbl);
             int lostWidth = GridColWidths(tbl) is { } widths && doomed < widths.Count ? widths[doomed] : 0;
 
-            var removed = new List<Anchor>();
-            if (colCount <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) removed.Add(a); tbl.Remove(); }
+            if (colCount <= 1) tbl.Remove();
             else
             {
                 foreach (var row in tbl.Elements(W.tr).ToList())
                 {
-                    if (CellCovering(RowGrid(row), doomed) is not { } cell) continue;
+                    var rowGrid = RowGrid(row);
+                    int gridBefore = Internal.TableGridModel.GridBefore(row);
+                    int rowEnd = rowGrid.Count == 0 ? gridBefore : rowGrid[^1].End;
+                    int gridAfter = Internal.TableGridModel.GridAfter(row);
+                    if (doomed < gridBefore)
+                    {
+                        SetRowGridOmission(row, W.gridBefore, gridBefore - 1);
+                        continue;
+                    }
+                    if (doomed >= rowEnd && doomed < rowEnd + gridAfter)
+                    {
+                        SetRowGridOmission(row, W.gridAfter, gridAfter - 1);
+                        continue;
+                    }
+                    if (CellCovering(rowGrid, doomed) is not { } cell) continue;
                     if (cell.Span > 1)
                     {
                         SetGridSpan(cell.Tc, cell.Span - 1);
                         BumpCellWidth(cell.Tc, -lostWidth);
                         continue;
                     }
-                    foreach (var a in CellParagraphAnchorsIn(cell.Tc)) removed.Add(a);
                     cell.Tc.Remove();
                 }
                 var cols = grid?.Elements(W.gridCol).ToList();
@@ -8012,7 +8148,14 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
+            var mapping = CompleteTableMapping(before, tbl);
+            return new EditResult
+            {
+                Success = true,
+                Removed = InvalidatedCellAnchors(mapping),
+                TableAnchors = mapping,
+                Patch = PatchFor(target!),
+            };
         }
         catch (Exception ex)
         {
@@ -8022,28 +8165,14 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    /// <summary>The cell-paragraph anchors under <paramref name="scope"/> (a tc/tr/tbl), in document order.
-    /// Resolved via <see cref="AnchorForElement"/> so a table inside a header/footer story cannot
-    /// report a body paragraph's anchor through a colliding content-addressed unid.</summary>
-    private List<Anchor> CellParagraphAnchorsIn(XElement scope)
-    {
-        var result = new List<Anchor>();
-        foreach (var para in scope.Descendants(W.p))
-        {
-            if (AnchorForElement(para) is { } a) result.Add(a);
-        }
-        return result;
-    }
-
-    // ─── Cell merge / unmerge (issue #340 Stage B), addressed by a cell-paragraph anchor ──
+    // ─── Cell merge / unmerge (issue #340 Stage B), addressed by a canonical tc anchor ─────
     //
-    // Anchor semantics: a merge never invents or hides anchors. Absorbed cells' paragraphs are
-    // either moved into the surviving cell (Append, so their anchors live on) or removed
-    // (reported in Removed). A vertical-merge continuation cell keeps exactly one empty w:p —
-    // CT_Tc requires a block-level child — whose anchor stays addressable even though Word
-    // renders nothing for it; writing to it is legal but invisible, so unmerge first. A table
-    // carrying any merge projects as an opaque ```table``` block (the markdown projection's
-    // existing rule), with its cell paragraphs still individually addressable.
+    // Anchor semantics: the surviving tc retains its canonical anchor; absorbed tc anchors are
+    // invalidated and reported in Removed/TableAnchors.Invalidated. Append moves absorbed content
+    // into the survivor, preserving those paragraph anchors. A vertical-merge continuation cell
+    // remains a canonical tc and keeps exactly one empty w:p because CT_Tc requires a block child.
+    // It stays addressable even though Word renders nothing for it; unmerge before writing visible
+    // content. The markdown projection still treats any table carrying a merge as opaque.
 
     private static EditResult MergeFail(string message, string anchorId) =>
         EditResult.Fail(EditErrorCode.InvalidTableMerge, message, anchorId);
@@ -8135,14 +8264,10 @@ public sealed class DocxSession : IDisposable
                 "absorbed cells are not empty (use Content = Append to keep their content, or Discard to drop it)",
                 cellAnchorId);
 
+        var before = CaptureTableMetadata(tbl);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var doomed = absorbed.SelectMany(x => x.Descendants(W.p))
-                .Select(p => (Para: p, Anchor: AnchorForElement(p)))
-                .Where(x => x.Anchor is not null).ToList();
-            var created = new List<XElement>();
-
             // Content first: everything the merge absorbs MOVES into the surviving cell. Detach
             // before re-adding — XContainer.Add clones a still-parented node, which would leave
             // the original behind (and duplicate its Unid).
@@ -8163,18 +8288,17 @@ public sealed class DocxSession : IDisposable
                 if (width > 0) SetCellWidth(keep, width);
                 if (rowSpan == 1) continue;
                 SetVMerge(keep, restart: i == 0);
-                if (i > 0 && EmptyCellBody(keep) is { } fresh) created.Add(fresh);
+                if (i > 0) _ = EmptyCellBody(keep);
             }
 
             InvalidateProjectionCache();
+            var mapping = CompleteTableMapping(before, tbl);
             return new EditResult
             {
                 Success = true,
-                Created = ResolveAnchorsForParagraphs(created),
-                // Whatever did not survive the merge — the absorbed cells' paragraphs under
-                // Discard, and every empty filler paragraph under Append.
-                Removed = doomed.Where(x => !x.Para.Ancestors().Contains(tbl)).Select(x => x.Anchor!.Value).ToList(),
+                Removed = InvalidatedCellAnchors(mapping),
                 Modified = new[] { AnchorForUnid(target!.Unid, target.PartUri) ?? target.Anchor },
+                TableAnchors = mapping,
                 Patch = PatchFor(target),
             };
         }
@@ -8220,6 +8344,7 @@ public sealed class DocxSession : IDisposable
                 r1++;
         }
 
+        var before = CaptureTableMetadata(tbl);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -8242,7 +8367,7 @@ public sealed class DocxSession : IDisposable
                     UnidHelper.AssignToSelfAndDescendants(unit);
                     tail.AddAfterSelf(unit);
                     tail = unit;
-                    created.Add(unit.Element(W.p)!);
+                    created.Add(unit);
                 }
             }
 
@@ -8250,8 +8375,9 @@ public sealed class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Created = ResolveAnchorsForParagraphs(created),
+                Created = ResolveAnchorsForElements(created),
                 Modified = new[] { AnchorForUnid(target!.Unid, target.PartUri) ?? target.Anchor },
+                TableAnchors = CompleteTableMapping(before, tbl),
                 Patch = PatchFor(target),
             };
         }
@@ -8263,7 +8389,7 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    // ─── Table styling (issue #315 Stage A), addressed by a cell-paragraph anchor ─────────
+    // ─── Table styling (issue #315 Stage A), addressed by a canonical tc anchor ───────────
     //
     // Localized w:tblPr / w:trPr / w:tcPr writes over the grid model above.
 
@@ -8327,7 +8453,7 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>The shared "styling applied" result: the target anchor in Modified + a patch.</summary>
-    private EditResult TableStyleResult(AnchorTarget target)
+    private EditResult TableStyleResult(AnchorTarget target, TableAnchorMapping? tableAnchors = null)
     {
         InvalidateProjectionCache();
         var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
@@ -8336,6 +8462,7 @@ public sealed class DocxSession : IDisposable
             Success = true,
             Modified = new[] { updated },
             Patch = PatchFor(target),
+            TableAnchors = tableAnchors,
         };
     }
 
@@ -8351,6 +8478,7 @@ public sealed class DocxSession : IDisposable
         if (ResolveCell(cellAnchorId, out _, out _, out _, out var tbl, out var target) is { } err)
             return err;
 
+        var before = Internal.TableGridModel.BuildMetadata(tbl!, AnchorForElement);
         var grid = tbl!.Element(W.tblGrid);
         int colCount = GridColumnCount(tbl);
         if (widthsTwips is null || widthsTwips.Count != colCount || widthsTwips.Any(w => w <= 0))
@@ -8368,9 +8496,18 @@ public sealed class DocxSession : IDisposable
                 if (pr is not null) pr.AddAfterSelf(grid);
                 else tbl.AddFirst(grid);
             }
-            grid.RemoveNodes();
-            foreach (var w in widthsTwips)
-                grid.Add(new XElement(W.gridCol, new XAttribute(W._w, w)));
+            var gridColumns = grid.Elements(W.gridCol).ToList();
+            for (int index = 0; index < widthsTwips.Count; index++)
+            {
+                if (index < gridColumns.Count)
+                {
+                    gridColumns[index].SetAttributeValue(W._w, widthsTwips[index]);
+                    continue;
+                }
+                var column = new XElement(W.gridCol, new XAttribute(W._w, widthsTwips[index]));
+                UnidHelper.AssignToSelfAndDescendants(column);
+                grid.Add(column);
+            }
 
             // A merged cell is as wide as the grid columns it spans, so widths are summed over
             // each cell's grid range rather than read off its position in the row.
@@ -8388,7 +8525,7 @@ public sealed class DocxSession : IDisposable
                 new XElement(W.tblLayout, new XAttribute(W.type, "fixed")),
                 TblPrChildOrder);
 
-            return TableStyleResult(target!);
+            return TableStyleResult(target!, CompleteTableMapping(before, tbl));
         }
         catch (Exception ex)
         {

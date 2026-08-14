@@ -30,7 +30,10 @@ import type {
   ParagraphFormatOp,
   TableBorderSpec,
   TableInsertOptions,
+  TableMetadataResult,
+  TableCellResolutionResult,
   TableMergeContent,
+  TableRowOptions,
   TableShadingScope,
   ListFormat,
   GrepOptions,
@@ -192,7 +195,7 @@ export class DocxSession {
 
   /**
    * Insert a `rows`×`cols` table before/after the block. `options` controls borders, row-major
-   * cell markdown, and cell alignment. The returned `EditResult.created` lists the cell-paragraph
+   * cell markdown, and cell alignment. The returned `EditResult.created` lists canonical `tc`
    * anchors (row-major), so each cell can then be addressed to fill/format.
    */
   insertTable(
@@ -208,10 +211,33 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /** Resolve a canonical `tbl` anchor to explicit table/row/column/cell identities. */
+  getTableMetadata(tableAnchorId: string): TableMetadataResult {
+    return JSON.parse(this.wasm.GetTableMetadata(this.handle, tableAnchorId)) as TableMetadataResult;
+  }
+
+  /** Resolve a canonical `tc` anchor to its zero-based table-grid coordinate and spans. */
+  resolveTableCellAnchor(cellAnchorId: string): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellAnchor(this.handle, cellAnchorId),
+    ) as TableCellResolutionResult;
+  }
+
+  /** Resolve a zero-based table-grid coordinate to the physical `tc` covering it. */
+  resolveTableCellCoordinate(
+    tableAnchorId: string,
+    rowIndex: number,
+    columnIndex: number,
+  ): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellCoordinate(this.handle, tableAnchorId, rowIndex, columnIndex),
+    ) as TableCellResolutionResult;
+  }
+
   /**
-   * Table row/column editing, addressed by a cell-paragraph anchor (e.g. one returned from
-   * {@link insertTable}'s `created`). Insert clones the reference row/column's widths and starts
-   * empty (`created` lists the new cell-paragraph anchors); delete of the last row/column removes
+   * Table row/column editing, addressed by the canonical `tc` anchor returned from
+   * {@link insertTable}'s `created` or table metadata. Insert clones the reference row/column's
+   * widths and starts empty (`created` lists new `tc` anchors); delete of the last row/column removes
    * the whole table. All four are grid-aware: inserting across a merge extends it, deleting
    * through one narrows it, and deleting a vertical merge's lead row promotes the next row to
    * carry it — the grid is never left ragged.
@@ -262,7 +288,7 @@ export class DocxSession {
   }
 
   /**
-   * Table styling, addressed by a cell-paragraph anchor — the post-insert counterpart of
+   * Table styling, addressed by a canonical `tc` anchor — the post-insert counterpart of
    * {@link insertTable}'s options (issue #315 Stage A). `setColumnWidths` retunes `w:tblGrid` +
    * every row's cell width (one positive twip value per column) and pins the table to fixed
    * layout, exactly as inserting with explicit `columnWidths` would.
@@ -307,6 +333,20 @@ export class DocxSession {
   setRepeatHeaderRow(cellAnchorId: string, repeat: boolean): EditResult {
     return JSON.parse(
       this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat),
+    ) as EditResult;
+  }
+
+  /** Apply row layout options to the row containing the canonical cell anchor. */
+  setTableRowOptions(cellAnchorId: string, options: TableRowOptions): EditResult {
+    return JSON.parse(
+      this.wasm.SetTableRowOptions(
+        this.handle,
+        cellAnchorId,
+        options.repeatHeader ?? null,
+        options.allowBreakAcrossPages ?? null,
+        options.heightTwips ?? null,
+        options.heightRule ?? "atLeast",
+      ),
     ) as EditResult;
   }
 

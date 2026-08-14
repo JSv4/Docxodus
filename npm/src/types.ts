@@ -1124,6 +1124,9 @@ export interface DocxodusWasmExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
     InsertTable: (handle: number, anchor: string, pos: string, rows: number, cols: number, optionsJson: string) => string;
+    GetTableMetadata: (handle: number, tableAnchor: string) => string;
+    ResolveTableCellAnchor: (handle: number, cellAnchor: string) => string;
+    ResolveTableCellCoordinate: (handle: number, tableAnchor: string, rowIndex: number, columnIndex: number) => string;
     InsertTableRow: (handle: number, cellAnchor: string, pos: string) => string;
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
     DeleteTableRow: (handle: number, cellAnchor: string) => string;
@@ -1134,6 +1137,8 @@ export interface DocxodusWasmExports {
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean) => string;
+    SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
+      allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
@@ -1276,6 +1281,7 @@ export type EditErrorCode =
   | "invalid_paragraph_format"
   | "invalid_table_styling"
   | "invalid_table_merge"
+  | "table_anchor_migration_required"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1313,6 +1319,8 @@ export interface EditResult {
   created: AnchorRef[];
   removed: AnchorRef[];
   modified: AnchorRef[];
+  /** Deterministic structural identity map for table shape mutations. */
+  tableAnchors?: TableAnchorMapping;
   patch?: MarkdownPatch;
   /** Set by the annotation ops (addAnnotation/removeAnnotation/updateAnnotation/
    * moveAnnotation) with the affected annotation id; absent for every other op. */
@@ -1503,6 +1511,85 @@ export interface TableInsertOptions {
    *  whose length != the column count is rejected. Drives unequal layouts like the S-1's
    *  wide-left / narrow-right filing-header row. */
   columnWidths?: number[];
+}
+
+export type TableVerticalMergeRole = "none" | "restart" | "continue";
+export type TableAnchorEntityKind = "table" | "row" | "column" | "cell";
+
+export interface TableCellMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  rowAnchorId: string;
+  rowIndex: number;
+  columnIndex: number;
+  rowSpan: number;
+  columnSpan: number;
+  verticalMerge: TableVerticalMergeRole;
+  /** Direct cell paragraphs only; nested-table paragraphs belong to their own cells. */
+  paragraphAnchors: AnchorRef[];
+}
+
+export interface TableRowMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  rowIndex: number;
+  gridBefore: number;
+  gridAfter: number;
+  cells: TableCellMetadata[];
+}
+
+export interface TableColumnMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  columnIndex: number;
+  widthTwips: number;
+  /** True when an absent/underspecified tblGrid required a read-only coordinate identity. */
+  isVirtual: boolean;
+  cellAnchorIds: string[];
+}
+
+export interface TableMetadata {
+  anchor: AnchorRef;
+  columns: TableColumnMetadata[];
+  rows: TableRowMetadata[];
+}
+
+export interface TableMetadataResult {
+  success: boolean;
+  error?: EditError;
+  metadata?: TableMetadata;
+}
+
+export interface TableCellResolutionResult {
+  success: boolean;
+  error?: EditError;
+  cell?: TableCellMetadata;
+}
+
+export interface TableAnchorLocation {
+  anchor: AnchorRef;
+  entityKind: TableAnchorEntityKind;
+  rowIndex?: number;
+  columnIndex?: number;
+  rowSpan?: number;
+  columnSpan?: number;
+  isVirtual?: boolean;
+}
+
+export interface TableAnchorMapping {
+  retained: { before: TableAnchorLocation; after: TableAnchorLocation }[];
+  added: TableAnchorLocation[];
+  invalidated: TableAnchorLocation[];
+}
+
+export type TableRowHeightRule = "auto" | "atLeast" | "exact";
+
+export interface TableRowOptions {
+  repeatHeader?: boolean;
+  allowBreakAcrossPages?: boolean;
+  /** Zero removes an explicit height. */
+  heightTwips?: number;
+  heightRule?: TableRowHeightRule;
 }
 
 /** Which table edges `DocxSession.setTableBorders` targets: `"outside"` = top/left/bottom/right,
@@ -2320,6 +2407,8 @@ export enum DocumentElementType {
 export interface DocumentElement {
   /** Unique element ID (path-based, e.g., "doc/tbl-0/tr-1/tc-2") */
   id: string;
+  /** Canonical session anchor when this element is addressable. */
+  anchorId?: string;
   /** Element type */
   type: DocumentElementType | string;
   /** Preview of text content (first ~100 characters) */
@@ -2344,10 +2433,17 @@ export interface DocumentElement {
 export interface TableColumnInfo {
   /** ID of the table this column belongs to */
   tableId: string;
+  /** Canonical `col` anchor. */
+  anchorId: string;
+  /** Canonical owning `tbl` anchor. */
+  tableAnchorId: string;
+  isVirtual: boolean;
   /** Zero-based column index */
   columnIndex: number;
   /** IDs of all cells in this column */
   cellIds: string[];
+  /** Canonical `tc` anchors for cells covering this column. */
+  cellAnchorIds: string[];
   /** Total number of rows in this column */
   rowCount: number;
 }

@@ -411,23 +411,21 @@ why this is "apply-then-undo" rather than a true no-op dry run.
 ### `docxodus_table` — tables
 
 `insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,
-plus the post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
+the read actions `get_metadata`, `resolve_cell_anchor`, `resolve_cell_coordinate`, plus the
+post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
 positive twip value per column), `set_borders` (`borderScope` `all`/`outside`/`inside`,
 `borderStyle` — `none` removes the targeted edges — `borderSize`, `borderColor`), `set_shading`
 (`fill` hex/`auto`, omit to clear; `shadingScope` `cell`/`row` — row is header-row banding), and
-`set_repeat_header_row` (`repeat`, default true). All four take the same `"p"`-kind
-cell-paragraph `cellAnchorId` the row/column ops take.
+`set_repeat_header_row` (`repeat`, default true), `set_row_options`, `merge_cells`, and
+`unmerge_cells`.
 
-**Anchor-kind trap worth calling out explicitly** (discovered writing the test suite for this
-tool, `MCP060`): `ReplaceCellContent` requires the cell's own `"tc"`-kind anchor
-(`target.Anchor.Kind != "tc"` is a hard `AnchorWrongKind` failure in `DocxSession.cs`), while
-`InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` require a `"p"`-kind
-anchor whose ancestor is a `w:tc` (`ResolveCell`'s `p.Ancestors(W.tc)` check) — a bare `"tc"`
-anchor fails those with the same error code. `InsertTable`'s `created` list only contains the
-`"p"` (cell-paragraph) anchors; a `"tc"` anchor has to come from `docxodus_search` with `mode:
-kind, query: "tc"`. This is a pre-existing Docxodus API asymmetry, not something this server
-smooths over — documented here (and in the tool's own schema) so an agent doesn't have to
-rediscover it by trial and error.
+The input schema does not overload anchor fields: `insert` uses `anchorId` for the neighboring
+block, metadata/coordinate reads use `tableAnchorId` (`tbl`), and every cell operation uses
+`cellAnchorId` (`tc`). `insert` returns canonical `tc` anchors in `created`; `get_metadata`
+enumerates the explicit `tbl`/`tr`/`col`/`tc` identities and coordinates. A legacy paragraph
+inside a cell is still translated during the compatibility window, but new tool calls should use
+only the canonical fields and identities. Shape mutations include a deterministic `tableAnchors`
+retained/added/invalidated mapping in their result.
 
 ## Inline preview (MCP Apps / ChatGPT Apps)
 
@@ -504,9 +502,6 @@ never claiming a capability it doesn't have:
   depth like any other edit sequence, and a crash between "apply" and "undo" would leave the
   session mutated — acceptable for a local, single-process tool server, worth knowing if this
   surface is ever exposed somewhere more failure-sensitive.
-- **`docxodus_table`'s `cellAnchorId` is two different anchor kinds depending on the action** —
-  see the tool reference above. Not fixable at this layer without hiding a real asymmetry in the
-  underlying API; documented instead.
 
 ## Testing
 

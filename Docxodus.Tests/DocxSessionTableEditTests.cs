@@ -12,7 +12,7 @@ namespace Docxodus.Tests;
 
 /// <summary>
 /// Tests for post-insert table editing on <see cref="DocxSession"/>: insert/delete row,
-/// insert/delete column — addressed by a cell-paragraph anchor. Test IDs use the DT2xx range.
+/// insert/delete column — addressed by a canonical cell anchor. Test IDs use the DT2xx range.
 /// </summary>
 public class DocxSessionTableEditTests
 {
@@ -30,9 +30,7 @@ public class DocxSessionTableEditTests
         session.Project().AnchorIndex.Values
             .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
 
-    /// <summary>Insert a rows×cols table and return its created cell-paragraph anchors (row-major).
-    /// One-line <paramref name="contents"/> entries stay one paragraph per cell, so the returned
-    /// anchors line up with the row-major cell order.</summary>
+    /// <summary>Insert a rows×cols table and return its created canonical cell anchors (row-major).</summary>
     private static (DocxSession session, string[] cells) NewTable(int rows, int cols,
         string[]? contents = null, int[]? widths = null)
     {
@@ -388,7 +386,9 @@ public class DocxSessionTableEditTests
 
         var r = session.MergeCells(cells[0], rowSpan: 1, colSpan: 3);
         Assert.True(r.Success, r.Error?.Message);
-        Assert.Empty(r.Removed);   // Append keeps every non-empty paragraph — nothing is lost
+        // Content is preserved, while the two absorbed canonical cell identities are invalidated.
+        Assert.Equal(2, r.Removed.Count);
+        Assert.All(r.Removed, anchor => Assert.Equal("tc", anchor.Kind));
         Assert.Empty(r.Created);
         Assert.Equal(cells[0], Assert.Single(r.Modified).Id);
 
@@ -410,10 +410,9 @@ public class DocxSessionTableEditTests
 
         var r = session.MergeCells(cells[0], rowSpan: 3, colSpan: 1);
         Assert.True(r.Success, r.Error?.Message);
-        // The absorbed text moved into the lead cell, so nothing is reported removed; each
-        // continuation cell is re-seeded with one fresh (still addressable) paragraph.
+        // The absorbed text moved into the lead cell and every canonical cell shell survives.
         Assert.Empty(r.Removed);
-        Assert.Equal(2, r.Created.Count);
+        Assert.Empty(r.Created);
 
         var tbl = SingleTable(session);
         Assert.Equal(new[] { 2, 2, 2 }, CellCounts(tbl)); // a vertical merge removes no cells
@@ -583,8 +582,8 @@ public class DocxSessionTableEditTests
         Assert.Equal(EditErrorCode.InvalidTableMerge, bad.Error!.Code);
 
         var bodyP = FirstBodyParagraph(session);
-        Assert.Equal(EditErrorCode.AnchorWrongKind, session.MergeCells(bodyP, 2, 2).Error!.Code);
-        Assert.Equal(EditErrorCode.AnchorWrongKind, session.UnmergeCells(bodyP).Error!.Code);
+        Assert.Equal(EditErrorCode.TableAnchorMigrationRequired, session.MergeCells(bodyP, 2, 2).Error!.Code);
+        Assert.Equal(EditErrorCode.TableAnchorMigrationRequired, session.UnmergeCells(bodyP).Error!.Code);
     }
 
     [Fact]
@@ -755,10 +754,10 @@ public class DocxSessionTableEditTests
         Assert.Contains("```table", projection.Markdown);
         // …whose width is the GRID extent (3), not the merged first row's cell count (2).
         Assert.Contains("rows: 2\ncols: 3", projection.Markdown.Replace("\r\n", "\n"));
-        // …while every surviving cell paragraph stays individually addressable.
+        // …while every surviving canonical cell stays individually addressable.
         Assert.Contains(cells[0], projection.AnchorIndex.Keys);
         Assert.Contains(cells[2], projection.AnchorIndex.Keys);
-        Assert.True(session.ReplaceText(cells[2], "still editable").Success);
+        Assert.True(session.ReplaceCellContent(cells[2], "still editable").Success);
         Assert.Equal("still editable", CellText(Cell(SingleTable(session), 0, 1)));
     }
 
@@ -771,7 +770,7 @@ public class DocxSessionTableEditTests
         Assert.True(session.MergeCells(cells[0], 2, 2).Success);
         var left = new WmlDocument("left.docx", session.Save());
 
-        Assert.True(session.ReplaceText(cells[0], "revised headline").Success);
+        Assert.True(session.ReplaceCellContent(cells[0], "revised headline").Success);
         var right = new WmlDocument("right.docx", session.Save());
 
         var redline = DocxDiff.Compare(left, right);

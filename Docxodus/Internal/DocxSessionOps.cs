@@ -386,6 +386,19 @@ internal static class DocxSessionOps
 
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
+    public static string GetTableMetadata(int handle, string tableAnchorId) =>
+        DocxSessionJson.SerializeTableMetadataResult(
+            SessionRegistry.Get(handle).GetTableMetadata(tableAnchorId));
+
+    public static string ResolveTableCellAnchor(int handle, string cellAnchorId) =>
+        DocxSessionJson.SerializeTableCellResolutionResult(
+            SessionRegistry.Get(handle).ResolveTableCellAnchor(cellAnchorId));
+
+    public static string ResolveTableCellCoordinate(
+        int handle, string tableAnchorId, int rowIndex, int columnIndex) =>
+        DocxSessionJson.SerializeTableCellResolutionResult(
+            SessionRegistry.Get(handle).ResolveTableCellCoordinate(tableAnchorId, rowIndex, columnIndex));
+
     public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceCellContent(cellAnchorId, markdown));
 

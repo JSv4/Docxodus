@@ -106,6 +106,7 @@ python -m venv .venv
 
 - `tests/test_smoke.py` — end-to-end mirror of `Docxodus.Tests/DocxSessionSmokeTest.cs`. v1 acceptance gate.
 - `tests/test_lifecycle.py` — proves session persistence, idempotent close, singleton host, finalizer fallback.
+- `tests/test_table_addressing.py` — canonical table identities, coordinate resolution, every table mutation, mappings, and anchor-stable reopen.
 
 Tests share the Docxodus monorepo's `TestFiles/` corpus so divergence between Python and .NET on identical inputs is detectable.
 
@@ -125,7 +126,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 | **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote` |
 | **B: native comments** | `add_comment`, `add_comment_to_revision`, `add_comment_reply`, `update_comment`, `set_comment_resolved`, `remove_comment`, `list_comments` |
 | **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership`, `apply_list_format`, `apply_list_format_range`, `set_list_start_override`, `clear_list_start_override` |
-| **D: tables** | `replace_cell_content` |
+| **D: tables** | `get_table_metadata`, `resolve_table_cell_anchor`, `resolve_table_cell_coordinate`, `insert_table`, `insert_table_row`, `insert_table_column`, `delete_table_row`, `delete_table_column`, `merge_cells`, `unmerge_cells`, `set_column_widths`, `set_table_borders`, `set_cell_shading`, `set_repeat_header_row`, `set_table_row_options`, `replace_cell_content` |
 | **D: tracked changes** | `set_tracked_changes`, `set_revision_author`, `list_revisions`, `accept_revision`, `reject_revision` |
 | **E: annotations** | `add_annotation`, `remove_annotation`, `update_annotation`, `move_annotation` |
 | **Raw XML** | `session.raw.get_xml`, `session.raw.insert_xml`, `session.raw.replace_xml` |

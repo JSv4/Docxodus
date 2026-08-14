@@ -421,6 +421,11 @@ internal static class DocxSessionJson
         sb.Append(",\"created\":"); AppendAnchorArray(sb, r.Created);
         sb.Append(",\"removed\":"); AppendAnchorArray(sb, r.Removed);
         sb.Append(",\"modified\":"); AppendAnchorArray(sb, r.Modified);
+        if (r.TableAnchors is not null)
+        {
+            sb.Append(",\"tableAnchors\":");
+            AppendTableAnchorMapping(sb, r.TableAnchors);
+        }
         if (r.AnnotationId is not null)
             sb.Append(",\"annotationId\":").Append(JsonString(r.AnnotationId));
         if (r.Patch is not null)
@@ -433,6 +438,127 @@ internal static class DocxSessionJson
         sb.Append('}');
         return sb.ToString();
     }
+
+    public static string SerializeTableMetadataResult(TableMetadataResult result)
+    {
+        var sb = new StringBuilder(1024);
+        sb.Append("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is not null) { sb.Append(",\"error\":"); AppendEditError(sb, result.Error); }
+        if (result.Metadata is not null) { sb.Append(",\"metadata\":"); AppendTableMetadata(sb, result.Metadata); }
+        return sb.Append('}').ToString();
+    }
+
+    public static string SerializeTableCellResolutionResult(TableCellResolutionResult result)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is not null) { sb.Append(",\"error\":"); AppendEditError(sb, result.Error); }
+        if (result.Cell is not null) { sb.Append(",\"cell\":"); AppendTableCellMetadata(sb, result.Cell); }
+        return sb.Append('}').ToString();
+    }
+
+    private static void AppendEditError(StringBuilder sb, EditError error)
+    {
+        sb.Append("{\"code\":\"").Append(EnumToSnake(error.Code)).Append('"')
+          .Append(",\"message\":").Append(JsonString(error.Message));
+        if (error.AnchorId is not null) sb.Append(",\"anchorId\":").Append(JsonString(error.AnchorId));
+        sb.Append('}');
+    }
+
+    private static void AppendTableMetadata(StringBuilder sb, TableMetadata metadata)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, metadata.Anchor);
+        sb.Append(",\"columns\":[");
+        for (int i = 0; i < metadata.Columns.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var column = metadata.Columns[i];
+            sb.Append("{\"anchor\":"); AppendAnchorValue(sb, column.Anchor);
+            sb.Append(",\"tableAnchorId\":").Append(JsonString(column.TableAnchorId))
+              .Append(",\"columnIndex\":").Append(column.ColumnIndex)
+              .Append(",\"widthTwips\":").Append(column.WidthTwips)
+              .Append(",\"isVirtual\":").Append(column.IsVirtual ? "true" : "false")
+              .Append(",\"cellAnchorIds\":"); AppendStringArray(sb, column.CellAnchorIds);
+            sb.Append('}');
+        }
+        sb.Append("],\"rows\":[");
+        for (int i = 0; i < metadata.Rows.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var row = metadata.Rows[i];
+            sb.Append("{\"anchor\":"); AppendAnchorValue(sb, row.Anchor);
+            sb.Append(",\"tableAnchorId\":").Append(JsonString(row.TableAnchorId))
+              .Append(",\"rowIndex\":").Append(row.RowIndex)
+              .Append(",\"gridBefore\":").Append(row.GridBefore)
+              .Append(",\"gridAfter\":").Append(row.GridAfter)
+              .Append(",\"cells\":[");
+            for (int c = 0; c < row.Cells.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                AppendTableCellMetadata(sb, row.Cells[c]);
+            }
+            sb.Append("]}");
+        }
+        sb.Append("]}");
+    }
+
+    private static void AppendTableCellMetadata(StringBuilder sb, TableCellMetadata cell)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, cell.Anchor);
+        sb.Append(",\"tableAnchorId\":").Append(JsonString(cell.TableAnchorId))
+          .Append(",\"rowAnchorId\":").Append(JsonString(cell.RowAnchorId))
+          .Append(",\"rowIndex\":").Append(cell.RowIndex)
+          .Append(",\"columnIndex\":").Append(cell.ColumnIndex)
+          .Append(",\"rowSpan\":").Append(cell.RowSpan)
+          .Append(",\"columnSpan\":").Append(cell.ColumnSpan)
+          .Append(",\"verticalMerge\":").Append(JsonString(cell.VerticalMerge.ToString().ToLowerInvariant()))
+          .Append(",\"paragraphAnchors\":"); AppendAnchorArray(sb, cell.ParagraphAnchors);
+        sb.Append('}');
+    }
+
+    private static void AppendTableAnchorMapping(StringBuilder sb, TableAnchorMapping mapping)
+    {
+        sb.Append("{\"retained\":[");
+        for (int i = 0; i < mapping.Retained.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"before\":"); AppendTableAnchorLocation(sb, mapping.Retained[i].Before);
+            sb.Append(",\"after\":"); AppendTableAnchorLocation(sb, mapping.Retained[i].After);
+            sb.Append('}');
+        }
+        sb.Append("],\"added\":[");
+        for (int i = 0; i < mapping.Added.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendTableAnchorLocation(sb, mapping.Added[i]);
+        }
+        sb.Append("],\"invalidated\":[");
+        for (int i = 0; i < mapping.Invalidated.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendTableAnchorLocation(sb, mapping.Invalidated[i]);
+        }
+        sb.Append("]}");
+    }
+
+    private static void AppendTableAnchorLocation(StringBuilder sb, TableAnchorLocation location)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, location.Anchor);
+        sb.Append(",\"entityKind\":").Append(JsonString(location.EntityKind.ToString().ToLowerInvariant()));
+        if (location.RowIndex is not null) sb.Append(",\"rowIndex\":").Append(location.RowIndex.Value);
+        if (location.ColumnIndex is not null) sb.Append(",\"columnIndex\":").Append(location.ColumnIndex.Value);
+        if (location.RowSpan is not null) sb.Append(",\"rowSpan\":").Append(location.RowSpan.Value);
+        if (location.ColumnSpan is not null) sb.Append(",\"columnSpan\":").Append(location.ColumnSpan.Value);
+        if (location.IsVirtual) sb.Append(",\"isVirtual\":true");
+        sb.Append('}');
+    }
+
+    private static void AppendAnchorValue(StringBuilder sb, Anchor anchor) =>
+        sb.Append("{\"id\":").Append(JsonString(anchor.Id))
+          .Append(",\"kind\":").Append(JsonString(anchor.Kind))
+          .Append(",\"scope\":").Append(JsonString(anchor.Scope))
+          .Append(",\"unid\":").Append(JsonString(anchor.Unid))
+          .Append('}');
 
     public static string SerializeEditResults(IReadOnlyList<EditResult> results)
     {

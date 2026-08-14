@@ -34,7 +34,10 @@ from .enums import (
     PlaceholderKind,
     PlaceholderKinds,
     ProjectionScopes,
+    TableAnchorEntityKind,
     TableRenderMode,
+    TableRowHeightRule,
+    TableVerticalMergeRole,
     TrackedChangeMode,
     WhitespaceMode,
 )
@@ -80,6 +83,18 @@ __all__ = [
     "DocxDiffConflictCompetitor",
     "DocxDiffConflict",
     "DocxDiffConsolidatedRevision",
+    "TableInsertOptions",
+    "TableBorderSpec",
+    "TableRowOptions",
+    "TableCellMetadata",
+    "TableRowMetadata",
+    "TableColumnMetadata",
+    "TableMetadata",
+    "TableMetadataResult",
+    "TableCellResolutionResult",
+    "TableAnchorLocation",
+    "RetainedTableAnchor",
+    "TableAnchorMapping",
 ]
 
 
@@ -105,6 +120,168 @@ class Anchor:
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "Anchor":
         return cls(id=d["id"], kind=d["kind"], scope=d["scope"], unid=d["unid"])
+
+
+@dataclass(frozen=True, slots=True)
+class TableInsertOptions:
+    borderless: bool = False
+    cell_contents: tuple[str, ...] = ()
+    cell_alignment: str | None = None
+    column_widths: tuple[int, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"borderless": self.borderless}
+        if self.cell_contents:
+            result["cellContents"] = list(self.cell_contents)
+        if self.cell_alignment is not None:
+            result["cellAlignment"] = self.cell_alignment
+        if self.column_widths:
+            result["columnWidths"] = list(self.column_widths)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class TableBorderSpec:
+    scope: str = "all"
+    style: str | None = None
+    size: int | None = None
+    color: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {key: value for key, value in {
+            "scope": self.scope, "style": self.style, "size": self.size, "color": self.color,
+        }.items() if value is not None}
+
+
+@dataclass(frozen=True, slots=True)
+class TableRowOptions:
+    repeat_header: bool | None = None
+    allow_break_across_pages: bool | None = None
+    height_twips: int | None = None
+    height_rule: TableRowHeightRule = TableRowHeightRule.AT_LEAST
+
+
+@dataclass(frozen=True, slots=True)
+class TableCellMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    row_anchor_id: str
+    row_index: int
+    column_index: int
+    row_span: int
+    column_span: int
+    vertical_merge: TableVerticalMergeRole
+    paragraph_anchors: tuple[Anchor, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableCellMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            table_anchor_id=d["tableAnchorId"], row_anchor_id=d["rowAnchorId"],
+            row_index=int(d["rowIndex"]), column_index=int(d["columnIndex"]),
+            row_span=int(d["rowSpan"]), column_span=int(d["columnSpan"]),
+            vertical_merge=TableVerticalMergeRole(d.get("verticalMerge", "none")),
+            paragraph_anchors=tuple(Anchor._from_wire(a) for a in d.get("paragraphAnchors", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableRowMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    row_index: int
+    grid_before: int
+    grid_after: int
+    cells: tuple[TableCellMetadata, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableRowMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]), table_anchor_id=d["tableAnchorId"],
+            row_index=int(d["rowIndex"]), grid_before=int(d.get("gridBefore", 0)),
+            grid_after=int(d.get("gridAfter", 0)),
+            cells=tuple(TableCellMetadata._from_wire(c) for c in d.get("cells", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableColumnMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    column_index: int
+    width_twips: int
+    is_virtual: bool
+    cell_anchor_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableColumnMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]), table_anchor_id=d["tableAnchorId"],
+            column_index=int(d["columnIndex"]), width_twips=int(d.get("widthTwips", 0)),
+            is_virtual=bool(d.get("isVirtual", False)),
+            cell_anchor_ids=tuple(d.get("cellAnchorIds", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableMetadata:
+    anchor: Anchor
+    columns: tuple[TableColumnMetadata, ...] = ()
+    rows: tuple[TableRowMetadata, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            columns=tuple(TableColumnMetadata._from_wire(c) for c in d.get("columns", ())),
+            rows=tuple(TableRowMetadata._from_wire(r) for r in d.get("rows", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableAnchorLocation:
+    anchor: Anchor
+    entity_kind: TableAnchorEntityKind
+    row_index: int | None = None
+    column_index: int | None = None
+    row_span: int | None = None
+    column_span: int | None = None
+    is_virtual: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableAnchorLocation":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            entity_kind=TableAnchorEntityKind(d["entityKind"]),
+            row_index=d.get("rowIndex"), column_index=d.get("columnIndex"),
+            row_span=d.get("rowSpan"), column_span=d.get("columnSpan"),
+            is_virtual=bool(d.get("isVirtual", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedTableAnchor:
+    before: TableAnchorLocation
+    after: TableAnchorLocation
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RetainedTableAnchor":
+        return cls(TableAnchorLocation._from_wire(d["before"]), TableAnchorLocation._from_wire(d["after"]))
+
+
+@dataclass(frozen=True, slots=True)
+class TableAnchorMapping:
+    retained: tuple[RetainedTableAnchor, ...] = ()
+    added: tuple[TableAnchorLocation, ...] = ()
+    invalidated: tuple[TableAnchorLocation, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableAnchorMapping":
+        return cls(
+            retained=tuple(RetainedTableAnchor._from_wire(x) for x in d.get("retained", ())),
+            added=tuple(TableAnchorLocation._from_wire(x) for x in d.get("added", ())),
+            invalidated=tuple(TableAnchorLocation._from_wire(x) for x in d.get("invalidated", ())),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,6 +767,36 @@ class EditError:
 
 
 @dataclass(frozen=True, slots=True)
+class TableMetadataResult:
+    success: bool
+    metadata: TableMetadata | None = None
+    error: EditError | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableMetadataResult":
+        metadata = d.get("metadata")
+        error = d.get("error")
+        return cls(bool(d.get("success", False)),
+            TableMetadata._from_wire(metadata) if metadata else None,
+            EditError._from_wire(error) if error else None)
+
+
+@dataclass(frozen=True, slots=True)
+class TableCellResolutionResult:
+    success: bool
+    cell: TableCellMetadata | None = None
+    error: EditError | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableCellResolutionResult":
+        cell = d.get("cell")
+        error = d.get("error")
+        return cls(bool(d.get("success", False)),
+            TableCellMetadata._from_wire(cell) if cell else None,
+            EditError._from_wire(error) if error else None)
+
+
+@dataclass(frozen=True, slots=True)
 class MarkdownPatch:
     """A scoped markdown re-projection produced by a successful mutation."""
 
@@ -620,6 +827,7 @@ class EditResult:
     patch: MarkdownPatch | None = None
     error: EditError | None = None
     annotation_id: str | None = None
+    table_anchors: TableAnchorMapping | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
@@ -633,6 +841,8 @@ class EditResult:
             patch=MarkdownPatch._from_wire(patch_d) if patch_d else None,
             error=EditError._from_wire(err_d) if err_d else None,
             annotation_id=d.get("annotationId"),
+            table_anchors=TableAnchorMapping._from_wire(d["tableAnchors"])
+            if d.get("tableAnchors") else None,
         )
 
 

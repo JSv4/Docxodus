@@ -1654,6 +1654,7 @@ export async function getDocumentStructure(
   // Convert from PascalCase to camelCase
   const convertElement = (el: any): DocumentElement => ({
     id: el.Id || el.id,
+    anchorId: el.AnchorId || el.anchorId,
     type: el.Type || el.type,
     textPreview: el.TextPreview || el.textPreview,
     index: el.Index ?? el.index,
@@ -1666,8 +1667,12 @@ export async function getDocumentStructure(
 
   const convertTableColumn = (col: any): TableColumnInfo => ({
     tableId: col.TableId || col.tableId,
+    anchorId: col.AnchorId || col.anchorId,
+    tableAnchorId: col.TableAnchorId || col.tableAnchorId,
+    isVirtual: col.IsVirtual ?? col.isVirtual ?? false,
     columnIndex: col.ColumnIndex ?? col.columnIndex,
     cellIds: col.CellIds || col.cellIds || [],
+    cellAnchorIds: col.CellAnchorIds || col.cellAnchorIds || [],
     rowCount: col.RowCount ?? col.rowCount,
   });
 

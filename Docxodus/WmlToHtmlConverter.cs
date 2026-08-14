@@ -5103,6 +5103,9 @@ namespace Docxodus
             var cell = new XElement(Xhtml.td,
                 rowSpan,
                 colSpan,
+                settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
+                    : null,
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
             cell.AddAnnotation(style);
 
