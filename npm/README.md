@@ -33,6 +33,23 @@ numbering, tables, images, comments, headers and footers, and real footnotes wit
 Paginated mode flows content into real page boxes with per-page numbers and page-anchored footnotes —
 a print-accurate preview in the browser.
 
+Supply an exact layout token to materialize portable page citations from that layout:
+
+```ts
+const result = paginateHtml(html, viewer, {
+  layoutToken: { documentVersion: session.getVersion(), rendererFingerprint: 'chromium-layout-v1' },
+});
+session.registerPageMap(result.pageMap!, 'chromium-layout-v1');
+const citation = session.getPageCitation(anchorId, {
+  documentVersion: session.getVersion(),
+  rendererFingerprint: 'chromium-layout-v1',
+});
+navigateToPageCitation(viewer, citation);
+```
+
+Continuous renderers return explicit unavailability; Docxodus never estimates a citation page.
+See the [PageMap contract](../docs/architecture/page_map.md).
+
 ## Edit it in place
 
 `DocxEditor` is a framework-agnostic block editor over the live document. Edits go through a

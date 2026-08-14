@@ -557,6 +557,7 @@ public class DocumentMetadataResponse
     /// Estimated total page count.
     /// </summary>
     public int EstimatedPageCount { get; set; }
+    public string EstimatedPageCountSource { get; set; } = "heuristic";
 }
 
 /// <summary>

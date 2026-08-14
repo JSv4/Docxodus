@@ -1049,7 +1049,18 @@ export interface DocxodusWasmExports {
     CloseSession: (handle: number) => void;
     CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
+    GetVersion: (handle: number) => string;
+    RegisterPageMap: (handle: number, pageMapJson: string, expectedRendererFingerprint: string) => string;
+    GetPageMapStatus: (handle: number, requestJson: string) => string;
+    GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
+    CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
+    ProjectAnchorWithCitations: (
+      handle: number,
+      anchorId: string,
+      depth: number,
+      requestJson: string,
+    ) => string;
     /** Ordered top-level render units per scope container (JSON {@link RenderPlan}) —
      *  what the editor's incremental reconciler diffs its DOM against. Optional:
      *  absent on older WASM bundles. */
@@ -1124,6 +1135,9 @@ export interface DocxodusWasmExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
     InsertTable: (handle: number, anchor: string, pos: string, rows: number, cols: number, optionsJson: string) => string;
+    GetTableMetadata: (handle: number, tableAnchor: string) => string;
+    ResolveTableCellAnchor: (handle: number, cellAnchor: string) => string;
+    ResolveTableCellCoordinate: (handle: number, tableAnchor: string, rowIndex: number, columnIndex: number) => string;
     InsertTableRow: (handle: number, cellAnchor: string, pos: string) => string;
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
     DeleteTableRow: (handle: number, cellAnchor: string) => string;
@@ -1134,6 +1148,8 @@ export interface DocxodusWasmExports {
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
     SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean) => string;
+    SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
+      allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
@@ -1203,17 +1219,29 @@ export interface DocxodusWasmExports {
       newInner: string,
     ) => string;
     FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number, boundary: number) => string;
+    FindPlaceholdersWithCitations: (
+      handle: number,
+      kinds: number,
+      scope: number,
+      contextChars: number,
+      boundary: number,
+      requestJson: string,
+    ) => string;
     GetEditSummary: (handle: number) => string;
     RemainingPlaceholders: (handle: number, kinds: number) => string;
     GetDiff: (handle: number, format: number) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
+    FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
+    FindByLabelWithCitations: (handle: number, labelId: string, requestJson: string) => string;
     FindByBookmark: (handle: number, bookmarkName: string) => string;
+    FindByBookmarkWithCitations: (handle: number, bookmarkName: string, requestJson: string) => string;
     Exists: (handle: number, anchorId: string) => boolean;
     FindByText: (handle: number, needle: string, optionsJson: string) => string;
     FindAllByText: (handle: number, needle: string, optionsJson: string) => string;
     FindByRegex: (handle: number, pattern: string, regexOptions: number, optionsJson: string) => string;
     FindByKind: (handle: number, kind: string, scope: string) => string;
+    FindByKindWithCitations: (handle: number, kind: string, scope: string, requestJson: string) => string;
     GetAnchorInfo: (handle: number, anchorId: string) => string;
     GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
     GetBlockMetadata: (handle: number, anchorId: string) => string;
@@ -1276,6 +1304,7 @@ export type EditErrorCode =
   | "invalid_paragraph_format"
   | "invalid_table_styling"
   | "invalid_table_merge"
+  | "table_anchor_migration_required"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1287,6 +1316,7 @@ export type EditErrorCode =
   | "empty_annotation_span"
   | "empty_comment_span"
   | "revision_not_found"
+  | "precondition_failed"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1300,6 +1330,43 @@ export interface EditError {
   code: EditErrorCode;
   message: string;
   anchorId?: string;
+  precondition?: PreconditionFailure;
+}
+
+export interface PreconditionTarget {
+  exists: boolean;
+  anchorId?: string;
+  kind?: string;
+  scope?: string;
+  contentHash?: string;
+  visibleText?: string;
+}
+
+export interface PreconditionFailure {
+  condition: string;
+  expected: unknown;
+  actual: unknown;
+  currentVersion: number;
+  currentTarget?: PreconditionTarget;
+}
+
+export interface TextRangePrecondition {
+  start: number;
+  length: number;
+  text: string;
+}
+
+/** Optimistic guards checked immediately before a mutation. */
+export interface MutationPreconditions {
+  expectedVersion?: number;
+  /** Optional explicit target; target-addressed methods infer their own anchor when omitted. */
+  anchorId?: string;
+  expectedContentHash?: string;
+  expectedText?: string;
+  expectedTextRange?: TextRangePrecondition;
+  expectedKind?: string;
+  expectedScope?: string;
+  expectedMatchCount?: number;
 }
 
 export interface MarkdownPatch {
@@ -1313,6 +1380,8 @@ export interface EditResult {
   created: AnchorRef[];
   removed: AnchorRef[];
   modified: AnchorRef[];
+  /** Deterministic structural identity map for table shape mutations. */
+  tableAnchors?: TableAnchorMapping;
   patch?: MarkdownPatch;
   /** Set by the annotation ops (addAnnotation/removeAnnotation/updateAnnotation/
    * moveAnnotation) with the affected annotation id; absent for every other op. */
@@ -1505,6 +1574,85 @@ export interface TableInsertOptions {
   columnWidths?: number[];
 }
 
+export type TableVerticalMergeRole = "none" | "restart" | "continue";
+export type TableAnchorEntityKind = "table" | "row" | "column" | "cell";
+
+export interface TableCellMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  rowAnchorId: string;
+  rowIndex: number;
+  columnIndex: number;
+  rowSpan: number;
+  columnSpan: number;
+  verticalMerge: TableVerticalMergeRole;
+  /** Direct cell paragraphs only; nested-table paragraphs belong to their own cells. */
+  paragraphAnchors: AnchorRef[];
+}
+
+export interface TableRowMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  rowIndex: number;
+  gridBefore: number;
+  gridAfter: number;
+  cells: TableCellMetadata[];
+}
+
+export interface TableColumnMetadata {
+  anchor: AnchorRef;
+  tableAnchorId: string;
+  columnIndex: number;
+  widthTwips: number;
+  /** True when an absent/underspecified tblGrid required a read-only coordinate identity. */
+  isVirtual: boolean;
+  cellAnchorIds: string[];
+}
+
+export interface TableMetadata {
+  anchor: AnchorRef;
+  columns: TableColumnMetadata[];
+  rows: TableRowMetadata[];
+}
+
+export interface TableMetadataResult {
+  success: boolean;
+  error?: EditError;
+  metadata?: TableMetadata;
+}
+
+export interface TableCellResolutionResult {
+  success: boolean;
+  error?: EditError;
+  cell?: TableCellMetadata;
+}
+
+export interface TableAnchorLocation {
+  anchor: AnchorRef;
+  entityKind: TableAnchorEntityKind;
+  rowIndex?: number;
+  columnIndex?: number;
+  rowSpan?: number;
+  columnSpan?: number;
+  isVirtual?: boolean;
+}
+
+export interface TableAnchorMapping {
+  retained: { before: TableAnchorLocation; after: TableAnchorLocation }[];
+  added: TableAnchorLocation[];
+  invalidated: TableAnchorLocation[];
+}
+
+export type TableRowHeightRule = "auto" | "atLeast" | "exact";
+
+export interface TableRowOptions {
+  repeatHeader?: boolean;
+  allowBreakAcrossPages?: boolean;
+  /** Zero removes an explicit height. */
+  heightTwips?: number;
+  heightRule?: TableRowHeightRule;
+}
+
 /** Which table edges `DocxSession.setTableBorders` targets: `"outside"` = top/left/bottom/right,
  * `"inside"` = the inner grid lines (`w:insideH`/`w:insideV`), `"all"` = both. */
 export type TableBorderScope = "all" | "outside" | "inside";
@@ -1614,6 +1762,63 @@ export interface DocxSessionProjection {
     scope: string;
     textPreview: string;
   }>;
+  /** Present only when projectAnchor requested citations. */
+  pageCitations?: Record<string, PageCitation>;
+}
+
+export interface PageCitationRequest {
+  documentVersion: number;
+  rendererFingerprint: string;
+}
+
+export type PageCitationUnavailableReason =
+  | "no_page_map"
+  | "continuous_mode"
+  | "stale_document_version"
+  | "renderer_fingerprint_mismatch"
+  | "anchor_not_mapped";
+
+export interface PageCitationFragment {
+  fragmentId: string;
+  anchorId: string;
+  fragmentIndex: number;
+  pageNumber: number;
+  geometry: { x: number; y: number; width: number; height: number };
+  story: "body" | "header" | "footer" | "footnote" | "endnote" | "comment";
+  inTableCell: boolean;
+}
+
+export interface PageCitationPage {
+  pageNumber: number;
+  pageInSection: number;
+  width: number;
+  height: number;
+  sectionIndex?: number;
+  pageName: string;
+}
+
+export interface PageCitation {
+  anchorId: string;
+  availability: "available" | "unavailable";
+  unavailableReason?: PageCitationUnavailableReason;
+  documentVersion: number;
+  rendererFingerprint: string;
+  pages: PageCitationPage[];
+  fragments: PageCitationFragment[];
+}
+
+export interface PageMapRegistrationResult {
+  success: boolean;
+  error?: "unsupported_schema_version" | "stale_document_version" | "renderer_fingerprint_mismatch" | "invalid_map";
+  message?: string;
+}
+
+export interface PageMapStatus {
+  availability: "available" | "unavailable";
+  unavailableReason?: PageCitationUnavailableReason;
+  documentVersion: number;
+  rendererFingerprint?: string;
+  mode?: "paginated" | "continuous";
 }
 
 /**
@@ -1657,6 +1862,8 @@ export interface TextMatch {
   contextAfter: string;
   /** Regex capture groups; index 0 is always the whole match. */
   groups: string[];
+  /** Present only when grep requested a citation for this exact render. */
+  citation?: PageCitation;
 }
 
 /**
@@ -1689,6 +1896,8 @@ export interface CrossBlockMatch {
   contextAfter: string;
   /** Regex capture groups; index 0 is always the whole match. */
   groups: string[];
+  /** One per enclosingAnchors entry when requested. */
+  citations?: PageCitation[];
 }
 
 /**
@@ -1699,6 +1908,10 @@ export interface ReplaceOptions {
   ignoreCase?: boolean;
   /** Cap the number of replacements; omitted = unlimited. */
   maxReplacements?: number;
+  /** Require exactly this many occurrences before applying any replacement. */
+  expectedMatchCount?: number;
+  /** Optional document/anchor guards evaluated before searching. */
+  preconditions?: MutationPreconditions;
 }
 
 /**
@@ -1882,6 +2095,8 @@ export interface GrepOptions {
    * `contextChars`.
    */
   boundary?: number;
+  /** Attach citations only if this exact registered layout is still valid. */
+  citation?: PageCitationRequest;
 }
 
 /**
@@ -1908,6 +2123,8 @@ export interface FindOptions {
    * for whole-category filtering; this is for the rare single-part case.
    */
   scopeFilter?: string;
+  /** Attach citations only if this exact registered layout is still valid. */
+  citation?: PageCitationRequest;
 }
 
 /**
@@ -1923,6 +2140,8 @@ export interface AnchorTargetRef extends AnchorRef {
   /** Resolved auto-numbering prefix (e.g. "1.", "First") when the element carries
    *  numbering. Absent otherwise. See {@link MarkdownAnchorTarget.autoNumberPrefix}. */
   autoNumberPrefix?: string;
+  /** Present only when the discovery call requested an exact page citation. */
+  citation?: PageCitation;
 }
 
 /**
@@ -1935,6 +2154,10 @@ export interface AnchorInfo {
   kind: string;
   scope: string;
   textPreview: string;
+  /** Exact live subtree hash suitable for expectedContentHash. */
+  contentHash: string;
+  /** Exact (untruncated) reader-visible text suitable for expectedText. */
+  visibleText: string;
   /** Resolved auto-numbering prefix (e.g. "1.", "First") when the element carries
    *  numbering. Absent for un-numbered paragraphs or non-paragraph kinds. */
   autoNumberPrefix?: string;
@@ -2320,6 +2543,8 @@ export enum DocumentElementType {
 export interface DocumentElement {
   /** Unique element ID (path-based, e.g., "doc/tbl-0/tr-1/tc-2") */
   id: string;
+  /** Canonical session anchor when this element is addressable. */
+  anchorId?: string;
   /** Element type */
   type: DocumentElementType | string;
   /** Preview of text content (first ~100 characters) */
@@ -2344,10 +2569,17 @@ export interface DocumentElement {
 export interface TableColumnInfo {
   /** ID of the table this column belongs to */
   tableId: string;
+  /** Canonical `col` anchor. */
+  anchorId: string;
+  /** Canonical owning `tbl` anchor. */
+  tableAnchorId: string;
+  isVirtual: boolean;
   /** Zero-based column index */
   columnIndex: number;
   /** IDs of all cells in this column */
   cellIds: string[];
+  /** Canonical `tc` anchors for cells covering this column. */
+  cellAnchorIds: string[];
   /** Total number of rows in this column */
   rowCount: number;
 }
@@ -2759,6 +2991,8 @@ export interface DocumentMetadata {
   hasComments: boolean;
   /** Estimated total page count (heuristic based on content volume and page sizes) */
   estimatedPageCount: number;
+  /** Explicit provenance: always "heuristic"; use PageMap for authoritative pages. */
+  estimatedPageCountSource: "heuristic";
 }
 
 // ============================================================================

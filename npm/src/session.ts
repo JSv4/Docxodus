@@ -26,21 +26,30 @@ import type {
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  PageCitation,
+  PageCitationRequest,
+  PageMapRegistrationResult,
+  PageMapStatus,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   TableBorderSpec,
   TableInsertOptions,
+  TableMetadataResult,
+  TableCellResolutionResult,
   TableMergeContent,
+  TableRowOptions,
   TableShadingScope,
   ListFormat,
   GrepOptions,
   ListMembership,
+  MutationPreconditions,
   ReplaceOptions,
   RevisionListEntry,
   SectionInfo,
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
+import type { PageMap } from "./pagination.js";
 import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, TrackedChangeMode } from "./types.js";
 
 /**
@@ -68,6 +77,55 @@ export class DocxSession {
     return JSON.parse(this.wasm.Project(this.handle)) as DocxSessionProjection;
   }
 
+  /** Monotonic document version (0 at open; +1 per committed mutation/undo/redo). */
+  getVersion(): number {
+    return (JSON.parse(this.wasm.GetVersion(this.handle)) as { version: number }).version;
+  }
+
+  /** Register a browser-materialized PageMap without changing the document version. */
+  registerPageMap(pageMap: PageMap, expectedRendererFingerprint?: string): PageMapRegistrationResult {
+    return JSON.parse(this.wasm.RegisterPageMap(
+      this.handle,
+      JSON.stringify(pageMap),
+      expectedRendererFingerprint ?? "",
+    )) as PageMapRegistrationResult;
+  }
+
+  getPageMapStatus(request?: PageCitationRequest): PageMapStatus {
+    return JSON.parse(this.wasm.GetPageMapStatus(
+      this.handle,
+      request ? JSON.stringify(request) : "",
+    )) as PageMapStatus;
+  }
+
+  getPageCitation(anchorId: string, request: PageCitationRequest): PageCitation {
+    return JSON.parse(this.wasm.GetPageCitation(
+      this.handle,
+      anchorId,
+      JSON.stringify(request),
+    )) as PageCitation;
+  }
+
+  /** Evaluate optimistic guards without mutating or advancing the version. */
+  checkPreconditions(preconditions: MutationPreconditions): EditResult {
+    return JSON.parse(
+      this.wasm.CheckPreconditions(this.handle, JSON.stringify(preconditions)),
+    ) as EditResult;
+  }
+
+  /**
+   * Guard any synchronous mutation. WASM calls are synchronous and single-threaded, so the
+   * check and callback form one uninterrupted client-side operation. Prefer a method's native
+   * `preconditions` option where it has one (notably replaceTextRange's match-count guard).
+   */
+  runWithPreconditions(
+    preconditions: MutationPreconditions,
+    mutation: () => EditResult,
+  ): EditResult {
+    const checked = this.checkPreconditions(preconditions);
+    return checked.success ? mutation() : checked;
+  }
+
   /**
    * Project a slice of the document keyed off an anchor — useful for showing
    * one section to an LLM at a time without paying the cost of projecting the
@@ -86,9 +144,12 @@ export class DocxSession {
   projectAnchor(
     anchorId: string,
     depth: ProjectionDepth = ProjectionDepth.SubtreeAndFollowingSiblings,
+    citation?: PageCitationRequest,
   ): DocxSessionProjection {
     return JSON.parse(
-      this.wasm.ProjectAnchor(this.handle, anchorId, depth),
+      citation
+        ? this.wasm.ProjectAnchorWithCitations(this.handle, anchorId, depth, JSON.stringify(citation))
+        : this.wasm.ProjectAnchor(this.handle, anchorId, depth),
     ) as DocxSessionProjection;
   }
 
@@ -119,12 +180,26 @@ export class DocxSession {
 
   // ─── Tier A: text CRUD ───────────────────────────────────────────────
 
-  replaceText(anchorId: string, markdown: string): EditResult {
-    return JSON.parse(this.wasm.ReplaceText(this.handle, anchorId, markdown)) as EditResult;
+  replaceText(
+    anchorId: string,
+    markdown: string,
+    preconditions?: MutationPreconditions,
+  ): EditResult {
+    const apply = () => JSON.parse(
+      this.wasm.ReplaceText(this.handle, anchorId, markdown),
+    ) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
   }
 
-  deleteBlock(anchorId: string): EditResult {
-    return JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
+  deleteBlock(anchorId: string, preconditions?: MutationPreconditions): EditResult {
+    const apply = () => JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
   }
 
   /** Reorder one top-level paragraph/heading/list/table block relative to another. */
@@ -192,7 +267,7 @@ export class DocxSession {
 
   /**
    * Insert a `rows`×`cols` table before/after the block. `options` controls borders, row-major
-   * cell markdown, and cell alignment. The returned `EditResult.created` lists the cell-paragraph
+   * cell markdown, and cell alignment. The returned `EditResult.created` lists canonical `tc`
    * anchors (row-major), so each cell can then be addressed to fill/format.
    */
   insertTable(
@@ -208,10 +283,33 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /** Resolve a canonical `tbl` anchor to explicit table/row/column/cell identities. */
+  getTableMetadata(tableAnchorId: string): TableMetadataResult {
+    return JSON.parse(this.wasm.GetTableMetadata(this.handle, tableAnchorId)) as TableMetadataResult;
+  }
+
+  /** Resolve a canonical `tc` anchor to its zero-based table-grid coordinate and spans. */
+  resolveTableCellAnchor(cellAnchorId: string): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellAnchor(this.handle, cellAnchorId),
+    ) as TableCellResolutionResult;
+  }
+
+  /** Resolve a zero-based table-grid coordinate to the physical `tc` covering it. */
+  resolveTableCellCoordinate(
+    tableAnchorId: string,
+    rowIndex: number,
+    columnIndex: number,
+  ): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellCoordinate(this.handle, tableAnchorId, rowIndex, columnIndex),
+    ) as TableCellResolutionResult;
+  }
+
   /**
-   * Table row/column editing, addressed by a cell-paragraph anchor (e.g. one returned from
-   * {@link insertTable}'s `created`). Insert clones the reference row/column's widths and starts
-   * empty (`created` lists the new cell-paragraph anchors); delete of the last row/column removes
+   * Table row/column editing, addressed by the canonical `tc` anchor returned from
+   * {@link insertTable}'s `created` or table metadata. Insert clones the reference row/column's
+   * widths and starts empty (`created` lists new `tc` anchors); delete of the last row/column removes
    * the whole table. All four are grid-aware: inserting across a merge extends it, deleting
    * through one narrows it, and deleting a vertical merge's lead row promotes the next row to
    * carry it — the grid is never left ragged.
@@ -262,7 +360,7 @@ export class DocxSession {
   }
 
   /**
-   * Table styling, addressed by a cell-paragraph anchor — the post-insert counterpart of
+   * Table styling, addressed by a canonical `tc` anchor — the post-insert counterpart of
    * {@link insertTable}'s options (issue #315 Stage A). `setColumnWidths` retunes `w:tblGrid` +
    * every row's cell width (one positive twip value per column) and pins the table to fixed
    * layout, exactly as inserting with explicit `columnWidths` would.
@@ -307,6 +405,20 @@ export class DocxSession {
   setRepeatHeaderRow(cellAnchorId: string, repeat: boolean): EditResult {
     return JSON.parse(
       this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat),
+    ) as EditResult;
+  }
+
+  /** Apply row layout options to the row containing the canonical cell anchor. */
+  setTableRowOptions(cellAnchorId: string, options: TableRowOptions): EditResult {
+    return JSON.parse(
+      this.wasm.SetTableRowOptions(
+        this.handle,
+        cellAnchorId,
+        options.repeatHeader ?? null,
+        options.allowBreakAcrossPages ?? null,
+        options.heightTwips ?? null,
+        options.heightRule ?? "atLeast",
+      ),
     ) as EditResult;
   }
 
@@ -900,10 +1012,14 @@ export class DocxSession {
     scope: number = 1,
     contextChars: number = 80,
     boundary: number = ContextBoundary.Char,
+    citation?: PageCitationRequest,
   ): TemplatePlaceholder[] {
-    return JSON.parse(
-      this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary),
-    ) as TemplatePlaceholder[];
+    const json = citation
+      ? this.wasm.FindPlaceholdersWithCitations(
+          this.handle, kinds, scope, contextChars, boundary, JSON.stringify(citation),
+        )
+      : this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary);
+    return JSON.parse(json) as TemplatePlaceholder[];
   }
 
   /**
@@ -962,8 +1078,11 @@ export class DocxSession {
    *
    * @see docs/architecture/docx_mutation_api.md#findbyannotation
    */
-  findByAnnotation(annotationId: string): AnchorTargetRef[] {
-    return JSON.parse(this.wasm.FindByAnnotation(this.handle, annotationId)) as AnchorTargetRef[];
+  findByAnnotation(annotationId: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByAnnotationWithCitations(this.handle, annotationId, JSON.stringify(citation))
+      : this.wasm.FindByAnnotation(this.handle, annotationId);
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   /**
@@ -973,8 +1092,11 @@ export class DocxSession {
    * annotations on different paragraphs become three entries). Annotations
    * whose bookmark resolves to no anchors are omitted from the result.
    */
-  findByLabel(labelId: string): Record<string, AnchorTargetRef[]> {
-    return JSON.parse(this.wasm.FindByLabel(this.handle, labelId)) as Record<string, AnchorTargetRef[]>;
+  findByLabel(labelId: string, citation?: PageCitationRequest): Record<string, AnchorTargetRef[]> {
+    const json = citation
+      ? this.wasm.FindByLabelWithCitations(this.handle, labelId, JSON.stringify(citation))
+      : this.wasm.FindByLabel(this.handle, labelId);
+    return JSON.parse(json) as Record<string, AnchorTargetRef[]>;
   }
 
   /**
@@ -983,8 +1105,11 @@ export class DocxSession {
    * order. Empty when the bookmark name is unknown. Use this for raw bookmark
    * names that didn't come from the annotation system.
    */
-  findByBookmark(bookmarkName: string): AnchorTargetRef[] {
-    return JSON.parse(this.wasm.FindByBookmark(this.handle, bookmarkName)) as AnchorTargetRef[];
+  findByBookmark(bookmarkName: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByBookmarkWithCitations(this.handle, bookmarkName, JSON.stringify(citation))
+      : this.wasm.FindByBookmark(this.handle, bookmarkName);
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   // ─── Text/kind-based anchor discovery (#171) ─────────────────────────
@@ -1040,10 +1165,13 @@ export class DocxSession {
    * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
    * a single part; omit it to span all scopes.
    */
-  findByKind(kind: string, scope?: string): AnchorTargetRef[] {
-    return JSON.parse(
-      this.wasm.FindByKind(this.handle, kind, scope ?? ""),
-    ) as AnchorTargetRef[];
+  findByKind(kind: string, scope?: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByKindWithCitations(
+          this.handle, kind, scope ?? "", JSON.stringify(citation),
+        )
+      : this.wasm.FindByKind(this.handle, kind, scope ?? "");
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   /**
@@ -1205,5 +1333,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

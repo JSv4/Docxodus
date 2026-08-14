@@ -36,6 +36,8 @@ internal sealed class UndoRing<T>
     private readonly int _capacity;
     private readonly long _budgetBytes;
     private readonly Func<T, long>? _costOf;
+    private readonly Action<T>? _onRecordPreOp;
+    private readonly Action<T>? _onPopUndo;
 
     private long _undoBytes;
     private long _redoBytes;
@@ -47,11 +49,18 @@ internal sealed class UndoRing<T>
     /// undo and redo sides together. Values &lt;= 0 disable the budget bound (depth only).</param>
     /// <param name="costOf">Approximate retained cost of one snapshot. Null (or a zero budget)
     /// leaves the ring depth-bounded only, exactly as before.</param>
-    public UndoRing(int capacity, long budgetBytes = 0, Func<T, long>? costOf = null)
+    public UndoRing(
+        int capacity,
+        long budgetBytes = 0,
+        Func<T, long>? costOf = null,
+        Action<T>? onRecordPreOp = null,
+        Action<T>? onPopUndo = null)
     {
         _capacity = capacity > 0 ? capacity : 1;
         _budgetBytes = budgetBytes > 0 ? budgetBytes : 0;
         _costOf = costOf;
+        _onRecordPreOp = onRecordPreOp;
+        _onPopUndo = onPopUndo;
     }
 
     private long CostOf(T snapshot) =>
@@ -77,6 +86,7 @@ internal sealed class UndoRing<T>
         _undoBytes += costBytes;
         ClearRedo();
         Trim();
+        _onRecordPreOp?.Invoke(preOpSnapshot);
     }
 
     /// <summary>Pop the most recent pre-op snapshot (for an undo).</summary>
@@ -86,6 +96,7 @@ internal sealed class UndoRing<T>
         var entry = _undo.Last!.Value;
         _undo.RemoveLast();
         _undoBytes -= entry.CostBytes;
+        _onPopUndo?.Invoke(entry.Snapshot);
         return (entry.Snapshot, true);
     }
 

@@ -20,6 +20,178 @@ internal static class DocxSessionJson
     public static Position ParsePos(string s) =>
         string.Equals(s, "before", System.StringComparison.OrdinalIgnoreCase) ? Position.Before : Position.After;
 
+    public static PageMap ParsePageMap(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return ParsePageMap(doc.RootElement);
+    }
+
+    public static PageMap ParsePageMap(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new FormatException("PageMap must be a JSON object");
+        EnsureOnlyProperties(root, "PageMap", "schemaVersion", "mode", "availability",
+            "documentVersion", "rendererFingerprint", "pages", "fragments");
+
+        var pages = new List<PageMapPage>();
+        var pagesElement = RequiredProperty(root, "pages", JsonValueKind.Array, "PageMap");
+        foreach (var page in pagesElement.EnumerateArray())
+        {
+            if (page.ValueKind != JsonValueKind.Object)
+                throw new FormatException("PageMap pages must be objects");
+            EnsureOnlyProperties(page, "PageMap page", "pageNumber", "pageInSection", "width",
+                "height", "sectionIndex", "pageName");
+
+            int? sectionIndex = null;
+            if (page.TryGetProperty("sectionIndex", out var sectionIndexElement))
+            {
+                if (sectionIndexElement.ValueKind != JsonValueKind.Number
+                    || !sectionIndexElement.TryGetInt32(out var parsedSectionIndex))
+                    throw new FormatException("PageMap page sectionIndex must be an integer when supplied");
+                sectionIndex = parsedSectionIndex;
+            }
+
+            pages.Add(new PageMapPage
+            {
+                PageNumber = RequiredInt32(page, "pageNumber", "PageMap page"),
+                PageInSection = RequiredInt32(page, "pageInSection", "PageMap page"),
+                Width = RequiredDouble(page, "width", "PageMap page"),
+                Height = RequiredDouble(page, "height", "PageMap page"),
+                SectionIndex = sectionIndex,
+                PageName = RequiredString(page, "pageName", "PageMap page"),
+            });
+        }
+
+        var fragments = new List<PageMapFragment>();
+        var fragmentsElement = RequiredProperty(root, "fragments", JsonValueKind.Array, "PageMap");
+        foreach (var fragment in fragmentsElement.EnumerateArray())
+        {
+            if (fragment.ValueKind != JsonValueKind.Object)
+                throw new FormatException("PageMap fragments must be objects");
+            EnsureOnlyProperties(fragment, "PageMap fragment", "fragmentId", "anchorId",
+                "fragmentIndex", "pageNumber", "geometry", "story", "inTableCell");
+            var geometry = RequiredProperty(fragment, "geometry", JsonValueKind.Object, "PageMap fragment");
+            EnsureOnlyProperties(geometry, "PageMap geometry", "x", "y", "width", "height");
+            fragments.Add(new PageMapFragment
+            {
+                FragmentId = RequiredString(fragment, "fragmentId", "PageMap fragment"),
+                AnchorId = RequiredString(fragment, "anchorId", "PageMap fragment"),
+                FragmentIndex = RequiredInt32(fragment, "fragmentIndex", "PageMap fragment"),
+                PageNumber = RequiredInt32(fragment, "pageNumber", "PageMap fragment"),
+                Geometry = new PageMapRect(
+                    RequiredDouble(geometry, "x", "PageMap geometry"),
+                    RequiredDouble(geometry, "y", "PageMap geometry"),
+                    RequiredDouble(geometry, "width", "PageMap geometry"),
+                    RequiredDouble(geometry, "height", "PageMap geometry")),
+                Story = ParsePageMapStory(RequiredString(fragment, "story", "PageMap fragment")),
+                InTableCell = RequiredBoolean(fragment, "inTableCell", "PageMap fragment"),
+            });
+        }
+
+        return new PageMap
+        {
+            SchemaVersion = RequiredInt32(root, "schemaVersion", "PageMap"),
+            Mode = ParsePageMapMode(RequiredString(root, "mode", "PageMap")),
+            Availability = ParsePageMapAvailability(RequiredString(root, "availability", "PageMap")),
+            DocumentVersion = RequiredInt64(root, "documentVersion", "PageMap"),
+            RendererFingerprint = RequiredString(root, "rendererFingerprint", "PageMap"),
+            Pages = pages,
+            Fragments = fragments,
+        };
+    }
+
+    public static PageCitationRequest? ParsePageCitationRequest(JsonElement root, string key = "citation")
+    {
+        if (!root.TryGetProperty(key, out var value))
+            return null;
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"{key} must be a JSON object");
+        EnsureOnlyProperties(value, key, "documentVersion", "rendererFingerprint");
+        return new PageCitationRequest(
+            RequiredInt64(value, "documentVersion", key),
+            RequiredString(value, "rendererFingerprint", key));
+    }
+
+    private static JsonElement RequiredProperty(
+        JsonElement root, string name, JsonValueKind kind, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != kind)
+            throw new FormatException($"{owner} requires {name} with JSON type {kind}");
+        return value;
+    }
+
+    private static void EnsureOnlyProperties(JsonElement root, string owner, params string[] allowed)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (System.Array.IndexOf(allowed, property.Name) < 0)
+                throw new FormatException($"{owner} contains unknown property {property.Name}");
+        }
+    }
+
+    private static string RequiredString(JsonElement root, string name, string owner) =>
+        RequiredProperty(root, name, JsonValueKind.String, owner).GetString()!;
+
+    private static bool RequiredBoolean(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new FormatException($"{owner} requires {name} with JSON type Boolean");
+        return value.GetBoolean();
+    }
+
+    private static int RequiredInt32(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var result))
+            throw new FormatException($"{owner} requires integer {name}");
+        return result;
+    }
+
+    private static long RequiredInt64(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt64(out var result))
+            throw new FormatException($"{owner} requires integer {name}");
+        return result;
+    }
+
+    private static double RequiredDouble(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetDouble(out var result))
+            throw new FormatException($"{owner} requires numeric {name}");
+        return result;
+    }
+
+    private static PageMapMode ParsePageMapMode(string? value) => value switch
+    {
+        "paginated" => PageMapMode.Paginated,
+        "continuous" => PageMapMode.Continuous,
+        _ => throw new FormatException($"Unknown PageMap mode: {value}"),
+    };
+
+    private static PageMapAvailability ParsePageMapAvailability(string? value) => value switch
+    {
+        "available" => PageMapAvailability.Available,
+        "unavailable" => PageMapAvailability.Unavailable,
+        _ => throw new FormatException($"Unknown PageMap availability: {value}"),
+    };
+
+    private static PageMapStory ParsePageMapStory(string? value) => value switch
+    {
+        "body" => PageMapStory.Body,
+        "header" => PageMapStory.Header,
+        "footer" => PageMapStory.Footer,
+        "footnote" => PageMapStory.Footnote,
+        "endnote" => PageMapStory.Endnote,
+        "comment" => PageMapStory.Comment,
+        _ => throw new FormatException($"Unknown PageMap story: {value}"),
+    };
+
     public static HeaderFooterKind ParseHeaderFooterKind(string? s) =>
         (s?.ToLowerInvariant()) switch
         {
@@ -181,6 +353,39 @@ internal static class DocxSessionJson
             VertAlign = TryGetString(root, "vertAlign", null),
             FontSizePts = TryGetDoubleNullable(root, "fontSizePts"),
             FontFamily = TryGetString(root, "fontFamily", null),
+        };
+    }
+
+    /// <summary>Parse the common optimistic-mutation guard object used by every transport.</summary>
+    public static MutationPreconditions? ParseMutationPreconditions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return ParseMutationPreconditions(doc.RootElement);
+    }
+
+    public static MutationPreconditions? ParseMutationPreconditions(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        TextRangePrecondition? range = null;
+        if (root.TryGetProperty("expectedTextRange", out var r) && r.ValueKind == JsonValueKind.Object
+            && r.TryGetProperty("start", out var start) && start.ValueKind == JsonValueKind.Number
+            && r.TryGetProperty("length", out var length) && length.ValueKind == JsonValueKind.Number
+            && r.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+        {
+            range = new TextRangePrecondition(start.GetInt32(), length.GetInt32(), text.GetString() ?? string.Empty);
+        }
+        return new MutationPreconditions
+        {
+            ExpectedVersion = root.TryGetProperty("expectedVersion", out var version)
+                && version.ValueKind == JsonValueKind.Number ? version.GetInt64() : null,
+            AnchorId = TryGetString(root, "anchorId", null),
+            ExpectedContentHash = TryGetString(root, "expectedContentHash", null),
+            ExpectedText = TryGetString(root, "expectedText", null),
+            ExpectedTextRange = range,
+            ExpectedKind = TryGetString(root, "expectedKind", null),
+            ExpectedScope = TryGetString(root, "expectedScope", null),
+            ExpectedMatchCount = TryGetIntNullable(root, "expectedMatchCount"),
         };
     }
 
@@ -379,6 +584,7 @@ internal static class DocxSessionJson
             KindFilter = TryGetString(root, "kindFilter", null),
             Scopes = scopes,
             ScopeFilter = TryGetString(root, "scopeFilter", null),
+            CitationRequest = ParsePageCitationRequest(root),
         };
     }
 
@@ -416,11 +622,43 @@ internal static class DocxSessionJson
               .Append(",\"message\":").Append(JsonString(r.Error.Message));
             if (r.Error.AnchorId is not null)
                 sb.Append(",\"anchorId\":").Append(JsonString(r.Error.AnchorId));
+            if (r.Error.Precondition is { } p)
+            {
+                sb.Append(",\"precondition\":{")
+                  .Append("\"condition\":").Append(JsonString(p.Condition))
+                  .Append(",\"expected\":");
+                AppendJsonValue(sb, p.Expected);
+                sb.Append(",\"actual\":");
+                AppendJsonValue(sb, p.Actual);
+                sb.Append(",\"currentVersion\":").Append(p.CurrentVersion);
+                if (p.CurrentTarget is { } target)
+                {
+                    sb.Append(",\"currentTarget\":{")
+                      .Append("\"exists\":").Append(target.Exists ? "true" : "false");
+                    if (target.AnchorId is not null)
+                        sb.Append(",\"anchorId\":").Append(JsonString(target.AnchorId));
+                    if (target.Kind is not null)
+                        sb.Append(",\"kind\":").Append(JsonString(target.Kind));
+                    if (target.Scope is not null)
+                        sb.Append(",\"scope\":").Append(JsonString(target.Scope));
+                    if (target.ContentHash is not null)
+                        sb.Append(",\"contentHash\":").Append(JsonString(target.ContentHash));
+                    if (target.VisibleText is not null)
+                        sb.Append(",\"visibleText\":").Append(JsonString(target.VisibleText));
+                    sb.Append('}');
+                }
+                sb.Append('}');
+            }
             sb.Append('}');
         }
         sb.Append(",\"created\":"); AppendAnchorArray(sb, r.Created);
         sb.Append(",\"removed\":"); AppendAnchorArray(sb, r.Removed);
         sb.Append(",\"modified\":"); AppendAnchorArray(sb, r.Modified);
+        if (r.TableAnchors is not null)
+        {
+            sb.Append(",\"tableAnchors\":");
+            AppendTableAnchorMapping(sb, r.TableAnchors);
+        }
         if (r.AnnotationId is not null)
             sb.Append(",\"annotationId\":").Append(JsonString(r.AnnotationId));
         if (r.Patch is not null)
@@ -433,6 +671,238 @@ internal static class DocxSessionJson
         sb.Append('}');
         return sb.ToString();
     }
+
+    public static string SerializeTableMetadataResult(TableMetadataResult result)
+    {
+        var sb = new StringBuilder(1024);
+        sb.Append("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is not null) { sb.Append(",\"error\":"); AppendEditError(sb, result.Error); }
+        if (result.Metadata is not null) { sb.Append(",\"metadata\":"); AppendTableMetadata(sb, result.Metadata); }
+        return sb.Append('}').ToString();
+    }
+
+    public static string SerializeTableCellResolutionResult(TableCellResolutionResult result)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is not null) { sb.Append(",\"error\":"); AppendEditError(sb, result.Error); }
+        if (result.Cell is not null) { sb.Append(",\"cell\":"); AppendTableCellMetadata(sb, result.Cell); }
+        return sb.Append('}').ToString();
+    }
+
+    private static void AppendEditError(StringBuilder sb, EditError error)
+    {
+        sb.Append("{\"code\":\"").Append(EnumToSnake(error.Code)).Append('"')
+          .Append(",\"message\":").Append(JsonString(error.Message));
+        if (error.AnchorId is not null) sb.Append(",\"anchorId\":").Append(JsonString(error.AnchorId));
+        sb.Append('}');
+    }
+
+    private static void AppendTableMetadata(StringBuilder sb, TableMetadata metadata)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, metadata.Anchor);
+        sb.Append(",\"columns\":[");
+        for (int i = 0; i < metadata.Columns.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var column = metadata.Columns[i];
+            sb.Append("{\"anchor\":"); AppendAnchorValue(sb, column.Anchor);
+            sb.Append(",\"tableAnchorId\":").Append(JsonString(column.TableAnchorId))
+              .Append(",\"columnIndex\":").Append(column.ColumnIndex)
+              .Append(",\"widthTwips\":").Append(column.WidthTwips)
+              .Append(",\"isVirtual\":").Append(column.IsVirtual ? "true" : "false")
+              .Append(",\"cellAnchorIds\":"); AppendStringArray(sb, column.CellAnchorIds);
+            sb.Append('}');
+        }
+        sb.Append("],\"rows\":[");
+        for (int i = 0; i < metadata.Rows.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var row = metadata.Rows[i];
+            sb.Append("{\"anchor\":"); AppendAnchorValue(sb, row.Anchor);
+            sb.Append(",\"tableAnchorId\":").Append(JsonString(row.TableAnchorId))
+              .Append(",\"rowIndex\":").Append(row.RowIndex)
+              .Append(",\"gridBefore\":").Append(row.GridBefore)
+              .Append(",\"gridAfter\":").Append(row.GridAfter)
+              .Append(",\"cells\":[");
+            for (int c = 0; c < row.Cells.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                AppendTableCellMetadata(sb, row.Cells[c]);
+            }
+            sb.Append("]}");
+        }
+        sb.Append("]}");
+    }
+
+    private static void AppendTableCellMetadata(StringBuilder sb, TableCellMetadata cell)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, cell.Anchor);
+        sb.Append(",\"tableAnchorId\":").Append(JsonString(cell.TableAnchorId))
+          .Append(",\"rowAnchorId\":").Append(JsonString(cell.RowAnchorId))
+          .Append(",\"rowIndex\":").Append(cell.RowIndex)
+          .Append(",\"columnIndex\":").Append(cell.ColumnIndex)
+          .Append(",\"rowSpan\":").Append(cell.RowSpan)
+          .Append(",\"columnSpan\":").Append(cell.ColumnSpan)
+          .Append(",\"verticalMerge\":").Append(JsonString(cell.VerticalMerge.ToString().ToLowerInvariant()))
+          .Append(",\"paragraphAnchors\":"); AppendAnchorArray(sb, cell.ParagraphAnchors);
+        sb.Append('}');
+    }
+
+    private static void AppendTableAnchorMapping(StringBuilder sb, TableAnchorMapping mapping)
+    {
+        sb.Append("{\"retained\":[");
+        for (int i = 0; i < mapping.Retained.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"before\":"); AppendTableAnchorLocation(sb, mapping.Retained[i].Before);
+            sb.Append(",\"after\":"); AppendTableAnchorLocation(sb, mapping.Retained[i].After);
+            sb.Append('}');
+        }
+        sb.Append("],\"added\":[");
+        for (int i = 0; i < mapping.Added.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendTableAnchorLocation(sb, mapping.Added[i]);
+        }
+        sb.Append("],\"invalidated\":[");
+        for (int i = 0; i < mapping.Invalidated.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendTableAnchorLocation(sb, mapping.Invalidated[i]);
+        }
+        sb.Append("]}");
+    }
+
+    private static void AppendTableAnchorLocation(StringBuilder sb, TableAnchorLocation location)
+    {
+        sb.Append("{\"anchor\":"); AppendAnchorValue(sb, location.Anchor);
+        sb.Append(",\"entityKind\":").Append(JsonString(location.EntityKind.ToString().ToLowerInvariant()));
+        if (location.RowIndex is not null) sb.Append(",\"rowIndex\":").Append(location.RowIndex.Value);
+        if (location.ColumnIndex is not null) sb.Append(",\"columnIndex\":").Append(location.ColumnIndex.Value);
+        if (location.RowSpan is not null) sb.Append(",\"rowSpan\":").Append(location.RowSpan.Value);
+        if (location.ColumnSpan is not null) sb.Append(",\"columnSpan\":").Append(location.ColumnSpan.Value);
+        if (location.IsVirtual) sb.Append(",\"isVirtual\":true");
+        sb.Append('}');
+    }
+
+    private static void AppendAnchorValue(StringBuilder sb, Anchor anchor) =>
+        sb.Append("{\"id\":").Append(JsonString(anchor.Id))
+          .Append(",\"kind\":").Append(JsonString(anchor.Kind))
+          .Append(",\"scope\":").Append(JsonString(anchor.Scope))
+          .Append(",\"unid\":").Append(JsonString(anchor.Unid))
+          .Append('}');
+    private static void AppendJsonValue(StringBuilder sb, object? value)
+    {
+        switch (value)
+        {
+            case null: sb.Append("null"); break;
+            case string s: sb.Append(JsonString(s)); break;
+            case bool b: sb.Append(b ? "true" : "false"); break;
+            case int i: sb.Append(i); break;
+            case long l: sb.Append(l); break;
+            default: sb.Append(JsonSerializer.Serialize(value)); break;
+        }
+    }
+
+    public static string SerializeVersion(long version) =>
+        "{\"version\":" + version.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}";
+
+    public static string SerializePageMapRegistration(PageMapRegistrationResult result)
+    {
+        var sb = new StringBuilder("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is { } error)
+            sb.Append(",\"error\":\"").Append(EnumToSnake(error)).Append('"');
+        if (result.Message is { } message)
+            sb.Append(",\"message\":").Append(JsonString(message));
+        return sb.Append('}').ToString();
+    }
+
+    public static string SerializePageMapStatus(PageMapStatus status)
+    {
+        var sb = new StringBuilder("{\"availability\":")
+            .Append(JsonString(PageMapAvailabilityString(status.Availability)))
+            .Append(",\"documentVersion\":").Append(status.DocumentVersion);
+        if (status.UnavailableReason is { } reason)
+            sb.Append(",\"unavailableReason\":").Append(JsonString(EnumToSnake(reason)));
+        if (status.RendererFingerprint is { } fingerprint)
+            sb.Append(",\"rendererFingerprint\":").Append(JsonString(fingerprint));
+        if (status.Mode is { } mode)
+            sb.Append(",\"mode\":").Append(JsonString(mode == PageMapMode.Paginated ? "paginated" : "continuous"));
+        return sb.Append('}').ToString();
+    }
+
+    public static string SerializePageCitation(PageCitation citation)
+    {
+        var sb = new StringBuilder(256);
+        AppendPageCitation(sb, citation);
+        return sb.ToString();
+    }
+
+    private static void AppendPageCitation(StringBuilder sb, PageCitation citation)
+    {
+        sb.Append("{\"anchorId\":").Append(JsonString(citation.AnchorId))
+          .Append(",\"availability\":").Append(JsonString(PageMapAvailabilityString(citation.Availability)))
+          .Append(",\"documentVersion\":").Append(citation.DocumentVersion)
+          .Append(",\"rendererFingerprint\":").Append(JsonString(citation.RendererFingerprint));
+        if (citation.UnavailableReason is { } reason)
+            sb.Append(",\"unavailableReason\":").Append(JsonString(EnumToSnake(reason)));
+        sb.Append(",\"pages\":[");
+        for (int i = 0; i < citation.Pages.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapPage(sb, citation.Pages[i]);
+        }
+        sb.Append("],\"fragments\":[");
+        for (int i = 0; i < citation.Fragments.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapFragment(sb, citation.Fragments[i]);
+        }
+        sb.Append("]}");
+    }
+
+    private static void AppendPageMapPage(StringBuilder sb, PageMapPage page)
+    {
+        sb.Append("{\"pageNumber\":").Append(page.PageNumber)
+          .Append(",\"pageInSection\":").Append(page.PageInSection)
+          .Append(",\"width\":").Append(Invariant(page.Width))
+          .Append(",\"height\":").Append(Invariant(page.Height));
+        if (page.SectionIndex is { } sectionIndex)
+            sb.Append(",\"sectionIndex\":").Append(sectionIndex);
+        sb.Append(",\"pageName\":").Append(JsonString(page.PageName)).Append('}');
+    }
+
+    private static void AppendPageMapFragment(StringBuilder sb, PageMapFragment fragment)
+    {
+        sb.Append("{\"fragmentId\":").Append(JsonString(fragment.FragmentId))
+          .Append(",\"anchorId\":").Append(JsonString(fragment.AnchorId))
+          .Append(",\"fragmentIndex\":").Append(fragment.FragmentIndex)
+          .Append(",\"pageNumber\":").Append(fragment.PageNumber)
+          .Append(",\"geometry\":{\"x\":").Append(Invariant(fragment.Geometry.X))
+          .Append(",\"y\":").Append(Invariant(fragment.Geometry.Y))
+          .Append(",\"width\":").Append(Invariant(fragment.Geometry.Width))
+          .Append(",\"height\":").Append(Invariant(fragment.Geometry.Height)).Append('}')
+          .Append(",\"story\":").Append(JsonString(PageMapStoryString(fragment.Story)))
+          .Append(",\"inTableCell\":").Append(fragment.InTableCell ? "true" : "false")
+          .Append('}');
+    }
+
+    private static string PageMapAvailabilityString(PageMapAvailability availability) =>
+        availability == PageMapAvailability.Available ? "available" : "unavailable";
+
+    private static string PageMapStoryString(PageMapStory story) => story switch
+    {
+        PageMapStory.Header => "header",
+        PageMapStory.Footer => "footer",
+        PageMapStory.Footnote => "footnote",
+        PageMapStory.Endnote => "endnote",
+        PageMapStory.Comment => "comment",
+        _ => "body",
+    };
+
+    private static string Invariant(double value) =>
+        value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
     public static string SerializeEditResults(IReadOnlyList<EditResult> results)
     {
@@ -593,6 +1063,11 @@ internal static class DocxSessionJson
             AppendStringArray(sb, m.Groups);
             sb.Append(",\"fragments\":");
             AppendFragments(sb, m.Fragments);
+            if (m.Citation is { } citation)
+            {
+                sb.Append(",\"citation\":");
+                AppendPageCitation(sb, citation);
+            }
             sb.Append('}');
         }
         sb.Append(']');
@@ -633,6 +1108,16 @@ internal static class DocxSessionJson
               .Append(",\"contextAfter\":").Append(JsonString(m.ContextAfter))
               .Append(",\"groups\":");
             AppendStringArray(sb, m.Groups);
+            if (m.Citations is { } citations)
+            {
+                sb.Append(",\"citations\":[");
+                for (int c = 0; c < citations.Count; c++)
+                {
+                    if (c > 0) sb.Append(',');
+                    AppendPageCitation(sb, citations[c]);
+                }
+                sb.Append(']');
+            }
             sb.Append('}');
         }
         sb.Append(']');
@@ -705,7 +1190,21 @@ internal static class DocxSessionJson
                 sb.Append(",\"autoNumberPrefix\":").Append(JsonString(prefix));
             sb.Append('}');
         }
-        sb.Append("}}");
+        sb.Append('}');
+        if (p.PageCitations is { } citations)
+        {
+            sb.Append(",\"pageCitations\":{");
+            bool firstCitation = true;
+            foreach (var (anchorId, citation) in citations)
+            {
+                if (!firstCitation) sb.Append(',');
+                firstCitation = false;
+                sb.Append(JsonString(anchorId)).Append(':');
+                AppendPageCitation(sb, citation);
+            }
+            sb.Append('}');
+        }
+        sb.Append('}');
         return sb.ToString();
     }
 
@@ -734,7 +1233,7 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
-    public static string EnumToSnake(EditErrorCode code)
+    public static string EnumToSnake(System.Enum code)
     {
         var s = code.ToString();
         var sb = new StringBuilder(s.Length + 4);
@@ -930,6 +1429,11 @@ internal static class DocxSessionJson
           .Append(",\"textPreview\":").Append(JsonString(t.TextPreview));
         if (t.AutoNumberPrefix is { } prefix)
             sb.Append(",\"autoNumberPrefix\":").Append(JsonString(prefix));
+        if (t.Citation is { } citation)
+        {
+            sb.Append(",\"citation\":");
+            AppendPageCitation(sb, citation);
+        }
         sb.Append('}');
     }
 
@@ -964,7 +1468,9 @@ internal static class DocxSessionJson
         sb.Append("{\"id\":").Append(JsonString(info.Id))
           .Append(",\"kind\":").Append(JsonString(info.Kind))
           .Append(",\"scope\":").Append(JsonString(info.Scope))
-          .Append(",\"textPreview\":").Append(JsonString(info.TextPreview));
+          .Append(",\"textPreview\":").Append(JsonString(info.TextPreview))
+          .Append(",\"contentHash\":").Append(JsonString(info.ContentHash))
+          .Append(",\"visibleText\":").Append(JsonString(info.VisibleText));
         if (info.AutoNumberPrefix is { } prefix)
             sb.Append(",\"autoNumberPrefix\":").Append(JsonString(prefix));
         sb.Append('}');

@@ -42,6 +42,11 @@ public class DocumentElement
     /// </summary>
     public string Id { get; init; } = "";
 
+    /// <summary>Canonical live-session anchor when the element is addressable. Table structures
+    /// expose <c>tbl</c>/<c>tr</c>/<c>tc</c> anchors here while <see cref="Id"/> remains as the
+    /// compatibility path identifier.</summary>
+    public string? AnchorId { get; init; }
+
     /// <summary>
     /// Type of this element.
     /// </summary>
@@ -98,6 +103,15 @@ public class TableColumnInfo
     /// </summary>
     public string TableId { get; init; } = "";
 
+    /// <summary>Canonical <c>col</c> anchor of the underlying <c>w:gridCol</c>.</summary>
+    public string AnchorId { get; init; } = "";
+
+    /// <summary>Canonical <c>tbl</c> anchor of the owning table.</summary>
+    public string TableAnchorId { get; init; } = "";
+
+    /// <summary>Whether the identity represents a missing grid slot rather than a physical gridCol.</summary>
+    public bool IsVirtual { get; init; }
+
     /// <summary>
     /// Zero-based column index.
     /// </summary>
@@ -107,6 +121,9 @@ public class TableColumnInfo
     /// IDs of all cells in this column.
     /// </summary>
     public List<string> CellIds { get; init; } = new();
+
+    /// <summary>Canonical <c>tc</c> anchors of the physical cells covering the column.</summary>
+    public List<string> CellAnchorIds { get; init; } = new();
 
     /// <summary>
     /// Total number of rows in this column.
@@ -200,7 +217,12 @@ public static class DocumentStructureAnalyzer
             };
         }
 
-        var body = XElement.Parse(mainPart.Document.Body.OuterXml);
+        // Seed from the same w:document root as the live-session projector. Seeding from a
+        // detached w:body would produce internally deterministic IDs that nevertheless differed
+        // from the canonical anchors a DocxSession over these exact bytes accepts.
+        var documentRoot = mainPart.GetXDocument().Root!;
+        UnidHelper.AssignToAllElementsDeterministic(documentRoot);
+        var body = documentRoot.Element(W + "body")!;
         var elementsById = new Dictionary<string, DocumentElement>();
         var tableColumns = new Dictionary<string, TableColumnInfo>();
 
@@ -366,6 +388,7 @@ public static class DocumentStructureAnalyzer
     {
         var id = $"{parentId}/tbl-{index}";
         var rows = new List<DocumentElement>();
+        var metadata = Internal.TableGridModel.BuildMetadata(table, BodyAnchorForElement);
 
         // Track column info
         var columnCells = new Dictionary<int, List<string>>();
@@ -373,26 +396,33 @@ public static class DocumentStructureAnalyzer
         int rowIndex = 0;
         foreach (var tr in table.Elements(W + "tr"))
         {
-            var rowElement = AnalyzeTableRow(tr, id, rowIndex, elementsById, tableColumns, columnCells);
+            var rowElement = AnalyzeTableRow(tr, id, rowIndex, metadata.Rows[rowIndex],
+                elementsById, tableColumns, columnCells);
             rows.Add(rowElement);
             rowIndex++;
         }
 
         // Build TableColumnInfo entries
-        foreach (var (colIdx, cellIds) in columnCells)
+        foreach (var column in metadata.Columns)
         {
-            var colId = $"{id}/col-{colIdx}";
+            var colId = $"{id}/col-{column.ColumnIndex}";
+            columnCells.TryGetValue(column.ColumnIndex, out var cellIds);
             tableColumns[colId] = new TableColumnInfo
             {
                 TableId = id,
-                ColumnIndex = colIdx,
-                CellIds = cellIds
+                TableAnchorId = metadata.Anchor.Id,
+                AnchorId = column.Anchor.Id,
+                IsVirtual = column.IsVirtual,
+                ColumnIndex = column.ColumnIndex,
+                CellIds = cellIds ?? new List<string>(),
+                CellAnchorIds = column.CellAnchorIds.ToList(),
             };
         }
 
         var element = new DocumentElement
         {
             Id = id,
+            AnchorId = metadata.Anchor.Id,
             Type = DocumentElementType.Table,
             TextPreview = $"[Table: {rowIndex} rows]",
             Index = index,
@@ -408,6 +438,7 @@ public static class DocumentStructureAnalyzer
         XElement tr,
         string tableId,
         int rowIndex,
+        TableRowMetadata rowMetadata,
         Dictionary<string, DocumentElement> elementsById,
         Dictionary<string, TableColumnInfo> tableColumns,
         Dictionary<int, List<string>> columnCells)
@@ -415,31 +446,30 @@ public static class DocumentStructureAnalyzer
         var id = $"{tableId}/tr-{rowIndex}";
         var cells = new List<DocumentElement>();
 
-        int columnIndex = 0;
         int cellIndex = 0;
 
         foreach (var tc in tr.Elements(W + "tc"))
         {
-            var cellElement = AnalyzeTableCell(tc, id, cellIndex, columnIndex, rowIndex, elementsById, tableColumns);
+            var cellMetadata = rowMetadata.Cells[cellIndex];
+            var cellElement = AnalyzeTableCell(tc, id, cellIndex, cellMetadata, elementsById, tableColumns);
             cells.Add(cellElement);
 
-            // Track cell for column info
-            if (!columnCells.ContainsKey(columnIndex))
+            // A horizontally-spanning cell belongs to every grid column it covers.
+            for (int columnIndex = cellMetadata.ColumnIndex;
+                 columnIndex < cellMetadata.ColumnIndex + cellMetadata.ColumnSpan;
+                 columnIndex++)
             {
-                columnCells[columnIndex] = new List<string>();
+                if (!columnCells.ContainsKey(columnIndex))
+                    columnCells[columnIndex] = new List<string>();
+                columnCells[columnIndex].Add(cellElement.Id);
             }
-            columnCells[columnIndex].Add(cellElement.Id);
-
-            // Account for column span
-            var gridSpan = tc.Element(W + "tcPr")?.Element(W + "gridSpan")?.Attribute(W + "val")?.Value;
-            var span = gridSpan != null ? int.Parse(gridSpan) : 1;
-            columnIndex += span;
             cellIndex++;
         }
 
         var element = new DocumentElement
         {
             Id = id,
+            AnchorId = rowMetadata.Anchor.Id,
             Type = DocumentElementType.TableRow,
             TextPreview = $"[Row {rowIndex + 1}: {cellIndex} cells]",
             Index = cellIndex,
@@ -456,25 +486,11 @@ public static class DocumentStructureAnalyzer
         XElement tc,
         string rowId,
         int cellIndex,
-        int columnIndex,
-        int rowIndex,
+        TableCellMetadata metadata,
         Dictionary<string, DocumentElement> elementsById,
         Dictionary<string, TableColumnInfo> tableColumns)
     {
         var id = $"{rowId}/tc-{cellIndex}";
-
-        // Get span info
-        var tcPr = tc.Element(W + "tcPr");
-        var gridSpanAttr = tcPr?.Element(W + "gridSpan")?.Attribute(W + "val")?.Value;
-        var columnSpan = gridSpanAttr != null ? int.Parse(gridSpanAttr) : 1;
-
-        var vMerge = tcPr?.Element(W + "vMerge");
-        int? rowSpan = null;
-        if (vMerge != null)
-        {
-            var val = vMerge.Attribute(W + "val")?.Value;
-            rowSpan = val == "restart" ? 1 : 0; // 0 means continuation
-        }
 
         // Analyze cell content (paragraphs and nested tables)
         var children = AnalyzeChildren(tc, id, elementsById, tableColumns);
@@ -482,19 +498,29 @@ public static class DocumentStructureAnalyzer
         var element = new DocumentElement
         {
             Id = id,
+            AnchorId = metadata.Anchor.Id,
             Type = DocumentElementType.TableCell,
             TextPreview = GetTextPreview(tc),
             Index = cellIndex,
-            ColumnIndex = columnIndex,
-            RowIndex = rowIndex,
-            ColumnSpan = columnSpan > 1 ? columnSpan : null,
-            RowSpan = rowSpan,
+            ColumnIndex = metadata.ColumnIndex,
+            RowIndex = metadata.RowIndex,
+            ColumnSpan = metadata.ColumnSpan > 1 ? metadata.ColumnSpan : null,
+            RowSpan = metadata.VerticalMerge == TableVerticalMergeRole.None ? null : metadata.RowSpan,
             Children = children,
             XmlElement = tc
         };
 
         elementsById[id] = element;
         return element;
+    }
+
+    private static Anchor? BodyAnchorForElement(XElement element)
+    {
+        var kind = WmlToMarkdownConverter.KindFor(element);
+        var unid = (string?)element.Attribute(PtOpenXml.Unid);
+        return kind is null || unid is null
+            ? null
+            : new Anchor($"{kind}:body:{unid}", kind, "body", unid);
     }
 
     private static string? GetTextPreview(XElement element, int maxLength = 100)

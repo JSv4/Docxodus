@@ -287,10 +287,11 @@ public class IrMarkdownEquivalenceTests
     // --- index comparison -------------------------------------------------
 
     /// <summary>
-    /// Compare the oracle and IR anchor indexes restricted to BODY entries (Task 1 scope). For each
-    /// body anchor the oracle produced, the IR must produce an entry with the same Anchor.Id/Kind/
-    /// Scope/Unid, identical PartUri, and identical TextPreview. AutoNumberPrefix is EXCLUDED from
-    /// the comparison — the IR counter walk lands in M1.4-T3 (see emitter TODO). Returns a
+    /// Compare the oracle and IR anchor indexes restricted to IR-owned BODY entries (Task 1 scope).
+    /// Metadata-only <c>col</c> anchors identify <c>w:gridCol</c> elements for canonical table
+    /// addressing; the markdown IR intentionally models the table/row/cell hierarchy instead. For
+    /// every other body anchor the oracle produced, the IR must produce an entry with the same
+    /// Anchor.Id/Kind/Scope/Unid, identical PartUri, TextPreview, and AutoNumberPrefix. Returns a
     /// human-readable diff in <paramref name="diff"/> on mismatch.
     /// </summary>
     private static bool BodyIndexEqual(
@@ -299,7 +300,10 @@ public class IrMarkdownEquivalenceTests
         out string diff)
     {
         var sb = new StringBuilder();
-        var oracleBody = oracle.Where(kv => kv.Value.Anchor.Scope == "body")
+        static bool IsComparableBodyAnchor(AnchorTarget target) =>
+            target.Anchor.Scope == "body" && target.Anchor.Kind != "col";
+
+        var oracleBody = oracle.Where(kv => IsComparableBodyAnchor(kv.Value))
             .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
 
         foreach (var (key, oTarget) in oracleBody.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -325,7 +329,7 @@ public class IrMarkdownEquivalenceTests
         }
 
         // Body anchors the IR produced that the oracle did not.
-        foreach (var key in ir.Keys.Where(k => ir[k].Anchor.Scope == "body"))
+        foreach (var key in ir.Keys.Where(k => IsComparableBodyAnchor(ir[k])))
             if (!oracleBody.ContainsKey(key))
                 sb.AppendLine($"  extra in IR: {key}");
 

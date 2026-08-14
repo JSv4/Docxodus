@@ -34,7 +34,10 @@ from .enums import (
     PlaceholderKind,
     PlaceholderKinds,
     ProjectionScopes,
+    TableAnchorEntityKind,
     TableRenderMode,
+    TableRowHeightRule,
+    TableVerticalMergeRole,
     TrackedChangeMode,
     WhitespaceMode,
 )
@@ -50,6 +53,10 @@ __all__ = [
     "MarkdownPatch",
     "AnchorTarget",
     "AnchorInfo",
+    "PreconditionTarget",
+    "PreconditionFailure",
+    "TextRangePrecondition",
+    "MutationPreconditions",
     "BlockMetadata",
     "BulkEditResult",
     "FillOptions",
@@ -58,6 +65,14 @@ __all__ = [
     "HtmlOptions",
     "ListMembership",
     "NumberFormat",
+    "PageCitation",
+    "PageCitationRequest",
+    "PageMap",
+    "PageMapFragment",
+    "PageMapPage",
+    "PageMapRect",
+    "PageMapRegistrationResult",
+    "PageMapStatus",
     "RunFormatting",
     "RunFragment",
     "SectionInfo",
@@ -80,6 +95,18 @@ __all__ = [
     "DocxDiffConflictCompetitor",
     "DocxDiffConflict",
     "DocxDiffConsolidatedRevision",
+    "TableInsertOptions",
+    "TableBorderSpec",
+    "TableRowOptions",
+    "TableCellMetadata",
+    "TableRowMetadata",
+    "TableColumnMetadata",
+    "TableMetadata",
+    "TableMetadataResult",
+    "TableCellResolutionResult",
+    "TableAnchorLocation",
+    "RetainedTableAnchor",
+    "TableAnchorMapping",
 ]
 
 
@@ -108,6 +135,168 @@ class Anchor:
 
 
 @dataclass(frozen=True, slots=True)
+class TableInsertOptions:
+    borderless: bool = False
+    cell_contents: tuple[str, ...] = ()
+    cell_alignment: str | None = None
+    column_widths: tuple[int, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"borderless": self.borderless}
+        if self.cell_contents:
+            result["cellContents"] = list(self.cell_contents)
+        if self.cell_alignment is not None:
+            result["cellAlignment"] = self.cell_alignment
+        if self.column_widths:
+            result["columnWidths"] = list(self.column_widths)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class TableBorderSpec:
+    scope: str = "all"
+    style: str | None = None
+    size: int | None = None
+    color: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {key: value for key, value in {
+            "scope": self.scope, "style": self.style, "size": self.size, "color": self.color,
+        }.items() if value is not None}
+
+
+@dataclass(frozen=True, slots=True)
+class TableRowOptions:
+    repeat_header: bool | None = None
+    allow_break_across_pages: bool | None = None
+    height_twips: int | None = None
+    height_rule: TableRowHeightRule = TableRowHeightRule.AT_LEAST
+
+
+@dataclass(frozen=True, slots=True)
+class TableCellMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    row_anchor_id: str
+    row_index: int
+    column_index: int
+    row_span: int
+    column_span: int
+    vertical_merge: TableVerticalMergeRole
+    paragraph_anchors: tuple[Anchor, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableCellMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            table_anchor_id=d["tableAnchorId"], row_anchor_id=d["rowAnchorId"],
+            row_index=int(d["rowIndex"]), column_index=int(d["columnIndex"]),
+            row_span=int(d["rowSpan"]), column_span=int(d["columnSpan"]),
+            vertical_merge=TableVerticalMergeRole(d.get("verticalMerge", "none")),
+            paragraph_anchors=tuple(Anchor._from_wire(a) for a in d.get("paragraphAnchors", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableRowMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    row_index: int
+    grid_before: int
+    grid_after: int
+    cells: tuple[TableCellMetadata, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableRowMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]), table_anchor_id=d["tableAnchorId"],
+            row_index=int(d["rowIndex"]), grid_before=int(d.get("gridBefore", 0)),
+            grid_after=int(d.get("gridAfter", 0)),
+            cells=tuple(TableCellMetadata._from_wire(c) for c in d.get("cells", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableColumnMetadata:
+    anchor: Anchor
+    table_anchor_id: str
+    column_index: int
+    width_twips: int
+    is_virtual: bool
+    cell_anchor_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableColumnMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]), table_anchor_id=d["tableAnchorId"],
+            column_index=int(d["columnIndex"]), width_twips=int(d.get("widthTwips", 0)),
+            is_virtual=bool(d.get("isVirtual", False)),
+            cell_anchor_ids=tuple(d.get("cellAnchorIds", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableMetadata:
+    anchor: Anchor
+    columns: tuple[TableColumnMetadata, ...] = ()
+    rows: tuple[TableRowMetadata, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableMetadata":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            columns=tuple(TableColumnMetadata._from_wire(c) for c in d.get("columns", ())),
+            rows=tuple(TableRowMetadata._from_wire(r) for r in d.get("rows", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableAnchorLocation:
+    anchor: Anchor
+    entity_kind: TableAnchorEntityKind
+    row_index: int | None = None
+    column_index: int | None = None
+    row_span: int | None = None
+    column_span: int | None = None
+    is_virtual: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableAnchorLocation":
+        return cls(
+            anchor=Anchor._from_wire(d["anchor"]),
+            entity_kind=TableAnchorEntityKind(d["entityKind"]),
+            row_index=d.get("rowIndex"), column_index=d.get("columnIndex"),
+            row_span=d.get("rowSpan"), column_span=d.get("columnSpan"),
+            is_virtual=bool(d.get("isVirtual", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedTableAnchor:
+    before: TableAnchorLocation
+    after: TableAnchorLocation
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RetainedTableAnchor":
+        return cls(TableAnchorLocation._from_wire(d["before"]), TableAnchorLocation._from_wire(d["after"]))
+
+
+@dataclass(frozen=True, slots=True)
+class TableAnchorMapping:
+    retained: tuple[RetainedTableAnchor, ...] = ()
+    added: tuple[TableAnchorLocation, ...] = ()
+    invalidated: tuple[TableAnchorLocation, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableAnchorMapping":
+        return cls(
+            retained=tuple(RetainedTableAnchor._from_wire(x) for x in d.get("retained", ())),
+            added=tuple(TableAnchorLocation._from_wire(x) for x in d.get("added", ())),
+            invalidated=tuple(TableAnchorLocation._from_wire(x) for x in d.get("invalidated", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AnchorTarget:
     """Search-result anchor with extra metadata (``partUri``, ``textPreview``)."""
 
@@ -117,6 +306,7 @@ class AnchorTarget:
     unid: str
     part_uri: str
     text_preview: str
+    citation: PageCitation | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorTarget":
@@ -127,6 +317,7 @@ class AnchorTarget:
             unid=d["unid"],
             part_uri=d.get("partUri", ""),
             text_preview=d.get("textPreview", ""),
+            citation=PageCitation._from_wire(d["citation"]) if d.get("citation") else None,
         )
 
 
@@ -138,6 +329,8 @@ class AnchorInfo:
     kind: str
     scope: str
     text_preview: str
+    content_hash: str | None = None
+    visible_text: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorInfo":
@@ -146,7 +339,90 @@ class AnchorInfo:
             kind=d["kind"],
             scope=d["scope"],
             text_preview=d.get("textPreview", ""),
+            content_hash=d.get("contentHash"),
+            visible_text=d.get("visibleText"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PreconditionTarget:
+    """Current target metadata returned when an optimistic guard fails."""
+
+    exists: bool
+    anchor_id: str | None = None
+    kind: str | None = None
+    scope: str | None = None
+    content_hash: str | None = None
+    visible_text: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PreconditionTarget":
+        return cls(
+            exists=bool(d.get("exists", False)),
+            anchor_id=d.get("anchorId"),
+            kind=d.get("kind"),
+            scope=d.get("scope"),
+            content_hash=d.get("contentHash"),
+            visible_text=d.get("visibleText"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreconditionFailure:
+    """Expected/actual detail for ``PRECONDITION_FAILED``."""
+
+    condition: str
+    expected: Any
+    actual: Any
+    current_version: int
+    current_target: PreconditionTarget | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PreconditionFailure":
+        target = d.get("currentTarget")
+        return cls(
+            condition=str(d.get("condition", "")),
+            expected=d.get("expected"),
+            actual=d.get("actual"),
+            current_version=int(d.get("currentVersion", 0)),
+            current_target=PreconditionTarget._from_wire(target) if target else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TextRangePrecondition:
+    start: int
+    length: int
+    text: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"start": self.start, "length": self.length, "text": self.text}
+
+
+@dataclass(frozen=True, slots=True)
+class MutationPreconditions:
+    """Optional optimistic guards evaluated immediately before a mutation."""
+
+    expected_version: int | None = None
+    anchor_id: str | None = None
+    expected_content_hash: str | None = None
+    expected_text: str | None = None
+    expected_text_range: TextRangePrecondition | None = None
+    expected_kind: str | None = None
+    expected_scope: str | None = None
+    expected_match_count: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.expected_version is not None: out["expectedVersion"] = self.expected_version
+        if self.anchor_id is not None: out["anchorId"] = self.anchor_id
+        if self.expected_content_hash is not None: out["expectedContentHash"] = self.expected_content_hash
+        if self.expected_text is not None: out["expectedText"] = self.expected_text
+        if self.expected_text_range is not None: out["expectedTextRange"] = self.expected_text_range.to_wire()
+        if self.expected_kind is not None: out["expectedKind"] = self.expected_kind
+        if self.expected_scope is not None: out["expectedScope"] = self.expected_scope
+        if self.expected_match_count is not None: out["expectedMatchCount"] = self.expected_match_count
+        return out
 
 
 class NumberFormat(str, Enum):
@@ -477,6 +753,177 @@ class RunFragment:
 
 
 @dataclass(frozen=True, slots=True)
+class PageMapRect:
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def to_wire(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapPage:
+    page_number: int
+    page_in_section: int
+    width: float
+    height: float
+    page_name: str
+    section_index: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "pageNumber": self.page_number,
+            "pageInSection": self.page_in_section,
+            "width": self.width,
+            "height": self.height,
+        }
+        out["pageName"] = self.page_name
+        if self.section_index is not None:
+            out["sectionIndex"] = self.section_index
+        return out
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapPage":
+        return cls(
+            page_number=int(d["pageNumber"]),
+            page_in_section=int(d["pageInSection"]),
+            width=float(d["width"]),
+            height=float(d["height"]),
+            page_name=d["pageName"],
+            section_index=int(d["sectionIndex"]) if d.get("sectionIndex") is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapFragment:
+    fragment_id: str
+    anchor_id: str
+    fragment_index: int
+    page_number: int
+    geometry: PageMapRect
+    story: str
+    in_table_cell: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "fragmentId": self.fragment_id,
+            "anchorId": self.anchor_id,
+            "fragmentIndex": self.fragment_index,
+            "pageNumber": self.page_number,
+            "geometry": self.geometry.to_wire(),
+            "story": self.story,
+            "inTableCell": self.in_table_cell,
+        }
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapFragment":
+        g = d["geometry"]
+        return cls(
+            fragment_id=d["fragmentId"],
+            anchor_id=d["anchorId"],
+            fragment_index=int(d["fragmentIndex"]),
+            page_number=int(d["pageNumber"]),
+            geometry=PageMapRect(
+                float(g["x"]),
+                float(g["y"]),
+                float(g["width"]),
+                float(g["height"]),
+            ),
+            story=d["story"],
+            in_table_cell=bool(d.get("inTableCell", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PageMap:
+    document_version: int
+    renderer_fingerprint: str
+    pages: tuple[PageMapPage, ...] = ()
+    fragments: tuple[PageMapFragment, ...] = ()
+    mode: str = "paginated"
+    availability: str = "available"
+    schema_version: int = 1
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": self.schema_version,
+            "mode": self.mode,
+            "availability": self.availability,
+            "documentVersion": self.document_version,
+            "rendererFingerprint": self.renderer_fingerprint,
+            "pages": [p.to_wire() for p in self.pages],
+            "fragments": [f.to_wire() for f in self.fragments],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PageCitationRequest:
+    document_version: int
+    renderer_fingerprint: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "documentVersion": self.document_version,
+            "rendererFingerprint": self.renderer_fingerprint,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PageCitation:
+    anchor_id: str
+    availability: str
+    document_version: int
+    renderer_fingerprint: str
+    pages: tuple[PageMapPage, ...] = ()
+    fragments: tuple[PageMapFragment, ...] = ()
+    unavailable_reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageCitation":
+        return cls(
+            anchor_id=d["anchorId"],
+            availability=d["availability"],
+            document_version=int(d["documentVersion"]),
+            renderer_fingerprint=d.get("rendererFingerprint", ""),
+            pages=tuple(PageMapPage._from_wire(p) for p in d.get("pages", ())),
+            fragments=tuple(PageMapFragment._from_wire(f) for f in d.get("fragments", ())),
+            unavailable_reason=d.get("unavailableReason"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapRegistrationResult:
+    success: bool
+    error: str | None = None
+    message: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapRegistrationResult":
+        return cls(bool(d.get("success")), d.get("error"), d.get("message"))
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapStatus:
+    availability: str
+    document_version: int
+    unavailable_reason: str | None = None
+    renderer_fingerprint: str | None = None
+    mode: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapStatus":
+        return cls(
+            d["availability"],
+            int(d["documentVersion"]),
+            d.get("unavailableReason"),
+            d.get("rendererFingerprint"),
+            d.get("mode"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TextMatch:
     """A single grep / find-by-text match."""
 
@@ -487,6 +934,7 @@ class TextMatch:
     context_before: str = ""
     context_after: str = ""
     groups: tuple[str, ...] = ()
+    citation: PageCitation | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "TextMatch":
@@ -498,6 +946,7 @@ class TextMatch:
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
+            citation=PageCitation._from_wire(d["citation"]) if d.get("citation") else None,
         )
 
 
@@ -528,6 +977,7 @@ class CrossBlockMatch:
     context_before: str = ""
     context_after: str = ""
     groups: tuple[str, ...] = ()
+    citations: tuple[PageCitation, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "CrossBlockMatch":
@@ -538,6 +988,7 @@ class CrossBlockMatch:
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
+            citations=tuple(PageCitation._from_wire(c) for c in d.get("citations", ())),
         )
 
 
@@ -579,6 +1030,7 @@ class EditError:
     code: EditErrorCode
     message: str
     anchor_id: str | None = None
+    precondition: PreconditionFailure | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditError":
@@ -586,7 +1038,39 @@ class EditError:
             code=EditErrorCode(d["code"]),
             message=d.get("message", ""),
             anchor_id=d.get("anchorId"),
+            precondition=PreconditionFailure._from_wire(d["precondition"])
+            if d.get("precondition") else None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TableMetadataResult:
+    success: bool
+    metadata: TableMetadata | None = None
+    error: EditError | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableMetadataResult":
+        metadata = d.get("metadata")
+        error = d.get("error")
+        return cls(bool(d.get("success", False)),
+            TableMetadata._from_wire(metadata) if metadata else None,
+            EditError._from_wire(error) if error else None)
+
+
+@dataclass(frozen=True, slots=True)
+class TableCellResolutionResult:
+    success: bool
+    cell: TableCellMetadata | None = None
+    error: EditError | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableCellResolutionResult":
+        cell = d.get("cell")
+        error = d.get("error")
+        return cls(bool(d.get("success", False)),
+            TableCellMetadata._from_wire(cell) if cell else None,
+            EditError._from_wire(error) if error else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -620,6 +1104,7 @@ class EditResult:
     patch: MarkdownPatch | None = None
     error: EditError | None = None
     annotation_id: str | None = None
+    table_anchors: TableAnchorMapping | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
@@ -633,6 +1118,8 @@ class EditResult:
             patch=MarkdownPatch._from_wire(patch_d) if patch_d else None,
             error=EditError._from_wire(err_d) if err_d else None,
             annotation_id=d.get("annotationId"),
+            table_anchors=TableAnchorMapping._from_wire(d["tableAnchors"])
+            if d.get("tableAnchors") else None,
         )
 
 
@@ -715,6 +1202,7 @@ class MarkdownProjection:
 
     markdown: str
     anchor_index: Mapping[str, AnchorTarget]
+    page_citations: Mapping[str, PageCitation] = field(default_factory=dict)
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownProjection":
@@ -731,7 +1219,11 @@ class MarkdownProjection:
                 part_uri=entry.get("partUri", ""),
                 text_preview=entry.get("textPreview", ""),
             )
-        return cls(markdown=d.get("markdown", ""), anchor_index=decoded)
+        citations = {
+            anchor_id: PageCitation._from_wire(citation)
+            for anchor_id, citation in (d.get("pageCitations", {}) or {}).items()
+        }
+        return cls(markdown=d.get("markdown", ""), anchor_index=decoded, page_citations=citations)
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +1370,7 @@ class FindOptions:
     kind_filter: str | None = None
     scopes: ProjectionScopes | None = None
     scope_filter: str | None = None
+    citation: PageCitationRequest | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -886,6 +1379,8 @@ class FindOptions:
         if self.kind_filter is not None: out["kindFilter"] = self.kind_filter
         if self.scopes is not None: out["scopes"] = int(self.scopes)
         if self.scope_filter is not None: out["scopeFilter"] = self.scope_filter
+        if self.citation is not None:
+            out["citation"] = self.citation.to_wire()
         return out
 
 
@@ -895,11 +1390,15 @@ class ReplaceOptions:
 
     ignore_case: bool = False
     max_replacements: int | None = None
+    expected_match_count: int | None = None
+    preconditions: MutationPreconditions | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.ignore_case: out["ignoreCase"] = True
         if self.max_replacements is not None: out["maxReplacements"] = self.max_replacements
+        if self.expected_match_count is not None: out["expectedMatchCount"] = self.expected_match_count
+        if self.preconditions is not None: out["preconditions"] = self.preconditions.to_wire()
         return out
 
 

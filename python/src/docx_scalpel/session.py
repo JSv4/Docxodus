@@ -21,7 +21,8 @@ not run at all during interpreter shutdown.
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -67,13 +68,24 @@ from .types import (
     HtmlOptions,
     ListMembership,
     MarkdownProjection,
+    MutationPreconditions,
     NumberFormat,
     ParagraphFormatOp,
+    PageCitation,
+    PageCitationRequest,
+    PageMap,
+    PageMapRegistrationResult,
+    PageMapStatus,
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
     TemplatePlaceholder,
     TextMatch,
+    TableBorderSpec,
+    TableCellResolutionResult,
+    TableInsertOptions,
+    TableMetadataResult,
+    TableRowOptions,
 )
 
 __all__ = [
@@ -353,11 +365,12 @@ class DocxSession:
     Construct via :func:`open_session`; never instantiate directly.
     """
 
-    __slots__ = ("_handle", "_closed")
+    __slots__ = ("_handle", "_closed", "_active_preconditions")
 
     def __init__(self, handle: int) -> None:
         self._handle = handle
         self._closed = False
+        self._active_preconditions: MutationPreconditions | None = None
 
     # -- lifecycle --------------------------------------------------------
 
@@ -447,11 +460,74 @@ class DocxSession:
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""
-        return bool(self._call("undo", {}))
+        result = self._call("undo", {})
+        return bool(result.get("success")) if isinstance(result, dict) else bool(result)
 
     def redo(self) -> bool:
         """Redo one snapshot. Returns ``True`` if the redo ring had something to pop."""
-        return bool(self._call("redo", {}))
+        result = self._call("redo", {})
+        return bool(result.get("success")) if isinstance(result, dict) else bool(result)
+
+    def get_version(self) -> int:
+        """Return the monotonic version of the live document state."""
+        result = self._call("get_version", {})
+        if not isinstance(result, dict) or not isinstance(result.get("version"), int):
+            raise TypeError(f"get_version: expected {{version: int}}, got {result!r}")
+        return int(result["version"])
+
+    def register_page_map(
+        self, page_map: PageMap, expected_renderer_fingerprint: str | None = None
+    ) -> PageMapRegistrationResult:
+        """Register browser-produced pagination without mutating the document."""
+        result = self._call(
+            "register_page_map",
+            {
+                "pageMap": page_map.to_wire(),
+                "expectedRendererFingerprint": expected_renderer_fingerprint,
+            },
+        )
+        return PageMapRegistrationResult._from_wire(result)
+
+    def get_page_map_status(
+        self, citation: PageCitationRequest | None = None
+    ) -> PageMapStatus:
+        args: dict[str, Any] = {}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        return PageMapStatus._from_wire(self._call("get_page_map_status", args))
+
+    def get_page_citation(
+        self, anchor_id: str, citation: PageCitationRequest
+    ) -> PageCitation:
+        return PageCitation._from_wire(
+            self._call(
+                "get_page_citation",
+                {"anchorId": anchor_id, "citation": citation.to_wire()},
+            )
+        )
+
+    def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
+        """Evaluate guards without mutating the document or advancing its version."""
+        return EditResult._from_wire(
+            self._call("check_preconditions", {"preconditions": preconditions.to_wire()})
+        )
+
+    @contextmanager
+    def preconditioned(
+        self, preconditions: MutationPreconditions
+    ) -> Iterator["DocxSession"]:
+        """Attach guards to each mutation request made inside the context.
+
+        The host evaluates them immediately before that request's mutation. Nested
+        contexts restore the previous guard on exit. A session should not be shared
+        across threads while a precondition context is active.
+        """
+        previous = self._active_preconditions
+        self._active_preconditions = preconditions
+        try:
+            yield self
+        finally:
+            self._active_preconditions = previous
 
     # -- projection -------------------------------------------------------
 
@@ -463,14 +539,13 @@ class DocxSession:
         self,
         anchor_id: str,
         depth: ProjectionDepth = ProjectionDepth.SUBTREE_AND_FOLLOWING_SIBLINGS,
+        citation: PageCitationRequest | None = None,
     ) -> MarkdownProjection:
         """Scoped re-projection rooted at ``anchor_id``."""
-        return MarkdownProjection._from_wire(
-            self._call(
-                "project_anchor",
-                {"anchorId": anchor_id, "depth": int(depth)},
-            )
-        )
+        args: dict[str, Any] = {"anchorId": anchor_id, "depth": int(depth)}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        return MarkdownProjection._from_wire(self._call("project_anchor", args))
 
     # -- discovery: grep + find -------------------------------------------
 
@@ -482,17 +557,21 @@ class DocxSession:
         context_chars: int = 80,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[TextMatch, ...]:
+        args: dict[str, Any] = {
+            "pattern": pattern,
+            "regexOptions": int(regex_options),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "whitespace": int(whitespace),
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "grep",
-            {
-                "pattern": pattern,
-                "regexOptions": int(regex_options),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "whitespace": int(whitespace),
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(TextMatch._from_wire(m) for m in result)
 
@@ -504,17 +583,21 @@ class DocxSession:
         context_chars: int = 80,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[CrossBlockMatch, ...]:
+        args: dict[str, Any] = {
+            "pattern": pattern,
+            "regexOptions": int(regex_options),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "whitespace": int(whitespace),
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "grep_cross_block",
-            {
-                "pattern": pattern,
-                "regexOptions": int(regex_options),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "whitespace": int(whitespace),
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(CrossBlockMatch._from_wire(m) for m in result)
 
@@ -524,15 +607,19 @@ class DocxSession:
         scope: ProjectionScopes = ProjectionScopes.BODY,
         context_chars: int = 80,
         boundary: ContextBoundary = ContextBoundary.CHAR,
+        citation: PageCitationRequest | None = None,
     ) -> tuple[TemplatePlaceholder, ...]:
+        args: dict[str, Any] = {
+            "kinds": int(kinds),
+            "scope": int(scope),
+            "contextChars": context_chars,
+            "boundary": int(boundary),
+        }
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call(
             "find_placeholders",
-            {
-                "kinds": int(kinds),
-                "scope": int(scope),
-                "contextChars": context_chars,
-                "boundary": int(boundary),
-            },
+            args,
         )
         return tuple(TemplatePlaceholder._from_wire(p) for p in result)
 
@@ -677,26 +764,48 @@ class DocxSession:
         result = self._call("find_by_regex", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_kind(self, kind: str, scope: str | None = None) -> tuple[AnchorTarget, ...]:
+    def find_by_kind(
+        self,
+        kind: str,
+        scope: str | None = None,
+        citation: PageCitationRequest | None = None,
+    ) -> tuple[AnchorTarget, ...]:
         args: dict[str, Any] = {"kind": kind}
         if scope is not None:
             args["scope"] = scope
+        if citation is not None:
+            args["citation"] = citation.to_wire()
         result = self._call("find_by_kind", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_annotation(self, annotation_id: str) -> tuple[AnchorTarget, ...]:
-        result = self._call("find_by_annotation", {"annotationId": annotation_id})
+    def find_by_annotation(
+        self, annotation_id: str, citation: PageCitationRequest | None = None
+    ) -> tuple[AnchorTarget, ...]:
+        args: dict[str, Any] = {"annotationId": annotation_id}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_annotation", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
-    def find_by_label(self, label_id: str) -> Mapping[str, tuple[AnchorTarget, ...]]:
-        result = self._call("find_by_label", {"labelId": label_id})
+    def find_by_label(
+        self, label_id: str, citation: PageCitationRequest | None = None
+    ) -> Mapping[str, tuple[AnchorTarget, ...]]:
+        args: dict[str, Any] = {"labelId": label_id}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_label", args)
         return {
             ann_id: tuple(AnchorTarget._from_wire(a) for a in anchors)
             for ann_id, anchors in result.items()
         }
 
-    def find_by_bookmark(self, bookmark_name: str) -> tuple[AnchorTarget, ...]:
-        result = self._call("find_by_bookmark", {"bookmarkName": bookmark_name})
+    def find_by_bookmark(
+        self, bookmark_name: str, citation: PageCitationRequest | None = None
+    ) -> tuple[AnchorTarget, ...]:
+        args: dict[str, Any] = {"bookmarkName": bookmark_name}
+        if citation is not None:
+            args["citation"] = citation.to_wire()
+        result = self._call("find_by_bookmark", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
@@ -1378,7 +1487,111 @@ class DocxSession:
 
     # -- Tier D: tables ---------------------------------------------------
 
+    def get_table_metadata(self, table_anchor_id: str) -> TableMetadataResult:
+        """Resolve a canonical ``tbl`` anchor to explicit table/row/column/cell identities."""
+        return TableMetadataResult._from_wire(
+            self._call("get_table_metadata", {"tableAnchorId": table_anchor_id})
+        )
+
+    def resolve_table_cell_anchor(self, cell_anchor_id: str) -> TableCellResolutionResult:
+        """Resolve a canonical ``tc`` anchor to its zero-based table-grid coordinate."""
+        return TableCellResolutionResult._from_wire(
+            self._call("resolve_table_cell_anchor", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def resolve_table_cell_coordinate(
+        self, table_anchor_id: str, row_index: int, column_index: int
+    ) -> TableCellResolutionResult:
+        """Resolve a table-grid coordinate to the physical ``tc`` covering it."""
+        return TableCellResolutionResult._from_wire(
+            self._call("resolve_table_cell_coordinate", {
+                "tableAnchorId": table_anchor_id,
+                "rowIndex": row_index,
+                "columnIndex": column_index,
+            })
+        )
+
+    def insert_table(
+        self, anchor_id: str, position: Position, rows: int, columns: int,
+        options: TableInsertOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table", {
+            "anchorId": anchor_id, "position": position.value, "rows": rows,
+            "columns": columns, "options": options.to_wire() if options else {},
+        }))
+
+    def insert_table_row(self, cell_anchor_id: str, position: Position) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table_row", {
+            "cellAnchorId": cell_anchor_id, "position": position.value,
+        }))
+
+    def insert_table_column(self, cell_anchor_id: str, position: Position) -> EditResult:
+        return EditResult._from_wire(self._call("insert_table_column", {
+            "cellAnchorId": cell_anchor_id, "position": position.value,
+        }))
+
+    def delete_table_row(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("delete_table_row", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def delete_table_column(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("delete_table_column", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def merge_cells(
+        self, cell_anchor_id: str, row_span: int, column_span: int,
+        content: str = "append",
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("merge_cells", {
+            "cellAnchorId": cell_anchor_id, "rowSpan": row_span,
+            "columnSpan": column_span, "content": content,
+        }))
+
+    def unmerge_cells(self, cell_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("unmerge_cells", {"cellAnchorId": cell_anchor_id})
+        )
+
+    def set_column_widths(self, cell_anchor_id: str, widths: Sequence[int]) -> EditResult:
+        return EditResult._from_wire(self._call("set_column_widths", {
+            "cellAnchorId": cell_anchor_id, "widths": list(widths),
+        }))
+
+    def set_table_borders(
+        self, cell_anchor_id: str, spec: TableBorderSpec | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_table_borders", {
+            "cellAnchorId": cell_anchor_id, "spec": spec.to_wire() if spec else {},
+        }))
+
+    def set_cell_shading(
+        self, cell_anchor_id: str, fill: str | None, scope: str = "cell",
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_cell_shading", {
+            "cellAnchorId": cell_anchor_id, "fill": fill, "scope": scope,
+        }))
+
+    def set_repeat_header_row(self, cell_anchor_id: str, repeat: bool) -> EditResult:
+        return EditResult._from_wire(self._call("set_repeat_header_row", {
+            "cellAnchorId": cell_anchor_id, "repeat": repeat,
+        }))
+
+    def set_table_row_options(
+        self, cell_anchor_id: str, options: TableRowOptions,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_table_row_options", {
+            "cellAnchorId": cell_anchor_id,
+            "repeatHeader": options.repeat_header,
+            "allowBreakAcrossPages": options.allow_break_across_pages,
+            "heightTwips": options.height_twips,
+            "heightRule": options.height_rule,
+        }))
+
     def replace_cell_content(self, cell_anchor_id: str, markdown: str) -> EditResult:
+        """Replace content of the canonical ``tc`` anchor. Legacy paragraph-in-cell anchors
+        remain translated during the documented compatibility window."""
         return EditResult._from_wire(
             self._call(
                 "replace_cell_content",
@@ -1398,6 +1611,8 @@ class DocxSession:
     def _call(self, op: str, args: dict[str, Any]) -> Any:
         if self._closed:
             raise ValueError(f"session {self._handle} is closed")
+        if self._active_preconditions is not None and "preconditions" not in args:
+            args = {**args, "preconditions": self._active_preconditions.to_wire()}
         payload = {"handle": self._handle, **args}
         return _call(op, payload)
 

@@ -10,7 +10,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus twelve
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus thirteen
 /// grouped-intent tools, each accepting an <c>action</c> discriminator and action-specific
 /// arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -64,23 +64,119 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info"], "description": "markdown/text: anchor-addressed markdown projection (text strips the markdown syntax). html: fully rendered HTML. blocks: structural metadata for every addressable block. info: section/page-setup facts plus a document edit summary." },
-                "anchorId": { "type": "string", "description": "Optional. Scope markdown/html/text output to one block and its descendants instead of the whole document. Anchors in body, header (hdr*), footer (ftr*), note, and comment scopes are accepted." }
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions"], "description": "markdown/text: projection; html: rendered HTML; blocks: metadata; info: version plus page/edit facts; version: monotonic document version; check_preconditions: read-only guard evaluation." },
+                "anchorId": { "type": "string", "description": "Optional scope/target anchor." },
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                },
+                "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
             }
             """),
         new ToolDefinition(
             "docxodus_preview",
-            "Render a session's document (or a single block) to HTML for the host's inline preview widget. The markup travels in the result's _meta for the widget only; the model-visible result is a short summary. Call again after edits to refresh the rendered view.",
+            "Render a session's document (or a single block) to HTML for the host's inline preview widget. With an exact registered citation, the widget materializes the cited physical page and navigates to its highlighted fragment. The markup travels in the result's _meta for the widget only; call again after edits to refresh it.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "anchorId": { "type": "string", "description": "Optional. Render just this block (any addressable anchor, including hdr*/ftr* scopes) instead of the whole document. Whole-document renders include the converter's stylesheet; single-block renders are bare markup." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
               },
               "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_pagination",
+            "Register or consume a browser-materialized PageMap. Core never estimates page numbers; unavailable, continuous, stale, and renderer-mismatched layouts are explicit.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["register", "status", "cite"] },
+                "pageMap": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "schemaVersion": { "type": "integer", "const": 1 },
+                    "mode": { "type": "string", "enum": ["paginated", "continuous"] },
+                    "availability": { "type": "string", "enum": ["available", "unavailable"] },
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "pageInSection": { "type": "integer", "minimum": 1 },
+                          "width": { "type": "number", "exclusiveMinimum": 0 },
+                          "height": { "type": "number", "exclusiveMinimum": 0 },
+                          "sectionIndex": { "type": "integer", "minimum": 0 },
+                          "pageName": { "type": "string", "minLength": 1 }
+                        },
+                        "required": ["pageNumber", "pageInSection", "width", "height", "pageName"]
+                      }
+                    },
+                    "fragments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "fragmentId": { "type": "string", "minLength": 1 },
+                          "anchorId": { "type": "string", "minLength": 1 },
+                          "fragmentIndex": { "type": "integer", "minimum": 0 },
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "geometry": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {
+                              "x": { "type": "number", "minimum": 0 },
+                              "y": { "type": "number", "minimum": 0 },
+                              "width": { "type": "number", "exclusiveMinimum": 0 },
+                              "height": { "type": "number", "exclusiveMinimum": 0 }
+                            },
+                            "required": ["x", "y", "width", "height"]
+                          },
+                          "story": { "type": "string", "enum": ["body", "header", "footer", "footnote", "endnote", "comment"] },
+                          "inTableCell": { "type": "boolean" }
+                        },
+                        "required": ["fragmentId", "anchorId", "fragmentIndex", "pageNumber", "geometry", "story", "inTableCell"]
+                      }
+                    }
+                  },
+                  "required": ["schemaVersion", "mode", "availability", "documentVersion", "rendererFingerprint", "pages", "fragments"]
+                },
+                "expectedRendererFingerprint": { "type": "string", "description": "register: optional independently expected fingerprint; mismatch rejects the map." },
+                "anchorId": { "type": "string", "description": "cite: canonical kind:scope:unid anchor." },
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
+              },
+              "required": ["sessionId", "action"],
+              "oneOf": [
+                { "properties": { "action": { "const": "register" } }, "required": ["pageMap"] },
+                { "properties": { "action": { "const": "status" } } },
+                { "properties": { "action": { "const": "cite" } }, "required": ["anchorId", "citation"] }
+              ]
             }
             """),
         new ToolDefinition(
@@ -97,6 +193,14 @@ internal static class ToolCatalog
                 "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
                 "maxResults": { "type": "integer", "description": "Cap the number of matches returned. Default unlimited." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
               },
               "required": ["sessionId", "mode", "query"]
             }
@@ -109,6 +213,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
                 "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
@@ -135,6 +240,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format"] },
                 "anchorId": { "type": "string" },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
@@ -201,6 +307,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
                 "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
@@ -230,6 +337,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership"] },
                 "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range. remove accepts paragraph, heading, or list-item anchors and overrides style-inherited numbering when necessary." },
                 "startValue": { "type": "integer", "description": "set_start: the number the item restarts at (>= 0), e.g. 5 to make this item render as '5.'" },
@@ -249,6 +357,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["add", "reply", "resolve", "update", "remove", "list"] },
                 "anchorId": { "type": "string", "description": "add: the body paragraph to comment on. Mutually exclusive with revisionId." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add: character range within the paragraph. Omit to comment on the whole block." },
@@ -271,6 +380,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["add", "update", "remove", "move", "list", "find"] },
                 "anchorId": { "type": "string", "description": "add/move: block to attach the annotation to." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add/move: character range within the block. Omit to annotate the whole block." },
@@ -302,6 +412,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
                 "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' reads revisions directly off the live markup — each entry carries a stable id, the markup's true author/date, its text, and the containing block's anchorId. 'accept'/'reject' resolve ONE revision by revisionId (undoable via docxodus_undo; other revisions keep their ids). 'accept_all'/'reject_all' resolve the whole document (not undoable — the session is rebound to the transformed bytes). 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
                 "revisionId": { "type": "string", "description": "accept/reject: the id from 'list' (e.g. 'rev101'). Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
@@ -320,6 +431,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
                 "mode": { "type": "string", "enum": ["apply", "preview"], "description": "preview applies every step, records the result, then undoes them all before returning — nothing is left changed." },
                 "steps": {
                   "type": "array",
@@ -338,24 +450,28 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_table",
-            "Create tables, edit their rows/columns/cell content, merge/unmerge cells, and style them after insert (column widths, borders, shading, and row layout).",
+            "Inspect canonical table identities and coordinates; create tables; edit rows, columns, and cell content; merge/unmerge cells; and style them after insert.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
+                "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
                 "cellContents": { "type": "array", "items": { "type": "string" } },
                 "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                 "columnWidths": { "type": "array", "items": { "type": "integer" } },
                 "borderless": { "type": "boolean" },
-                "cellAnchorId": { "type": "string", "description": "insert_row/insert_column/delete_row/delete_column/set_*: a 'p' (paragraph-inside-the-cell) anchor in the target cell/row/table, e.g. from docxodus_table's own insert result or docxodus_search. replace_cell_content: the cell's own 'tc' anchor instead (e.g. from docxodus_search with mode kind, query 'tc') — these two anchor kinds are not interchangeable." },
+                "cellAnchorId": { "type": "string", "description": "resolve_cell_anchor and every cell mutation: the cell's canonical tc anchor, returned by insert/insert_row/insert_column, get_metadata, resolve_cell_coordinate, or docxodus_search mode=kind query=tc. Legacy p/h/li anchors physically inside a cell are translated temporarily for migration; new callers must use tc." },
+                "rowIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based physical row index." },
+                "columnIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based table-grid column (honors gridBefore/gridAfter and gridSpan)." },
                 "markdown": { "type": "string", "description": "replace_cell_content payload." },
                 "rowSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many rows down the merged rectangle runs from the anchor's cell (default 1). Becomes w:vMerge restart/continue." },
-                "colSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many cells right the rectangle runs from the anchor's cell (default 1). Becomes w:gridSpan. rowSpan x colSpan must be > 1." },
+                "colSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many cells right the rectangle runs from the anchor's cell (default 1). Becomes w:gridSpan. rowSpan x colSpan must be > 1. unmerge_cells addressed at a vertical continuation unmerges the whole run." },
                 "mergeContent": { "type": "string", "enum": ["append", "discard", "reject"], "description": "merge_cells: what to do with the absorbed cells' content — append it to the surviving cell (default, lossless), discard it, or refuse the merge when any absorbed cell is non-empty." },
                 "widths": { "type": "array", "items": { "type": "integer" }, "description": "set_column_widths: one positive twip width per column, left→right (1440 = 1 inch). Rewrites w:tblGrid + every cell width and pins the table to fixed layout." },
                 "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders: which edges to write (default all). Untargeted edges are left unchanged." },

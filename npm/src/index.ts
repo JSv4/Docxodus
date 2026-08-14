@@ -80,6 +80,13 @@ export type {
   ListMembership,
   MarkdownPatch,
   NumberFormat,
+  PageCitation,
+  PageCitationFragment,
+  PageCitationPage,
+  PageCitationRequest,
+  PageCitationUnavailableReason,
+  PageMapRegistrationResult,
+  PageMapStatus,
   PageNumberField,
   PageNumberingOp,
   ParagraphBorderEdge,
@@ -171,9 +178,23 @@ export type {
   PageInfo,
   PaginationResult,
   PaginationOptions,
+  PageMap,
+  PageMapPage,
+  PageMapFragment,
+  PageMapRect,
+  PageMapMode,
+  PageMapAvailability,
+  PageMapStory,
+  PageCitationNavigation,
 } from "./pagination.js";
 
-export { PaginationEngine, paginateHtml } from "./pagination.js";
+export {
+  PaginationEngine,
+  clearPageCitationHighlight,
+  createUnavailablePageMap,
+  navigateToPageCitation,
+  paginateHtml,
+} from "./pagination.js";
 
 // Page geometry is the document's own page setup (w:sectPr), read off the section wrappers
 // the converter stamps in every render mode, plus the fit-to-width zoom a view applies to it.
@@ -1654,6 +1675,7 @@ export async function getDocumentStructure(
   // Convert from PascalCase to camelCase
   const convertElement = (el: any): DocumentElement => ({
     id: el.Id || el.id,
+    anchorId: el.AnchorId || el.anchorId,
     type: el.Type || el.type,
     textPreview: el.TextPreview || el.textPreview,
     index: el.Index ?? el.index,
@@ -1666,8 +1688,12 @@ export async function getDocumentStructure(
 
   const convertTableColumn = (col: any): TableColumnInfo => ({
     tableId: col.TableId || col.tableId,
+    anchorId: col.AnchorId || col.anchorId,
+    tableAnchorId: col.TableAnchorId || col.tableAnchorId,
+    isVirtual: col.IsVirtual ?? col.isVirtual ?? false,
     columnIndex: col.ColumnIndex ?? col.columnIndex,
     cellIds: col.CellIds || col.cellIds || [],
+    cellAnchorIds: col.CellAnchorIds || col.cellAnchorIds || [],
     rowCount: col.RowCount ?? col.rowCount,
   });
 
@@ -1781,6 +1807,7 @@ export async function getDocumentMetadata(
     hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
     hasComments: parsed.HasComments ?? parsed.hasComments,
     estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
+    estimatedPageCountSource: parsed.EstimatedPageCountSource ?? parsed.estimatedPageCountSource ?? "heuristic",
   };
 }
 

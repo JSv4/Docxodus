@@ -27,8 +27,8 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
-grouped-intent tools (read / search / edit / format / create / list / comment / annotate /
-track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+grouped-intent tools (read / preview / pagination / search / edit / format / create / list /
+comment / annotate / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -85,7 +85,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 15 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 16 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -218,7 +218,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, eleven grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, thirteen grouped-intent tools. Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -256,6 +256,19 @@ Apps hosts deliver to the widget (`ui/notifications/tool-result`) and ChatGPT ex
 context nothing. Call it again after edits to refresh the view; the widget's Refresh button does
 exactly that via widget-initiated `tools/call`. See "Inline preview" below.
 
+This preview is continuous until #434 provides a server-side paginated HTML substrate. With a
+valid citation token it displays the exact cited page label and highlights the source anchor, but
+returns `pageNavigation: "unavailable_continuous_preview"` rather than pretending a physical page
+box exists.
+
+### `docxodus_pagination` — register or consume an exact PageMap
+
+`action: register` validates a renderer-materialized `PageMap`; `status` and `cite` consume it
+with an exact `{ documentVersion, rendererFingerprint }` token. Mutations stale the map
+automatically. Continuous/no-map, stale, fingerprint-mismatched, and unmapped-anchor results are
+explicitly unavailable. The server does not estimate pages or bundle a browser; see
+[`page_map.md`](page_map.md).
+
 ### `docxodus_search` — find text or blocks, get reusable anchor ids back
 
 `mode: text` and `regex` use `DocxSessionOps.Grep` (returns span + context, not just an anchor —
@@ -268,6 +281,7 @@ categories (`headers` covers every `hdr*`, not merely `hdr1`). Text/regex result
 reusable id at `enclosingAnchor.id`; anchor-only results carry it at `id`. Either is the same
 anchor every other tool's `anchorId`/`cellAnchorId` argument expects — this server doesn't invent
 a separate "search result handle" concept; Docxodus's anchors already are one.
+All search modes accept the exact citation token and attach a citation envelope to each result.
 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 
@@ -408,26 +422,33 @@ is `ok`/`partial`/`failed`). `mode: preview` runs every step exactly the same wa
 `DocxSessionOps.Undo` once per step that actually mutated before returning — see Known gaps for
 why this is "apply-then-undo" rather than a true no-op dry run.
 
+The batch itself and each step's `args` may carry `preconditions`, using the same
+camel-case guard object as the core API (`expectedVersion`, `anchorId`,
+`expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
+failure is the standard structured `precondition_failed` result and does not
+mutate that step. `docxodus_get_content` with `format: "version"` reads the current
+monotonic document version; `format: "check_preconditions"` evaluates guards
+without mutating. Preview restores its starting version after undoing speculative
+steps, so a dry-run does not make an otherwise-current plan stale.
+
 ### `docxodus_table` — tables
 
 `insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,
-plus the post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
+the read actions `get_metadata`, `resolve_cell_anchor`, `resolve_cell_coordinate`, plus the
+post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
 positive twip value per column), `set_borders` (`borderScope` `all`/`outside`/`inside`,
 `borderStyle` — `none` removes the targeted edges — `borderSize`, `borderColor`), `set_shading`
 (`fill` hex/`auto`, omit to clear; `shadingScope` `cell`/`row` — row is header-row banding), and
-`set_repeat_header_row` (`repeat`, default true). All four take the same `"p"`-kind
-cell-paragraph `cellAnchorId` the row/column ops take.
+`set_repeat_header_row` (`repeat`, default true), `set_row_options`, `merge_cells`, and
+`unmerge_cells`.
 
-**Anchor-kind trap worth calling out explicitly** (discovered writing the test suite for this
-tool, `MCP060`): `ReplaceCellContent` requires the cell's own `"tc"`-kind anchor
-(`target.Anchor.Kind != "tc"` is a hard `AnchorWrongKind` failure in `DocxSession.cs`), while
-`InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` require a `"p"`-kind
-anchor whose ancestor is a `w:tc` (`ResolveCell`'s `p.Ancestors(W.tc)` check) — a bare `"tc"`
-anchor fails those with the same error code. `InsertTable`'s `created` list only contains the
-`"p"` (cell-paragraph) anchors; a `"tc"` anchor has to come from `docxodus_search` with `mode:
-kind, query: "tc"`. This is a pre-existing Docxodus API asymmetry, not something this server
-smooths over — documented here (and in the tool's own schema) so an agent doesn't have to
-rediscover it by trial and error.
+The input schema does not overload anchor fields: `insert` uses `anchorId` for the neighboring
+block, metadata/coordinate reads use `tableAnchorId` (`tbl`), and every cell operation uses
+`cellAnchorId` (`tc`). `insert` returns canonical `tc` anchors in `created`; `get_metadata`
+enumerates the explicit `tbl`/`tr`/`col`/`tc` identities and coordinates. A legacy paragraph
+inside a cell is still translated during the compatibility window, but new tool calls should use
+only the canonical fields and identities. Shape mutations include a deterministic `tableAnchors`
+retained/added/invalidated mapping in their result.
 
 ## Inline preview (MCP Apps / ChatGPT Apps)
 
@@ -504,9 +525,6 @@ never claiming a capability it doesn't have:
   depth like any other edit sequence, and a crash between "apply" and "undo" would leave the
   session mutated — acceptable for a local, single-process tool server, worth knowing if this
   surface is ever exposed somewhere more failure-sensitive.
-- **`docxodus_table`'s `cellAnchorId` is two different anchor kinds depending on the action** —
-  see the tool reference above. Not fixable at this layer without hiding a real asymmetry in the
-  underlying API; documented instead.
 
 ## Testing
 

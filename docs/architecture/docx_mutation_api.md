@@ -18,6 +18,67 @@ Three design forces, in order of weight:
 
 **Errors must be pattern-matchable, not stringly-typed.** Every mutation returns an `EditResult` envelope; failure carries a typed `EditErrorCode` with a remediation message. The same enum is exposed as a snake-case string union in TypeScript, so JS agents pattern-match the same way C# callers do. No method on the session throws across the boundary (the constructor and `Save()` are the only places that can — and only for fatal conditions like an invalid DOCX or IO failure).
 
+## Document version and optimistic preconditions
+
+Every session exposes a monotonic `long Version`. It is `0` when the document is
+opened and advances exactly once for each committed document mutation. A
+multi-match `ReplaceTextRange` is one mutation. `Undo()` and `Redo()` also advance
+the version—restoring older content never restores an older caller-visible
+version. Validation failures, precondition failures, exceptions that roll back,
+and successful no-ops do not advance it. Version state is carried in internal
+snapshots so rollback and speculative preview restoration cannot leak a version
+change.
+
+Callers that derived an edit from an earlier projection can guard the mutation:
+
+```csharp
+var info = session.GetAnchorInfo(anchor)!;
+var result = session.ExecuteMutation(
+    new MutationPreconditions
+    {
+        ExpectedVersion = session.Version,
+        AnchorId = anchor,
+        ExpectedContentHash = info.ContentHash,
+        ExpectedText = info.VisibleText,
+        ExpectedKind = info.Kind,
+        ExpectedScope = info.Scope,
+    },
+    s => s.ReplaceText(anchor, replacement));
+```
+
+`MutationPreconditions` fields are optional and ANDed:
+
+| .NET | wire | Meaning |
+|---|---|---|
+| `ExpectedVersion` | `expectedVersion` | The session version used to derive the plan. |
+| `AnchorId` | `anchorId` | Guard target. Mutation façades infer their primary target when omitted. |
+| `ExpectedContentHash` | `expectedContentHash` | Hash of the target's current OOXML subtree, also returned by `GetAnchorInfo`. |
+| `ExpectedText` | `expectedText` | Exact current visible text, also returned as `AnchorInfo.VisibleText`. |
+| `ExpectedTextRange` | `expectedTextRange: {start,length,text}` | Exact ordinal substring guard over visible text. |
+| `ExpectedKind` / `ExpectedScope` | `expectedKind` / `expectedScope` | Current canonical anchor metadata. A stale kind prefix still resolves by Unid and reports the new kind. |
+| `ExpectedMatchCount` | `expectedMatchCount` | Exact live occurrence count for `ReplaceTextRange`. |
+
+`EvaluatePreconditions`/transport `checkPreconditions` are read-only probes.
+`ExecuteMutation` is the direct .NET gated primitive used by the shared façade.
+`ReplaceTextRange` holds the same gate across initial guard evaluation, live match
+enumeration/counting, and every replacement, so another mutation cannot slip
+between count and commit.
+
+On mismatch, no document bytes or history entry change and the result has code
+`PreconditionFailed` (`precondition_failed` on the wire). Its `precondition` member
+contains `condition`, `expected`, `actual`, `currentVersion`, and `currentTarget`
+(`exists`, canonical anchor id/kind/scope, content hash, and exact visible text).
+That is enough for an agent to decide whether to rebase, retarget, or abandon the
+edit without an extra diagnostic round trip.
+
+The common wire object is available throughout the stack: npm exposes
+`getVersion`, `checkPreconditions`, and `runWithPreconditions`; Python exposes
+`get_version`, `check_preconditions`, and a `session.preconditioned(...)` context
+that attaches the guard to each mutation request; stdio accepts top-level
+`preconditions`; MCP mutation tools and individual batch steps accept the same
+property. MCP batches may additionally carry a batch-start guard. Preview mode
+restores the starting version after it undoes its speculative edits.
+
 ## Architecture
 
 ```
@@ -71,7 +132,7 @@ When you pass markdown into `ReplaceText`, `InsertParagraph`, or `ReplaceCellCon
 This is symmetric by design: anything the projector can emit, the parser can accept, so an agent can read markdown out and write markdown in. Anything outside the subset is rejected with a typed error that names either the v1 op to use instead or the v2 op planned to address it. The full table of accepted and rejected syntax is in the spec — the practical shorthand:
 
 - If you can see it in the projection output, you can write it in a payload.
-- If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`). Style it after insert (issue #315 Stage A, same cell-paragraph addressing): `SetColumnWidths(cellAnchor, widthsTwips)` retunes `w:tblGrid` + every `w:tcW` and pins fixed layout; `SetTableBorders(cellAnchor, TableBorderSpec?)` writes `w:tblPr/w:tblBorders` for the spec's scope (`All`/`Outside`/`Inside`) only, style `"none"` removing those edges; `SetCellShading(cellAnchor, fill, TableShadingScope)` writes `w:tcPr/w:shd` (`val="clear"`) on the cell or its whole row (header-row banding; null fill clears); `SetRepeatHeaderRow(cellAnchor, bool)` toggles `w:trPr/w:tblHeader` (Word honors it on a run of rows starting at row 1). Bad widths/fill/size → `InvalidTableStyling`. Merge cells with `MergeCells(cellAnchor, rowSpan, colSpan, TableMergeOptions?)` / `UnmergeCells(cellAnchor)` (issue #340 Stage B — see [the grid model](#table-cell-merge-the-grid-model) below).
+- If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`). It returns canonical `tc` anchors. Discover the whole shape with `GetTableMetadata(tblAnchor)` or translate in either direction with `ResolveTableCellAnchor(tcAnchor)` / `ResolveTableCellCoordinate(tblAnchor, row, column)`. Every cell-content, shape, merge, and styling operation takes that same canonical `tc` anchor: `ReplaceCellContent`, `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn`, `SetColumnWidths`, `SetTableBorders`, `SetCellShading`, `SetRepeatHeaderRow`, `SetTableRowOptions`, `MergeCells`, and `UnmergeCells`. See [Canonical table addressing](#canonical-table-addressing) and [the grid model](#table-cell-merge-the-grid-model).
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
 - If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`, or target a tracked change from `ListRevisions()` with `AddCommentToRevision(revisionId, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
@@ -105,6 +166,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `SetListStartOverride(li, value)` | — | — | the anchored item + every following member of its numbering instance (all repointed to a dedicated `w:num`) | the anchored item |
 | `ClearListStartOverride(li)` | — | — | every member of the item's numbering instance (all repointed together) | the anchored item |
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
+| table row/column CRUD, merge/unmerge | new `tr`/`tc` identities where applicable | invalidated `tr`/`tc` identities | addressed `tc` where applicable | enclosing `tbl`; full structural map in `TableAnchors` |
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
@@ -123,7 +185,7 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **`SplitParagraph` keeps the original Unid on the first half.** Reason: external systems (LLM context windows, search indices) bias toward the pre-split anchor position; keeping the prefix-half stable minimizes invalidation downstream.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
-**Tracked-change mode shifts the semantics for `ReplaceText` and `DeleteBlock`.** When `Settings.TrackedChanges = RenderInline`, deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
+**Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
@@ -322,11 +384,30 @@ wraps each removed paragraph's runs in `w:del` and marks the paragraph mark
 itself as deleted via `w:pPr/w:rPr/w:del`. Tables get `w:trPr/w:del` on every
 row (Word's row-deletion convention — there is no table-level "delete" markup),
 plus the same run/paragraph-mark wrapping inside every cell. Nested tables
-recurse. Anchors stay live in the document tree, so the top-level block anchors
-land in `EditResult.Modified` instead of `Removed` and callers can re-address
-them before accepting the changes. Block kinds outside `w:p` / `w:tbl` (e.g.
-`w:sdt` content controls in the middle of a range) still fall back to structural
-removal in tracked mode — file a follow-up if a consumer needs them tracked.
+recurse.
+
+Block-level `w:sdt` content controls are reversible too. Two paired
+`w:customXmlDelRangeStart` / `w:customXmlDelRangeEnd` ranges cross the control's
+opening and closing tags, matching Word's native content-control deletion shape.
+Payload paragraphs and tables receive their normal deletion markup recursively;
+nested block controls receive their own paired ranges. Accepting the revisions
+therefore removes the control and its payload, while rejecting restores the
+original wrapper, metadata, and content. Locked (`w:lock`) and data-bound
+(`w:dataBinding`) controls use the same shape—the lock and binding metadata are
+preserved until the revision is resolved.
+
+Anchor accounting describes what actually happened. Ordinary paragraph/table
+top-level anchors remain the compact `Modified` contract. A structured wrapper
+has no anchor of its own, so every anchored descendant retained under that
+wrapper appears in `Modified`, without duplicates. A remaining structural
+fall-through that must be hard-removed appears in `Removed`; it is never silently
+omitted from both lists.
+
+`w:customXml` wrappers are deliberately unsupported in tracked bulk deletion.
+If any selected block contains one, the operation fails before taking an undo
+snapshot or changing the document with `IncompatibleElementType` and a message
+identifying `w:customXml`. This is the explicit unsupported branch of the
+custom-XML deletion contract; accepted-mode bulk deletion remains unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal
 
@@ -339,9 +420,9 @@ If the target heading has no sibling-heading boundary after it, the section
 extends to the end of the parent.
 
 Built on `DeleteRange` semantics via the shared `DeleteSiblingRangeCore` helper:
-same undo, same EditResult shape, same tracked-change behavior (paragraphs and
-tables get `w:del` markup, anchors stay live, block kinds outside `w:p`/`w:tbl`
-fall back to structural removal).
+same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
+recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
+same reported structural fall-through.
 
 ## Finding anchors via tagged annotations
 
@@ -794,7 +875,7 @@ rendering notes, appeared as a stray empty footnote with no citation.
   "reference note N again" op.
 - **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
   in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
-  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange` track.
+  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange`/`DeleteSection` track.
 - **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
   `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
@@ -1218,7 +1299,9 @@ session.ReplaceMatch(textMatch, replace)                       // convenience fo
 session.ReplaceTextAtSpan(anchor, spanStart, spanLength, repl) // exact-span variant when several identical needles share a block
 ```
 
-`ReplaceOptions`: `IgnoreCase` (case-insensitive find) and `MaxReplacements` (cap on how many to apply).
+`ReplaceOptions`: `IgnoreCase` (case-insensitive find), `MaxReplacements` (cap on
+how many to apply), `ExpectedMatchCount` (require the exact live count before the
+cap), and `Preconditions` (the common optimistic guard object).
 
 ### Formatting-preservation contract
 
@@ -1234,7 +1317,7 @@ Revision wrappers stay inside a match's hyperlink, run-level SDT, `smartTag`, or
 
 ### Ordering and atomicity
 
-Multiple matches in the same paragraph are applied in **reverse document order** so each earlier-offset match's span stays valid after later edits land — the same trick the projector uses for tracked-change accept passes. The whole call records **one** snapshot; `Undo()` rolls every replacement back together.
+Multiple matches in the same paragraph are applied in **reverse document order** so each earlier-offset match's span stays valid after later edits land — the same trick the projector uses for tracked-change accept passes. The whole call records **one** snapshot; `Undo()` rolls every replacement back together. Preconditions, exact occurrence counting, and the rewrite execute under one mutation gate; a count mismatch returns one failed result and leaves bytes, version, and undo history unchanged.
 
 ### When to reach for the span-addressed variant
 
@@ -1374,6 +1457,54 @@ const result = session.raw.replaceXml(anchor, modified);
 
 Starting from a known-valid XML fragment and modifying it locally is dramatically less error-prone than constructing OOXML from scratch — namespace declarations, attribute ordering, and child-element validity are all preserved from the original.
 
+## Canonical table addressing
+
+The canonical address for every cell operation is the physical `w:tc` anchor (`tc:{scope}:{unid}`).
+`InsertTable` and cell-creating mutations return `tc` anchors in `Created`; callers do not need to
+search for a paragraph merely to identify its cell. `GetTableMetadata(tblAnchor)` returns the table
+anchor and explicit ordered row, column, and physical-cell metadata. A cell records its row index,
+starting grid column, horizontal/vertical spans, vertical-merge role, owning table/row identities,
+and only its **direct** paragraph anchors. Paragraphs in a nested table belong solely to that nested
+table's cells.
+
+Resolution is deliberately bidirectional:
+
+- `ResolveTableCellAnchor(tcAnchor)` returns the cell's current coordinate and spans.
+- `ResolveTableCellCoordinate(tblAnchor, rowIndex, columnIndex)` returns the physical cell covering
+  that Word-grid coordinate, including a horizontally spanned cell. A coordinate in a
+  `gridBefore`/`gridAfter` gap returns `AnchorNotFound`; it never guesses a neighboring cell.
+
+Compatibility is narrow and deterministic. A legacy `p`/`h`/`li` anchor whose nearest ancestor is
+a cell is translated to that nearest `tc`, so old callers have a migration window and nested tables
+cannot retarget an outer cell. Passing `tbl`, `tr`, or an unrelated paragraph to a cell operation
+returns `TableAnchorMigrationRequired` with instructions to call `GetTableMetadata` or coordinate
+resolution. New code should never cache or manufacture cell-paragraph addressing.
+
+Every table-shape mutation populates `EditResult.TableAnchors`:
+
+- `Retained` pairs each stable identity's before/after grid location;
+- `Added` lists new table/row/column/cell identities at their new locations;
+- `Invalidated` lists identities that no longer resolve at their former locations.
+
+The lists are deterministic (old-location order for retained/invalidated, new-location order for
+added), so clients can update a cached coordinate model without matching by array position.
+`Created`/`Removed` remain the concise mutation result and use canonical `tc` identities;
+`TableAnchors` is the complete structural account.
+
+Real columns are the `col` anchors of `w:tblGrid/w:gridCol` and retain their Unids when widths or
+neighboring columns change. A table with a missing or underspecified `tblGrid` is not mutated by a
+read: metadata derives deterministic virtual `col` identities (`IsVirtual = true`). The first
+column/width transaction materializes real `gridCol` elements inside that transaction and reports
+the virtual columns invalidated and the real columns added. Persist identities across a close/reopen
+checkpoint with `Save(persistAnchorIds: true)` (or the equivalent session setting); a normal clean
+save intentionally strips all Unid bookkeeping, including table identities.
+
+`DocumentStructure` retains its path-based `Id` as a compatibility/display locator and adds
+`AnchorId` for addressable table/row/cell elements. `TableColumnInfo` similarly carries both legacy
+path ids and canonical column/table/cell anchors plus `IsVirtual`. Its coordinates use this same
+grid model, so `gridBefore`/`gridAfter`, `gridSpan`, and actual `vMerge` runs cannot diverge from the
+live session APIs.
+
 ## Table cell merge: the grid model
 
 `MergeCells`/`UnmergeCells` (issue #340 Stage B) and the row/column CRUD around them share one
@@ -1409,24 +1540,26 @@ and give each its `w:tblGrid` width. Addressing a *continuation* cell unmerges t
 op walks up to the restart and back down through every column-aligned continuation. A cell with no
 merge markup is `InvalidTableMerge`, not a silent no-op.
 
-**Anchor semantics.** A merge never invents or hides anchors:
+**Anchor semantics.** Content blocks keep their own identities when moved, while physical cell
+shells follow the canonical structural lifecycle:
 
-| Cell | What happens to its paragraphs |
+| Cell | What happens |
 |---|---|
-| The surviving (lead) cell | Untouched; its anchor is returned in `Modified` |
-| An absorbed cell, `Content = Append` (default) | Non-empty blocks are **moved** into the lead cell — same elements, same unids, so their anchors survive and nothing appears in `Removed` |
-| An absorbed cell, `Content = Discard` | Removed; their anchors come back in `Removed` |
+| The surviving (lead) cell | Its `tc` identity is retained and returned in `Modified` |
+| An absorbed cell, `Content = Append` (default) | Non-empty blocks are **moved** into the lead cell with their Unids; the absorbed `tc` identity is invalidated and returned in `Removed`/`TableAnchors.Invalidated` |
+| An absorbed cell, `Content = Discard` | Its content is dropped and its `tc` identity is invalidated |
 | An absorbed cell, `Content = Reject` | Nothing happens — a non-empty absorbed cell fails the whole op |
-| A vertical-merge continuation | Reduced to exactly one empty `w:p` (CT_Tc requires a block child). A cell that was *already* one empty paragraph keeps it — and keeps its anchor. Otherwise the fresh paragraph's anchor is reported in `Created` |
+| A vertical-merge continuation | The `tc` survives at the same coordinate and is retained; its body is reduced to the one empty `w:p` CT_Tc requires |
 
-A continuation cell's paragraph stays addressable even though Word renders nothing for it: writing
-to it is legal but invisible, so unmerge first. `Created`/`Removed` always describe reality — an
-`Append` merge of a filled 3×1 column reports neither, because every paragraph is still there.
+A continuation `tc` stays addressable even though Word renders its body invisibly; unmerge before
+writing content intended to display. A horizontal append merge invalidates absorbed cell shells even
+though their content blocks survive inside the lead cell.
 
 **Projection.** A table carrying any merge fails the projector's GFM-simplicity predicate (any
 `w:gridSpan > 1` or any `w:vMerge` disqualifies), so it renders as the opaque ` ```table ` block
-with its `{#tbl:…}` anchor — and every cell paragraph stays individually addressable in the anchor
-index, so `ReplaceText`/`ApplyFormat` on a merged table's cells work unchanged.
+with its `{#tbl:…}` anchor — and every surviving cell stays individually addressable in the anchor
+index. Use `ReplaceCellContent(tc, …)` for whole-cell content, or a direct paragraph anchor from
+table metadata for paragraph-grained `ReplaceText`/`ApplyFormat`.
 
 **Span-aware CRUD.** The four reshaping ops each have one defined behavior where a merge is in the
 way — extend, narrow, or repair, never tear:
@@ -1451,9 +1584,10 @@ Errors are grouped by what the agent should do in response, not by where in the 
 
 | The agent should… | When it sees these codes |
 |---|---|
+| Re-read the current version/target metadata in `error.precondition`, rebase or abandon the stale edit, then retry with fresh guards | `PreconditionFailed` |
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
 | Re-list revisions (`ListRevisions`) and reissue with a current id | `RevisionNotFound` |
-| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
+| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |

@@ -42,6 +42,7 @@ namespace OxPt
             Assert.True(metadata.TotalParagraphs >= 0, "Total paragraphs should be non-negative");
             Assert.True(metadata.TotalTables >= 0, "Total tables should be non-negative");
             Assert.True(metadata.EstimatedPageCount >= 1, "Estimated page count should be at least 1");
+            Assert.Equal("heuristic", metadata.EstimatedPageCountSource);
         }
 
         [Fact]

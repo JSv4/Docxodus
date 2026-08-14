@@ -162,6 +162,26 @@ public class IrReaderTests
     }
 
     [Fact]
+    public void Read_TableProjectionAnchors_AllUseClosedIrVocabulary()
+    {
+        var doc = IrTestDocuments.FromBodyXml(
+            "<w:tbl>" +
+            "<w:tblPr/><w:tblGrid><w:gridCol w:w=\"100\"/><w:gridCol w:w=\"200\"/></w:tblGrid>" +
+            "<w:tr><w:tc><w:p><w:r><w:t>left</w:t></w:r></w:p></w:tc>" +
+            "<w:tc><w:p><w:r><w:t>right</w:t></w:r></w:p></w:tc></w:tr>" +
+            "</w:tbl>");
+
+        var projection = WmlToMarkdownConverter.Convert(
+            doc, new WmlToMarkdownConverterSettings());
+        var projectedKinds = projection.AnchorIndex.Values
+            .Select(target => IrAnchor.KindFromToken(target.Anchor.Kind))
+            .ToList();
+
+        Assert.Equal(2, projectedKinds.Count(kind => kind == IrAnchorKind.Col));
+        Assert.IsType<IrTable>(IrReader.Read(doc).Body.Blocks.Single());
+    }
+
+    [Fact]
     public void Read_NestedTable_Recurses()
     {
         var doc = IrTestDocuments.FromBodyXml(

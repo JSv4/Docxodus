@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Canonical table addressing and complete table-operation ripple (#450, absorbing
+  #471).** Tables now expose explicit stable identities for the `w:tbl`, every
+  `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus
+  `GetTableMetadata`, `ResolveTableCellAnchor`, and
+  `ResolveTableCellCoordinate` for bidirectional anchor ↔ zero-based Word-grid
+  coordinates. All cell operations now consume one unambiguous canonical `tc`
+  anchor; a legacy paragraph inside a cell is translated to its nearest cell for
+  the compatibility window, while `tbl`/`tr`/unrelated anchors fail with
+  `TableAnchorMigrationRequired` and remediation. This also fixes nested-table
+  operations accidentally retargeting an outer cell. Shape-changing edits return
+  `EditResult.TableAnchors` with deterministic retained (before/after location),
+  added, and invalidated table/row/column/cell identities. Missing or
+  underspecified `tblGrid` columns are read-only virtual metadata until a column or
+  width transaction materializes real `gridCol` anchors and reports the virtual
+  identities invalidated. `DocumentStructure` keeps its path-based `Id` for
+  compatibility and adds canonical `AnchorId`; its table geometry now honors
+  `gridBefore`/`gridAfter`, horizontal spans, and actual vertical-merge row spans.
+  Rippled through JSON/ops, WASM/npm (including `SetTableRowOptions`), the Python
+  host/client (all table operations), and MCP. MCP table actions now use distinct
+  schema fields: `anchorId` for insertion, `tableAnchorId` for table reads, and
+  `cellAnchorId` for every cell operation. Existing merge OOXML semantics are
+  preserved; emitting new tracked table revisions remains #455. Coverage:
+  `DocxSessionTableAddressingTests` DT250–DT257, the existing table/MCP suites, and
+  `python/tests/test_table_addressing.py`.
+- **Portable, renderer-authored `PageMap` and exact page citations** (issue #454).
+  Browser pagination can now materialize a versioned map of physical pages and every
+  canonical `kind:scope:unid` source fragment, with page-relative point geometry,
+  story/table ownership, page style identity, document version, and renderer
+  fingerprint. `DocxSession` validates and registers external maps; search, structural
+  find, and scoped projection APIs optionally attach citations across .NET, WASM/npm,
+  stdio/Python, and MCP. Mutations stale maps automatically, fingerprint mismatches are
+  rejected, and continuous/no-map layouts return typed unavailable results instead of
+  guessed pages. `paginateHtml`, React `PaginatedDocument`, and
+  `navigateToPageCitation` expose materialization and preview navigation. The MCP inline
+  preview remains explicitly continuous pending #434. See
+  [`docs/architecture/page_map.md`](docs/architecture/page_map.md).
+- **Optimistic mutation preconditions and a monotonic document version** (issue
+  #447). Every `DocxSession` starts at version `0` and advances exactly once for
+  each committed mutation, undo, or redo; failures and successful no-ops leave it
+  unchanged. `MutationPreconditions` can guard the expected version, target
+  anchor/hash/exact visible text or range/kind/scope, and find/replace occurrence
+  count. A mismatch returns `PreconditionFailed` with structured expected/actual
+  values plus the current version and target metadata, without changing bytes or
+  undo history. The same camel-case shape is exposed by the WASM/npm, stdio/Python,
+  and MCP transports; `AnchorInfo` now includes `contentHash` and `visibleText`.
+- **Exact occurrence-count replacement.** `ReplaceOptions.ExpectedMatchCount`
+  requires the live literal-match count before `ReplaceTextRange` proceeds. Guard
+  evaluation, counting, and the whole multi-match rewrite share one mutation gate
+  and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
+  replacement.
 - **`DocxSession.Batch` / `BeginBatch` / `EndBatch`** — apply a sequence of mutations
   as one logical operation: **one pre-op snapshot, one undo step**, and all-or-nothing
   application by default. Every mutation records a snapshot, and a snapshot deep-clones
@@ -137,6 +187,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Tracked `DeleteRange` / `DeleteSection` no longer hard-remove block content
+  controls.** Block `w:sdt` envelopes now use Word-native paired custom-XML
+  deletion ranges while paragraphs, tables, and nested controls are marked
+  recursively, so accept removes the selection and reject restores locked or
+  data-bound controls intact. Anchors retained beneath a control are reported as
+  `Modified`, structural fall-through anchors as `Removed`, and ranges containing
+  unsupported `w:customXml` wrappers fail atomically with
+  `IncompatibleElementType` instead of silently deleting them. Paragraph-mark
+  revision properties are also inserted in schema order for styled headings.
 - One undo step is now always retained even when a single snapshot exceeds the whole
   budget, so undo cannot silently become unavailable on exactly the large documents
   where a mistaken edit is most expensive to lose.

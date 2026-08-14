@@ -305,6 +305,84 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(found.GetProperty("matches").GetArrayLength() > 0);
     }
 
+    [Fact]
+    public void MCP032_Pagination_RegisterSearchPreviewAndStaleStatus()
+    {
+        var sessionId = OpenSession();
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "citation target")
+            .GetProperty("success").GetBoolean());
+
+        var version = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            JsonSerializer.Serialize(new { sessionId, format = "version" }))))
+            .GetProperty("version").GetInt64();
+        const string fingerprint = "mcp-page-map-v1";
+        var pageMap = new
+        {
+            schemaVersion = 1,
+            mode = "paginated",
+            availability = "available",
+            documentVersion = version,
+            rendererFingerprint = fingerprint,
+            pages = new[]
+            {
+                new
+                {
+                    pageNumber = 1,
+                    pageInSection = 1,
+                    width = 612,
+                    height = 792,
+                    sectionIndex = 0,
+                    pageName = "docxodus-section-0",
+                },
+            },
+            fragments = new[]
+            {
+                new
+                {
+                    fragmentId = $"p1-f0-{anchor}",
+                    anchorId = anchor,
+                    fragmentIndex = 0,
+                    pageNumber = 1,
+                    geometry = new { x = 72, y = 90, width = 468, height = 18 },
+                    story = "body",
+                    inTableCell = false,
+                },
+            },
+        };
+        var registered = Parse(Dispatcher.Call(_store, "docxodus_pagination", J(
+            JsonSerializer.Serialize(new { sessionId, action = "register", pageMap }))));
+        Assert.True(registered.GetProperty("success").GetBoolean());
+
+        var citation = new { documentVersion = version, rendererFingerprint = fingerprint };
+        var found = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                mode = "text",
+                query = "citation target",
+                citation,
+            }))));
+        Assert.Equal("available", found.GetProperty("matches")[0]
+            .GetProperty("citation").GetProperty("availability").GetString());
+
+        var preview = Parse(Dispatcher.Call(_store, "docxodus_preview", J(
+            JsonSerializer.Serialize(new { sessionId, anchorId = anchor, citation }))));
+        Assert.Equal("available_registered_map",
+            preview.GetProperty("pageNavigation").GetString());
+        Assert.Equal(1, preview.GetProperty("citation").GetProperty("fragments")[0]
+            .GetProperty("pageNumber").GetInt32());
+        Assert.Equal(612, preview.GetProperty("citation").GetProperty("pages")[0]
+            .GetProperty("width").GetDouble());
+        Assert.Contains("pagination-staging", preview.GetProperty("html").GetString());
+
+        Assert.True(ReplaceText(_store, sessionId, anchor, "changed")
+            .GetProperty("success").GetBoolean());
+        var stale = Parse(Dispatcher.Call(_store, "docxodus_pagination", J(
+            JsonSerializer.Serialize(new { sessionId, action = "status", citation }))));
+        Assert.Equal("stale_document_version", stale.GetProperty("unavailableReason").GetString());
+    }
+
     // ─── Format / List ──────────────────────────────────────────────────
 
     [Fact]
@@ -547,32 +625,28 @@ public class McpServerDispatcherTests : IDisposable
             $$"""{"sessionId":{{sessionArg}},"action":"insert","anchorId":"{{anchor}}","position":"after","rows":2,"columns":2}""")));
         Assert.True(inserted.GetProperty("success").GetBoolean());
 
-        // Two Docxodus ops address "the same cell" with two different anchor kinds:
-        // ReplaceCellContent requires the "tc" (cell) anchor itself (not returned by InsertTable's
-        // Created list — only the cell-paragraph anchors are — so it's found via search), while
-        // row/column ops require a "p" (paragraph-inside-the-cell) anchor from Created directly.
-        // See the docxodus_table schema note. Use the LAST "p" anchor (a different cell than the
-        // one replace_cell_content below rewrites) for insert_row — replacing a cell's content
-        // removes and recreates its paragraph, invalidating any anchor into that same cell.
-        string? pAnchor = null;
-        foreach (var created in inserted.GetProperty("created").EnumerateArray())
-        {
-            if (created.GetProperty("kind").GetString() == "p") pAnchor = created.GetProperty("id").GetString();
-        }
-        Assert.NotNull(pAnchor);
-
-        var tcSearch = Parse(Dispatcher.Call(_store, "docxodus_search", J(
-            $$"""{"sessionId":{{sessionArg}},"mode":"kind","query":"tc"}""")));
-        var tcAnchor = tcSearch.GetProperty("matches")[0].GetProperty("id").GetString()!;
+        // Every cell operation consumes the same canonical tc anchor, returned directly by insert.
+        var tcAnchor = inserted.GetProperty("created")[0].GetProperty("id").GetString()!;
+        Assert.Equal("tc", inserted.GetProperty("created")[0].GetProperty("kind").GetString());
+        var otherTcAnchor = inserted.GetProperty("created")[3].GetProperty("id").GetString()!;
 
         var replaced = Parse(Dispatcher.Call(_store, "docxodus_table", J(
             $$"""{"sessionId":{{sessionArg}},"action":"replace_cell_content","cellAnchorId":"{{tcAnchor}}","markdown":"cell text"}""")));
         Assert.True(replaced.GetProperty("success").GetBoolean());
 
         var rowAddedJson = Dispatcher.Call(_store, "docxodus_table", J(
-            $$"""{"sessionId":{{sessionArg}},"action":"insert_row","cellAnchorId":"{{pAnchor}}","position":"after"}"""));
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_row","cellAnchorId":"{{otherTcAnchor}}","position":"after"}"""));
         var rowAdded = Parse(rowAddedJson);
         Assert.True(rowAdded.GetProperty("success").GetBoolean(), rowAddedJson);
+
+        var tableAnchor = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            $$"""{"sessionId":{{sessionArg}},"mode":"kind","query":"tbl"}""")))
+            .GetProperty("matches")[0].GetProperty("id").GetString()!;
+        var metadata = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_metadata","tableAnchorId":"{{tableAnchor}}"}""")));
+        Assert.True(metadata.GetProperty("success").GetBoolean());
+        Assert.Equal("col", metadata.GetProperty("metadata").GetProperty("columns")[0]
+            .GetProperty("anchor").GetProperty("kind").GetString());
     }
 
     [Fact]
@@ -890,6 +964,9 @@ public class McpServerDispatcherTests : IDisposable
 
         var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
+        var versionBefore = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
+            .GetProperty("version").GetInt64();
 
         var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
             $$"""
@@ -906,6 +983,40 @@ public class McpServerDispatcherTests : IDisposable
         var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
         Assert.Equal(before, after);
+        var versionAfter = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
+            .GetProperty("version").GetInt64();
+        Assert.Equal(versionBefore, versionAfter);
+    }
+
+    [Fact]
+    public void MCP093_StalePrecondition_ReturnsStructuredFailureWithoutMutation()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "committed").GetProperty("success").GetBoolean());
+
+        var failed = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "action": "replace_text",
+              "anchorId": "{{anchor}}",
+              "markdown": "must not apply",
+              "preconditions": { "expectedVersion": 0 }
+            }
+            """)));
+
+        Assert.False(failed.GetProperty("success").GetBoolean());
+        var error = failed.GetProperty("error");
+        Assert.Equal("precondition_failed", error.GetProperty("code").GetString());
+        Assert.Equal(1, error.GetProperty("precondition").GetProperty("currentVersion").GetInt64());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString()!;
+        Assert.Contains("committed", markdown);
+        Assert.DoesNotContain("must not apply", markdown);
     }
 
     [Fact]
@@ -921,9 +1032,9 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]
-    public void MCP100_ToolCatalog_HasFifteenDistinctNamedToolsWithValidSchemas()
+    public void MCP100_ToolCatalog_HasSixteenDistinctNamedToolsWithValidSchemas()
     {
-        Assert.Equal(15, ToolCatalog.Tools.Count);
+        Assert.Equal(16, ToolCatalog.Tools.Count);
         var names = new System.Collections.Generic.HashSet<string>();
         foreach (var tool in ToolCatalog.Tools)
         {
@@ -933,6 +1044,48 @@ public class McpServerDispatcherTests : IDisposable
             using var schema = JsonDocument.Parse(tool.InputSchemaJson); // must be valid JSON
             Assert.Equal("object", schema.RootElement.GetProperty("type").GetString());
         }
+    }
+
+    [Fact]
+    public void MCP101_PageMapSchemas_DescribeStrictTokensAndActionRequirements()
+    {
+        static void AssertCitationSchema(JsonElement schema)
+        {
+            Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+            var required = schema.GetProperty("required").EnumerateArray()
+                .Select(value => value.GetString()).ToArray();
+            Assert.Contains("documentVersion", required);
+            Assert.Contains("rendererFingerprint", required);
+            Assert.Equal("integer", schema.GetProperty("properties")
+                .GetProperty("documentVersion").GetProperty("type").GetString());
+            Assert.Equal(1, schema.GetProperty("properties")
+                .GetProperty("rendererFingerprint").GetProperty("minLength").GetInt32());
+        }
+
+        foreach (var toolName in new[] { "docxodus_get_content", "docxodus_preview", "docxodus_search" })
+        {
+            var tool = Assert.Single(ToolCatalog.Tools, item => item.Name == toolName);
+            using var schema = JsonDocument.Parse(tool.InputSchemaJson);
+            AssertCitationSchema(schema.RootElement.GetProperty("properties").GetProperty("citation"));
+        }
+
+        var pagination = Assert.Single(ToolCatalog.Tools, item => item.Name == "docxodus_pagination");
+        using var paginationSchema = JsonDocument.Parse(pagination.InputSchemaJson);
+        var root = paginationSchema.RootElement;
+        AssertCitationSchema(root.GetProperty("properties").GetProperty("citation"));
+        var pageMap = root.GetProperty("properties").GetProperty("pageMap");
+        Assert.False(pageMap.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(1, pageMap.GetProperty("properties").GetProperty("schemaVersion")
+            .GetProperty("const").GetInt32());
+        Assert.False(pageMap.GetProperty("properties").GetProperty("fragments")
+            .GetProperty("items").GetProperty("additionalProperties").GetBoolean());
+        var variants = root.GetProperty("oneOf").EnumerateArray().ToArray();
+        Assert.Contains(variants, variant => variant.GetProperty("properties").GetProperty("action")
+            .GetProperty("const").GetString() == "register"
+            && variant.GetProperty("required").EnumerateArray().Any(v => v.GetString() == "pageMap"));
+        Assert.Contains(variants, variant => variant.GetProperty("properties").GetProperty("action")
+            .GetProperty("const").GetString() == "cite"
+            && variant.GetProperty("required").EnumerateArray().Any(v => v.GetString() == "citation"));
     }
 
     [Fact]
@@ -998,6 +1151,13 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("<html><body>big</body></html>".Length,
             structured.GetProperty("htmlLength").GetInt32());
 
+        var cited = Parse(UiResources.WrapToolResult("docxodus_preview",
+            """{"sessionId":"s1","html":"<p>x</p>","citation":{"availability":"available","pages":[{"pageNumber":3,"pageInSection":1,"width":612,"height":792,"pageName":"docxodus-section-0"}],"fragments":[{"pageNumber":3}]},"pageNavigation":"available_registered_map"}""",
+            isError: false)).GetProperty("structuredContent");
+        Assert.Equal(3, cited.GetProperty("citation").GetProperty("fragments")[0]
+            .GetProperty("pageNumber").GetInt32());
+        Assert.Equal("available_registered_map", cited.GetProperty("pageNavigation").GetString());
+
         // docxodus_open mirrors its result as structuredContent for the widget…
         var open = Parse(UiResources.WrapToolResult("docxodus_open",
             """{"sessionId":"s1","path":"a.docx"}""", isError: false));
@@ -1025,6 +1185,9 @@ public class McpServerDispatcherTests : IDisposable
         var htmlText = contents.GetProperty("text").GetString()!;
         Assert.StartsWith("<!DOCTYPE html>", htmlText.TrimStart());
         Assert.Contains("docxodus_preview", htmlText); // the widget's refresh path
+        Assert.Contains("unavailable_continuous_preview", htmlText);
+        Assert.Contains("available_registered_map", htmlText);
+        Assert.Contains("materializeCitationPage", htmlText);
         Assert.True(contents.GetProperty("_meta").TryGetProperty("ui", out _));
 
         Assert.Throws<InvalidParamsException>(() =>

@@ -221,6 +221,9 @@ public sealed class AnchorTarget
     /// </summary>
     public string? AutoNumberPrefix { get; init; }
 
+    /// <summary>Null unless the discovery call requested an exact page citation.</summary>
+    public PageCitation? Citation { get; init; }
+
     /// <summary>
     /// The element's text as a reader would see it: <see cref="AutoNumberPrefix"/>
     /// joined with <see cref="TextPreview"/> by a single space when a prefix is
@@ -272,6 +275,12 @@ public sealed class MarkdownProjection
 {
     required public string Markdown { get; init; }
     required public IReadOnlyDictionary<string, AnchorTarget> AnchorIndex { get; init; }
+
+    /// <summary>
+    /// Optional page citations keyed by canonical anchor id. Null when citations were not
+    /// requested; requested-but-unavailable entries carry an explicit reason.
+    /// </summary>
+    public IReadOnlyDictionary<string, PageCitation>? PageCitations { get; init; }
 }
 
 public partial class WmlDocument
@@ -569,6 +578,7 @@ public static class WmlToMarkdownConverter
         if (n == W.tbl) return "tbl";
         if (n == W.tr) return "tr";
         if (n == W.tc) return "tc";
+        if (n == W.gridCol) return "col";
         if (n == W.sectPr) return "sec";
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";

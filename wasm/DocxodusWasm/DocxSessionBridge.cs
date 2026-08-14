@@ -37,6 +37,42 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string Project(int handle) => DocxSessionOps.Project(handle);
 
+    /// <summary>Current monotonic session document version as <c>{"version":N}</c>.</summary>
+    [JSExport]
+    public static string GetVersion(int handle) => DocxSessionOps.GetVersionJson(handle);
+
+    [JSExport]
+    public static string RegisterPageMap(
+        int handle, string pageMapJson, string expectedRendererFingerprint) =>
+        DocxSessionOps.RegisterPageMap(
+            handle,
+            DocxSessionJson.ParsePageMap(pageMapJson),
+            string.IsNullOrEmpty(expectedRendererFingerprint) ? null : expectedRendererFingerprint);
+
+    [JSExport]
+    public static string GetPageMapStatus(int handle, string requestJson)
+    {
+        PageCitationRequest? request = null;
+        if (!string.IsNullOrEmpty(requestJson))
+        {
+            using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+            request = DocxSessionJson.ParsePageCitationRequest(doc.RootElement);
+        }
+        return DocxSessionOps.GetPageMapStatus(handle, request);
+    }
+
+    [JSExport]
+    public static string GetPageCitation(int handle, string anchorId, string requestJson)
+    {
+        return DocxSessionOps.GetPageCitation(handle, anchorId, ParseRequiredCitationRequest(requestJson));
+    }
+
+    /// <summary>Read-only optimistic guard evaluation. A successful result applies no mutation.</summary>
+    [JSExport]
+    public static string CheckPreconditions(int handle, string preconditionsJson) =>
+        DocxSessionOps.CheckPreconditions(
+            handle, DocxSessionJson.ParseMutationPreconditions(preconditionsJson));
+
     /// <summary>
     /// Ordered top-level render units per scope container (body / footnotes /
     /// endnotes), as JSON: <c>{"body":[{"id","kind"},…],"footnotes":[…],"endnotes":[…]}</c>.
@@ -109,6 +145,16 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ProjectAnchor(int h, string anchorId, int depth) =>
         DocxSessionOps.ProjectAnchor(h, anchorId, (ProjectionDepth)depth);
+
+    [JSExport]
+    public static string ProjectAnchorWithCitations(
+        int h, string anchorId, int depth, string requestJson)
+    {
+        using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+        return DocxSessionOps.ProjectAnchor(
+            h, anchorId, (ProjectionDepth)depth,
+            DocxSessionJson.ParsePageCitationRequest(doc.RootElement));
+    }
 
     /// <summary>
     /// Render a single block from the live session to faithful HTML — the editor's
@@ -236,11 +282,24 @@ public static partial class DocxSessionBridge
     /// <summary>
     /// Insert a rows×cols table before/after the anchor. <paramref name="optionsJson"/> is a
     /// TableInsertOptions object ({ borderless?, cellContents?: string[], cellAlignment? }).
-    /// Returns an EditResult whose <c>created</c> lists the cell-paragraph anchors (row-major).
+    /// Returns an EditResult whose <c>created</c> lists canonical <c>tc</c> anchors (row-major).
     /// </summary>
     [JSExport]
     public static string InsertTable(int h, string anchor, string posStr, int rows, int cols, string optionsJson) =>
         DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParsePos(posStr), rows, cols, optionsJson);
+
+    [JSExport]
+    public static string GetTableMetadata(int h, string tableAnchor) =>
+        DocxSessionOps.GetTableMetadata(h, tableAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellAnchor(int h, string cellAnchor) =>
+        DocxSessionOps.ResolveTableCellAnchor(h, cellAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellCoordinate(
+        int h, string tableAnchor, int rowIndex, int columnIndex) =>
+        DocxSessionOps.ResolveTableCellCoordinate(h, tableAnchor, rowIndex, columnIndex);
 
     [JSExport]
     public static string InsertTableRow(int h, string cellAnchor, string posStr) =>
@@ -297,6 +356,12 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string SetRepeatHeaderRow(int h, string cellAnchor, bool repeat) =>
         DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
+
+    [JSExport]
+    public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,
+        bool? allowBreakAcrossPages, int? heightTwips, string heightRule) =>
+        DocxSessionOps.SetTableRowOptions(h, cellAnchor, repeatHeader, allowBreakAcrossPages,
+            heightTwips, heightRule);
 
     /// <summary>
     /// Set the section's running header story (<paramref name="anchor"/> = any body block in the
@@ -543,8 +608,10 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string Grep(int h, string pattern, string optionsJson)
     {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace, out var boundary);
-        return DocxSessionOps.Grep(h, pattern, regexOpts, scope, contextChars, whitespace, boundary);
+        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars,
+            out var whitespace, out var boundary, out var citationRequest);
+        return DocxSessionOps.Grep(
+            h, pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest);
     }
 
     /// <summary>
@@ -555,8 +622,10 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string GrepCrossBlock(int h, string pattern, string optionsJson)
     {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace, out var boundary);
-        return DocxSessionOps.GrepCrossBlock(h, pattern, regexOpts, scope, contextChars, whitespace, boundary);
+        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars,
+            out var whitespace, out var boundary, out var citationRequest);
+        return DocxSessionOps.GrepCrossBlock(
+            h, pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest);
     }
 
     /// <summary>
@@ -577,6 +646,9 @@ public static partial class DocxSessionBridge
                 IgnoreCase = DocxSessionJson.TryGetBool(root, "ignoreCase", false),
                 MaxReplacements = root.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
                     ? mr.GetInt32() : (int?)null,
+                ExpectedMatchCount = DocxSessionJson.TryGetIntNullable(root, "expectedMatchCount"),
+                Preconditions = root.TryGetProperty("preconditions", out var p)
+                    ? DocxSessionJson.ParseMutationPreconditions(p) : null,
             };
         }
         return DocxSessionOps.ReplaceTextRange(h, anchor, find, replace, opts);
@@ -612,6 +684,13 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string FindPlaceholders(int h, int kinds, int scope, int contextChars, int boundary) =>
         DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars, (ContextBoundary)boundary);
+
+    [JSExport]
+    public static string FindPlaceholdersWithCitations(
+        int h, int kinds, int scope, int contextChars, int boundary, string requestJson) =>
+        DocxSessionOps.FindPlaceholders(
+            h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars,
+            (ContextBoundary)boundary, ParseRequiredCitationRequest(requestJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.GetEditSummary"/>. Returns a JSON object
@@ -649,6 +728,11 @@ public static partial class DocxSessionBridge
     public static string FindByAnnotation(int h, string annotationId) =>
         DocxSessionOps.FindByAnnotation(h, annotationId);
 
+    [JSExport]
+    public static string FindByAnnotationWithCitations(
+        int h, string annotationId, string requestJson) =>
+        DocxSessionOps.FindByAnnotation(h, annotationId, ParseRequiredCitationRequest(requestJson));
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByLabel"/>. Returns a JSON object keyed by
     /// annotation id; each value is the same AnchorTarget array shape as
@@ -658,6 +742,11 @@ public static partial class DocxSessionBridge
     public static string FindByLabel(int h, string labelId) =>
         DocxSessionOps.FindByLabel(h, labelId);
 
+    [JSExport]
+    public static string FindByLabelWithCitations(
+        int h, string labelId, string requestJson) =>
+        DocxSessionOps.FindByLabel(h, labelId, ParseRequiredCitationRequest(requestJson));
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByBookmark"/>. Same return shape as
     /// <see cref="FindByAnnotation"/>; accepts any bookmark name (Docxodus-managed or
@@ -666,6 +755,11 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string FindByBookmark(int h, string bookmarkName) =>
         DocxSessionOps.FindByBookmark(h, bookmarkName);
+
+    [JSExport]
+    public static string FindByBookmarkWithCitations(
+        int h, string bookmarkName, string requestJson) =>
+        DocxSessionOps.FindByBookmark(h, bookmarkName, ParseRequiredCitationRequest(requestJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.ListAnnotations"/>. Returns a JSON array of
@@ -829,6 +923,15 @@ public static partial class DocxSessionBridge
         DocxSessionOps.FindByKind(h, kind, string.IsNullOrEmpty(scope) ? null : scope);
 
     [JSExport]
+    public static string FindByKindWithCitations(
+        int h, string kind, string scope, string requestJson) =>
+        DocxSessionOps.FindByKind(
+            h,
+            kind,
+            string.IsNullOrEmpty(scope) ? null : scope,
+            ParseRequiredCitationRequest(requestJson));
+
+    [JSExport]
     public static bool Undo(int h) => DocxSessionOps.Undo(h);
 
     [JSExport]
@@ -873,15 +976,23 @@ public static partial class DocxSessionBridge
         return DocxSessionJson.ParseFindOptions(doc.RootElement);
     }
 
+    private static PageCitationRequest ParseRequiredCitationRequest(string requestJson)
+    {
+        using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+        return DocxSessionJson.ParsePageCitationRequest(doc.RootElement)
+            ?? throw new FormatException("citation request is required");
+    }
+
     private static void ParseGrepOptions(string optionsJson, out RegexOptions regexOpts,
         out ProjectionScopes scope, out int contextChars, out WhitespaceMode whitespace,
-        out ContextBoundary boundary)
+        out ContextBoundary boundary, out PageCitationRequest? citationRequest)
     {
         regexOpts = RegexOptions.None;
         scope = ProjectionScopes.Body;
         contextChars = 80;
         whitespace = WhitespaceMode.Preserve;
         boundary = ContextBoundary.Char;
+        citationRequest = null;
         if (string.IsNullOrEmpty(optionsJson)) return;
         using var doc = JsonDocument.Parse(optionsJson);
         var root = doc.RootElement;
@@ -895,6 +1006,7 @@ public static partial class DocxSessionBridge
             whitespace = (WhitespaceMode)w.GetInt32();
         if (root.TryGetProperty("boundary", out var b) && b.ValueKind == JsonValueKind.Number)
             boundary = (ContextBoundary)b.GetInt32();
+        citationRequest = DocxSessionJson.ParsePageCitationRequest(root);
     }
 
 }

@@ -34,6 +34,9 @@ __all__ = [
     "AnchorIdRendering",
     "RegexOptions",
     "ConflictResolution",
+    "TableAnchorEntityKind",
+    "TableRowHeightRule",
+    "TableVerticalMergeRole",
 ]
 
 
@@ -42,6 +45,31 @@ class Position(str, Enum):
 
     BEFORE = "before"
     AFTER = "after"
+
+
+class TableAnchorEntityKind(str, Enum):
+    """Structural identity kind in a table-anchor mutation mapping."""
+
+    TABLE = "table"
+    ROW = "row"
+    COLUMN = "column"
+    CELL = "cell"
+
+
+class TableVerticalMergeRole(str, Enum):
+    """A physical cell's role in a Word vertical-merge run."""
+
+    NONE = "none"
+    RESTART = "restart"
+    CONTINUE = "continue"
+
+
+class TableRowHeightRule(str, Enum):
+    """Interpretation of an explicit table-row height."""
+
+    AUTO = "auto"
+    AT_LEAST = "atLeast"
+    EXACT = "exact"
 
 
 class HeaderFooterKind(str, Enum):
@@ -133,10 +161,14 @@ class EditErrorCode(str, Enum):
     INVALID_LIST_START_VALUE = "invalid_list_start_value"
     INVALID_PAGE_NUMBERING = "invalid_page_numbering"
     INVALID_PARAGRAPH_FORMAT = "invalid_paragraph_format"
+    INVALID_TABLE_STYLING = "invalid_table_styling"
+    INVALID_TABLE_MERGE = "invalid_table_merge"
+    TABLE_ANCHOR_MIGRATION_REQUIRED = "table_anchor_migration_required"
     MALFORMED_XML = "malformed_xml"
     DISALLOWED_NAMESPACE = "disallowed_namespace"
     INCOMPATIBLE_ELEMENT_TYPE = "incompatible_element_type"
     VALIDATION_FAILED = "validation_failed"
+    PRECONDITION_FAILED = "precondition_failed"
     NOTHING_TO_UNDO = "nothing_to_undo"
     NOTHING_TO_REDO = "nothing_to_redo"
     DUPLICATE_ANNOTATION_ID = "duplicate_annotation_id"

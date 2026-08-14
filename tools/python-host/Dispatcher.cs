@@ -22,7 +22,25 @@ namespace Docxodus.PyHost;
 /// </summary>
 internal static class Dispatcher
 {
-    public static string Dispatch(string op, JsonElement args) => op switch
+    public static string Dispatch(string op, JsonElement args)
+    {
+        var preconditions = ParsePreconditions(args);
+        if (preconditions is not null && IsMutation(op) && op != "replace_text_range")
+        {
+            if (op == "undo") return DocxSessionOps.UndoChecked(Handle(args), preconditions);
+            if (op == "redo") return DocxSessionOps.RedoChecked(Handle(args), preconditions);
+
+            // The stdio host dispatches one complete request at a time, so the check and
+            // mutation below cannot be interleaved by another protocol request.
+            var check = DocxSessionOps.CheckPreconditions(Handle(args), preconditions);
+            using var parsed = JsonDocument.Parse(check);
+            if (!parsed.RootElement.GetProperty("success").GetBoolean()) return check;
+        }
+
+        return DispatchCore(op, args);
+    }
+
+    private static string DispatchCore(string op, JsonElement args) => op switch
     {
         "ping" => Ping(),
         "open_session" => OpenSession(args),
@@ -43,7 +61,20 @@ internal static class Dispatcher
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
-            (ProjectionDepth)IntOptional(args, "depth", 2)),
+            (ProjectionDepth)IntOptional(args, "depth", 2),
+            DocxSessionJson.ParsePageCitationRequest(args)),
+        "get_version" => DocxSessionOps.GetVersionJson(Handle(args)),
+        "register_page_map" => DocxSessionOps.RegisterPageMap(
+            Handle(args),
+            DocxSessionJson.ParsePageMap(JsonObjectElement(args, "pageMap")),
+            OptStr(args, "expectedRendererFingerprint")),
+        "get_page_map_status" => DocxSessionOps.GetPageMapStatus(
+            Handle(args), DocxSessionJson.ParsePageCitationRequest(args)),
+        "get_page_citation" => DocxSessionOps.GetPageCitation(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParsePageCitationRequest(args)
+                ?? throw new FormatException("args missing object \"citation\"")),
+        "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -131,6 +162,38 @@ internal static class Dispatcher
         "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
             Handle(args), Str(args, "anchorId")),
 
+        "get_table_metadata" => DocxSessionOps.GetTableMetadata(
+            Handle(args), Str(args, "tableAnchorId")),
+        "resolve_table_cell_anchor" => DocxSessionOps.ResolveTableCellAnchor(
+            Handle(args), Str(args, "cellAnchorId")),
+        "resolve_table_cell_coordinate" => DocxSessionOps.ResolveTableCellCoordinate(
+            Handle(args), Str(args, "tableAnchorId"), Int(args, "rowIndex"), Int(args, "columnIndex")),
+        "insert_table" => DocxSessionOps.InsertTable(
+            Handle(args), Str(args, "anchorId"), ParsePos(args, "position"),
+            Int(args, "rows"), Int(args, "columns"), RawObjectOrEmpty(args, "options")),
+        "insert_table_row" => DocxSessionOps.InsertTableRow(
+            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+        "insert_table_column" => DocxSessionOps.InsertTableColumn(
+            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+        "delete_table_row" => DocxSessionOps.DeleteTableRow(Handle(args), Str(args, "cellAnchorId")),
+        "delete_table_column" => DocxSessionOps.DeleteTableColumn(Handle(args), Str(args, "cellAnchorId")),
+        "merge_cells" => DocxSessionOps.MergeCells(
+            Handle(args), Str(args, "cellAnchorId"), Int(args, "rowSpan"), Int(args, "columnSpan"),
+            OptStr(args, "content")),
+        "unmerge_cells" => DocxSessionOps.UnmergeCells(Handle(args), Str(args, "cellAnchorId")),
+        "set_column_widths" => DocxSessionOps.SetColumnWidths(
+            Handle(args), Str(args, "cellAnchorId"), RawArray(args, "widths")),
+        "set_table_borders" => DocxSessionOps.SetTableBorders(
+            Handle(args), Str(args, "cellAnchorId"), RawObjectOrEmpty(args, "spec")),
+        "set_cell_shading" => DocxSessionOps.SetCellShading(
+            Handle(args), Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
+            OptStr(args, "scope") ?? "cell"),
+        "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
+            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeat") ?? true),
+        "set_table_row_options" => DocxSessionOps.SetTableRowOptions(
+            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeatHeader"),
+            OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
+            OptStr(args, "heightRule")),
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             Handle(args), Str(args, "cellAnchorId"), Str(args, "markdown")),
 
@@ -148,15 +211,19 @@ internal static class Dispatcher
             (PlaceholderKinds)IntOptional(args, "kinds", (int)PlaceholderKinds.All),
             (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
             IntOptional(args, "contextChars", 80),
-            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char)),
+            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char),
+            DocxSessionJson.ParsePageCitationRequest(args)),
         "get_edit_summary" => DocxSessionOps.GetEditSummary(Handle(args)),
         "remaining_placeholders" => DocxSessionOps.RemainingPlaceholders(
             Handle(args), (PlaceholderKinds)IntOptional(args, "kinds", 7)),
         "get_diff" => DocxSessionOps.GetDiff(
             Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
-        "find_by_annotation" => DocxSessionOps.FindByAnnotation(Handle(args), Str(args, "annotationId")),
-        "find_by_label" => DocxSessionOps.FindByLabel(Handle(args), Str(args, "labelId")),
-        "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
+        "find_by_annotation" => DocxSessionOps.FindByAnnotation(
+            Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args)),
+        "find_by_label" => DocxSessionOps.FindByLabel(
+            Handle(args), Str(args, "labelId"), DocxSessionJson.ParsePageCitationRequest(args)),
+        "find_by_bookmark" => DocxSessionOps.FindByBookmark(
+            Handle(args), Str(args, "bookmarkName"), DocxSessionJson.ParsePageCitationRequest(args)),
         "list_annotations" => DocxSessionOps.ListAnnotations(Handle(args)),
         "add_annotation" => DocxSessionOps.AddAnnotation(
             Handle(args),
@@ -189,7 +256,8 @@ internal static class Dispatcher
         "find_by_kind" => DocxSessionOps.FindByKind(
             Handle(args), Str(args, "kind"),
             args.ValueKind == JsonValueKind.Object && args.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String
-                ? sc.GetString() : null),
+                ? sc.GetString() : null,
+            DocxSessionJson.ParsePageCitationRequest(args)),
 
         "undo" => DocxSessionOps.Undo(Handle(args)) ? "true" : "false",
         "redo" => DocxSessionOps.Redo(Handle(args)) ? "true" : "false",
@@ -385,9 +453,10 @@ internal static class Dispatcher
         var contextChars = IntOptional(args, "contextChars", 80);
         var whitespace = (WhitespaceMode)IntOptional(args, "whitespace", (int)WhitespaceMode.Preserve);
         var boundary = (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char);
+        var citation = DocxSessionJson.ParsePageCitationRequest(args);
         return crossBlock
-            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary)
-            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary);
+            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation)
+            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation);
     }
 
     private static string AddComment(JsonElement args)
@@ -450,6 +519,26 @@ internal static class Dispatcher
             ? v.GetBoolean() : null;
     }
 
+    private static int? OptInt(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32() : null;
+    }
+
+    private static string RawArray(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind != JsonValueKind.Array)
+            throw new FormatException($"args missing array \"{name}\"");
+        return v.GetRawText();
+    }
+
+    private static string RawObjectOrEmpty(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.Object
+                ? v.GetRawText() : "";
+
     private static PageNumberingOp ParsePageNumberingOp(JsonElement args, string name)
     {
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op))
@@ -507,15 +596,61 @@ internal static class Dispatcher
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
-        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("options", out var o) || o.ValueKind != JsonValueKind.Object)
-            return null;
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        var hasOptions = args.TryGetProperty("options", out var o) && o.ValueKind == JsonValueKind.Object;
+        var preconditions = ParsePreconditions(args);
+        if (preconditions is null && hasOptions
+            && o.TryGetProperty("preconditions", out var nestedPreconditions))
+            preconditions = DocxSessionJson.ParseMutationPreconditions(nestedPreconditions);
+        if (!hasOptions && preconditions is null) return null;
         return new ReplaceOptions
         {
-            IgnoreCase = DocxSessionJson.TryGetBool(o, "ignoreCase", false),
-            MaxReplacements = o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
+            IgnoreCase = hasOptions && DocxSessionJson.TryGetBool(o, "ignoreCase", false),
+            MaxReplacements = hasOptions && o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
                 ? mr.GetInt32() : (int?)null,
+            ExpectedMatchCount = hasOptions && o.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
+                ? emc.GetInt32() : (int?)null,
+            Preconditions = preconditions,
         };
     }
+
+    private static MutationPreconditions? ParsePreconditions(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("preconditions", out var p)
+            || p.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        var parsed = DocxSessionJson.ParseMutationPreconditions(p);
+        if (parsed is null || parsed.AnchorId is not null) return parsed;
+        foreach (var targetName in new[]
+        {
+            "anchorId", "cellAnchorId", "sourceAnchorId", "fromAnchorId",
+            "firstAnchorId", "headingAnchorId", "parentAnchorId", "newAnchorId",
+        })
+        {
+            if (args.TryGetProperty(targetName, out var target) && target.ValueKind == JsonValueKind.String)
+                return parsed with { AnchorId = target.GetString() };
+        }
+        return parsed;
+    }
+
+    private static bool IsMutation(string op) => op is
+        "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
+        or "replace_text_range" or "replace_text_at_span" or "replace_inner"
+        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
+        or "set_header_text" or "set_footer_text" or "insert_page_number_field"
+        or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
+        or "insert_footnote" or "insert_endnote"
+        or "add_comment" or "add_comment_reply" or "update_comment"
+        or "set_comment_resolved" or "remove_comment"
+        or "accept_revision" or "reject_revision"
+        or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
+        or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
+        or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
+        or "clear_list_start_override" or "replace_cell_content"
+        or "raw_insert_xml" or "raw_replace_xml"
+        or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
+        or "undo" or "redo";
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
 
@@ -524,5 +659,13 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Object)
             throw new FormatException($"args missing object \"{name}\"");
         return v.GetRawText();
+    }
+
+    private static JsonElement JsonObjectElement(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"args missing object \"{name}\"");
+        return v;
     }
 }

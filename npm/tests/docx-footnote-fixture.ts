@@ -29,10 +29,15 @@ function bodyParagraph(index: number, noteId: number | null): string {
     `<w:r><w:t xml:space="preserve">Body line ${index + 1}</w:t></w:r>${citation}</w:p>`;
 }
 
-function footnote(id: number): string {
-  return `<w:footnote w:id="${id}"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
-    `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>` +
-    `<w:r><w:t xml:space="preserve"> Footnote ${id} text.</w:t></w:r></w:p></w:footnote>`;
+function footnote(id: number, paragraphCount: number): string {
+  const paragraphs = Array.from({ length: paragraphCount }, (_, index) =>
+    `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
+      (index === 0
+        ? `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>`
+        : '') +
+      `<w:r><w:t xml:space="preserve"> Footnote ${id} paragraph ${index + 1} text.</w:t></w:r></w:p>`)
+    .join('');
+  return `<w:footnote w:id="${id}">${paragraphs}</w:footnote>`;
 }
 
 /**
@@ -40,7 +45,11 @@ function footnote(id: number): string {
  * @param bodyLines total body paragraphs — few enough to keep everything on one page, so the
  *   note area's position is determined purely by the page geometry, not by flow pressure.
  */
-export function generateFootnoteDocx(noteCount = 1, bodyLines = 5): Uint8Array {
+export function generateFootnoteDocx(
+  noteCount = 1,
+  bodyLines = 5,
+  paragraphsPerNote = 1,
+): Uint8Array {
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
     bodyParagraph(i, i < noteCount ? i + 1 : null)).join('');
@@ -97,7 +106,7 @@ export function generateFootnoteDocx(noteCount = 1, bodyLines = 5): Uint8Array {
 <w:footnotes xmlns:w="${W_NS}">
   <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
   <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
-  ${noteIds.map(footnote).join('\n  ')}
+  ${noteIds.map((id) => footnote(id, paragraphsPerNote)).join('\n  ')}
 </w:footnotes>`),
     },
     {
