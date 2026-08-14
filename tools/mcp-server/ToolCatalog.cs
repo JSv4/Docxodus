@@ -10,7 +10,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus eleven
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus twelve
 /// grouped-intent tools, each accepting an <c>action</c> discriminator and action-specific
 /// arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.

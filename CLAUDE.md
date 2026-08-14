@@ -1,448 +1,278 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
+
+**This file is a map, not a manual.** It covers what you cannot discover quickly from the
+code: repository layout, which surfaces a change must ripple through, build gotchas, and
+where the real documentation lives. Per-module design detail belongs in
+`docs/architecture/` — see the index below. Do not re-document a subsystem here; a
+duplicated description is one that will go stale.
 
 ## Important Instructions
 
-- **Never credit yourself in commits.** Do not add "Generated with Claude Code" or "Co-Authored-By: Claude" to commit messages.
+- **Never credit yourself in commits.** Do not add "Generated with Claude Code" or
+  "Co-Authored-By: Claude" to commit messages.
 
 ## Coding Standards
 
 ### Nullable Reference Types
 
-The project has `<Nullable>disable</Nullable>` globally due to ~9,000 warnings in legacy code. However, **new code should use nullable annotations**:
+The project sets `<Nullable>disable</Nullable>` globally: enabling it today produces
+**~4,800 warnings** in the legacy core. New code should still be annotated.
 
-- **New files**: Add `#nullable enable` at the top of the file
-- **Substantial refactors**: When significantly modifying an existing file, consider adding `#nullable enable` and fixing warnings in that file
-- **Use proper annotations**: Mark nullable parameters/returns with `?`, use null checks or `!` where appropriate
+- **New files**: add `#nullable enable` at the top.
+- **Substantial refactors**: consider adding `#nullable enable` and fixing that file's warnings.
+- **Use proper annotations**: mark nullable parameters/returns with `?`; use null checks or `!`.
 
-```csharp
-#nullable enable
+About 60% of files in `Docxodus/` already carry `#nullable enable` — everything written for
+this fork. The un-annotated remainder is the inherited OpenXmlPowerTools core
+(`WmlComparer`, `WmlToHtmlConverter`, the `HtmlToWml*` family, `FormattingAssembler`,
+`DocumentBuilder`, `RevisionProcessor`, `PtOpenXmlUtil`, `PtUtil`, `ListItemRetriever`).
 
-namespace Docxodus;
+See [Issue #13](https://github.com/JSv4/Docxodus/issues/13) for the migration plan.
 
-public class MyNewClass
-{
-    public string Name { get; set; } = string.Empty;  // Non-nullable with default
-    public string? Description { get; set; }           // Explicitly nullable
+### Warnings
 
-    public string? FindItem(string key)                // May return null
-    {
-        // ...
-    }
-}
-```
+`Directory.Build.props` sets `TreatWarningsAsErrors=true` for Release — but
+**`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
+library and the test project do *not* fail on warnings. The CLI tools, MCP server,
+python-host and WASM project do inherit it. Current baseline: the library builds with
+**115 warnings**, the test project with **~618** (mostly StyleCop `SA1633` file headers and
+xUnit analyzer suggestions). Don't add to either baseline.
 
-See [Issue #13](https://github.com/JSv4/Docxodus/issues/13) for the full nullable migration plan.
+## Repository Layout
 
-## Feature Development Workflow
+This is not just a .NET library — it ships a multi-layer stack. Public-surface changes
+usually ripple through all of it.
 
-When implementing new features or significant changes, follow this workflow:
+| Layer | Path | Purpose |
+|-------|------|---------|
+| Core library | `Docxodus/` | All OOXML logic. NuGet package `Docxodus`. |
+| Shared facades | `Docxodus/Internal/{DocxSessionOps,DocxDiffOps,HtmlConversionOps,SessionRegistry,DocxSessionJson}.cs` | Single-owner op + wire-shape layer every transport routes through. |
+| Unit tests | `Docxodus.Tests/` | xUnit, **~3,440 tests**, ~4 min. |
+| CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. |
+| WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells over the facades. |
+| Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
+| Agent server | `tools/mcp-server/` | JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): 3 lifecycle tools + 12 grouped-intent tools. See `docs/architecture/docx_agent_server.md`. |
+| Python client | `python/` | `docx-scalpel` on PyPI. |
+| npm/TypeScript | `npm/` | Browser package: `src/index.ts` (API), `src/editor.ts` (block editor), `src/ribbon.ts` (shipped UI surface), `src/embed.ts` (CDN entries), `src/react.ts`, worker proxy. |
+| Pages demo | `docs/demo/` | Static pages hosting the **shipped** surface via `createRibbonEditor`. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
 
-### 1. Documentation Updates
+### The single-owner rule
 
-- **CHANGELOG.md** - Add entry under `[Unreleased]` section describing the feature/fix
-- **CLAUDE.md** - Update if the feature adds new settings, modules, or changes architecture
-- **docs/architecture/** - Create or update architecture docs for significant features (e.g., `comment_rendering.md`, `comparison_engine.md`)
-- **docs/ooxml_corner_cases.md** - Document any OOXML edge cases where Word's behavior differs from spec or our implementation (see below)
+When a public `DocxSession` method or setting changes, **update `Docxodus/Internal/DocxSessionOps.cs`
+first** — both bridges and both clients pick the change up from there. Then ripple outward.
 
-### 2. Test Updates
+The same pattern governs the stateless surfaces: `HtmlConversionOps` owns DOCX→HTML,
+`DocxDiffOps` owns the `DocxDiff` engine, and `DocxCompare` owns the
+`WmlComparer`-vs-`DocxDiff` engine selection. Change the facade first, then the two bridges
+and two clients.
 
-- Add tests to the appropriate test file in `Docxodus.Tests/`:
-  - `HtmlConverterTests.cs` - WmlToHtmlConverter features
-  - `WmlComparerTests.cs` - Document comparison features
-  - `DocumentBuilderTests.cs` - Document merging/splitting
-  - Use existing test files from `TestFiles/` when possible
-  - When creating programmatic test documents, ensure all required parts exist (StyleDefinitionsPart, DocumentSettingsPart, etc.)
+### Ripple checklist
 
-### 3. WASM/npm Wrapper Updates
+| Change type | Core | Tests | `*Ops` facade | WASM | npm/TS | stdio + Python | MCP | Docs |
+|-------------|------|-------|---------------|------|--------|----------------|-----|------|
+| New setting or method | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| New public enum | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Bug fix | ✓ | ✓ | – | – | – | – | – | CHANGELOG |
+| Internal refactor | ✓ | ✓ | – | – | – | – | – | – |
 
-Update these when adding new settings or methods to the .NET API:
+Concretely, a new session op touches: `DocxSession.cs` → `DocxSessionOps.cs` →
+`DocxSessionJson.cs` → `wasm/DocxodusWasm/DocxSessionBridge.cs` → `npm/src/types.ts` +
+`npm/src/index.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
+→ `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
 
-- **wasm/DocxodusWasm/DocumentConverter.cs** - Add new JSExport methods or parameters
-- **wasm/DocxodusWasm/DocumentComparer.cs** - For comparison-related changes
-- **npm/src/types.ts** - Add TypeScript types, enums, and update `DocxodusWasmExports` interface
-- **npm/src/index.ts** - Update wrapper functions to use new WASM methods
-
-Build and verify with:
-```bash
-npm run build          # Builds WASM and TypeScript
-dotnet test            # Run .NET tests
-```
-
-### 4. When to Update Each Layer
-
-| Change Type | .NET | Tests | WASM | npm/TS | Docs |
-|-------------|------|-------|------|--------|------|
-| New converter setting | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Bug fix | ✓ | ✓ | - | - | CHANGELOG |
-| New public enum | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Internal refactor | ✓ | ✓ | - | - | - |
-| New module | ✓ | ✓ | ✓ | ✓ | ✓ |
-
-## Release Process
-
-A release is **a CHANGELOG section + an annotated git tag + a GitHub Release** —
-and *no* version bump in `Docxodus.csproj` (`<Version>` is intentionally left at
-`1.0.0`) or `npm/package.json`; those are not tied to the release tags.
-
-Versioning is **semver** on tags of the form `vMAJOR.MINOR.PATCH` (e.g.
-`v6.3.0`). Pick the bump from what landed in `[Unreleased]` since the last tag:
-
-| Bump | When |
-|------|------|
-| Patch (`v6.2.0` → `v6.2.1`) | only `### Fixed` entries (bug fixes) |
-| Minor (`v6.2.0` → `v6.3.0`) | any `### Added`/`### Changed` (new feature/surface, no breaking change) |
-| Major (`v6.x` → `v7.0.0`) | a breaking public-API change |
-
-To cut a release from an up-to-date `main`:
-
-1. Edit `CHANGELOG.md`: insert `## [X.Y.Z] - YYYY-MM-DD` immediately under the
-   `## [Unreleased]` header, leaving the accumulated `### Added`/`### Fixed`/etc.
-   entries beneath it as the released section and `## [Unreleased]` empty above.
-   (Do not add per-release version commits to csproj/package.json.)
-2. Commit changelog-only with message `docs(changelog): cut vX.Y.0 release notes`.
-3. Create an **annotated** tag whose message is the version string:
-   `git tag -a vX.Y.Z -m vX.Y.Z`.
-4. `git push origin main` then `git push origin vX.Y.Z`.
-5. Publish the **GitHub Release** on that tag — every tag back to `v5.x` has one,
-   so a tag without one is an incomplete release:
-   `gh release create vX.Y.Z --title vX.Y.Z --notes-file <body.md> --latest --verify-tag`.
-
-The release body follows one of two shapes, both opening with a one-line lead that
-links the CHANGELOG anchor (`…/CHANGELOG.md#XYZ---YYYY-MM-DD`, digits only, e.g.
-`#800---2026-07-29`):
-
-| Bump | Body |
-|------|------|
-| Patch / minor | `Minor release. Full details in [CHANGELOG.md](…).` then the `### Added`/`### Changed`/`### Fixed` sections verbatim (see `v7.1.0`). |
-| Major | `Major release rolling up all changes accumulated since **vX.Y.Z**. Full details in [CHANGELOG.md](…).` then `### Highlights` and `### Breaking changes` — a *summary*, not the whole changelog, because a major's accumulated entries are far too long to dump (see `v7.0.0`, `v8.0.0`). |
-
-`### Breaking changes` must name what silently changes for a caller who passes
-nothing, and how to pin the old behavior — that is the whole reason the bump is
-major.
-
-Prior release-cut commits (`#206`, `#209`) and tags (`v6.1.0`, `v6.2.0`) are the
-reference for the exact diff shape.
+**Defaults are declared once.** Read them from the settings object rather than repeating
+literals per surface — `DocxSessionJson.ParseSettings` and the MCP dispatcher had each
+hardcoded their own copy of `undoDepth`, and it drifted.
 
 ## Build Commands
 
 ```bash
-# Build the entire solution
-dotnet build Docxodus.sln
-
-# Build specific project
-dotnet build Docxodus/Docxodus.csproj
-
-# Release build — warnings are errors (Directory.Build.props)
+dotnet build Docxodus.sln                       # needs the wasm-tools workload
+dotnet build Docxodus/Docxodus.csproj           # library only, no workload needed
 dotnet build -c Release Docxodus.sln
-
-# Build the WASM target (sets WASM_BUILD; excludes SkiaSharp)
-./scripts/build-wasm.sh
-
-# Build the npm package end-to-end (runs build-wasm.sh + tsc + esbuild bundles)
-cd npm && npm run build
+./scripts/build-wasm.sh                         # WASM target (sets WASM_BUILD, excludes SkiaSharp)
+cd npm && npm run build                         # build-wasm.sh + tsc + esbuild bundles
 ```
 
-`TreatWarningsAsErrors=true` is set for Release config only (`Directory.Build.props`). Debug builds tolerate the ~9,000 legacy nullable warnings; do not regress Release.
+A full-solution build requires `dotnet workload install wasm-tools`. Without it, build
+`Docxodus/Docxodus.csproj` and `Docxodus.Tests/Docxodus.Tests.csproj` directly.
 
 ## Test Commands
 
 ```bash
-# Run all .NET tests
 dotnet test Docxodus.Tests/Docxodus.Tests.csproj
-
-# Run a specific test by name (test IDs are prefixed by feature, e.g. WC001, DB001)
-dotnet test --filter "FullyQualifiedName~DB001_DocumentBuilderKeepSections"
-
-# Run tests for a specific test class
+dotnet test --filter "FullyQualifiedName~DB001_DocumentBuilderKeepSections"   # test ids are feature-prefixed
 dotnet test --filter "FullyQualifiedName~DbTests"
 
-# Browser/WASM tests (Playwright) — must rebuild npm package first
 cd npm
-npm install                       # first time only
-npx playwright install chromium   # first time only
-npm run build                     # produces dist/ which the harness loads
-npm test                          # run all Playwright specs
-npx playwright test --grep "Document Structure"  # single test by name
-npx playwright test --headed      # see the browser
-npx tsc --noEmit                  # TS type-check only
+npm install && npx playwright install chromium   # first time only
+npm run build                                    # produces dist/ that the harness loads
+npm test                                         # all Playwright specs
+npx playwright test --grep "Document Structure"
+npx tsc --noEmit
 ```
 
-Playwright tests serve from `npm/dist/wasm/` — if you edit C#, .ts, or the harness HTML, re-run `npm run build` (or at minimum the relevant `build:*` script) before re-running tests, or you will test stale artifacts.
+Playwright serves from `npm/dist/wasm/`. **If you edit C#, `.ts`, or the harness HTML,
+re-run `npm run build` first** or you will test stale artifacts.
 
-## Architecture Overview
+**Running the .NET suite dirties the working tree.** The `SH*` spreadsheet tests write back
+to their own committed fixtures under `TestFiles/`, leaving ~47 modified `.xlsx` files in
+`git status`. They are test-run noise, not your changes — `git checkout -- TestFiles/` before
+committing.
 
-Docxodus is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. It is a fork of OpenXmlPowerTools upgraded to .NET 10.0. All code is in the `Docxodus` namespace.
+## WASM Conditional Compilation
 
-### Repository Layout
+The library compiles in two modes, controlled by the `WASM_BUILD` MSBuild property
+(set by `scripts/build-wasm.sh`):
 
-This repo is not just a .NET library — it ships a four-layer stack. Changes to public surface usually need to ripple through all of them:
+- **Default**: includes `SkiaSharp` + `SkiaSharp.NativeAssets.Linux.NoDependencies`.
+- **`WASM_BUILD=true`**: defines the `WASM_BUILD` constant and excludes SkiaSharp (no native
+  deps in the browser). Code needing SkiaSharp must be guarded with `#if !WASM_BUILD` or routed
+  through a no-op fallback.
 
-| Layer | Path | Purpose |
-|-------|------|---------|
-| Core library | `Docxodus/` | The .NET library — all OOXML logic lives here. NuGet package `Docxodus`. |
-| Bridge core | `Docxodus/Internal/{SessionRegistry,DocxSessionOps,DocxSessionJson}.cs` | Shared handle pool + per-op session-lookup-and-serialize facade + JSON helpers. Both the WASM bridge and the stdio host route through these — wire shapes live in exactly one place. |
-| Unit tests | `Docxodus.Tests/` | xUnit tests for the core library (~1,000+ tests). |
-| CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool`-installable wrappers over the library. |
-| WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells (`DocumentConverter.cs`, `DocumentComparer.cs`, `DocxSessionBridge.cs`) exposing the library to JS via .NET WASM. `DocxSessionBridge` is now a thin passthrough to `DocxSessionOps`. |
-| Stdio host | `tools/python-host/` | .NET 10 console binary (`docxodus-pyhost`) that reads NDJSON requests on stdin and dispatches to `DocxSessionOps`. The `docx-scalpel` pip package (`python/`) subprocesses this. |
-| Agent server | `tools/mcp-server/` | .NET 10 console binary (`docxodus-mcp`) speaking newline-delimited JSON-RPC 2.0 (the Model Context Protocol stdio transport) on stdin/stdout. Groups `DocxSessionOps`/`DocxDiffOps` into eleven intent-shaped tools (`docxodus_edit`, `docxodus_format`, `docxodus_table`, `docxodus_comment` (native Word comments), `docxodus_annotate` (overlay), …) plus open/save/close, for AI agents. See `docs/architecture/docx_agent_server.md`. |
-| npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread, `src/ribbon.ts` (+ `src/ribbon-chrome.ts`) is the editor's **UI surface** — `mountRibbon`, the tabbed ribbon/anchor rail/table picker/loading overlay, container-measured responsive density; it is also the entry `dist/editor.bundle.js` (`window.DocxodusEditor`) is built from, `src/embed.ts` is the CDN embed entry (`createViewer`/`createEditor`/`createRibbonEditor` one-call factories; built as `dist/embed.js` ESM + `dist/embed.bundle.js` self-contained + `dist/embed.iife.js` global, WASM path auto-detected from the bundle URL — spec `tests/cdn-embed.spec.ts` exercises it cross-origin via `tests/cors-server.py`). |
-| Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
-| GitHub Pages demo | `docs/demo/` | Three static pages (`index.html` landing, `app.html` full-bleed, `player.html` compact iframe) that all host the SAME shipped surface via `createRibbonEditor` from the pinned CDN bundle. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
+When touching image/font/color code, check that it compiles under `WASM_BUILD` — the npm
+build fails loudly if it doesn't.
 
-When the core library changes a public method or setting on `DocxSession`, update **`Docxodus/Internal/DocxSessionOps.cs` first** — both bridges and both clients pick up the change automatically. Then ripple through: tests, the WASM `[JSExport]` shell in `DocxSessionBridge.cs`, the stdio dispatcher in `tools/python-host/Dispatcher.cs`, `npm/src/types.ts` + `npm/src/index.ts`, `python/src/docx_scalpel/types.py` + `python/src/docx_scalpel/session.py`. The table in "Feature Development Workflow" below summarizes when each is required.
+**Output isolation:** the WASM-mode assembly builds into `Docxodus/bin/wasm/` +
+`Docxodus/obj/wasm/` (see the `WASM_BUILD` PropertyGroup in `Docxodus.csproj`) so it can never
+clobber the default-mode assembly — a solution build compiles Docxodus twice. If you ever see
+`error CS1061: 'ImageInfo' does not contain a definition for 'SaveImage'`, a stale
+pre-isolation artifact is lingering: delete `Docxodus*/bin` + `Docxodus*/obj` once.
 
-The same single-owner-facade pattern applies to the **stateless** surfaces (no session handle): `HtmlConversionOps` owns DOCX→HTML, and `DocxDiffOps` (`Docxodus/Internal/DocxDiffOps.cs`) owns the public `DocxDiff` engine (Compare / GetRevisions / GetEditScriptJson, plus the byte→byte `AcceptRevisions`/`RejectRevisions` primitive clients use to verify a redline's round-trip contract — accept ≡ right, reject ≡ left). Both the WASM bridge (`DocxDiffBridge.cs`) and the stdio dispatcher route through `DocxDiffOps`, so the settings-in / revisions-out JSON wire shapes — and any future change to them — live in exactly one place. The corresponding clients are `npm/src/index.ts`'s `docxDiff*` wrappers (`DocxDiffBridge` on `DocxodusWasmExports`) and `docx-scalpel`'s `docx_diff_*` module functions (`python/src/docx_scalpel/session.py`, with the `DocxDiff*` types/enums in `types.py`/`enums.py`). When a stateless surface changes, update its `*Ops` facade first, then ripple the two bridges + two clients exactly as for `DocxSession`.
+## Core Concepts
 
-### WASM Conditional Compilation
+**Document wrappers.** `DocxodusDocument` (base, holds `DocumentByteArray` + `FileName`) with
+`WmlDocument` / `SmlDocument` / `PmlDocument` for Word / Excel / PowerPoint. Immutable-style
+manipulation goes through `OpenXmlMemoryStreamDocument`:
 
-The core library compiles in two modes controlled by the `WASM_BUILD` MSBuild property (set by `scripts/build-wasm.sh`):
-
-- **Default build**: includes `SkiaSharp` + `SkiaSharp.NativeAssets.Linux.NoDependencies` for image/font work.
-- **`WASM_BUILD=true`**: defines the `WASM_BUILD` constant, excludes SkiaSharp (no native deps in the browser). Code that needs SkiaSharp must be guarded with `#if !WASM_BUILD` or routed through a no-op fallback. See `docs/architecture/skiasharp-removal-plan.md`.
-
-When touching image/font/color code, check whether your change compiles under `WASM_BUILD` before shipping — the npm build will fail loudly if it doesn't.
-
-**WASM-mode output isolation:** the WASM-mode `Docxodus.dll` (no `SkiaSharp`, no `ImageInfo.SaveImage`) builds into its own `Docxodus/bin/wasm/` + `Docxodus/obj/wasm/` paths (see the `WASM_BUILD` PropertyGroup in `Docxodus.csproj`), so neither `scripts/build-wasm.sh` nor a solution build (which compiles Docxodus twice — `DocxodusWasm` references it with `WASM_BUILD=true`) can clobber the default-mode assembly. If you ever see `error CS1061: 'ImageInfo' does not contain a definition for 'SaveImage'` again, a stale pre-isolation artifact is lingering — delete `Docxodus*/bin` + `Docxodus*/obj` once; no recurring `dotnet clean` ritual is needed.
-
-### Document Wrapper Classes
-
-The library uses in-memory byte array wrappers for documents:
-- `DocxodusDocument` - Base class holding `DocumentByteArray` and `FileName`
-- `WmlDocument` - Word documents (.docx)
-- `SmlDocument` - Spreadsheet documents (.xlsx)
-- `PmlDocument` - Presentation documents (.pptx)
-
-These allow immutable-style document manipulation via `OpenXmlMemoryStreamDocument` pattern:
 ```csharp
-using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+using (var streamDoc = new OpenXmlMemoryStreamDocument(doc))
 {
-    using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
-    {
-        // modify document
-    }
+    using (var document = streamDoc.GetWordprocessingDocument()) { /* modify */ }
     return streamDoc.GetModifiedWmlDocument();
 }
 ```
 
-### Core Modules
+**Anchors.** `kind:scope:unid` (e.g. `p:body:a1b2c3d4`) is the addressing system shared by the
+markdown projection, `DocxSession`, `DocxDiff` revisions, and the editor's `data-anchor`
+attributes. It is an addressing overlay over the live OOXML, which remains the model of record
+— there is no IR→OOXML writer.
 
-**DocumentBuilder.cs** - Merge/split DOCX files. Uses `Source` objects to specify document ranges:
-```csharp
-var sources = new List<Source> { new Source(wmlDoc, keepSections: true) };
-DocumentBuilder.BuildDocument(sources, outputPath);
-```
+**Comparison engines.** `DocxDiff` is the default since v8.0.0; `WmlComparer` is the older
+engine, feature-frozen and available by explicit selection. Note that `DocxDiff` still depends
+on `WmlComparer`'s *types* (`WmlComparerSettings`, `WmlComparerRevision`), so the older engine
+is not removable.
 
-**WmlComparer.cs** - Compare two DOCX files, producing a document with tracked revisions. Supports nested tables and text boxes. Key settings in `WmlComparerSettings`:
-- `AuthorForRevisions` - Author name for tracked changes
-- `DetailThreshold` - 0.0-1.0, lower = more detailed comparison (default: 0.15)
-- `CaseInsensitive` - Case-insensitive comparison
-- `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
-- `SimplifyMoveMarkup` - Convert move markup to del/ins (default: false)
-- `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
-- `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
-- `DetectFormatChanges` - Enable format change detection (default: true)
+## Module Map
 
-Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) when `DetectMoves` is enabled:
-- The comparer analyzes deleted/inserted content blocks for similarity after LCS comparison
-- Matching pairs (≥80% Jaccard similarity by default) are converted to move markup
-- The output document contains `w:moveFromRangeStart`/`w:moveFromRangeEnd` and `w:moveToRangeStart`/`w:moveToRangeEnd` elements
-- Move pairs are linked via the `w:name` attribute (e.g., "move1")
-- `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.Moved` revisions
-- `WmlComparerRevision.MoveGroupId` links source and destination revisions
-- `WmlComparerRevision.IsMoveSource` - true = moved FROM here, false = moved TO here
+Read the linked doc before non-trivial changes. These docs are the source of truth for design
+detail; this file deliberately does not restate them.
 
-Format change detection produces **native Word format change markup** (`w:rPrChange`) when `DetectFormatChanges` is enabled:
-- The comparer analyzes Equal atoms (same text content) for run property differences after LCS comparison
-- When text is identical but formatting differs (bold, italic, font size, etc.), atoms are marked as FormatChanged
-- The output document contains `w:rPrChange` elements inside `w:rPr` with the old formatting properties
-- `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.FormatChanged` revisions
-- `WmlComparerRevision.FormatChange` contains details about what changed (old/new properties, changed property names)
+| Module | What it does | Design doc |
+|--------|--------------|------------|
+| `DocxSession.cs` | Stateful anchor-addressed editing API (text, structural, formatting, tables, notes, comments, revisions, annotations, raw XML, undo/redo) | `docx_mutation_api.md` |
+| `DocxDiff.cs` + `Ir/Diff/` | Structure-aware comparison → native tracked changes; edit script as data; N-way consolidate | `ir_diff_engine.md` |
+| `WmlComparer.cs` | Legacy comparison engine (frozen) | `comparison_engine.md`, `wml_comparer_gaps.md`, `native_move_markup.md`, `format_change_detection.md` |
+| `WmlToHtmlConverter.cs` | DOCX → HTML, the render fidelity oracle | `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `wml_to_html_converter_gaps.md` |
+| `HtmlToWmlConverter.cs` | HTML → DOCX | — |
+| `WmlToMarkdownConverter.cs` | Anchor-addressed markdown projection | `markdown_projection.md` |
+| `npm/src/editor.ts` + `ribbon.ts` | In-browser block editor and its shipped UI surface | `ir_editor_feasibility.md`, `ir_editor_roadmap.md`, `editor_ui_surface.md` |
+| `ExternalAnnotationProjector.cs` | Incremental annotation overlay on pre-converted HTML | `incremental_annotation_overlay.md`, `custom_annotations.md` |
+| `OpenContractExporter.cs` | Export to OpenContracts format | `opencontracts_export.md` |
+| `DocumentBuilder.cs` | Merge / split DOCX | — |
+| `DocumentAssembler.cs` | Template population from XML via content controls | — |
+| `PresentationBuilder.cs` | Merge / split PPTX | — |
+| `SpreadsheetWriter.cs` | Simplified XLSX creation, streaming | — |
+| `OpenXmlRegex.cs` | Regex search/replace in DOCX/PPTX | — |
+| `RevisionProcessor.cs` | Accept/reject tracked revisions | `tracked_changes.md` |
+| `FormattingAssembler.cs` | Resolve and flatten formatting | — |
+| `MetricsGetter.cs` | Document metrics (styles, fonts, languages) | — |
 
-**DocxCompare.cs** - The shared comparison-engine selector (M-B). One public `enum ComparisonEngine { WmlComparer = 0, DocxDiff = 1 }` + `DocxCompare.Compare(left, right, engine, WmlComparerSettings)` — the single `WmlComparer`-vs-`DocxDiff` dispatch owner that the CLI (`tools/redline` `--engine=`), the WASM bridge (`DocumentComparer`'s four primary redline methods, via a trailing `engine` int), and — transitively — the npm wrappers (`CompareOptions.engine`) all route through (mirrors the `DocxDiffOps`/`HtmlConversionOps` single-owner pattern). Takes the incumbent `WmlComparerSettings` and maps the common option set to `DocxDiffSettings` on the `DocxDiff` branch via `ToDocxDiffSettings` (drops the WmlComparer-only knobs `DetailThreshold`/`SimplifyMoveMarkup`/`DetectFormatChanges`). **`DocxDiff` is the default as of v8.0.0** — the CLI, WASM, and npm surfaces all route an omitted selector to `DocxDiff`; `ComparisonEngine.WmlComparer` (wire value `0`) stays available only via explicit selection. `DocxCompare.TryParseEngine` is the CLI name↔enum mapper. Note: python-host/docx-scalpel are out of M-B scope.
+WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured payload),
+`wasm-optimization-plan.md`, `skiasharp-removal-plan.md`, `ui_responsiveness.md`,
+`profiling-results.md`. Python wrapper: `python_docxodus.md`.
 
-**DocxDiff.cs** - Public facade over the IR diff engine — a structure-aware, anchor-addressed DOCX comparison engine and the diff-side counterpart to `WmlToMarkdownConverter`/`DocxSession`. **The default comparison engine (since v8.0.0)**; `WmlComparer` is the older engine, kept for callers that explicitly select it and feature-frozen (no new capabilities going forward):
-- `Compare(left, right, settings?)` → `WmlDocument` — native tracked-changes markup (`w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`); satisfies the WmlComparer contract (accept ≡ right, reject ≡ left)
-- `GetRevisions(left, right, settings?)` → `IReadOnlyList<DocxDiffRevision>` — consumer revisions rendered off the edit script
-- `GetEditScriptJson(left, right, settings?)` → `string` — the edit script as data (the differentiator vs `WmlComparer`)
-- Accept/reject primitive (the round-trip verifier, surfaced for clients via `DocxDiffOps.AcceptRevisions`/`RejectRevisions` → WASM `DocxDiffBridge.AcceptRevisions`/`RejectRevisions` + npm `docxDiffAcceptRevisions`/`docxDiffRejectRevisions`, stdio `docx_diff_accept_revisions`/`docx_diff_reject_revisions` + docx-scalpel `docx_diff_accept_revisions`/`docx_diff_reject_revisions`): byte→byte materialize the right (accept) / left (reject) side of a redline, so a client can prove `accept(Compare(left,right))` ≡ `right` and `reject` ≡ `left` at the per-block text level — wraps `RevisionProcessor`
-- N-way composite / consolidate (closes the last WmlComparer gap): `Consolidate(base, reviewers, settings?)` → `WmlDocument`, plus `GetConsolidatedRevisions`/`GetConsolidatedEditScriptJson`/`GetConflicts` — merge N `DocxDiffReviewer{Document,Author}` (each diffed against ONE shared base) into one multi-author tracked-changes document with per-reviewer attribution, token-granular sub-block merge, and a structured `DocxDiffConflict` report; `DocxDiffConsolidateSettings.ConflictResolution` = `BaseWins`(default)/`FirstReviewerWins`/`StackAll`. Round-trip: reject ≡ base, accept ≡ the policy-resolved composite. Structurally complete: note-scope (footnote/endnote) diffs merge across reviewers (compose/consensus/conflict per block, inserted notes under fresh ids, N-reviewer-aware renumbering), table column add/remove composes with native `w:cellIns`/`w:cellDel` markup, cell-shell (`w:tcPr`) edits are visible and composable, uncontested split/merge/move/row-move ops render natively (colliding ones lower to del/ins with a recorded conflict — never a silent drop), and **reviewers' block-format changes MERGE — paragraph (B1) + table-shell + section (B2), closing the last "Consolidate ignores block-format" ceiling**: `ComposeParagraphFormat` (by full `BlockSignature`) → `w:pPrChange`; per-element table shells via `ComposeTableAndRowShells` (per-cell `tcPr`, per-row `trPr`+`tblPrEx`, per-table `tblPr`+`tblGrid` — disjoint compose, contested conflict) → `w:tcPr/trPr/tblPr/tblGrid/tblPrExChange`; trailing+inline section via `ComposeTrailingSection`/B1's paragraph path → `w:sectPrChange`; each mirrors `ComposeCellShell` (0→base/agree→consensus/≥2→conflict-per-policy/non-stackable) with `reject ≡ base`/`accept ≡ policy-winner` at the property-byte level (strengthened byte-level verifier `Docs.ShellSection`). text+pPr stays conflict-routed (v1 decision; never a silent drop). Wraps `Docxodus/DocxDiffConsolidate.cs` + `Docxodus/Ir/Diff/IrCompositeMerger.cs`; surfaced in WASM/npm (`docxDiffConsolidate*`)/docx-scalpel (`docx_diff_consolidate*`)
-- `DocxDiffSettings` mirrors `WmlComparerSettings` defaults (two honest deviations: `Deterministic` revision dates default true; `FormatComparison` defaults `ModeledOnly`). `DocxDiffRevision` adds `LeftAnchor`/`RightAnchor` (`kind:scope:unid`, interoperable with `DocxSession`/markdown projection)
-- Header/footer stories are compared like Word Compare's default-on "Headers and footers" granularity (`CompareHeadersFooters`, default true) — stories pair per section ordinal × kind with Word's inheritance rule, changed stories get native markup inside their parts (accept ≡ right / reject ≡ left extends to those scopes), Fine revisions carry `hdr`/`ftr` anchors (compatible mode excludes them), JSON gains `headerFooterOps`. WmlComparer ignores headers/footers entirely; Consolidate doesn't merge them in v1 (forced off, pinned)
-- Paragraph-and-above formatting changes are tracked as native markup — the block-format-change family (closes the last "Word compares Formatting, we don't" gap): `w:pPrChange` (paragraph: jc/indent/spacing/style/**numbering**, + `w:pPr/w:rPr/w:rPrChange` for a changed mark), `w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:tblPrExChange` (table shells — the per-element digests `IrCell.ShellDigest`/`IrRow.TrPrShellDigest`/`TrPrExDigest`/`IrTable.TblPrDigest`/`TblGridDigest` drive attribution; makes the #250 cell-shell edits *tracked*, not just visible), and `w:sectPrChange` (trailing section AND mid-document inline `w:pPr/w:sectPr` via `IrParagraph.InlineSectionFormat`). Detected via `FormatComparison` for paragraphs (canonical for shells/section); accept ≡ right / reject ≡ left holds at the property-byte level for every detected change. Note/header/footer-scope `w:pPrChange` works via the shared `RenderBlockOp` dispatch (no per-scope gate). `DocxDiffRevision.FormatChange.Scope` (`DocxDiffFormatChangeScope`: Run/Paragraph/TableCell/TableRow/Table/Section) — `WmlComparerCompatible` excludes non-Run scopes (oracle produces none); additive `scope` on the revisions wire. **`TrackBlockFormatChanges` is a public opt-out** (default true; wire `trackBlockFormatChanges`). **Consolidate MERGES all block-format families** (sub-project B done: `IrCompositeMerger` forces the umbrella `TrackBlockFormatChanges` off but turns the paragraph/table/section slices ON — B1+B2). Split/merge members with NEW pilcrows (¶INS/¶DEL) don't emit pPrChange (they are new paragraphs tracked by their mark), but the member owning the SURVIVING pilcrow (merge survivor / split last member) stamps pPrChange/mark-rPr history against its counterpart — the paired-paragraph analogue, matching Word's compare output (superseded the earlier blanket v1 decline, 2026-07-27). Rode-along consume-side fix: `RevisionProcessor` no longer drops header/footer refs (sectPrChange) or an inline sectPr (pPrChange) on reject — CT_*Base inners exclude them (see `docs/ooxml_corner_cases.md`)
-- No static state — `AuthorForRevisions` flows per call (multi-author / consolidate-compatible)
-- Wraps the internal `Docxodus/Ir/Diff/` pipeline (`IrReader → IrEditScriptBuilder → IrMarkupRenderer/IrRevisionRenderer/IrEditScriptJson`); see `docs/architecture/ir_diff_engine.md`
+### Coverage gaps worth knowing
 
-**WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
-- `RenderTrackedChanges` - Render insertions/deletions as `<ins>`/`<del>` instead of accepting them
-- `RenderMoveOperations` - Distinguish move operations from regular insert/delete
-- `RenderFootnotesAndEndnotes` - Include footnotes/endnotes sections in HTML output
-- `RenderHeadersAndFooters` - Include document headers/footers in HTML output
-- `RenderComments` - Render document comments in HTML output
-- `CommentRenderMode` - How to render comments: `EndnoteStyle` (default), `Inline`, or `Margin`
-- `AuthorColors` - Dictionary mapping author names to CSS colors for styling
-- `StampAnchors` - Stamp `data-anchor="<unid>"` on block elements (`p`/`h1`-`h6`/`li`/`table`) so DOM blocks are addressable by the `kind:scope:unid` anchor system (powers the browser editor's incremental re-render). Default false.
+The DOCX path is exhaustively tested. The inherited spreadsheet/presentation modules are not:
+`WorksheetAccessor` and `TextReplacer` have **zero** references in `Docxodus.Tests/`, and
+`PresentationBuilder`, `SpreadsheetWriter`, `ChartUpdater` and `SmlToHtmlConverter` have one
+test file each. Treat changes there as unguarded.
 
-See `docs/architecture/comment_rendering.md` for detailed comment rendering documentation.
+## Feature Development Workflow
 
-**Single-block render (`HtmlConversionOps.RenderBlockHtml`)** - Renders ONE block (addressed by a `kind:scope:unid` anchor, or a bare unid) to faithful HTML, for incremental editor re-render. Overloads: `(byte[] bytes, …)` (stateless), `(DocxSession, …)` / `(int handle, …)` (session-attached — resolves against the live document with no byte re-open / whole-doc Unid pass, ~2.5× faster). Builds a throwaway document copying the source's styles/numbering/theme/font/settings parts. The full-document render is the faithfulness oracle. Surfaced in WASM/npm (`renderBlockHtml`, `DocxSession.renderBlock`). There is also a session-attached FULL render, `DocxSessionOps.RenderHtml` (WASM `DocxSessionBridge.RenderHtml`), used by the editor's remount so the saved bytes never round-trip through JS; its output is byte-identical to `ConvertDocxToHtmlComplete` over `Save()` bytes with the editor's option profile. See `docs/architecture/ir_editor_feasibility.md`.
-
-**DocxEditor (npm, `npm/src/editor.ts`)** - Framework-agnostic, pure-TypeScript in-browser block editor (the write-side editor counterpart to the read-side projection). Renders a faithful document with `data-anchor` blocks, makes projection-addressable paragraphs/headings `contenteditable`, and on commit edits via `DocxSession` then re-renders only the changed block. **Structural ops (insert table/row/col, footnote/endnote, delete block, undo/redo) reconcile incrementally** (`reconcile()` in continuous mode: LCS diff of the DOM's top-level unit sequence vs the session's `ListBlocks` render plan over `unid|contentHash` tokens, batched `RenderBlocksHtml` for changed units, positional note-chrome renumber from `ListNotes`), with full remount as the universal fallback (paginated mode, pure li insert/remove, border-div regrouping — `insertHorizontalRule`/`clearBorders`/list toggles — or any inconsistency; `lastReconcileFallback` records why). ~200-360 ms per structural op on a 346-block/94-footnote document, from ~5-6 s. `{ paginated: true }` flows blocks into real page boxes via `pagination.ts`. **Page geometry is the document's, the zoom is the view's** — `DocumentViewport` (`npm/src/viewport.ts`) stamps each section wrapper with its `w:sectPr` text column + margins (read via `npm/src/page-geometry.ts`, the shared owner `pagination.ts` also uses) and applies a fit-to-width zoom on a `ResizeObserver`, so line breaking is device-independent and a narrow window shows a whole smaller page instead of a reflowed one; `.docx-body-flow` is therefore ALWAYS created (not only with bands) and is the sheet, `DocxEditor.zoom` reports the scale, `fitToWidth: false` / `columnWidth: "fluid"` opt out. This depends on the converter stamping section geometry in every render mode and on its always-emitted document-layout CSS (Word's word-breaking + table-layout rules, which CSS's defaults invert — see `docs/ooxml_corner_cases.md`). Lossless `save()`. Commands: `format`/`setFontSize`/`setFontFamily`/`setAlignment`/`indent`/`setParagraphStyle`/`toggleList`/`pageBreakBefore` (all apply across a multi-block selection, not just the focused block — reconciled incrementally as N single-block swaps with the cross-block selection restored, falling back to one full remount only for list-touching results, `clearBorders`, and paginated mode), `clearParagraphBorders` (remove an HR/paragraph border), `deleteBlock` (remove the active block — inert inside a table or when it is the only editable block), structural `insertHorizontalRule(weight, style, position?)` (`position` = `"above"`|`"below"`, default below; `"above"` puts the rule before the active block — e.g. the S-1 top bar)/`insertTable`, table editing `insertTableRow("above"|"below")`/`insertTableColumn("left"|"right")`/`deleteTableRow`/`deleteTableColumn`, note authoring `insertFootnote(markdown?)`/`insertEndnote(markdown?)` (cite a new note at the caret — offset captured BEFORE `syncBlock`, which re-renders the block and would drop the selection, then mapped through the same `trimmedSplitOffset` `SplitParagraph` uses; body blocks only, band/note blocks rejected client-side; remounts because a new note renumbers every later citation), `undo`/`redo`, and the `DocxEditor.openBlank(container, exports, options?)` "New document" factory. `refresh()` is the public seam for hosts that mutate the editor's session OUTSIDE its commands (an agent pipeline or `raw.replaceXml` via `sessionHandle`): "the session changed behind the editor's back — reconcile," patching incrementally in continuous mode (a Unid-preserving single-block mutation repaints just that block; `examples/ascii-animation-editor.html` animates at 8 fps through it) and remounting when the reconciler can't prove the patch. `setFontSize`/`setFontFamily` cache the last real selection so a focus-stealing combobox/dropdown still applies to a sub-range. `insertTable` on an empty paragraph inserts the table *before* it so that line becomes the editable paragraph below the table (no stray line above). Enter inside a table cell splits the cell paragraph in place (stacked lines); Enter inside an empty horizontal rule does NOT inherit the rule's border; Shift+Enter inserts a real line break (`w:br`). The **UI surface is shipped, not per-page** — `mountRibbon` (`npm/src/ribbon.ts` + `ribbon-chrome.ts`), exported from `docxodus` and, as the one-call `createRibbonEditor` (boots WASM + scopes the document CSS), from `docxodus/embed`. `examples/editor.html` and the three `docs/demo/` pages are thin hosts of it, differing only in how they obtain the WASM exports and how much chrome they enable; they carried three drifting hand-written copies before. Density is measured from the SURFACE'S OWN ROOT via a `ResizeObserver` (`compactBreakpoint`, default 720px), not a viewport media query — a narrow embed in a wide page is narrow; `compact` scrolls the ribbon into one strip, hides rail+hint and bottom-docks the table picker but **never drops a command**, and `chrome: "full"|"compact"` pins it. The **loading overlay is part of the surface** and paints before any runtime exists, so a host booting its own .NET runtime narrates the gap through `ribbon.loader` (`stage`/`progress`/`done`/`fail`). Controls carry `data-dxr="<name>"` AND `id = idPrefix + name`, defaulting to bare ids when free and a generated `dxr<N>-` when not, so historical selectors survive and two ribbons can't collide. The surface is a **tabbed ribbon**: an always-visible document strip (New/Open/Save/Undo/Redo), **Home** (text, paragraph, block) / **Insert** (table grid picker with an L/C/R cell-alignment selector, single/thick/double rules with an Above/Below position toggle, footnote/endnote, page-number fields) / **Layout** (page view + header-footer region toggles, section page-number format/start-at), plus a **contextual Table tab** shown only while the caret is in a table — it replaces the old floating table toolbar, whose absolute positioning had to be corrected twice (covering the first row, then content below the table); a docked tab cannot overlap the edited cell. Under the tabs sits the **anchor rail**, reporting live engine state (focused `kind:scope:unid` anchor, block count, session handle, last command + its real duration — every command routes through one `run()` wrapper). Tab activation is exposed as `window.__selectTab(name)` so specs reach controls without pointer geometry; a control on a non-active tab is `display:none` and NOT clickable, so a spec touching one must activate its tab first (`editor-demo-grid.spec.ts` does this for `#table`). **Footnotes/endnotes render and edit inline** (#276, not opt-in — they are document content): the editor's render profile turns `RenderFootnotesAndEndnotes` on in BOTH paths (`DocxSessionOps.RenderHtml` + `completeArgs` in editor.ts — they must stay in step, the remount must match the first paint byte-for-byte), `HtmlConversionOps.AssignAnchorUnids` stamps anchor Unids on the footnotes/endnotes parts (and `FindByUnid` searches them) so note paragraphs are ordinary `data-anchor` editable blocks and the whole ribbon works inside a note, and the citation marker + backref are treated as inert converter chrome via one `GENERATED_CHROME_SELECTOR` (shared with list markers) — excluded from the content-offset space and non-editable, else offsets drift or the rendered display number is committed as literal text and destroys the citation run. Header/footer parts stay UNstamped by design (pagination clones one header node per page → non-unique anchor); each note renders once. **Header/footer editing region** (opt-in `headerFooter: true`, default off): docked Header/Footer bands around the body flow, composed PER STORY PARAGRAPH via the session-attached `RenderBlockHtml` (which resolves `hdr`/`ftr` anchors) rather than from the body render — the full render stamps anchors only in the main document part, and paginated mode clones one header node onto every page, so a page-margin overlay could never be uniquely addressable. Story paragraphs are wired by the same `wireBlock` the body uses, so they are ordinary editable blocks and the whole ribbon works inside a band with no new command code; only the edited band repaints. Band chrome: a `default`/`first`/`even` kind selector (seeding an absent story, and calling `EnsureHeaderFooterVisible` so first/even actually render; a section that inherits its story from an earlier one shows that story, marked inherited, rather than offering to create a redundant part) and a `currentPage`/`totalPages` page-number control, plus an inline note about first/even pages no longer inheriting the Default stories. Commands `setHeaderFooterKind`/`headerFooterKind`/`insertPageNumber`; the body flow's `.docx-body-flow` wrapper is the edit root, so band blocks stay out of the body's block list. The model-of-record is the live OOXML in `DocxSession`; the IR/anchor system is the addressing overlay (the IR itself is read-only, no IR→OOXML writer). See `docs/architecture/ir_editor_feasibility.md`; the S-1 cover-page feature build is `docs/architecture/s1_smoke_test_features.md`.
-
-**DocumentAssembler.cs** - Template population from XML data using content controls.
-
-**PresentationBuilder.cs** - Merge/split PPTX files.
-
-**SpreadsheetWriter.cs** - Simplified XLSX creation API with streaming support for large files.
-
-**OpenXmlRegex.cs** - Search/replace in DOCX/PPTX using regular expressions.
-
-**RevisionAccepter.cs / RevisionProcessor.cs** - Handle tracked revisions.
-
-**FormattingAssembler.cs** - Resolve and flatten document formatting.
-
-**MetricsGetter.cs** - Extract document metrics (styles, fonts, languages).
-
-**OpenContractExporter.cs** - Export documents to OpenContracts format for interoperability:
-- `Export(WmlDocument)` / `Export(WordprocessingDocument)` - Export to `OpenContractDocExport`
-- Complete text extraction (paragraphs, tables, headers, footers, footnotes, endnotes)
-- PAWLS-format page layout with token positions
-- Structural annotations (sections, paragraphs, tables) with relationships
-- See `docs/architecture/opencontracts_export.md` for detailed documentation
-
-**WmlToMarkdownConverter.cs** - Anchor-addressed markdown projection of a Word document. A stable text view of a DOCX with stable IDs, suitable for LLM editing pipelines, structured search indexers, and diff/review UIs:
-- `Convert(WmlDocument, WmlToMarkdownConverterSettings)` / `Convert(WordprocessingDocument, ...)` - returns `MarkdownProjection` (markdown text + anchor index)
-- Anchors have the form `{#kind:scope:unid}` (e.g. `{#p:body:a1b2c3d4}`), derived from Docxodus' existing Unid system
-- See `docs/architecture/markdown_projection.md` for the projection spec
-
-**DocxSession.cs** - Stateful in-memory DOCX editing API keyed by markdown-projection anchor ids. The write-side counterpart to `WmlToMarkdownConverter` for agentic editing pipelines:
-- `new DocxSession(byte[] bytes, DocxSessionSettings? settings = null)` - open a session over in-memory DOCX bytes
-- Tier A (text CRUD): `ReplaceText(anchor, markdown)`, `DeleteBlock(anchor)`
-- Tier B (structural): `InsertParagraph(anchor, Position, markdown)`, `SplitParagraph(anchor, offset)` (splits correctly inside a table cell too — the new `w:p` stays in the `w:tc`; splitting an EMPTY bordered paragraph does NOT copy its `w:pBdr` to the new paragraph, so Enter on a horizontal rule doesn't stack rules), `MergeParagraphs(first, second)`, `InsertHorizontalRule(anchor, Position, ParagraphBorderEdge?)` (empty bottom-bordered paragraph; `Style` supports `single`/`double`/`thick`), `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless option, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths` (twips); returns created cell anchors; always keeps a trailing `w:p` after the table so an end-of-body table has an editable paragraph below it), and post-insert table editing addressed by a cell-paragraph anchor: `InsertTableRow(cellAnchor, Position)`, `InsertTableColumn(cellAnchor, Position)`, `DeleteTableRow(cellAnchor)`, `DeleteTableColumn(cellAnchor)` (deleting the last row/column removes the table; v1 assumes a rectangular grid, no `w:gridSpan`), plus post-insert table STYLING (issue #315 Stage A, same addressing): `SetColumnWidths(cellAnchor, widthsTwips)` (rewrites `w:tblGrid`+`w:tcW`, pins fixed layout), `SetTableBorders(cellAnchor, TableBorderSpec?)` (`w:tblBorders` for the spec's `All`/`Outside`/`Inside` scope only; style `"none"` removes), `SetCellShading(cellAnchor, fill, Cell|Row)` (`w:tcPr/w:shd`; null clears), `SetRepeatHeaderRow(cellAnchor, bool)` (`w:trPr/w:tblHeader`); invalid widths/fill/size → `EditErrorCode.InvalidTableStyling`; wired through WASM/npm + MCP `docxodus_table` (`set_column_widths`/`set_borders`/`set_shading`/`set_repeat_header_row`) but not the stdio host (which never carried table CRUD). Cell merge landed as issue #340 Stage B, same addressing: `MergeCells(cellAnchor, rowSpan, colSpan, TableMergeOptions?)` (native `w:gridSpan` across + `w:vMerge` restart/continue down; the rectangle must tile the same whole grid columns in every row and must not clip a vertical merge entering from above or continuing below — a partial overlap is `EditErrorCode.InvalidTableMerge` *before* the undo snapshot, never a torn grid; `TableMergeContent.Append` (default, lossless — absorbed paragraphs MOVE and keep their anchors) / `Discard` / `Reject`) and `UnmergeCells(cellAnchor)` (the exact inverse — one cell per grid column at its `w:tblGrid` width, cloning the merged cell's shell minus merge markup; addressing a continuation unmerges the whole run; no merge markup → `InvalidTableMerge`). All row/column CRUD is grid-aware, not cell-index-aware: insert-row inside a vertical merge extends the run, delete-row of its lead promotes the next continuation, insert/delete-column through a horizontal span widens/narrows it, and `SetColumnWidths` sizes a merged cell to the SUM of the columns it spans. A merged table projects as the opaque ```` ```table ```` block with every cell paragraph still addressable; a `w:vMerge` continuation keeps exactly one empty `w:p` (CT_Tc needs a block) whose anchor stays addressable but renders as nothing — unmerge before writing to it. Wired through WASM/npm (`mergeCells`/`unmergeCells`) + MCP `docxodus_table` (`merge_cells`/`unmerge_cells`); see the grid model in `docs/architecture/docx_mutation_api.md`. Intra-paragraph newlines in the markdown subset (the GFM hard break `"  \n"`) round-trip as a real `w:br`.
-- Tier B (headers/footers/page numbers, issues #236/#275): `EnsureHeaderFooterVisible(bodyAnchor, HeaderFooterKind)` makes a section's first/even stories actually render (`w:titlePg` / document-global `w:evenAndOddHeaders`; `Default` is a no-op) — needed because Word leaves a first/even part+reference behind when those options are switched off, and content writes alone don't restore the flag. `SetHeaderText(bodyAnchor, HeaderFooterKind, markdown)` / `SetFooterText(...)` — author the running header/footer story for the section that owns any body block `bodyAnchor` (governing `w:sectPr` resolved as `GetSectionInfo` does; a trailing `w:sectPr` is synthesized if the body has none). Creates the `HeaderPart`/`FooterPart` + relationship + `w:headerReference`/`w:footerReference` of the requested `kind` if absent, else replaces its content; `HeaderFooterKind` = `Default`/`First`(+`w:titlePg`)/`Even`(+`w:evenAndOddHeaders`). Paragraphs get the built-in `Header`/`Footer` style (centre/right tab stops); created story paragraphs (scope `hdr{N}`/`ftr{N}`) come back in `Created`. `InsertPageNumberField(anchor, PageNumberField=CurrentPage, NumberFormat? format=null)` appends a native complex `PAGE`/`NUMPAGES` field to a paragraph; `format` writes the field's own `\*` general-formatting switch (`PAGE \* roman`) and seeds the cached result with page 1 in that format — omitting it emits the plain field byte-for-byte as before, which is the normal choice since a switch OVERRIDES the section and keeps overriding it. Part create/delete is undo/redo-reconciled in `RestoreSnapshot` (snapshot records each header/footer part's relId; re-create uses `AddNewPart<…>(relId)`). Wired through WASM/npm (`setHeaderText`/`setFooterText`/`insertPageNumberField`) + stdio/`docx-scalpel` (`set_header_text`/`set_footer_text`/`insert_page_number_field`).
-- Tier B (section page numbering, issue #277): `SetPageNumbering(bodyAnchor, PageNumberingOp { Start, Format })` writes `w:pgNumType` (Word's *Format Page Numbers…*: restart-at + number format) and `ClearPageNumbering(bodyAnchor)` removes those two attributes, preserving `w:chapStyle`/`w:chapSep` and dropping the element only when nothing is left. Tri-state fields (null = leave that attribute alone); no-ops return BEFORE `TakeSnapshot` so a format dropdown can't evict the bounded undo ring. This — not the field switch — is the normal way to number pages: a plain `PAGE` field renders through it. Read back on `SectionInfo.PageNumberStart`/`PageNumberFormat` (omitted, not defaulted, when absent). Reuses the existing public `NumberFormat` (already this library's name for `ST_NumberFormat`, the type of both `w:numFmt` and `w:pgNumType/@w:fmt`); `NumberFormat.Bullet` / a negative start ⇒ `EditErrorCode.InvalidPageNumbering`. `Docxodus/Internal/NumberFormats.cs` is the single owner of the OOXML-token / `\*`-switch-argument / rendered-glyph mappings (switch case is load-bearing: `roman` vs `ROMAN`), and `WordprocessingMLUtil.Order_sectPr` + `InsertSectPrChildInOrder` is the single owner of `CT_SectPr` child ordering (previously `DocxSession` and `IrMarkupRenderer` each carried a private "what follows `w:titlePg`" list). Editor band gains format/start-at controls (`DocxEditor.setPageNumbering`/`clearPageNumbering`/`pageNumbering`); paginated preview substitutes real per-page numbers (converter marks `PAGE`/`NUMPAGES` results with `data-field` + stamps `data-page-num-start`/`-fmt` on the section wrapper in Paginated mode only; `npm/src/page-number-format.ts` renders them).
-- Tier B (footnotes/endnotes, issue #276): `InsertFootnote(bodyAnchor, characterOffset, markdown)` / `InsertEndnote(...)` — create a note definition and cite it from a body paragraph at a character offset (`[0, len]`; resolved through the same `SplitRunsAtOffset`/`SplitInlineContainersAtOffset` pair `SplitParagraph`/`ApplyFormat` use). On a document with no notes yet this writes the whole Word scaffold: the `FootnotesPart`/`EndnotesPart` + its two reserved notes (`w:type="separator"` id `-1`, `continuationSeparator` id `0`), the `w:footnotePr`/`w:endnotePr` settings declaration (slot-inserted via the shared `EnsureSettingsChildInOrder` — never a whole-part reorder), and find-or-create `FootnoteText`/`EndnoteText` + superscript `FootnoteReference`/`EndnoteReference` styles. Ids are kept ASCENDING IN REFERENCE ORDER (the invariant every Word file holds; LibreOffice pairs a marker with the id-sorted definition list, so a first-cited note holding the highest id renders the WRONG note text): a citation after every existing one takes `max(id)+1` (scanning refs as well as defs, so gaps can't alias); one that lands earlier takes the smallest id cited after it and shifts that note and every higher one up by one across all parts, never touching Word-reserved notes. Body anchors only — Word disallows a note reference in a header/footer story or inside another note (`AnchorWrongKind`). `Created` = the note definition anchor (kind `fn`/`en`) + its paragraphs (scope `fn`/`en`); editing and deleting need no new op (`ReplaceText` on the note paragraph, `DeleteBlock` on the definition, which also strips the body reference). Part create/delete is undo/redo-reconciled by `ReconcileNoteParts`, the `ReconcileHeaderFooterParts` twin. `EditErrorCode.FootnoteRefNotSupported` survives, narrowed to "a `[^label]` in a markdown *payload*". Wired through WASM/npm (`insertFootnote`/`insertEndnote`) + stdio/`docx-scalpel` (`insert_footnote`/`insert_endnote`).
-- Tier B (native comments, issue #300): `AddComment(anchor, CharSpan?, author, markdown, initials?, date?)` — real `w:comment` markup the Reviewing pane shows (NOT the Tier E annotation overlay, which stays for its own job). Find-or-creates the `WordprocessingCommentsPart` + `CommentText`/`CommentReference` styles, brackets the span with `w:commentRangeStart/End` via the shared `AnnotationOps.SplitRunsForSpan`, puts the `CommentReference`-styled reference run directly after the rangeEnd, allocates `w:id` max+1 over defs AND dangling markers (comments have no reference-order invariant, unlike notes), writes `w:date` only when provided (deterministic default). `UpdateComment(cmtAnchor, markdown)` replaces the body preserving id/author/initials/date + the last paragraph's `w14:paraId` (Word's `commentsExtended` threading key); `RemoveComment(cmtAnchor)` = kind guard + `DeleteBlock`'s cmt teardown, which also prunes `commentsExtended`/`commentsIds` entries and dangling `w15:paraIdParent` refs (single owner — the generic `DeleteBlock` path gets it too; both threading parts are content-only snapshot-scoped so pruning is undoable); `ListComments()` → `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` (numeric `w:id` never surfaced). `Created` = cmt anchor + `p`/scope-`cmt` paragraphs (ordinary editable blocks — `ReplaceText`/`DeleteBlock` work). Part create/delete undo-reconciled by `ReconcileCommentsPart`. Body anchors only; zero-length span ⇒ `EditErrorCode.EmptyCommentSpan`; `CommentMarkerNotSupported` survives narrowed (payload `{#cmt:}` tokens have no round-trip meaning). Mechanics in `Internal/CommentOps.cs`. Wired through WASM/npm (`addComment`/`updateComment`/`removeComment`/`listComments`) + stdio/`docx-scalpel` (`add_comment`/`update_comment`/`remove_comment`/`list_comments`) + MCP (`docxodus_comment` native; overlay moved to `docxodus_annotate`).
-- Tier B (comment targets by tracked revision, issue #341): `AddCommentToRevision(revisionId, author, markdown, initials?, date?)` resolves an id from `ListRevisions()` and brackets its live insertion/deletion wrapper, move destination, or formatting extent. The markers remain outside revision wrappers, so selective accept/reject preserves the comment and either keeps its range on surviving content or collapses it to a point. Stale ids use `RevisionNotFound`. Wired through WASM/npm (`addCommentToRevision`), stdio/docx-scalpel (`add_comment_to_revision`), and MCP `docxodus_comment add`, where exactly one of `anchorId` or `revisionId` is required.
-- Tier B (native comment threads, issue #317): `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)` creates a distinct `w:comment` definition and an adjacent `w:commentReference`, preserving Word's native shape in which only the thread root owns range start/end markers; `w15:paraIdParent` links the reply to its immediate parent, so nested replies inherit the root range even when that parent is reference-only. `SetCommentResolved(cmtAnchor, bool)` writes `w15:done` (`false` reopens without disturbing parentage). Both find-or-create `commentsExtended.xml` + `commentsIds.xml`, stamp final comment paragraphs with deterministic collision-free uppercase eight-hex para/durable ids (max+1), and preserve existing metadata. `ListComments()` adds nullable init properties `ParentAnchorId`/`Resolved` (absent for flat legacy comments) while retaining the record's five-argument constructor/Deconstruct ABI. `DocumentSnapshot` now reconciles these relationship-bearing parts, including deletion on undo and relationship-id-stable recreation on redo. Wired through WASM/npm (`addCommentReply`/`setCommentResolved`), stdio/docx-scalpel (`add_comment_reply`/`set_comment_resolved`), and MCP `docxodus_comment` actions `reply`/`resolve`.
-- Tier C (formatting): `ApplyFormat(anchor, CharSpan?, FormatOp)` (`FormatOp.FontSizePts` → `w:sz`/`w:szCs`; `FormatOp.FontFamily` → `w:rFonts` ascii/hAnsi/cs, `""` clears), `SetParagraphStyle(anchor, styleId)`, `SetParagraphFormat(anchor, ParagraphFormatOp)` (alignment/indent/page-break + `FirstLineIndent`/`HangingIndent` → `w:ind/@w:firstLine`/`@w:hanging` (one either/or slot — setting one evicts the other), `SpacingBefore`/`SpacingAfter`/`LineSpacing`+`LineSpacingRule` → `w:spacing`, all twips except `LineSpacing` under the default `auto` rule (240ths of a line), invalid combinations → `EditErrorCode.InvalidParagraphFormat`, + `TopBorder`/`BottomBorder`/`ClearBorders` → `w:pBdr`), `SetListLevel(anchor, delta)`, `RemoveListMembership(anchor)`, `ApplyListFormat(anchor, ListFormat)` (bullet/decimal/letter/roman + `*Parenthesis` legal presets — `(1)`/`(a)`/`(i)`; `None` strips membership), `ApplyListFormatRange(first, last, format)` (same conversion across a contiguous sibling run in ONE call/undo step, all members guaranteed one shared `w:num` instance; issue #313), and `SetListStartOverride(anchor, value)`/`ClearListStartOverride(anchor)` (Word's *Set Numbering Value…*, issue #314 — restart/seed a list's numbering via `w:lvlOverride/w:startOverride` on a DEDICATED cloned `w:num` (never mutates a possibly-shared instance; the numbering part isn't snapshotted, so additive-only keeps undo correct), repointing the anchored item + following members (set — a mid-list anchor splits the sequence like Word) or every member (clear); negative value → `EditErrorCode.InvalidListStartValue`; numbering mutations strip stale `ListItemRetriever` annotations so the restarted numbers render in-session)
-- Tier D (advanced): `ReplaceCellContent(cellAnchor, markdown)`; `Settings.TrackedChanges = RenderInline` makes all mutations land as `w:ins`/`w:del` — switchable mid-session via `SetTrackedChanges(mode)`/`SetRevisionAuthor(author)` (not undoable, applied history untouched; issue #304), wired through WASM/npm + stdio/docx-scalpel + MCP `docxodus_track_changes set_mode`
-- Tier D (revision review, issue #318): `ListRevisions()` — markup-native tracked-revision listing (`RevisionListEntry(Id, Type=insert/delete/move/format, Author, Date?, Text, AnchorId?)` in document order across body/headers/footers/notes; contiguous same-kind+author markup groups into one entry per user-visible change — inserted paragraph = runs+mark, deleted row absorbs its cell markup, a named move pair is ONE `move` entry; ids derive from the markup's `w:id`s so they're stable across calls AND across resolving other revisions; authors/dates are the markup's own, no accept-all/reject-all re-diff) — and `AcceptRevision(id)`/`RejectRevision(id)`, selective per-revision resolution as ordinary undoable mutations mirroring `RevisionProcessor`'s per-element semantics (unwrap vs remove, `delText`→`t` restore, paragraph-mark coalescing, row/table removal, `CT_*Base`-aware format restore; `EditErrorCode.RevisionNotFound` for stale ids). Mechanics in `Internal/RevisionOps.cs`; v1 skips `cellIns`/`cellDel`/`cellMerge`, content-control ranges, `numPr` ins (accept_all/reject_all still cover those). Wired through WASM/npm (`listRevisions`/`acceptRevision`/`rejectRevision`) + stdio/docx-scalpel (`list_revisions`/`accept_revision`/`reject_revision`) + MCP `docxodus_track_changes` (`accept`/`reject` with `revisionId`; `list` is now markup-native)
-- Factory: `DocxSession.CreateBlankDocxBytes()` (static) — mint a complete blank DOCX ("New document" seed: Normal style, US-Letter section); WASM/npm `createBlankDocx()` + `DocxEditor.openBlank(...)`
-- Tier E (annotations): `AddAnnotation(anchorId, span, DocumentAnnotation)`,
-  `RemoveAnnotation(id)`, `UpdateAnnotation(id, AnnotationUpdate)`,
-  `MoveAnnotation(id, newAnchorId, newSpan)` — anchor-addressed annotation
-  CRUD that mutates the live session document. `EditResult.AnnotationId`
-  carries the affected id on success.
-- Inspection: `GetBlockMetadata(anchor)`, `GetBlockMetadatas(anchors)`,
-  `GetListMembership(anchor)`, `GetSectionInfo(anchor)` — read-only
-  block-level metadata (style id/name, outline level, list facts:
-  numId/abstractNumId/ilvl/format/start-override/from-style,
-  sectPr page setup). Returns null for unknown anchors.
-- Render-plan endpoints (power the editor's incremental structural repaint):
-  `ListBlocks()` → `RenderPlan` (ordered top-level units per scope — body blocks by
-  projected kind, each table ONE `tbl` unit, note defs mirroring exactly what the
-  renderer's notes section shows; every unit carries a content signature, with note
-  ids excluded from the hash since inserts shift them without changing rendered
-  content); `ListNotes(endnotes)` → citation-ordered `[{Id, DefAnchorId, Ordinal}]`
-  (the id↔ordinal authority for client-side note-chrome renumbering). WASM adds
-  `ListAnchors` (anchor index without the markdown payload) and `RenderBlocksHtml`
-  (batch block render — one throwaway doc, real sibling context, true list-marker
-  numbers via live ListItemRetriever annotation transplant). WASM/npm only (not in
-  the stdio host, same as RenderHtml/RenderBlockHtml).
-- `DocxSessionSettings.EmitMarkdownPatch` (default true; wire `emitMarkdownPatch`) —
-  when false, mutations return `Patch = null` and skip the per-op whole-document
-  re-projection that builds it; the editor opens its session with it off.
-- Raw OOXML escape hatch: `session.Raw.GetXml(anchor)`, `Raw.InsertXml(anchor, Position, xml)`, `Raw.ReplaceXml(anchor, xml)` for content the markdown subset can't express
-- Bounded snapshot `Undo()`/`Redo()` (configurable depth via `Settings.UndoDepth`)
-- Every mutation returns a typed `EditResult` envelope: `Success`, `EditError(EditErrorCode, message, anchorId)`, `Created`/`Removed`/`Modified` anchor lists, and a `MarkdownPatch` for the affected scope
-- Available in .NET, WASM (`DocxSessionBridge`), and npm TypeScript (`openDocxSession`, `DocxSession`)
-- See `docs/architecture/docx_mutation_api.md` for the full surface contract, anchor lifecycle table, error catalog, and supported markdown subset
-
-**ExternalAnnotationProjector.cs** - Incremental annotation overlay API (Issue #106). Decouples annotation projection from DOCX conversion for dramatically better performance when annotations change:
-- `ProjectAnnotationsOntoHtml(html, set, settings)` - Project a full annotation set onto pre-converted HTML (~56ms vs ~892ms for full re-conversion, 15.9x faster)
-- `AddAnnotationToHtml(html, annotation, label, settings)` - Add a single annotation (~0.3ms, 2972x faster than full re-conversion)
-- `RemoveAnnotationFromHtml(html, annotationId, cssPrefix)` - Remove a single annotation by ID (~18ms)
-- `GenerateVisibilityCss(hiddenLabelIds, cssPrefix)` - Generate CSS to hide/show annotations by label (instant toggling)
-- `GenerateAnnotationCssString(labels, settings)` - Generate annotation CSS independently
-- Works by building a text map of the HTML, finding annotation text via string search, and wrapping matches with styled `<span>` elements
-- `GetTextNodes` skips already-projected annotation wrappers to prevent offset drift from label text
-- Available in .NET, WASM (JSExport), and npm TypeScript wrapper
-- See `docs/architecture/incremental_annotation_overlay.md` for detailed documentation
-
-### Target Frameworks
-
-Library targets: `net10.0`
-Tests target: `net10.0`
-
-### Dependencies
-
-- **DocumentFormat.OpenXml**: 3.4.1 (Open XML SDK)
-- **SkiaSharp**: 2.88.9 (cross-platform graphics, replaces System.Drawing)
-
-### Test Data
-
-Test files are in `TestFiles/` directory with prefixes indicating their purpose:
-- `DB*` - DocumentBuilder tests
-- `DA*` - DocumentAssembler tests
-- `HC*` - HTML Converter tests
-- `WC/` - WmlComparer tests
-- `SH*` - Spreadsheet tests
-- `CU*` - Chart Updater tests
-
-## Legacy Migration Notes
-
-Docxodus is a fork of OpenXmlPowerTools, upgraded from net45/net46/netstandard2.0 → .NET 8.0 → .NET 10.0 and from Open XML SDK 2.8.1 → 3.x. A few artifacts of that migration are worth knowing when reading code:
-
-- **`GetPackage()` extension in `PtOpenXmlUtil.cs`** — Open XML SDK 3.x made the internal `Package` private; we access it via reflection. Use this extension rather than reaching for `OpenXmlPackage.Package` directly.
-- **`PartTypeInfo` pattern** — replaces SDK 2.x's `FontPartType`/`ImagePartType` enums when adding parts.
-- **`Dispose()` not `.Close()`** — SDK 3.x dropped `Close()`; always use `using` blocks or `Dispose()`.
-- **SkiaSharp replaces System.Drawing** — `SKColor`/`SKBitmap`/`SKTypeface`/`SKEncodedImageFormat`. Helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper` for color name mapping). Remember the WASM build excludes SkiaSharp entirely — see WASM Conditional Compilation above.
-- **Rebranded namespaces** — everything is `Docxodus`; old `OpenXmlPowerTools*` types are `Docxodus*` (e.g. `DocxodusDocument`, `DocxodusException`). Legacy example projects live in `archived-examples/` (not in the solution).
-- **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives still appear in some files; safe to remove when you touch a file (Phase 4 of the migration plan).
-
-For specific bugfix history (e.g. relationship copying in `DocumentBuilder`, footnote/endnote Unid assignment, LCS-based table row matching), use `git log` rather than maintaining a list here.
-
-## Architecture Documentation
-
-Detailed design docs for the major subsystems live in `docs/architecture/`. Read the relevant doc before making non-trivial changes to:
-
-- `comparison_engine.md`, `wml_comparer_gaps.md`, `native_move_markup.md`, `move_detection_implementation_plan.md`, `format_change_detection.md`, `tracked_changes.md` — WmlComparer internals
-- `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `custom_annotations.md`, `unsupported_content_placeholders.md`, `wml_to_html_converter_gaps.md` — WmlToHtmlConverter internals
-- `opencontracts_export.md` — OpenContractExporter format
-- `markdown_projection.md` — WmlToMarkdownConverter design
-- `ir_diff_engine.md` — DocxDiff (IR diff engine) public surface, pipeline, edit script, settings, parity status, relationship to WmlComparer
-- `docx_mutation_api.md` — DocxSession surface, anchor lifecycle, error catalog, supported markdown subset
-- `ir_editor_feasibility.md` — IR-powered browser DOCX editor: architecture (Option B — DocxSession is model-of-record, IR/anchors are addressing), RenderBlockHtml + DocxEditor surface, measured results, findings
-- `ir_editor_roadmap.md` — sequenced, impact-ordered roadmap for the editor (M1 rich in-block editing → M9 render fidelity); architecture invariants to preserve
-- `editor_ui_surface.md` — the editor UI reference (screenshots in `docs/images/editor/`): ribbon anatomy, every control mapped to its `DocxEditor` command and `DocxSession` op, the anchor rail, bands/notes/paginated behavior, measured per-operation costs, and how to drive the surface from specs
-- `python_docxodus.md` — planned Python wrapper for DocxSession; wire protocol, type mapping, distribution
-- `skiasharp-removal-plan.md`, `wasm-optimization-plan.md`, `wasm-packaging.md`, `ui_responsiveness.md`, `profiling-results.md` — WASM/browser work (`wasm-packaging.md`: trimming policy + reflection pins, Brotli precompression/serving, size budget, measured payload and cold-open numbers)
+1. **CHANGELOG.md** — add an entry under `[Unreleased]`.
+2. **Tests** — add to the matching file in `Docxodus.Tests/`. Reuse `TestFiles/` fixtures where
+   possible; programmatic fixtures need all required parts (`StyleDefinitionsPart`,
+   `DocumentSettingsPart`, …).
+3. **Ripple** — follow the checklist above.
+4. **Docs** — update `docs/architecture/` for significant features, and
+   `docs/ooxml_corner_cases.md` for any Word-behaviour discovery (see below).
 
 ## OOXML Corner Cases
 
-When investigating bugs where our output differs from Word/LibreOffice rendering, **always document findings** in `docs/ooxml_corner_cases.md`. This is critical because:
+When our output differs from Word or LibreOffice, **document the finding** in
+`docs/ooxml_corner_cases.md`. Word does not always follow the spec, these cases are expensive
+to rediscover, and each one should eventually get a test.
 
-1. **Word doesn't always follow the spec** - Microsoft Word sometimes implements undocumented behavior or interprets ambiguous spec sections differently than expected
-2. **Future reference** - These edge cases are hard to rediscover; documenting them saves hours of debugging later
-3. **Test coverage** - Each documented case should eventually have a corresponding test
+Record: a minimal XML reproducer, a Word / LibreOffice / Docxodus comparison table, your
+analysis of why they differ, the Docxodus code involved, and the fix if known.
 
-### What to Document
+## Release Process
 
-- Any case where Word renders differently than a literal reading of the OOXML spec would suggest
-- Behaviors that differ between Word, LibreOffice, and our implementation
-- Numbering/list formatting edge cases (especially legal numbering, multi-level formats)
-- Style inheritance quirks
-- Table layout anomalies
-- Character/paragraph property interactions
+A release is **a CHANGELOG section + an annotated tag + a GitHub Release**. Versions are
+injected from the tag at publish time — `Docxodus.csproj` stays at `1.0.0` and
+`npm/package.json` at `0.0.0` deliberately; do not bump them.
 
-### Documentation Format
+Semver on `vMAJOR.MINOR.PATCH` tags, chosen from what accumulated in `[Unreleased]`:
 
-For each corner case, include:
-1. **Minimal XML reproducer** - The smallest XML snippet that demonstrates the issue
-2. **Renderer comparison table** - What Word, LibreOffice, and Docxodus each produce
-3. **Analysis** - Your hypothesis about why the difference exists
-4. **Relevant code** - Which Docxodus files/functions are involved
-5. **Proposed fix** - If known, how to align with Word's behavior
+| Bump | When |
+|------|------|
+| Patch | only `### Fixed` |
+| Minor | any `### Added` / `### Changed`, no breaking change |
+| Major | a breaking public-API change |
+
+From an up-to-date `main`:
+
+1. In `CHANGELOG.md`, insert `## [X.Y.Z] - YYYY-MM-DD` under `## [Unreleased]`, leaving the
+   accumulated entries beneath it and `[Unreleased]` empty above.
+2. Commit changelog-only: `docs(changelog): cut vX.Y.Z release notes`.
+3. Annotated tag whose message is the version: `git tag -a vX.Y.Z -m vX.Y.Z`.
+4. `git push origin main && git push origin vX.Y.Z`.
+5. `gh release create vX.Y.Z --title vX.Y.Z --notes-file <body.md> --latest --verify-tag`.
+   Every tag back to `v5.x` has a Release; a tag without one is an incomplete release.
+
+Release body opens with a one-line lead linking the CHANGELOG anchor
+(`…/CHANGELOG.md#XYZ---YYYY-MM-DD`, digits only). Patch/minor: the lead plus the
+`### Added`/`### Changed`/`### Fixed` sections verbatim (see `v7.1.0`). Major: the lead plus
+`### Highlights` and `### Breaking changes` as a *summary* — a major's accumulated entries are
+far too long to dump (see `v7.0.0`, `v8.0.0`). `### Breaking changes` must say what silently
+changes for a caller who passes nothing, and how to pin the old behaviour.
+
+Reference commits: `#206`, `#209`; reference tags: `v6.1.0`, `v6.2.0`.
+
+## Dependencies
+
+- **DocumentFormat.OpenXml** 3.5.1
+- **SkiaSharp** 4.148.0 (+ `SkiaSharp.NativeAssets.Linux.NoDependencies`), excluded under `WASM_BUILD`
+
+Target framework: `net10.0` for both library and tests.
+
+## Legacy Migration Notes
+
+Docxodus forks OpenXmlPowerTools, upgraded net45/net46/netstandard2.0 → .NET 10 and Open XML
+SDK 2.8.1 → 3.x. Artifacts of that migration worth knowing:
+
+- **`GetPackage()` in `PtOpenXmlUtil.cs`** — SDK 3.x made the internal `Package` private; we
+  reach it by reflection. Use this extension, not `OpenXmlPackage.Package`.
+- **`PartTypeInfo`** replaces SDK 2.x's `FontPartType`/`ImagePartType` enums when adding parts.
+- **`Dispose()`, not `.Close()`** — SDK 3.x dropped `Close()`.
+- **SkiaSharp replaces System.Drawing** — `SKColor`/`SKBitmap`/`SKTypeface`/`SKEncodedImageFormat`,
+  helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper`). Remember the WASM build excludes it.
+- **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives remain in some
+  files; safe to remove when you touch one.
+- Legacy example projects live in `archived-examples/` and are not in the solution.
+
+For bugfix history, use `git log` rather than maintaining a list here.
