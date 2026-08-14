@@ -99,7 +99,14 @@ internal static class DocxSessionJson
         if (string.IsNullOrEmpty(settingsJson)) return new DocxSessionSettings();
         using var doc = JsonDocument.Parse(settingsJson);
         var root = doc.RootElement;
-        int undoDepth = TryGetInt(root, "undoDepth", 50);
+
+        // Defaults are read from the settings object itself rather than repeated as literals here,
+        // so the wire default can never drift from the .NET default (it had, for undoDepth).
+        var defaults = new DocxSessionSettings();
+
+        int undoDepth = TryGetInt(root, "undoDepth", defaults.UndoDepth);
+        long undoMemoryBudgetBytes =
+            TryGetLong(root, "undoMemoryBudgetBytes", defaults.UndoMemoryBudgetBytes);
         bool validateRawOps = TryGetBool(root, "validateRawOps", false);
         var tracked = ParseTrackedChangeMode(TryGetString(root, "trackedChanges", "accept"));
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
@@ -113,6 +120,7 @@ internal static class DocxSessionJson
         return new DocxSessionSettings
         {
             UndoDepth = undoDepth,
+            UndoMemoryBudgetBytes = undoMemoryBudgetBytes,
             ValidateRawOps = validateRawOps,
             TrackedChanges = tracked,
             RevisionAuthor = revisionAuthor,
@@ -376,6 +384,9 @@ internal static class DocxSessionJson
 
     public static int TryGetInt(JsonElement root, string name, int fallback) =>
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : fallback;
+
+    public static long TryGetLong(JsonElement root, string name, long fallback) =>
+        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : fallback;
 
     public static bool TryGetBool(JsonElement root, string name, bool fallback) =>
         root.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False) ? v.GetBoolean() : fallback;

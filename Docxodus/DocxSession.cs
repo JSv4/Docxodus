@@ -1219,7 +1219,31 @@ public sealed record AnnotationUpdate
 
 public sealed class DocxSessionSettings
 {
-    public int UndoDepth { get; init; } = 50;
+    /// <summary>
+    /// Maximum number of undo steps retained. Lowered from 50 to 20 — a depth alone never
+    /// bounded memory, because each step is a deep clone of every snapshot-scoped part and so
+    /// costs whatever the DOCUMENT costs. Fifty steps over a long filing is fifty whole-document
+    /// DOMs held live. Raise it freely for small documents; <see cref="UndoMemoryBudgetBytes"/>
+    /// is the bound that actually protects the heap.
+    /// </summary>
+    public int UndoDepth { get; init; } = 20;
+
+    /// <summary>
+    /// Approximate ceiling, in bytes, on the memory retained by undo/redo snapshots. When
+    /// exceeded the ring discards its OLDEST entries (redo first, then undo) until it is back
+    /// under budget, so the depth cap and this budget are both upper bounds and whichever binds
+    /// first wins.
+    ///
+    /// <para>Default 128 MiB. Set to 0 (or any non-positive value) for the historical behavior of
+    /// depth-only bounding — appropriate for a server process editing modest documents, and a
+    /// latent OOM in a browser WASM heap, which is why it is not the default.</para>
+    ///
+    /// <para>The measure is an ESTIMATE of retained heap, not serialized size: a live LINQ-to-XML
+    /// tree costs several times the XML it came from. One undo step is always retained even if a
+    /// single snapshot exceeds the whole budget, and <see cref="DocxSession.UndoHistoryTrimmedForMemory"/>
+    /// reports whether the budget has ever discarded history.</para>
+    /// </summary>
+    public long UndoMemoryBudgetBytes { get; init; } = 128L * 1024 * 1024;
     public bool ValidateRawOps { get; init; } = false;
     public TrackedChangeMode TrackedChanges { get; init; } = TrackedChangeMode.Accept;
     public string? RevisionAuthor { get; init; }
@@ -1292,7 +1316,10 @@ public sealed class DocxSession : IDisposable
         _settings = settings ?? new DocxSessionSettings();
         _trackedChanges = _settings.TrackedChanges;
         _revisionAuthor = _settings.RevisionAuthor;
-        _history = new Internal.UndoRing<DocumentSnapshot>(_settings.UndoDepth);
+        _history = new Internal.UndoRing<DocumentSnapshot>(
+            _settings.UndoDepth,
+            _settings.UndoMemoryBudgetBytes,
+            static snapshot => snapshot.ApproximateBytes);
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
@@ -1312,6 +1339,27 @@ public sealed class DocxSession : IDisposable
     /// no longer trustworthy": reopen from the last known-good bytes rather than continuing to edit.
     /// </summary>
     public Exception? LastRollbackError { get; private set; }
+
+    /// <summary>Undo steps currently available. Bounded by both
+    /// <see cref="DocxSessionSettings.UndoDepth"/> and
+    /// <see cref="DocxSessionSettings.UndoMemoryBudgetBytes"/>.</summary>
+    public int UndoCount => _history.UndoCount;
+
+    /// <summary>Redo steps currently available.</summary>
+    public int RedoCount => _history.RedoCount;
+
+    /// <summary>Approximate heap retained by undo/redo snapshots, in bytes. Always 0 when the
+    /// memory budget is disabled (<see cref="DocxSessionSettings.UndoMemoryBudgetBytes"/> &lt;= 0),
+    /// because nothing is measured in that mode.</summary>
+    public long UndoMemoryBytes => _history.RetainedBytes;
+
+    /// <summary>
+    /// True once the memory budget — rather than the depth cap — has discarded undo history.
+    /// Sticky for the session's lifetime. An editor can surface this to explain why undo does not
+    /// reach as far back as the configured depth; a headless caller can treat it as a signal to
+    /// raise <see cref="DocxSessionSettings.UndoMemoryBudgetBytes"/> or work in smaller sessions.
+    /// </summary>
+    public bool UndoHistoryTrimmedForMemory => _history.EvictedForMemory;
 
     /// <summary>How subsequent mutations are recorded — switchable mid-session (issue #304).</summary>
     public TrackedChangeMode TrackedChanges => _trackedChanges;
@@ -9280,7 +9328,18 @@ public sealed class DocxSession : IDisposable
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts);
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts)
+    {
+        /// <summary>
+        /// Approximate retained heap of this snapshot's cloned part trees, for the undo ring's
+        /// memory budget. Computed lazily and cached: the ring asks for it at most once per
+        /// snapshot, and a session with the budget disabled never asks at all.
+        /// </summary>
+        internal long ApproximateBytes =>
+            _approximateBytes ??= Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
+
+        private long? _approximateBytes;
+    }
 
     internal DocumentSnapshot TakeSnapshot()
     {

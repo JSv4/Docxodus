@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
+  Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
+  by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:
+  each undo step is a deep clone of every snapshot-scoped part, so one step costs
+  whatever the *document* costs. Measured on `TestFiles/NVCA-Model-COI.docx`
+  (**144 KB on disk**), a single snapshot retains **≈7.5 MB** — so the previous
+  default of 50 steps was **≈375 MB of live DOM for a 144 KB file**, with nothing
+  bounding it. The ring now evicts oldest-first (redo before undo) until under
+  *both* bounds. Set to `0` for the previous depth-only behavior, which also skips
+  measurement entirely.
+- **`DocxSession.UndoCount` / `RedoCount` / `UndoMemoryBytes` /
+  `UndoHistoryTrimmedForMemory`** — makes the bound observable. The last is sticky
+  and reports that the *budget*, not the depth, discarded history, so an editor can
+  explain why undo stops short of the configured depth instead of appearing broken.
+
 ### Changed
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
   navigation, and gives the arcade thumb controls** — three fixes to the same
@@ -34,6 +50,19 @@ All notable changes to this project will be documented in this file.
     screen — Freedoom could previously be walked but never fought on a phone.
 
     Demo-site content only; no library, WASM, or npm-package surface changes.
+- **`DocxSessionSettings.UndoDepth` default 50 → 20.** See above: at 7.5 MB per
+  snapshot the old default was a latent OOM in a browser WASM heap. 20 steps pairs
+  with the 128 MiB budget so that on a typical document the two bounds roughly
+  agree (~17 steps) and the budget takes over as documents grow.
+- Wire defaults for session settings are now read from `DocxSessionSettings` rather
+  than repeated as literals in each surface. `DocxSessionJson.ParseSettings` and the
+  MCP dispatcher had each hardcoded `undoDepth = 50` independently of the .NET
+  default — they could (and would) have silently drifted apart.
+
+### Fixed
+- One undo step is now always retained even when a single snapshot exceeds the whole
+  budget, so undo cannot silently become unavailable on exactly the large documents
+  where a mistaken edit is most expensive to lose.
 
 ### Fixed
 - **A `DocxSession` mutation that threw partway through left the document

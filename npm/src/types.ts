@@ -1534,7 +1534,21 @@ export interface TableBorderSpec {
 }
 
 export interface DocxSessionSettings {
+  /**
+   * Maximum undo steps retained. Default 20 (was 50).
+   *
+   * Each step is a full snapshot of every snapshot-scoped part, so this is a STEP count and not
+   * a memory bound — the cost of one step scales with the document. Use `undoMemoryBudgetBytes`
+   * to bound the heap.
+   */
   undoDepth?: number;
+  /**
+   * Approximate ceiling, in bytes, on memory held by undo/redo snapshots. Default 134217728
+   * (128 MiB). When exceeded the oldest history is discarded, so on a large document undo may
+   * not reach the full `undoDepth`; one step is always retained. Set to 0 to bound by depth
+   * alone (the pre-9.10 behavior).
+   */
+  undoMemoryBudgetBytes?: number;
   validateRawOps?: boolean;
   trackedChanges?: "accept" | "render_inline" | "strip_deletions";
   revisionAuthor?: string;
