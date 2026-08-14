@@ -61,8 +61,19 @@ internal static class Dispatcher
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
-            (ProjectionDepth)IntOptional(args, "depth", 2)),
+            (ProjectionDepth)IntOptional(args, "depth", 2),
+            DocxSessionJson.ParsePageCitationRequest(args)),
         "get_version" => DocxSessionOps.GetVersionJson(Handle(args)),
+        "register_page_map" => DocxSessionOps.RegisterPageMap(
+            Handle(args),
+            DocxSessionJson.ParsePageMap(JsonObjectElement(args, "pageMap")),
+            OptStr(args, "expectedRendererFingerprint")),
+        "get_page_map_status" => DocxSessionOps.GetPageMapStatus(
+            Handle(args), DocxSessionJson.ParsePageCitationRequest(args)),
+        "get_page_citation" => DocxSessionOps.GetPageCitation(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParsePageCitationRequest(args)
+                ?? throw new FormatException("args missing object \"citation\"")),
         "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
@@ -200,15 +211,19 @@ internal static class Dispatcher
             (PlaceholderKinds)IntOptional(args, "kinds", (int)PlaceholderKinds.All),
             (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
             IntOptional(args, "contextChars", 80),
-            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char)),
+            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char),
+            DocxSessionJson.ParsePageCitationRequest(args)),
         "get_edit_summary" => DocxSessionOps.GetEditSummary(Handle(args)),
         "remaining_placeholders" => DocxSessionOps.RemainingPlaceholders(
             Handle(args), (PlaceholderKinds)IntOptional(args, "kinds", 7)),
         "get_diff" => DocxSessionOps.GetDiff(
             Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
-        "find_by_annotation" => DocxSessionOps.FindByAnnotation(Handle(args), Str(args, "annotationId")),
-        "find_by_label" => DocxSessionOps.FindByLabel(Handle(args), Str(args, "labelId")),
-        "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
+        "find_by_annotation" => DocxSessionOps.FindByAnnotation(
+            Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args)),
+        "find_by_label" => DocxSessionOps.FindByLabel(
+            Handle(args), Str(args, "labelId"), DocxSessionJson.ParsePageCitationRequest(args)),
+        "find_by_bookmark" => DocxSessionOps.FindByBookmark(
+            Handle(args), Str(args, "bookmarkName"), DocxSessionJson.ParsePageCitationRequest(args)),
         "list_annotations" => DocxSessionOps.ListAnnotations(Handle(args)),
         "add_annotation" => DocxSessionOps.AddAnnotation(
             Handle(args),
@@ -241,7 +256,8 @@ internal static class Dispatcher
         "find_by_kind" => DocxSessionOps.FindByKind(
             Handle(args), Str(args, "kind"),
             args.ValueKind == JsonValueKind.Object && args.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String
-                ? sc.GetString() : null),
+                ? sc.GetString() : null,
+            DocxSessionJson.ParsePageCitationRequest(args)),
 
         "undo" => DocxSessionOps.Undo(Handle(args)) ? "true" : "false",
         "redo" => DocxSessionOps.Redo(Handle(args)) ? "true" : "false",
@@ -437,9 +453,10 @@ internal static class Dispatcher
         var contextChars = IntOptional(args, "contextChars", 80);
         var whitespace = (WhitespaceMode)IntOptional(args, "whitespace", (int)WhitespaceMode.Preserve);
         var boundary = (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char);
+        var citation = DocxSessionJson.ParsePageCitationRequest(args);
         return crossBlock
-            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary)
-            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary);
+            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation)
+            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation);
     }
 
     private static string AddComment(JsonElement args)
@@ -642,5 +659,13 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Object)
             throw new FormatException($"args missing object \"{name}\"");
         return v.GetRawText();
+    }
+
+    private static JsonElement JsonObjectElement(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"args missing object \"{name}\"");
+        return v;
     }
 }

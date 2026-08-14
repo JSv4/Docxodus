@@ -118,6 +118,142 @@ export interface PaginationResult {
   totalPages: number;
   /** Array of page information */
   pages: PageInfo[];
+  /** Present only when the caller supplied an exact layoutToken. */
+  pageMap?: PageMap;
+}
+
+export type PageMapMode = "paginated" | "continuous";
+export type PageMapAvailability = "available" | "unavailable";
+export type PageMapStory = "body" | "header" | "footer" | "footnote" | "endnote" | "comment";
+
+export interface PageMapRect {
+  /** Page-relative points, independent of viewer zoom/transform. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PageMapPage {
+  pageNumber: number;
+  pageInSection: number;
+  width: number;
+  height: number;
+  sectionIndex?: number;
+  pageName: string;
+}
+
+export interface PageMapFragment {
+  fragmentId: string;
+  /** Canonical collision-safe `kind:scope:unid`, never the bare editor Unid. */
+  anchorId: string;
+  fragmentIndex: number;
+  pageNumber: number;
+  geometry: PageMapRect;
+  story: PageMapStory;
+  /** Table-cell ownership is orthogonal to story (e.g. a body or footnote table cell). */
+  inTableCell: boolean;
+}
+
+/** Versioned portable layout contract consumed by DocxSession and remote agent surfaces. */
+export interface PageMap {
+  schemaVersion: 1;
+  mode: PageMapMode;
+  availability: PageMapAvailability;
+  documentVersion: number;
+  rendererFingerprint: string;
+  pages: PageMapPage[];
+  fragments: PageMapFragment[];
+}
+
+/** Explicit no-pages contract for a continuous viewer. It never estimates page numbers. */
+export function createUnavailablePageMap(
+  documentVersion: number,
+  rendererFingerprint: string,
+  mode: "continuous" = "continuous",
+): PageMap {
+  if (!rendererFingerprint) throw new Error("rendererFingerprint must be non-empty");
+  return {
+    schemaVersion: 1,
+    mode,
+    availability: "unavailable",
+    documentVersion,
+    rendererFingerprint,
+    pages: [],
+    fragments: [],
+  };
+}
+
+export interface PageCitationNavigation {
+  navigated: boolean;
+  target?: HTMLElement;
+  pageNumber?: number;
+  fragmentId?: string;
+  unavailableReason?: "citation_unavailable" | "fragment_not_found";
+}
+
+/**
+ * Navigate an exact citation over an already-paginated DOM. The page-qualified fragment id is
+ * authoritative; page + canonical source identity is a compatibility fallback for older v1 DOMs.
+ */
+export function navigateToPageCitation(
+  root: ParentNode,
+  citation: {
+    availability: PageMapAvailability;
+    anchorId: string;
+    fragments: Array<{ fragmentId: string; pageNumber: number }>;
+  },
+  options: {
+    highlightClass?: string;
+    /** Apply a visible inline highlight when no class is supplied. Default true. */
+    highlight?: boolean;
+    behavior?: ScrollBehavior;
+    block?: ScrollLogicalPosition;
+  } = {},
+): PageCitationNavigation {
+  if (citation.availability !== "available" || citation.fragments.length === 0) {
+    return { navigated: false, unavailableReason: "citation_unavailable" };
+  }
+
+  const byAttribute = (name: string, value: string, within: ParentNode = root): HTMLElement | null => {
+    for (const node of Array.from(within.querySelectorAll<HTMLElement>(`[${name}]`))) {
+      if (node.getAttribute(name) === value) return node;
+    }
+    return null;
+  };
+
+  const fragment = citation.fragments[0];
+  let target = byAttribute("data-page-fragment-id", fragment.fragmentId);
+  if (!target) {
+    const page = byAttribute("data-page-number", String(fragment.pageNumber));
+    if (page) target = byAttribute("data-source-anchor-id", citation.anchorId, page) ?? page;
+  }
+  if (!target) {
+    return {
+      navigated: false,
+      pageNumber: fragment.pageNumber,
+      fragmentId: fragment.fragmentId,
+      unavailableReason: "fragment_not_found",
+    };
+  }
+
+  if (options.highlightClass) {
+    target.classList.add(options.highlightClass);
+  } else if (options.highlight !== false) {
+    target.style.setProperty("outline", "3px solid #f4b400", "important");
+    target.style.setProperty("outline-offset", "2px", "important");
+    target.style.setProperty("background-color", "rgba(255, 235, 59, .18)", "important");
+  }
+  target.scrollIntoView({
+    behavior: options.behavior ?? "smooth",
+    block: options.block ?? "center",
+  });
+  return {
+    navigated: true,
+    target,
+    pageNumber: fragment.pageNumber,
+    fragmentId: fragment.fragmentId,
+  };
 }
 
 /**
@@ -138,6 +274,8 @@ export interface PaginationOptions {
    * entry points opt in explicitly.
    */
   fragmentParagraphs?: boolean;
+  /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
+  layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
 
 // Default letter size in points (612 x 792 = 8.5" x 11")
@@ -195,11 +333,14 @@ export class PaginationEngine {
   private showPageNumbers: boolean;
   private pageGap: number;
   private fragmentParagraphs: boolean;
+  private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
+  private lastPages: PageInfo[] = [];
+  private expectedPageMapAnchorIds: Set<string> = new Set();
 
   /**
    * Creates a new pagination engine.
@@ -234,6 +375,7 @@ export class PaginationEngine {
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
+    this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
   }
@@ -263,6 +405,25 @@ export class PaginationEngine {
     // If no sections found, treat the entire staging content as one section
     const sectionsToProcess =
       sections.length > 0 ? Array.from(sections) : [this.stagingElement];
+
+    // Snapshot the addressable SOURCE inventory before flow moves nodes out of staging. PageMap
+    // completeness cannot be inferred from whatever survives into page boxes: that would let a
+    // dropped block silently disappear from both the DOM and the supposedly authoritative map.
+    // Running-story variants and cited notes are inventoried from their source registries.
+    this.expectedPageMapAnchorIds = new Set();
+    const referencedFootnoteIds = new Set<string>();
+    for (const section of sectionsToProcess) {
+      this.collectExpectedSourceAnchors(section, this.expectedPageMapAnchorIds, true);
+      for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-footnote-id]"))) {
+        if (reference.closest("#pagination-footnote-registry, #pagination-hf-registry")) continue;
+        const id = reference.dataset.footnoteId;
+        if (id) referencedFootnoteIds.add(id);
+      }
+    }
+    for (const id of referencedFootnoteIds) {
+      const source = this.footnoteRegistry.get(id);
+      if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+    }
 
     // Group adjacent sections into page runs. A `w:type="continuous"` section keeps
     // filling the page its predecessor started rather than opening a fresh one, so it
@@ -333,7 +494,244 @@ export class PaginationEngine {
     // Every page box exists now, so NUMPAGES has an answer and each PAGE marker knows its page.
     this.substitutePageNumberFields(pages.length);
 
-    return { totalPages: pages.length, pages };
+    // Only running-story variants selected by a real page are expected to materialize. Read IDs
+    // from registry sources, not presentation clones, so a failed clone remains detectable.
+    for (const page of pages) {
+      const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
+      const header = this.selectHeader(page.sectionIndex, pageInSection, page.pageNumber);
+      const footer = this.selectFooter(page.sectionIndex, pageInSection, page.pageNumber);
+      if (header) this.collectExpectedSourceAnchors(header, this.expectedPageMapAnchorIds);
+      if (footer) this.collectExpectedSourceAnchors(footer, this.expectedPageMapAnchorIds);
+    }
+
+    // Establish one active editor anchor and page-qualify every presentation fragment.
+    // Full canonical source identities remain on all clones, including table cells.
+    this.qualifyPageFragments(pages);
+    this.lastPages = pages;
+
+    return {
+      totalPages: pages.length,
+      pages,
+      pageMap: this.layoutToken
+        ? this.materializePageMap(
+            this.layoutToken.documentVersion,
+            this.layoutToken.rendererFingerprint,
+          )
+        : undefined,
+    };
+  }
+
+  /**
+   * Materialize the last completed browser layout as portable page-relative point geometry.
+   * The caller supplies both invalidation tokens; this engine never guesses a document version
+   * or renderer fingerprint.
+   */
+  materializePageMap(documentVersion: number, rendererFingerprint: string): PageMap {
+    if (!Number.isSafeInteger(documentVersion) || documentVersion < 0) {
+      throw new Error("documentVersion must be a non-negative safe integer");
+    }
+    if (!rendererFingerprint) throw new Error("rendererFingerprint must be non-empty");
+    if (this.lastPages.length === 0) throw new Error("paginate() must complete before materializePageMap()");
+
+    const pages: PageMapPage[] = this.lastPages.map((page) => ({
+      pageNumber: page.pageNumber,
+      pageInSection: parseInt(page.element.dataset.pageInSection || "1", 10),
+      width: page.dimensions.pageWidth,
+      height: page.dimensions.pageHeight,
+      sectionIndex: page.sectionIndex,
+      pageName: `docxodus-section-${page.sectionIndex}`,
+    }));
+
+    const fragments: PageMapFragment[] = [];
+    const requiredAnchorIds = new Set(this.expectedPageMapAnchorIds);
+    const measuredAnchorIds = new Set<string>();
+    const emittedFragmentCounts = new Map<string, number>();
+    for (const page of this.lastPages) {
+      const pageRect = page.element.getBoundingClientRect();
+      if (pageRect.width <= 0 || pageRect.height <= 0) {
+        throw new Error(`page ${page.pageNumber} has no measurable geometry`);
+      }
+      // Ratio-to-known-page-size removes CSS px, zoom, and transform from the contract.
+      const pointPerRenderedX = page.dimensions.pageWidth / pageRect.width;
+      const pointPerRenderedY = page.dimensions.pageHeight / pageRect.height;
+      const nodes = page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]");
+      for (const element of Array.from(nodes)) {
+        const anchorId = element.dataset.sourceAnchorId;
+        if (!anchorId || !element.dataset.pageFragmentId
+          || !Number.isInteger(parseInt(element.dataset.fragmentIndex || "", 10))) {
+          throw new Error(`page ${page.pageNumber} contains an unqualified source anchor`);
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const deliberatelyHidden = style.display === "none" || style.visibility === "hidden";
+        if (deliberatelyHidden) continue;
+        requiredAnchorIds.add(anchorId);
+        const left = Math.max(pageRect.left, rect.left);
+        const top = Math.max(pageRect.top, rect.top);
+        const right = Math.min(pageRect.right, rect.right);
+        const bottom = Math.min(pageRect.bottom, rect.bottom);
+        if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) {
+          // A continued note/story clone can contain children clipped off this page which become
+          // measurable on its next clone. Enforce completeness once every page has been inspected.
+          continue;
+        }
+
+        measuredAnchorIds.add(anchorId);
+        // Clipped descendants in repeated note/story clones are deliberately omitted from the
+        // portable map. Re-number only the visible fragments so the emitted contract remains
+        // contiguous even when an earlier DOM clone carried no visible geometry on its page.
+        const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
+        emittedFragmentCounts.set(anchorId, fragmentIndex + 1);
+        const fragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
+        element.dataset.fragmentIndex = String(fragmentIndex);
+        element.dataset.pageFragmentId = fragmentId;
+        fragments.push({
+          fragmentId,
+          anchorId,
+          fragmentIndex,
+          pageNumber: page.pageNumber,
+          geometry: {
+            x: (left - pageRect.left) * pointPerRenderedX,
+            y: (top - pageRect.top) * pointPerRenderedY,
+            width: (right - left) * pointPerRenderedX,
+            height: (bottom - top) * pointPerRenderedY,
+          },
+          story: this.storyForCanonicalAnchor(anchorId),
+          inTableCell: element.matches("td,th") || element.closest("td,th") !== null,
+        });
+      }
+    }
+
+    const missingAnchor = Array.from(requiredAnchorIds).find((id) => !measuredAnchorIds.has(id));
+    if (missingAnchor) {
+      throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
+    }
+
+    return {
+      schemaVersion: 1,
+      mode: "paginated",
+      availability: "available",
+      documentVersion,
+      rendererFingerprint,
+      pages,
+      fragments,
+    };
+  }
+
+  private storyForCanonicalAnchor(anchorId: string): PageMapStory {
+    const first = anchorId.indexOf(":");
+    const second = first < 0 ? -1 : anchorId.indexOf(":", first + 1);
+    const scope = first >= 0 && second > first ? anchorId.slice(first + 1, second) : "body";
+    if (scope.startsWith("hdr")) return "header";
+    if (scope.startsWith("ftr")) return "footer";
+    if (scope === "fn") return "footnote";
+    if (scope === "en") return "endnote";
+    if (scope === "cmt") return "comment";
+    return "body";
+  }
+
+  /**
+   * Add canonical IDs from an addressable source subtree to the pre-pagination inventory.
+   * Registry wrappers are excluded when scanning staging because selectable registry contents are
+   * inventoried separately. Producers may explicitly mark content that has no visual substrate
+   * with `data-page-map-exclude="true"`; native hidden semantics carry the same signal.
+   */
+  private collectExpectedSourceAnchors(
+    source: HTMLElement,
+    destination: Set<string>,
+    excludeRegistries = false,
+  ): void {
+    const candidates: HTMLElement[] = source.matches("[data-source-anchor-id]") ? [source] : [];
+    candidates.push(...Array.from(source.querySelectorAll<HTMLElement>("[data-source-anchor-id]")));
+    for (const element of candidates) {
+      if (excludeRegistries && element.closest("#pagination-hf-registry, #pagination-footnote-registry")) {
+        continue;
+      }
+      if (this.isDeliberatelyUnrenderedSource(element, source)) continue;
+      const anchorId = element.dataset.sourceAnchorId;
+      if (anchorId) destination.add(anchorId);
+    }
+  }
+
+  private isDeliberatelyUnrenderedSource(element: HTMLElement, sourceRoot: HTMLElement): boolean {
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      if (
+        current.dataset.pageMapExclude === "true"
+        || current.hidden
+        || current.getAttribute("aria-hidden") === "true"
+        || current.style.display === "none"
+        || current.style.visibility === "hidden"
+      ) {
+        return true;
+      }
+      if (current === sourceRoot) break;
+    }
+    return false;
+  }
+
+  /**
+   * Keep exactly one active bare-Unid editor anchor per source block. Presentation clones use
+   * canonical source identity plus page/fragment qualification instead.
+   */
+  private qualifyPageFragments(pages: PageInfo[]): void {
+    const fragmentCounts = new Map<string, number>();
+    const activeCanonicalIds = new Set<string>();
+    const activeBareAnchorIds = new Set<string>();
+
+    const makeInactive = (element: HTMLElement): void => {
+      element.removeAttribute("data-anchor");
+      element.removeAttribute("data-committed-text");
+      if (element.hasAttribute("contenteditable")) element.setAttribute("contenteditable", "false");
+    };
+
+    for (const page of pages) {
+      const nodes = page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]");
+      for (const element of Array.from(nodes)) {
+        const anchorId = element.dataset.sourceAnchorId;
+        if (!anchorId) continue;
+        const fragmentIndex = fragmentCounts.get(anchorId) ?? 0;
+        fragmentCounts.set(anchorId, fragmentIndex + 1);
+        element.dataset.pageNumber = String(page.pageNumber);
+        element.dataset.fragmentIndex = String(fragmentIndex);
+        element.dataset.pageFragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
+
+        const story = this.storyForCanonicalAnchor(anchorId);
+        const mayOwnActiveEditorAnchor =
+          story === "body" || story === "comment" || story === "footnote" || story === "endnote";
+        if (element.hasAttribute("data-anchor")) {
+          const bareAnchorId = element.dataset.anchor!;
+          if (mayOwnActiveEditorAnchor
+            && !activeCanonicalIds.has(anchorId)
+            && !activeBareAnchorIds.has(bareAnchorId)) {
+            activeCanonicalIds.add(anchorId);
+            activeBareAnchorIds.add(bareAnchorId);
+          } else {
+            makeInactive(element);
+          }
+        }
+      }
+    }
+
+    // Body/comment page nodes are the editable copies. A repeated header/footer registry entry can
+    // also render the same source story once per section/variant, so retain at most one active
+    // staging node per canonical source and make every presentation duplicate inert.
+    const activeStagingCanonicalIds = new Set<string>();
+    for (const element of Array.from(
+      this.stagingElement.querySelectorAll<HTMLElement>("[data-source-anchor-id][data-anchor]"),
+    )) {
+      const anchorId = element.dataset.sourceAnchorId;
+      if (!anchorId) continue;
+      const bareAnchorId = element.dataset.anchor!;
+      if (activeCanonicalIds.has(anchorId)
+        || activeStagingCanonicalIds.has(anchorId)
+        || activeBareAnchorIds.has(bareAnchorId)) {
+        makeInactive(element);
+      } else {
+        activeStagingCanonicalIds.add(anchorId);
+        activeBareAnchorIds.add(bareAnchorId);
+      }
+    }
   }
 
   /** Read each section's `w:pgNumType` off its wrapper (see {@link SectionPageNumbering}). */

@@ -27,8 +27,8 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
-grouped-intent tools (read / search / edit / format / create / list / comment / annotate /
-track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+grouped-intent tools (read / preview / pagination / search / edit / format / create / list /
+comment / annotate / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -85,7 +85,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 15 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 16 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -218,7 +218,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, eleven grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, thirteen grouped-intent tools. Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -256,6 +256,19 @@ Apps hosts deliver to the widget (`ui/notifications/tool-result`) and ChatGPT ex
 context nothing. Call it again after edits to refresh the view; the widget's Refresh button does
 exactly that via widget-initiated `tools/call`. See "Inline preview" below.
 
+This preview is continuous until #434 provides a server-side paginated HTML substrate. With a
+valid citation token it displays the exact cited page label and highlights the source anchor, but
+returns `pageNavigation: "unavailable_continuous_preview"` rather than pretending a physical page
+box exists.
+
+### `docxodus_pagination` — register or consume an exact PageMap
+
+`action: register` validates a renderer-materialized `PageMap`; `status` and `cite` consume it
+with an exact `{ documentVersion, rendererFingerprint }` token. Mutations stale the map
+automatically. Continuous/no-map, stale, fingerprint-mismatched, and unmapped-anchor results are
+explicitly unavailable. The server does not estimate pages or bundle a browser; see
+[`page_map.md`](page_map.md).
+
 ### `docxodus_search` — find text or blocks, get reusable anchor ids back
 
 `mode: text` and `regex` use `DocxSessionOps.Grep` (returns span + context, not just an anchor —
@@ -268,6 +281,7 @@ categories (`headers` covers every `hdr*`, not merely `hdr1`). Text/regex result
 reusable id at `enclosingAnchor.id`; anchor-only results carry it at `id`. Either is the same
 anchor every other tool's `anchorId`/`cellAnchorId` argument expects — this server doesn't invent
 a separate "search result handle" concept; Docxodus's anchors already are one.
+All search modes accept the exact citation token and attach a citation envelope to each result.
 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 

@@ -94,6 +94,10 @@ internal static class UiResources
                     .Append(JsonRpcIo.JsonString(sessionId!));
                 if (anchorId is not null)
                     structured.Append(",\"anchorId\":").Append(JsonRpcIo.JsonString(anchorId));
+                if (root.TryGetProperty("citation", out var citation))
+                    structured.Append(",\"citation\":").Append(citation.GetRawText());
+                if (root.TryGetProperty("pageNavigation", out var pageNavigation))
+                    structured.Append(",\"pageNavigation\":").Append(pageNavigation.GetRawText());
                 structured.Append(",\"htmlLength\":").Append(html.Length).Append('}');
 
                 // content text = the structuredContent summary, NOT the HTML: the model needs to
@@ -145,6 +149,8 @@ internal static class UiResources
     border-radius: 4px; background: #fff; cursor: pointer; }
   #dxo-refresh:hover { background: #f0f0f0; }
   #dxo-content { padding: 16px 20px; overflow: auto; }
+  .dxo-cited-fragment { outline: 3px solid #f4b400 !important;
+    outline-offset: 2px; background-color: rgba(255, 235, 59, .18) !important; }
 </style>
 </head>
 <body>
@@ -157,7 +163,8 @@ internal static class UiResources
 <script>
 (function () {
   "use strict";
-  var state = { sessionId: null, anchorId: null, rendered: false };
+  var state = { sessionId: null, anchorId: null, citation: null,
+    pageNavigation: null, rendered: false };
   var statusEl, contentEl;
 
   function setStatus(text) { if (statusEl) statusEl.textContent = text; }
@@ -178,8 +185,54 @@ internal static class UiResources
     for (var k = 0; k < nodes.length; k++)
       contentEl.appendChild(document.importNode(nodes[k], true));
     state.rendered = true;
+    var exactPage = navigateCitation();
+    var citedPage = state.citation && state.citation.fragments && state.citation.fragments.length
+      ? " · cited page " + state.citation.fragments[0].pageNumber : "";
+    var pageNote = citedPage && !exactPage && state.pageNavigation === "unavailable_continuous_preview"
+      ? " · continuous preview (anchor highlight only)" : "";
     setStatus(state.sessionId ? "session " + state.sessionId
-      + (state.anchorId ? " · " + state.anchorId : "") : "rendered");
+      + (state.anchorId ? " · " + state.anchorId : "") + citedPage + pageNote : "rendered");
+  }
+
+  function byAttribute(name, value) {
+    var nodes = contentEl.querySelectorAll("[" + name + "]");
+    for (var i = 0; i < nodes.length; i++)
+      if (nodes[i].getAttribute(name) === value) return nodes[i];
+    return null;
+  }
+
+  function navigateCitation() {
+    var target = null, exactPage = false, citation = state.citation;
+    if (citation && citation.availability === "available" && citation.fragments
+        && citation.fragments.length > 0) {
+      var fragment = citation.fragments[0];
+      target = byAttribute("data-page-fragment-id", fragment.fragmentId);
+      if (target) exactPage = true;
+      if (!target) {
+        var page = byAttribute("data-page-number", String(fragment.pageNumber));
+        if (page) {
+          var candidates = page.querySelectorAll("[data-source-anchor-id]");
+          for (var i = 0; i < candidates.length; i++)
+            if (candidates[i].getAttribute("data-source-anchor-id") === citation.anchorId) {
+              target = candidates[i]; break;
+            }
+          if (!target) target = page;
+          exactPage = true;
+        }
+      }
+    }
+    if (!target && state.anchorId) {
+      target = byAttribute("data-source-anchor-id", state.anchorId);
+      if (!target) {
+        var split = state.anchorId.split(":");
+        target = byAttribute("data-anchor", split[split.length - 1]);
+      }
+    }
+    if (target) {
+      target.classList.add("dxo-cited-fragment");
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    return exactPage;
   }
 
   // Accept a tools/call result object from any host path; returns true if HTML was rendered.
@@ -188,6 +241,8 @@ internal static class UiResources
     var sc = result.structuredContent || {};
     if (typeof sc.sessionId === "string") state.sessionId = sc.sessionId;
     if (typeof sc.anchorId === "string") state.anchorId = sc.anchorId;
+    if (sc.citation && typeof sc.citation === "object") state.citation = sc.citation;
+    if (typeof sc.pageNavigation === "string") state.pageNavigation = sc.pageNavigation;
     var meta = result._meta || {};
     var html = meta["docxodus/html"];
     if (typeof html === "string" && html.length > 0) { renderDocumentHtml(html); return true; }
@@ -229,6 +284,7 @@ internal static class UiResources
       var args = (params.arguments !== undefined ? params.arguments : params) || {};
       if (typeof args.sessionId === "string") state.sessionId = args.sessionId;
       if (typeof args.anchorId === "string") state.anchorId = args.anchorId;
+      if (args.citation && typeof args.citation === "object") state.citation = args.citation;
     }
   });
 
@@ -236,6 +292,10 @@ internal static class UiResources
   function callPreview() {
     var args = { sessionId: state.sessionId };
     if (state.anchorId) args.anchorId = state.anchorId;
+    if (state.citation && typeof state.citation.documentVersion === "number"
+        && typeof state.citation.rendererFingerprint === "string")
+      args.citation = { documentVersion: state.citation.documentVersion,
+        rendererFingerprint: state.citation.rendererFingerprint };
     if (window.openai && typeof window.openai.callTool === "function")
       return Promise.resolve(window.openai.callTool("docxodus_preview", args));
     return rpcRequest("tools/call", { name: "docxodus_preview", arguments: args });

@@ -305,6 +305,81 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(found.GetProperty("matches").GetArrayLength() > 0);
     }
 
+    [Fact]
+    public void MCP032_Pagination_RegisterSearchPreviewAndStaleStatus()
+    {
+        var sessionId = OpenSession();
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "citation target")
+            .GetProperty("success").GetBoolean());
+
+        var version = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            JsonSerializer.Serialize(new { sessionId, format = "version" }))))
+            .GetProperty("version").GetInt64();
+        const string fingerprint = "mcp-page-map-v1";
+        var pageMap = new
+        {
+            schemaVersion = 1,
+            mode = "paginated",
+            availability = "available",
+            documentVersion = version,
+            rendererFingerprint = fingerprint,
+            pages = new[]
+            {
+                new
+                {
+                    pageNumber = 1,
+                    pageInSection = 1,
+                    width = 612,
+                    height = 792,
+                    sectionIndex = 0,
+                    pageName = "docxodus-section-0",
+                },
+            },
+            fragments = new[]
+            {
+                new
+                {
+                    fragmentId = $"p1-f0-{anchor}",
+                    anchorId = anchor,
+                    fragmentIndex = 0,
+                    pageNumber = 1,
+                    geometry = new { x = 72, y = 90, width = 468, height = 18 },
+                    story = "body",
+                    inTableCell = false,
+                },
+            },
+        };
+        var registered = Parse(Dispatcher.Call(_store, "docxodus_pagination", J(
+            JsonSerializer.Serialize(new { sessionId, action = "register", pageMap }))));
+        Assert.True(registered.GetProperty("success").GetBoolean());
+
+        var citation = new { documentVersion = version, rendererFingerprint = fingerprint };
+        var found = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                mode = "text",
+                query = "citation target",
+                citation,
+            }))));
+        Assert.Equal("available", found.GetProperty("matches")[0]
+            .GetProperty("citation").GetProperty("availability").GetString());
+
+        var preview = Parse(Dispatcher.Call(_store, "docxodus_preview", J(
+            JsonSerializer.Serialize(new { sessionId, anchorId = anchor, citation }))));
+        Assert.Equal("unavailable_continuous_preview",
+            preview.GetProperty("pageNavigation").GetString());
+        Assert.Equal(1, preview.GetProperty("citation").GetProperty("fragments")[0]
+            .GetProperty("pageNumber").GetInt32());
+
+        Assert.True(ReplaceText(_store, sessionId, anchor, "changed")
+            .GetProperty("success").GetBoolean());
+        var stale = Parse(Dispatcher.Call(_store, "docxodus_pagination", J(
+            JsonSerializer.Serialize(new { sessionId, action = "status", citation }))));
+        Assert.Equal("stale_document_version", stale.GetProperty("unavailableReason").GetString());
+    }
+
     // ─── Format / List ──────────────────────────────────────────────────
 
     [Fact]
@@ -954,9 +1029,9 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]
-    public void MCP100_ToolCatalog_HasFifteenDistinctNamedToolsWithValidSchemas()
+    public void MCP100_ToolCatalog_HasSixteenDistinctNamedToolsWithValidSchemas()
     {
-        Assert.Equal(15, ToolCatalog.Tools.Count);
+        Assert.Equal(16, ToolCatalog.Tools.Count);
         var names = new System.Collections.Generic.HashSet<string>();
         foreach (var tool in ToolCatalog.Tools)
         {
@@ -1031,6 +1106,13 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal("<html><body>big</body></html>".Length,
             structured.GetProperty("htmlLength").GetInt32());
 
+        var cited = Parse(UiResources.WrapToolResult("docxodus_preview",
+            """{"sessionId":"s1","html":"<p>x</p>","citation":{"availability":"available","fragments":[{"pageNumber":3}]},"pageNavigation":"unavailable_continuous_preview"}""",
+            isError: false)).GetProperty("structuredContent");
+        Assert.Equal(3, cited.GetProperty("citation").GetProperty("fragments")[0]
+            .GetProperty("pageNumber").GetInt32());
+        Assert.Equal("unavailable_continuous_preview", cited.GetProperty("pageNavigation").GetString());
+
         // docxodus_open mirrors its result as structuredContent for the widget…
         var open = Parse(UiResources.WrapToolResult("docxodus_open",
             """{"sessionId":"s1","path":"a.docx"}""", isError: false));
@@ -1058,6 +1140,7 @@ public class McpServerDispatcherTests : IDisposable
         var htmlText = contents.GetProperty("text").GetString()!;
         Assert.StartsWith("<!DOCTYPE html>", htmlText.TrimStart());
         Assert.Contains("docxodus_preview", htmlText); // the widget's refresh path
+        Assert.Contains("unavailable_continuous_preview", htmlText);
         Assert.True(contents.GetProperty("_meta").TryGetProperty("ui", out _));
 
         Assert.Throws<InvalidParamsException>(() =>

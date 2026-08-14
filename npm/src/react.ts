@@ -30,6 +30,7 @@ import type {
   AddAnnotationWithTargetRequest,
   DocumentMetadata,
   SectionMetadata,
+  PageCitation,
 } from "./types.js";
 import {
   AnnotationLabelMode,
@@ -52,8 +53,11 @@ import {
 } from "./types.js";
 import {
   PaginationEngine,
+  navigateToPageCitation,
   type PaginationOptions,
   type PaginationResult,
+  type PageMap,
+  type PageCitationNavigation,
 } from "./pagination.js";
 
 export type {
@@ -62,6 +66,9 @@ export type {
   Revision,
   PaginationOptions,
   PaginationResult,
+  PageMap,
+  PageCitationNavigation,
+  PageCitation,
   Annotation,
   AddAnnotationRequest,
   AddAnnotationResponse,
@@ -601,6 +608,8 @@ export interface PaginatedDocumentProps {
   pageGap?: number;
   /** Whether simple paragraphs may fragment across page boundaries. Default: true. */
   fragmentParagraphs?: boolean;
+  /** Exact tokens used to include an authoritative pageMap in onPaginationComplete. */
+  layoutToken?: { documentVersion: number; rendererFingerprint: string };
   /** Background color for the viewer. Default: "#525659" */
   backgroundColor?: string;
   /** CSS class prefix used in the HTML. Default: "page-" */
@@ -609,6 +618,8 @@ export interface PaginatedDocumentProps {
   onPaginationComplete?: (result: PaginationResult) => void;
   /** Callback when a page becomes visible (for tracking current page) */
   onPageVisible?: (pageNumber: number) => void;
+  /** Exact PageMap citation to navigate and highlight after pagination completes. */
+  citation?: PageCitation;
   /** Additional CSS class for the container */
   className?: string;
   /** Additional inline styles for the container */
@@ -669,6 +680,7 @@ export function usePagination(
     pageGap = 20,
     cssPrefix = "page-",
     fragmentParagraphs = true,
+    layoutToken,
   } = options;
 
   const paginate = useCallback(() => {
@@ -706,6 +718,7 @@ export function usePagination(
         pageGap,
         cssPrefix,
         fragmentParagraphs,
+        layoutToken,
       };
       const engine = new PaginationEngine(staging, pageContainer, engineOptions);
       const paginationResult = engine.paginate();
@@ -715,7 +728,17 @@ export function usePagination(
     } finally {
       setIsPaginating(false);
     }
-  }, [html, containerRef, scale, showPageNumbers, pageGap, cssPrefix, fragmentParagraphs]);
+  }, [
+    html,
+    containerRef,
+    scale,
+    showPageNumbers,
+    pageGap,
+    cssPrefix,
+    fragmentParagraphs,
+    layoutToken?.documentVersion,
+    layoutToken?.rendererFingerprint,
+  ]);
 
   // Auto-paginate when HTML changes
   useEffect(() => {
@@ -768,10 +791,12 @@ export function PaginatedDocument({
   showPageNumbers = true,
   pageGap = 20,
   fragmentParagraphs = true,
+  layoutToken,
   backgroundColor = "#525659",
   cssPrefix = "page-",
   onPaginationComplete,
   onPageVisible,
+  citation,
   className,
   style,
 }: PaginatedDocumentProps): ReactElement {
@@ -785,7 +810,16 @@ export function PaginatedDocument({
     pageGap,
     cssPrefix,
     fragmentParagraphs,
-  }), [scale, showPageNumbers, pageGap, cssPrefix, fragmentParagraphs]);
+    layoutToken,
+  }), [
+    scale,
+    showPageNumbers,
+    pageGap,
+    cssPrefix,
+    fragmentParagraphs,
+    layoutToken?.documentVersion,
+    layoutToken?.rendererFingerprint,
+  ]);
 
   const { result, isPaginating, error } = usePagination(html, containerRef, options);
 
@@ -822,6 +856,13 @@ export function PaginatedDocument({
 
     return () => observer.disconnect();
   }, [result, cssPrefix, onPageVisible]);
+
+  useEffect(() => {
+    if (!result || !citation || !containerRef.current) return;
+    navigateToPageCitation(containerRef.current, citation, {
+      highlight: true,
+    });
+  }, [result, citation, cssPrefix]);
 
   // Use createElement to avoid TSX dependency
   const containerStyle: CSSProperties = {

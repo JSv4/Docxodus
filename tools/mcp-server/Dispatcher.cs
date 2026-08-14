@@ -33,6 +33,7 @@ internal static class Dispatcher
         "docxodus_close" => Close(store, args),
         "docxodus_get_content" => GetContent(store, args),
         "docxodus_preview" => Preview(store, args),
+        "docxodus_pagination" => Pagination(store, args),
         "docxodus_search" => Search(store, args),
         "docxodus_edit" => Edit(store, args),
         "docxodus_format" => Format(store, args),
@@ -111,19 +112,22 @@ internal static class Dispatcher
         var session = Session(store, args);
         var format = Str(args, "format");
         var anchorId = OptStr(args, "anchorId");
+        var citation = DocxSessionJson.ParsePageCitationRequest(args);
 
         switch (format)
         {
             case "markdown":
                 return anchorId is null
                     ? DocxSessionOps.Project(session.Handle)
-                    : DocxSessionOps.ProjectAnchor(session.Handle, anchorId, ProjectionDepth.SubtreeAndFollowingSiblings);
+                    : DocxSessionOps.ProjectAnchor(session.Handle, anchorId,
+                        ProjectionDepth.SubtreeAndFollowingSiblings, citation);
 
             case "text":
             {
                 var projectionJson = anchorId is null
                     ? DocxSessionOps.Project(session.Handle)
-                    : DocxSessionOps.ProjectAnchor(session.Handle, anchorId, ProjectionDepth.SubtreeAndFollowingSiblings);
+                    : DocxSessionOps.ProjectAnchor(session.Handle, anchorId,
+                        ProjectionDepth.SubtreeAndFollowingSiblings, citation);
                 using var doc = JsonDocument.Parse(projectionJson);
                 var markdown = doc.RootElement.GetProperty("markdown").GetString() ?? string.Empty;
                 return $"{{\"text\":{JsonRpcIo.JsonString(StripMarkdownSyntax(markdown))}}}";
@@ -185,12 +189,37 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var anchorId = OptStr(args, "anchorId");
+        var citationRequest = DocxSessionJson.ParsePageCitationRequest(args);
         var html = anchorId is null
             ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
             : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false);
+        var citationJson = anchorId is not null && citationRequest is not null
+            ? DocxSessionOps.GetPageCitation(session.Handle, anchorId, citationRequest)
+            : null;
         return $"{{\"sessionId\":{JsonRpcIo.JsonString(session.Id)}"
             + (anchorId is null ? "" : $",\"anchorId\":{JsonRpcIo.JsonString(anchorId)}")
+            + (citationJson is null ? "" : $",\"citation\":{citationJson}")
+            + ",\"pageNavigation\":\"unavailable_continuous_preview\""
             + $",\"html\":{JsonRpcIo.JsonString(html)}}}";
+    }
+
+    private static string Pagination(SessionStore store, JsonElement args)
+    {
+        var session = Session(store, args);
+        return Str(args, "action") switch
+        {
+            "register" => DocxSessionOps.RegisterPageMap(
+                session.Handle,
+                DocxSessionJson.ParsePageMap(Object(args, "pageMap")),
+                OptStr(args, "expectedRendererFingerprint")),
+            "status" => DocxSessionOps.GetPageMapStatus(
+                session.Handle, DocxSessionJson.ParsePageCitationRequest(args)),
+            "cite" => DocxSessionOps.GetPageCitation(
+                session.Handle, Str(args, "anchorId"),
+                DocxSessionJson.ParsePageCitationRequest(args)
+                    ?? throw new McpToolException("cite requires citation {documentVersion, rendererFingerprint}")),
+            _ => throw new McpToolException("unknown pagination action"),
+        };
     }
 
     /// <summary>
@@ -226,18 +255,19 @@ internal static class Dispatcher
         var scope = ParseSearchScope(OptStr(args, "scope"));
         var maxResults = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("maxResults", out var mr) && mr.ValueKind == JsonValueKind.Number
             ? mr.GetInt32() : (int?)null;
+        var citation = DocxSessionJson.ParsePageCitationRequest(args);
 
         string matchesJson = mode switch
         {
             "text" => DocxSessionOps.Grep(
                 session.Handle, Regex.Escape(query), caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
+                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char, citation),
             "regex" => DocxSessionOps.Grep(
                 session.Handle, query, caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
-            "kind" => DocxSessionOps.FindByKind(session.Handle, query, null),
-            "annotation" => DocxSessionOps.FindByAnnotation(session.Handle, query),
-            "bookmark" => DocxSessionOps.FindByBookmark(session.Handle, query),
+                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char, citation),
+            "kind" => DocxSessionOps.FindByKind(session.Handle, query, null, citation),
+            "annotation" => DocxSessionOps.FindByAnnotation(session.Handle, query, citation),
+            "bookmark" => DocxSessionOps.FindByBookmark(session.Handle, query, citation),
             _ => throw new McpToolException($"unknown search mode: {mode}"),
         };
 
@@ -851,6 +881,14 @@ internal static class Dispatcher
     private static string? OptStr(JsonElement args, string name) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString() : null;
+
+    private static JsonElement Object(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"missing required object argument \"{name}\"");
+        return value;
+    }
 
     private static int Int(JsonElement args, string name)
     {

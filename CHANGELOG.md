@@ -29,6 +29,18 @@ All notable changes to this project will be documented in this file.
   preserved; emitting new tracked table revisions remains #455. Coverage:
   `DocxSessionTableAddressingTests` DT250–DT257, the existing table/MCP suites, and
   `python/tests/test_table_addressing.py`.
+- **Portable, renderer-authored `PageMap` and exact page citations** (issue #454).
+  Browser pagination can now materialize a versioned map of physical pages and every
+  canonical `kind:scope:unid` source fragment, with page-relative point geometry,
+  story/table ownership, page style identity, document version, and renderer
+  fingerprint. `DocxSession` validates and registers external maps; search, structural
+  find, and scoped projection APIs optionally attach citations across .NET, WASM/npm,
+  stdio/Python, and MCP. Mutations stale maps automatically, fingerprint mismatches are
+  rejected, and continuous/no-map layouts return typed unavailable results instead of
+  guessed pages. `paginateHtml`, React `PaginatedDocument`, and
+  `navigateToPageCitation` expose materialization and preview navigation. The MCP inline
+  preview remains explicitly continuous pending #434. See
+  [`docs/architecture/page_map.md`](docs/architecture/page_map.md).
 - **Optimistic mutation preconditions and a monotonic document version** (issue
   #447). Every `DocxSession` starts at version `0` and advances exactly once for
   each committed mutation, undo, or redo; failures and successful no-ops leave it

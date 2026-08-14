@@ -26,6 +26,10 @@ import type {
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  PageCitation,
+  PageCitationRequest,
+  PageMapRegistrationResult,
+  PageMapStatus,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   TableBorderSpec,
@@ -45,6 +49,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
+import type { PageMap } from "./pagination.js";
 import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, TrackedChangeMode } from "./types.js";
 
 /**
@@ -75,6 +80,30 @@ export class DocxSession {
   /** Monotonic document version (0 at open; +1 per committed mutation/undo/redo). */
   getVersion(): number {
     return (JSON.parse(this.wasm.GetVersion(this.handle)) as { version: number }).version;
+  }
+
+  /** Register a browser-materialized PageMap without changing the document version. */
+  registerPageMap(pageMap: PageMap, expectedRendererFingerprint?: string): PageMapRegistrationResult {
+    return JSON.parse(this.wasm.RegisterPageMap(
+      this.handle,
+      JSON.stringify(pageMap),
+      expectedRendererFingerprint ?? "",
+    )) as PageMapRegistrationResult;
+  }
+
+  getPageMapStatus(request?: PageCitationRequest): PageMapStatus {
+    return JSON.parse(this.wasm.GetPageMapStatus(
+      this.handle,
+      request ? JSON.stringify(request) : "",
+    )) as PageMapStatus;
+  }
+
+  getPageCitation(anchorId: string, request: PageCitationRequest): PageCitation {
+    return JSON.parse(this.wasm.GetPageCitation(
+      this.handle,
+      anchorId,
+      JSON.stringify(request),
+    )) as PageCitation;
   }
 
   /** Evaluate optimistic guards without mutating or advancing the version. */
@@ -115,9 +144,12 @@ export class DocxSession {
   projectAnchor(
     anchorId: string,
     depth: ProjectionDepth = ProjectionDepth.SubtreeAndFollowingSiblings,
+    citation?: PageCitationRequest,
   ): DocxSessionProjection {
     return JSON.parse(
-      this.wasm.ProjectAnchor(this.handle, anchorId, depth),
+      citation
+        ? this.wasm.ProjectAnchorWithCitations(this.handle, anchorId, depth, JSON.stringify(citation))
+        : this.wasm.ProjectAnchor(this.handle, anchorId, depth),
     ) as DocxSessionProjection;
   }
 
@@ -980,10 +1012,14 @@ export class DocxSession {
     scope: number = 1,
     contextChars: number = 80,
     boundary: number = ContextBoundary.Char,
+    citation?: PageCitationRequest,
   ): TemplatePlaceholder[] {
-    return JSON.parse(
-      this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary),
-    ) as TemplatePlaceholder[];
+    const json = citation
+      ? this.wasm.FindPlaceholdersWithCitations(
+          this.handle, kinds, scope, contextChars, boundary, JSON.stringify(citation),
+        )
+      : this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary);
+    return JSON.parse(json) as TemplatePlaceholder[];
   }
 
   /**
@@ -1042,8 +1078,11 @@ export class DocxSession {
    *
    * @see docs/architecture/docx_mutation_api.md#findbyannotation
    */
-  findByAnnotation(annotationId: string): AnchorTargetRef[] {
-    return JSON.parse(this.wasm.FindByAnnotation(this.handle, annotationId)) as AnchorTargetRef[];
+  findByAnnotation(annotationId: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByAnnotationWithCitations(this.handle, annotationId, JSON.stringify(citation))
+      : this.wasm.FindByAnnotation(this.handle, annotationId);
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   /**
@@ -1053,8 +1092,11 @@ export class DocxSession {
    * annotations on different paragraphs become three entries). Annotations
    * whose bookmark resolves to no anchors are omitted from the result.
    */
-  findByLabel(labelId: string): Record<string, AnchorTargetRef[]> {
-    return JSON.parse(this.wasm.FindByLabel(this.handle, labelId)) as Record<string, AnchorTargetRef[]>;
+  findByLabel(labelId: string, citation?: PageCitationRequest): Record<string, AnchorTargetRef[]> {
+    const json = citation
+      ? this.wasm.FindByLabelWithCitations(this.handle, labelId, JSON.stringify(citation))
+      : this.wasm.FindByLabel(this.handle, labelId);
+    return JSON.parse(json) as Record<string, AnchorTargetRef[]>;
   }
 
   /**
@@ -1063,8 +1105,11 @@ export class DocxSession {
    * order. Empty when the bookmark name is unknown. Use this for raw bookmark
    * names that didn't come from the annotation system.
    */
-  findByBookmark(bookmarkName: string): AnchorTargetRef[] {
-    return JSON.parse(this.wasm.FindByBookmark(this.handle, bookmarkName)) as AnchorTargetRef[];
+  findByBookmark(bookmarkName: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByBookmarkWithCitations(this.handle, bookmarkName, JSON.stringify(citation))
+      : this.wasm.FindByBookmark(this.handle, bookmarkName);
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   // ─── Text/kind-based anchor discovery (#171) ─────────────────────────
@@ -1120,10 +1165,13 @@ export class DocxSession {
    * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
    * a single part; omit it to span all scopes.
    */
-  findByKind(kind: string, scope?: string): AnchorTargetRef[] {
-    return JSON.parse(
-      this.wasm.FindByKind(this.handle, kind, scope ?? ""),
-    ) as AnchorTargetRef[];
+  findByKind(kind: string, scope?: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByKindWithCitations(
+          this.handle, kind, scope ?? "", JSON.stringify(citation),
+        )
+      : this.wasm.FindByKind(this.handle, kind, scope ?? "");
+    return JSON.parse(json) as AnchorTargetRef[];
   }
 
   /**
@@ -1285,5 +1333,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationPreconditions, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

@@ -78,12 +78,13 @@ path stay as they are.
 
 ## Tool surface
 
-Three lifecycle tools plus ten grouped-intent tools, each addressed by the anchor ids the
+Three lifecycle tools plus thirteen grouped-intent tools, each addressed by the anchor ids the
 markdown projection and search tools return:
 
 | Tool | Purpose |
 |------|---------|
 | `docxodus_open` / `docxodus_save` / `docxodus_close` | Session lifecycle |
+| `docxodus_pagination` | Register, inspect, or query an externally materialized PageMap |
 | `docxodus_get_content` | Read as markdown, HTML, plain text, block metadata, or document info |
 | `docxodus_search` | Find text (literal/regex), or blocks by kind/annotation/bookmark |
 | `docxodus_edit` | Insert/replace/delete text and blocks, split/merge paragraphs, undo/redo |
@@ -118,6 +119,11 @@ them):
   `expectedVersion` and/or an anchor hash/exact text/range/kind/scope; replacement may
   also require `expectedMatchCount`. `docxodus_get_content` formats `version` and
   `check_preconditions` expose the read side. Batch-level and per-step guards use the same shape.
+- **The inline MCP preview is continuous, not physically paginated.** It reports
+  `pageNavigation: "unavailable_continuous_preview"`; a registered PageMap can still supply an
+  exact page label, but navigation to a page box awaits the server-side paginated HTML substrate
+  tracked by #434. The server does not estimate or bundle a browser. See the
+  [PageMap contract](../../docs/architecture/page_map.md).
 
 ## License
 

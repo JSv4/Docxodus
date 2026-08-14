@@ -709,6 +709,7 @@ public partial class DocumentConverter
                 HasTrackedChanges = metadata.HasTrackedChanges,
                 HasComments = metadata.HasComments,
                 EstimatedPageCount = metadata.EstimatedPageCount,
+                EstimatedPageCountSource = metadata.EstimatedPageCountSource,
                 Sections = metadata.Sections.Select(s => new SectionMetadataInfo
                 {
                     SectionIndex = s.SectionIndex,

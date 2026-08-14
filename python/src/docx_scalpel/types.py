@@ -65,6 +65,14 @@ __all__ = [
     "HtmlOptions",
     "ListMembership",
     "NumberFormat",
+    "PageCitation",
+    "PageCitationRequest",
+    "PageMap",
+    "PageMapFragment",
+    "PageMapPage",
+    "PageMapRect",
+    "PageMapRegistrationResult",
+    "PageMapStatus",
     "RunFormatting",
     "RunFragment",
     "SectionInfo",
@@ -298,6 +306,7 @@ class AnchorTarget:
     unid: str
     part_uri: str
     text_preview: str
+    citation: PageCitation | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorTarget":
@@ -308,6 +317,7 @@ class AnchorTarget:
             unid=d["unid"],
             part_uri=d.get("partUri", ""),
             text_preview=d.get("textPreview", ""),
+            citation=PageCitation._from_wire(d["citation"]) if d.get("citation") else None,
         )
 
 
@@ -743,6 +753,164 @@ class RunFragment:
 
 
 @dataclass(frozen=True, slots=True)
+class PageMapRect:
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def to_wire(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapPage:
+    page_number: int
+    page_in_section: int
+    width: float
+    height: float
+    page_name: str
+    section_index: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "pageNumber": self.page_number,
+            "pageInSection": self.page_in_section,
+            "width": self.width,
+            "height": self.height,
+        }
+        out["pageName"] = self.page_name
+        if self.section_index is not None:
+            out["sectionIndex"] = self.section_index
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapFragment:
+    fragment_id: str
+    anchor_id: str
+    fragment_index: int
+    page_number: int
+    geometry: PageMapRect
+    story: str
+    in_table_cell: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "fragmentId": self.fragment_id,
+            "anchorId": self.anchor_id,
+            "fragmentIndex": self.fragment_index,
+            "pageNumber": self.page_number,
+            "geometry": self.geometry.to_wire(),
+            "story": self.story,
+            "inTableCell": self.in_table_cell,
+        }
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapFragment":
+        g = d["geometry"]
+        return cls(
+            fragment_id=d["fragmentId"],
+            anchor_id=d["anchorId"],
+            fragment_index=int(d["fragmentIndex"]),
+            page_number=int(d["pageNumber"]),
+            geometry=PageMapRect(
+                float(g["x"]),
+                float(g["y"]),
+                float(g["width"]),
+                float(g["height"]),
+            ),
+            story=d["story"],
+            in_table_cell=bool(d.get("inTableCell", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PageMap:
+    document_version: int
+    renderer_fingerprint: str
+    pages: tuple[PageMapPage, ...] = ()
+    fragments: tuple[PageMapFragment, ...] = ()
+    mode: str = "paginated"
+    availability: str = "available"
+    schema_version: int = 1
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": self.schema_version,
+            "mode": self.mode,
+            "availability": self.availability,
+            "documentVersion": self.document_version,
+            "rendererFingerprint": self.renderer_fingerprint,
+            "pages": [p.to_wire() for p in self.pages],
+            "fragments": [f.to_wire() for f in self.fragments],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PageCitationRequest:
+    document_version: int
+    renderer_fingerprint: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "documentVersion": self.document_version,
+            "rendererFingerprint": self.renderer_fingerprint,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PageCitation:
+    anchor_id: str
+    availability: str
+    document_version: int
+    renderer_fingerprint: str
+    fragments: tuple[PageMapFragment, ...] = ()
+    unavailable_reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageCitation":
+        return cls(
+            anchor_id=d["anchorId"],
+            availability=d["availability"],
+            document_version=int(d["documentVersion"]),
+            renderer_fingerprint=d.get("rendererFingerprint", ""),
+            fragments=tuple(PageMapFragment._from_wire(f) for f in d.get("fragments", ())),
+            unavailable_reason=d.get("unavailableReason"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapRegistrationResult:
+    success: bool
+    error: str | None = None
+    message: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapRegistrationResult":
+        return cls(bool(d.get("success")), d.get("error"), d.get("message"))
+
+
+@dataclass(frozen=True, slots=True)
+class PageMapStatus:
+    availability: str
+    document_version: int
+    unavailable_reason: str | None = None
+    renderer_fingerprint: str | None = None
+    mode: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapStatus":
+        return cls(
+            d["availability"],
+            int(d["documentVersion"]),
+            d.get("unavailableReason"),
+            d.get("rendererFingerprint"),
+            d.get("mode"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TextMatch:
     """A single grep / find-by-text match."""
 
@@ -753,6 +921,7 @@ class TextMatch:
     context_before: str = ""
     context_after: str = ""
     groups: tuple[str, ...] = ()
+    citation: PageCitation | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "TextMatch":
@@ -764,6 +933,7 @@ class TextMatch:
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
+            citation=PageCitation._from_wire(d["citation"]) if d.get("citation") else None,
         )
 
 
@@ -794,6 +964,7 @@ class CrossBlockMatch:
     context_before: str = ""
     context_after: str = ""
     groups: tuple[str, ...] = ()
+    citations: tuple[PageCitation, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "CrossBlockMatch":
@@ -804,6 +975,7 @@ class CrossBlockMatch:
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
+            citations=tuple(PageCitation._from_wire(c) for c in d.get("citations", ())),
         )
 
 
@@ -1017,6 +1189,7 @@ class MarkdownProjection:
 
     markdown: str
     anchor_index: Mapping[str, AnchorTarget]
+    page_citations: Mapping[str, PageCitation] = field(default_factory=dict)
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownProjection":
@@ -1033,7 +1206,11 @@ class MarkdownProjection:
                 part_uri=entry.get("partUri", ""),
                 text_preview=entry.get("textPreview", ""),
             )
-        return cls(markdown=d.get("markdown", ""), anchor_index=decoded)
+        citations = {
+            anchor_id: PageCitation._from_wire(citation)
+            for anchor_id, citation in (d.get("pageCitations", {}) or {}).items()
+        }
+        return cls(markdown=d.get("markdown", ""), anchor_index=decoded, page_citations=citations)
 
 
 # ---------------------------------------------------------------------------
@@ -1180,6 +1357,7 @@ class FindOptions:
     kind_filter: str | None = None
     scopes: ProjectionScopes | None = None
     scope_filter: str | None = None
+    citation: PageCitationRequest | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -1188,6 +1366,8 @@ class FindOptions:
         if self.kind_filter is not None: out["kindFilter"] = self.kind_filter
         if self.scopes is not None: out["scopes"] = int(self.scopes)
         if self.scope_filter is not None: out["scopeFilter"] = self.scope_filter
+        if self.citation is not None:
+            out["citation"] = self.citation.to_wire()
         return out
 
 

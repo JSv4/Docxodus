@@ -394,6 +394,7 @@ function handleGetDocumentMetadata(
       hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
       hasComments: parsed.HasComments ?? parsed.hasComments,
       estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
+      estimatedPageCountSource: parsed.EstimatedPageCountSource ?? parsed.estimatedPageCountSource ?? "heuristic",
     };
 
     return { metadata };

@@ -61,21 +61,10 @@ internal static class HtmlConversionOps
     /// <c>data-anchor</c> stamps exactly like body paragraphs — without them a rendered footnote is
     /// visible but not addressable, so an editor can show it and not edit it.
     /// </summary>
-    /// <remarks>
-    /// Header/footer parts are deliberately NOT stamped here. Paginated output clones one header
-    /// node onto every page, so a stamped header anchor would exist N times in the DOM; the editor's
-    /// header/footer bands compose per story paragraph through <see cref="RenderBlockHtml(DocxSession, string, HtmlConversionOptions)"/>
-    /// instead. Footnotes have no such problem — each note renders exactly once.
-    /// </remarks>
     private static void AssignAnchorUnids(WordprocessingDocument doc)
     {
-        var main = doc.MainDocumentPart;
-        if (main is null) return;
-        UnidHelper.AssignToAllElementsDeterministic(main.GetXDocument().Root!);
-        if (main.FootnotesPart?.GetXDocument().Root is { } fn)
-            UnidHelper.AssignToAllElementsDeterministic(fn);
-        if (main.EndnotesPart?.GetXDocument().Root is { } en)
-            UnidHelper.AssignToAllElementsDeterministic(en);
+        _ = WmlToMarkdownConverter.BuildAnchorIndexOnly(doc,
+            new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All });
     }
 
     /// <summary>Render raw DOCX bytes to a self-contained HTML string.</summary>
@@ -143,6 +132,7 @@ internal static class HtmlConversionOps
             IncludeUnsupportedContentMetadata = true,
             DocumentLanguage = options.DocumentLanguage,
             StampAnchors = options.StampAnchors,
+            StampCanonicalSourceAnchors = options.StampAnchors,
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).
             ImageHandler = CreateBase64ImageHandler(),
         };

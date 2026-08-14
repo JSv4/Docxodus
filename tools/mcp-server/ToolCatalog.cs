@@ -10,7 +10,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus twelve
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus thirteen
 /// grouped-intent tools, each accepting an <c>action</c> discriminator and action-specific
 /// arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -66,6 +66,7 @@ internal static class ToolCatalog
                 "sessionId": { "type": "string" },
                 "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions"], "description": "markdown/text: projection; html: rendered HTML; blocks: metadata; info: version plus page/edit facts; version: monotonic document version; check_preconditions: read-only guard evaluation." },
                 "anchorId": { "type": "string", "description": "Optional scope/target anchor." },
+                "citation": { "type": "object", "description": "Optional exact layout token {documentVersion, rendererFingerprint}; scoped markdown includes explicit pageCitations when supplied." },
                 "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
@@ -73,15 +74,33 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_preview",
-            "Render a session's document (or a single block) to HTML for the host's inline preview widget. The markup travels in the result's _meta for the widget only; the model-visible result is a short summary. Call again after edits to refresh the rendered view.",
+            "Render a session's document (or a single block) to HTML for the host's inline preview widget. This MCP preview is continuous until #434 supplies paginated HTML, so citations show a page label and highlight the source anchor but cannot navigate a physical page box. The markup travels in the result's _meta for the widget only; call again after edits to refresh it.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "anchorId": { "type": "string", "description": "Optional. Render just this block (any addressable anchor, including hdr*/ftr* scopes) instead of the whole document. Whole-document renders include the converter's stylesheet; single-block renders are bare markup." }
+                ,"citation": { "type": "object", "description": "Optional exact layout token. When valid, the widget navigates/highlights the cited page fragment if the returned HTML contains that pagination substrate." }
               },
               "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_pagination",
+            "Register or consume a browser-materialized PageMap. Core never estimates page numbers; unavailable, continuous, stale, and renderer-mismatched layouts are explicit.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["register", "status", "cite"] },
+                "pageMap": { "type": "object", "description": "register: versioned PageMap produced after browser pagination." },
+                "expectedRendererFingerprint": { "type": "string", "description": "register: optional independently expected fingerprint; mismatch rejects the map." },
+                "anchorId": { "type": "string", "description": "cite: canonical kind:scope:unid anchor." },
+                "citation": { "type": "object", "description": "status/cite: exact {documentVersion, rendererFingerprint} layout token." }
+              },
+              "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(
@@ -98,6 +117,7 @@ internal static class ToolCatalog
                 "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
                 "maxResults": { "type": "integer", "description": "Cap the number of matches returned. Default unlimited." }
+                ,"citation": { "type": "object", "description": "Optional exact {documentVersion, rendererFingerprint}; every search mode attaches an explicit citation result to each match." }
               },
               "required": ["sessionId", "mode", "query"]
             }

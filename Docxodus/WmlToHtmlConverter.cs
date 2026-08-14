@@ -274,6 +274,20 @@ namespace Docxodus
         public bool StampAnchors;
 
         /// <summary>
+        /// Optional canonical anchor identity provider used alongside <see cref="StampAnchors"/>.
+        /// The legacy <c>data-anchor</c> value is intentionally the bare Unid for editor
+        /// compatibility; this provider stamps the collision-safe full
+        /// <c>kind:scope:unid</c> value as <c>data-source-anchor-id</c> for pagination/PageMap.
+        /// </summary>
+        internal Func<XElement, string?>? SourceAnchorIdentityProvider;
+
+        /// <summary>Build <see cref="SourceAnchorIdentityProvider"/> from the converter's
+        /// post-simplification trees immediately before the HTML transform. This timing matters:
+        /// MarkupSimplifier and FormattingAssembler replace part roots, invalidating any earlier
+        /// XElement-reference map.</summary>
+        internal bool StampCanonicalSourceAnchors;
+
+        /// <summary>
         /// Skip MarkupSimplifier's pass over the style-definition parts (styles + stylesWithEffects).
         /// That pass only strips rendering-irrelevant metadata (rsids; styles carry no body runs /
         /// bookmarks / proof errors to remove or merge), so it cannot change the resolved formatting
@@ -622,6 +636,7 @@ namespace Docxodus
         public string Author { get; set; }
         public string Date { get; set; }
         public string Initials { get; set; }
+        internal XElement SourceElement { get; set; }
         public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
     }
 
@@ -817,6 +832,10 @@ namespace Docxodus
 
         /// <summary>Estimated total page count (rough estimate based on content)</summary>
         public int EstimatedPageCount { get; set; }
+
+        /// <summary>Always <c>"heuristic"</c>. Authoritative counts come only from a
+        /// browser-materialized PageMap.</summary>
+        public string EstimatedPageCountSource { get; set; } = "heuristic";
     }
 
     public static partial class WmlToHtmlConverter
@@ -967,6 +986,34 @@ namespace Docxodus
                 footnoteTracker.EndnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.endnotePr, "lowerRoman");
             }
             rootElement.AddAnnotation(footnoteTracker);
+
+            if (htmlConverterSettings.StampAnchors
+                && htmlConverterSettings.StampCanonicalSourceAnchors)
+            {
+                // Build from the FINAL source trees. The next operation is the HTML transform, so
+                // these reference keys cannot be invalidated by another preprocessing rewrite.
+                var canonicalIndex = WmlToMarkdownConverter.BuildAnchorIndexOnly(wordDoc,
+                    new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All });
+                var canonicalByElement = new Dictionary<XElement, string>();
+                var canonicalByLocation = new Dictionary<(string PartUri, string Kind, string Unid), string>();
+                foreach (var target in canonicalIndex.Values)
+                {
+                    var source = target.Resolve(wordDoc);
+                    if (source != null) canonicalByElement[source] = target.Anchor.Id;
+                    canonicalByLocation[(target.PartUri, target.Anchor.Kind, target.Unid)] = target.Anchor.Id;
+                }
+                htmlConverterSettings.SourceAnchorIdentityProvider = element =>
+                {
+                    if (canonicalByElement.TryGetValue(element, out var id)) return id;
+                    var kind = WmlToMarkdownConverter.KindFor(element);
+                    var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                    var partUri = element.Document?.Root?.Annotation<OpenXmlPart>()?.Uri.ToString();
+                    return kind != null && unid != null && partUri != null
+                        && canonicalByLocation.TryGetValue((partUri, kind, unid), out id)
+                            ? id
+                            : null;
+                };
+            }
 
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
@@ -3580,6 +3627,7 @@ namespace Docxodus
             var li = new XElement(Xhtml.li,
                 new XAttribute("id", $"{noteType}-{noteId}"),
                 new XAttribute("value", displayNumber),
+                SourceAnchorIdentityAttribute(settings, noteElement),
                 content);
 
             // If no paragraph found, append backref directly to li (fallback)
@@ -3662,6 +3710,7 @@ namespace Docxodus
                     new XAttribute("data-footnote-id", footnoteId),
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
+                    SourceAnchorIdentityAttribute(settings, fn),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-number"),
                         new XText(displayNumber)),
@@ -4042,6 +4091,7 @@ namespace Docxodus
                     Author = (string)comment.Attribute(W.author),
                     Date = (string)comment.Attribute(W.date),
                     Initials = (string)comment.Attribute(W.initials),
+                    SourceElement = comment,
                     ContentParagraphs = comment.Elements(W.p).ToList()
                 };
             }
@@ -4272,7 +4322,8 @@ namespace Docxodus
         {
             var li = new XElement(Xhtml.li,
                 new XAttribute("id", $"comment-{comment.Id}"),
-                new XAttribute("class", prefix.TrimEnd('-')));
+                new XAttribute("class", prefix.TrimEnd('-')),
+                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
 
             if (settings.IncludeCommentMetadata)
             {
@@ -4325,7 +4376,8 @@ namespace Docxodus
 
                 if (!string.IsNullOrWhiteSpace(textContent))
                 {
-                    body.Add(new XElement(Xhtml.p, textContent));
+                    body.Add(new XElement(Xhtml.p,
+                        SourceAnchorIdentityAttribute(settings, para), textContent));
                 }
             }
 
@@ -4377,7 +4429,8 @@ namespace Docxodus
             var note = new XElement(Xhtml.div,
                 new XAttribute("id", $"comment-{comment.Id}"),
                 new XAttribute("class", prefix + "margin-note"),
-                new XAttribute("data-comment-id", comment.Id.ToString()));
+                new XAttribute("data-comment-id", comment.Id.ToString()),
+                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
 
             if (settings.IncludeCommentMetadata)
             {
@@ -4430,7 +4483,8 @@ namespace Docxodus
 
                 if (!string.IsNullOrWhiteSpace(textContent))
                 {
-                    body.Add(new XElement(Xhtml.p, textContent));
+                    body.Add(new XElement(Xhtml.p,
+                        SourceAnchorIdentityAttribute(settings, para), textContent));
                 }
             }
 
@@ -4901,6 +4955,7 @@ namespace Docxodus
                 settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
                     ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
                     : null,
+                SourceAnchorIdentityAttribute(settings, element),
                 CreateColGroup(element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
@@ -5106,6 +5161,7 @@ namespace Docxodus
                 settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
                     ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
                     : null,
+                SourceAnchorIdentityAttribute(settings, element),
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
             cell.AddAnnotation(style);
 
@@ -5175,6 +5231,7 @@ namespace Docxodus
                 style.AddIfMissing("height",
                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", (decimal) trHeight/1440m));
             var htmlRow = new XElement(Xhtml.tr,
+                SourceAnchorIdentityAttribute(settings, element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             if (style.Any())
                 htmlRow.AddAnnotation(style);
@@ -5471,6 +5528,15 @@ namespace Docxodus
          *
          */
 
+        private static XAttribute? SourceAnchorIdentityAttribute(
+            WmlToHtmlConverterSettings settings, XElement source)
+        {
+            if (!settings.StampAnchors || settings.SourceAnchorIdentityProvider == null)
+                return null;
+            var id = settings.SourceAnchorIdentityProvider(source);
+            return string.IsNullOrEmpty(id) ? null : new XAttribute("data-source-anchor-id", id);
+        }
+
         private static object ConvertParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement paragraph, XName elementName, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi,
             bool suppressLeadingWhiteSpace = false)
@@ -5481,6 +5547,7 @@ namespace Docxodus
             var anchorAttr = settings.StampAnchors && (string)paragraph.Attribute(PtOpenXml.Unid) != null
                 ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid))
                 : null;
+            var sourceAnchorAttr = SourceAnchorIdentityAttribute(settings, paragraph);
 
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
@@ -5514,6 +5581,7 @@ namespace Docxodus
                     rtl,
                     firstMark,
                     anchorAttr,
+                    sourceAnchorAttr,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
                 ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
                 paraElement1.AddAnnotation(style);
@@ -5528,6 +5596,7 @@ namespace Docxodus
                 rtl,
                 firstMark,
                 anchorAttr,
+                sourceAnchorAttr,
                 txElementsPrecedingTab,
                 ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
@@ -6103,6 +6172,9 @@ namespace Docxodus
                         {
                             if (tracker.Comments.TryGetValue(commentId, out var comment))
                             {
+                                highlightSpan.Add(SourceAnchorIdentityAttribute(
+                                    settings, comment.SourceElement));
+
                                 // Build inline tooltip
                                 var tooltipText = comment.ContentParagraphs
                                     .SelectMany(p => p.Descendants(W.t)
