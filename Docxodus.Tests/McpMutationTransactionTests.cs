@@ -701,6 +701,53 @@ public sealed class McpMutationTransactionTests : IDisposable
     }
 
     [Fact]
+    public void MCP449_FlowedChildDispatchRejectsWhileActiveButRunsAfterParentReturns()
+    {
+        using var parentStore = new TestSessionStore(new LocalFileDocumentStore(_root));
+        using var childStore = new TestSessionStore(new LocalFileDocumentStore(_root));
+        var parentSession = parentStore.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        var childSession = childStore.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        using var releaseDeferredChild = new ManualResetEventSlim(false);
+        Task<Exception?>? concurrentChild = null;
+        Task<string>? deferredChild = null;
+
+        var parent = Task.Run(() => parentStore.Value.Dispatch(parentSession.Id, () =>
+        {
+            concurrentChild = Task.Run(() => Record.Exception(() =>
+                childStore.Value.Dispatch(childSession.Id, () => "must reject")));
+            if (!concurrentChild.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("concurrent child did not finish");
+
+            deferredChild = Task.Run(() =>
+            {
+                releaseDeferredChild.Wait();
+                return parentStore.Value.Dispatch(parentSession.Id, () => "deferred child");
+            });
+            return "parent";
+        }));
+
+        try
+        {
+            Assert.True(parent.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal("parent", parent.Result);
+            var reentrant = Assert.IsType<McpToolException>(concurrentChild!.Result);
+            Assert.Contains("session dispatch callback", reentrant.Message,
+                StringComparison.Ordinal);
+
+            releaseDeferredChild.Set();
+            Assert.True(deferredChild!.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal("deferred child", deferredChild.Result);
+        }
+        finally
+        {
+            releaseDeferredChild.Set();
+            deferredChild?.Wait(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public void MCP449_JournalFactoryFailureCannotLeakACoreSession()
     {
         var countBefore = Docxodus.Internal.SessionRegistry.Count;
@@ -720,7 +767,7 @@ public sealed class McpMutationTransactionTests : IDisposable
     {
         var sessionId = OpenSession(_store, _path);
         var anchor = FirstAnchor(_store, sessionId);
-        foreach (var invalid in new[] { "", " \t\r\n" })
+        foreach (var invalid in new[] { "", " \t\r\n", "\u0085" })
         {
             var error = Assert.Throws<McpToolException>(() => Dispatcher.Call(
                 _store,
@@ -728,6 +775,12 @@ public sealed class McpMutationTransactionTests : IDisposable
                 J(MutationArgs(sessionId, invalid, anchor, "must not execute"))));
             Assert.Contains("empty or whitespace", error.Message, StringComparison.Ordinal);
         }
+
+        const string byteOrderMark = "\uFEFF";
+        var byteOrderMarkResult = J(Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(sessionId, byteOrderMark, anchor, "BOM is not whitespace"))));
+        Assert.True(byteOrderMarkResult.GetProperty("success").GetBoolean());
+        Assert.NotNull(_store.Get(sessionId).MutationTransactions.GetRecord(byteOrderMark));
 
         var ascii256 = new string('a', 256);
         var asciiResult = J(Dispatcher.Call(_store, "docxodus_mutations",
@@ -788,12 +841,18 @@ public sealed class McpMutationTransactionTests : IDisposable
         Assert.Equal(1, transactionId.GetProperty("minLength").GetInt32());
         Assert.Equal(MutationTransactions.MaxTransactionIdLength,
             transactionId.GetProperty("maxLength").GetInt32());
-        Assert.Equal("\\S", transactionId.GetProperty("pattern").GetString());
+        Assert.Equal(
+            @"[^\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]",
+            transactionId.GetProperty("pattern").GetString());
         Assert.Contains("APPLYING", transactionId.GetProperty("description").GetString(),
             StringComparison.Ordinal);
         Assert.Contains("non-blank", transactionId.GetProperty("description").GetString(),
             StringComparison.Ordinal);
         Assert.Contains("Unicode scalar values",
+            transactionId.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains(MutationTransactions.TransactionIdWhiteSpaceDescription,
+            transactionId.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("U+FEFF is non-whitespace",
             transactionId.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Equal(128, MutationTransactions.DefaultFullRecordCapacity);
         Assert.Equal(1024, MutationTransactions.DefaultTombstoneCapacity);

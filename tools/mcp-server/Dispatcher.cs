@@ -1022,7 +1022,7 @@ internal static class Dispatcher
         if (value.ValueKind != JsonValueKind.String)
             throw new McpToolException("transactionId must be a string");
         var id = value.GetString()!;
-        if (string.IsNullOrWhiteSpace(id))
+        if (MutationTransactions.IsBlankTransactionId(id))
             throw new McpToolException("transactionId must not be empty or whitespace");
         var scalarLength = 0;
         foreach (var _ in id.EnumerateRunes()) scalarLength++;

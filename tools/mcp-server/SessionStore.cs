@@ -43,9 +43,17 @@ internal sealed class DocSession
 /// </summary>
 internal sealed class SessionStore
 {
+    private sealed class DispatchFrame
+    {
+        public volatile bool Active = true;
+    }
+
+    // Static scope rejects cross-store reentry too. ExecutionContext copies the frame reference,
+    // while Active is shared so deferred children cease being reentrant when the parent returns.
+    private static readonly AsyncLocal<DispatchFrame?> CurrentDispatch = new();
+
     private readonly ConcurrentDictionary<string, DocSession> _sessions = new();
     private readonly object _lifecycleGate = new();
-    private readonly AsyncLocal<int> _dispatchDepth = new();
     private readonly System.Func<MutationTransactions> _mutationTransactionsFactory;
 
     /// <param name="documents">Backing document store. Defaults to a local store rooted at the
@@ -115,10 +123,12 @@ internal sealed class SessionStore
     /// The active check after taking the gate closes the lookup/close race: a caller that found
     /// the session before close removed it still cannot enter the disposed core handle.
     /// Callbacks are non-reentrant so lifecycle operations retain one lifecycle-to-session lock order.
+    /// Callback-spawned work must preserve <see cref="System.Threading.ExecutionContext"/> flow;
+    /// deliberately suppressed or unsafe flow is unsupported by this synchronous dispatch contract.
     /// </summary>
     public string Dispatch(string sessionId, System.Func<string> action)
     {
-        if (_dispatchDepth.Value > 0)
+        if (CurrentDispatch.Value?.Active == true)
             throw new McpToolException(
                 "cannot nest a session dispatch within a session dispatch callback");
         if (!_sessions.TryGetValue(sessionId, out var session))
@@ -129,14 +139,17 @@ internal sealed class SessionStore
                 || !_sessions.TryGetValue(sessionId, out var current)
                 || !ReferenceEquals(session, current))
                 throw new McpToolException($"unknown session_id: {sessionId}");
-            _dispatchDepth.Value++;
+            var priorFrame = CurrentDispatch.Value;
+            var frame = new DispatchFrame();
+            CurrentDispatch.Value = frame;
             try
             {
                 return action();
             }
             finally
             {
-                _dispatchDepth.Value--;
+                frame.Active = false;
+                CurrentDispatch.Value = priorFrame;
             }
         }
     }
@@ -177,7 +190,7 @@ internal sealed class SessionStore
 
     private void RejectReentrantLifecycle(string operation)
     {
-        if (_dispatchDepth.Value > 0)
+        if (CurrentDispatch.Value?.Active == true)
             throw new McpToolException(
                 $"cannot {operation} from within a session dispatch callback");
     }

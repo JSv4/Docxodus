@@ -61,6 +61,42 @@ internal sealed class MutationTransactions
     public const int DefaultTombstoneCapacity = 1024;
     public const int MaxTransactionIdLength = 256;
 
+    // Stable Unicode White_Space definition for transaction ids. Runtime validation, the schema
+    // regex, and its prose are all derived from this one table so their blank-string semantics
+    // cannot drift with .NET or ECMAScript whitespace classifications.
+    private static readonly (int Start, int End)[] TransactionIdWhiteSpaceRanges =
+    {
+        (0x0009, 0x000D),
+        (0x0020, 0x0020),
+        (0x0085, 0x0085),
+        (0x00A0, 0x00A0),
+        (0x1680, 0x1680),
+        (0x2000, 0x200A),
+        (0x2028, 0x2029),
+        (0x202F, 0x202F),
+        (0x205F, 0x205F),
+        (0x3000, 0x3000),
+    };
+
+    internal static string TransactionIdNonBlankPattern { get; } =
+        BuildTransactionIdNonBlankPattern();
+
+    internal static string TransactionIdWhiteSpaceDescription { get; } =
+        string.Join(", ", TransactionIdWhiteSpaceRanges.Select(static range =>
+            range.Start == range.End
+                ? "U+" + ScalarHex(range.Start)
+                : "U+" + ScalarHex(range.Start) + "-U+" + ScalarHex(range.End)));
+
+    internal static string TransactionIdSchemaDescription { get; } =
+        "Optional non-blank caller identity for an APPLYING batch only, limited to 256 Unicode "
+        + "scalar values. Blank means composed only of exactly these Unicode White_Space code "
+        + "points: "
+        + TransactionIdWhiteSpaceDescription
+        + "; U+FEFF is non-whitespace. The first terminal response is retained in this open "
+        + "session; an identical retry returns that exact serialized response without executing "
+        + "or rechecking preconditions. Reusing the id for a different canonical request returns "
+        + "transaction_conflict. Preview/dry-run rejects this field.";
+
     private readonly int _fullRecordCapacity;
     private readonly int _tombstoneCapacity;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -109,6 +145,32 @@ internal sealed class MutationTransactions
         lock (_records)
             return _tombstones.TryGetValue(transactionId, out var tombstone) ? tombstone : null;
     }
+
+    internal static bool IsBlankTransactionId(string transactionId)
+    {
+        foreach (var rune in transactionId.EnumerateRunes())
+        {
+            if (!TransactionIdWhiteSpaceRanges.Any(range =>
+                    rune.Value >= range.Start && rune.Value <= range.End))
+                return false;
+        }
+        return true;
+    }
+
+    private static string BuildTransactionIdNonBlankPattern()
+    {
+        var pattern = new StringBuilder("[^");
+        foreach (var range in TransactionIdWhiteSpaceRanges)
+        {
+            pattern.Append("\\u").Append(ScalarHex(range.Start));
+            if (range.Start != range.End)
+                pattern.Append("-\\u").Append(ScalarHex(range.End));
+        }
+        return pattern.Append(']').ToString();
+    }
+
+    private static string ScalarHex(int value) =>
+        value.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Reserve a new identity, or resolve it to replay/conflict/expired deterministically.</summary>
     public MutationTransactionDecision Begin(string transactionId, string requestFingerprint)

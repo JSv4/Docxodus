@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Collections.Generic;
+using System.Text.Json;
 
 namespace Docxodus.McpServer;
 
@@ -503,12 +504,12 @@ internal static class ToolCatalog
         new ToolDefinition(
             "docxodus_mutations",
             "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId.",
-            """
+            $$"""
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "transactionId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S", "description": "Optional non-blank caller identity for an APPLYING batch only, limited to 256 Unicode scalar values. The first terminal response is retained in this open session; an identical retry returns that exact serialized response without executing or rechecking preconditions. Reusing the id for a different canonical request returns transaction_conflict. Preview/dry-run rejects this field." },
+                "transactionId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdNonBlankPattern)}}, "description": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdSchemaDescription)}} },
                 "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
                 "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: isolated dry-run shorthand using atomic policy unless previewPolicy says best_effort." },
                 "preview": { "type": "boolean", "default": false, "description": "Dry-run mode for mode=atomic or mode=best_effort. The complete package is cloned and the live document, version, caches, configuration, and undo/redo history are never touched." },
