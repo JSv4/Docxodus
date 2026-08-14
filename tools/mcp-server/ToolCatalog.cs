@@ -425,14 +425,18 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions atomically by default, with explicit best-effort and legacy preview modes.",
+            "Apply or safely preview a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions. Preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
-                "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: legacy apply-then-undo behavior; isolated previews are tracked separately in #446." },
+                "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: isolated dry-run shorthand using atomic policy unless previewPolicy says best_effort." },
+                "preview": { "type": "boolean", "default": false, "description": "Dry-run mode for mode=atomic or mode=best_effort. The complete package is cloned and the live document, version, caches, configuration, and undo/redo history are never touched." },
+                "previewPolicy": { "type": "string", "enum": ["atomic", "best_effort"], "default": "atomic", "description": "Policy used by legacy mode=preview. Ignored when mode itself is atomic/best_effort." },
+                "previewHtml": { "type": "string", "enum": ["none", "scoped", "full"], "default": "none", "description": "Optionally render shadow-only HTML from the predicted package." },
+                "previewAnchorId": { "type": "string", "description": "Required when previewHtml=scoped; the live anchor is resolved only inside the cloned package." },
                 "steps": {
                   "type": "array",
                   "items": {

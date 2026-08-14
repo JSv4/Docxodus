@@ -41,6 +41,20 @@ All notable changes to this project will be documented in this file.
   `navigateToPageCitation` expose materialization and preview navigation. The MCP inline
   preview remains explicitly continuous pending #434. See
   [`docs/architecture/page_map.md`](docs/architecture/page_map.md).
+- **Intrinsically isolated mutation preview** (issue #446). `.NET` `PreviewBatch`,
+  Ops/JSON, WASM/npm, stdio/Python, and MCP now run the identical atomic or explicit
+  `best_effort` batch path on a complete shadow package instead of applying to the live
+  session and undoing. The clone carries every OPC part/relationship/media/custom-XML
+  payload plus version, mutable configuration, diff baseline, and id generators, while
+  caches and undo/redo history remain independent; failure, interruption, disposal, and
+  abandonment therefore cannot touch live bytes or history. Rich apply/preview receipts
+  include predicted versions, per-step created/removed/modified anchors and patches,
+  revision/comment/annotation deltas, warnings, a canonical package-content SHA-256, and
+  optional scoped/full shadow-only HTML. Deterministic previews and applies have exact
+  receipt/hash equivalence. Operations that generate anchors/OOXML ids or timestamps are
+  explicitly semantic-equivalence-only (same outcomes and structure/content/relationship
+  effects modulo generated metadata) and emit warnings. This supersedes the undo-depth,
+  redo-destruction, and crash window described in #468.
 - **Atomic multi-step mutation batches** (issue #445). `DocxSession.ExecuteBatch`
   and the reusable nested-safe `BeginTransaction` primitive checkpoint the complete
   OPC package, relationship topology, anchor/revision generators, mutable session

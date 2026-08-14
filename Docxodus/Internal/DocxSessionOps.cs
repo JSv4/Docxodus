@@ -84,8 +84,8 @@ internal static class DocxSessionOps
             : new EditResult { Success = false, Error = error });
     }
 
-    internal static void RestorePreviewVersion(int handle, long version) =>
-        SessionRegistry.Get(handle).RestorePreviewVersion(version);
+    internal static void RestoreVersionAfterRebind(int handle, long version) =>
+        SessionRegistry.Get(handle).RestoreVersionAfterRebind(version);
 
     public static string ExecuteBatch(
         int handle,
@@ -93,6 +93,38 @@ internal static class DocxSessionOps
         System.Collections.Generic.IEnumerable<MutationBatchStep> steps) =>
         DocxSessionJson.SerializeMutationBatchResult(
             SessionRegistry.Get(handle).ExecuteBatch(steps, mode));
+
+    /// <summary>
+    /// Execute a serialized/handle-addressed batch against a complete isolated clone. The step
+    /// factory receives only the temporary shadow handle, which makes accidentally targeting the
+    /// live handle impossible at this central transport seam. The shadow is disposed on every
+    /// return/throw path; process abandonment is also safe because the live package was never a
+    /// mutation target.
+    /// </summary>
+    public static string PreviewBatch(
+        int liveHandle,
+        MutationBatchMode mode,
+        System.Func<int, System.Collections.Generic.IEnumerable<MutationBatchStep>> shadowSteps,
+        MutationBatchPreviewOptions? options = null)
+    {
+        DocxSession.ValidatePreviewOptions(options);
+        var shadowHandle = SessionRegistry.CloneSessionForPreview(liveHandle);
+        try
+        {
+            var shadow = SessionRegistry.Get(shadowHandle);
+            return DocxSessionJson.SerializeMutationBatchResult(
+                shadow.FinalizePreviewResult(
+                    shadow.ExecuteBatch(shadowSteps(shadowHandle), mode),
+                    options));
+        }
+        finally
+        {
+            SessionRegistry.CloseSession(shadowHandle);
+        }
+    }
+
+    public static string GetPackageContentHash(int handle) =>
+        SessionRegistry.Get(handle).GetPackageContentHash();
 
     public static DocxSessionTransaction BeginTransaction(int handle) =>
         SessionRegistry.Get(handle).BeginTransaction();

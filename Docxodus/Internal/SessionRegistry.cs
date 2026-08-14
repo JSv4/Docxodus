@@ -20,6 +20,30 @@ internal static class SessionRegistry
     public static int OpenSession(byte[] bytes, DocxSessionSettings? settings)
     {
         var session = new DocxSession(bytes, settings);
+        return Register(session);
+    }
+
+    /// <summary>
+    /// Register a complete isolated clone of an existing session. The returned handle owns only
+    /// the shadow; callers must close it in a finally block. No live history/cache/config object is
+    /// shared with the clone.
+    /// </summary>
+    public static int CloneSessionForPreview(int handle)
+    {
+        var shadow = Get(handle).CreateShadowSession();
+        try
+        {
+            return Register(shadow);
+        }
+        catch
+        {
+            shadow.Dispose();
+            throw;
+        }
+    }
+
+    private static int Register(DocxSession session)
+    {
         var id = Interlocked.Increment(ref _nextId);
         _sessions[id] = session;
         return id;

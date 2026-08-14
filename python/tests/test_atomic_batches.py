@@ -5,6 +5,7 @@ from __future__ import annotations
 from docx_scalpel import (
     EditErrorCode,
     DocxSession,
+    DocxSessionSettings,
     MutationBatchMode,
     MutationBatchStep,
     open_session,
@@ -112,3 +113,57 @@ def test_best_effort_is_explicit_and_invalid_steps_are_structured(
         assert invalid.failure is not None
         assert invalid.failure.error.code is EditErrorCode.INVALID_BATCH_STEP
         assert session.get_version() == 0
+
+
+def test_preview_batch_is_rich_and_preserves_live_bytes_version_and_redo(
+    tour_plan_bytes: bytes,
+) -> None:
+    with open_session(
+        tour_plan_bytes,
+        DocxSessionSettings(undo_depth=1, persist_anchor_ids=True),
+    ) as session:
+        targets = _body_paragraphs(session)[:2]
+        assert session.replace_text(targets[0], "Python redo target.").success
+        assert session.undo()
+        before_version = session.get_version()
+        # Match Save call sequences on each side; Save itself warms serialization caches.
+        session.save(False)
+        session.save(True)
+        before_clean = session.save(False)
+        before_persisted = session.save(True)
+
+        result = session.preview_batch(
+            [
+                MutationBatchStep(
+                    "replace_text",
+                    {"anchorId": targets[0], "markdown": "Predicted Python first."},
+                ),
+                MutationBatchStep(
+                    "replace_text",
+                    {"anchorId": targets[1], "markdown": "Predicted Python second."},
+                ),
+            ],
+            html_mode="scoped",
+            html_anchor_id=targets[0],
+        )
+
+        assert result.preview
+        assert result.success
+        assert result.mode is MutationBatchMode.ATOMIC
+        assert result.base_version == before_version
+        assert result.result_version == before_version + 1
+        assert len(result.package_hash) == 64
+        assert len(result.steps) == 2
+        assert result.revision_changes.added == ()
+        assert result.comment_changes.added == ()
+        assert result.annotation_changes.added == ()
+        assert result.html is not None
+        assert "Predicted Python first." in result.html
+
+        assert session.get_version() == before_version
+        assert session.save(False) == before_clean
+        assert session.save(True) == before_persisted
+        assert "Predicted Python" not in session.project().markdown
+        assert not session.undo()
+        assert session.redo()
+        assert "Python redo target." in session.project().markdown

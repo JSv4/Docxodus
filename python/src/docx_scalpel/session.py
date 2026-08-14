@@ -523,6 +523,35 @@ class DocxSession:
             raise TypeError(f"execute_batch: expected object, got {result!r}")
         return MutationBatchResult._from_wire(result)
 
+    def preview_batch(
+        self,
+        steps: Iterable[MutationBatchStep],
+        mode: MutationBatchMode = MutationBatchMode.ATOMIC,
+        *,
+        html_mode: str = "none",
+        html_anchor_id: str | None = None,
+    ) -> MutationBatchResult:
+        """Predict a batch on a complete clone without touching this live session.
+
+        ``atomic`` is the safe default; choose ``best_effort`` explicitly to inspect
+        partial-success semantics. Optional ``scoped``/``full`` HTML is rendered only
+        from the predicted shadow package.
+        """
+        if html_mode not in ("none", "scoped", "full"):
+            raise ValueError(f"unknown preview html mode: {html_mode}")
+        result = self._call(
+            "preview_batch",
+            {
+                "mode": mode.value,
+                "steps": [step.to_wire() for step in steps],
+                "htmlMode": html_mode,
+                "htmlAnchorId": html_anchor_id,
+            },
+        )
+        if not isinstance(result, Mapping):
+            raise TypeError(f"preview_batch: expected object, got {result!r}")
+        return MutationBatchResult._from_wire(result)
+
     def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
         """Evaluate guards without mutating the document or advancing its version."""
         return EditResult._from_wire(

@@ -94,7 +94,7 @@ markdown projection and search tools return:
 | `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
-| `docxodus_mutations` | Apply a batch atomically by default; opt into best-effort; legacy apply/preview remain available |
+| `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
 
 ## Known gaps
@@ -111,10 +111,12 @@ them):
   `reject_all` still resolve those.
 - **New lists inserted via markdown don't get real numbering** unless promoted afterward
   with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
-- **`docxodus_mutations`'s `preview` mode is apply-then-undo**, not a true no-op dry run;
-  it uses the session's bounded undo ring, so it composes with everything else but is not
-  free of history-depth pressure. Its caller-visible document version is restored after
-  rollback, so merely previewing does not stale a guarded edit plan.
+- **Generated-id previews are semantic rather than necessarily byte-identical.** Preview runs
+  the same batch path on a complete isolated package clone and never touches live bytes,
+  version, caches, configuration, or undo/redo history. Create/comment/note/image operations
+  may allocate different anchors or OOXML ids when later applied, and tracked changes may stamp
+  a different execution time, so receipts warn when exact anchor or package-hash equality is
+  unsafe. Deterministic mutation-only batches retain exact result/hash equivalence.
 - **Optimistic guards are common to every mutation tool.** Pass `preconditions` with
   `expectedVersion` and/or an anchor hash/exact text/range/kind/scope; replacement may
   also require `expectedMatchCount`. `docxodus_get_content` formats `version` and

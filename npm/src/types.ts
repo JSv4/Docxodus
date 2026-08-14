@@ -1046,6 +1046,7 @@ export interface DocxodusWasmExports {
   };
   DocxSessionBridge: {
     OpenSession: (bytes: Uint8Array, settingsJson: string) => number;
+    OpenPreviewSession?: (liveHandle: number) => number;
     CloseSession: (handle: number) => void;
     CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
@@ -1053,6 +1054,7 @@ export interface DocxodusWasmExports {
     RegisterPageMap: (handle: number, pageMapJson: string, expectedRendererFingerprint: string) => string;
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
+    GetPackageContentHash?: (handle: number) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     BeginTransaction: (handle: number) => number;
     CommitTransaction: (transactionHandle: number) => void;
@@ -1384,6 +1386,20 @@ export interface MutationBatchStep {
   preflight?: () => EditError | undefined;
 }
 
+/** A preview callback receives the isolated shadow session it must mutate/read. */
+export interface MutationBatchPreviewStep {
+  tool: string;
+  action: string;
+  mutation: (shadow: import("./session.js").DocxSession) => EditResult | readonly EditResult[];
+  preflight?: (shadow: import("./session.js").DocxSession) => EditError | undefined;
+}
+
+export interface MutationBatchPreviewOptions {
+  html?: "none" | "scoped" | "full";
+  /** Required for scoped HTML. */
+  htmlAnchorId?: string;
+}
+
 export interface MutationBatchStepResult {
   index: number;
   tool: string;
@@ -1401,13 +1417,30 @@ export interface MutationBatchFailure {
   rolledBack: boolean;
 }
 
+export interface MutationBatchChangeSet<T> {
+  added: readonly T[];
+  removed: readonly T[];
+  modified: readonly T[];
+}
+
 export interface MutationBatchResult {
   mode: MutationBatchMode;
   status: "ok" | "failed" | "partial";
+  preview: boolean;
   success: boolean;
   rolledBack: boolean;
+  baseVersion: number;
+  resultVersion: number;
+  /** Canonical SHA-256 of this result package; exact replay equality is guaranteed only for deterministic batches. */
+  packageHash: string;
   steps: readonly MutationBatchStepResult[];
   failure?: MutationBatchFailure;
+  revisionChanges: MutationBatchChangeSet<RevisionListEntry>;
+  commentChanges: MutationBatchChangeSet<CommentListEntry>;
+  annotationChanges: MutationBatchChangeSet<DocumentAnnotation>;
+  warnings: readonly string[];
+  /** Shadow-only preview HTML when requested; null otherwise. */
+  html: string | null;
 }
 
 export interface MarkdownPatch {

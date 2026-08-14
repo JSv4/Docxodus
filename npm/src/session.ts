@@ -43,7 +43,10 @@ import type {
   GrepOptions,
   ListMembership,
   MutationBatchFailure,
+  MutationBatchChangeSet,
   MutationBatchMode,
+  MutationBatchPreviewOptions,
+  MutationBatchPreviewStep,
   MutationBatchResult,
   MutationBatchStep,
   MutationBatchStepResult,
@@ -56,6 +59,52 @@ import type {
 } from "./types.js";
 import type { PageMap } from "./pagination.js";
 import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, TrackedChangeMode } from "./types.js";
+
+function mutationBatchChangeSet<T>(
+  before: readonly T[],
+  after: readonly T[],
+  key: (value: T) => string,
+): MutationBatchChangeSet<T> {
+  const beforeGroups = new Map<string, number[]>();
+  const afterGroups = new Map<string, number[]>();
+  const group = (items: readonly T[], target: Map<string, number[]>): void => {
+    items.forEach((item, index) => {
+      const identity = key(item);
+      const indices = target.get(identity) ?? [];
+      indices.push(index);
+      target.set(identity, indices);
+    });
+  };
+  group(before, beforeGroups);
+  group(after, afterGroups);
+
+  const beforeMatched = before.map(() => false);
+  const afterMatched = after.map(() => false);
+  const modified = after.map(() => false);
+  for (const [identity, afterIndices] of afterGroups) {
+    const beforeIndices = beforeGroups.get(identity) ?? [];
+    for (const afterIndex of afterIndices) {
+      const beforeIndex = beforeIndices.find(index =>
+        !beforeMatched[index] && JSON.stringify(before[index]) === JSON.stringify(after[afterIndex]));
+      if (beforeIndex === undefined) continue;
+      beforeMatched[beforeIndex] = true;
+      afterMatched[afterIndex] = true;
+    }
+    const remainingBefore = beforeIndices.filter(index => !beforeMatched[index]);
+    const remainingAfter = afterIndices.filter(index => !afterMatched[index]);
+    const modifiedCount = Math.min(remainingBefore.length, remainingAfter.length);
+    for (let index = 0; index < modifiedCount; index++) {
+      beforeMatched[remainingBefore[index]!] = true;
+      afterMatched[remainingAfter[index]!] = true;
+      modified[remainingAfter[index]!] = true;
+    }
+  }
+  return {
+    added: after.filter((_, index) => !afterMatched[index]),
+    removed: before.filter((_, index) => !beforeMatched[index]),
+    modified: after.filter((_, index) => modified[index]),
+  };
+}
 
 /**
  * Stateful in-memory DOCX editing session keyed by markdown-projection anchor ids.
@@ -142,6 +191,100 @@ export class DocxSession {
     if (mode !== "atomic" && mode !== "best_effort") {
       throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
     }
+    const baseVersion = this.getVersion();
+    const observationWarnings: string[] = [];
+    const inspect = <T>(label: string, read: () => T, fallback: T): T => {
+      try { return read(); } catch (error) {
+        observationWarnings.push(`${label} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return fallback;
+      }
+    };
+    const beforeRevisions = inspect("Revision delta inspection", () => this.listRevisions(), []);
+    const beforeComments = inspect("Comment delta inspection", () => this.listComments(), []);
+    const beforeAnnotations = inspect("Annotation delta inspection", () => this.listAnnotations(), []);
+    const complete = (result: {
+      mode: MutationBatchMode;
+      status: "ok" | "failed" | "partial";
+      success: boolean;
+      rolledBack: boolean;
+      steps: readonly MutationBatchStepResult[];
+      failure?: MutationBatchFailure;
+    }): MutationBatchResult => {
+      try {
+        const revisionChanges = mutationBatchChangeSet(
+          beforeRevisions,
+          inspect("Revision delta inspection", () => this.listRevisions(), beforeRevisions),
+          revision => revision.id,
+        );
+        const commentChanges = mutationBatchChangeSet(
+          beforeComments,
+          inspect("Comment delta inspection", () => this.listComments(), beforeComments),
+          comment => comment.anchorId,
+        );
+        const annotationChanges = mutationBatchChangeSet(
+          beforeAnnotations,
+          inspect("Annotation delta inspection", () => this.listAnnotations(), beforeAnnotations),
+          annotation => annotation.id ?? "",
+        );
+        const resultVersion = inspect(
+          "Result version inspection", () => this.getVersion(), baseVersion,
+        );
+        const warnings: string[] = [...observationWarnings];
+        if ([...revisionChanges.added, ...revisionChanges.modified]
+          .some(revision => revision.date !== undefined && revision.date !== null)) {
+          warnings.push("Tracked-revision date attributes may use the execution clock; compare revision ids, authors, types, text, and anchors across separate executions.");
+        }
+        if ([...commentChanges.added, ...commentChanges.modified]
+          .some(comment => comment.date !== undefined && comment.date !== null)) {
+          warnings.push("Comment date attributes may be generated from the execution clock; supply dates explicitly when byte-identical replay is required.");
+        }
+        if (annotationChanges.added.length > 0) {
+          warnings.push("Auto-generated annotation ids or creation timestamps are execution metadata; supply id and created explicitly when byte-identical replay is required.");
+        }
+        if (result.steps.some(step => step.results.some(edit => edit.created.length > 0))) {
+          warnings.push("Created anchors and related OOXML ids may be generated independently on replay; preview/apply equivalence is semantic and packageHash or anchor ids may differ.");
+        }
+        if (mode === "best_effort" && !result.success) {
+          warnings.push("Best-effort execution retains every successful step despite later failures.");
+        }
+        let packageHash = "";
+        if (!this.wasm.GetPackageContentHash) {
+          warnings.push("This WASM bundle predates package equivalence hashes; packageHash is unavailable.");
+        } else {
+          try { packageHash = this.wasm.GetPackageContentHash(this.handle); } catch (error) {
+            warnings.push(`Package equivalence hash unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        return {
+          ...result,
+          preview: false,
+          baseVersion,
+          resultVersion,
+          packageHash,
+          revisionChanges,
+          commentChanges,
+          annotationChanges,
+          warnings,
+          html: null,
+        };
+      } catch (error) {
+        return {
+          ...result,
+          preview: false,
+          baseVersion,
+          resultVersion: inspect("Result version inspection", () => this.getVersion(), baseVersion),
+          packageHash: "",
+          revisionChanges: { added: [], removed: [], modified: [] },
+          commentChanges: { added: [], removed: [], modified: [] },
+          annotationChanges: { added: [], removed: [], modified: [] },
+          warnings: [
+            ...observationWarnings,
+            `Batch receipt enrichment unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          ],
+          html: null,
+        };
+      }
+    };
     const internalFailure = (value: unknown): EditResult => ({
       success: false,
       error: { code: "internal_error", message: value instanceof Error ? value.message : String(value) },
@@ -185,8 +328,8 @@ export class DocxSession {
           success: false, rolledBack: true,
           results: [{ success: false, error: preflight[failedPreflight]!, created: [], removed: [], modified: [] }],
         };
-        return { mode, status: "failed", success: false, rolledBack: true,
-          steps: [failed], failure: failureOf(failed, true) };
+        return complete({ mode, status: "failed", success: false, rolledBack: true,
+          steps: [failed], failure: failureOf(failed, true) });
       }
 
       const transaction = this.wasm.BeginTransaction(this.handle);
@@ -204,12 +347,12 @@ export class DocxSession {
             this.wasm.RollbackTransaction(transaction);
             const rolledBack = completed.map(value => ({ ...value, rolledBack: true }));
             const failed = rolledBack[rolledBack.length - 1]!;
-            return { mode, status: "failed", success: false, rolledBack: true,
-              steps: rolledBack, failure: failureOf(failed, true) };
+            return complete({ mode, status: "failed", success: false, rolledBack: true,
+              steps: rolledBack, failure: failureOf(failed, true) });
           }
         }
         this.wasm.CommitTransaction(transaction);
-        return { mode, status: "ok", success: true, rolledBack: false, steps: completed };
+        return complete({ mode, status: "ok", success: true, rolledBack: false, steps: completed });
       } catch (error) {
         try { this.wasm.RollbackTransaction(transaction); } catch { /* preserve the original */ }
         throw error;
@@ -229,14 +372,79 @@ export class DocxSession {
       };
     });
     const failed = completed.find(step => !step.success);
-    return {
+    return complete({
       mode,
       status: failed ? (completed.some(step => step.success) ? "partial" : "failed") : "ok",
       success: failed === undefined,
       rolledBack: false,
       steps: completed,
       failure: failed ? failureOf(failed, false) : undefined,
-    };
+    });
+  }
+
+  /**
+   * Execute the same callback batch algorithm against a complete isolated package clone.
+   * Callbacks receive the shadow session explicitly; mutate that argument. The live session's
+   * package, caches, version, configuration, and undo/redo history are never execution targets.
+   */
+  previewBatch(
+    steps: readonly MutationBatchPreviewStep[],
+    mode: MutationBatchMode = "atomic",
+    options?: MutationBatchPreviewOptions,
+  ): MutationBatchResult {
+    if (mode !== "atomic" && mode !== "best_effort") {
+      throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
+    }
+    const htmlMode = options?.html ?? "none";
+    if (htmlMode !== "none" && htmlMode !== "scoped" && htmlMode !== "full") {
+      throw new RangeError(`unknown preview HTML mode: ${String(htmlMode)}`);
+    }
+    if (!this.wasm.OpenPreviewSession) {
+      throw new Error("This WASM bundle does not support isolated mutation previews.");
+    }
+
+    const shadow = new DocxSession(this.wasm.OpenPreviewSession(this.handle), this.wasm);
+    try {
+      const result = shadow.executeBatch(
+        steps.map(step => ({
+          tool: step.tool,
+          action: step.action,
+          mutation: () => step.mutation(shadow),
+          preflight: step.preflight ? () => step.preflight!(shadow) : undefined,
+        })),
+        mode,
+      );
+      const warnings = [...result.warnings];
+      let html: string | null = null;
+      try {
+        if (htmlMode === "scoped") {
+          if (!options?.htmlAnchorId) {
+            warnings.push("Scoped HTML was requested without htmlAnchorId; no HTML was generated.");
+          } else {
+            html = shadow.renderBlock(options.htmlAnchorId);
+          }
+        } else if (htmlMode === "full") {
+          const rendered = this.wasm.RenderHtmlForReview
+            ? this.wasm.RenderHtmlForReview(shadow.handle, "docx-", false, false, 1, true)
+            : this.wasm.RenderHtml(shadow.handle, "docx-", false, false, 1);
+          if (rendered.trimStart().startsWith("{")) {
+            const envelope = JSON.parse(rendered) as { error?: string };
+            if (envelope.error) {
+              warnings.push(`Preview HTML could not be generated: ${envelope.error}`);
+            } else {
+              html = rendered;
+            }
+          } else {
+            html = rendered;
+          }
+        }
+      } catch (error) {
+        warnings.push(`Preview HTML could not be generated: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return { ...result, preview: true, warnings, html };
+    } finally {
+      shadow.close();
+    }
   }
 
   /**
@@ -1446,5 +1654,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationBatchFailure, MutationBatchMode, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";
