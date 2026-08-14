@@ -13,8 +13,8 @@ namespace Docxodus.Internal;
 /// <see cref="DocxSession.ApplyListFormat"/> / <see cref="DocxSession.ApplyListFormatRange"/>
 /// use this when no suitable numbering exists. Definitions are tagged with a fixed marker
 /// <c>w:nsid</c> per format and resolved find-or-create, so the op is idempotent across calls,
-/// save/reopen, and undo (the numbering part is not snapshotted; the paragraph's <c>w:numPr</c>
-/// is).
+/// save/reopen, and undo/redo. Session snapshots cover both the numbering part and paragraph
+/// <c>w:numPr</c> references.
 /// </summary>
 internal static class NumberingFactory
 {
@@ -39,6 +39,14 @@ internal static class NumberingFactory
         ListFormat.UpperRomanParenthesis => "0D0CC102",
         _ => throw new ArgumentOutOfRangeException(nameof(fmt), fmt, "no numbering definition for this format"),
     };
+
+    internal static bool IsDocxodusDefinition(XElement abstractNum)
+    {
+        var nsid = (string?)abstractNum.Element(W + "nsid")?.Attribute(W + "val");
+        return Enum.GetValues<ListFormat>()
+            .Where(format => format != ListFormat.None)
+            .Any(format => string.Equals(nsid, NsidFor(format), StringComparison.OrdinalIgnoreCase));
+    }
 
     // Standard Word bullet cycle (•, o, ▪) for synthesized nested levels — same glyph/font set
     // BuildAbstractNum emits for our own multi-level lists, so source and synthesized lists nest
@@ -222,10 +230,9 @@ internal static class NumberingFactory
     /// new numId, or null when <paramref name="numId"/> resolves to no <c>w:num</c>.
     /// </summary>
     /// <remarks>
-    /// Additive-only ON PURPOSE: the source num is never mutated, because the numbering part is
-    /// not snapshotted (see the class remarks) — the caller repoints the affected paragraphs'
-    /// <c>w:numPr</c> at the clone, which IS snapshotted, so undo restores the paragraphs and
-    /// merely strands the clone unreferenced (harmless, like an undone <see cref="EnsureNumbering"/>).
+    /// Additive-only ON PURPOSE: the source num may be shared by paragraphs outside the requested
+    /// sequence, so the caller repoints only the affected paragraphs' <c>w:numPr</c> at a clone.
+    /// Session snapshots restore both the paragraph references and the numbering definition.
     /// </remarks>
     public static int? CloneNumWithStartOverride(WordprocessingDocument doc, int numId, int ilvl, int? value)
     {

@@ -1308,6 +1308,155 @@ public class McpServerDispatcherTests : IDisposable
         Assert.DoesNotContain("first atomic state", markdown);
     }
 
+    [Fact]
+    public void MCP099_TrackChangesBatchPreviewIsIsolatedAndAtomicApplyResolvesRevision()
+    {
+        var sessionId = OpenSession(trackedChanges: "render_inline");
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        InsertParagraph(sessionId, "tracked paragraph");
+
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var revision = Assert.Single(listed.GetProperty("revisions").EnumerateArray());
+        var revisionId = revision.GetProperty("id").GetString()!;
+        Assert.Equal("content_insert", revision.GetProperty("family").GetString());
+
+        var preview = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "preview",
+              "steps": [
+                { "tool": "docxodus_track_changes", "args": { "action": "reject", "revisionId": {{JsonSerializer.Serialize(revisionId)}} } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", preview.GetProperty("status").GetString());
+        Assert.True(preview.GetProperty("success").GetBoolean());
+        Assert.True(preview.GetProperty("preview").GetBoolean());
+        Assert.True(Assert.Single(preview.GetProperty("steps").EnumerateArray())
+            .GetProperty("success").GetBoolean());
+
+        var afterPreview = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        Assert.Equal(revisionId,
+            Assert.Single(afterPreview.GetProperty("revisions").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Contains("tracked paragraph", Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!);
+
+        var applied = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_track_changes", "args": { "action": "reject", "revisionId": {{JsonSerializer.Serialize(revisionId)}} } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", applied.GetProperty("status").GetString());
+        Assert.True(applied.GetProperty("success").GetBoolean());
+        Assert.Equal(0, Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}"""))).GetProperty("revisions").GetArrayLength());
+        Assert.DoesNotContain("tracked paragraph", Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!);
+    }
+
+    [Fact]
+    public void MCP102_TrackChangesBulkAcceptAndRejectAllAreAtomicBatchSteps()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "baseline")
+            .GetProperty("success").GetBoolean());
+        SetMode(sessionId, "render_inline");
+
+        Assert.True(ReplaceText(_store, sessionId, anchor, "accepted replacement")
+            .GetProperty("success").GetBoolean());
+        var accepted = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_track_changes", "args": { "action": "accept_all" } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", accepted.GetProperty("status").GetString());
+        Assert.True(accepted.GetProperty("success").GetBoolean());
+        Assert.Contains("accepted replacement", Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!);
+
+        Assert.True(ReplaceText(_store, sessionId, anchor, "rejected replacement")
+            .GetProperty("success").GetBoolean());
+        var rejected = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_track_changes", "args": { "action": "reject_all" } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", rejected.GetProperty("status").GetString());
+        Assert.True(rejected.GetProperty("success").GetBoolean());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!;
+        Assert.Contains("accepted replacement", markdown);
+        Assert.DoesNotContain("rejected replacement", markdown);
+    }
+
+    [Fact]
+    public void MCP103_TrackChangesReadOnlyBatchStepsFailStructuredAndSchemaAdvertisesMutations()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        foreach (var action in new[] { "list", "set_mode" })
+        {
+            var actionArg = JsonSerializer.Serialize(action);
+            var receipt = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+                $$"""
+                {
+                  "sessionId": {{sessionArg}},
+                  "mode": "atomic",
+                  "steps": [
+                    { "tool": "docxodus_track_changes", "args": { "action": {{actionArg}} } }
+                  ]
+                }
+                """)));
+            Assert.Equal("failed", receipt.GetProperty("status").GetString());
+            Assert.False(receipt.GetProperty("success").GetBoolean());
+            var failure = receipt.GetProperty("failure");
+            Assert.Equal("docxodus_track_changes", failure.GetProperty("tool").GetString());
+            Assert.Equal(action, failure.GetProperty("action").GetString());
+            Assert.Equal("invalid_batch_step",
+                failure.GetProperty("error").GetProperty("code").GetString());
+
+            var legacy = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+                _store, "docxodus_mutations", J(
+                    $$"""
+                    {
+                      "sessionId": {{sessionArg}},
+                      "mode": "apply",
+                      "steps": [
+                        { "tool": "docxodus_track_changes", "args": { "action": {{actionArg}} } }
+                      ]
+                    }
+                    """)));
+            Assert.Contains(action, legacy.Message, StringComparison.Ordinal);
+        }
+
+        var mutations = Assert.Single(ToolCatalog.Tools, tool => tool.Name == "docxodus_mutations");
+        using var schema = JsonDocument.Parse(mutations.InputSchemaJson);
+        var tools = schema.RootElement.GetProperty("properties").GetProperty("steps")
+            .GetProperty("items").GetProperty("properties").GetProperty("tool")
+            .GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToList();
+        Assert.Contains("docxodus_track_changes", tools);
+    }
+
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]

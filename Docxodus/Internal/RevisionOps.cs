@@ -120,6 +120,12 @@ internal static class RevisionOps
         W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd,
     };
 
+    private static readonly HashSet<XName> MoveRangeNames = new()
+    {
+        W.moveFromRangeStart, W.moveFromRangeEnd,
+        W.moveToRangeStart, W.moveToRangeEnd,
+    };
+
     private static readonly HashSet<XName> PropsChangeNames = new()
     {
         W.rPrChange, W.pPrChange, W.sectPrChange, W.tblPrChange,
@@ -175,6 +181,17 @@ internal static class RevisionOps
                 group.Diagnostic = new RevisionDiagnostic(
                     "missing_revision_id",
                     "A live revision marker has no w:id and cannot be addressed stably.");
+                continue;
+            }
+
+            if (group.Units.Any(u => !string.IsNullOrEmpty(u.NativeId) && u.Wid is null)
+                || group.RangeMarkers.Any(marker =>
+                    !long.TryParse((string?)marker.Attribute(W.id), out _)))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "invalid_revision_id",
+                    "A live revision marker has a nonnumeric w:id and cannot be addressed safely.");
                 continue;
             }
 
@@ -636,6 +653,7 @@ internal static class RevisionOps
         var moveGroups = new Dictionary<string, RevisionGroup>(StringComparer.Ordinal);
         var rowGroupByTr = new Dictionary<XElement, RevisionGroup>();
         var cellGroups = new List<RevisionGroup>();
+        var tablePropertyGroups = new List<RevisionGroup>();
         RevisionGroup? cur = null;
         RevisionGroup? lastRowGroup = null;
 
@@ -691,6 +709,7 @@ internal static class RevisionOps
             if (u.Kind == UnitKind.RowMark)
             {
                 if (lastRowGroup is not null && lastRowGroup.Type == u.Type && lastRowGroup.Author == u.Author
+                    && lastRowGroup.Date == u.Date
                     && lastRowGroup.Units[^1].MarkedRow is { } prevTr && u.MarkedRow is { } tr2
                     && prevTr.Parent == tr2.Parent && OnlyIgnorableBetween(prevTr, tr2))
                 {
@@ -715,7 +734,15 @@ internal static class RevisionOps
 
             if (u.Kind == UnitKind.PropsChange)
             {
-                if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
+                var tablePropertyGroup = u.Table is null ? null : tablePropertyGroups.FirstOrDefault(group =>
+                    group.Author == u.Author && group.Date == u.Date
+                    && ReferenceEquals(group.Units[0].Table, u.Table));
+                if (tablePropertyGroup is not null)
+                {
+                    tablePropertyGroup.Units.Add(u);
+                    cur = null;
+                }
+                else if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
                     && cur.Date == u.Date
                     && cur.Units[^1].Element.Name == W.rPrChange && u.Element.Name == W.rPrChange
                     && AdjacentFormatRuns(cur.Units[^1].Element, u.Element))
@@ -726,12 +753,14 @@ internal static class RevisionOps
                 {
                     cur = NewGroup(u, partIndex);
                     groups.Add(cur);
+                    if (u.Table is not null) tablePropertyGroups.Add(cur);
                 }
                 continue;
             }
 
             // Content / paragraph-mark insert, delete, or unranged move — adjacency grouping.
             if (cur is not null && cur.Type == u.Type && cur.Author == u.Author
+                && cur.Date == u.Date
                 && cur.Units[^1].Element.Name == u.Element.Name
                 && Contiguous(cur.Units[^1], u))
             {
@@ -904,6 +933,62 @@ internal static class RevisionOps
                 "customXml move-range revisions are listed but cannot be selectively resolved.");
             groups.Add(group);
         }
+
+        // Inventory every other recognized revision marker that the selective resolver did
+        // not claim. This is deliberately a final pass: silently omitting a live family makes
+        // accept-all report success while leaving tracked markup behind. Archived markers in
+        // the old-value payload of a *PrChange are not live revisions and stay excluded.
+        var represented = groups.Where(group => group.PartIndex == partIndex)
+            .SelectMany(group => group.Units.Select(unit => unit.Element)
+                .Concat(group.RangeMarkers))
+            .ToHashSet();
+        foreach (var marker in root.Descendants()
+            .Where(IsRecognizedRevisionMarker)
+            .Where(marker => !represented.Contains(marker))
+            .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name))))
+        {
+            var type = marker.Name == W.ins ? TypeInsert
+                : marker.Name == W.del ? TypeDelete
+                : marker.Name == W.moveFrom || marker.Name == W.moveTo
+                    || MoveRangeNames.Contains(marker.Name) ? TypeMove
+                : PropsChangeNames.Contains(marker.Name) || marker.Name == W.numberingChange
+                    ? TypeFormat
+                : TypeStructure;
+            var unit = new RevisionUnit
+            {
+                Element = marker,
+                Kind = UnitKind.Unsupported,
+                Type = type,
+                Family = RevisionFamily.Unsupported,
+                Author = AuthorOf(marker),
+                Date = (string?)marker.Attribute(W.date),
+                Paragraph = marker.Ancestors(W.p).FirstOrDefault(),
+                MarkedCell = marker.Ancestors(W.tc).FirstOrDefault(),
+                MarkedRow = marker.Ancestors(W.tr).FirstOrDefault(),
+                Table = marker.Ancestors(W.tbl).FirstOrDefault(),
+                Wid = WidOf(marker),
+                NativeId = (string?)marker.Attribute(W.id),
+            };
+            var group = NewGroup(unit, partIndex);
+            group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+            group.Diagnostic = new RevisionDiagnostic(
+                "unsupported_revision_family",
+                $"{marker.Name} is recognized tracked-change markup but cannot be selectively resolved.");
+            groups.Add(group);
+            represented.Add(marker);
+        }
+    }
+
+    private static bool IsRecognizedRevisionMarker(XElement element)
+    {
+        var name = element.Name;
+        return RevWrapperNames.Contains(name)
+            || MoveRangeNames.Contains(name)
+            || StructuredRangeNames.Contains(name)
+            || UnsupportedRangeNames.Contains(name)
+            || PropsChangeNames.Contains(name)
+            || name == W.cellIns || name == W.cellDel || name == W.cellMerge
+            || name == W.numberingChange;
     }
 
     /// <summary>
@@ -1275,6 +1360,15 @@ internal static class RevisionOps
 
         ResolveCellStructure(g, accept, removedBlocks);
 
+        // If resolving this revision removes an SDT envelope, expose its paragraphs before
+        // resolving their pilcrows. A last paragraph inside w:sdtContent can then coalesce with
+        // the following body paragraph instead of being mistaken for the end of its container
+        // and surviving as an empty husk. Range markers are transparent revision scaffolding and
+        // must likewise be gone before paragraph adjacency is evaluated.
+        ResolveStructuredWrapper(g, accept, removedBlocks);
+        foreach (var marker in g.RangeMarkers)
+            if (!Detached(marker)) marker.Remove();
+
         // Paragraph marks last, in reverse document order, so multi-paragraph coalescing
         // cascades into the single surviving paragraph exactly as RevisionProcessor's
         // grouped transform does.
@@ -1296,17 +1390,24 @@ internal static class RevisionOps
                 }
                 else
                 {
-                    // No following paragraph to coalesce into (last block of its
-                    // container) — the mark cannot go away; strip the revision.
-                    u.Element.Remove();
+                    // A wholly inserted/deleted final paragraph has no successor whose mark can
+                    // survive. Once its revised content is gone, remove the empty block itself;
+                    // a paragraph with unrelated surviving content keeps its unavoidable mark.
+                    if (!u.Paragraph.Elements().Any(element => element.Name != W.pPr
+                        && !IsIgnorableBetween(element)))
+                    {
+                        var paragraph = u.Paragraph;
+                        paragraph.Remove();
+                        removedBlocks.Add(paragraph);
+                        touchedParagraphs.Remove(paragraph);
+                    }
+                    else
+                    {
+                        u.Element.Remove();
+                    }
                 }
             }
         }
-
-        ResolveStructuredWrapper(g, accept, removedBlocks);
-
-        foreach (var m in g.RangeMarkers)
-            if (!Detached(m)) m.Remove();
 
         foreach (var p in touchedParagraphs)
         {
@@ -1662,9 +1763,10 @@ internal static class RevisionOps
     {
         var parent = change.Parent;
         change.Remove();
-        if (parent is not null && !parent.HasElements && !parent.HasAttributes
+        if (parent is not null && !parent.HasElements && HasNoSemanticAttributes(parent)
             && (parent.Name == W.rPr || parent.Name == W.pPr || parent.Name == W.trPr
-                || parent.Name == W.tblPrEx))
+                || parent.Name == W.tblPr || parent.Name == W.tcPr
+                || parent.Name == W.tblGrid || parent.Name == W.tblPrEx))
         {
             parent.Remove();
         }
@@ -1725,8 +1827,9 @@ internal static class RevisionOps
 
         // A change whose stored old property set was empty leaves an empty husk —
         // remove it (Word writes no empty rPr/pPr), mirroring AcceptProps.
-        if (!parent.HasElements && !parent.HasAttributes
-            && (pn == W.rPr || pn == W.pPr || pn == W.trPr || pn == W.tblPrEx))
+        if (!parent.HasElements && HasNoSemanticAttributes(parent)
+            && (pn == W.rPr || pn == W.pPr || pn == W.trPr
+                || pn == W.tblPr || pn == W.tcPr || pn == W.tblGrid || pn == W.tblPrEx))
         {
             parent.Remove();
         }

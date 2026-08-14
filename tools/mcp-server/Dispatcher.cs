@@ -687,6 +687,11 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var action = Str(args, "action");
+        return RunTrackChangesAction(session, action, args);
+    }
+
+    private static string RunTrackChangesAction(DocSession session, string action, JsonElement args)
+    {
         switch (action)
         {
             case "list":
@@ -874,6 +879,7 @@ internal static class Dispatcher
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
                     "docxodus_links" => RunLinksAction(session, action, mutationArgs),
                     "docxodus_images" => RunImagesAction(session, action, mutationArgs),
+                    "docxodus_track_changes" => RunTrackChangesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
@@ -906,6 +912,8 @@ internal static class Dispatcher
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
             "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
+            "docxodus_track_changes" => action is "accept" or "reject"
+                or "accept_all" or "reject_all",
             _ => false,
         };
         return known ? null : new EditError(
@@ -1198,6 +1206,14 @@ internal static class Dispatcher
                 break;
             case ("docxodus_images", "remove"):
                 RequireStrings(args, "imageId");
+                break;
+
+            case ("docxodus_track_changes", "accept"):
+            case ("docxodus_track_changes", "reject"):
+                RequireStrings(args, "revisionId");
+                break;
+            case ("docxodus_track_changes", "accept_all"):
+            case ("docxodus_track_changes", "reject_all"):
                 break;
         }
     }

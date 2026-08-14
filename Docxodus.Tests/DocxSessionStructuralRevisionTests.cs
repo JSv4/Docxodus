@@ -343,6 +343,392 @@ public class DocxSessionStructuralRevisionTests
         Assert.Equal("777", Assert.Single(remaining.ConstituentIds));
     }
 
+    [Fact]
+    public void DS45511_TrackedSdtDelete_AcceptMatchesDirectWithoutParagraphHusks()
+    {
+        var baseline = BuildSdtDeleteBaseline();
+        byte[] expected;
+        using (var direct = new DocxSession(baseline))
+        {
+            Assert.True(direct.DeleteRange(AnchorByText(direct, "delete start"),
+                AnchorByText(direct, "after")).Success);
+            expected = direct.Save();
+        }
+
+        byte[] actual;
+        using (var tracked = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "SDT Reviewer",
+        }))
+        {
+            Assert.True(tracked.DeleteRange(AnchorByText(tracked, "delete start"),
+                AnchorByText(tracked, "after")).Success);
+            var resolved = tracked.AcceptAllRevisions();
+            Assert.True(resolved.Success, resolved.Error?.Message);
+            Assert.Empty(tracked.ListRevisions());
+            actual = tracked.Save();
+        }
+
+        var expectedRoot = MainRoot(expected);
+        var actualRoot = MainRoot(actual);
+        Assert.True(XNode.DeepEquals(expectedRoot, actualRoot),
+            FirstDifference(expectedRoot, actualRoot));
+        Assert.Equal(new[] { "before", "after" },
+            actualRoot.Descendants(W.p).Select(paragraph => paragraph.Value).ToArray());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS45512_TrackedInsertParagraph_RoundTrips(bool accept)
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        byte[] expected;
+        if (accept)
+        {
+            using var direct = new DocxSession(baseline);
+            Assert.True(direct.InsertParagraph(FirstBodyTextAnchor(direct), Position.After,
+                "inserted paragraph").Success);
+            expected = direct.Save();
+        }
+        else
+        {
+            expected = baseline;
+        }
+
+        byte[] actual;
+        using (var tracked = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Paragraph Reviewer",
+        }))
+        {
+            Assert.True(tracked.InsertParagraph(FirstBodyTextAnchor(tracked), Position.After,
+                "inserted paragraph").Success);
+            var revision = Assert.Single(tracked.ListRevisions());
+            Assert.Equal(RevisionFamily.ContentInsert, revision.Family);
+            var resolved = accept
+                ? tracked.AcceptRevision(revision.Id)
+                : tracked.RejectRevision(revision.Id);
+            Assert.True(resolved.Success, resolved.Error?.Message);
+            Assert.Empty(tracked.ListRevisions());
+            actual = tracked.Save();
+        }
+
+        Assert.True(XNode.DeepEquals(MainRoot(expected), MainRoot(actual)),
+            FirstDifference(MainRoot(expected), MainRoot(actual)));
+    }
+
+    [Theory]
+    [InlineData("split")]
+    [InlineData("merge")]
+    [InlineData("insert_table")]
+    public void DS45513_UnsafeTrackedStructuralOperations_FailTypedAndUndoFree(string operation)
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+        });
+        var paragraphs = session.Project().AnchorIndex.Values
+            .Where(anchor => anchor.Anchor.Scope == "body" && anchor.Anchor.Kind == "p")
+            .Select(anchor => anchor.Anchor.Id).Take(2).ToArray();
+
+        var result = operation switch
+        {
+            "split" => session.SplitParagraph(paragraphs[0], 1),
+            "merge" => session.MergeParagraphs(paragraphs[0], paragraphs[1]),
+            "insert_table" => session.InsertTable(paragraphs[0], Position.After, 1, 1),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
+        Assert.False(session.Undo());
+    }
+
+    [Theory]
+    [InlineData("paragraph_style", true)]
+    [InlineData("paragraph_style", false)]
+    [InlineData("paragraph_format", true)]
+    [InlineData("paragraph_format", false)]
+    [InlineData("column_widths", true)]
+    [InlineData("column_widths", false)]
+    [InlineData("table_borders", true)]
+    [InlineData("table_borders", false)]
+    [InlineData("cell_shading", true)]
+    [InlineData("cell_shading", false)]
+    [InlineData("row_options", true)]
+    [InlineData("row_options", false)]
+    public void DS45514_TrackedPropertyMutation_RoundTrips(string operation, bool accept)
+    {
+        var baseline = operation.StartsWith("paragraph", StringComparison.Ordinal)
+            ? DocxSessionTests.BuildDS001_SimpleTwoParagraphs()
+            : BuildTableDocument();
+        byte[] expected;
+        if (accept)
+        {
+            using var direct = new DocxSession(baseline);
+            Assert.True(ApplyPropertyMutation(direct, operation).Success);
+            expected = direct.Save();
+        }
+        else
+        {
+            expected = baseline;
+        }
+
+        byte[] actual;
+        using (var tracked = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Format Reviewer",
+        }))
+        {
+            var edit = ApplyPropertyMutation(tracked, operation);
+            Assert.True(edit.Success, edit.Error?.Message);
+            var revision = Assert.Single(tracked.ListRevisions());
+            Assert.Equal(RevisionFamily.PropertiesChange, revision.Family);
+            var resolved = accept
+                ? tracked.AcceptRevision(revision.Id)
+                : tracked.RejectRevision(revision.Id);
+            Assert.True(resolved.Success, resolved.Error?.Message);
+            Assert.Empty(tracked.ListRevisions());
+            actual = tracked.Save();
+        }
+
+        var expectedRoot = MainRoot(expected);
+        var actualRoot = MainRoot(actual);
+        Assert.True(XNode.DeepEquals(expectedRoot, actualRoot),
+            FirstDifference(expectedRoot, actualRoot));
+        Assert.Equal(ValidationErrors(expected), ValidationErrors(actual));
+    }
+
+    [Fact]
+    public void DS45515_StableIdsAndSequentialRows_RemainIndependent()
+    {
+        using (var content = new DocxSession(BuildSeparatedInsertions()))
+        {
+            var before = content.ListRevisions();
+            var first = Assert.Single(before, revision => revision.ConstituentIds.SequenceEqual(new[] { "1" }));
+            var separator = Assert.Single(before, revision => revision.ConstituentIds.SequenceEqual(new[] { "2" }));
+            var third = Assert.Single(before, revision => revision.ConstituentIds.SequenceEqual(new[] { "3" }));
+
+            Assert.True(content.AcceptRevision(separator.Id).Success);
+
+            var after = content.ListRevisions();
+            Assert.Equal(first.Id, Assert.Single(after,
+                revision => revision.ConstituentIds.SequenceEqual(new[] { "1" })).Id);
+            Assert.Equal(third.Id, Assert.Single(after,
+                revision => revision.ConstituentIds.SequenceEqual(new[] { "3" })).Id);
+        }
+
+        using var rows = new DocxSession(BuildTableDocument(), new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Row Reviewer",
+        });
+        var cell = FirstCellAnchor(rows);
+        Assert.True(rows.InsertTableRow(cell, Position.After).Success);
+        Assert.True(rows.InsertTableRow(cell, Position.After).Success);
+        var rowRevisions = rows.ListRevisions()
+            .Where(revision => revision.Family == RevisionFamily.RowInsert).ToList();
+        Assert.Equal(2, rowRevisions.Count);
+        var survivingId = rowRevisions[1].Id;
+        Assert.True(rows.AcceptRevision(rowRevisions[0].Id).Success);
+        Assert.Equal(survivingId, Assert.Single(rows.ListRevisions(),
+            revision => revision.Family == RevisionFamily.RowInsert).Id);
+    }
+
+    [Theory]
+    [InlineData("math_ctrlpr")]
+    [InlineData("numbering_delete")]
+    [InlineData("run_properties_delete")]
+    public void DS45516_UnhandledRecognizedFamilies_AreListedAndBlockBulk(string shape)
+    {
+        var input = BuildUnsupportedRevisionDocument(shape);
+        using var session = new DocxSession(input);
+        var before = MainRoot(session.Save());
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionFamily.Unsupported, revision.Family);
+        Assert.Equal(RevisionResolutionStatus.Unsupported, revision.ResolutionStatus);
+        Assert.Equal("unsupported_revision_family", revision.Diagnostic!.Code);
+
+        var result = session.AcceptAllRevisions();
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.RevisionUnsupported, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
+        Assert.False(session.Undo());
+    }
+
+    [Fact]
+    public void DS45517_NonnumericNativeId_IsMalformedAndFailsClosed()
+    {
+        var input = MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var run = root.Descendants(W.p).First().Elements(W.r).First();
+            run.ReplaceWith(new XElement(W.ins,
+                new XAttribute(W.id, "not-an-integer"),
+                new XAttribute(W.author, "Bad Producer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                new XElement(run)));
+        });
+        using var session = new DocxSession(input);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(RevisionResolutionStatus.Malformed, revision.ResolutionStatus);
+        Assert.Equal("invalid_revision_id", revision.Diagnostic!.Code);
+
+        var result = session.AcceptRevision(revision.Id);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.RevisionMalformed, result.Error!.Code);
+        Assert.False(session.Undo());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS45518_RejectTrackedListCreation_RestoresPackageAndUndoRedo(bool bulk)
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        Assert.False(HasNumberingPart(baseline));
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "List Reviewer",
+        });
+        Assert.True(session.ApplyListFormat(FirstBodyTextAnchor(session), ListFormat.Decimal).Success);
+        Assert.True(HasNumberingPart(session.Save()));
+        var revision = Assert.Single(session.ListRevisions());
+
+        var rejected = bulk
+            ? session.RejectAllRevisions()
+            : session.RejectRevision(revision.Id);
+
+        Assert.True(rejected.Success, rejected.Error?.Message);
+        Assert.False(HasNumberingPart(session.Save()));
+        Assert.True(XNode.DeepEquals(MainRoot(baseline), MainRoot(session.Save())));
+        Assert.True(session.Undo());
+        Assert.True(HasNumberingPart(session.Save()));
+        Assert.Single(session.ListRevisions());
+        Assert.True(session.Redo());
+        Assert.False(HasNumberingPart(session.Save()));
+        Assert.Empty(session.ListRevisions());
+    }
+
+    private static EditResult ApplyPropertyMutation(DocxSession session, string operation)
+    {
+        if (operation.StartsWith("paragraph", StringComparison.Ordinal))
+        {
+            var paragraph = FirstBodyTextAnchor(session);
+            return operation switch
+            {
+                "paragraph_style" => session.SetParagraphStyle(paragraph, "Heading2"),
+                "paragraph_format" => session.SetParagraphFormat(paragraph,
+                    new ParagraphFormatOp { Alignment = ParagraphAlignment.Center, SpacingAfter = 240 }),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+            };
+        }
+
+        var cell = FirstCellAnchor(session);
+        return operation switch
+        {
+            "column_widths" => session.SetColumnWidths(cell, new[] { 2600, 3000 }),
+            "table_borders" => session.SetTableBorders(cell,
+                new TableBorderSpec { Style = "double", Size = 8, Color = "CC0000" }),
+            "cell_shading" => session.SetCellShading(cell, "D9EAF7", TableShadingScope.Row),
+            "row_options" => session.SetTableRowOptions(cell,
+                new TableRowOptions { RepeatHeader = true, AllowBreakAcrossPages = false, HeightTwips = 480 }),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+    }
+
+    private static byte[] BuildSdtDeleteBaseline() =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var body = root.Element(W.body)!;
+            var sectPr = body.Element(W.sectPr) is { } section
+                ? new XElement(section)
+                : null;
+            body.ReplaceNodes(
+                Paragraph("before"),
+                Paragraph("delete start"),
+                new XElement(W.sdt,
+                    new XElement(W.sdtPr,
+                        new XElement(W.tag, new XAttribute(W.val, "controlled"))),
+                    new XElement(W.sdtContent, Paragraph("controlled paragraph"))),
+                Paragraph("after"),
+                sectPr);
+        });
+
+    private static byte[] BuildSeparatedInsertions() =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var paragraph = root.Descendants(W.p).First();
+            paragraph.ReplaceNodes(
+                RevisionWrapper(W.ins, "1", "A", "2026-01-01T00:00:00Z", "one"),
+                RevisionWrapper(W.del, "2", "B", "2026-01-01T00:00:00Z", "separator"),
+                RevisionWrapper(W.ins, "3", "A", "2026-01-02T00:00:00Z", "three"));
+        });
+
+    private static byte[] BuildUnsupportedRevisionDocument(string shape) =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var paragraph = root.Descendants(W.p).First();
+            var marker = new XElement(W.del,
+                new XAttribute(W.id, "44"),
+                new XAttribute(W.author, "Unsupported Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"));
+            switch (shape)
+            {
+                case "math_ctrlpr":
+                    paragraph.ReplaceNodes(new XElement(M.oMath,
+                        new XElement(M.f,
+                            new XElement(M.fPr, new XElement(M.ctrlPr, marker)),
+                            new XElement(M.num, new XElement(W.r, new XElement(W.t, "1"))),
+                            new XElement(M.den, new XElement(W.r, new XElement(W.t, "2"))))));
+                    break;
+                case "numbering_delete":
+                    paragraph.AddFirst(new XElement(W.pPr,
+                        new XElement(W.numPr,
+                            new XElement(W.ilvl, new XAttribute(W.val, 0)),
+                            new XElement(W.numId, new XAttribute(W.val, 1)),
+                            marker)));
+                    break;
+                case "run_properties_delete":
+                    paragraph.Elements(W.r).First().AddFirst(new XElement(W.rPr, marker));
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(shape));
+            }
+        });
+
+    private static XElement Paragraph(string text) =>
+        new(W.p, new XElement(W.r, new XElement(W.t, text)));
+
+    private static XElement RevisionWrapper(
+        XName name, string id, string author, string date, string text) =>
+        new(name,
+            new XAttribute(W.id, id),
+            new XAttribute(W.author, author),
+            new XAttribute(W.date, date),
+            new XElement(W.r,
+                new XElement(name == W.del ? W.delText : W.t, text)));
+
+    private static string AnchorByText(DocxSession session, string text) =>
+        session.Project().AnchorIndex.Values.Single(anchor =>
+            string.Equals(session.GetAnchorInfo(anchor.Anchor.Id)?.TextPreview,
+                text, StringComparison.Ordinal)).Anchor.Id;
+
+    private static bool HasNumberingPart(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return document.MainDocumentPart!.NumberingDefinitionsPart is not null;
+    }
+
     private static byte[] BuildTableDocument()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

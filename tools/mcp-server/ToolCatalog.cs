@@ -476,7 +476,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/track-changes actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
             """
             {
               "type": "object",
@@ -493,7 +493,7 @@ internal static class ToolCatalog
                   "items": {
                     "type": "object",
                     "properties": {
-                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images"] },
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_track_changes"] },
                       "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
                     },
                     "required": ["tool", "args"]
