@@ -25,6 +25,13 @@
     standalone example serves from a local runtime. That is deliberate. When the
     three were separate hand-rolled toolbars they drifted, and the demo ended up
     advertising a smaller editor than the one that shipped.
+
+    On a phone this page mounts THE DOCX ARCADE instead of the plain editor
+    (same surface, a game running on one of its paragraphs). A phone visitor
+    will not draft a contract on a 390px screen, but they will absolutely play
+    the thing — and the arcade demonstrates the same engine harder: a document
+    being rewritten and re-rendered ten times a second, still saving as a real
+    .docx. `?demo=editor` pins the plain editor, `?demo=arcade` the game.
   -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Docxodus — a Word-document engine in your browser" />
@@ -147,6 +154,10 @@
     .capability-card strong { display: block; font-size: 15px; }
     .capability-card p { margin: 7px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 
+    /* The page mounts ONE of two demos (the decision is taken in <head>, before
+       first paint, so the framing copy never flashes the wrong one). */
+    [data-demo="editor"] .for-arcade, [data-demo="arcade"] .for-editor { display: none; }
+
     #stage { width: min(1220px, calc(100% - 32px)); margin: 54px auto 70px; }
     .section-kicker { margin: 0 0 10px; color: var(--accent); font-size: 11px; font-weight: 700;
       letter-spacing: .14em; text-transform: uppercase; }
@@ -154,7 +165,9 @@
       font-size: clamp(26px, 4vw, 42px); letter-spacing: -.02em; }
     .section-sub { margin: 0 0 23px; max-width: 62ch; color: var(--muted); font-size: 14px; line-height: 1.6; }
     .section-sub a { color: var(--accent); }
-    #frame { overflow: hidden; border: 1px solid var(--line); border-radius: 16px;
+    /* Positioned: the arcade's thumb controls overlay THIS card rather than the
+       viewport, so they float over the game and not over the page's own prose. */
+    #frame { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 16px;
       background: var(--surface); box-shadow: var(--shadow-xl); }
     .workspace-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
       padding: 10px 16px; color: #CBD5E1; background: var(--sidebar); border-bottom: 1px solid rgba(255,255,255,.08); }
@@ -229,20 +242,52 @@
     }
     @media (max-width: 620px) {
       .hero-inner { width: min(100% - 26px, 1180px); }
-      .topbar { min-height: 64px; }
-      nav a:not(.nav-cta) { display: none; }
+      /* Every destination stays reachable on a phone. These links point at the
+         other demo pages — the arcade, the observatory, the full-screen editor
+         — which is exactly what a phone visitor wants, and collapsing them to
+         display:none turned the landing page into a dead end. A horizontal
+         scroll strip rather than a hamburger: six chips are one swipe, and
+         nothing hides behind a second tap. */
+      .topbar { min-height: 0; flex-direction: column; align-items: stretch; gap: 4px;
+        padding: 12px 0 2px; }
+      nav { margin: 0 -13px; padding: 2px 13px 8px; overflow-x: auto;
+        scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+      nav::-webkit-scrollbar { display: none; }
+      nav a { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 34px;
+        border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+      nav .nav-cta { border-color: transparent; }
       .hero-grid { padding: 42px 0 62px; }
       .workspace-head { align-items: flex-start; flex-direction: column; gap: 8px; }
       .privacy-chip { display: none; }
       /* On a phone the surface owns the screen: a short frame would leave the document
          in a letterbox, and the ribbon collapses to its compact layout anyway. */
       #workspace { height: min(78vh, 620px); }
+      /* The arcade also spends its bottom ~190px on the thumb controls, so it
+         gets the taller frame — a letterboxed 92 × 26 game screen is unplayable.
+         Sized in dvh where that exists: vh on a phone is the tall viewport with
+         the browser chrome hidden, which would push the controls under it. */
+      [data-demo="arcade"] #workspace { height: min(86vh, 720px); }
+      [data-demo="arcade"] #workspace { height: min(80dvh, 720px); }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important;
         animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
     }
   </style>
+
+  <script>
+    // Which demo this page mounts — decided once, synchronously, before the
+    // first paint, so the copy framing the surface can never flash the wrong
+    // one and the module script below has nothing left to decide.
+    //
+    // Width, not touch: it is how much room the frame has that decides whether
+    // a document surface is worth serving here, and a width test stays true
+    // when the window is resized (and testable without a device emulator).
+    const forcedDemo = new URLSearchParams(location.search).get("demo");
+    document.documentElement.dataset.demo =
+      forcedDemo === "arcade" || forcedDemo === "editor" ? forcedDemo
+        : window.matchMedia("(max-width: 620px)").matches ? "arcade" : "editor";
+  </script>
 </head>
 <body>
   <header class="hero">
@@ -266,8 +311,10 @@
           <h1>Word files.<br><span>No server required.</span></h1>
           <p class="hero-copy">Render, edit, redline, and save real DOCX documents with .NET-grade OOXML fidelity—entirely inside the browser via WebAssembly.</p>
           <div class="hero-actions">
-            <a class="hero-button primary" href="#live-editor">Try the live editor <span aria-hidden="true">↘</span></a>
-            <a class="hero-button" href="./app.html">Open full screen <span aria-hidden="true">↗</span></a>
+            <a class="hero-button primary for-editor" href="#live-editor">Try the live editor <span aria-hidden="true">↘</span></a>
+            <a class="hero-button primary for-arcade" href="#live-editor">Play the arcade <span aria-hidden="true">↘</span></a>
+            <a class="hero-button for-editor" href="./app.html">Open full screen <span aria-hidden="true">↗</span></a>
+            <a class="hero-button for-arcade" href="./arcade.html">Open full screen <span aria-hidden="true">↗</span></a>
             <button class="hero-button" id="openEmbed" type="button">Embed it <span aria-hidden="true">&lt;/&gt;</span></button>
             <a class="hero-button" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">View source <span aria-hidden="true">↗</span></a>
           </div>
@@ -298,11 +345,22 @@
   </header>
 
   <main id="stage">
-    <p class="section-kicker">Not a screenshot</p>
-    <h2 class="section-title" id="live-editor">The document below is live.</h2>
-    <p class="section-sub">This is the shipped editor surface — the same ribbon, tables, footnotes and
-      header/footer tools you get from <code>createRibbonEditor</code> in the npm package. It narrows to a
-      one-handed layout on a phone. <a href="./app.html">Open it full screen ↗</a></p>
+    <div id="live-editor">
+      <p class="section-kicker for-editor">Not a screenshot</p>
+      <h2 class="section-title for-editor">The document below is live.</h2>
+      <p class="section-sub for-editor">This is the shipped editor surface — the same ribbon, tables, footnotes and
+        header/footer tools you get from <code>createRibbonEditor</code> in the npm package. It narrows to a
+        one-handed layout on a phone. <a href="./app.html">Open it full screen ↗</a> ·
+        <a href="?demo=arcade">Play the arcade on it ↗</a></p>
+
+      <p class="section-kicker for-arcade">Not a video</p>
+      <h2 class="section-title for-arcade">The game below is a Word document.</h2>
+      <p class="section-sub for-arcade">Its screen is one paragraph, rewritten and re-rendered ten times a
+        second by the same engine that edits contracts — on the same shipped ribbon. Pause and type terrain
+        straight into the level; resume and it is solid. Save mid-jump and you get a real
+        <code>.docx</code>. <a href="./arcade.html">Open it full screen ↗</a> ·
+        <a href="?demo=editor">Prefer the plain editor? ↗</a></p>
+    </div>
 
     <section id="frame" aria-label="Live Docxodus editor">
       <div class="workspace-head">
@@ -353,6 +411,13 @@
       ?? "https://cdn.jsdelivr.net/npm/docxodus@9.9.0/dist/embed.bundle.js";
     const DOC = params.get("doc")
       ?? "./docxodus-demo-guide.docx";
+    // The arcade and its controls are demo content living beside this page, so
+    // ?engine= pins the library alone and they version with the site — the same
+    // split arcade.html and observatory.html use.
+    const GAMES_URL = params.get("games") ?? "./ascii-arcade.js";
+    const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
+    // Decided in <head>, before paint. Read, never re-derived.
+    const DEMO = document.documentElement.dataset.demo;
 
     const $ = (id) => document.getElementById(id);
     const statusbar = $("statusbar");
@@ -402,28 +467,66 @@
       if (event.target === $("embedDialog")) $("embedDialog").close();
     });
 
+    // Both branches mount the SAME shipped surface into the same frame; they
+    // differ only in what is loaded into it and what steers it.
+    const surfaceOptions = {
+      // The landing page frames the surface itself (status head + card), so the
+      // surface stays flush inside it.
+      frame: "flush",
+      // Relay the surface's own status into the chip, without demoting the dot
+      // back to "loading" for routine post-boot messages ("Saved …").
+      onStatus: (text) => setStatus(text, statusbar.dataset.state === "ready" ? "ready" : "loading"),
+      loader: {
+        eyebrow: "Running locally in this tab",
+        meta: DEMO === "arcade" ? "a live DOCX as the framebuffer" : "DOCX → WASM → DOCX",
+      },
+    };
+
     const started = performance.now();
     try {
-      const { createRibbonEditor } = await import(ENGINE);
-      // One call mounts the whole surface. The chrome and its loading overlay paint
-      // immediately; the runtime streams behind them. This page contributes only the
-      // dark frame around it and the status chip above it.
-      window.__ribbon = await createRibbonEditor("#workspace", DOC, {
-        documentName: "docxodus-demo.docx",
-        // The landing page frames the surface itself (status head + card), so the
-        // surface stays flush inside it.
-        frame: "flush",
-        // Relay the surface's own status into the chip, without demoting the dot
-        // back to "loading" for routine post-boot messages ("Saved …").
-        onStatus: (text) => setStatus(text, statusbar.dataset.state === "ready" ? "ready" : "loading"),
-        loader: {
-          eyebrow: "Running locally in this tab",
-          meta: "DOCX → WASM → DOCX",
-        },
-      });
-      setStatus(`Live — engine and document ready in ${Math.round(performance.now() - started)} ms.`, "ready");
+      if (DEMO === "arcade") {
+        const [{ createRibbonEditor, DocxSession, getWasmExports },
+               { startArcade }, { mountArcadeDock }] =
+          await Promise.all([import(ENGINE), import(GAMES_URL), import(DOCK_URL)]);
+
+        const ribbon = await createRibbonEditor("#workspace", null, {
+          ...surfaceOptions,
+          documentName: "docx-arcade.docx",
+          headerFooter: false,
+          hint: "The game screen below is a Word paragraph. Pause (or tap it) and edit it like any other document.",
+        });
+        const editor = ribbon.editor;
+        const bridge = getWasmExports().DocxSessionBridge;
+        const session = new DocxSession(editor.sessionHandle, bridge);
+        // Anchored to the card, not the viewport: the thumb controls float over
+        // the game, and the page's own prose above and below stays clear of them.
+        // No Embed button here — this page has its own embed dialog.
+        const dock = mountArcadeDock($("frame"), { anchor: "host" });
+        const controller = startArcade({
+          editor,
+          session,
+          cart: params.get("cart") ?? "quest",
+          intro: params.get("intro") !== "0",
+          ui: dock.ui,
+        });
+        dock.show();
+        window.__arcade = { ...controller, editor, ribbon, session, bridge, dock };
+        window.__ribbon = ribbon;
+        setStatus(`Live — the arcade booted in ${Math.round(performance.now() - started)} ms.`, "ready");
+      } else {
+        const { createRibbonEditor } = await import(ENGINE);
+        // One call mounts the whole surface. The chrome and its loading overlay paint
+        // immediately; the runtime streams behind them. This page contributes only the
+        // dark frame around it and the status chip above it.
+        window.__ribbon = await createRibbonEditor("#workspace", DOC, {
+          ...surfaceOptions,
+          documentName: "docxodus-demo.docx",
+        });
+        setStatus(`Live — engine and document ready in ${Math.round(performance.now() - started)} ms.`, "ready");
+      }
     } catch (error) {
       setStatus(String(error).slice(0, 180), "error");
+      window.__demoError = String(error);
     }
   </script>
 </body>

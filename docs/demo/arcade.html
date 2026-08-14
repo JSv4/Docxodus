@@ -22,8 +22,9 @@
   <style>
     /* A HOST page, like observatory.html: the editor surface ships in the npm
        package (`createRibbonEditor`); the games and their driver are demo
-       content living beside this page (`ascii-arcade.js`). The page's only
-       original chrome is the arcade dock pinned under the document and the
+       content living beside this page (`ascii-arcade.js`), and the controls
+       come from `arcade-dock.js` — shared with the landing page, which mounts
+       this same arcade on a phone. The page's only original chrome is the
        power-on screen shown when the page is embedded in an iframe. */
     html, body { height: 100%; }
     body { margin: 0; background: #e8ecf2; }
@@ -51,45 +52,15 @@
     body:has(.dxr[data-state="loading"]) #home,
     body:has(.dxr[data-state="error"]) #home { display: none; }
 
-    #dock {
-      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
-      z-index: 60; max-width: min(980px, calc(100vw - 24px));
-      display: flex; flex-direction: column; gap: 5px; align-items: center;
-      background: rgba(11, 15, 26, 0.94); color: #d5dce8;
-      border: 1px solid #1f2a3f; border-radius: 10px;
-      padding: 8px 14px 7px;
-      font: 12px/1.4 "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-    }
-    #dock .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; }
-    #dock button, #dock select {
-      appearance: none; background: #111827; color: #d5dce8;
-      border: 1px solid #1f2a3f; border-radius: 6px;
-      font: inherit; font-size: 11.5px; padding: 4px 10px; cursor: pointer;
-    }
-    #dock button:hover { background: #18233a; }
-    #dock button[aria-pressed="true"] { background: #123a34; color: #5eead4; }
-    #dock button:disabled { opacity: 0.4; cursor: default; }
-    #playpause { min-width: 110px; }
-    #dockstats { color: #7a8699; font-size: 11px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
-    #dockstats b { color: #d5dce8; font-weight: 600; }
-    #dockstats .inc { color: #5eead4; }
-    #dockhint { color: #7a8699; font-size: 10.5px; text-align: center; }
-    #dockhint b { color: #d5dce8; font-weight: 600; }
-
-    /* Touch pad: only when the pointer is coarse (phones/tablets). */
-    #pad { display: none; }
-    @media (pointer: coarse) { #pad { display: flex; } }
-    #pad button { min-width: 44px; min-height: 40px; font-size: 15px; touch-action: none; user-select: none; }
-
-    #copyEmbed { border-color: #123a34; color: #5eead4; }
-    #copyEmbed:hover { background: #123a34; }
+    /* The dock, the "⋯" sheet and the thumb pad are styled by arcade-dock.js
+       (`.dxa-*`), which owns both its layouts. Nothing about them is page-local
+       any more — the landing page mounts the identical controls. */
 
     /* Power-on screen: shown instead of auto-booting when the page is inside
        an iframe, so a feed embed never streams a .NET runtime unasked. */
     /* The explicit display values below would defeat the `hidden` attribute
        (author CSS beats the UA's display:none), so restore it explicitly. */
-    #boot[hidden], #dock[hidden] { display: none; }
+    #boot[hidden] { display: none; }
     #boot {
       position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
       background: radial-gradient(ellipse at center, #12203a 0%, #0a0f1a 70%);
@@ -116,29 +87,6 @@
     </div>
   </div>
 
-  <div id="dock" hidden>
-    <div class="row" id="dockcarts"></div>
-    <div class="row">
-      <button id="playpause">⏸ Pause &amp; edit</button>
-      <button id="restart" title="Restart the cartridge (R)">↻ Restart</button>
-      <select id="pace" title="Target frame pacing">
-        <option value="125">8 fps</option>
-        <option value="100" selected>10 fps</option>
-        <option value="66">15 fps</option>
-        <option value="0">unthrottled</option>
-      </select>
-      <button id="copyEmbed" title="Copy an iframe that embeds this arcade on your site">&lt;/&gt; Embed</button>
-      <span id="dockstats">warming up…</span>
-    </div>
-    <div class="row" id="pad" aria-label="Touch controls">
-      <button data-code="ArrowLeft" aria-label="Left / turn left">◀</button>
-      <button data-code="ArrowRight" aria-label="Right / turn right">▶</button>
-      <button data-code="KeyW" aria-label="Jump / forward">▲</button>
-      <button data-code="KeyS" aria-label="Back">▼</button>
-    </div>
-    <div id="dockhint">warming up…</div>
-  </div>
-
   <script type="module">
     const params = new URLSearchParams(location.search);
     // The Arcade needs DocxEditor.refresh() (docxodus ≥ 9.6.0); it shares the
@@ -151,6 +99,9 @@
     // local webroot), so ?engine= pins the library alone and the games version
     // with the site.
     const GAMES_URL = params.get("games") ?? "./ascii-arcade.js";
+    // The controls travel with the games, for the same reason: they are demo
+    // content, and the landing page imports this identical module.
+    const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
 
     const embedSnippet = `<iframe
   src="https://jsv4.github.io/Docxodus/demo/arcade.html"
@@ -163,8 +114,9 @@
 
     async function powerOn() {
       try {
-        const [{ createRibbonEditor, DocxSession, getWasmExports }, { startArcade }] =
-          await Promise.all([import(engineUrl.href), import(GAMES_URL)]);
+        const [{ createRibbonEditor, DocxSession, getWasmExports },
+               { startArcade }, { mountArcadeDock }] =
+          await Promise.all([import(engineUrl.href), import(GAMES_URL), import(DOCK_URL)]);
 
         const ribbon = await createRibbonEditor("#app", null, {
           documentName: "docx-arcade.docx",
@@ -179,6 +131,9 @@
         const editor = ribbon.editor;
         const bridge = getWasmExports().DocxSessionBridge;
         const session = new DocxSession(editor.sessionHandle, bridge);
+        // Fixed to the viewport: the cabinet IS the page, so the controls
+        // measure the window and float over the whole screen.
+        const dock = mountArcadeDock(document.body, { embed: embedSnippet });
         const controller = startArcade({
           editor,
           session,
@@ -186,35 +141,11 @@
           // ?intro=0 skips the attract screen (specs use it; humans get the
           // full "OS LEGAL presents DOCXODUS" title card).
           intro: params.get("intro") !== "0",
-          ui: {
-            carts: document.getElementById("dockcarts"),
-            playpause: document.getElementById("playpause"),
-            restart: document.getElementById("restart"),
-            pace: document.getElementById("pace"),
-            stats: document.getElementById("dockstats"),
-            hint: document.getElementById("dockhint"),
-            pad: document.getElementById("pad"),
-          },
+          ui: dock.ui,
         });
-        document.getElementById("dock").hidden = false;
+        dock.show();
 
-        document.getElementById("copyEmbed").addEventListener("click", async (event) => {
-          const button = event.currentTarget;
-          try { await navigator.clipboard.writeText(embedSnippet); }
-          catch {
-            const area = Object.assign(document.createElement("textarea"), { value: embedSnippet });
-            area.style.cssText = "position:fixed;opacity:0";
-            document.body.append(area);
-            area.select();
-            document.execCommand("copy");
-            area.remove();
-          }
-          const previous = button.innerHTML;
-          button.textContent = "Copied!";
-          setTimeout(() => { button.innerHTML = previous; }, 1500);
-        });
-
-        window.__arcade = { ...controller, editor, ribbon, session, bridge };
+        window.__arcade = { ...controller, editor, ribbon, session, bridge, dock };
       } catch (error) {
         document.getElementById("app").innerHTML =
           '<div style="display:grid;place-items:center;height:100%;padding:24px;text-align:center;'
