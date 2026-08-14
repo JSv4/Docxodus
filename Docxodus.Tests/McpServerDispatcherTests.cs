@@ -236,6 +236,56 @@ public class McpServerDispatcherTests : IDisposable
         }
     }
 
+    [Fact]
+    public void MCP011_GetContent_IntrospectionFormats_ReturnMutationCompatibleIdsAndSpans()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "Alpha beta")
+            .GetProperty("success").GetBoolean());
+
+        var styles = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"styles"}""")))
+            .GetProperty("styles").EnumerateArray().ToArray();
+        var paragraphStyle = styles.First(s => s.GetProperty("type").GetString() == "paragraph");
+        var styleId = paragraphStyle.GetProperty("id").GetString()!;
+        var styleMutation = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_paragraph_style","anchorId":"{{anchor}}","styleId":{{JsonSerializer.Serialize(styleId)}}}""")));
+        Assert.True(styleMutation.GetProperty("success").GetBoolean());
+
+        var formatting = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"formatting","anchorId":"{{anchor}}"}""")))
+            .GetProperty("formatting");
+        Assert.Equal(anchor, formatting.GetProperty("anchorId").GetString());
+        Assert.Equal(JsonValueKind.Object, formatting.GetProperty("directParagraph").ValueKind);
+        Assert.Equal(JsonValueKind.Object, formatting.GetProperty("effectiveParagraph").ValueKind);
+
+        var span = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"spans","anchorId":"{{anchor}}"}""")))
+            .GetProperty("spans")[0];
+        var spanAnchor = span.GetProperty("anchorId").GetString()!;
+        var range = span.GetProperty("span");
+        var spanArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "apply_format",
+            anchorId = spanAnchor,
+            span = new
+            {
+                start = range.GetProperty("start").GetInt32(),
+                length = range.GetProperty("length").GetInt32(),
+            },
+            format = new { bold = true },
+        });
+        var spanMutation = Parse(Dispatcher.Call(_store, "docxodus_format", J(spanArgs)));
+        Assert.True(spanMutation.GetProperty("success").GetBoolean());
+
+        var info = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"info","anchorId":"{{anchor}}"}""")));
+        Assert.Equal(anchor, info.GetProperty("sectionInfo").GetProperty("anchorId").GetString());
+    }
+
     // ─── Edit ───────────────────────────────────────────────────────────
 
     [Fact]

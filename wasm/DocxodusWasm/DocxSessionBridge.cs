@@ -945,6 +945,20 @@ public static partial class DocxSessionBridge
     public static string GetSectionInfo(int h, string anchorId) =>
         DocxSessionOps.GetSectionInfo(h, anchorId);
 
+    /// <summary>All explicit document styles with resolved high-signal properties.</summary>
+    [JSExport]
+    public static string ListStyles(int h) => DocxSessionOps.ListStyles(h);
+
+    /// <summary>Direct and effective paragraph/run formatting for one paragraph anchor.</summary>
+    [JSExport]
+    public static string GetFormatting(int h, string anchorId) =>
+        DocxSessionOps.GetFormatting(h, anchorId);
+
+    /// <summary>Enumerable run spans, directly reusable by ApplyFormat.</summary>
+    [JSExport]
+    public static string ListInlineSpans(int h, string anchorId) =>
+        DocxSessionOps.ListInlineSpans(h, anchorId);
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByText"/>. Returns a single AnchorTarget
     /// JSON object (first match in document order) or the literal <c>null</c> if no

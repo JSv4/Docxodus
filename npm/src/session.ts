@@ -22,7 +22,9 @@ import type {
   FillOptions,
   FindOptions,
   FormatOp,
+  FormattingInspection,
   HeaderFooterKind,
+  InlineSpan,
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
@@ -54,6 +56,7 @@ import type {
   ReplaceOptions,
   RevisionListEntry,
   SectionInfo,
+  StyleInfo,
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
@@ -1553,6 +1556,21 @@ export class DocxSession {
     return JSON.parse(raw) as SectionInfo | null;
   }
 
+  /** Enumerate the document's explicit style catalog with resolved high-signal properties. */
+  listStyles(): StyleInfo[] {
+    return JSON.parse(this.wasm.ListStyles(this.handle)) as StyleInfo[];
+  }
+
+  /** Inspect direct and effective paragraph/run formatting for one paragraph anchor. */
+  getFormatting(anchorId: string): FormattingInspection | null {
+    return JSON.parse(this.wasm.GetFormatting(this.handle, anchorId)) as FormattingInspection | null;
+  }
+
+  /** Enumerate text-bearing runs as mutation-compatible anchor/span pairs. */
+  listInlineSpans(anchorId: string): InlineSpan[] {
+    return JSON.parse(this.wasm.ListInlineSpans(this.handle, anchorId)) as InlineSpan[];
+  }
+
   /**
    * Enumerates every annotation persisted in the document. Lets an agent prime
    * itself with "here are the labeled regions you can target" before committing
@@ -1654,5 +1672,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

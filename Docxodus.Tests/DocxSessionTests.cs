@@ -189,6 +189,11 @@ public class DocxSessionTests
 
             var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
             numberingPart.Numbering = BuildBulletNumbering();
+            var inheritedLevel = numberingPart.Numbering
+                .Elements<AbstractNum>().Single().Elements<Level>().First();
+            inheritedLevel.StartNumberingValue = new StartNumberingValue { Val = 3 };
+            inheritedLevel.PreviousParagraphProperties = new PreviousParagraphProperties(
+                new Indentation { Left = "720", Hanging = "360" });
 
             // Paragraph carries only the pStyle — no inline numPr.
             var pPr = new ParagraphProperties(new ParagraphStyleId { Val = "MyListStyle" });

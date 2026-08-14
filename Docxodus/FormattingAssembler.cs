@@ -2454,6 +2454,120 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// Non-mutating paragraph-property resolver for anchor introspection. Cascades document
+        /// defaults, the paragraph style chain (through <see cref="ParagraphStyleRollup"/>), and
+        /// the paragraph's direct <c>w:pPr</c>, returning a detached effective <c>w:pPr</c>.
+        /// </summary>
+        internal static XElement ResolveEffectiveParagraphProperties(
+            WordprocessingDocument wDoc, XElement paragraph)
+        {
+            var stylesPart = wDoc.MainDocumentPart?.StyleDefinitionsPart;
+            var direct = paragraph.Element(W.pPr) ?? new XElement(W.pPr);
+            if (stylesPart == null)
+                return new XElement(direct);
+
+            var stylesXDoc = stylesPart.GetXDocument();
+            var defaultParagraphStyleName = (string)stylesXDoc.Root?
+                .Elements(W.style)
+                .FirstOrDefault(s => (string)s.Attribute(W.type) == "paragraph"
+                    && s.Attribute(W._default).ToBoolean() == true)?
+                .Attribute(W.styleId);
+            var defaults = stylesXDoc.Root?
+                .Element(W.docDefaults)?
+                .Element(W.pPrDefault)?
+                .Element(W.pPr) ?? new XElement(W.pPr);
+            var styleRollup = ParagraphStyleRollup(
+                paragraph, stylesXDoc, defaultParagraphStyleName);
+            var inherited = MergeStyleElement(styleRollup, defaults);
+            return new XElement(MergeStyleElement(direct, inherited));
+        }
+
+        /// <summary>
+        /// Non-mutating run-property resolver for anchor introspection. Reuses the assembler's
+        /// paragraph/character style rollup, toggle handling, document defaults, and theme-font
+        /// resolution, then overlays the run's direct <c>w:rPr</c>. Returns a detached effective
+        /// <c>w:rPr</c>; the source run and package are not changed.
+        /// </summary>
+        internal static XElement ResolveEffectiveRunProperties(
+            WordprocessingDocument wDoc, XElement run)
+        {
+            var stylesPart = wDoc.MainDocumentPart?.StyleDefinitionsPart;
+            var direct = run.Element(W.rPr) ?? new XElement(W.rPr);
+            if (stylesPart == null)
+            {
+                var stockDefaults = new XElement(W.rPr,
+                    new XElement(W.rFonts,
+                        new XAttribute(W.ascii, "Times New Roman"),
+                        new XAttribute(W.hAnsi, "Times New Roman"),
+                        new XAttribute(W.cs, "Times New Roman")),
+                    new XElement(W.sz, new XAttribute(W.val, "20")),
+                    new XElement(W.szCs, new XAttribute(W.val, "20")));
+                return new XElement(MergeStyleElement(direct, stockDefaults));
+            }
+
+            var stylesXDoc = stylesPart.GetXDocument();
+            var fai = new FormattingAssemblerInfo();
+            IndexStylesDocument(stylesXDoc, fai);
+            foreach (var style in stylesXDoc.Root.Elements(W.style))
+            {
+                if (style.Attribute(W._default).ToBoolean() != true)
+                    continue;
+                var styleType = (string)style.Attribute(W.type);
+                var styleId = (string)style.Attribute(W.styleId);
+                if (styleType == "paragraph") fai.DefaultParagraphStyleName = styleId;
+                else if (styleType == "character") fai.DefaultCharacterStyleName = styleId;
+                else if (styleType == "table") fai.DefaultTableStyleName = styleId;
+            }
+
+            var defaults = stylesXDoc.Root?
+                .Element(W.docDefaults)?
+                .Element(W.rPrDefault)?
+                .Element(W.rPr);
+            defaults = defaults == null
+                ? new XElement(W.rPr,
+                    new XElement(W.rFonts,
+                        new XAttribute(W.ascii, "Times New Roman"),
+                        new XAttribute(W.hAnsi, "Times New Roman"),
+                        new XAttribute(W.cs, "Times New Roman")),
+                    new XElement(W.sz, new XAttribute(W.val, "20")),
+                    new XElement(W.szCs, new XAttribute(W.val, "20")))
+                : new XElement(defaults);
+
+            // Match AnnotateWithGlobalDefaults: absent font/size values receive the stock Word
+            // defaults before the style and direct layers are applied.
+            if (defaults.Element(W.rFonts) == null)
+                defaults.Add(new XElement(W.rFonts,
+                    new XAttribute(W.ascii, "Times New Roman"),
+                    new XAttribute(W.hAnsi, "Times New Roman"),
+                    new XAttribute(W.cs, "Times New Roman")));
+            if (defaults.Element(W.sz) == null)
+                defaults.Add(new XElement(W.sz, new XAttribute(W.val, "20")));
+            if (defaults.Element(W.szCs) == null)
+                defaults.Add(new XElement(W.szCs, new XAttribute(W.val, "20")));
+
+            var styleRollup = CharStyleRollup(fai, wDoc, run);
+            var inherited = MergeStyleElement(styleRollup, defaults);
+            var effective = new XElement(MergeStyleElement(direct, inherited));
+
+            // AdjustFontAttributes also annotates the supplied run with presentation hints. Use
+            // a detached probe so this read API remains non-mutating while retaining its existing
+            // theme-font resolver.
+            var probe = new XElement(run);
+            var paragraph = run.Ancestors(W.p).FirstOrDefault();
+            var effectivePPr = paragraph == null
+                ? null
+                : ResolveEffectiveParagraphProperties(wDoc, paragraph);
+            AdjustFontAttributes(wDoc, probe, effectivePPr, effective,
+                new FormattingAssemblerSettings());
+            return effective;
+        }
+
+        /// <summary>Resolve a table style's based-on chain to a detached style element. Used only
+        /// for catalog metadata; it does not inspect a concrete table's geometry or cell state.</summary>
+        internal static XElement ResolveTableStyle(WordprocessingDocument wDoc, string styleId) =>
+            new XElement(TableStyleRollup(wDoc, styleId));
+
+        /// <summary>
         /// Rolls up paragraph style properties from the style hierarchy.
         /// Optimization #2: Caches results for non-list-item paragraphs by style name.
         /// Internal version with FormattingAssemblerInfo for caching support.

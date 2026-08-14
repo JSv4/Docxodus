@@ -147,7 +147,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 | **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `execute_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
-| **Inspection** | `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
+| **Inspection** | `list_styles`, `get_formatting`, `list_inline_spans`, `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
 | **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
 | **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering` |

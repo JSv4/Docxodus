@@ -79,6 +79,16 @@ All notable changes to this project will be documented in this file.
   evaluation, counting, and the whole multi-match rewrite share one mutation gate
   and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
   replacement.
+- **Complete inspect-before-edit formatting surface (#448).** `DocxSession` now exposes an explicit
+  style catalog (`ListStyles`), direct-versus-effective paragraph/run formatting
+  (`GetFormatting`), and enumerable mutation-compatible run spans (`ListInlineSpans`). Effective
+  properties reuse `FormattingAssembler`'s document-default and style-chain rollups. List
+  membership now includes its query `AnchorId`, abstract-level `Start`/`LevelText`, and effective
+  indentation; section info includes its mutation-ready body `AnchorId`, and section identifiers
+  are stored Unids rather than positional fallbacks. The same JSON schema is rippled through the
+  WASM/npm, stdio/Python, and MCP surfaces (`get_content` formats `styles`, `formatting`, `spans`;
+  `info` is per-anchor). Returned style ids, anchors, and spans are tested by feeding them unchanged
+  into their matching mutation APIs. Table geometry and inline memberships remain separate work.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:

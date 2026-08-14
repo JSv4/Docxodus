@@ -1253,6 +1253,9 @@ export interface DocxodusWasmExports {
     GetBlockMetadatas: (handle: number, anchorIdsJson: string) => string;
     GetListMembership: (handle: number, anchorId: string) => string;
     GetSectionInfo: (handle: number, anchorId: string) => string;
+    ListStyles: (handle: number) => string;
+    GetFormatting: (handle: number, anchorId: string) => string;
+    ListInlineSpans: (handle: number, anchorId: string) => string;
     ListAnnotations: (handle: number) => string;
     // Session annotation write surface
     AddAnnotation: (
@@ -2251,6 +2254,8 @@ export type NumberFormat =
 /** Numbering facts for a list-item paragraph. Returned by
  *  {@link DocxSession.getListMembership} and surfaced as {@link BlockMetadata.list}. */
 export interface ListMembership {
+  /** Stable paragraph anchor accepted unchanged by every list mutation method. */
+  anchorId: string;
   /** The w:numId the paragraph belongs to (the w:num instance). */
   numId: number;
   /** The w:abstractNumId the paragraph's w:num points at. */
@@ -2265,6 +2270,14 @@ export interface ListMembership {
   fromStyle: boolean;
   /** Start-override from w:lvlOverride/w:startOverride for this level, if any. */
   startOverride?: number;
+  /** Level definition's w:start value (1 when omitted). */
+  start: number;
+  /** Marker template such as "%1." or "(%2)". */
+  levelText?: string;
+  leftIndentTwips?: number;
+  rightIndentTwips?: number;
+  firstLineIndentTwips?: number;
+  hangingIndentTwips?: number;
   /** Resolved label (e.g. "1.", "(a)") — same value surfaced via AnchorInfo.autoNumberPrefix. */
   generatedLabel?: string;
 }
@@ -2300,6 +2313,8 @@ export interface HeaderFooterRef {
 /** Page-layout snapshot for the w:sectPr that governs an anchor.
  *  Returned by {@link DocxSession.getSectionInfo}. */
 export interface SectionInfo {
+  /** Body anchor used for the lookup; accepted unchanged by section mutation methods. */
+  anchorId: string;
   sectionUnid: string;
   pageWidthTwips: number;
   pageHeightTwips: number;
@@ -2324,6 +2339,95 @@ export interface SectionInfo {
    *  `1, 2, 3` — deliberately not reported as `"decimal"`, so a UI can tell "inherits" from
    *  "explicitly decimal" and avoid writing an attribute the document never had. */
   pageNumberFormat?: NumberFormat;
+}
+
+/** High-signal paragraph properties. Optional fields are deliberately absent when a
+ * direct formatting layer did not write them; effective layers include schema defaults. */
+export interface ParagraphFormatting {
+  styleId?: string;
+  alignment?: "left" | "center" | "right" | "justify";
+  leftIndentTwips?: number;
+  rightIndentTwips?: number;
+  firstLineIndentTwips?: number;
+  hangingIndentTwips?: number;
+  spacingBeforeTwips?: number;
+  spacingAfterTwips?: number;
+  lineSpacing?: number;
+  lineSpacingRule?: LineSpacingRule;
+  keepNext?: boolean;
+  keepLines?: boolean;
+  pageBreakBefore?: boolean;
+  outlineLevel?: number;
+  shadingFill?: string;
+  topBorder?: ParagraphBorderEdge;
+  bottomBorder?: ParagraphBorderEdge;
+}
+
+/** High-signal character properties. Nullable-at-source fields are optional on the wire so
+ * an absent direct property remains distinguishable from an explicit false/zero. */
+export interface RunFormattingInfo {
+  styleId?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  underlineStyle?: string;
+  strike?: boolean;
+  code?: boolean;
+  color?: string;
+  highlight?: string;
+  vertAlign?: string;
+  fontSizePts?: number;
+  fontFamily?: string;
+  caps?: boolean;
+  smallCaps?: boolean;
+  hidden?: boolean;
+}
+
+export interface TableStyleFormatting {
+  alignment?: string;
+  widthTwips?: number;
+  indentTwips?: number;
+  layout?: string;
+  hasBorders?: boolean;
+  cellShadingFill?: string;
+}
+
+/** One explicit document style. `id` is accepted unchanged by paragraph/run style mutations. */
+export interface StyleInfo {
+  id: string;
+  name: string;
+  type: "paragraph" | "character" | "table" | "numbering" | string;
+  basedOn?: string;
+  next?: string;
+  isDefault: boolean;
+  isCustom: boolean;
+  hasLatentException: boolean;
+  uiPriority?: number;
+  semiHidden?: boolean;
+  unhideWhenUsed?: boolean;
+  quickFormat?: boolean;
+  locked?: boolean;
+  resolvedParagraph?: ParagraphFormatting;
+  resolvedRun?: RunFormattingInfo;
+  resolvedTable?: TableStyleFormatting;
+}
+
+/** One text-bearing run. `anchorId` + `span` can be passed unchanged to applyFormat. */
+export interface InlineSpan {
+  anchorId: string;
+  runUnid: string;
+  span: CharSpan;
+  text: string;
+  direct: RunFormattingInfo;
+  effective: RunFormattingInfo;
+}
+
+/** Explicitly separated direct and effective formatting for one paragraph anchor. */
+export interface FormattingInspection {
+  anchorId: string;
+  directParagraph: ParagraphFormatting;
+  effectiveParagraph: ParagraphFormatting;
+  runs: InlineSpan[];
 }
 
 /**

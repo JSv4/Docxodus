@@ -64,8 +64,8 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions"], "description": "markdown/text: projection; html: rendered HTML; blocks: metadata; info: version plus page/edit facts; version: monotonic document version; check_preconditions: read-only guard evaluation." },
-                "anchorId": { "type": "string", "description": "Optional scope/target anchor." },
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions", "styles", "formatting", "spans"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId." },
+                "anchorId": { "type": "string", "description": "Optional for markdown/html/text/info and guard evaluation; required for formatting/spans. Returned formatting/list/section anchors and span ranges can be passed unchanged to mutation tools." },
                 "citation": {
                   "type": "object", "additionalProperties": false,
                   "properties": {

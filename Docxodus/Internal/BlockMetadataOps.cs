@@ -94,14 +94,13 @@ internal static class BlockMetadataOps
             ? NumberFormats.ParseOoxml(fmtToken)
             : null;
 
-        // The sectPr itself doesn't carry a stable Unid in every fixture; fall back
-        // to a deterministic synthetic id derived from element position so the field
-        // is always non-null and stable across reads of the same doc state.
-        var sectionUnid = (string?)sectPr.Attribute(PtOpenXml.Unid)
-            ?? $"sect:{sectPr.Parent?.Elements().ToList().IndexOf(sectPr) ?? 0}";
+        // The anchor-index walk normally assigned this already. For unusual/custom projection
+        // scopes, derive the same deterministic identity without mutating the live package.
+        var sectionUnid = UnidHelper.ReadOrDeriveUnid(sectPr);
 
         return new SectionInfo
         {
+            AnchorId = target.Anchor.Id,
             SectionUnid = sectionUnid,
             PageWidthTwips = width,
             PageHeightTwips = height,
@@ -320,31 +319,47 @@ internal static class BlockMetadataOps
             .FirstOrDefault(a => (string?)a.Attribute(W.abstractNumId) == abstractNumId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (abstractNumEl is null) return null;
 
-        var lvlEl = abstractNumEl.Elements(W.lvl)
+        var abstractLvlEl = abstractNumEl.Elements(W.lvl)
             .FirstOrDefault(l => (string?)l.Attribute(W.ilvl) == level.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        var format = ParseNumberFormat((string?)lvlEl?.Element(W.numFmt)?.Attribute(W.val));
 
-        // Start override from the w:num's lvlOverride for this level.
-        int? startOverride = null;
+        // A concrete w:num can override either just the start value or the complete level. The
+        // complete-level form supplies effective format/text/indentation; omitted pieces continue
+        // to come from the abstract level.
         var lvlOverrideEl = numEl.Elements(W.lvlOverride)
             .FirstOrDefault(o => (string?)o.Attribute(W.ilvl) == level.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (lvlOverrideEl is not null)
-        {
-            var startOverrideEl = lvlOverrideEl.Element(W.startOverride);
-            if (startOverrideEl is not null && int.TryParse((string?)startOverrideEl.Attribute(W.val), out var so))
-                startOverride = so;
-        }
+        var overrideLvlEl = lvlOverrideEl?.Element(W.lvl);
+        var format = ParseNumberFormat(
+            (string?)overrideLvlEl?.Element(W.numFmt)?.Attribute(W.val)
+            ?? (string?)abstractLvlEl?.Element(W.numFmt)?.Attribute(W.val));
+        var start = ParseInt(
+            (string?)overrideLvlEl?.Element(W.start)?.Attribute(W.val)
+            ?? (string?)abstractLvlEl?.Element(W.start)?.Attribute(W.val)) ?? 1;
+        var startOverride = ParseInt((string?)lvlOverrideEl?.Element(W.startOverride)?.Attribute(W.val));
+        var levelText = (string?)overrideLvlEl?.Element(W.lvlText)?.Attribute(W.val)
+            ?? (string?)abstractLvlEl?.Element(W.lvlText)?.Attribute(W.val);
+        var abstractInd = abstractLvlEl?.Element(W.pPr)?.Element(W.ind);
+        var overrideInd = overrideLvlEl?.Element(W.pPr)?.Element(W.ind);
+        int? Indent(XName name, XName alternate) =>
+            ParseInt((string?)overrideInd?.Attribute(name) ?? (string?)overrideInd?.Attribute(alternate)
+                ?? (string?)abstractInd?.Attribute(name) ?? (string?)abstractInd?.Attribute(alternate));
 
         return new ListMembership
         {
+            AnchorId = target.Anchor.Id,
             NumId = numId,
             AbstractNumId = abstractNumId,
             Level = level,
             Format = format,
             StartOverride = startOverride,
+            Start = start,
+            LevelText = levelText,
+            LeftIndentTwips = Indent(W.left, W.start),
+            RightIndentTwips = Indent(W.right, W.end),
+            FirstLineIndentTwips = Indent(W.firstLine, W.firstLine),
+            HangingIndentTwips = Indent(W.hanging, W.hanging),
             IsAutoNumbered = true,
             FromStyle = fromStyle,
-            GeneratedLabel = target.AutoNumberPrefix,
+            GeneratedLabel = target.AutoNumberPrefix ?? ListNumberResolver.Resolve(element, doc),
         };
     }
 

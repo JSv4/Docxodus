@@ -372,6 +372,128 @@ public sealed record RunFormatting
 }
 
 /// <summary>
+/// High-signal paragraph properties used by the formatting-inspection surface. Every property is
+/// nullable so a <em>direct</em> snapshot can distinguish "not written here" from an explicit zero
+/// or false. Effective snapshots fill the schema defaults for alignment, indentation, spacing,
+/// line spacing, and on/off properties after applying document defaults and the paragraph-style
+/// chain through <see cref="FormattingAssembler"/>.
+/// </summary>
+public sealed record ParagraphFormatting
+{
+    /// <summary>The paragraph style id in effect at this layer. This is accepted directly by
+    /// <see cref="DocxSession.SetParagraphStyle"/>.</summary>
+    public string? StyleId { get; init; }
+    public ParagraphAlignment? Alignment { get; init; }
+    public int? LeftIndentTwips { get; init; }
+    public int? RightIndentTwips { get; init; }
+    public int? FirstLineIndentTwips { get; init; }
+    public int? HangingIndentTwips { get; init; }
+    public int? SpacingBeforeTwips { get; init; }
+    public int? SpacingAfterTwips { get; init; }
+    public int? LineSpacing { get; init; }
+    public LineSpacingRule? LineSpacingRule { get; init; }
+    public bool? KeepNext { get; init; }
+    public bool? KeepLines { get; init; }
+    public bool? PageBreakBefore { get; init; }
+    public int? OutlineLevel { get; init; }
+    public string? ShadingFill { get; init; }
+    public ParagraphBorderEdge? TopBorder { get; init; }
+    public ParagraphBorderEdge? BottomBorder { get; init; }
+}
+
+/// <summary>
+/// High-signal run properties used by style, anchor, and inline-span introspection. Nullable
+/// fields preserve the difference between an absent direct property and an explicit off value;
+/// effective snapshots resolve the document/style cascade and fill false for absent toggles.
+/// </summary>
+public sealed record RunFormattingInfo
+{
+    /// <summary>Character-style id at this layer. Accepted directly by
+    /// <see cref="FormatOp.RunStyle"/>.</summary>
+    public string? StyleId { get; init; }
+    public bool? Bold { get; init; }
+    public bool? Italic { get; init; }
+    public bool? Underline { get; init; }
+    public string? UnderlineStyle { get; init; }
+    public bool? Strike { get; init; }
+    public bool? Code { get; init; }
+    public string? Color { get; init; }
+    public string? Highlight { get; init; }
+    public string? VertAlign { get; init; }
+    public double? FontSizePts { get; init; }
+    public string? FontFamily { get; init; }
+    public bool? Caps { get; init; }
+    public bool? SmallCaps { get; init; }
+    public bool? Hidden { get; init; }
+}
+
+/// <summary>High-signal base properties for a table style. These describe the style definition,
+/// not the geometry or formatting of any concrete table (owned by issue #450).</summary>
+public sealed record TableStyleFormatting
+{
+    public string? Alignment { get; init; }
+    public int? WidthTwips { get; init; }
+    public int? IndentTwips { get; init; }
+    public string? Layout { get; init; }
+    public bool? HasBorders { get; init; }
+    public string? CellShadingFill { get; init; }
+}
+
+/// <summary>One explicit style definition from the document's style catalog.</summary>
+public sealed record StyleInfo
+{
+    /// <summary>Stable <c>w:styleId</c>, accepted by paragraph/run style mutation tools.</summary>
+    required public string Id { get; init; }
+    required public string Name { get; init; }
+
+    /// <summary>OOXML style type (<c>paragraph</c>, <c>character</c>, <c>table</c>, or
+    /// <c>numbering</c>).</summary>
+    required public string Type { get; init; }
+    public string? BasedOn { get; init; }
+    public string? Next { get; init; }
+    public bool IsDefault { get; init; }
+    public bool IsCustom { get; init; }
+
+    /// <summary>True when <c>w:latentStyles</c> has an exception for this style name. The following
+    /// gallery fields resolve explicit style metadata over the exception and latent defaults.</summary>
+    public bool HasLatentException { get; init; }
+    public int? UiPriority { get; init; }
+    public bool? SemiHidden { get; init; }
+    public bool? UnhideWhenUsed { get; init; }
+    public bool? QuickFormat { get; init; }
+    public bool? Locked { get; init; }
+
+    public ParagraphFormatting? ResolvedParagraph { get; init; }
+    public RunFormattingInfo? ResolvedRun { get; init; }
+    public TableStyleFormatting? ResolvedTable { get; init; }
+}
+
+/// <summary>
+/// One text-bearing run inside a paragraph-like anchor. <see cref="AnchorId"/> plus
+/// <see cref="Span"/> can be passed directly to <see cref="DocxSession.ApplyFormat"/>; the run
+/// Unid is also reported for stable correlation but is not a separate mutation handle.
+/// </summary>
+public sealed record InlineSpan
+{
+    required public string AnchorId { get; init; }
+    required public string RunUnid { get; init; }
+    required public CharSpan Span { get; init; }
+    required public string Text { get; init; }
+    required public RunFormattingInfo Direct { get; init; }
+    required public RunFormattingInfo Effective { get; init; }
+}
+
+/// <summary>Direct and effective formatting for one paragraph-like anchor.</summary>
+public sealed record FormattingInspection
+{
+    /// <summary>Stable anchor id accepted by paragraph and inline formatting mutation tools.</summary>
+    required public string AnchorId { get; init; }
+    required public ParagraphFormatting DirectParagraph { get; init; }
+    required public ParagraphFormatting EffectiveParagraph { get; init; }
+    required public IReadOnlyList<InlineSpan> Runs { get; init; }
+}
+
+/// <summary>
 /// One piece of a <see cref="TextMatch"/> that came from a single <c>&lt;w:r&gt;</c> run.
 /// The <see cref="Unid"/> uniquely identifies the run within the document; callers
 /// rewriting the match can address each piece by its Unid + <see cref="SpanInElement"/>
@@ -779,6 +901,9 @@ public enum NumberFormat
 /// </summary>
 public sealed record ListMembership
 {
+    /// <summary>The stable paragraph/list-item anchor accepted by list mutation tools.</summary>
+    required public string AnchorId { get; init; }
+
     /// <summary>The <c>w:numId</c> the paragraph belongs to (the <c>w:num</c> instance).</summary>
     required public int NumId { get; init; }
 
@@ -794,6 +919,19 @@ public sealed record ListMembership
     /// <summary>The start-override applied to this paragraph's level via
     /// <c>w:lvlOverride/w:startOverride</c>, if any. <c>null</c> when no override is in effect.</summary>
     public int? StartOverride { get; init; }
+
+    /// <summary>The level definition's <c>w:start</c> value. Defaults to 1 when omitted.</summary>
+    required public int Start { get; init; }
+
+    /// <summary>The level's marker template (<c>w:lvlText</c>), e.g. <c>"%1."</c> or
+    /// <c>"(%2)"</c>.</summary>
+    public string? LevelText { get; init; }
+
+    /// <summary>Numbering-level indentation from <c>w:lvl/w:pPr/w:ind</c>.</summary>
+    public int? LeftIndentTwips { get; init; }
+    public int? RightIndentTwips { get; init; }
+    public int? FirstLineIndentTwips { get; init; }
+    public int? HangingIndentTwips { get; init; }
 
     /// <summary>Always <c>true</c> for a paragraph carrying <c>w:numPr</c> (inline or via style).</summary>
     required public bool IsAutoNumbered { get; init; }
@@ -876,6 +1014,11 @@ public sealed record HeaderFooterRef
 /// </summary>
 public sealed record SectionInfo
 {
+    /// <summary>The body anchor used for this query. It is stable within the session and accepted
+    /// directly by section mutation tools such as <see cref="DocxSession.SetPageNumbering"/> and
+    /// <see cref="DocxSession.SetHeaderText"/>.</summary>
+    required public string AnchorId { get; init; }
+
     /// <summary>The Unid of the <c>w:sectPr</c> element this info describes. Stable across mutations.</summary>
     required public string SectionUnid { get; init; }
 
@@ -3494,6 +3637,49 @@ public sealed class DocxSession : IDisposable
         ArgumentNullException.ThrowIfNull(anchorId);
         var target = FindAnchor(anchorId);
         return target is null ? null : Internal.BlockMetadataOps.GetSectionInfo(_doc!, target);
+    }
+
+    /// <summary>
+    /// Enumerates the document's explicit paragraph, character, table, and numbering style
+    /// definitions in declaration order. Each entry includes inheritance/gallery metadata and
+    /// high-signal effective properties; returned style ids are the ids accepted by the matching
+    /// paragraph/run style mutation fields.
+    /// </summary>
+    public IReadOnlyList<StyleInfo> ListStyles()
+    {
+        ThrowIfDisposed();
+        return Internal.FormattingIntrospectionOps.ListStyles(_doc!);
+    }
+
+    /// <summary>
+    /// Inspect direct and effective paragraph formatting plus every text-bearing run's direct and
+    /// effective formatting for a paragraph/heading/list-item anchor. Returns <c>null</c> for an
+    /// unknown or non-paragraph anchor.
+    /// </summary>
+    public FormattingInspection? GetFormatting(string anchorId)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchorId);
+        var target = FindAnchor(anchorId);
+        return target is null
+            ? null
+            : Internal.FormattingIntrospectionOps.GetFormatting(_doc!, target);
+    }
+
+    /// <summary>
+    /// Enumerate text-bearing inline runs for a paragraph/heading/list-item anchor. Every result
+    /// carries a block-relative <see cref="CharSpan"/> that can be passed directly to
+    /// <see cref="ApplyFormat(string, CharSpan?, FormatOp)"/>. Unknown/non-paragraph anchors return
+    /// an empty list.
+    /// </summary>
+    public IReadOnlyList<InlineSpan> ListInlineSpans(string anchorId)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchorId);
+        var target = FindAnchor(anchorId);
+        return target is null
+            ? Array.Empty<InlineSpan>()
+            : Internal.FormattingIntrospectionOps.ListInlineSpans(_doc!, target);
     }
 
     /// <summary>

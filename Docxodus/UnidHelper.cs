@@ -132,6 +132,60 @@ internal static class UnidHelper
     }
 
     /// <summary>
+    /// Return an element's existing Unid, or derive the exact deterministic value that
+    /// <see cref="AssignToAllElementsDeterministic"/> would assign without changing the XML tree.
+    /// Read-only inspection fallbacks use this when an element lies outside the normal projected
+    /// walk. The derivation follows the ancestor chain and counts same-signature preceding siblings,
+    /// matching <see cref="AssignDescendantsDeterministic"/>.
+    /// </summary>
+    internal static string ReadOrDeriveUnid(XElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        if ((string?)element.Attribute(PtOpenXml.Unid) is { Length: > 0 } existing)
+            return existing;
+
+        var chain = element.AncestorsAndSelf().Reverse().ToArray();
+        var root = chain[0];
+        string parentUnid;
+        if ((string?)root.Attribute(PtOpenXml.Unid) is { Length: > 0 } rootUnid)
+        {
+            parentUnid = rootUnid;
+        }
+        else if (root.Name == W.footnote || root.Name == W.endnote)
+        {
+            var noteId = (string?)root.Attribute(W.id) ?? string.Empty;
+            parentUnid = DeriveUnid(root.Name.LocalName, "id", noteId, 0);
+        }
+        else
+        {
+            // Scope roots such as w:document/w:hdr/w:ftr are seeds, not assigned descendants.
+            parentUnid = root.Name.LocalName;
+        }
+
+        for (int i = 1; i < chain.Length; i++)
+        {
+            var current = chain[i];
+            if ((string?)current.Attribute(PtOpenXml.Unid) is { Length: > 0 } currentUnid)
+            {
+                parentUnid = currentUnid;
+                continue;
+            }
+
+            var signature = ContentSignature(current);
+            int duplicateIndex = 0;
+            foreach (var preceding in current.ElementsBeforeSelf())
+            {
+                if (preceding.Name == current.Name
+                    && string.Equals(ContentSignature(preceding), signature, StringComparison.Ordinal))
+                    duplicateIndex++;
+            }
+            parentUnid = DeriveUnid(parentUnid, current.Name.LocalName, signature, duplicateIndex);
+        }
+
+        return parentUnid;
+    }
+
+    /// <summary>
     /// Like <see cref="AssignToAllElements"/> but also assigns to the root element
     /// itself (regardless of element name). Used for freshly-built block elements
     /// inserted into a document by <c>DocxSession</c>. Uses the random Unid path
