@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
+  navigation, and gives the arcade thumb controls** — three fixes to the same
+  problem, that the demo's mobile visit was its worst one:
+  - *The arcade is the phone default.* Below 620px `docs/demo/index.html`
+    mounts the arcade into its frame instead of the plain editor — the same
+    shipped `createRibbonEditor` surface, with a game running on one of its
+    paragraphs. Nobody drafts a contract on a 390px screen, and the arcade
+    demonstrates the engine harder anyway: a document rewritten and re-rendered
+    ten times a second, still saving as a real `.docx`. The choice is taken in a
+    `<head>` script before first paint, so the copy framing the frame can never
+    advertise the demo the page did not mount; `?demo=editor` / `?demo=arcade`
+    pin either on any screen, and the page links to the other one both ways.
+  - *The nav survives the phone.* Every link but the CTA was `display: none`
+    below 620px, which made the landing page a dead end on exactly the device
+    that most wants the other demo pages. They are now a horizontal scroll
+    strip — six chips, one swipe, nothing behind a second tap.
+  - *Floating controls, where the thumbs are.* The arcade's controls moved into
+    `docs/demo/arcade-dock.js`, shared by both hosts and sized from its own
+    host element rather than a viewport media query (a narrow card in a wide
+    page is narrow). Wide, it is the cabinet's original one-bar dock. Compact,
+    a slim HUD strip keeps play/pause and pacing, everything else moves behind
+    a `⋯` sheet, and a thumb D-pad plus a round **FIRE** button float over the
+    bottom corners of the game — replacing a wrapped four-arrow row that ate
+    the bottom of the screen and sat nowhere near a thumb. `FIRE` sends
+    `Space`, which the old touch row could not send at all: jump in the
+    platformer, the weapon in the raycasters, the coin drop on the attract
+    screen — Freedoom could previously be walked but never fought on a phone.
+
+    Demo-site content only; no library, WASM, or npm-package surface changes.
+
 ### Fixed
 - **A `DocxSession` mutation that threw partway through left the document
   partially mutated, permanently** — and reported it to the caller as an

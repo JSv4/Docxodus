@@ -171,6 +171,9 @@ test.describe('social demo pages', () => {
   test('index.html landing boots the editor and reports live status', async ({ page }) => {
     await page.goto(`/demo-index.html?${OVERRIDES}`);
     expect(await page.locator('script[type="module"]').textContent()).toContain(RELEASE_ENGINE);
+    // A desktop-width frame still gets the plain editor; the arcade swap is a
+    // phone default, not a change of what this page is.
+    expect(await page.evaluate(() => document.documentElement.dataset.demo)).toBe('editor');
     // The loading overlay belongs to the surface now, and narrates the wait.
     await expect(page.locator('#loader')).toBeVisible();
     await expect(page.locator('#loaderAdTitle')).not.toBeEmpty();
@@ -283,5 +286,161 @@ test.describe('social demo pages', () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect(page.locator('.dxr')).toHaveAttribute('data-chrome', 'full');
     await expect(page.locator('.dxr-rail')).toBeVisible();
+  });
+});
+
+/**
+ * The landing page on a phone. Two changes, one theme — a phone visitor is not
+ * going to draft a contract on a 390px screen, so the page stops offering them
+ * one first and stops dead-ending them second:
+ *
+ *  - it mounts THE DOCX ARCADE into the same frame, on the same shipped
+ *    surface, with the plain editor one tap away (`?demo=editor`);
+ *  - the nav links, which used to collapse to `display: none` below 620px,
+ *    stay reachable as a scroll strip — they point at the other demo pages,
+ *    which is precisely what a phone visitor wants;
+ *  - the arcade's controls float where the thumbs are instead of stacking into
+ *    a wrapped bar over the game.
+ *
+ * A phone-shaped viewport is enough to drive all of it: the demo decision and
+ * the controls' density are both taken from measured WIDTH, not from the
+ * pointer type, so they are exercisable here rather than only on the Pixel 5
+ * rig (which covers the cabinet page and the font/grid properties instead).
+ */
+test.describe('The landing page on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  const NAV_LINKS = ['GitHub', 'npm', 'Full editor', 'Compact player', 'Observatory', 'Arcade'];
+
+  test('mounts the arcade by default and keeps every nav destination reachable', async ({ page }) => {
+    test.setTimeout(150000);
+    await page.goto(`/demo-index.html?${OVERRIDES}&intro=0`);
+
+    // Decided in <head>, so it is already true of the first paint — the copy
+    // around the frame can never advertise the demo the page did not mount.
+    expect(await page.evaluate(() => document.documentElement.dataset.demo)).toBe('arcade');
+    await expect(page.locator('.section-title.for-arcade')).toBeVisible();
+    await expect(page.locator('.section-title.for-editor')).toBeHidden();
+    await expect(page.locator('.hero-button.for-arcade').first()).toBeVisible();
+    // The escape hatch is on the page, not only in the nav.
+    await expect(page.locator('.section-sub.for-arcade a[href="?demo=editor"]')).toBeVisible();
+
+    // The regression this replaces: every link but the CTA was display:none.
+    // "Reachable" is a laid-out box in a scroll strip, not necessarily one
+    // already on screen — so measure the boxes and the scroll affordance.
+    const nav = await page.evaluate((labels) => {
+      const bar = document.querySelector<HTMLElement>('.topbar nav')!;
+      const links = Array.from(bar.querySelectorAll<HTMLAnchorElement>('a'));
+      return {
+        overflowX: getComputedStyle(bar).overflowX,
+        laidOut: labels.every((label) => {
+          const link = links.find((a) => a.textContent?.trim() === label);
+          return !!link && link.getBoundingClientRect().width > 0;
+        }),
+        collapsed: links.filter((a) => getComputedStyle(a).display === 'none').length,
+        // Whatever does not fit is swipeable rather than lost.
+        clipped: bar.scrollWidth > bar.clientWidth,
+      };
+    }, NAV_LINKS);
+    expect(nav.laidOut, 'every nav destination must be laid out on a phone').toBe(true);
+    expect(nav.collapsed, 'no nav link may be collapsed away').toBe(0);
+    expect(nav.overflowX, 'anything past the edge must stay swipeable').toBe('auto');
+    expect(nav.clipped, 'six chips do not fit 390px — the strip must overflow, not wrap away').toBe(true);
+
+    // …and the arcade really boots, on the shipped surface, in the card.
+    await page.waitForFunction(
+      () => (window as any).__arcade !== undefined || (window as any).__demoError !== undefined,
+      { timeout: 90000 },
+    );
+    expect(await page.evaluate(() => (window as any).__demoError)).toBeUndefined();
+    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
+    await expect(page.locator('#pageStatus')).toContainText(/live/i);
+    await expect(page.locator('.dxr')).toHaveAttribute('data-chrome', 'compact');
+    expect(await page.evaluate(() => (window as any).__arcade.canvasText() as string))
+      .toContain('│'); // the game screen is drawn in the document
+  });
+
+  test('the floating controls steer the game and keep the screen clear', async ({ page }) => {
+    test.setTimeout(150000);
+    await page.goto(`/demo-index.html?${OVERRIDES}&intro=0&cart=quest`);
+    await page.waitForFunction(
+      () => (window as any).__arcade !== undefined || (window as any).__demoError !== undefined,
+      { timeout: 90000 },
+    );
+    expect(await page.evaluate(() => (window as any).__demoError)).toBeUndefined();
+    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
+
+    await expect(page.locator('.dxa-controls')).toHaveAttribute('data-compact', 'true');
+    await expect(page.locator('#pad .dxa-dpad')).toBeVisible();
+    await expect(page.locator('#pad .dxa-fire')).toBeVisible();
+
+    // The HUD keeps only what you touch mid-frame; the rest is behind "⋯",
+    // still one tap away — nothing is dropped, only re-placed.
+    await expect(page.locator('#playpause')).toBeVisible();
+    await expect(page.locator('#pace')).toBeVisible();
+    await expect(page.locator('#dockcarts')).toBeHidden();
+    await page.locator('#dockmore').click();
+    await expect(page.locator('#dockcarts')).toBeVisible();
+    expect(await page.locator('#dockcarts button').count()).toBe(3);
+    await expect(page.locator('#restart')).toBeVisible();
+    // The pad sits a fixed distance above the dock, so an opened sheet grows
+    // the dock up underneath it: the D-pad covered the cartridge buttons and
+    // the telemetry, and took the taps meant for them. It stands down instead.
+    await expect(page.locator('#pad')).toBeHidden();
+    await page.locator('#dockmore').click();
+    await expect(page.locator('#dockcarts')).toBeHidden();
+    await expect(page.locator('#pad')).toBeVisible();
+
+    // Thumb reach, inside the card, and out of the middle of the game screen.
+    const geometry = await page.evaluate(() => {
+      const box = (selector: string) =>
+        document.querySelector(selector)!.getBoundingClientRect();
+      const frame = box('#frame');
+      const dpad = box('.dxa-dpad');
+      const fire = box('.dxa-fire');
+      return {
+        insideCard: dpad.left >= frame.left && fire.right <= frame.right
+          && dpad.bottom <= frame.bottom && fire.bottom <= frame.bottom,
+        dpadOnTheLeft: dpad.right < frame.left + frame.width / 2,
+        fireOnTheRight: fire.left > frame.left + frame.width / 2,
+        // Big enough to hit without looking (Apple/Google both say 44px).
+        tapTargets: Math.min(dpad.width / 3, dpad.height / 3, fire.width, fire.height),
+        clearOfCentre: dpad.top > frame.top + frame.height / 2,
+      };
+    });
+    expect(geometry.insideCard, 'the controls overlay the card, not the page').toBe(true);
+    expect(geometry.dpadOnTheLeft).toBe(true);
+    expect(geometry.fireOnTheRight).toBe(true);
+    expect(geometry.tapTargets).toBeGreaterThanOrEqual(40);
+    expect(geometry.clearOfCentre).toBe(true);
+
+    // Holding ▶ runs the pilcrow right, through the same input the keyboard
+    // feeds — the control is wired to the simulation, not to a stub.
+    const before = await page.evaluate(() => (window as any).__arcade.game().player.x as number);
+    const right = (await page.locator('.dxa-right').boundingBox())!;
+    await page.mouse.move(right.x + right.width / 2, right.y + right.height / 2);
+    await page.mouse.down();
+    await page.waitForFunction(
+      (x0) => (window as any).__arcade.game().player.x > x0 + 2, before, { timeout: 30000 });
+    await page.mouse.up();
+
+    // FIRE is Space — jump here, the weapon in the raycasters, and the coin
+    // drop on the attract screen. A phone had no way to send it at all before.
+    const fire = (await page.locator('.dxa-fire').boundingBox())!;
+    await page.mouse.move(fire.x + fire.width / 2, fire.y + fire.height / 2);
+    await page.mouse.down();
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(true);
+    await page.mouse.up();
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(false);
+  });
+
+  test('?demo=editor pins the plain editor on the same phone viewport', async ({ page }) => {
+    await page.goto(`/demo-index.html?${OVERRIDES}&demo=editor`);
+    expect(await page.evaluate(() => document.documentElement.dataset.demo)).toBe('editor');
+    await expect(page.locator('.section-title.for-editor')).toBeVisible();
+    await expect(page.locator('#pageStatus')).toContainText(/live/i, { timeout: 90000 });
+    expect(await page.locator('#editor [data-anchor]').count()).toBeGreaterThan(0);
+    await expect(page.locator('.dxa-controls')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__arcade)).toBeUndefined();
   });
 });
