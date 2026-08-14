@@ -1467,6 +1467,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_annotate",
             "docxodus_close",
             "docxodus_comment",
+            "docxodus_content_controls",
             "docxodus_create",
             "docxodus_edit",
             "docxodus_format",
@@ -2239,5 +2240,56 @@ public class McpServerDispatcherTests : IDisposable
         Assert.False(invalid.GetProperty("success").GetBoolean());
         Assert.Equal("invalid_batch_step",
             invalid.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void MCP146_ContentControls_ListFillDetachAndBatchPreview_AreFirstClass()
+    {
+        File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list","scope":"body"}""")))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        Assert.Equal(15, listed.Length);
+        var plain = listed.Single(control => control.TryGetProperty("nativeId", out var id)
+            && id.GetString() == "101");
+        var plainAnchor = plain.GetProperty("anchorId").GetString()!;
+        var filled = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(plainAnchor)}},"text":"MCP value"}""")));
+        Assert.True(filled.GetProperty("success").GetBoolean());
+
+        var bound = listed.Single(control => control.TryGetProperty("nativeId", out var id)
+            && id.GetString() == "106");
+        var boundAnchor = bound.GetProperty("anchorId").GetString()!;
+        var refused = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(boundAnchor)}},"text":"no"}""")));
+        Assert.Equal("content_control_bound",
+            refused.GetProperty("error").GetProperty("code").GetString());
+        var detached = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(boundAnchor)}},"text":"yes","bindingPolicy":"detach_target"}""")));
+        Assert.True(detached.GetProperty("success").GetBoolean());
+
+        var previewArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            mode = "preview",
+            steps = new[] { new { tool = "docxodus_content_controls",
+                args = new { action = "fill_text", anchorId = plainAnchor, text = "preview" } } },
+        });
+        Assert.Equal("ok", Parse(Dispatcher.Call(_store, "docxodus_mutations", J(previewArgs)))
+            .GetProperty("status").GetString());
+        var after = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("contentControls").EnumerateArray().Single(control =>
+                control.TryGetProperty("nativeId", out var id) && id.GetString() == "101");
+        Assert.Equal("MCP value", after.GetProperty("text").GetString());
+
+        var tool = Assert.Single(ToolCatalog.Tools,
+            definition => definition.Name == "docxodus_content_controls");
+        using var schema = JsonDocument.Parse(tool.InputSchemaJson);
+        Assert.Contains("detach_target", schema.RootElement.GetProperty("properties")
+            .GetProperty("bindingPolicy").GetProperty("enum").EnumerateArray()
+            .Select(value => value.GetString()));
     }
 }

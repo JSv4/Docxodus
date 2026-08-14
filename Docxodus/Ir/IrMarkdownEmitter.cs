@@ -97,6 +97,37 @@ internal static class IrMarkdownEmitter
                 AddIndexEntry(index, c.Anchor, partUri, ComputeScopeTextPreview(c.Blocks), autoNumber);
         }
 
+        // Reorder the modeled entries to the oracle's exact descendant walk and add transparent
+        // carrier anchors (notably inline/row/cell SDTs) that intentionally have no separate IR
+        // block. The reader captures these facts while its private package is still open, so this
+        // also works with RetainSources=false without constructing another document tree.
+        if (ir.ProjectionAnchors.Count > 0)
+        {
+            var ordered = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
+            foreach (var fact in ir.ProjectionAnchors)
+            {
+                if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress && fact.IsEmptyParagraph)
+                    continue;
+                var id = fact.Anchor.ToString();
+                if (index.TryGetValue(id, out var modeled)) ordered[id] = modeled;
+                else
+                {
+                    ordered[id] = new AnchorTarget
+                    {
+                        Anchor = ToPublicAnchor(fact.Anchor),
+                        PartUri = fact.PartUri,
+                        Unid = fact.Anchor.Unid,
+                        TextPreview = fact.TextPreview,
+                        AutoNumberPrefix = fact.AutoNumberPrefix,
+                    };
+                }
+            }
+            // Defensive: retain any modeled anchor absent from a legacy captured list.
+            foreach (var pair in index)
+                if (!ordered.ContainsKey(pair.Key)) ordered[pair.Key] = pair.Value;
+            index = ordered;
+        }
+
         // Build the AnchorIdMap. Mirror the oracle exactly: the map is constructed by iterating
         // index.Values in INSERTION order (which the walk above keeps identical to the oracle's
         // DescendantsAndSelf order), so Abbreviated prefixes and Sequential counters match byte-for-byte.
@@ -286,8 +317,7 @@ internal static class IrMarkdownEmitter
             switch (b)
             {
                 case IrSdtBlock sdt:
-                    // The oracle's index walk descends into w:sdtContent, but KindFor does not make
-                    // the w:sdt wrapper a public anchor. Preserve that split: recurse, do not yield sdt.
+                    yield return (sdt.Anchor, ComputeTextPreview(sdt));
                     foreach (var inner in WalkAnchorsForIndex(sdt.Blocks, settings))
                         yield return inner;
                     break;

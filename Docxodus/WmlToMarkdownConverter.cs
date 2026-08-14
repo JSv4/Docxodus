@@ -583,6 +583,7 @@ public static class WmlToMarkdownConverter
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";
         if (n == W.comment) return "cmt";
+        if (n == W.sdt) return "sdt";
         return null;
     }
 

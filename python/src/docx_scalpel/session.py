@@ -53,6 +53,8 @@ from .types import (
     BulkEditResult,
     CharSpan,
     CommentListEntry,
+    ContentControlFillOptions,
+    ContentControlInfo,
     CrossBlockMatch,
     DocumentAnnotation,
     DocumentRange,
@@ -927,6 +929,78 @@ class DocxSession:
 
     def remove_image(self, image_id: str) -> EditResult:
         return EditResult._from_wire(self._call("remove_image", {"imageId": image_id}))
+
+    def list_content_controls(
+        self, scopes: ProjectionScopes = ProjectionScopes.ALL
+    ) -> tuple[ContentControlInfo, ...]:
+        result = self._call("list_content_controls", {"scopes": int(scopes)})
+        return tuple(ContentControlInfo._from_wire(item) for item in result)
+
+    def fill_content_control_text(self, anchor_id: str, text: str,
+                                  options: ContentControlFillOptions | None = None) -> EditResult:
+        return EditResult._from_wire(self._call("fill_content_control_text", {
+            "anchorId": anchor_id, "text": text,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def fill_content_control_rich_text(
+        self, anchor_id: str, markdown: str,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("fill_content_control_rich_text", {
+            "anchorId": anchor_id, "markdown": markdown,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def set_content_control_checked(
+        self, anchor_id: str, checked: bool,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_content_control_checked", {
+            "anchorId": anchor_id, "checked": checked,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def set_content_control_date(
+        self, anchor_id: str, value: str, display_text: str | None = None,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("set_content_control_date", {
+            "anchorId": anchor_id, "value": value, "displayText": display_text,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def select_content_control_item(
+        self, anchor_id: str, value: str,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("select_content_control_item", {
+            "anchorId": anchor_id, "value": value,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def fill_content_control_picture(
+        self, anchor_id: str, image_bytes: bytes,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("fill_content_control_picture", {
+            "anchorId": anchor_id,
+            "imageBase64": base64.b64encode(image_bytes).decode("ascii"),
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def add_repeating_section_item(
+        self, section_anchor_id: str, after_item_anchor_id: str | None = None,
+        options: ContentControlFillOptions | None = None,
+    ) -> EditResult:
+        return EditResult._from_wire(self._call("add_repeating_section_item", {
+            "sectionAnchorId": section_anchor_id, "afterItemAnchorId": after_item_anchor_id,
+            "options": (options or ContentControlFillOptions()).to_wire(),
+        }))
+
+    def remove_repeating_section_item(self, item_anchor_id: str) -> EditResult:
+        return EditResult._from_wire(self._call(
+            "remove_repeating_section_item", {"itemAnchorId": item_anchor_id}))
 
     def list_bookmarks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[BookmarkInfo, ...]:
         result = self._call("list_bookmarks", {"scopes": int(scopes)})

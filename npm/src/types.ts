@@ -1206,6 +1206,15 @@ export interface DocxodusWasmExports {
     SetImageMetadata: (handle: number, imageId: string, altText: string | null, title: string | null) => string;
     SetImageFloatingLayout: (handle: number, imageId: string, layoutJson: string) => string;
     RemoveImage: (handle: number, imageId: string) => string;
+    ListContentControls: (handle: number, scopes: number) => string;
+    FillContentControlText: (handle: number, anchorId: string, text: string, optionsJson: string) => string;
+    FillContentControlRichText: (handle: number, anchorId: string, markdown: string, optionsJson: string) => string;
+    SetContentControlChecked: (handle: number, anchorId: string, isChecked: boolean, optionsJson: string) => string;
+    SetContentControlDate: (handle: number, anchorId: string, value: string, displayText: string, optionsJson: string) => string;
+    SelectContentControlItem: (handle: number, anchorId: string, value: string, optionsJson: string) => string;
+    FillContentControlPicture: (handle: number, anchorId: string, imageBase64: string, optionsJson: string) => string;
+    AddRepeatingSectionItem: (handle: number, sectionAnchorId: string, afterItemAnchorId: string, optionsJson: string) => string;
+    RemoveRepeatingSectionItem: (handle: number, itemAnchorId: string) => string;
     ListBookmarks: (handle: number, scopes: number) => string;
     AddBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RenameBookmark: (handle: number, name: string, newName: string) => string;
@@ -1360,6 +1369,16 @@ export type EditErrorCode =
   | "revision_ambiguous"
   | "tracked_operation_unsupported"
   | "unresolved_structural_revision"
+  | "content_control_not_found"
+  | "content_control_malformed"
+  | "content_control_unsupported"
+  | "content_control_locked"
+  | "content_control_bound"
+  | "content_control_wrong_type"
+  | "invalid_content_control_value"
+  | "content_control_placement_unsupported"
+  | "content_control_nested_fill_unsupported"
+  | "repeating_section_constraint"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1594,6 +1613,46 @@ export interface ImageCapabilities {
   verticalReferences: ImageVerticalReference[]; maxInputBytes: number; maxRenderedPoints: number;
   defaultDpi: number; usesHeaderParsingOnly: boolean; acceptsBinaryBytes: boolean;
   supportsNetworkFetch: boolean; supportsFileIo: boolean;
+}
+
+export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date"
+  | "drop_down_list" | "combo_box" | "picture" | "repeating_section"
+  | "repeating_section_item" | "unsupported";
+export type ContentControlPlacement = "inline" | "block" | "row" | "cell" | "unknown";
+export type ContentControlBindingPolicy = "preserve" | "detach_target";
+
+export interface ContentControlFillOptions {
+  bindingPolicy?: ContentControlBindingPolicy;
+}
+
+export interface ContentControlBindingInfo {
+  storeItemId?: string;
+  xpath?: string;
+  prefixMappings?: string;
+}
+
+export interface ContentControlInfo {
+  anchorId: string;
+  type: ContentControlType;
+  placement: ContentControlPlacement;
+  nativeId?: string;
+  tag?: string;
+  alias?: string;
+  lock?: string;
+  isShowingPlaceholder: boolean;
+  isBound: boolean;
+  binding?: ContentControlBindingInfo;
+  owningPartUri: string;
+  scope: string;
+  parentAnchorId?: string;
+  depth: number;
+  hasValidNativeId: boolean;
+  hasDuplicateNativeId: boolean;
+  canMutate: boolean;
+  canDetachTargetBinding: boolean;
+  unsupportedReason?: string;
+  text: string;
+  itemValues: string[];
 }
 
 export interface DocumentRange {
@@ -2598,6 +2657,8 @@ export interface InlineSpan {
   text: string;
   direct: RunFormattingInfo;
   effective: RunFormattingInfo;
+  /** Outer-to-inner native content controls containing this run. */
+  contentControlAnchorIds: string[];
 }
 
 /** Explicitly separated direct and effective formatting for one paragraph anchor. */

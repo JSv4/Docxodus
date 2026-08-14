@@ -524,6 +524,10 @@ public sealed record InlineSpan
     required public string Text { get; init; }
     required public RunFormattingInfo Direct { get; init; }
     required public RunFormattingInfo Effective { get; init; }
+
+    /// <summary>Outer-to-inner native content-control membership for this run. Empty when the
+    /// run is not inside a w:sdt. Each id is directly accepted by content-control operations.</summary>
+    public IReadOnlyList<string> ContentControlAnchorIds { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>Direct and effective formatting for one paragraph-like anchor.</summary>
@@ -1664,6 +1668,17 @@ public enum EditErrorCode
     UnsupportedImageMarkup,
     LinkedImageReadOnly,
     InvalidImageLayout,
+
+    ContentControlNotFound,
+    ContentControlMalformed,
+    ContentControlUnsupported,
+    ContentControlLocked,
+    ContentControlBound,
+    ContentControlWrongType,
+    InvalidContentControlValue,
+    ContentControlPlacementUnsupported,
+    ContentControlNestedFillUnsupported,
+    RepeatingSectionConstraint,
 
     /// <summary>A zero-length span passed to <see cref="DocxSession.AddComment"/>, or a
     /// whole-block comment requested on a paragraph with no text — a comment range must

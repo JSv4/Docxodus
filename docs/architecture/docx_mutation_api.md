@@ -176,7 +176,9 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
 - If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`, or target a tracked change from `ListRevisions()` with `AddCommentToRevision(revisionId, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
-- For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
+- For everything OOXML can do that markdown can't (complex tables, math, and unmodeled drawings) → `session.Raw.*`.
+  Native Word content controls instead use the typed surface in
+  [`native_content_controls.md`](native_content_controls.md).
 
 We didn't pick CommonMark or GFM as the input language because the projector's subset is small and well-defined; running a full parser against that subset would import surprise (e.g., GFM tables silently splitting paragraphs, autolinks mis-classifying spans). The hand-rolled parser is ~300 LOC, has no dependencies, and gives us complete control over what gets rejected and why.
 

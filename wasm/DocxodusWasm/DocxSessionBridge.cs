@@ -596,6 +596,51 @@ public static partial class DocxSessionBridge
         DocxSessionOps.RemoveImage(h, imageId);
 
     [JSExport]
+    public static string ListContentControls(int h, int scopes) =>
+        DocxSessionOps.ListContentControls(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string FillContentControlText(int h, string anchorId, string text,
+        string optionsJson) =>
+        DocxSessionOps.FillContentControlText(h, anchorId, text, optionsJson);
+
+    [JSExport]
+    public static string FillContentControlRichText(int h, string anchorId, string markdown,
+        string optionsJson) =>
+        DocxSessionOps.FillContentControlRichText(h, anchorId, markdown, optionsJson);
+
+    [JSExport]
+    public static string SetContentControlChecked(int h, string anchorId, bool isChecked,
+        string optionsJson) =>
+        DocxSessionOps.SetContentControlChecked(h, anchorId, isChecked, optionsJson);
+
+    [JSExport]
+    public static string SetContentControlDate(int h, string anchorId, string value,
+        string displayText, string optionsJson) =>
+        DocxSessionOps.SetContentControlDate(h, anchorId, value,
+            string.IsNullOrEmpty(displayText) ? null : displayText, optionsJson);
+
+    [JSExport]
+    public static string SelectContentControlItem(int h, string anchorId, string value,
+        string optionsJson) =>
+        DocxSessionOps.SelectContentControlItem(h, anchorId, value, optionsJson);
+
+    [JSExport]
+    public static string FillContentControlPicture(int h, string anchorId,
+        string imageBase64, string optionsJson) =>
+        DocxSessionOps.FillContentControlPicture(h, anchorId, imageBase64, optionsJson);
+
+    [JSExport]
+    public static string AddRepeatingSectionItem(int h, string sectionAnchorId,
+        string afterItemAnchorId, string optionsJson) =>
+        DocxSessionOps.AddRepeatingSectionItem(h, sectionAnchorId,
+            string.IsNullOrEmpty(afterItemAnchorId) ? null : afterItemAnchorId, optionsJson);
+
+    [JSExport]
+    public static string RemoveRepeatingSectionItem(int h, string itemAnchorId) =>
+        DocxSessionOps.RemoveRepeatingSectionItem(h, itemAnchorId);
+
+    [JSExport]
     public static string ListBookmarks(int h, int scopes) =>
         DocxSessionOps.ListBookmarks(h, (ProjectionScopes)scopes);
 

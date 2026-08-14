@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir;
 
@@ -180,6 +181,8 @@ internal static class IrReader
             comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!,
                 retain, drawingGraphFallbackDocumentHash);
 
+        var projectionAnchors = CaptureProjectionAnchors(wdoc, options.Scopes);
+
         return new IrDocument
         {
             Body = new IrScope("body", IrNodeList.From(blocks), partUri),
@@ -193,7 +196,63 @@ internal static class IrReader
             ThemeFonts = BuildThemeFonts(main),
             AnchorIndex = anchorIndex,
             Sources = sources,
+            ProjectionAnchors = projectionAnchors,
         };
+    }
+
+    private static IrNodeList<IrProjectionAnchor> CaptureProjectionAnchors(
+        WordprocessingDocument document, IrScopes scopes)
+    {
+        var result = new List<IrProjectionAnchor>();
+        foreach (var owner in OwnedPartRelationships.StoryParts(document))
+        {
+            bool included = owner.Scope switch
+            {
+                "body" => scopes.HasFlag(IrScopes.Body),
+                var value when value.StartsWith("hdr", StringComparison.Ordinal)
+                    || value.StartsWith("ftr", StringComparison.Ordinal) =>
+                    scopes.HasFlag(IrScopes.HeadersFooters),
+                "fn" or "en" => scopes.HasFlag(IrScopes.Notes),
+                "cmt" => scopes.HasFlag(IrScopes.Comments),
+                _ => false,
+            };
+            if (!included) continue;
+            var root = owner.Part.GetXDocument().Root;
+            if (root is null) continue;
+            ContentControlIdentity.AssignStableUnids(root);
+            if (root.Annotation<OpenXmlPart>() is null) root.AddAnnotation(owner.Part);
+
+            var skip = new HashSet<XElement>();
+            if (owner.Scope is "fn" or "en")
+            {
+                var noteName = owner.Scope == "fn" ? W + "footnote" : W + "endnote";
+                foreach (var note in root.Elements(noteName))
+                {
+                    var type = (string?)note.Attribute(W + "type");
+                    if (type is null or "normal") continue;
+                    skip.Add(note);
+                    foreach (var descendant in note.Descendants()) skip.Add(descendant);
+                }
+            }
+
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if (skip.Contains(element)) continue;
+                var kind = WmlToMarkdownConverter.KindFor(element);
+                var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                if (kind is null || unid is null) continue;
+                var previewText = string.Concat(element.Descendants(W + "t").Select(t => (string)t));
+                var preview = previewText.Length > 80 ? previewText.Substring(0, 80) + "…" : previewText;
+                var autoNumber = owner.Scope == "body" && kind is "p" or "h" or "li"
+                    ? ListNumberResolver.Resolve(element, document) : null;
+                bool emptyParagraph = element.Name == W + "p"
+                    && !element.Descendants(W + "t").Any(t => !string.IsNullOrEmpty((string)t));
+                result.Add(new IrProjectionAnchor(
+                    new IrAnchor(IrAnchor.KindFromToken(kind), owner.Scope, unid),
+                    owner.PartUri, preview, autoNumber, emptyParagraph));
+            }
+        }
+        return IrNodeList.From(result);
     }
 
     /// <summary>

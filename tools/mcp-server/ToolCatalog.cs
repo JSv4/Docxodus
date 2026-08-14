@@ -10,7 +10,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus fourteen
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus fifteen
 /// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
 /// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -453,6 +453,31 @@ internal static class ToolCatalog
             }
             """),
         new ToolDefinition(
+            "docxodus_content_controls",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Whole-control fills are refused in render_inline tracked-change mode.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["list", "fill_text", "fill_rich_text", "set_checked", "set_date", "select_item", "fill_picture", "add_repeating_item", "remove_repeating_item"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
+                "anchorId": { "type": "string", "description": "Target sdt anchor returned by list." },
+                "text": { "type": "string", "description": "fill_text payload." },
+                "markdown": { "type": "string", "description": "fill_rich_text payload." },
+                "checked": { "type": "boolean", "description": "set_checked value." },
+                "value": { "type": "string", "description": "set_date ISO-8601 value or select_item value/display text." },
+                "displayText": { "type": "string", "description": "Optional set_date displayed text." },
+                "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
+                "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
+                "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
+                "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own w:dataBinding; a bound ancestor still fails closed." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
             "docxodus_track_changes",
             "List, selectively accept/reject (by revisionId), or atomically bulk-resolve live tracked changes including structural cell, content-control, and numbering families — or switch how the session records its OWN subsequent edits (set_mode).",
             """
@@ -476,7 +501,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/track-changes actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
             """
             {
               "type": "object",
@@ -493,7 +518,7 @@ internal static class ToolCatalog
                   "items": {
                     "type": "object",
                     "properties": {
-                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_track_changes"] },
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_content_controls", "docxodus_track_changes"] },
                       "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
                     },
                     "required": ["tool", "args"]

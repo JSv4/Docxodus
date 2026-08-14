@@ -11,6 +11,8 @@ import type {
   BulkEditResult,
   CharSpan,
   CommentListEntry,
+  ContentControlFillOptions,
+  ContentControlInfo,
   CrossBlockMatch,
   DiffEntry,
   DocumentAnnotation,
@@ -1033,6 +1035,59 @@ export class DocxSession {
 
   removeImage(imageId: string): EditResult {
     return JSON.parse(this.wasm.RemoveImage(this.handle, imageId)) as EditResult;
+  }
+
+  /** Native Word structured-document tags, in outer-before-inner story order. */
+  listContentControls(scopes: ProjectionScopes = ProjectionScopes.All): ContentControlInfo[] {
+    return JSON.parse(this.wasm.ListContentControls(this.handle, scopes)) as ContentControlInfo[];
+  }
+
+  fillContentControlText(anchorId: string, text: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlText(
+      this.handle, anchorId, text, JSON.stringify(options))) as EditResult;
+  }
+
+  fillContentControlRichText(anchorId: string, markdown: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlRichText(
+      this.handle, anchorId, markdown, JSON.stringify(options))) as EditResult;
+  }
+
+  setContentControlChecked(anchorId: string, isChecked: boolean,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.SetContentControlChecked(
+      this.handle, anchorId, isChecked, JSON.stringify(options))) as EditResult;
+  }
+
+  setContentControlDate(anchorId: string, value: string | Date, displayText?: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    const timestamp = value instanceof Date ? value.toISOString() : value;
+    return JSON.parse(this.wasm.SetContentControlDate(
+      this.handle, anchorId, timestamp, displayText ?? "", JSON.stringify(options))) as EditResult;
+  }
+
+  selectContentControlItem(anchorId: string, value: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.SelectContentControlItem(
+      this.handle, anchorId, value, JSON.stringify(options))) as EditResult;
+  }
+
+  fillContentControlPicture(anchorId: string, bytes: Uint8Array,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlPicture(
+      this.handle, anchorId, imageBytesToBase64(bytes), JSON.stringify(options))) as EditResult;
+  }
+
+  addRepeatingSectionItem(sectionAnchorId: string, afterItemAnchorId?: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.AddRepeatingSectionItem(
+      this.handle, sectionAnchorId, afterItemAnchorId ?? "", JSON.stringify(options))) as EditResult;
+  }
+
+  removeRepeatingSectionItem(itemAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveRepeatingSectionItem(
+      this.handle, itemAnchorId)) as EditResult;
   }
 
   listBookmarks(scopes: ProjectionScopes = ProjectionScopes.All): BookmarkInfo[] {
