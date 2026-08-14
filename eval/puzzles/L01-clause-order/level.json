@@ -1,0 +1,55 @@
+{
+  "id": "L01-clause-order",
+  "title": "Put the boilerplate back in order",
+  "par": 3,
+  "brief": "This agreement's closing clauses were pasted back in the wrong order and one defined term was never conformed. Move the Governing Law clause so it sits immediately before Indemnification, and make the body use the defined term \"the Company\" consistently — the Recitals define it, and one later clause still says \"Acme\". Do not change any other wording.",
+  "start": {
+    "paragraphs": [
+      { "text": "Master Services Agreement", "style": "Heading1" },
+      { "text": "Recitals", "style": "Heading2" },
+      { "text": "Acme Industries, Inc. (\"the Company\") and the Counterparty enter into this Agreement as of the date last signed below." },
+      { "text": "Indemnification", "style": "Heading2" },
+      { "text": "The Company shall indemnify and hold harmless the Counterparty against any third-party claim arising out of the Services." },
+      { "text": "Governing Law", "style": "Heading2" },
+      { "text": "This Agreement is governed by the laws of the State of Delaware, without regard to its conflict-of-laws principles." },
+      { "text": "Notices", "style": "Heading2" },
+      { "text": "Any notice to Acme must be delivered to the address set out on the signature page." }
+    ]
+  },
+  "target": {
+    "paragraphs": [
+      { "text": "Master Services Agreement", "style": "Heading1" },
+      { "text": "Recitals", "style": "Heading2" },
+      { "text": "Acme Industries, Inc. (\"the Company\") and the Counterparty enter into this Agreement as of the date last signed below." },
+      { "text": "Governing Law", "style": "Heading2" },
+      { "text": "This Agreement is governed by the laws of the State of Delaware, without regard to its conflict-of-laws principles." },
+      { "text": "Indemnification", "style": "Heading2" },
+      { "text": "The Company shall indemnify and hold harmless the Counterparty against any third-party claim arising out of the Services." },
+      { "text": "Notices", "style": "Heading2" },
+      { "text": "Any notice to the Company must be delivered to the address set out on the signature page." }
+    ]
+  },
+  "reference": [
+    {
+      "op": "moveBlock",
+      "find": "Governing Law",
+      "relativeTo": "Indemnification",
+      "position": "before",
+      "why": "The heading moves; its body paragraph has to follow it as a second step, which is the affordance gap this level is really probing."
+    },
+    {
+      "op": "moveBlock",
+      "find": "governed by the laws of the State of Delaware",
+      "relativeTo": "Indemnification",
+      "position": "before",
+      "why": "Clause bodies are separate blocks — there is no move-the-section op, so a two-paragraph clause costs two calls."
+    },
+    {
+      "op": "replaceTextRange",
+      "find": "Any notice to Acme",
+      "search": "Acme",
+      "replace": "the Company",
+      "why": "Scoped to the one block, because a document-wide replace would also rewrite the Recitals' \"Acme Industries, Inc.\" and break the definition."
+    }
+  ]
+}

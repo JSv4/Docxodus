@@ -25,6 +25,19 @@ All notable changes to this project will be documented in this file.
     half-applied-mutation guarantee that per-op rollback exists to provide.
   - Nesting joins the enclosing batch rather than opening a second snapshot, so the whole
     tree stays one undo step and the outermost close owns the outcome.
+- **The puzzle eval** (`eval/`, `Docxodus.Tests/PuzzleEvalTests.cs`): levels that ask
+  whether an agent can reach a specified document state using only the grouped tool
+  surface and anchor addressing, **scored by `DocxDiff` returning zero revisions** against
+  the target rather than by judgement. A level declares its start and target as paragraph
+  lists (text, so it diffs in review; built by one function, so a scoring difference can
+  only come from the player's edits), a `par` call budget, the brief the player is given,
+  and a reference solution addressed by content via `FindAllByText` — the same op behind
+  `docxodus_search`, so the reference pays the same discovery cost a player does. CI keeps
+  the levels honest rather than testing the session: the reference solves the level, does
+  so within par, and the start document does not already score as solved — the last being
+  what stops a mis-built target from passing every level with an empty solution. Ships
+  with `L01-clause-order`. Complements the arcade, which drives `raw.replaceXml` and so
+  says nothing about the surface agents are actually given.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:
@@ -41,6 +54,11 @@ All notable changes to this project will be documented in this file.
   explain why undo stops short of the configured depth instead of appearing broken.
 
 ### Changed
+- **The arcade's social copy says what the Freedoom cartridge actually is**
+  (`docs/demo/arcade.html`): "a REAL Doom-format level" read as a live WAD parser, where
+  `tools/wad2cart.mjs` rasterizes E1M1's geometry to a character grid at build time and
+  ships the result as static data. `freedoom-e1m1.js` already described itself accurately;
+  only the `og:`/`twitter:` descriptions overstated it.
 - **`docxodus_mutations` is now genuinely atomic rather than "atomic-feeling"**
   (`tools/mcp-server/Dispatcher.cs`): the step loop runs inside a session batch, so a
   forty-step agent plan costs one snapshot and one undo step instead of forty of each.
