@@ -82,11 +82,34 @@ public sealed partial class DocxSession
     private static readonly XNamespace ContentControlW15 =
         "http://schemas.microsoft.com/office/word/2012/wordml";
 
+    private static readonly IReadOnlyDictionary<XName, ContentControlType>
+        ContentControlFamilies = new Dictionary<XName, ContentControlType>
+        {
+            [ContentControlW14 + "checkbox"] = ContentControlType.Checkbox,
+            [ContentControlW15 + "repeatingSection"] = ContentControlType.RepeatingSection,
+            [ContentControlW15 + "repeatingSectionItem"] = ContentControlType.RepeatingSectionItem,
+            [W.picture] = ContentControlType.Picture,
+            [W.date] = ContentControlType.Date,
+            [W.dropDownList] = ContentControlType.DropDownList,
+            [W.comboBox] = ContentControlType.ComboBox,
+            [W.text] = ContentControlType.PlainText,
+            [ContentControlW + "richText"] = ContentControlType.RichText,
+        };
+
+    private static readonly HashSet<XName> ContentControlMetadata = new()
+    {
+        W.id, W.tag, W.alias, W.dataBinding, ContentControlW15 + "dataBinding",
+        W.showingPlcHdr, ContentControlW + "lock", ContentControlW + "placeholder",
+        ContentControlW + "temporary", ContentControlW15 + "appearance",
+        ContentControlW15 + "color", W.rPr,
+    };
+
     private sealed record ContentControlCandidate(
         OwnedPartRelationships.Owner Owner,
         XElement Element,
         ContentControlIdentity.Entry Identity,
-        ContentControlInfo Info);
+        ContentControlInfo Info,
+        string? MalformedReason);
 
     public IReadOnlyList<ContentControlInfo> ListContentControls(
         ProjectionScopes scopes = ProjectionScopes.All)
@@ -131,6 +154,7 @@ public sealed partial class DocxSession
         var fallback = isChecked ? 0x2612 : 0x2610;
         var glyph = TryParseHexScalar((string?)stateElement?.Attribute(ContentControlW14 + "val"),
             out var scalar) ? char.ConvertFromUtf32(scalar) : char.ConvertFromUtf32(fallback);
+        var stateFont = (string?)stateElement?.Attribute(ContentControlW14 + "font");
         if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
             return replacementError;
 
@@ -142,7 +166,7 @@ public sealed partial class DocxSession
                 checkbox.AddFirst(checkedElement);
             }
             checkedElement.SetAttributeValue(ContentControlW14 + "val", isChecked ? "1" : "0");
-            ReplaceControlWithPlainText(candidate.Element, glyph);
+            ReplaceControlWithPlainText(candidate.Element, glyph, stateFont);
         });
     }
 
@@ -178,20 +202,29 @@ public sealed partial class DocxSession
             return NestedFillError(anchorId);
         var props = candidate.Element.Element(W.sdtPr)!;
         var list = props.Element(W.dropDownList) ?? props.Element(W.comboBox)!;
+        var isComboBox = list.Name == W.comboBox;
         var matches = list.Elements(W.listItem).Where(item =>
             string.Equals((string?)item.Attribute(ContentControlW + "value"), value, StringComparison.Ordinal)
             || string.Equals((string?)item.Attribute(W.displayText), value, StringComparison.Ordinal)).ToList();
-        if (matches.Count != 1)
+        if (matches.Count > 1 || matches.Count == 0 && !isComboBox)
             return EditResult.Fail(EditErrorCode.InvalidContentControlValue,
                 matches.Count == 0
                     ? $"content control has no list item matching '{value}'"
                     : $"content control has multiple list items matching '{value}'", anchorId);
-        var display = (string?)matches[0].Attribute(W.displayText)
-            ?? (string?)matches[0].Attribute(ContentControlW + "value") ?? string.Empty;
+        var selectedValue = matches.Count == 1
+            ? (string?)matches[0].Attribute(ContentControlW + "value")
+                ?? (string?)matches[0].Attribute(W.displayText) ?? string.Empty
+            : value;
+        var display = matches.Count == 1
+            ? (string?)matches[0].Attribute(W.displayText) ?? selectedValue
+            : value;
         if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
             return replacementError;
-        return MutateContentControl(candidate, options,
-            () => ReplaceControlWithPlainText(candidate.Element, display));
+        return MutateContentControl(candidate, options, () =>
+        {
+            list.SetAttributeValue(W.lastValue, selectedValue);
+            ReplaceControlWithPlainText(candidate.Element, display);
+        });
     }
 
     public EditResult FillContentControlPicture(string anchorId, byte[] imageBytes,
@@ -414,10 +447,11 @@ public sealed partial class DocxSession
                 $"content control not found: {anchorId}", anchorId);
             return false;
         }
-        if (!candidate.Identity.HasMutableIdentity)
+        if (candidate.MalformedReason is not null || !candidate.Identity.HasMutableIdentity)
         {
             error = EditResult.Fail(EditErrorCode.ContentControlMalformed,
-                candidate.Info.UnsupportedReason ?? "content control has no unique valid native w:id", anchorId);
+                candidate.MalformedReason ?? candidate.Info.UnsupportedReason
+                    ?? "content control has no unique valid native w:id", anchorId);
             return false;
         }
         if (candidate.Info.Type == ContentControlType.Unsupported)
@@ -526,7 +560,8 @@ public sealed partial class DocxSession
                 binding.Remove();
     }
 
-    private static void ReplaceControlWithPlainText(XElement control, string text)
+    private static void ReplaceControlWithPlainText(XElement control, string text,
+        string? stateFont = null)
     {
         var content = control.Element(W.sdtContent)
             ?? throw new InvalidOperationException("content control has no w:sdtContent");
@@ -536,6 +571,25 @@ public sealed partial class DocxSession
         var run = new XElement(W.r,
             oldRunProperties is null ? null : new XElement(oldRunProperties),
             new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+        if (!string.IsNullOrWhiteSpace(stateFont))
+        {
+            var runProperties = run.Element(W.rPr);
+            if (runProperties is null)
+            {
+                runProperties = new XElement(W.rPr);
+                run.AddFirst(runProperties);
+            }
+            var fonts = runProperties.Element(W.rFonts);
+            if (fonts is null)
+            {
+                fonts = new XElement(W.rFonts);
+                runProperties.AddFirst(fonts);
+            }
+            fonts.SetAttributeValue(W.ascii, stateFont);
+            fonts.SetAttributeValue(W.hAnsi, stateFont);
+            fonts.SetAttributeValue(W.eastAsia, stateFont);
+            fonts.SetAttributeValue(W.cs, stateFont);
+        }
         if (placement == ContentControlPlacement.Inline)
         {
             content.ReplaceNodes(run);
@@ -601,6 +655,7 @@ public sealed partial class DocxSession
             foreach (var identity in identities)
             {
                 var element = identity.Element;
+                var malformed = ValidateContentControlStructure(element);
                 var props = element.Element(W.sdtPr);
                 var type = ClassifyContentControl(props);
                 var placement = DetectContentControlPlacement(element);
@@ -608,7 +663,8 @@ public sealed partial class DocxSession
                 var parent = element.Ancestors(W.sdt).FirstOrDefault();
                 var lockToken = (string?)props?.Element(ContentControlW + "lock")?.Attribute(W.val);
                 string? unsupported = null;
-                if (!identity.HasValidNativeId) unsupported = "missing or invalid native w:sdtPr/w:id";
+                if (malformed is not null) unsupported = malformed;
+                else if (!identity.HasValidNativeId) unsupported = "missing or invalid native w:sdtPr/w:id";
                 else if (identity.IsDuplicateNativeId) unsupported = "duplicate native w:sdtPr/w:id in package";
                 else if (placement == ContentControlPlacement.Unknown) unsupported = "unsupported or malformed OOXML placement";
                 else if (type == ContentControlType.Unsupported) unsupported = "unsupported content-control family";
@@ -619,13 +675,18 @@ public sealed partial class DocxSession
                 bool locked = element.AncestorsAndSelf(W.sdt).Any(control =>
                     (string?)control.Element(W.sdtPr)?.Element(ContentControlW + "lock")?.Attribute(W.val)
                         is "contentLocked" or "sdtContentLocked");
+                bool wrapperLocked = type == ContentControlType.RepeatingSectionItem
+                    && lockToken is "sdtLocked" or "sdtContentLocked";
                 bool placementSupported = IsMutationPlacementSupported(type, placement);
                 if (unsupported is null && !placementSupported)
                     unsupported = $"{type} mutation supports only inline and block content controls";
                 if (unsupported is null && IsWholeControlFillType(type)
                     && ContainsNestedContentControl(element))
                     unsupported = "whole-control fill is unsupported when the target contains nested controls";
-                bool defaultMutable = unsupported is null && !locked && !targetBound && !ancestorBound;
+                if (unsupported is null)
+                    unsupported = RepeatingMutationConstraint(element, type);
+                bool defaultMutable = unsupported is null && !locked && !wrapperLocked
+                    && !targetBound && !ancestorBound;
 
                 var items = props?.Elements().FirstOrDefault(value =>
                         value.Name == W.dropDownList || value.Name == W.comboBox)
@@ -654,15 +715,18 @@ public sealed partial class DocxSession
                     HasValidNativeId = identity.HasValidNativeId,
                     HasDuplicateNativeId = identity.IsDuplicateNativeId,
                     CanMutate = defaultMutable,
-                    CanDetachTargetBinding = unsupported is null && targetBound && !ancestorBound && !locked,
+                    CanDetachTargetBinding = unsupported is null && targetBound && !ancestorBound
+                        && !locked && !wrapperLocked,
                     UnsupportedReason = unsupported ?? (locked ? "content locked by target or ancestor"
+                        : wrapperLocked ? "content-control wrapper is locked"
                         : ancestorBound ? "inside a data-bound ancestor"
                         : targetBound ? "target is data-bound; explicit detach_target is required" : null),
                     Text = string.Concat(element.Element(W.sdtContent)?.Descendants(W.t)
                         .Select(text => (string)text) ?? Enumerable.Empty<string>()),
                     ItemValues = items,
                 };
-                result.Add(new ContentControlCandidate(owner, element, byElement[element], info));
+                result.Add(new ContentControlCandidate(owner, element, byElement[element], info,
+                    malformed));
             }
         }
         return result;
@@ -682,23 +746,57 @@ public sealed partial class DocxSession
     private static ContentControlType ClassifyContentControl(XElement? props)
     {
         if (props is null) return ContentControlType.Unsupported;
-        if (props.Element(ContentControlW14 + "checkbox") is not null) return ContentControlType.Checkbox;
-        if (props.Element(ContentControlW15 + "repeatingSection") is not null) return ContentControlType.RepeatingSection;
-        if (props.Element(ContentControlW15 + "repeatingSectionItem") is not null) return ContentControlType.RepeatingSectionItem;
-        if (props.Element(W.picture) is not null) return ContentControlType.Picture;
-        if (props.Element(W.date) is not null) return ContentControlType.Date;
-        if (props.Element(W.dropDownList) is not null) return ContentControlType.DropDownList;
-        if (props.Element(W.comboBox) is not null) return ContentControlType.ComboBox;
-        if (props.Element(W.text) is not null) return ContentControlType.PlainText;
-        if (props.Element(ContentControlW + "richText") is not null) return ContentControlType.RichText;
-        var knownMetadata = new HashSet<XName> { W.id, W.tag, W.alias, W.dataBinding,
-            ContentControlW15 + "dataBinding",
-            W.showingPlcHdr, ContentControlW + "lock", ContentControlW + "placeholder",
-            ContentControlW + "temporary", ContentControlW15 + "appearance",
-            ContentControlW15 + "color", W.rPr };
-        return props.Elements().All(element => knownMetadata.Contains(element.Name))
-            ? ContentControlType.RichText
+        var family = props.Elements().Where(element =>
+            !ContentControlMetadata.Contains(element.Name)).ToList();
+        if (family.Count == 0) return ContentControlType.RichText;
+        return family.Count == 1 && ContentControlFamilies.TryGetValue(family[0].Name, out var type)
+            ? type
             : ContentControlType.Unsupported;
+    }
+
+    private static string? ValidateContentControlStructure(XElement control)
+    {
+        var properties = control.Elements(W.sdtPr).ToList();
+        if (properties.Count != 1)
+            return $"content control must contain exactly one w:sdtPr; found {properties.Count}";
+        var contents = control.Elements(W.sdtContent).ToList();
+        if (contents.Count != 1)
+            return $"content control must contain exactly one w:sdtContent; found {contents.Count}";
+        var ids = properties[0].Elements(W.id).ToList();
+        if (ids.Count != 1)
+            return $"w:sdtPr must contain exactly one w:id; found {ids.Count}";
+        if (!ContentControlIdentity.TryCanonicalizeNativeId(
+                (string?)ids[0].Attribute(W.val), out _))
+            return "w:sdtPr/w:id must have a signed 32-bit integer w:val";
+        var family = properties[0].Elements().Where(element =>
+            !ContentControlMetadata.Contains(element.Name)).ToList();
+        if (family.Count > 1)
+            return "w:sdtPr must contain at most one mutually exclusive content-control family marker";
+        return null;
+    }
+
+    private static string? RepeatingMutationConstraint(XElement control, ContentControlType type)
+    {
+        if (type == ContentControlType.RepeatingSection)
+        {
+            var content = control.Element(W.sdtContent);
+            var items = content?.Elements(W.sdt).Where(IsRepeatingSectionItem).ToList()
+                ?? new List<XElement>();
+            if (items.Count == 0 || content!.Elements().Any(element => element.Name != W.sdt
+                    || !IsRepeatingSectionItem(element)))
+                return "repeating section must contain only one or more direct repeating-section-item controls";
+            if (FindUnsafeRepeatingCloneCarrier(items[^1]) is { } unsafeCarrier)
+                return $"default repeating-item template contains clone-sensitive markup ({unsafeCarrier})";
+            return null;
+        }
+        if (type != ContentControlType.RepeatingSectionItem) return null;
+        var outer = control.Parent?.Parent;
+        if (control.Parent?.Name != W.sdtContent || outer?.Name != W.sdt
+            || !IsRepeatingSection(outer))
+            return "repeating-section item is not a direct child of a repeating section";
+        if (control.Parent.Elements(W.sdt).Count(IsRepeatingSectionItem) <= 1)
+            return "a repeating section must retain at least one item";
+        return null;
     }
 
     private static ContentControlPlacement DetectContentControlPlacement(XElement control)
@@ -748,18 +846,8 @@ public sealed partial class DocxSession
             while (used.Contains(next) && next < int.MaxValue) next++;
             if (used.Contains(next)) throw new InvalidOperationException("no unused content-control id remains");
             used.Add(next);
-            var props = control.Element(W.sdtPr);
-            if (props is null)
-            {
-                props = new XElement(W.sdtPr);
-                control.AddFirst(props);
-            }
-            var id = props.Element(W.id);
-            if (id is null)
-            {
-                id = new XElement(W.id);
-                props.Add(id);
-            }
+            var props = control.Elements(W.sdtPr).Single();
+            var id = props.Elements(W.id).Single();
             id.SetAttributeValue(W.val, next.ToString(CultureInfo.InvariantCulture));
             next++;
         }
@@ -785,6 +873,9 @@ public sealed partial class DocxSession
 
     private static string? FindUnsafeRepeatingCloneCarrier(XElement item)
     {
+        foreach (var control in item.DescendantsAndSelf(W.sdt))
+            if (ValidateContentControlStructure(control) is { } malformed)
+                return $"malformed content control: {malformed}";
         var unsafeNames = new HashSet<XName>
         {
             W.bookmarkStart, W.bookmarkEnd, W.commentRangeStart, W.commentRangeEnd,

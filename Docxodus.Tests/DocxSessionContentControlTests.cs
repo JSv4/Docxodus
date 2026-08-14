@@ -665,6 +665,343 @@ public sealed class DocxSessionContentControlTests
         }
     }
 
+    [Fact]
+    public void CC020_ListSelection_PersistsNativeLastValue_AndComboAcceptsCustomText()
+    {
+        using var session = new DocxSession(BuildFixture());
+        var controls = session.ListContentControls();
+        var dropDown = controls.Single(control => control.NativeId == "104");
+        var combo = controls.Single(control => control.NativeId == "105");
+
+        Assert.True(session.SelectContentControlItem(dropDown.AnchorId, "b").Success);
+        Assert.True(session.SelectContentControlItem(combo.AnchorId, "custom value").Success);
+        using (var document = WordprocessingDocument.Open(new MemoryStream(session.Save()), false))
+        {
+            var dropDownProperties = ControlByNativeId(document, "104").Element(W + "sdtPr")!
+                .Element(W + "dropDownList")!;
+            var comboProperties = ControlByNativeId(document, "105").Element(W + "sdtPr")!
+                .Element(W + "comboBox")!;
+            Assert.Equal("b", (string?)dropDownProperties.Attribute(W + "lastValue"));
+            Assert.Equal("custom value", (string?)comboProperties.Attribute(W + "lastValue"));
+            Assert.Equal("Beta", ControlByNativeId(document, "104").Element(W + "sdtContent")!.Value);
+            Assert.Equal("custom value", ControlByNativeId(document, "105").Element(W + "sdtContent")!.Value);
+        }
+
+        using var matched = new DocxSession(BuildFixture());
+        var matchedCombo = matched.ListContentControls().Single(control => control.NativeId == "105");
+        Assert.True(matched.SelectContentControlItem(matchedCombo.AnchorId, "Alpha").Success);
+        using var matchedDocument = WordprocessingDocument.Open(new MemoryStream(matched.Save()), false);
+        Assert.Equal("a", (string?)ControlByNativeId(matchedDocument, "105").Element(W + "sdtPr")!
+            .Element(W + "comboBox")!.Attribute(W + "lastValue"));
+    }
+
+    [Fact]
+    public void CC021_ExactSdtCardinalityAndFamilyExclusivity_FailBeforeHistory()
+    {
+        var malformedFixtures = new (Action<XElement> Arrange, string Diagnostic)[]
+        {
+            (control => control.Element(W + "sdtPr")!.AddAfterSelf(
+                new XElement(control.Element(W + "sdtPr")!)), "exactly one w:sdtPr"),
+            (control => control.Element(W + "sdtContent")!.AddAfterSelf(
+                new XElement(control.Element(W + "sdtContent")!)), "exactly one w:sdtContent"),
+            (control => control.Element(W + "sdtPr")!.Element(W + "id")!.AddAfterSelf(
+                new XElement(W + "id", new XAttribute(W + "val", "901"))), "exactly one w:id"),
+            (control => control.Element(W + "sdtPr")!.Add(
+                new XElement(W + "date")), "mutually exclusive"),
+        };
+
+        foreach (var (arrange, diagnostic) in malformedFixtures)
+        {
+            var fixture = Transform(BuildFixture(), document =>
+                arrange(ControlByNativeId(document, "101")));
+            using var malformedSession = new DocxSession(fixture);
+            var target = malformedSession.ListContentControls().Single(control => control.Text == "inner");
+            Assert.False(target.CanMutate);
+            Assert.Contains(diagnostic, target.UnsupportedReason, StringComparison.Ordinal);
+            var result = malformedSession.FillContentControlText(target.AnchorId, "must not apply");
+            Assert.Equal(EditErrorCode.ContentControlMalformed, result.Error?.Code);
+            Assert.Equal(0, malformedSession.UndoCount);
+            Assert.Equal("inner", malformedSession.GetContentControl(target.AnchorId)?.Text);
+        }
+
+        var unsafeClone = Transform(BuildFixture(), document =>
+        {
+            var properties = ControlByNativeId(document, "109").Element(W + "sdtPr")!;
+            properties.Element(W + "id")!.AddAfterSelf(
+                new XElement(W + "id", new XAttribute(W + "val", "902")));
+        });
+        using var cloneSession = new DocxSession(unsafeClone);
+        var section = cloneSession.ListContentControls().Single(control => control.NativeId == "108");
+        Assert.False(section.CanMutate);
+        Assert.Contains("malformed content control", section.UnsupportedReason, StringComparison.Ordinal);
+        var clone = cloneSession.AddRepeatingSectionItem(section.AnchorId);
+        Assert.Equal(EditErrorCode.RepeatingSectionConstraint, clone.Error?.Code);
+        Assert.Equal(0, cloneSession.UndoCount);
+    }
+
+    [Fact]
+    public void CC022_RepeatingCanMutate_ExplainsSoleOrphanLockedAndUnsafeCases()
+    {
+        using (var soleSession = new DocxSession(BuildFixture()))
+        {
+            var controls = soleSession.ListContentControls();
+            Assert.True(controls.Single(control => control.NativeId == "108").CanMutate);
+            var sole = controls.Single(control => control.NativeId == "109");
+            Assert.False(sole.CanMutate);
+            Assert.Contains("retain at least one", sole.UnsupportedReason, StringComparison.Ordinal);
+            Assert.Equal(EditErrorCode.RepeatingSectionConstraint,
+                soleSession.RemoveRepeatingSectionItem(sole.AnchorId).Error?.Code);
+        }
+
+        using (var multiSession = new DocxSession(BuildFixture()))
+        {
+            var section = multiSession.ListContentControls().Single(control => control.NativeId == "108");
+            Assert.True(multiSession.AddRepeatingSectionItem(section.AnchorId).Success);
+            Assert.All(multiSession.ListContentControls().Where(control =>
+                control.Type == ContentControlType.RepeatingSectionItem), control =>
+                Assert.True(control.CanMutate, control.UnsupportedReason));
+        }
+
+        var lockedFixture = Transform(BuildFixture(), document =>
+        {
+            var first = ControlByNativeId(document, "109");
+            var locked = new XElement(first);
+            locked.Element(W + "sdtPr")!.Element(W + "id")!
+                .SetAttributeValue(W + "val", "209");
+            locked.Element(W + "sdtPr")!.Add(
+                new XElement(W + "lock", new XAttribute(W + "val", "sdtLocked")));
+            first.AddAfterSelf(locked);
+        });
+        using (var lockedSession = new DocxSession(lockedFixture))
+        {
+            var locked = lockedSession.ListContentControls().Single(control => control.NativeId == "209");
+            Assert.False(locked.CanMutate);
+            Assert.Contains("wrapper is locked", locked.UnsupportedReason, StringComparison.Ordinal);
+            Assert.Equal(EditErrorCode.ContentControlLocked,
+                lockedSession.RemoveRepeatingSectionItem(locked.AnchorId).Error?.Code);
+        }
+
+        var orphanFixture = Transform(BuildFixture(), document =>
+        {
+            var item = ControlByNativeId(document, "109");
+            item.Remove();
+            document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Add(item);
+        });
+        using (var orphanSession = new DocxSession(orphanFixture))
+        {
+            var orphan = orphanSession.ListContentControls().Single(control => control.NativeId == "109");
+            Assert.False(orphan.CanMutate);
+            Assert.Contains("not a direct child", orphan.UnsupportedReason, StringComparison.Ordinal);
+        }
+
+        var nonDirectFixture = Transform(BuildFixture(), document =>
+        {
+            var item = ControlByNativeId(document, "109");
+            item.ReplaceWith(new XElement(W + "customXml",
+                new XAttribute(W + "element", "wrapper"), new XElement(item)));
+        });
+        using (var nonDirectSession = new DocxSession(nonDirectFixture))
+        {
+            var nonDirect = nonDirectSession.ListContentControls()
+                .Single(control => control.NativeId == "109");
+            Assert.False(nonDirect.CanMutate);
+            Assert.Contains("not a direct child", nonDirect.UnsupportedReason, StringComparison.Ordinal);
+        }
+
+        var unsafeFixture = Transform(BuildFixture(), document =>
+        {
+            var content = ControlByNativeId(document, "109").Element(W + "sdtContent")!;
+            content.AddFirst(new XElement(W + "bookmarkStart",
+                new XAttribute(W + "id", "71"), new XAttribute(W + "name", "clone-sensitive")));
+        });
+        using var unsafeSession = new DocxSession(unsafeFixture);
+        var unsafeSection = unsafeSession.ListContentControls()
+            .Single(control => control.NativeId == "108");
+        Assert.False(unsafeSection.CanMutate);
+        Assert.Contains("clone-sensitive markup", unsafeSection.UnsupportedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CC023_CheckboxStateFont_IsAppliedToTheProducedGlyphRun()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+            ControlByNativeId(document, "102").Descendants(W14 + "checkedState").Single()
+                .SetAttributeValue(W14 + "font", "Wingdings"));
+        using var session = new DocxSession(fixture);
+        var checkbox = session.ListContentControls().Single(control => control.NativeId == "102");
+        Assert.True(session.SetContentControlChecked(checkbox.AnchorId, true).Success);
+
+        using var document = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
+        var fonts = ControlByNativeId(document, "102").Descendants(W + "rFonts").Single();
+        Assert.Equal("Wingdings", (string?)fonts.Attribute(W + "ascii"));
+        Assert.Equal("Wingdings", (string?)fonts.Attribute(W + "hAnsi"));
+        Assert.Equal("Wingdings", (string?)fonts.Attribute(W + "eastAsia"));
+        Assert.Equal("Wingdings", (string?)fonts.Attribute(W + "cs"));
+    }
+
+    [Fact]
+    public void CC024_PlaceholderAndBoundAncestorEdges_FailClosedOrPreserveMetadata()
+    {
+        var placeholderFixture = Transform(BuildFixture(), document =>
+        {
+            var properties = ControlByNativeId(document, "101").Element(W + "sdtPr")!;
+            properties.Element(W + "id")!.AddAfterSelf(
+                new XElement(W + "placeholder", new XElement(W + "docPart",
+                    new XAttribute(W + "val", "DefaultPlaceholder_22675703"))),
+                new XElement(W + "showingPlcHdr"));
+        });
+        using (var placeholderSession = new DocxSession(placeholderFixture))
+        {
+            var target = placeholderSession.ListContentControls()
+                .Single(control => control.NativeId == "101");
+            Assert.True(target.IsShowingPlaceholder);
+            Assert.True(placeholderSession.FillContentControlText(target.AnchorId, "real value").Success);
+            Assert.False(placeholderSession.GetContentControl(target.AnchorId)!.IsShowingPlaceholder);
+            using (var saved = WordprocessingDocument.Open(
+                new MemoryStream(placeholderSession.Save()), false))
+                Assert.NotNull(ControlByNativeId(saved, "101").Element(W + "sdtPr")!
+                    .Element(W + "placeholder"));
+            Assert.True(placeholderSession.Undo());
+            Assert.True(placeholderSession.GetContentControl(target.AnchorId)!.IsShowingPlaceholder);
+        }
+
+        var ancestorBoundFixture = Transform(BuildFixture(), document =>
+        {
+            XElement Binding(string path) => new(W + "dataBinding",
+                new XAttribute(W + "storeItemID", "{11111111-1111-1111-1111-111111111111}"),
+                new XAttribute(W + "xpath", path),
+                new XAttribute(W + "prefixMappings", "xmlns:x='urn:test'"));
+            ControlByNativeId(document, "100").Element(W + "sdtPr")!.Add(Binding("/root/outer"));
+            ControlByNativeId(document, "101").Element(W + "sdtPr")!.Add(Binding("/root/inner"));
+        });
+        using var boundSession = new DocxSession(ancestorBoundFixture);
+        var boundTarget = boundSession.ListContentControls().Single(control => control.NativeId == "101");
+        var refused = boundSession.FillContentControlText(boundTarget.AnchorId, "must not detach",
+            new ContentControlFillOptions { BindingPolicy = ContentControlBindingPolicy.DetachTarget });
+        Assert.Equal(EditErrorCode.ContentControlBound, refused.Error?.Code);
+        Assert.Equal(0, boundSession.UndoCount);
+        using var boundDocument = WordprocessingDocument.Open(
+            new MemoryStream(boundSession.Save()), false);
+        Assert.NotNull(ControlByNativeId(boundDocument, "100").Element(W + "sdtPr")!
+            .Element(W + "dataBinding"));
+        Assert.NotNull(ControlByNativeId(boundDocument, "101").Element(W + "sdtPr")!
+            .Element(W + "dataBinding"));
+    }
+
+    [Fact]
+    public void CC025_PictureFill_RejectsZeroMultipleAndLinkedCandidatesBeforeHistory()
+    {
+        var fixtures = new (byte[] Bytes, EditErrorCode Error)[]
+        {
+            (Transform(BuildPictureFixture(), document =>
+                ControlByNativeId(document, "113").Descendants()
+                    .Where(element => element.Name.LocalName == "drawing").Remove()),
+                EditErrorCode.ContentControlMalformed),
+            (Transform(BuildPictureFixture(), document =>
+            {
+                var run = ControlByNativeId(document, "113").Descendants(W + "r")
+                    .First(element => element.Descendants().Any(value => value.Name.LocalName == "drawing"));
+                run.AddAfterSelf(new XElement(run));
+            }), EditErrorCode.ContentControlMalformed),
+            (Transform(BuildPictureFixture(), document =>
+            {
+                var blip = ControlByNativeId(document, "113").Descendants()
+                    .Single(element => element.Name.LocalName == "blip");
+                var relationshipId = (string?)blip.Attribute(R + "embed");
+                blip.Attribute(R + "embed")!.Remove();
+                blip.SetAttributeValue(R + "link", relationshipId);
+            }), EditErrorCode.LinkedImageReadOnly),
+        };
+
+        foreach (var (bytes, expected) in fixtures)
+        {
+            using var pictureSession = new DocxSession(bytes);
+            var picture = pictureSession.ListContentControls()
+                .Single(control => control.NativeId == "113");
+            var result = pictureSession.FillContentControlPicture(picture.AnchorId, Png(4, 5));
+            Assert.Equal(expected, result.Error?.Code);
+            Assert.Equal(0, pictureSession.UndoCount);
+        }
+    }
+
+    [Fact]
+    public void CC026_FillAddRemoveReceipts_UseStableSdtIdentityEnvelopes()
+    {
+        using var session = new DocxSession(BuildFixture());
+        var controls = session.ListContentControls();
+        var plain = controls.Single(control => control.NativeId == "101");
+        var section = controls.Single(control => control.NativeId == "108");
+
+        var fill = session.FillContentControlText(plain.AnchorId, "receipt value");
+        Assert.True(fill.Success, fill.Error?.Message);
+        Assert.Empty(fill.Created);
+        Assert.Empty(fill.Removed);
+        Assert.Equal(plain.AnchorId, Assert.Single(fill.Modified).Id);
+
+        var add = session.AddRepeatingSectionItem(section.AnchorId);
+        Assert.True(add.Success, add.Error?.Message);
+        var created = Assert.Single(add.Created);
+        Assert.Equal("sdt", created.Kind);
+        Assert.Equal(section.AnchorId, Assert.Single(add.Modified).Id);
+        Assert.NotNull(session.GetContentControl(created.Id));
+
+        var remove = session.RemoveRepeatingSectionItem(created.Id);
+        Assert.True(remove.Success, remove.Error?.Message);
+        Assert.Equal(created.Id, Assert.Single(remove.Removed).Id);
+        Assert.Equal(section.AnchorId, Assert.Single(remove.Modified).Id);
+        Assert.Null(session.GetContentControl(created.Id));
+    }
+
+    [Fact]
+    public void CC027_WordAuthoredFixture_RoundTripsNativeMetadataAndState()
+    {
+        var fixturePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "../../../../TestFiles/HC030-Content-Controls.docx"));
+        using var session = new DocxSession(File.ReadAllBytes(fixturePath));
+        var controls = session.ListContentControls();
+        Assert.Equal(5, controls.Count);
+        Assert.Equal(new[]
+        {
+            ContentControlType.RichText,
+            ContentControlType.PlainText,
+            ContentControlType.Picture,
+            ContentControlType.Checkbox,
+            ContentControlType.ComboBox,
+        }, controls.Select(control => control.Type));
+        Assert.All(controls, control => Assert.True(control.CanMutate, control.UnsupportedReason));
+
+        var plain = controls.Single(control => control.Type == ContentControlType.PlainText);
+        var checkbox = controls.Single(control => control.Type == ContentControlType.Checkbox);
+        var combo = controls.Single(control => control.Type == ContentControlType.ComboBox);
+        var picture = controls.Single(control => control.Type == ContentControlType.Picture);
+        Assert.True(session.FillContentControlText(plain.AnchorId, "authored fixture value").Success);
+        Assert.True(session.SetContentControlChecked(checkbox.AnchorId, true).Success);
+        Assert.True(session.SelectContentControlItem(combo.AnchorId, "custom authored value").Success);
+        Assert.True(session.FillContentControlPicture(picture.AnchorId, Png(7, 8)).Success);
+
+        var saved = session.Save();
+        using var reopened = new DocxSession(saved);
+        Assert.Equal("authored fixture value", reopened.GetContentControl(plain.AnchorId)?.Text);
+        Assert.Equal("☒", reopened.GetContentControl(checkbox.AnchorId)?.Text);
+        Assert.Equal("custom authored value", reopened.GetContentControl(combo.AnchorId)?.Text);
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        var plainProperties = ControlByNativeId(document, plain.NativeId!).Element(W + "sdtPr")!;
+        Assert.NotNull(plainProperties.Element(W + "placeholder"));
+        var comboProperties = ControlByNativeId(document, combo.NativeId!).Element(W + "sdtPr")!
+            .Element(W + "comboBox")!;
+        Assert.Equal("custom authored value", (string?)comboProperties.Attribute(W + "lastValue"));
+        var checkboxFonts = ControlByNativeId(document, checkbox.NativeId!)
+            .Descendants(W + "rFonts").Single();
+        Assert.Equal("MS Gothic", (string?)checkboxFonts.Attribute(W + "ascii"));
+        Assert.Equal("MS Gothic", (string?)checkboxFonts.Attribute(W + "hAnsi"));
+        Assert.Single(document.MainDocumentPart!.ImageParts);
+        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
+            .Where(IsMaterialValidationError).ToList();
+        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
+            validationErrors.Select(validation =>
+                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+    }
+
     private static string[] ParagraphAnchors(DocxSession session) => session.Project().AnchorIndex.Values
         .Where(value => value.Anchor.Kind is "p" or "h" or "li")
         .Select(value => value.Anchor.Id).Distinct().ToArray();

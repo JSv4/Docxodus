@@ -66,8 +66,16 @@ internal static class ContentControlIdentity
         var parsedByRoot = storyRoots.ToDictionary(root => root, root =>
             root.DescendantsAndSelf(W.sdt).Select((element, ordinal) =>
             {
-                var raw = (string?)element.Element(W.sdtPr)?.Element(W.id)?.Attribute(W.val);
-                var valid = TryCanonicalizeNativeId(raw, out var canonical);
+                var properties = element.Elements(W.sdtPr).ToList();
+                var ids = properties.Count == 1
+                    ? properties[0].Elements(W.id).ToList()
+                    : new List<XElement>();
+                var raw = ids.Count == 0
+                    ? null
+                    : string.Join("|", ids.Select(id => (string?)id.Attribute(W.val) ?? "<missing>"));
+                string? canonical = null;
+                var valid = properties.Count == 1 && ids.Count == 1
+                    && TryCanonicalizeNativeId(raw, out canonical);
                 return (element, ordinal, raw, valid, canonical);
             }).ToList());
         var globalCounts = parsedByRoot.Values.SelectMany(values => values)

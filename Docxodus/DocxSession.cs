@@ -6462,8 +6462,8 @@ public sealed partial class DocxSession : IDisposable
                 // removing it. Anchors stay live in the document tree so callers can
                 // re-address the same blocks before changes are accepted. Ordinary
                 // paragraphs/tables retain DeleteBlock's single top-level-anchor
-                // contract. Structured wrappers have no anchor of their own, so every
-                // descendant anchor they keep live is reported as Modified. A remaining
+                // contract. Structured wrappers and every descendant anchor they keep
+                // live are reported as Modified. A remaining
                 // structural fall-through is a real removal and is reported as such.
                 var modified = new List<Anchor>();
                 var trackedRemoved = new List<Anchor>();

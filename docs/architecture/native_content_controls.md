@@ -16,10 +16,17 @@ package-wide duplicate native ids remain enumerable under deterministic diagnost
 anchors but are not mutable. Repeating-item clones receive fresh native ids before
 their anchors are made public.
 
+Mutation also requires an exact SDT envelope: one `w:sdtPr`, one `w:sdtContent`,
+one `w:id`, and no more than one mutually exclusive family marker. Malformed controls
+stay enumerable under diagnostic anchors and fail before an undo snapshot. A repeating
+template is cloneable only when every nested SDT satisfies the same invariant.
+
 `sdt` is an AnchorIndex kind in both the WML projector and the immutable IR emitter.
 The IR captures projector-order anchor facts while its private package is open, so
-index parity also holds with `RetainSources=false`. The wrapper remains transparent to
-markdown, HTML, and `ListBlocks`; those surfaces continue to render/list its content.
+index parity also holds with `RetainSources=false`. The current Markdown oracle indexes
+the outer SDT but omits content delivered through an inline or block SDT, so adding the
+anchor does not change historical Markdown bytes. HTML and `ListBlocks` remain wrapper-
+transparent and flatten/render the contained blocks.
 `ListInlineSpans` additionally returns outer-to-inner `contentControlAnchorIds` for each
 run.
 
@@ -42,6 +49,11 @@ drawing `docPr` id, and reject clone-sensitive bookmark, comment, permission, cu
 XML container/range, move, note-reference, and `w14:paraId`/`w14:textId` markup. The
 final item cannot be removed.
 
+Dropdown selection writes the selected item's native `w:lastValue` as well as its
+displayed text. Combo boxes do the same for a listed item and also accept custom text;
+custom text becomes both the displayed payload and `w:lastValue`. Checkbox fills honor
+the selected `w14:checkedState`/`w14:uncheckedState` font on the produced glyph run.
+
 Whole-content replacement and repeating-item removal use the same bookmark-removal
 gate as other structural edits: crossing or externally referenced ranges fail before
 history changes. Rich-text links are validated against the document that will remain
@@ -50,17 +62,37 @@ After a successful replacement/removal, owner-local hyperlink relationships are
 promoted or reference-counted away and unreferenced image parts are swept. Undo/redo
 restores that XML and package relationship topology together.
 
-Every successful operation is one undo/redo step. Whole-control fills support inline
-and block controls; row/cell controls remain enumerable but report `CanMutate=false`
-and reject typed fills. Whole-control fills are also rejected in `render_inline`
-tracked-change mode until issue #455 defines revision semantics; surgical text/format
-operations inside a control remain available.
+Every successful operation is one undo/redo step. Text, rich-text, checkbox, date,
+dropdown, and combo-box fills support inline and block controls only. Row/cell controls
+remain enumerable; picture and repeating-section operations use their own structural
+shape checks instead of the text-placement rule. Whole-control fills are rejected in
+`render_inline` tracked-change mode because they do not yet have a faithful replacement
+revision encoding; surgical text/format operations inside a control remain available.
+
+## Anchor and receipt lifecycle
+
+Typed fills preserve the selected wrapper identity and return that `sdt` anchor in
+`Modified`. `AddRepeatingSectionItem` returns the fresh item anchor in `Created` and the
+section anchor in `Modified`. `RemoveRepeatingSectionItem` returns the item anchor in
+`Removed` and the section anchor in `Modified`. These identities remain usable through
+undo/redo according to whether the corresponding wrapper is live.
+
+Generic tracked `DeleteRange`/`DeleteSection` keeps a selected SDT wrapper live until
+revision resolution. Its receipt therefore reports the wrapper `sdt` anchor and every
+retained descendant anchor in `Modified`; a structural fall-through that is actually
+removed appears in `Removed`.
 
 ## Locks, bindings, and nesting
 
 Content locks are effective through ancestors. A locked target or ancestor fails
 without changing history. A whole-content replacement that would discard a nested
 control is also refused; callers address the nested child directly.
+
+For repeating sections, `CanMutate` describes the default operation honestly: a
+section must have a safe final clone template, and an item is removable only when it
+is a direct child, at least one sibling item will remain, and its wrapper is not
+locked. Orphaned/non-direct items and clone-sensitive templates remain enumerable with
+the corresponding diagnostic.
 
 Bindings fail closed by default. Both `w:dataBinding` and the Office 2013
 `w15:dataBinding` form are recognized. `bindingPolicy: "detach_target"` is the only
@@ -73,7 +105,8 @@ Custom XML data part. A target inside a bound ancestor is always refused.
 The shared JSON facade, WASM bridge, TypeScript package, Python host/client, and MCP
 server expose the same typed operations. Options JSON is strict: the only fill option
 is `bindingPolicy`, with `preserve` (default) or `detach_target`. The MCP grouped tool
-is `docxodus_content_controls`; its mutating actions participate in
+is `docxodus_content_controls`; it advertises the same optional optimistic
+`preconditions` guard as the other mutating tools, and its mutating actions participate in
 `docxodus_mutations` apply/preview rollback, while `list` is read-only and rejected as
 a batch step. Picture bytes cross JSON transports only as base64.
 An omitted date `displayText` selects the invariant default; an explicitly empty

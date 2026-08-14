@@ -2297,6 +2297,7 @@ public class McpServerDispatcherTests : IDisposable
         var tool = Assert.Single(ToolCatalog.Tools,
             definition => definition.Name == "docxodus_content_controls");
         using var schema = JsonDocument.Parse(tool.InputSchemaJson);
+        Assert.True(schema.RootElement.GetProperty("properties").TryGetProperty("preconditions", out _));
         Assert.Contains("detach_target", schema.RootElement.GetProperty("properties")
             .GetProperty("bindingPolicy").GetProperty("enum").EnumerateArray()
             .Select(value => value.GetString()));
@@ -2410,5 +2411,94 @@ public class McpServerDispatcherTests : IDisposable
             .GetProperty("contentControls").EnumerateArray().Single(control =>
                 control.TryGetProperty("nativeId", out var id) && id.GetString() == "101");
         Assert.Equal("inner", undone.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void MCP148_ContentControlReceiptsAndBestEffortBatch_PreserveSdtIdentities()
+    {
+        File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
+        var sessionId = OpenSession();
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new { sessionId, action = "list" }))))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        string Anchor(string nativeId) => listed.Single(control =>
+            control.TryGetProperty("nativeId", out var id) && id.GetString() == nativeId)
+            .GetProperty("anchorId").GetString()!;
+        var plainAnchor = Anchor("101");
+        var boundAnchor = Anchor("106");
+        var sectionAnchor = Anchor("108");
+
+        var fill = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "fill_text",
+                anchorId = plainAnchor,
+                text = "receipt",
+            }))));
+        Assert.Equal(plainAnchor, Assert.Single(fill.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+        Assert.Empty(fill.GetProperty("created").EnumerateArray());
+        Assert.Empty(fill.GetProperty("removed").EnumerateArray());
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "add_repeating_item",
+                sectionAnchorId = sectionAnchor,
+            }))));
+        var createdAnchor = Assert.Single(added.GetProperty("created").EnumerateArray())
+            .GetProperty("id").GetString()!;
+        Assert.StartsWith("sdt:body:", createdAnchor, StringComparison.Ordinal);
+        Assert.Equal(sectionAnchor, Assert.Single(added.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+
+        var removed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "remove_repeating_item",
+                itemAnchorId = createdAnchor,
+            }))));
+        Assert.Equal(createdAnchor, Assert.Single(removed.GetProperty("removed").EnumerateArray())
+            .GetProperty("id").GetString());
+        Assert.Equal(sectionAnchor, Assert.Single(removed.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                mode = "best_effort",
+                steps = new object[]
+                {
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "fill_text", anchorId = plainAnchor, text = "best effort" } },
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "fill_text", anchorId = boundAnchor, text = "refused" } },
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "add_repeating_item", sectionAnchorId = sectionAnchor } },
+                },
+            }))));
+        Assert.Equal("partial", batch.GetProperty("status").GetString());
+        Assert.Equal(2, batch.GetProperty("editsApplied").GetInt32());
+        var steps = batch.GetProperty("steps").EnumerateArray().ToArray();
+        Assert.True(steps[0].GetProperty("success").GetBoolean());
+        Assert.False(steps[1].GetProperty("success").GetBoolean());
+        Assert.True(steps[2].GetProperty("success").GetBoolean());
+        Assert.Equal(plainAnchor, Assert.Single(steps[0].GetProperty("results")[0]
+            .GetProperty("modified").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Equal(sectionAnchor, Assert.Single(steps[2].GetProperty("results")[0]
+            .GetProperty("modified").EnumerateArray()).GetProperty("id").GetString());
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new { sessionId, action = "list" }))))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        Assert.Equal("best effort", after.Single(control =>
+            control.TryGetProperty("nativeId", out var id) && id.GetString() == "101")
+            .GetProperty("text").GetString());
+        Assert.Equal(2, after.Count(control =>
+            control.GetProperty("type").GetString() == "repeating_section_item"));
     }
 }

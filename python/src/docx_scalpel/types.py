@@ -1088,7 +1088,7 @@ class ContentControlInfo:
             is_showing_placeholder=bool(d.get("isShowingPlaceholder", False)),
             is_bound=bool(d.get("isBound", False)),
             binding=(ContentControlBindingInfo._from_wire(d["binding"])
-                     if d.get("binding") else None),
+                     if "binding" in d and d["binding"] is not None else None),
             owning_part_uri=d["owningPartUri"], scope=d["scope"],
             parent_anchor_id=d.get("parentAnchorId"), depth=int(d.get("depth", 0)),
             has_valid_native_id=bool(d.get("hasValidNativeId", False)),

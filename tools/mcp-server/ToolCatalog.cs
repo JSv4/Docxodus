@@ -454,12 +454,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_content_controls",
-            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Whole-control fills are refused for row/cell placements, nested targets, and render_inline tracked-change mode.",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements; nested targets and render_inline tracked-change mode fail closed for every whole-control fill.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
                 "action": { "type": "string", "enum": ["list", "fill_text", "fill_rich_text", "set_checked", "set_date", "select_item", "fill_picture", "add_repeating_item", "remove_repeating_item"] },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
                 "anchorId": { "type": "string", "description": "Target sdt anchor returned by list." },
