@@ -183,6 +183,7 @@ export type {
 
 export {
   PaginationEngine,
+  clearPageCitationHighlight,
   createUnavailablePageMap,
   navigateToPageCitation,
   paginateHtml,

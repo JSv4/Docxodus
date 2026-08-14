@@ -85,11 +85,13 @@ internal static class HtmlConversionOps
         memoryStream.Position = 0;
         using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
 
-        if (options.StampAnchors)
-            AssignAnchorUnids(wordDoc);
-
         var renderComments = options.CommentRenderMode >= 0;
         bool renderPagination = options.PaginationMode == (int)PaginationMode.Paginated;
+        // PageMap source identity is required for every paginated render, including the
+        // stateless viewer's default stampAnchors=false path. Bare editable data-anchor stamps
+        // remain opt-in; canonical kind:scope:unid identity does not.
+        if (options.StampAnchors || renderPagination)
+            AssignAnchorUnids(wordDoc);
         // The paginated React viewer injects this document HTML into its capture host. A body margin
         // therefore applies to the HOST body as well as the document staging tree and makes every fixed-size
         // page box overflow onto a second printed page. Keep the comfortable standalone-document margin, but
@@ -132,7 +134,7 @@ internal static class HtmlConversionOps
             IncludeUnsupportedContentMetadata = true,
             DocumentLanguage = options.DocumentLanguage,
             StampAnchors = options.StampAnchors,
-            StampCanonicalSourceAnchors = options.StampAnchors,
+            StampCanonicalSourceAnchors = options.StampAnchors || renderPagination,
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).
             ImageHandler = CreateBase64ImageHandler(),
         };

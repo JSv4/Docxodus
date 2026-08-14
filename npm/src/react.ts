@@ -53,6 +53,7 @@ import {
 } from "./types.js";
 import {
   PaginationEngine,
+  clearPageCitationHighlight,
   navigateToPageCitation,
   type PaginationOptions,
   type PaginationResult,
@@ -858,10 +859,16 @@ export function PaginatedDocument({
   }, [result, cssPrefix, onPageVisible]);
 
   useEffect(() => {
-    if (!result || !citation || !containerRef.current) return;
-    navigateToPageCitation(containerRef.current, citation, {
+    const root = containerRef.current;
+    if (!root) return;
+    if (!result || !citation) {
+      clearPageCitationHighlight(root);
+      return;
+    }
+    navigateToPageCitation(root, citation, {
       highlight: true,
     });
+    return () => clearPageCitationHighlight(root);
   }, [result, citation, cssPrefix]);
 
   // Use createElement to avoid TSX dependency

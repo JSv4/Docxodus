@@ -192,6 +192,32 @@ export interface PageCitationNavigation {
   unavailableReason?: "citation_unavailable" | "fragment_not_found";
 }
 
+interface PageCitationHighlightState {
+  target: HTMLElement;
+  highlightClass?: string;
+  addedClass?: boolean;
+  inlineStyles?: Array<{ name: string; value: string; priority: string }>;
+}
+
+const activePageCitationHighlights = new WeakMap<ParentNode, PageCitationHighlightState>();
+
+/** Remove the citation highlight previously applied within this paginated root. */
+export function clearPageCitationHighlight(root: ParentNode): void {
+  const active = activePageCitationHighlights.get(root);
+  if (!active) return;
+  if (active.highlightClass && active.addedClass) {
+    active.target.classList.remove(active.highlightClass);
+  }
+  for (const style of active.inlineStyles ?? []) {
+    if (style.value) {
+      active.target.style.setProperty(style.name, style.value, style.priority);
+    } else {
+      active.target.style.removeProperty(style.name);
+    }
+  }
+  activePageCitationHighlights.delete(root);
+}
+
 /**
  * Navigate an exact citation over an already-paginated DOM. The page-qualified fragment id is
  * authoritative; page + canonical source identity is a compatibility fallback for older v1 DOMs.
@@ -211,6 +237,7 @@ export function navigateToPageCitation(
     block?: ScrollLogicalPosition;
   } = {},
 ): PageCitationNavigation {
+  clearPageCitationHighlight(root);
   if (citation.availability !== "available" || citation.fragments.length === 0) {
     return { navigated: false, unavailableReason: "citation_unavailable" };
   }
@@ -238,11 +265,24 @@ export function navigateToPageCitation(
   }
 
   if (options.highlightClass) {
+    const addedClass = !target.classList.contains(options.highlightClass);
     target.classList.add(options.highlightClass);
+    activePageCitationHighlights.set(root, {
+      target,
+      highlightClass: options.highlightClass,
+      addedClass,
+    });
   } else if (options.highlight !== false) {
+    const names = ["outline", "outline-offset", "background-color"];
+    const inlineStyles = names.map((name) => ({
+      name,
+      value: target.style.getPropertyValue(name),
+      priority: target.style.getPropertyPriority(name),
+    }));
     target.style.setProperty("outline", "3px solid #f4b400", "important");
     target.style.setProperty("outline-offset", "2px", "important");
     target.style.setProperty("background-color", "rgba(255, 235, 59, .18)", "important");
+    activePageCitationHighlights.set(root, { target, inlineStyles });
   }
   target.scrollIntoView({
     behavior: options.behavior ?? "smooth",
@@ -301,6 +341,8 @@ export type FootnoteRegistry = Map<string, HTMLElement>;
 interface FootnoteContinuation {
   /** The footnote ID being continued */
   footnoteId: string;
+  /** Canonical fn:* definition identity from the registry wrapper. */
+  sourceAnchorId?: string;
   /** Remaining paragraphs/elements that didn't fit */
   remainingElements: HTMLElement[];
 }
@@ -336,6 +378,7 @@ export class PaginationEngine {
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
+  private commentMarginRegistry: Map<string, HTMLElement>;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
@@ -378,6 +421,7 @@ export class PaginationEngine {
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
+    this.commentMarginRegistry = new Map();
   }
 
   /**
@@ -394,6 +438,10 @@ export class PaginationEngine {
 
     // Parse the footnote registry if present
     this.footnoteRegistry = this.parseFootnoteRegistry();
+
+    // Parse the margin-comment registry if present. Its entries are cloned into
+    // the side substrate of pages that contain the corresponding range marker.
+    this.commentMarginRegistry = this.parseCommentMarginRegistry();
 
     // Find all section containers
     const sections = this.stagingElement.querySelectorAll<HTMLElement>(
@@ -412,6 +460,7 @@ export class PaginationEngine {
     // Running-story variants and cited notes are inventoried from their source registries.
     this.expectedPageMapAnchorIds = new Set();
     const referencedFootnoteIds = new Set<string>();
+    const referencedCommentIds = new Set<string>();
     for (const section of sectionsToProcess) {
       this.collectExpectedSourceAnchors(section, this.expectedPageMapAnchorIds, true);
       for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-footnote-id]"))) {
@@ -419,9 +468,20 @@ export class PaginationEngine {
         const id = reference.dataset.footnoteId;
         if (id) referencedFootnoteIds.add(id);
       }
+      for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
+        if (reference.closest(
+          "#pagination-comment-margin-registry, #pagination-footnote-registry, #pagination-hf-registry",
+        )) continue;
+        const id = reference.dataset.commentId;
+        if (id) referencedCommentIds.add(id);
+      }
     }
     for (const id of referencedFootnoteIds) {
       const source = this.footnoteRegistry.get(id);
+      if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+    }
+    for (const id of referencedCommentIds) {
+      const source = this.commentMarginRegistry.get(id);
       if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
     }
 
@@ -544,6 +604,9 @@ export class PaginationEngine {
 
     const fragments: PageMapFragment[] = [];
     const requiredAnchorIds = new Set(this.expectedPageMapAnchorIds);
+    if (requiredAnchorIds.size === 0) {
+      throw new Error("cannot publish an available PageMap without canonical source inventory");
+    }
     const measuredAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     for (const page of this.lastPages) {
@@ -556,6 +619,9 @@ export class PaginationEngine {
       const pointPerRenderedY = page.dimensions.pageHeight / pageRect.height;
       const nodes = page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]");
       for (const element of Array.from(nodes)) {
+        // Preserve the source-side exclusion contract on presentation clones as well. This
+        // covers the node itself and any excluded/hidden/aria-hidden ancestor within the page.
+        if (this.isDeliberatelyUnrenderedSource(element, page.element)) continue;
         const anchorId = element.dataset.sourceAnchorId;
         if (!anchorId || !element.dataset.pageFragmentId
           || !Number.isInteger(parseInt(element.dataset.fragmentIndex || "", 10))) {
@@ -645,7 +711,9 @@ export class PaginationEngine {
     const candidates: HTMLElement[] = source.matches("[data-source-anchor-id]") ? [source] : [];
     candidates.push(...Array.from(source.querySelectorAll<HTMLElement>("[data-source-anchor-id]")));
     for (const element of candidates) {
-      if (excludeRegistries && element.closest("#pagination-hf-registry, #pagination-footnote-registry")) {
+      if (excludeRegistries && element.closest(
+        "#pagination-hf-registry, #pagination-footnote-registry, #pagination-comment-margin-registry",
+      )) {
         continue;
       }
       if (this.isDeliberatelyUnrenderedSource(element, source)) continue;
@@ -813,6 +881,18 @@ export class PaginationEngine {
         continue;
       }
 
+      // Converter-shaped endnotes are a safe nested block structure whose outer
+      // section/list wrappers must not make the complete endnote collection one
+      // indivisible page block. Flatten only the exact shape we understand; any
+      // richer author HTML retains the conservative whole-block fallback below.
+      if (child.matches("section.endnotes")) {
+        const endnoteBlocks = this.measureSafeEndnoteBlocks(child, dims);
+        if (endnoteBlocks) {
+          blocks.push(...endnoteBlocks);
+          continue;
+        }
+      }
+
       // Measure height and margins separately for proper margin collapsing calculation
       // getBoundingClientRect() returns content+padding+border, not margins
       const rect = child.getBoundingClientRect();
@@ -839,6 +919,76 @@ export class PaginationEngine {
         isWordParagraph: this.isWordParagraphElement(child),
       });
     }
+
+    return blocks;
+  }
+
+  /**
+   * Flatten the converter's `section.endnotes > ol > li > p` presentation into
+   * ordinary paragraph blocks. This preserves paragraph formatting and canonical
+   * p:en/en:en identities while allowing the existing paragraph fragmenter to
+   * split a long endnote across page boundaries.
+   */
+  private measureSafeEndnoteBlocks(
+    section: HTMLElement,
+    dims: PageDimensions,
+  ): MeasuredBlock[] | null {
+    const sectionChildren = Array.from(section.children) as HTMLElement[];
+    const list = sectionChildren.find((child) => child.tagName === "OL");
+    if (
+      !list
+      || sectionChildren.some((child) => child.tagName !== "HR" && child !== list)
+      || Array.from(list.children).some((child) => child.tagName !== "LI")
+    ) {
+      return null;
+    }
+
+    const items = Array.from(list.children) as HTMLElement[];
+    if (items.length === 0 || items.some((item) =>
+      item.children.length === 0
+      || Array.from(item.children).some((child) => child.tagName !== "P")
+    )) {
+      return null;
+    }
+
+    const blocks: MeasuredBlock[] = [];
+    const sectionStyle = window.getComputedStyle(section);
+    for (const rule of sectionChildren.filter((child) => child.tagName === "HR")) {
+      const clonedRule = rule.cloneNode(true) as HTMLElement;
+      if (blocks.length === 0) clonedRule.style.marginTop = sectionStyle.marginTop;
+      blocks.push(this.measureElement(clonedRule, dims));
+    }
+
+    const listStyle = window.getComputedStyle(list);
+    items.forEach((item, itemIndex) => {
+      const ownerAnchorId = item.dataset.sourceAnchorId;
+      const paragraphs = Array.from(item.children) as HTMLElement[];
+      paragraphs.forEach((paragraph, paragraphIndex) => {
+        const clone = paragraph.cloneNode(true) as HTMLElement;
+        clone.dataset.paginationSafeEndnote = "true";
+        clone.style.fontSize ||= sectionStyle.fontSize;
+        clone.style.lineHeight ||= sectionStyle.lineHeight;
+        clone.style.paddingLeft ||= listStyle.paddingLeft;
+
+        // Older/custom producers may put the endnote identity only on the li.
+        // Mirror it into the visible paragraph without displacing the paragraph's
+        // own identity, matching current converter output.
+        if (ownerAnchorId && !Array.from(
+          clone.querySelectorAll<HTMLElement>("[data-source-anchor-id]"),
+        ).some((node) => node.dataset.sourceAnchorId === ownerAnchorId)) {
+          const owner = document.createElement("span");
+          owner.dataset.sourceAnchorId = ownerAnchorId;
+          while (clone.firstChild) owner.appendChild(clone.firstChild);
+          clone.appendChild(owner);
+        }
+
+        if (paragraphIndex === 0) {
+          const marker = item.getAttribute("value") || String(itemIndex + 1);
+          clone.insertBefore(document.createTextNode(`${marker}. `), clone.firstChild);
+        }
+        blocks.push(this.measureElement(clone, dims));
+      });
+    });
 
     return blocks;
   }
@@ -1366,34 +1516,39 @@ export class PaginationEngine {
       return false;
     }
 
-    const paragraphStyle = window.getComputedStyle(paragraph);
-    if (
-      paragraphStyle.display !== "block" ||
-      paragraphStyle.position !== "static" ||
-      paragraphStyle.float !== "none" ||
-      paragraphStyle.whiteSpace !== "normal" ||
-      paragraphStyle.breakBefore !== "auto" ||
-      paragraphStyle.breakAfter !== "auto" ||
-      paragraphStyle.breakInside === "avoid" ||
-      paragraphStyle.pageBreakBefore !== "auto" ||
-      paragraphStyle.pageBreakAfter !== "auto" ||
-      paragraphStyle.pageBreakInside === "avoid"
-    ) {
-      return false;
+    const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
+    if (!isValidatedEndnote) {
+      const paragraphStyle = window.getComputedStyle(paragraph);
+      if (
+        paragraphStyle.display !== "block" ||
+        paragraphStyle.position !== "static" ||
+        paragraphStyle.float !== "none" ||
+        paragraphStyle.whiteSpace !== "normal" ||
+        paragraphStyle.breakBefore !== "auto" ||
+        paragraphStyle.breakAfter !== "auto" ||
+        paragraphStyle.breakInside === "avoid" ||
+        paragraphStyle.pageBreakBefore !== "auto" ||
+        paragraphStyle.pageBreakAfter !== "auto" ||
+        paragraphStyle.pageBreakInside === "avoid"
+      ) {
+        return false;
+      }
     }
 
     // A range clone preserves nested inline formatting exactly. Anything that
     // establishes its own box/layout context is intentionally deferred until a
     // future fragmenter can model it accurately.
-    for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
-      const style = window.getComputedStyle(descendant);
-      if (
-        style.display !== "inline" ||
-        style.position !== "static" ||
-        style.float !== "none" ||
-        style.whiteSpace !== "normal"
-      ) {
-        return false;
+    if (!isValidatedEndnote) {
+      for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
+        const style = window.getComputedStyle(descendant);
+        if (
+          style.display !== "inline" ||
+          style.position !== "static" ||
+          style.float !== "none" ||
+          (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap")
+        ) {
+          return false;
+        }
       }
     }
 
@@ -1613,6 +1768,23 @@ export class PaginationEngine {
     return registry;
   }
 
+  /** Parses the hidden source notes used to render paginated margin comments. */
+  private parseCommentMarginRegistry(): Map<string, HTMLElement> {
+    const registry = new Map<string, HTMLElement>();
+    const registryEl = this.stagingElement.querySelector(
+      "#pagination-comment-margin-registry",
+    );
+    if (!registryEl) return registry;
+
+    for (const entry of Array.from(
+      registryEl.querySelectorAll<HTMLElement>("[data-comment-id]"),
+    )) {
+      const commentId = entry.dataset.commentId;
+      if (commentId) registry.set(commentId, entry.cloneNode(true) as HTMLElement);
+    }
+    return registry;
+  }
+
   /**
    * Extracts footnote reference IDs from an element.
    */
@@ -1664,6 +1836,9 @@ export class PaginationEngine {
     if (hasContinuation) {
       const contWrapper = document.createElement("div");
       contWrapper.className = "footnote-continuation";
+      if (continuation!.sourceAnchorId) {
+        contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
+      }
       for (const el of continuation!.remainingElements) {
         contWrapper.appendChild(el.cloneNode(true));
       }
@@ -1724,6 +1899,47 @@ export class PaginationEngine {
     this.stagingElement.removeChild(measureContainer);
 
     return heightPt;
+  }
+
+  /**
+   * Partition a continuation at complete child boundaries for one page's note band.
+   * Always advances by at least one element so an indivisible oversized paragraph
+   * follows the established clipped fallback without trapping pagination in a loop.
+   */
+  private splitContinuationForPage(
+    continuation: FootnoteContinuation,
+    availableHeightPt: number,
+    contentWidth: number,
+  ): { current: FootnoteContinuation; overflow: FootnoteContinuation | null } {
+    const fitting: HTMLElement[] = [];
+    let fittingHeight = 0;
+
+    for (const element of continuation.remainingElements) {
+      const candidate: FootnoteContinuation = {
+        footnoteId: continuation.footnoteId,
+        sourceAnchorId: continuation.sourceAnchorId,
+        remainingElements: [...fitting, element],
+      };
+      const candidateHeight = this.measureContinuationHeight(candidate, contentWidth);
+      if (fitting.length > 0 && candidateHeight > availableHeightPt) break;
+      fitting.push(element);
+      fittingHeight = candidateHeight;
+      if (fittingHeight >= availableHeightPt) break;
+    }
+
+    const remaining = continuation.remainingElements.slice(fitting.length);
+    return {
+      current: {
+        footnoteId: continuation.footnoteId,
+        sourceAnchorId: continuation.sourceAnchorId,
+        remainingElements: fitting,
+      },
+      overflow: remaining.length > 0 ? {
+        footnoteId: continuation.footnoteId,
+        sourceAnchorId: continuation.sourceAnchorId,
+        remainingElements: remaining,
+      } : null,
+    };
   }
 
   /**
@@ -1886,6 +2102,9 @@ export class PaginationEngine {
     if (hasContinuation) {
       const contWrapper = document.createElement("div");
       contWrapper.className = "footnote-continuation";
+      if (continuation!.sourceAnchorId) {
+        contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
+      }
       for (const el of continuation!.remainingElements) {
         contWrapper.appendChild(el.cloneNode(true));
       }
@@ -1903,6 +2122,9 @@ export class PaginationEngine {
           const partialDiv = document.createElement("div");
           partialDiv.className = "footnote-item";
           partialDiv.dataset.footnoteId = id;
+          if (footnote.dataset.sourceAnchorId) {
+            partialDiv.dataset.sourceAnchorId = footnote.dataset.sourceAnchorId;
+          }
 
           // Add footnote number
           const numberSpan = footnote.querySelector(".footnote-number");
@@ -2129,6 +2351,28 @@ export class PaginationEngine {
         (currentContinuation?.remainingElements.length ?? 0) > 0;
       if (currentContent.length === 0 && !hasCurrentContinuation) return;
 
+      let pageContinuation = currentContinuation;
+      if (currentContinuation && currentContinuation.remainingElements.length > 0) {
+        const pageBands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
+        const partition = this.splitContinuationForPage(
+          currentContinuation,
+          pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
+          dims.contentWidth,
+        );
+        pageContinuation = partition.current;
+        if (partition.overflow) {
+          // A carried tail occupies the next page before any newly introduced note.
+          // The normal flow never starts another splittable note while an oversized
+          // continuation already consumes the note budget, so this assignment does
+          // not discard an independent continuation.
+          nextPageContinuation = partition.overflow;
+        }
+        currentFootnoteHeight = this.measureContinuationHeight(
+          pageContinuation,
+          dims.contentWidth,
+        );
+      }
+
       const page = this.createPage(
         dims,
         pageNumber,
@@ -2137,7 +2381,7 @@ export class PaginationEngine {
         pageInSection,
         currentFootnoteIds,
         currentFootnoteHeight,
-        currentContinuation,
+        pageContinuation,
         currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined
       );
       pages.push(page);
@@ -2397,6 +2641,7 @@ export class PaginationEngine {
                   if (overflow.length > 0) {
                     nextPageContinuation = {
                       footnoteId,
+                      sourceAnchorId: footnote.dataset.sourceAnchorId,
                       remainingElements: overflow
                     };
                   }
@@ -2500,6 +2745,12 @@ export class PaginationEngine {
     // Finish last page
     finishPage();
 
+    // A split created while finishing the final body page still needs a page substrate.
+    // Drain all remaining note paragraphs into footnote-only continuation pages.
+    while (currentContinuation && currentContinuation.remainingElements.length > 0) {
+      finishPage();
+    }
+
     // Store any remaining continuation for next section
     this.pendingFootnoteContinuation = nextPageContinuation;
 
@@ -2526,6 +2777,20 @@ export class PaginationEngine {
       el.removeAttribute("data-anchor");
       el.removeAttribute("data-committed-text");
       if (el.getAttribute("contenteditable") !== null) el.setAttribute("contenteditable", "false");
+    }
+  }
+
+  /** A repeated margin note is presentation, not a second bookmark/link target. */
+  private makeClonedMarginCommentInert(root: HTMLElement): void {
+    this.makeClonedStoryInert(root);
+    const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
+    for (const element of nodes) {
+      element.removeAttribute("id");
+      if (element instanceof HTMLAnchorElement && element.getAttribute("href")?.startsWith("#")) {
+        element.removeAttribute("href");
+        element.setAttribute("aria-disabled", "true");
+        element.tabIndex = -1;
+      }
     }
   }
 
@@ -2837,6 +3102,39 @@ export class PaginationEngine {
     }
 
     pageBox.appendChild(contentArea);
+
+    // Materialize margin comments in a page-owned side column. The body only carries range
+    // markers; definition and comment-paragraph identities live on these selected registry
+    // clones, so PageMap geometry describes the actual visible margin presentation.
+    const pageCommentIds: string[] = [];
+    for (const marker of Array.from(
+      contentArea.querySelectorAll<HTMLElement>("[data-comment-id]"),
+    )) {
+      const id = marker.dataset.commentId;
+      if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
+        pageCommentIds.push(id);
+      }
+    }
+    if (pageCommentIds.length > 0) {
+      const marginColumn = document.createElement("aside");
+      marginColumn.className = `${this.cssPrefix}comment-margin`;
+      marginColumn.style.position = "absolute";
+      marginColumn.style.top = `${contentAreaTop}pt`;
+      marginColumn.style.left = `${dims.marginLeft + dims.contentWidth + 3}pt`;
+      marginColumn.style.width = `${Math.max(12, dims.marginRight - 6)}pt`;
+      marginColumn.style.maxHeight = `${contentAreaHeight}pt`;
+      marginColumn.style.overflow = "hidden";
+      marginColumn.style.boxSizing = "border-box";
+      for (const id of pageCommentIds) {
+        const source = this.commentMarginRegistry.get(id);
+        if (source) {
+          const clone = source.cloneNode(true) as HTMLElement;
+          this.makeClonedMarginCommentInert(clone);
+          marginColumn.appendChild(clone);
+        }
+      }
+      pageBox.appendChild(marginColumn);
+    }
 
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;

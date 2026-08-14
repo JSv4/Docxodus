@@ -987,8 +987,7 @@ namespace Docxodus
             }
             rootElement.AddAnnotation(footnoteTracker);
 
-            if (htmlConverterSettings.StampAnchors
-                && htmlConverterSettings.StampCanonicalSourceAnchors)
+            if (htmlConverterSettings.StampCanonicalSourceAnchors)
             {
                 // Build from the FINAL source trees. The next operation is the HTML transform, so
                 // these reference keys cannot be invalidated by another preprocessing rewrite.
@@ -2732,7 +2731,9 @@ namespace Docxodus
                 var mainContent = CreateSectionDivs(wordDoc, settings, element);
 
                 // For margin mode, wrap content in a flex container with margin column
-                if (settings.RenderComments && settings.CommentRenderMode == CommentRenderMode.Margin)
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.Margin
+                    && settings.RenderPagination != PaginationMode.Paginated)
                 {
                     var prefix = settings.CommentCssClassPrefix ?? "comment-";
                     var tracker = GetCommentTracker(element);
@@ -2792,7 +2793,9 @@ namespace Docxodus
                 }
 
                 // Add comments section if enabled (EndnoteStyle mode)
-                if (settings.RenderComments && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle)
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    && settings.RenderPagination != PaginationMode.Paginated)
                 {
                     var tracker = GetCommentTracker(element);
                     if (tracker != null)
@@ -3622,6 +3625,22 @@ namespace Docxodus
             {
                 // Add space and backref inside the last paragraph
                 lastParagraph.Add(new XText(" "), backref);
+            }
+
+            // The browser flattens safe paginated endnote paragraphs into ordinary page-flow
+            // blocks. Carry the owning endnote identity inside every paragraph so its range
+            // clones retain both the p:en and en:en identities when a long paragraph splits.
+            if (noteType == "en" && settings.RenderPagination == PaginationMode.Paginated)
+            {
+                foreach (var paragraph in content.OfType<XElement>()
+                    .Where(e => e.Name == Xhtml.p))
+                {
+                    var sourceIdentity = SourceAnchorIdentityAttribute(settings, noteElement);
+                    if (sourceIdentity == null) continue;
+                    var nodes = paragraph.Nodes().ToList();
+                    paragraph.RemoveNodes();
+                    paragraph.Add(new XElement(Xhtml.span, sourceIdentity, nodes));
+                }
             }
 
             var li = new XElement(Xhtml.li,
@@ -5452,6 +5471,47 @@ namespace Docxodus
                     }
                 }
 
+                // Margin comments are selectable presentation stories, like footnotes and
+                // headers/footers: keep one hidden source registry in staging and let the
+                // paginator clone only the comments referenced by each page into that page's
+                // side margin. Putting the column in the last flow section would turn margin
+                // notes into ordinary document-end body content.
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.Margin)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentPrefix = settings.CommentCssClassPrefix ?? "comment-";
+                        var marginRegistry = RenderMarginCommentsColumn(
+                            wordDoc, settings, tracker, commentPrefix);
+                        if (marginRegistry.HasElements)
+                        {
+                            marginRegistry.Add(new XAttribute(
+                                "id", "pagination-comment-margin-registry"));
+                            marginRegistry.Add(new XAttribute("style", "display: none;"));
+                            stagingContent.Add(marginRegistry);
+                        }
+                    }
+                }
+
+                // Endnote-style comments are document-end content just like endnotes. In a
+                // paginated render they must live inside the final section wrapper; a body-level
+                // sibling of #pagination-staging is invisible to PaginationEngine and cannot
+                // produce PageMap fragments.
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    && divList.Count > 0)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                        if (commentsSection != null)
+                            divList[divList.Count - 1].Add(commentsSection);
+                    }
+                }
+
                 // Add section content
                 stagingContent.AddRange(divList);
 
@@ -5531,7 +5591,7 @@ namespace Docxodus
         private static XAttribute? SourceAnchorIdentityAttribute(
             WmlToHtmlConverterSettings settings, XElement source)
         {
-            if (!settings.StampAnchors || settings.SourceAnchorIdentityProvider == null)
+            if (settings.SourceAnchorIdentityProvider == null)
                 return null;
             var id = settings.SourceAnchorIdentityProvider(source);
             return string.IsNullOrEmpty(id) ? null : new XAttribute("data-source-anchor-id", id);
@@ -6174,6 +6234,18 @@ namespace Docxodus
                             {
                                 highlightSpan.Add(SourceAnchorIdentityAttribute(
                                     settings, comment.SourceElement));
+
+                                // Inline mode presents the comment through its highlighted range
+                                // rather than through a separate body. Map each comment paragraph
+                                // to that same visible range so p:cmt scoped searches have an exact
+                                // presentation fragment instead of silently missing from the map.
+                                foreach (var commentParagraph in comment.ContentParagraphs)
+                                {
+                                    var paragraphIdentity = SourceAnchorIdentityAttribute(
+                                        settings, commentParagraph);
+                                    if (paragraphIdentity != null)
+                                        content = new XElement(Xhtml.span, paragraphIdentity, content);
+                                }
 
                                 // Build inline tooltip
                                 var tooltipText = comment.ContentParagraphs

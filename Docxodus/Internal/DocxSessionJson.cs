@@ -30,52 +30,64 @@ internal static class DocxSessionJson
     {
         if (root.ValueKind != JsonValueKind.Object)
             throw new FormatException("PageMap must be a JSON object");
+
         var pages = new List<PageMapPage>();
-        if (root.TryGetProperty("pages", out var pagesElement))
+        var pagesElement = RequiredProperty(root, "pages", JsonValueKind.Array, "PageMap");
+        foreach (var page in pagesElement.EnumerateArray())
         {
-            foreach (var page in pagesElement.EnumerateArray())
-                pages.Add(new PageMapPage
-                {
-                    PageNumber = page.GetProperty("pageNumber").GetInt32(),
-                    PageInSection = page.TryGetProperty("pageInSection", out var pis) ? pis.GetInt32() : 1,
-                    Width = page.GetProperty("width").GetDouble(),
-                    Height = page.GetProperty("height").GetDouble(),
-                    SectionIndex = page.TryGetProperty("sectionIndex", out var si) && si.ValueKind == JsonValueKind.Number
-                        ? si.GetInt32() : null,
-                    PageName = page.GetProperty("pageName").GetString() ?? string.Empty,
-                });
-        }
-        var fragments = new List<PageMapFragment>();
-        if (root.TryGetProperty("fragments", out var fragmentsElement))
-        {
-            foreach (var fragment in fragmentsElement.EnumerateArray())
+            if (page.ValueKind != JsonValueKind.Object)
+                throw new FormatException("PageMap pages must be objects");
+
+            int? sectionIndex = null;
+            if (page.TryGetProperty("sectionIndex", out var sectionIndexElement))
             {
-                var geometry = fragment.GetProperty("geometry");
-                fragments.Add(new PageMapFragment
-                {
-                    FragmentId = fragment.GetProperty("fragmentId").GetString() ?? string.Empty,
-                    AnchorId = fragment.GetProperty("anchorId").GetString() ?? string.Empty,
-                    FragmentIndex = fragment.GetProperty("fragmentIndex").GetInt32(),
-                    PageNumber = fragment.GetProperty("pageNumber").GetInt32(),
-                    Geometry = new PageMapRect(
-                        geometry.GetProperty("x").GetDouble(),
-                        geometry.GetProperty("y").GetDouble(),
-                        geometry.GetProperty("width").GetDouble(),
-                        geometry.GetProperty("height").GetDouble()),
-                    Story = ParsePageMapStory(fragment.GetProperty("story").GetString()),
-                    InTableCell = fragment.TryGetProperty("inTableCell", out var itc)
-                        && itc.ValueKind == JsonValueKind.True,
-                });
+                if (sectionIndexElement.ValueKind != JsonValueKind.Number
+                    || !sectionIndexElement.TryGetInt32(out var parsedSectionIndex))
+                    throw new FormatException("PageMap page sectionIndex must be an integer when supplied");
+                sectionIndex = parsedSectionIndex;
             }
+
+            pages.Add(new PageMapPage
+            {
+                PageNumber = RequiredInt32(page, "pageNumber", "PageMap page"),
+                PageInSection = RequiredInt32(page, "pageInSection", "PageMap page"),
+                Width = RequiredDouble(page, "width", "PageMap page"),
+                Height = RequiredDouble(page, "height", "PageMap page"),
+                SectionIndex = sectionIndex,
+                PageName = RequiredString(page, "pageName", "PageMap page"),
+            });
         }
+
+        var fragments = new List<PageMapFragment>();
+        var fragmentsElement = RequiredProperty(root, "fragments", JsonValueKind.Array, "PageMap");
+        foreach (var fragment in fragmentsElement.EnumerateArray())
+        {
+            if (fragment.ValueKind != JsonValueKind.Object)
+                throw new FormatException("PageMap fragments must be objects");
+            var geometry = RequiredProperty(fragment, "geometry", JsonValueKind.Object, "PageMap fragment");
+            fragments.Add(new PageMapFragment
+            {
+                FragmentId = RequiredString(fragment, "fragmentId", "PageMap fragment"),
+                AnchorId = RequiredString(fragment, "anchorId", "PageMap fragment"),
+                FragmentIndex = RequiredInt32(fragment, "fragmentIndex", "PageMap fragment"),
+                PageNumber = RequiredInt32(fragment, "pageNumber", "PageMap fragment"),
+                Geometry = new PageMapRect(
+                    RequiredDouble(geometry, "x", "PageMap geometry"),
+                    RequiredDouble(geometry, "y", "PageMap geometry"),
+                    RequiredDouble(geometry, "width", "PageMap geometry"),
+                    RequiredDouble(geometry, "height", "PageMap geometry")),
+                Story = ParsePageMapStory(RequiredString(fragment, "story", "PageMap fragment")),
+                InTableCell = RequiredBoolean(fragment, "inTableCell", "PageMap fragment"),
+            });
+        }
+
         return new PageMap
         {
-            SchemaVersion = root.TryGetProperty("schemaVersion", out var sv)
-                ? sv.GetInt32() : PageMap.CurrentSchemaVersion,
-            Mode = ParsePageMapMode(root.GetProperty("mode").GetString()),
-            Availability = ParsePageMapAvailability(root.GetProperty("availability").GetString()),
-            DocumentVersion = root.GetProperty("documentVersion").GetInt64(),
-            RendererFingerprint = root.GetProperty("rendererFingerprint").GetString() ?? string.Empty,
+            SchemaVersion = RequiredInt32(root, "schemaVersion", "PageMap"),
+            Mode = ParsePageMapMode(RequiredString(root, "mode", "PageMap")),
+            Availability = ParsePageMapAvailability(RequiredString(root, "availability", "PageMap")),
+            DocumentVersion = RequiredInt64(root, "documentVersion", "PageMap"),
+            RendererFingerprint = RequiredString(root, "rendererFingerprint", "PageMap"),
             Pages = pages,
             Fragments = fragments,
         };
@@ -83,11 +95,59 @@ internal static class DocxSessionJson
 
     public static PageCitationRequest? ParsePageCitationRequest(JsonElement root, string key = "citation")
     {
-        if (!root.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.Object)
+        if (!root.TryGetProperty(key, out var value))
             return null;
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"{key} must be a JSON object");
         return new PageCitationRequest(
-            value.GetProperty("documentVersion").GetInt64(),
-            value.GetProperty("rendererFingerprint").GetString() ?? string.Empty);
+            RequiredInt64(value, "documentVersion", key),
+            RequiredString(value, "rendererFingerprint", key));
+    }
+
+    private static JsonElement RequiredProperty(
+        JsonElement root, string name, JsonValueKind kind, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != kind)
+            throw new FormatException($"{owner} requires {name} with JSON type {kind}");
+        return value;
+    }
+
+    private static string RequiredString(JsonElement root, string name, string owner) =>
+        RequiredProperty(root, name, JsonValueKind.String, owner).GetString()!;
+
+    private static bool RequiredBoolean(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new FormatException($"{owner} requires {name} with JSON type Boolean");
+        return value.GetBoolean();
+    }
+
+    private static int RequiredInt32(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var result))
+            throw new FormatException($"{owner} requires integer {name}");
+        return result;
+    }
+
+    private static long RequiredInt64(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt64(out var result))
+            throw new FormatException($"{owner} requires integer {name}");
+        return result;
+    }
+
+    private static double RequiredDouble(JsonElement root, string name, string owner)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Number
+            || !value.TryGetDouble(out var result))
+            throw new FormatException($"{owner} requires numeric {name}");
+        return result;
     }
 
     private static PageMapMode ParsePageMapMode(string? value) => value switch

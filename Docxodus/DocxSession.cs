@@ -1464,10 +1464,10 @@ public sealed class DocxSession : IDisposable
             return Fail(PageMapRegistrationError.InvalidMap,
                 "paginated PageMaps must be explicitly available");
         }
-        else if (pageMap.Pages.Count == 0)
+        else if (pageMap.Pages.Count == 0 || pageMap.Fragments.Count == 0)
         {
             return Fail(PageMapRegistrationError.InvalidMap,
-                "an available paginated PageMap must contain at least one page");
+                "an available paginated PageMap must contain at least one page and fragment");
         }
 
         var pagesByNumber = new Dictionary<int, PageMapPage>();
@@ -1553,7 +1553,17 @@ public sealed class DocxSession : IDisposable
             var element = target.Resolve(_doc!);
             var actuallyInTableCell = target.Anchor.Kind == "tc"
                 || (element?.AncestorsAndSelf(W.tc).Any() ?? false);
-            if (fragment.InTableCell != actuallyInTableCell)
+            // A comment's canonical source lives in comments.xml, while its inline presentation
+            // lives at the referenced range in the main story. A true table flag therefore must
+            // be proven from a live body-side marker; false also validly describes the definition,
+            // endnote-style, margin, or an out-of-table inline presentation.
+            if (fragment.Story == PageMapStory.Comment
+                && fragment.InTableCell
+                && !CommentHasTableCellPresentation(element))
+                return Fail(PageMapRegistrationError.InvalidMap,
+                    $"PageMap comment has no table-cell presentation: {fragment.AnchorId}");
+            if (fragment.Story != PageMapStory.Comment
+                && fragment.InTableCell != actuallyInTableCell)
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap inTableCell does not match anchor ownership: {fragment.AnchorId}");
 
@@ -1675,6 +1685,19 @@ public sealed class DocxSession : IDisposable
         PageMapStory.Comment => scope == "cmt",
         _ => scope == "body",
     };
+
+    private bool CommentHasTableCellPresentation(XElement? source)
+    {
+        var commentId = (string?)source?.AncestorsAndSelf(W.comment).FirstOrDefault()?.Attribute(W.id);
+        var mainRoot = _doc?.MainDocumentPart?.GetXDocument().Root;
+        if (commentId is null || mainRoot is null) return false;
+        return mainRoot.Descendants()
+            .Where(element => element.Name == W.commentRangeStart
+                || element.Name == W.commentRangeEnd
+                || element.Name == W.commentReference)
+            .Any(element => (string?)element.Attribute(W.id) == commentId
+                && element.Ancestors(W.tc).Any());
+    }
 
     private PageCitation UnavailableCitation(
         string anchorId, PageCitationRequest request, PageCitationUnavailableReason reason) =>

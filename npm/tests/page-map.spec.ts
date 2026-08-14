@@ -289,4 +289,168 @@ test.describe('PageMap materialization and citation navigation', () => {
 
     expect(message).toContain('source anchor p:body:dropped has no measurable fragment');
   });
+
+  test('excludes explicit, hidden, and aria-hidden source subtrees from page clones and the map', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const result = await page.evaluate((html) => {
+      const pagination = (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+        showPageNumbers: false,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'excluded-v1' },
+      });
+      return {
+        anchors: pagination.pageMap.fragments.map((fragment: any) => fragment.anchorId),
+        pageSources: Array.from(document.querySelectorAll<HTMLElement>(
+          '#pagination-container [data-source-anchor-id]',
+        )).map((node) => node.dataset.sourceAnchorId),
+      };
+    }, shell(`
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="80"
+           data-content-width="120" data-content-height="78"
+           data-margin-top="1" data-margin-right="1"
+           data-margin-bottom="1" data-margin-left="1">
+        <p data-source-anchor-id="p:body:visible" style="height:18pt;margin:0">visible</p>
+        <p data-page-map-exclude="true" data-source-anchor-id="p:body:explicit">explicit</p>
+        <div hidden><p data-source-anchor-id="p:body:hidden">hidden</p></div>
+        <div aria-hidden="true"><p data-source-anchor-id="p:body:aria">aria</p></div>
+      </div>`));
+
+    expect(result.anchors).toEqual(['p:body:visible']);
+    expect(result.pageSources).toContain('p:body:visible');
+    expect(result.pageSources).toContain('p:body:explicit');
+    expect(result.pageSources).toContain('p:body:hidden');
+    expect(result.pageSources).toContain('p:body:aria');
+  });
+
+  test('refuses an available map when the source has no canonical inventory', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const message = await page.evaluate((html) => {
+      try {
+        (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+          showPageNumbers: false,
+          layoutToken: { documentVersion: 0, rendererFingerprint: 'empty-inventory-v1' },
+        });
+        return '';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }, shell(`
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="80"
+           data-content-width="120" data-content-height="78"
+           data-margin-top="1" data-margin-right="1"
+           data-margin-bottom="1" data-margin-left="1">
+        <p style="height:18pt;margin:0">not canonically addressable</p>
+      </div>`));
+    expect(message).toContain('without canonical source inventory');
+  });
+
+  test('citation switching and clearing restore the previous highlight exactly', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const state = await page.evaluate((html) => {
+      const api = (window as any).DocxodusPagination;
+      const viewer = document.getElementById('viewer') as HTMLElement;
+      const result = api.paginateHtml(html, viewer, {
+        showPageNumbers: false,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'highlight-v1' },
+      });
+      const citation = (anchorId: string) => ({
+        availability: 'available',
+        anchorId,
+        fragments: result.pageMap.fragments.filter((fragment: any) => fragment.anchorId === anchorId),
+      });
+      const firstCitation = citation('p:body:first');
+      const secondCitation = citation('p:body:second');
+      const first = Array.from(viewer.querySelectorAll<HTMLElement>('[data-page-fragment-id]'))
+        .find((node) => node.dataset.pageFragmentId === firstCitation.fragments[0].fragmentId)!;
+      const second = Array.from(viewer.querySelectorAll<HTMLElement>('[data-page-fragment-id]'))
+        .find((node) => node.dataset.pageFragmentId === secondCitation.fragments[0].fragmentId)!;
+      first.style.outline = '2px dotted rgb(1, 2, 3)';
+      api.navigateToPageCitation(viewer, firstCitation, { behavior: 'auto' });
+      api.navigateToPageCitation(viewer, secondCitation, { behavior: 'auto' });
+      const firstRestored = first.style.outline;
+      const secondHighlighted = second.style.outline;
+      api.clearPageCitationHighlight(viewer);
+      const secondCleared = second.style.outline;
+
+      first.classList.add('existing-highlight');
+      api.navigateToPageCitation(viewer, firstCitation, {
+        behavior: 'auto', highlightClass: 'existing-highlight',
+      });
+      api.clearPageCitationHighlight(viewer);
+      return {
+        firstRestored,
+        secondHighlighted,
+        secondCleared,
+        existingClassRetained: first.classList.contains('existing-highlight'),
+      };
+    }, shell(`
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="80"
+           data-content-width="120" data-content-height="78"
+           data-margin-top="1" data-margin-right="1"
+           data-margin-bottom="1" data-margin-left="1">
+        <p data-source-anchor-id="p:body:first" style="height:18pt;margin:0">first</p>
+        <p data-source-anchor-id="p:body:second" style="height:18pt;margin:0">second</p>
+      </div>`));
+
+    expect(state.firstRestored).toContain('dotted');
+    expect(state.secondHighlighted).toContain('solid');
+    expect(state.secondCleared).toBe('');
+    expect(state.existingClassRetained).toBe(true);
+  });
+
+  test('materializes referenced margin comments in each page side substrate without duplicate ids', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const result = await page.evaluate((html) => {
+      const pagination = (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+        showPageNumbers: false,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'margin-comments-v1' },
+      });
+      const pageBoxes = Array.from(document.querySelectorAll<HTMLElement>('.page-box'));
+      return {
+        totalPages: pagination.totalPages,
+        commentPages: Array.from(new Set(pagination.pageMap.fragments
+          .filter((fragment: any) => fragment.story === 'comment')
+          .map((fragment: any) => fragment.pageNumber))),
+        marginColumns: pageBoxes.filter((box) => box.querySelector('.page-comment-margin')).length,
+        pageCommentIds: document.querySelectorAll('#pagination-container [id="comment-7"]').length,
+        registryCommentIds: document.querySelectorAll(
+          '#pagination-comment-margin-registry [id="comment-7"]',
+        ).length,
+        activeBackrefs: document.querySelectorAll(
+          '#pagination-container .page-comment-margin a[href^="#"]',
+        ).length,
+      };
+    }, shell(`
+      <aside id="pagination-comment-margin-registry" style="display:none">
+        <div id="comment-7" data-comment-id="7" data-source-anchor-id="cmt:cmt:comment-7">
+          <a href="#comment-ref-7">back</a>
+          <p data-source-anchor-id="p:cmt:comment-body-7">Margin definition</p>
+        </div>
+      </aside>
+      <div data-section-index="0"
+           data-page-width="180" data-page-height="62"
+           data-content-width="120" data-content-height="60"
+           data-margin-top="1" data-margin-right="50"
+           data-margin-bottom="1" data-margin-left="10">
+        <p data-source-anchor-id="p:body:first" style="height:50pt;margin:0">
+          <span data-comment-id="7">first range</span>
+        </p>
+        <p data-source-anchor-id="p:body:second" style="height:50pt;margin:0">
+          <span data-comment-id="7">second range</span>
+        </p>
+      </div>`));
+
+    expect(result.totalPages).toBe(2);
+    expect(result.commentPages).toEqual([1, 2]);
+    expect(result.marginColumns).toBe(2);
+    expect(result.pageCommentIds).toBe(0);
+    expect(result.registryCommentIds).toBe(1);
+    expect(result.activeBackrefs).toBe(0);
+  });
 });

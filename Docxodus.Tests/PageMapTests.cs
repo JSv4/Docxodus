@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Docxodus;
 using Docxodus.Internal;
 using Xunit;
@@ -277,5 +278,92 @@ public class PageMapTests
             citationRequest: new PageCitationRequest(session.Version, Fingerprint)));
         Assert.Equal(anchor, match.Match.Citation?.AnchorId);
         Assert.Equal(PageMapAvailability.Available, match.Match.Citation?.Availability);
+    }
+
+    [Fact]
+    public void PM008_PageMapAndCitationWireSchemasRejectMissingOrMistypedRequiredFields()
+    {
+        const string valid = """
+            {
+              "schemaVersion":1,
+              "mode":"paginated",
+              "availability":"available",
+              "documentVersion":0,
+              "rendererFingerprint":"renderer",
+              "pages":[{
+                "pageNumber":1,"pageInSection":1,"width":612,"height":792,
+                "sectionIndex":0,"pageName":"docxodus-section-0"
+              }],
+              "fragments":[{
+                "fragmentId":"f", "anchorId":"p:body:u", "fragmentIndex":0,
+                "pageNumber":1, "geometry":{"x":0,"y":0,"width":1,"height":1},
+                "story":"body", "inTableCell":false
+              }]
+            }
+            """;
+
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"schemaVersion\":1,", string.Empty, StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"pageInSection\":1,", string.Empty, StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"sectionIndex\":0", "\"sectionIndex\":\"0\"", StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace(", \"inTableCell\":false", string.Empty, StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"inTableCell\":false", "\"inTableCell\":\"false\"", StringComparison.Ordinal)));
+
+        using var malformed = JsonDocument.Parse("{\"citation\":\"current page\"}");
+        Assert.Throws<FormatException>(() =>
+            DocxSessionJson.ParsePageCitationRequest(malformed.RootElement));
+        using var missingCitationField = JsonDocument.Parse(
+            "{\"citation\":{\"documentVersion\":0}}");
+        Assert.Throws<FormatException>(() =>
+            DocxSessionJson.ParsePageCitationRequest(missingCitationField.RootElement));
+    }
+
+    [Fact]
+    public void PM009_InlineCommentDefinitionsMayMapInsideTheirBodyTablePresentation()
+    {
+        using var tableSession = new DocxSession(DocxSessionTests.BuildDS003_TableWithCells());
+        var cellParagraph = tableSession.Project().AnchorIndex.Values.First(target =>
+            target.Anchor.Kind == "p" && target.TextPreview == "R0C0");
+        Assert.True(tableSession.AddComment(
+            cellParagraph.Anchor.Id, new CharSpan(0, 2), "Reviewer", "Cell comment").Success);
+        var commentAnchors = tableSession.Project().AnchorIndex.Values
+            .Where(target => target.Anchor.Scope == "cmt" && target.Anchor.Kind is "cmt" or "p")
+            .Select(target => target.Anchor.Id)
+            .ToArray();
+        Assert.Equal(2, commentAnchors.Length);
+        Assert.True(tableSession.RegisterPageMap(AvailableMap(
+            tableSession,
+            commentAnchors.Select(anchor => Fragment(
+                anchor, story: PageMapStory.Comment, inTableCell: true)).ToArray())).Success);
+
+        using var bodySession = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var bodyParagraph = bodySession.Project().AnchorIndex.Values.First(target =>
+            target.Anchor.Scope == "body" && target.Anchor.Kind == "p");
+        Assert.True(bodySession.AddComment(
+            bodyParagraph.Anchor.Id, new CharSpan(0, 2), "Reviewer", "Body comment").Success);
+        var bodyComment = bodySession.Project().AnchorIndex.Values.Single(target =>
+            target.Anchor.Scope == "cmt" && target.Anchor.Kind == "cmt");
+        Assert.Equal(PageMapRegistrationError.InvalidMap,
+            bodySession.RegisterPageMap(AvailableMap(bodySession, new[]
+            {
+                Fragment(bodyComment.Anchor.Id, story: PageMapStory.Comment, inTableCell: true),
+            })).Error);
+    }
+
+    [Fact]
+    public void PM010_AvailablePaginatedMapCannotRegisterWithoutFragments()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+
+        var result = session.RegisterPageMap(AvailableMap(
+            session, Array.Empty<PageMapFragment>(), new[] { Page() }));
+
+        Assert.False(result.Success);
+        Assert.Equal(PageMapRegistrationError.InvalidMap, result.Error);
+        Assert.Contains("at least one page and fragment", result.Message, StringComparison.Ordinal);
     }
 }

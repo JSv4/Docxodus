@@ -89,7 +89,7 @@ public class PageMapSourceIdentityTests
         var inlineBody = inlineSession.Project().AnchorIndex.Values
             .First(target => target.Anchor.Scope == "body" && target.TextPreview == "First paragraph.");
         Assert.True(inlineSession.AddComment(
-            inlineBody.Anchor.Id, new CharSpan(0, 5), "Reviewer", "Inline comment").Success);
+            inlineBody.Anchor.Id, new CharSpan(0, 5), "Reviewer", "Inline first.\n\nInline second.").Success);
         var inlineProjection = inlineSession.Project();
         var inlineHtml = XElement.Parse(HtmlConversionOps.ConvertToHtml(inlineSession, new HtmlConversionOptions
         {
@@ -100,6 +100,14 @@ public class PageMapSourceIdentityTests
         var commentDefinition = inlineProjection.AnchorIndex.Values.Single(target => target.Anchor.Kind == "cmt");
         Assert.Contains(inlineHtml.DescendantsAndSelf(), element =>
             (string?)element.Attribute("data-source-anchor-id") == commentDefinition.Anchor.Id);
+        var commentParagraphs = inlineProjection.AnchorIndex.Values
+            .Where(target => target.Anchor.Scope == "cmt" && target.Anchor.Kind == "p")
+            .Select(target => target.Anchor.Id)
+            .ToArray();
+        Assert.Equal(2, commentParagraphs.Length);
+        Assert.All(commentParagraphs, anchor => Assert.Contains(
+            inlineHtml.DescendantsAndSelf(), element =>
+                (string?)element.Attribute("data-source-anchor-id") == anchor));
     }
 
     [Fact]
@@ -156,5 +164,75 @@ public class PageMapSourceIdentityTests
             .ToArray();
         Assert.Contains(bodySame.Anchor.Id, identities);
         Assert.Contains(headerSame.Anchor.Id, identities);
+    }
+
+    [Fact]
+    public void PM102_PaginatedStatelessHtmlAlwaysCarriesCanonicalIdentityAndStagesComments()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var body = session.Project().AnchorIndex.Values.First(target =>
+            target.Anchor.Scope == "body" && target.Anchor.Kind == "p");
+        Assert.True(session.AddComment(
+            body.Anchor.Id, new CharSpan(0, 5), "Reviewer", "First.\n\nSecond.").Success);
+
+        XElement Convert(CommentRenderMode mode) => XElement.Parse(HtmlConversionOps.ConvertToHtml(
+            session,
+            new HtmlConversionOptions
+            {
+                StampAnchors = false,
+                FabricateCssClasses = false,
+                PaginationMode = (int)PaginationMode.Paginated,
+                CommentRenderMode = (int)mode,
+            }));
+
+        var endnoteHtml = Convert(CommentRenderMode.EndnoteStyle);
+        Assert.DoesNotContain(endnoteHtml.DescendantsAndSelf().Attributes("data-anchor"), _ => true);
+        Assert.Contains(endnoteHtml.DescendantsAndSelf().Attributes("data-source-anchor-id"), _ => true);
+        var staging = endnoteHtml.Descendants().Single(element =>
+            (string?)element.Attribute("id") == "pagination-staging");
+        var finalSection = staging.Descendants().Last(element =>
+            element.Attribute("data-section-index") is not null);
+        Assert.Contains(finalSection.Descendants(), element =>
+            ((string?)element.Attribute("class"))?.Contains("comments-section", StringComparison.Ordinal) == true);
+
+        var marginHtml = Convert(CommentRenderMode.Margin);
+        var marginStaging = marginHtml.Descendants().Single(element =>
+            (string?)element.Attribute("id") == "pagination-staging");
+        var registry = marginStaging.Descendants().Single(element =>
+            (string?)element.Attribute("id") == "pagination-comment-margin-registry");
+        Assert.Contains(registry.DescendantsAndSelf().Attributes("data-source-anchor-id"), _ => true);
+        Assert.DoesNotContain(marginStaging.Descendants()
+            .Where(element => element.Attribute("data-section-index") is not null)
+            .SelectMany(element => element.Descendants()), element =>
+                (string?)element.Attribute("id") == "pagination-comment-margin-registry");
+    }
+
+    [Fact]
+    public void PM103_InlineTableCommentIdentitiesStayInsideTheTablePresentation()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS003_TableWithCells());
+        var cell = session.Project().AnchorIndex.Values.First(target =>
+            target.Anchor.Kind == "p" && target.TextPreview == "R0C0");
+        Assert.True(session.AddComment(
+            cell.Anchor.Id, new CharSpan(0, 2), "Reviewer", "First.\n\nSecond.").Success);
+        var commentIds = session.Project().AnchorIndex.Values
+            .Where(target => target.Anchor.Scope == "cmt" && target.Anchor.Kind is "cmt" or "p")
+            .Select(target => target.Anchor.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(session, new HtmlConversionOptions
+        {
+            StampAnchors = false,
+            FabricateCssClasses = false,
+            PaginationMode = (int)PaginationMode.Paginated,
+            CommentRenderMode = (int)CommentRenderMode.Inline,
+        }));
+        var tableCell = html.Descendants().First(element => element.Name.LocalName == "td");
+        var presentedCommentIds = tableCell.DescendantsAndSelf()
+            .Attributes("data-source-anchor-id")
+            .Select(attribute => attribute.Value)
+            .Where(commentIds.Contains)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(commentIds, presentedCommentIds);
     }
 }
