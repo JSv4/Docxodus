@@ -498,13 +498,13 @@ modulo those generated ids/timestamps. Such receipts carry warnings; clients mus
 id or `packageHash` equality unless the operation supplies stable ids/timestamps or is otherwise
 known deterministic.
 
-Applying batches may carry a caller-chosen root `transactionId` (a non-empty string up to 256
-characters). Its first terminal success, partial result, structured failure, precondition failure,
-or safely-caught exception is recorded for the lifetime of that open session. An identical retry
-returns the original serialized `MutationBatchResult` byte-for-byte before evaluating current
-preconditions or running a step; it therefore preserves generated anchors, timestamps, versions,
-outcome, semantic deltas, and `packageHash` from the original call. The result has one additional
-top-level identity — not a parallel receipt model:
+Applying batches may carry a caller-chosen root `transactionId` (a non-blank string up to 256
+Unicode scalar values). Its first terminal success, partial result, structured failure,
+precondition failure, or safely-caught exception is recorded for the lifetime of that open session.
+An identical retry returns the original serialized `MutationBatchResult` byte-for-byte before
+evaluating current preconditions or running a step; it therefore preserves generated anchors,
+timestamps, versions, outcome, semantic deltas, and `packageHash` from the original call. The
+result has one additional top-level identity — not a parallel receipt model:
 
 ```json
 {

@@ -27,7 +27,7 @@ internal sealed class DocSession
     internal MutationTransactions MutationTransactions { get; init; } = new();
 
     /// <summary>False after close has won the dispatch race for this session.</summary>
-    internal bool Active { get; set; } = true;
+    internal volatile bool Active = true;
 
     /// <summary>Store-resolved location this session was opened from — already checked to be in
     /// scope, so a save back to it needs no re-validation. Null only if a session was opened from
@@ -45,6 +45,7 @@ internal sealed class SessionStore
 {
     private readonly ConcurrentDictionary<string, DocSession> _sessions = new();
     private readonly object _lifecycleGate = new();
+    private readonly AsyncLocal<int> _dispatchDepth = new();
     private readonly System.Func<MutationTransactions> _mutationTransactionsFactory;
 
     /// <param name="documents">Backing document store. Defaults to a local store rooted at the
@@ -66,18 +67,30 @@ internal sealed class SessionStore
 
     public DocSession Open(byte[] bytes, string? location, DocxSessionSettings settings)
     {
+        RejectReentrantLifecycle("open");
+        // Construct fallible per-session collaborators before allocating a core handle. If the
+        // factory fails, there is nothing in either registry to clean up.
+        var mutationTransactions = _mutationTransactionsFactory();
         lock (_lifecycleGate)
         {
             var handle = DocxSessionOps.OpenSession(bytes, settings);
-            var session = new DocSession
+            try
             {
-                Id = NewSessionId(),
-                Handle = handle,
-                Location = location,
-                MutationTransactions = _mutationTransactionsFactory(),
-            };
-            _sessions[session.Id] = session;
-            return session;
+                var session = new DocSession
+                {
+                    Id = NewSessionId(),
+                    Handle = handle,
+                    Location = location,
+                    MutationTransactions = mutationTransactions,
+                };
+                _sessions[session.Id] = session;
+                return session;
+            }
+            catch
+            {
+                DocxSessionOps.CloseSession(handle);
+                throw;
+            }
         }
     }
 
@@ -101,9 +114,13 @@ internal sealed class SessionStore
     /// Run one complete session-bound dispatch while holding the session's synchronous gate.
     /// The active check after taking the gate closes the lookup/close race: a caller that found
     /// the session before close removed it still cannot enter the disposed core handle.
+    /// Callbacks are non-reentrant so lifecycle operations retain one lifecycle-to-session lock order.
     /// </summary>
     public string Dispatch(string sessionId, System.Func<string> action)
     {
+        if (_dispatchDepth.Value > 0)
+            throw new McpToolException(
+                "cannot nest a session dispatch within a session dispatch callback");
         if (!_sessions.TryGetValue(sessionId, out var session))
             throw new McpToolException($"unknown session_id: {sessionId}");
         lock (session.DispatchGate)
@@ -112,12 +129,21 @@ internal sealed class SessionStore
                 || !_sessions.TryGetValue(sessionId, out var current)
                 || !ReferenceEquals(session, current))
                 throw new McpToolException($"unknown session_id: {sessionId}");
-            return action();
+            _dispatchDepth.Value++;
+            try
+            {
+                return action();
+            }
+            finally
+            {
+                _dispatchDepth.Value--;
+            }
         }
     }
 
     public void Close(string sessionId)
     {
+        RejectReentrantLifecycle("close");
         lock (_lifecycleGate)
         {
             if (!_sessions.TryGetValue(sessionId, out var session)) return;
@@ -133,6 +159,7 @@ internal sealed class SessionStore
 
     public void CloseAll()
     {
+        RejectReentrantLifecycle("close all sessions");
         lock (_lifecycleGate)
         {
             foreach (var kv in _sessions)
@@ -146,6 +173,13 @@ internal sealed class SessionStore
                 }
             }
         }
+    }
+
+    private void RejectReentrantLifecycle(string operation)
+    {
+        if (_dispatchDepth.Value > 0)
+            throw new McpToolException(
+                $"cannot {operation} from within a session dispatch callback");
     }
 }
 

@@ -172,7 +172,10 @@ internal sealed class MutationTransactions
 
             var completed = current with
             {
-                CompletedAt = _utcNow(),
+                // The document mutation has already committed when Complete is called. Clock
+                // injection is diagnostic metadata and must never strand that committed result
+                // behind an active reservation that cannot replay.
+                CompletedAt = UtcNowOr(current.StartedAt),
                 SerializedResponse = serializedResponse,
             };
             _records[completed.Identity.TransactionId] = completed;
@@ -196,7 +199,9 @@ internal sealed class MutationTransactions
                 evicted.Identity,
                 evicted.StartedAt,
                 completedAt,
-                _utcNow());
+                // Eviction must move the identity from a full record to a tombstone as one
+                // logical operation even when an injected diagnostics clock fails.
+                UtcNowOr(completedAt));
             _tombstoneFifo.Enqueue(id);
         }
 
@@ -204,6 +209,18 @@ internal sealed class MutationTransactions
         {
             var id = _tombstoneFifo.Dequeue();
             _tombstones.Remove(id);
+        }
+    }
+
+    private DateTimeOffset UtcNowOr(DateTimeOffset fallback)
+    {
+        try
+        {
+            return _utcNow();
+        }
+        catch (Exception)
+        {
+            return fallback;
         }
     }
 
@@ -314,7 +331,9 @@ internal sealed class MutationTransactions
 
         var suffix = serializedBatchResult[(end + 1)..];
         return serializedBatchResult[..end]
-            + ",\"transaction\":{\"schemaVersion\":1,\"transactionId\":"
+            + ",\"transaction\":{\"schemaVersion\":"
+            + identity.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ",\"transactionId\":"
             + JsonRpcIo.JsonString(identity.TransactionId)
             + ",\"requestFingerprint\":"
             + JsonRpcIo.JsonString(identity.RequestFingerprint)

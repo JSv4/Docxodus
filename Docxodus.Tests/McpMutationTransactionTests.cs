@@ -8,6 +8,7 @@ using Xunit;
 namespace Docxodus.Tests;
 
 /// <summary>Issue #449: in-session idempotency and session-wide dispatch ordering.</summary>
+[Collection("MCP session registry isolation")]
 public sealed class McpMutationTransactionTests : IDisposable
 {
     private readonly string _root;
@@ -336,6 +337,100 @@ public sealed class McpMutationTransactionTests : IDisposable
     }
 
     [Fact]
+    public void MCP449_CompletionClockFailureAfterCommitStillReplaysWithoutApplyingAgain()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 13, 0, 0, TimeSpan.Zero);
+        var clockCalls = 0;
+        var journal = new MutationTransactions(
+            utcNow: () => ++clockCalls == 2
+                ? throw new InvalidOperationException("completion clock failed")
+                : now,
+            recordIdFactory: () => "completion-record");
+        using var store = new TestSessionStore(
+            new LocalFileDocumentStore(_root), () => journal);
+        var sessionId = OpenSession(store.Value, _path);
+        var args = MutationArgs(
+            sessionId,
+            "completion",
+            FirstAnchor(store.Value, sessionId),
+            "committed before clock failure");
+
+        var original = Dispatcher.Call(store.Value, "docxodus_mutations", J(args));
+        var replay = Dispatcher.Call(store.Value, "docxodus_mutations", J(args));
+
+        Assert.True(J(original).GetProperty("success").GetBoolean());
+        Assert.Equal(original, replay);
+        Assert.Equal(1,
+            Docxodus.Internal.DocxSessionOps.GetVersion(store.Value.Get(sessionId).Handle));
+        Assert.Equal(1, Occurrences(
+            GetMarkdown(store.Value, sessionId), "committed before clock failure"));
+        var completed = Assert.IsType<MutationTransactionRecord>(
+            journal.GetRecord("completion"));
+        Assert.Equal(now, completed.StartedAt);
+        Assert.Equal(now, completed.CompletedAt);
+        Assert.Equal(original, completed.SerializedResponse);
+        Assert.Null(journal.GetTombstone("completion"));
+    }
+
+    [Fact]
+    public void MCP449_EvictionClockFailureStillMovesTheExactIdentityToATombstone()
+    {
+        var start = new DateTimeOffset(2026, 8, 14, 14, 0, 0, TimeSpan.Zero);
+        var clockCalls = 0;
+        var recordNumber = 0;
+        DateTimeOffset Clock()
+        {
+            clockCalls++;
+            if (clockCalls == 5) throw new InvalidOperationException("eviction clock failed");
+            return start.AddSeconds(clockCalls - 1);
+        }
+        var journal = new MutationTransactions(
+            fullRecordCapacity: 1,
+            tombstoneCapacity: 2,
+            utcNow: Clock,
+            recordIdFactory: () => $"eviction-record-{++recordNumber}");
+        var first = AssertReserved(journal.Begin("first", "sha256:first"));
+        journal.Complete(first, "{\"result\":\"first exact\"}");
+        var second = AssertReserved(journal.Begin("second", "sha256:second"));
+
+        var completedSecond = journal.Complete(second, "{\"result\":\"second exact\"}");
+
+        Assert.Equal(1, journal.FullRecordCount);
+        Assert.Equal(1, journal.TombstoneCount);
+        Assert.Null(journal.GetRecord("first"));
+        var tombstone = Assert.IsType<MutationTransactionTombstone>(
+            journal.GetTombstone("first"));
+        Assert.Equal(first.RecordId, tombstone.RecordId);
+        Assert.Equal(first.Identity, tombstone.Identity);
+        Assert.Equal(first.StartedAt, tombstone.StartedAt);
+        Assert.Equal(start.AddSeconds(1), tombstone.CompletedAt);
+        Assert.Equal(tombstone.CompletedAt, tombstone.EvictedAt);
+        Assert.Equal(MutationTransactionDecisionKind.ResultEvicted,
+            journal.Begin("first", "sha256:first").Kind);
+        Assert.Equal(MutationTransactionDecisionKind.Conflict,
+            journal.Begin("first", "sha256:different").Kind);
+        var replay = journal.Begin("second", "sha256:second");
+        Assert.Equal(MutationTransactionDecisionKind.Replay, replay.Kind);
+        Assert.Same(completedSecond, replay.Record);
+        Assert.Equal("{\"result\":\"second exact\"}", replay.SerializedResponse);
+    }
+
+    [Fact]
+    public void MCP449_AttachIdentitySerializesTheIdentitySchemaVersion()
+    {
+        var serialized = MutationTransactions.AttachIdentity(
+            "{\"success\":true}\n",
+            new MutationTransactionIdentity(7, "tx-version", "sha256:version"));
+
+        Assert.EndsWith("\n", serialized, StringComparison.Ordinal);
+        var transaction = J(serialized).GetProperty("transaction");
+        Assert.Equal(7, transaction.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("tx-version", transaction.GetProperty("transactionId").GetString());
+        Assert.Equal("sha256:version",
+            transaction.GetProperty("requestFingerprint").GetString());
+    }
+
+    [Fact]
     public void MCP449_DispatcherSerializesEvictedResultAndConflictAndReusesOnlyAfterTombstone()
     {
         using var store = new TestSessionStore(
@@ -517,6 +612,151 @@ public sealed class McpMutationTransactionTests : IDisposable
     }
 
     [Fact]
+    public void MCP449_ReentrantDispatchAndLifecycleCallsFailBeforeLocksWhileExternalCloseWaits()
+    {
+        using var store = new TestSessionStore(new LocalFileDocumentStore(_root));
+        var session = store.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        var otherSession = store.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var errors = new ConcurrentBag<Exception?>();
+        var action = Task.Run(() => store.Value.Dispatch(session.Id, () =>
+        {
+            errors.Add(Record.Exception(() => store.Value.Open(
+                DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings())));
+            errors.Add(Record.Exception(() => store.Value.Close(session.Id)));
+            errors.Add(Record.Exception(store.Value.CloseAll));
+            errors.Add(Record.Exception(() =>
+                store.Value.Dispatch(session.Id, () => "nested same session")));
+            errors.Add(Record.Exception(() =>
+                store.Value.Dispatch(otherSession.Id, () => "nested cross session")));
+            entered.Set();
+            release.Wait();
+            return "{}";
+        }));
+        Task? close = null;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(5, errors.Count);
+            Assert.All(errors, error =>
+            {
+                var typed = Assert.IsType<McpToolException>(error);
+                Assert.Contains("session dispatch callback", typed.Message,
+                    StringComparison.Ordinal);
+            });
+            close = Task.Run(() => store.Value.Close(session.Id));
+            Assert.False(close.Wait(TimeSpan.FromMilliseconds(100)));
+
+            release.Set();
+            Assert.True(action.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(close.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Throws<McpToolException>(() => store.Value.Get(session.Id));
+        }
+        finally
+        {
+            release.Set();
+            action.Wait(TimeSpan.FromSeconds(5));
+            close?.Wait(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public void MCP449_DifferentSessionsStillDispatchInParallel()
+    {
+        using var store = new TestSessionStore(new LocalFileDocumentStore(_root));
+        var first = store.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        var second = store.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings());
+        using var firstEntered = new ManualResetEventSlim(false);
+        using var secondEntered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var firstAction = Task.Run(() => store.Value.Dispatch(first.Id, () =>
+        {
+            firstEntered.Set();
+            release.Wait();
+            return "first";
+        }));
+        var secondAction = Task.Run(() => store.Value.Dispatch(second.Id, () =>
+        {
+            secondEntered.Set();
+            release.Wait();
+            return "second";
+        }));
+        try
+        {
+            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(secondEntered.Wait(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.Set();
+        }
+        Assert.True(Task.WaitAll(new[] { firstAction, secondAction }, TimeSpan.FromSeconds(5)));
+        Assert.Equal("first", firstAction.Result);
+        Assert.Equal("second", secondAction.Result);
+    }
+
+    [Fact]
+    public void MCP449_JournalFactoryFailureCannotLeakACoreSession()
+    {
+        var countBefore = Docxodus.Internal.SessionRegistry.Count;
+        using var store = new TestSessionStore(
+            new LocalFileDocumentStore(_root),
+            () => throw new InvalidOperationException("journal factory failed"));
+
+        var error = Assert.Throws<InvalidOperationException>(() => store.Value.Open(
+            DocxSession.CreateBlankDocxBytes(), null, new DocxSessionSettings()));
+
+        Assert.Equal("journal factory failed", error.Message);
+        Assert.Equal(countBefore, Docxodus.Internal.SessionRegistry.Count);
+    }
+
+    [Fact]
+    public void MCP449_TransactionIdRuntimeUsesBlankAndUnicodeScalarContract()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        foreach (var invalid in new[] { "", " \t\r\n" })
+        {
+            var error = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+                _store,
+                "docxodus_mutations",
+                J(MutationArgs(sessionId, invalid, anchor, "must not execute"))));
+            Assert.Contains("empty or whitespace", error.Message, StringComparison.Ordinal);
+        }
+
+        var ascii256 = new string('a', 256);
+        var asciiResult = J(Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(sessionId, ascii256, anchor, "ascii boundary"))));
+        Assert.True(asciiResult.GetProperty("success").GetBoolean());
+        Assert.NotNull(_store.Get(sessionId).MutationTransactions.GetRecord(ascii256));
+
+        var asciiError = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+            _store,
+            "docxodus_mutations",
+            J(MutationArgs(sessionId, new string('a', 257), anchor, "too long"))));
+        Assert.Contains("Unicode scalar values", asciiError.Message, StringComparison.Ordinal);
+
+        var emoji256 = string.Concat(Enumerable.Repeat("\U0001F600", 256));
+        Assert.Equal(512, emoji256.Length);
+        var emojiResult = J(Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(sessionId, emoji256, anchor, "emoji boundary"))));
+        Assert.True(emojiResult.GetProperty("success").GetBoolean());
+        Assert.NotNull(_store.Get(sessionId).MutationTransactions.GetRecord(emoji256));
+
+        var emoji257 = emoji256 + "\U0001F600";
+        var emojiError = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+            _store,
+            "docxodus_mutations",
+            J(MutationArgs(sessionId, emoji257, anchor, "too many emoji"))));
+        Assert.Contains("Unicode scalar values", emojiError.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MCP449_SaveThenRetryPreservesTheSavedMutationWithoutApplyingAgain()
     {
         var sessionId = OpenSession(_store, _path);
@@ -548,8 +788,13 @@ public sealed class McpMutationTransactionTests : IDisposable
         Assert.Equal(1, transactionId.GetProperty("minLength").GetInt32());
         Assert.Equal(MutationTransactions.MaxTransactionIdLength,
             transactionId.GetProperty("maxLength").GetInt32());
+        Assert.Equal("\\S", transactionId.GetProperty("pattern").GetString());
         Assert.Contains("APPLYING", transactionId.GetProperty("description").GetString(),
             StringComparison.Ordinal);
+        Assert.Contains("non-blank", transactionId.GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("Unicode scalar values",
+            transactionId.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Equal(128, MutationTransactions.DefaultFullRecordCapacity);
         Assert.Equal(1024, MutationTransactions.DefaultTombstoneCapacity);
     }
@@ -667,7 +912,7 @@ public sealed class McpMutationTransactionTests : IDisposable
     {
         public TestSessionStore(
             IDocumentStore documents,
-            Func<MutationTransactions> journalFactory) =>
+            Func<MutationTransactions>? journalFactory = null) =>
             Value = new SessionStore(documents, journalFactory);
 
         public SessionStore Value { get; }
@@ -675,3 +920,6 @@ public sealed class McpMutationTransactionTests : IDisposable
         public void Dispose() => Value.CloseAll();
     }
 }
+
+[CollectionDefinition("MCP session registry isolation", DisableParallelization = true)]
+public sealed class McpSessionRegistryIsolationCollection;

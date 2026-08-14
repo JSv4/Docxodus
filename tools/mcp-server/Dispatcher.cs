@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Docxodus;
@@ -1023,9 +1024,11 @@ internal static class Dispatcher
         var id = value.GetString()!;
         if (string.IsNullOrWhiteSpace(id))
             throw new McpToolException("transactionId must not be empty or whitespace");
-        if (id.Length > MutationTransactions.MaxTransactionIdLength)
+        var scalarLength = 0;
+        foreach (var _ in id.EnumerateRunes()) scalarLength++;
+        if (scalarLength > MutationTransactions.MaxTransactionIdLength)
             throw new McpToolException(
-                $"transactionId must not exceed {MutationTransactions.MaxTransactionIdLength} characters");
+                $"transactionId must not exceed {MutationTransactions.MaxTransactionIdLength} Unicode scalar values");
         return id;
     }
 
