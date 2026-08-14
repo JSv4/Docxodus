@@ -1920,36 +1920,58 @@ class CommentListEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class RevisionDiagnostic:
+    code: str
+    message: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionDiagnostic":
+        return cls(code=d.get("code", ""), message=d.get("message", ""))
+
+
+@dataclass(frozen=True, slots=True)
 class RevisionListEntry:
     """One tracked revision read directly off the live markup — see
     ``Session.list_revisions``.
 
-    ``id`` is stable while the underlying markup exists (derived from the markup's
-    own ``w:id`` attributes — resolving OTHER revisions never renames it) and is what
-    ``accept_revision``/``reject_revision`` address. ``type`` is ``"insert"``,
-    ``"delete"``, ``"move"`` (a linked move pair — both sides resolve together), or
-    ``"format"``. ``author``/``date`` are the markup's true ``w:author``/``w:date``
-    (``date`` ``None`` when absent). ``text`` is the revision's visible text (deleted
-    text for deletions, ``¶`` for a revised paragraph mark, the affected text for
-    format changes). ``anchor_id`` is the containing block's anchor when addressable.
+    ``id`` is an opaque, deterministic ``rev2-…`` identity; ``constituent_ids`` exposes
+    the native Word ids. ``family`` identifies the exact atomic operation while ``type``
+    is its coarse display class. Part/scope and every affected anchor are included.
+    Unsafe native topology remains listed through ``resolution_status`` and
+    ``diagnostic`` and fails closed when resolution is requested.
     """
 
     id: str
     type: str
     author: str
+    family: str = "unsupported"
+    constituent_ids: tuple[str, ...] = ()
     date: str | None = None
     text: str = ""
+    part_uri: str = ""
+    scope: str = ""
     anchor_id: str | None = None
+    affected_anchors: tuple[Anchor, ...] = ()
+    resolution_status: str = "unsupported"
+    diagnostic: RevisionDiagnostic | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionListEntry":
         return cls(
             id=d["id"],
             type=d.get("type", ""),
+            family=d.get("family", "unsupported"),
+            constituent_ids=tuple(d.get("constituentIds", ())),
             author=d.get("author", "unknown"),
             date=d.get("date"),
             text=d.get("text", ""),
+            part_uri=d.get("partUri", ""),
+            scope=d.get("scope", ""),
             anchor_id=d.get("anchorId"),
+            affected_anchors=tuple(Anchor._from_wire(a) for a in d.get("affectedAnchors", ())),
+            resolution_status=d.get("resolutionStatus", "unsupported"),
+            diagnostic=(RevisionDiagnostic._from_wire(d["diagnostic"])
+                        if d.get("diagnostic") is not None else None),
         )
 
 

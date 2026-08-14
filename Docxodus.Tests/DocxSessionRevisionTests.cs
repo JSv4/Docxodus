@@ -245,19 +245,22 @@ public class DocxSessionRevisionTests
 
         Assert.Equal(3, revs.Count);
 
-        Assert.Equal("rev101", revs[0].Id);
+        Assert.StartsWith("rev2-", revs[0].Id);
+        Assert.Equal(new[] { "101" }, revs[0].ConstituentIds);
         Assert.Equal("insert", revs[0].Type);
         Assert.Equal("Alice", revs[0].Author);
         Assert.Equal("2026-01-02T03:04:05Z", revs[0].Date);
         Assert.Equal("New York", revs[0].Text);
         Assert.NotNull(revs[0].AnchorId);
 
-        Assert.Equal("rev102", revs[1].Id);
+        Assert.StartsWith("rev2-", revs[1].Id);
+        Assert.Equal(new[] { "102" }, revs[1].ConstituentIds);
         Assert.Equal("delete", revs[1].Type);
         Assert.Equal("Bob", revs[1].Author);
         Assert.Equal("Boston", revs[1].Text);
 
-        Assert.Equal("rev103", revs[2].Id);
+        Assert.StartsWith("rev2-", revs[2].Id);
+        Assert.Equal(new[] { "103" }, revs[2].ConstituentIds);
         Assert.Equal("delete", revs[2].Type);
         Assert.Equal("This sentence is gone.", revs[2].Text);
     }
@@ -269,7 +272,8 @@ public class DocxSessionRevisionTests
         var revs = s.ListRevisions();
 
         var rev = Assert.Single(revs);
-        Assert.Equal("rev201", rev.Id); // min w:id over runs + mark
+        Assert.StartsWith("rev2-", rev.Id);
+        Assert.Contains("201", rev.ConstituentIds);
         Assert.Equal("insert", rev.Type);
         Assert.Equal("Alice", rev.Author);
         Assert.Equal("Whole new paragraph.¶", rev.Text);
@@ -282,7 +286,8 @@ public class DocxSessionRevisionTests
         var revs = s.ListRevisions();
 
         var rev = Assert.Single(revs);
-        Assert.Equal("rev500", rev.Id);
+        Assert.StartsWith("rev2-", rev.Id);
+        Assert.Contains("500", rev.ConstituentIds);
         Assert.Equal("move", rev.Type);
         Assert.Equal("moved bit", rev.Text);
     }
@@ -294,7 +299,8 @@ public class DocxSessionRevisionTests
         var revs = s.ListRevisions();
 
         var rev = Assert.Single(revs);
-        Assert.Equal("rev601", rev.Id);
+        Assert.StartsWith("rev2-", rev.Id);
+        Assert.Contains("601", rev.ConstituentIds);
         Assert.Equal("delete", rev.Type);
         Assert.Equal("Bob", rev.Author);
         Assert.Contains("A2", rev.Text);
@@ -324,13 +330,14 @@ public class DocxSessionRevisionTests
     public void DS375_ResolvingOneRevision_LeavesOtherIdsStable()
     {
         using var s = new DocxSession(BuildMixedRevisionsDoc());
-        var before = s.ListRevisions().Select(r => r.Id).ToArray();
-        Assert.Equal(new[] { "rev101", "rev102", "rev103" }, before);
+        var before = s.ListRevisions().ToArray();
+        Assert.Equal(new[] { "101", "102", "103" },
+            before.Select(r => Assert.Single(r.ConstituentIds)).ToArray());
 
         Assert.True(s.AcceptRevision("rev102").Success);
 
         var after = s.ListRevisions();
-        Assert.Equal(new[] { "rev101", "rev103" }, after.Select(r => r.Id).ToArray());
+        Assert.Equal(new[] { before[0].Id, before[2].Id }, after.Select(r => r.Id).ToArray());
         Assert.Equal("New York", after[0].Text);
     }
 
@@ -462,7 +469,8 @@ public class DocxSessionRevisionTests
         using (var s = new DocxSession(BuildFormatChangeDoc()))
         {
             var rev = Assert.Single(s.ListRevisions());
-            Assert.Equal("rev401", rev.Id);
+            Assert.StartsWith("rev2-", rev.Id);
+            Assert.Equal(new[] { "401" }, rev.ConstituentIds);
             Assert.Equal("format", rev.Type);
             Assert.Equal("Carol", rev.Author);
             Assert.Equal("Bold now.", rev.Text);
@@ -499,8 +507,8 @@ public class DocxSessionRevisionTests
         var result = s.AddCommentToRevision(revisionId, "Reviewer", "Discuss this revision.");
         Assert.True(result.Success, result.Error?.Message);
         Assert.Single(s.ListComments());
-        Assert.Equal(new[] { "rev101", "rev102", "rev103" },
-            s.ListRevisions().Select(r => r.Id).ToArray());
+        Assert.Equal(new[] { "101", "102", "103" },
+            s.ListRevisions().Select(r => Assert.Single(r.ConstituentIds)).ToArray());
 
         var bytes = s.Save();
         using var ms = new MemoryStream(bytes);
@@ -581,7 +589,7 @@ public class DocxSessionRevisionTests
     {
         using var s = new DocxSession(BuildInsertedParagraphDoc());
         Assert.True(s.AddCommentToRevision("rev201", "Reviewer", "Do we need this paragraph?").Success);
-        Assert.Equal("rev201", Assert.Single(s.ListRevisions()).Id);
+        Assert.Contains("201", Assert.Single(s.ListRevisions()).ConstituentIds);
         Assert.True(s.RejectRevision("rev201").Success);
         Assert.Single(s.ListComments());
 
@@ -759,7 +767,8 @@ public class DocxSessionRevisionTests
 
         Assert.True(s.Undo());
         var restored = s.ListRevisions();
-        Assert.Equal(new[] { "rev101", "rev102", "rev103" }, restored.Select(r => r.Id).ToArray());
+        Assert.Equal(new[] { "101", "102", "103" },
+            restored.Select(r => Assert.Single(r.ConstituentIds)).ToArray());
 
         Assert.True(s.Redo());
         Assert.Equal(2, s.ListRevisions().Count);
@@ -830,7 +839,8 @@ public class DocxSessionRevisionTests
 
         // Adjacent per-run markers surface as one user-visible format revision.
         var listed = Assert.Single(s.ListRevisions());
-        Assert.Equal("rev1001", listed.Id);
+        Assert.StartsWith("rev2-", listed.Id);
+        Assert.Equal(new[] { "1001", "1002" }, listed.ConstituentIds);
         Assert.Equal("format", listed.Type);
         Assert.Equal("Format Reviewer", listed.Author);
         Assert.Equal("Alpha Beta", listed.Text);
@@ -969,7 +979,8 @@ public class DocxSessionRevisionTests
         // OOXML allows one rPrChange only. The later edit folds into Carol's pending
         // change so reject still reaches the original empty formatting baseline.
         var listed = Assert.Single(s.ListRevisions());
-        Assert.Equal("rev401", listed.Id);
+        Assert.StartsWith("rev2-", listed.Id);
+        Assert.Equal(new[] { "401" }, listed.ConstituentIds);
         Assert.Equal("Carol", listed.Author);
 
         using (var trackedMs = new MemoryStream(s.Save()))
@@ -1035,7 +1046,8 @@ public class DocxSessionRevisionTests
         Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
         Assert.True(XNode.DeepEquals(before, MainDocumentRoot(s.Save())));
         var revision = Assert.Single(s.ListRevisions());
-        Assert.Equal("rev401", revision.Id);
+        Assert.StartsWith("rev2-", revision.Id);
+        Assert.Equal(new[] { "401" }, revision.ConstituentIds);
         Assert.Equal("Carol", revision.Author);
         Assert.False(s.Undo()); // failed operations do not remain on the history stack
     }
@@ -1058,14 +1070,16 @@ public class DocxSessionRevisionTests
 
         var revisions = s.ListRevisions();
         Assert.Equal(2, revisions.Count);
-        Assert.Equal(new[] { "rev1001", "rev1002" }, revisions.Select(r => r.Id).ToArray());
+        Assert.All(revisions, r => Assert.StartsWith("rev2-", r.Id));
+        Assert.Equal(new[] { "1001", "1002" },
+            revisions.Select(r => Assert.Single(r.ConstituentIds)).ToArray());
         Assert.Equal(new[] { "Alpha ", "Beta" }, revisions.Select(r => r.Text).ToArray());
         Assert.All(revisions, r => Assert.Equal("One Reviewer", r.Author));
         Assert.NotEqual(revisions[0].Date, revisions[1].Date);
 
         Assert.True(s.RejectRevision(revisions[0].Id).Success);
         var remaining = Assert.Single(s.ListRevisions());
-        Assert.Equal("rev1002", remaining.Id);
+        Assert.Equal(new[] { "1002" }, remaining.ConstituentIds);
         Assert.Equal("Beta", remaining.Text);
 
         using (var rejectedFirstMs = new MemoryStream(s.Save()))
@@ -1106,7 +1120,7 @@ public class DocxSessionRevisionTests
         }
 
         Assert.True(s.Undo());
-        Assert.Equal("rev401", Assert.Single(s.ListRevisions()).Id);
+        Assert.Equal(new[] { "401" }, Assert.Single(s.ListRevisions()).ConstituentIds);
         Assert.True(s.Redo());
         Assert.Empty(s.ListRevisions());
     }
@@ -1122,7 +1136,7 @@ public class DocxSessionRevisionTests
             new FormatOp { Bold = false });
         Assert.True(result.Success, result.Error?.Message);
         var remaining = Assert.Single(s.ListRevisions());
-        Assert.Equal("rev401", remaining.Id);
+        Assert.Equal(new[] { "401" }, remaining.ConstituentIds);
         Assert.Equal(" now.", remaining.Text);
 
         using (var ms = new MemoryStream(s.Save()))

@@ -176,6 +176,8 @@ internal static class Dispatcher
         "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
         "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
         "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),
+        "accept_all_revisions" => DocxSessionOps.AcceptAllRevisions(Handle(args)),
+        "reject_all_revisions" => DocxSessionOps.RejectAllRevisions(Handle(args)),
 
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),

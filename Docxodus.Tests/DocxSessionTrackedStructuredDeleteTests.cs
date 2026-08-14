@@ -209,6 +209,52 @@ public class DocxSessionTrackedStructuredDeleteTests
         AssertSchemaValid(tracked);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS478_SessionRegistry_ResolvesAuthoredControlDeletionAtomically(bool accept)
+    {
+        byte[] tracked;
+        using (var authoring = OpenTrackedSession(BuildDocument(
+            ParagraphWithText("before"),
+            ParagraphWithText("delete start"),
+            BlockControl("controlled", ParagraphWithText("controlled paragraph")),
+            ParagraphWithText("after"))))
+        {
+            var projection = authoring.Project();
+            var from = FindByText(authoring, projection, "delete start");
+            var to = FindByText(authoring, projection, "after");
+            Assert.True(authoring.DeleteRange(from, to).Success);
+            tracked = authoring.Save();
+        }
+
+        using var review = new DocxSession(tracked);
+        var structured = Assert.Single(review.ListRevisions(), revision =>
+            revision.Family == RevisionFamily.ContentControlDelete);
+        Assert.Equal(RevisionResolutionStatus.Supported, structured.ResolutionStatus);
+        Assert.Contains(structured.AffectedAnchors, anchor => anchor.Kind == "p");
+
+        var result = accept
+            ? review.AcceptRevision(structured.Id)
+            : review.RejectRevision(structured.Id);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var body = Body(review.Save());
+        if (accept)
+        {
+            Assert.Empty(body.Elements(W.sdt));
+            Assert.DoesNotContain("controlled paragraph", body.Value);
+        }
+        else
+        {
+            Assert.Single(body.Elements(W.sdt));
+            Assert.Contains("controlled paragraph", body.Value);
+        }
+        Assert.DoesNotContain(body.Descendants(), element =>
+            element.Name == W.customXmlDelRangeStart || element.Name == W.customXmlDelRangeEnd);
+        AssertSchemaValid(review.Save());
+    }
+
     private static DocxSession OpenTrackedSession(byte[] bytes) =>
         new(bytes, new DocxSessionSettings
         {

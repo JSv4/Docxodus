@@ -454,17 +454,20 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_track_changes",
-            "List, selectively accept/reject (by revisionId), or bulk-resolve tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:*PrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
+            "List, selectively accept/reject (by revisionId), or atomically bulk-resolve live tracked changes including structural cell, content-control, and numbering families — or switch how the session records its OWN subsequent edits (set_mode).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
-                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' reads revisions directly off the live markup — each entry carries a stable id, the markup's true author/date, its text, and the containing block's anchorId. 'accept'/'reject' resolve ONE revision by revisionId (undoable via docxodus_undo; other revisions keep their ids). 'accept_all'/'reject_all' resolve the whole document (not undoable — the session is rebound to the transformed bytes). 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
-                "revisionId": { "type": "string", "description": "accept/reject: the id from 'list' (e.g. 'rev101'). Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
+                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and refuses unsupported/malformed/ambiguous entries." },
+                "revisionId": { "type": "string", "description": "accept/reject: the opaque stable id from 'list' (e.g. 'rev2-a1b2c3d4e5f60718293a'). Legacy revNNN ids remain accepted only when uniquely resolvable. Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
-                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format"], "description": "list: only return revisions of this type. A 'move' entry is a linked pair — accepting/rejecting it resolves both sides." },
+                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format", "structure"], "description": "list: only return revisions of this coarse type." },
+                "family": { "type": "string", "description": "list: exact family filter, such as cell_delete, content_control_insert, or numbering_change." },
+                "resolutionStatus": { "type": "string", "enum": ["supported", "unsupported", "malformed", "ambiguous"], "description": "list: fail-closed resolution status filter." },
+                "partUri": { "type": "string", "description": "list: exact owning package-part URI." },
                 "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept/accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
                 "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." }
               },

@@ -15,7 +15,7 @@ async function waitForDocxodus(page: Page) {
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
 }
 
-// Issue #318 — markup-native revision listing + selective per-revision accept/reject.
+// Issues #318/#455 — live revision registry + selective and bulk resolution.
 test.describe('DocxSession revision review (WASM bridge)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -57,7 +57,11 @@ test.describe('DocxSession revision review (WASM bridge)', () => {
           insertAuthor: insertRev?.author,
           insertText: insertRev?.text,
           insertHasAnchor: typeof insertRev?.anchorId === 'string',
-          idsStartWithRev: listed.every((r) => typeof r.id === 'string' && r.id.startsWith('rev')),
+          richRegistry: listed.every((r) =>
+            typeof r.id === 'string' && r.id.startsWith('rev2-') &&
+            typeof r.family === 'string' && Array.isArray(r.constituentIds) &&
+            r.partUri === '/word/document.xml' && r.scope === 'body' &&
+            Array.isArray(r.affectedAnchors) && r.resolutionStatus === 'supported'),
           acceptOk: accepted.success,
           remainingIds: remaining.map((r: any) => r.id),
           deleteId: deleteRev?.id,
@@ -76,7 +80,7 @@ test.describe('DocxSession revision review (WASM bridge)', () => {
     expect(result.insertAuthor).toBe('Spec Reviewer');
     expect(result.insertText).toBe('Tracked rewrite.');
     expect(result.insertHasAnchor).toBe(true);
-    expect(result.idsStartWithRev).toBe(true);
+    expect(result.richRegistry).toBe(true);
     expect(result.acceptOk).toBe(true);
     // Resolving one revision leaves the other's id untouched.
     expect(result.remainingIds).toEqual([result.deleteId]);

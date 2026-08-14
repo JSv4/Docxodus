@@ -3090,15 +3090,12 @@ namespace Docxodus
                                 return null;
                             if (g.Key.CollectionType == DeletedCellCollectionType.Other)
                                 return (object)g;
-                            XElement gridSpanElement = g
-                                .First()
-                                .Elements(W.tcPr)
-                                .Elements(W.gridSpan)
-                                .FirstOrDefault();
-                            int gridSpan = gridSpanElement != null ?
-                                (int)gridSpanElement.Attribute(W.val) :
-                                1;
-                            int newGridSpan = gridSpan + g.Count() - 1;
+                            // GridSpan counts logical grid columns, not physical cells.
+                            // A deleted cell can itself span several columns, so widening
+                            // by g.Count()-1 corrupts tables with pre-existing spans.
+                            int newGridSpan = g.Where(e => e.Name == W.tc).Sum(tc =>
+                                (int?)tc.Elements(W.tcPr).Elements(W.gridSpan)
+                                    .Attributes(W.val).FirstOrDefault() ?? 1);
                             XElement currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
                             // The absorbing cell may have NO tcPr at all (minimal cells) — synthesize one
                             // carrying just the widened gridSpan instead of dereferencing null.

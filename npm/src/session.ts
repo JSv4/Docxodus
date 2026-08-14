@@ -1081,6 +1081,16 @@ export class DocxSession {
     return JSON.parse(this.wasm.RejectRevision(this.handle, revisionId)) as EditResult;
   }
 
+  /** Accept every supported live revision as one undoable session mutation. */
+  acceptAllRevisions(): EditResult {
+    return JSON.parse(this.wasm.AcceptAllRevisions(this.handle)) as EditResult;
+  }
+
+  /** Reject every supported live revision as one undoable session mutation. */
+  rejectAllRevisions(): EditResult {
+    return JSON.parse(this.wasm.RejectAllRevisions(this.handle)) as EditResult;
+  }
+
   // ─── Tier C: formatting ──────────────────────────────────────────────
 
   applyFormat(anchorId: string, span: CharSpan | null, op: FormatOp): EditResult {

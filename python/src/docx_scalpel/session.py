@@ -1515,6 +1515,14 @@ class DocxSession:
             self._call("reject_revision", {"revisionId": revision_id})
         )
 
+    def accept_all_revisions(self) -> EditResult:
+        """Accept every supported live revision as one undoable mutation."""
+        return EditResult._from_wire(self._call("accept_all_revisions", {}))
+
+    def reject_all_revisions(self) -> EditResult:
+        """Reject every supported live revision as one undoable mutation."""
+        return EditResult._from_wire(self._call("reject_all_revisions", {}))
+
     # -- Tier C: formatting -----------------------------------------------
 
     def apply_format(

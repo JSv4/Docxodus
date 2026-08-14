@@ -1291,22 +1291,58 @@ public sealed record CommentListEntry(
     public bool? Resolved { get; init; }
 }
 
+public enum RevisionFamily
+{
+    ContentInsert,
+    ContentDelete,
+    Move,
+    ParagraphMark,
+    RowInsert,
+    RowDelete,
+    CellInsert,
+    CellDelete,
+    CellMerge,
+    ContentControlInsert,
+    ContentControlDelete,
+    NumberingPropertiesInsert,
+    NumberingChange,
+    PropertiesChange,
+    Unsupported,
+}
+
+public enum RevisionResolutionStatus
+{
+    Supported,
+    Unsupported,
+    Malformed,
+    Ambiguous,
+}
+
+public sealed record RevisionDiagnostic(string Code, string Message);
+
 /// <summary>
-/// One tracked revision, read directly off the live document's markup in document
-/// order — see <see cref="DocxSession.ListRevisions"/>. <see cref="Id"/> is stable
-/// while the underlying markup exists (derived from the markup's own <c>w:id</c>
-/// attributes, so resolving OTHER revisions never renames it) and is what
-/// <see cref="DocxSession.AcceptRevision"/>/<see cref="DocxSession.RejectRevision"/>
-/// address. <see cref="Type"/> is <c>"insert"</c>, <c>"delete"</c>, <c>"move"</c>
-/// (a linked move pair — both sides resolve together), or <c>"format"</c>.
-/// <see cref="Author"/>/<see cref="Date"/> are the true <c>w:author</c>/<c>w:date</c>
-/// from the markup (date null when absent). <see cref="Text"/> is the revision's
-/// visible text (the deleted text for deletions, <c>¶</c> for a revised paragraph
-/// mark, the affected text for format changes). <see cref="AnchorId"/> is the
-/// containing block's anchor (null when the block isn't projection-addressable).
+/// One part-qualified, markup-native tracked revision. <see cref="AffectedAnchors"/>
+/// contains every currently addressable structure the atomic revision can change;
+/// <see cref="AnchorId"/> remains the convenient first/primary anchor.
+/// Unsupported, malformed, and ambiguous markup is deliberately listed and fails
+/// closed when resolution is requested.
 /// </summary>
-public sealed record RevisionListEntry(
-    string Id, string Type, string Author, string? Date, string Text, string? AnchorId);
+public sealed record RevisionListEntry
+{
+    required public string Id { get; init; }
+    required public string Type { get; init; }
+    required public RevisionFamily Family { get; init; }
+    required public IReadOnlyList<string> ConstituentIds { get; init; }
+    required public string Author { get; init; }
+    public string? Date { get; init; }
+    required public string Text { get; init; }
+    required public string PartUri { get; init; }
+    required public string Scope { get; init; }
+    public string? AnchorId { get; init; }
+    required public IReadOnlyList<Anchor> AffectedAnchors { get; init; }
+    required public RevisionResolutionStatus ResolutionStatus { get; init; }
+    public RevisionDiagnostic? Diagnostic { get; init; }
+}
 
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
@@ -1619,7 +1655,6 @@ public enum EditErrorCode
     ManagedBookmark,
     EmptyHyperlinkSpan,
     UnsupportedInlineBoundary,
-    TrackedOperationUnsupported,
 
     ImageNotFound,
     InvalidImageData,
@@ -1646,6 +1681,21 @@ public enum EditErrorCode
 
     /// <summary>A mutation batch step names an unsupported operation or a read-only action.</summary>
     InvalidBatchStep,
+
+    /// <summary>The revision family is visible but has no safe selective resolver.</summary>
+    RevisionUnsupported,
+
+    /// <summary>The native marker topology is incomplete or internally inconsistent.</summary>
+    RevisionMalformed,
+
+    /// <summary>The native identity/topology maps to more than one possible operation.</summary>
+    RevisionAmbiguous,
+
+    /// <summary>The requested mutation has no reversible native tracked-change encoding.</summary>
+    TrackedOperationUnsupported,
+
+    /// <summary>A structural edit was refused because its table still has unresolved structure revisions.</summary>
+    UnresolvedStructuralRevision,
 
     InternalError,
 }
@@ -2606,43 +2656,37 @@ public sealed partial class DocxSession : IDisposable
     // ─── Tracked revisions: markup-native listing + selective resolution (issue #318) ───
 
     /// <summary>
-    /// Enumerate the document's tracked revisions directly off the live markup, in
-    /// document order across every story RevisionProcessor walks (body, headers,
-    /// footers, footnotes, endnotes). Contiguous markup of the same kind and author
-    /// groups into one entry per user-visible change (an inserted paragraph is ONE
-    /// revision: its runs plus its mark); a named move pair is one <c>"move"</c> entry
-    /// covering both sides. Ids derive from the markup's <c>w:id</c> attributes, so
-    /// they are stable across calls and across resolution of other revisions —
-    /// unlike the re-diff listing, authors/dates are the markup's own. Not
-    /// enumerated in v1 (still resolved by whole-document accept/reject):
-    /// <c>cellIns</c>/<c>cellDel</c>/<c>cellMerge</c>, content-control ins/del
-    /// ranges, and <c>numPr</c> numbering-ins markers.
+    /// Enumerate the document's tracked revisions from a live, part-aware registry.
+    /// Cell structure, content-control envelopes, and numbering families are atomic
+    /// entries alongside the existing content/move/property families. Bad native
+    /// markup remains visible with a diagnostic and cannot be resolved accidentally.
     /// </summary>
     public IReadOnlyList<RevisionListEntry> ListRevisions()
     {
         ThrowIfDisposed();
         _ = AnchorIndex(); // guarantees Unids so entries can carry block anchors
 
-        var parts = RevisionStoryParts();
-        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
-        var result = new List<RevisionListEntry>(groups.Count);
-        foreach (var g in groups)
+        var registry = BuildRevisionRegistry();
+        var result = new List<RevisionListEntry>(registry.Entries.Count);
+        foreach (var g in registry.Entries)
         {
-            var partUri = parts[g.PartIndex].Part.Uri.ToString();
-            string? anchorId = null;
-            if (g.Units.Count > 0)
+            var affected = RevisionGroupAnchors(g, g.PartUri);
+            result.Add(new RevisionListEntry
             {
-                var first = g.Units[0];
-                for (var a = first.Paragraph ?? first.MarkedRow ?? first.Element; a is not null; a = a.Parent)
-                {
-                    var unid = (string?)a.Attribute(PtOpenXml.Unid);
-                    if (unid is null) continue;
-                    if (AnchorForUnid(unid, partUri) is { } anch) anchorId = anch.Id;
-                    break;
-                }
-            }
-            result.Add(new RevisionListEntry(
-                g.Id, g.Type, g.Author, g.Date, Internal.RevisionOps.GroupText(g), anchorId));
+                Id = g.Id,
+                Type = g.Type,
+                Family = g.Family,
+                ConstituentIds = Internal.RevisionOps.ConstituentIds(g),
+                Author = g.Author,
+                Date = g.Date,
+                Text = Internal.RevisionOps.GroupText(g),
+                PartUri = g.PartUri,
+                Scope = g.Scope,
+                AnchorId = affected.Count == 0 ? null : affected[0].Id,
+                AffectedAnchors = affected,
+                ResolutionStatus = g.ResolutionStatus,
+                Diagnostic = g.Diagnostic,
+            });
         }
         return result;
     }
@@ -2660,6 +2704,14 @@ public sealed partial class DocxSession : IDisposable
     /// old properties.</summary>
     public EditResult RejectRevision(string revisionId) => ResolveRevision(revisionId, accept: false);
 
+    /// <summary>Accept every live revision through the same fail-closed resolver used by
+    /// <see cref="AcceptRevision"/>. The complete operation is one undo step.</summary>
+    public EditResult AcceptAllRevisions() => ResolveAllRevisions(accept: true);
+
+    /// <summary>Reject every live revision through the same fail-closed resolver used by
+    /// <see cref="RejectRevision"/>. The complete operation is one undo step.</summary>
+    public EditResult RejectAllRevisions() => ResolveAllRevisions(accept: false);
+
     private EditResult ResolveRevision(string revisionId, bool accept)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
@@ -2667,14 +2719,16 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
 
         _ = AnchorIndex();
-        var parts = RevisionStoryParts();
-        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
-        var group = groups.FirstOrDefault(x => x.Id == revisionId);
+        var registry = BuildRevisionRegistry();
+        var group = registry.Find(revisionId);
         if (group is null)
             return EditResult.Fail(EditErrorCode.RevisionNotFound, $"revision not found: {revisionId}");
 
-        var owningPart = parts[group.PartIndex].Part;
-        var partUri = owningPart.Uri.ToString();
+        if (RevisionResolutionError(group) is { } resolutionError)
+            return resolutionError;
+
+        var partUri = group.PartUri;
+        var owningPart = ResolvePart(partUri);
 
         // Capture the block anchors the resolution touches BEFORE applying — elements
         // detach during Apply and can no longer be resolved to a part afterwards.
@@ -2683,8 +2737,9 @@ public sealed partial class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var removedElements = Internal.RevisionOps.Apply(group, accept);
-            SweepOrphanedStoryRelationships(owningPart);
+            var removedElements = registry.Resolve(group, accept);
+            if (owningPart is not null)
+                SweepOrphanedStoryRelationships(owningPart);
 
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -2715,14 +2770,115 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    private EditResult ResolveAllRevisions(bool accept)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        _ = AnchorIndex();
+        var registry = BuildRevisionRegistry();
+        if (registry.Entries.Count == 0)
+            return new EditResult { Success = true };
+
+        var blocked = registry.Entries.FirstOrDefault(g =>
+            g.ResolutionStatus != RevisionResolutionStatus.Supported);
+        if (blocked is not null)
+            return RevisionResolutionError(blocked)!;
+
+        var modified = registry.Entries.SelectMany(g => RevisionGroupAnchors(g, g.PartUri))
+            .GroupBy(a => a.Id, StringComparer.Ordinal).Select(g => g.First()).ToList();
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var removedElements = registry.ResolveAll(accept);
+            foreach (var story in RevisionStoryParts())
+                SweepOrphanedStoryRelationships(story.Part);
+            var removed = new List<Anchor>();
+            var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var element in removedElements)
+            {
+                var partUri = PartUriOf(element) ?? registry.Entries
+                    .FirstOrDefault(g => g.Units.Any(u => ReferenceEquals(u.Element, element)
+                        || ReferenceEquals(u.MarkedCell, element)
+                        || ReferenceEquals(u.MarkedRow, element)
+                        || ReferenceEquals(u.StructuredWrapper, element)))?.PartUri;
+                foreach (var descendant in element.DescendantsAndSelf())
+                {
+                    var unid = (string?)descendant.Attribute(PtOpenXml.Unid);
+                    if (unid is null) continue;
+                    if (AnchorForUnid(unid, partUri) is { } anchor && seenRemoved.Add(anchor.Id))
+                        removed.Add(anchor);
+                }
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = modified.Where(a => !seenRemoved.Contains(a.Id)).ToList(),
+                Removed = removed,
+            };
+        }
+        catch (Internal.RevisionResolutionException ex)
+        {
+            RollbackFailedOp();
+            return RevisionResolutionError(ex.Group)!;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    private static EditResult? RevisionResolutionError(Internal.RevisionOps.RevisionGroup group)
+    {
+        var code = group.ResolutionStatus switch
+        {
+            RevisionResolutionStatus.Unsupported => EditErrorCode.RevisionUnsupported,
+            RevisionResolutionStatus.Malformed => EditErrorCode.RevisionMalformed,
+            RevisionResolutionStatus.Ambiguous => EditErrorCode.RevisionAmbiguous,
+            _ => (EditErrorCode?)null,
+        };
+        return code is null ? null : EditResult.Fail(code.Value,
+            group.Diagnostic?.Message ?? "revision cannot be resolved safely");
+    }
+
     private List<Anchor> RevisionGroupAnchors(
         Internal.RevisionOps.RevisionGroup group, string partUri)
     {
         var anchors = new List<Anchor>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var structuralTables = group.Units.Where(u => u.Kind == Internal.RevisionOps.UnitKind.CellMark)
+            .Select(u => u.Table).Where(t => t is not null).Select(t => t!).Distinct().ToList();
+        foreach (var table in structuralTables)
+        {
+            foreach (var element in table.DescendantsAndSelf())
+            {
+                var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                if (unid is not null && AnchorForUnid(unid, partUri) is { } anchor
+                    && seen.Add(anchor.Id))
+                    anchors.Add(anchor);
+            }
+        }
+
         foreach (var unit in group.Units)
         {
-            for (var element = unit.Paragraph ?? unit.MarkedRow ?? unit.Element;
+            var start = unit.MarkedCell ?? unit.Paragraph ?? unit.MarkedRow
+                ?? unit.StructuredWrapper ?? unit.Element;
+            if (unit.StructuredWrapper is { } wrapper)
+            {
+                foreach (var element in wrapper.DescendantsAndSelf())
+                {
+                    var descendantUnid = (string?)element.Attribute(PtOpenXml.Unid);
+                    if (descendantUnid is not null
+                        && AnchorForUnid(descendantUnid, partUri) is { } descendantAnchor
+                        && seen.Add(descendantAnchor.Id))
+                        anchors.Add(descendantAnchor);
+                }
+            }
+            for (var element = start;
                 element is not null; element = element.Parent)
             {
                 var unid = (string?)element.Attribute(PtOpenXml.Unid);
@@ -2735,19 +2891,35 @@ public sealed partial class DocxSession : IDisposable
         return anchors;
     }
 
+    private Internal.RevisionRegistry BuildRevisionRegistry()
+    {
+        var parts = RevisionStoryParts();
+        return Internal.RevisionRegistry.Build(parts.Select(p =>
+            new Internal.RevisionRegistry.Part(
+                p.Part.Uri.ToString(), p.Scope, p.Root)).ToList());
+    }
+
     /// <summary>The story parts revision markup lives in, in the fixed order the
     /// revision enumeration indexes them (main, headers, footers, footnotes, endnotes
     /// — the same set RevisionProcessor's whole-document accept/reject walks).</summary>
-    private List<(OpenXmlPart Part, XElement Root)> RevisionStoryParts()
+    private List<(OpenXmlPart Part, XElement Root, string Scope)> RevisionStoryParts()
     {
-        var list = new List<(OpenXmlPart, XElement)>();
-        foreach (var part in EnumerateProjectedPartsForScopes(
-            ProjectionScopes.Body | ProjectionScopes.Headers | ProjectionScopes.Footers
-            | ProjectionScopes.Footnotes | ProjectionScopes.Endnotes))
+        var list = new List<(OpenXmlPart, XElement, string)>();
+        void Add(OpenXmlPart part, string scope)
         {
             var root = part.GetXDocument().Root;
-            if (root is not null) list.Add((part, root));
+            if (root is not null) list.Add((part, root, scope));
         }
+
+        var main = _doc!.MainDocumentPart;
+        if (main is null) return list;
+        Add(main, "body");
+        int index = 1;
+        foreach (var header in main.HeaderParts) Add(header, $"hdr{index++}");
+        index = 1;
+        foreach (var footer in main.FooterParts) Add(footer, $"ftr{index++}");
+        if (main.FootnotesPart is not null) Add(main.FootnotesPart, "fn");
+        if (main.EndnotesPart is not null) Add(main.EndnotesPart, "en");
         return list;
     }
 
@@ -6842,19 +7014,8 @@ public sealed partial class DocxSession : IDisposable
         XElement table, bool inserted, string author, string date)
     {
         EnsureTrackRevisionsEnabled();
-        var wrapperName = inserted ? W.ins : W.del;
         foreach (var row in table.Descendants(W.tr).ToList())
-        {
-            var trPr = row.Element(W.trPr);
-            if (trPr is null)
-            {
-                trPr = new XElement(W.trPr);
-                row.AddFirst(trPr);
-            }
-            trPr.Add(CreateRevisionEnvelope(wrapperName, author, date));
-            foreach (var paragraph in row.Descendants(W.p).ToList())
-                MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
-        }
+            MarkRowAsTrackedRevision(row, inserted, author, date);
     }
 
     public EditResult InsertParagraph(string anchorId, Position pos, string markdownPayload)
@@ -8829,18 +8990,20 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
 
         _ = AnchorIndex();
-        var parts = RevisionStoryParts();
-        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
-        var group = groups.FirstOrDefault(x => x.Id == revisionId);
+        var registry = BuildRevisionRegistry();
+        var group = registry.Find(revisionId);
         if (group is null)
             return EditResult.Fail(EditErrorCode.RevisionNotFound, $"revision not found: {revisionId}");
+
+        if (RevisionResolutionError(group) is { } resolutionError)
+            return resolutionError;
 
         var commentTarget = Internal.RevisionOps.CommentTarget(group);
         if (commentTarget is null)
             return EditResult.Fail(EditErrorCode.RevisionNotFound,
                 $"revision has no commentable extent: {revisionId}");
 
-        var partUri = parts[group.PartIndex].Part.Uri.ToString();
+        var partUri = group.PartUri;
         var modified = RevisionGroupAnchors(group, partUri);
         return AddCommentCore(author, markdownPayload, initials, date,
             placeMarkers: id =>
@@ -9614,6 +9777,51 @@ public sealed partial class DocxSession : IDisposable
             .Select(location => location.Anchor)
             .ToList();
 
+    private EditResult? RefuseUnresolvedTableStructure(XElement table, string anchorId)
+    {
+        var pending = BuildRevisionRegistry().Entries.FirstOrDefault(group =>
+            group.Units.Any(unit => ReferenceEquals(unit.Table, table))
+            && (group.Family == RevisionFamily.CellInsert
+                || group.Family == RevisionFamily.CellDelete
+                || group.Family == RevisionFamily.CellMerge));
+        return pending is null ? null : EditResult.Fail(
+            EditErrorCode.UnresolvedStructuralRevision,
+            $"table has unresolved {pending.Family} revision {pending.Id}; resolve it before another structural mutation",
+            anchorId);
+    }
+
+    private static EditResult TrackedStructureUnsupported(string operation, string anchorId) =>
+        EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+            $"{operation} has no reversible native tracked-change encoding on this document shape; no changes were made",
+            anchorId);
+
+    private static XElement PropertySnapshot(XElement? properties, XName propertyName, XName changeName,
+        params XName[] excluded)
+    {
+        var exclude = excluded.Append(changeName).ToHashSet();
+        return new XElement(propertyName,
+            properties?.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name != PtOpenXml.Unid),
+            properties?.Elements().Where(e => !exclude.Contains(e.Name)).Select(e => new XElement(e)));
+    }
+
+    private static bool PropertySnapshotEquals(XElement snapshot, XElement? current, XName changeName,
+        params XName[] excluded) =>
+        XNode.DeepEquals(snapshot, PropertySnapshot(current, snapshot.Name, changeName, excluded));
+
+    private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date)
+    {
+        var wrapperName = inserted ? W.ins : W.del;
+        var trPr = row.Element(W.trPr);
+        if (trPr is null)
+        {
+            trPr = new XElement(W.trPr);
+            row.AddFirst(trPr);
+        }
+        trPr.Add(CreateRevisionEnvelope(wrapperName, author, date));
+        foreach (var paragraph in row.Descendants(W.p).ToList())
+            MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
+    }
+
     /// <summary>An empty clone of <paramref name="referenceCell"/>'s shell (width, borders, shading,
     /// valign). Merge markup is always dropped — a clone is a fresh cell, never half of somebody
     /// else's merge — except <c>w:gridSpan</c> when <paramref name="keepSpan"/> is set, which a new
@@ -9642,6 +9850,7 @@ public sealed partial class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out _, out var tr, out var tbl, out var target) is { } err)
             return err;
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
 
         var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
@@ -9675,6 +9884,12 @@ public sealed partial class DocxSession : IDisposable
             if (pos == Position.Before) tr.AddBeforeSelf(newTr);
             else tr.AddAfterSelf(newTr);
 
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                MarkRowAsTrackedRevision(newTr, inserted: true,
+                    _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
+            }
+
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -9701,11 +9916,19 @@ public sealed partial class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
 
         var anchorCell = RowGrid(tr!).First(g => g.Tc == tc);
         int boundary = pos == Position.Before ? anchorCell.Start : anchorCell.End;
 
         var before = CaptureTableMetadata(tbl!);
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+        var oldGrid = tracked ? new XElement(tbl!.Element(W.tblGrid) ?? new XElement(W.tblGrid)) : null;
+        var oldRows = tracked ? tbl!.Elements(W.tr).ToDictionary(row => row,
+            row => PropertySnapshot(row.Element(W.trPr), W.trPr, W.trPrChange, W.ins, W.del)) : null;
+        var oldCells = tracked ? tbl!.Descendants(W.tc).ToDictionary(cell => cell,
+            cell => PropertySnapshot(cell.Element(W.tcPr), W.tcPr, W.tcPrChange,
+                W.cellIns, W.cellDel, W.cellMerge)) : null;
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -9762,6 +9985,37 @@ public sealed partial class DocxSession : IDisposable
                 else right.Tc!.AddBeforeSelf(newTc);
             }
 
+            if (tracked)
+            {
+                var author = _revisionAuthor ?? "docxodus";
+                var date = NextTrackedFormatRevisionDate();
+                var trackedGrid = tbl.Element(W.tblGrid)
+                    ?? throw new InvalidOperationException("tracked column insertion has no table grid");
+                trackedGrid.Add(CreateRevisionEnvelope(W.tblGridChange, author, date, oldGrid!));
+
+                foreach (var pair in oldRows!)
+                {
+                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.trPr), W.trPrChange,
+                        W.ins, W.del)) continue;
+                    var trPr = pair.Key.Element(W.trPr) ?? new XElement(W.trPr);
+                    if (trPr.Parent is null) pair.Key.AddFirst(trPr);
+                    trPr.Add(CreateRevisionEnvelope(W.trPrChange, author, date, pair.Value));
+                }
+                foreach (var pair in oldCells!)
+                {
+                    if (PropertySnapshotEquals(pair.Value, pair.Key.Element(W.tcPr), W.tcPrChange,
+                        W.cellIns, W.cellDel, W.cellMerge)) continue;
+                    var tcPr = GetOrCreateTcPr(pair.Key);
+                    tcPr.Add(CreateRevisionEnvelope(W.tcPrChange, author, date, pair.Value));
+                }
+                foreach (var cell in newCells)
+                {
+                    GetOrCreateTcPr(cell).Add(CreateRevisionEnvelope(W.cellIns, author, date));
+                    foreach (var paragraph in cell.Elements(W.p))
+                        MarkParagraphContentAndMark(paragraph, W.ins, author, date);
+                }
+            }
+
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -9790,12 +10044,24 @@ public sealed partial class DocxSession : IDisposable
         var removalRoot = tbl!.Elements(W.tr).Count() <= 1 ? tbl : tr!;
         if (ValidateBookmarkRemoval(new[] { removalRoot }, cellAnchorId) is { } bookmarkError)
             return bookmarkError;
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && tr!.ElementsAfterSelf(W.tr).FirstOrDefault() is { } trackedNext
+            && RowGrid(tr).Any(g => VMergeRestart(g.Tc) == true
+                && AlignedCell(trackedNext, g) is { } heir && VMergeRestart(heir) == false))
+            return TrackedStructureUnsupported(
+                "DeleteTableRow across a vertical-merge restart", cellAnchorId);
 
         var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (tbl!.Elements(W.tr).Count() <= 1) tbl.Remove();
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                MarkRowAsTrackedRevision(tr!, inserted: false,
+                    _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
+            }
+            else if (tbl!.Elements(W.tr).Count() <= 1) tbl.Remove();
             else
             {
                 if (tr!.ElementsAfterSelf(W.tr).FirstOrDefault() is { } next)
@@ -9835,6 +10101,9 @@ public sealed partial class DocxSession : IDisposable
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
         var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, tbl!);
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported("DeleteTableColumn", cellAnchorId);
 
         int doomed = RowGrid(tr!).First(g => g.Tc == tc).Start;
         int existingColumns = GridColumnCount(tbl!);
@@ -9963,6 +10232,9 @@ public sealed partial class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported("MergeCells", cellAnchorId);
 
         var opts = options ?? new TableMergeOptions();
         if (rowSpan < 1 || colSpan < 1 || (long)rowSpan * colSpan < 2)
@@ -10077,6 +10349,9 @@ public sealed partial class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
+        if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported("UnmergeCells", cellAnchorId);
 
         var shape = RowGrid(tr!).First(g => g.Tc == tc);
         bool? vMerge = VMergeRestart(tc!);
@@ -10492,6 +10767,38 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    private EditResult? RefuseNestedTrackedListChange(XElement paragraph, string anchorId)
+    {
+        if (_trackedChanges != TrackedChangeMode.RenderInline) return null;
+        return paragraph.Element(W.pPr)?.Element(W.pPrChange) is null
+            ? null
+            : EditResult.Fail(EditErrorCode.UnresolvedStructuralRevision,
+                "paragraph has an unresolved property revision; resolve it before another tracked list mutation",
+                anchorId);
+    }
+
+    private void TrackListPropertyMutation(XElement paragraph, XElement oldPPr, bool insertedNumPr)
+    {
+        if (_trackedChanges != TrackedChangeMode.RenderInline) return;
+        var author = _revisionAuthor ?? "docxodus";
+        var date = NextTrackedFormatRevisionDate();
+        var pPr = paragraph.Element(W.pPr);
+        var oldBase = PropertySnapshot(oldPPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
+        var newBase = PropertySnapshot(pPr, W.pPr, W.pPrChange, W.rPr, W.sectPr);
+        if (XNode.DeepEquals(oldBase, newBase)) return;
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            paragraph.AddFirst(pPr);
+        }
+        if (insertedNumPr && pPr.Element(W.numPr) is { } numPr)
+        {
+            numPr.Add(CreateRevisionEnvelope(W.ins, author, date));
+            return;
+        }
+        pPr.Add(CreateRevisionEnvelope(W.pPrChange, author, date, oldBase));
+    }
+
     public EditResult SetListLevel(string anchorId, int levelDelta)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
@@ -10503,9 +10810,12 @@ public sealed partial class DocxSession : IDisposable
 
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+        if (RefuseNestedTrackedListChange(element, anchorId) is { } pending) return pending;
 
         var pPr = element.Element(W.pPr);
         var numPr = pPr?.Element(W.numPr);
+        var oldPPr = new XElement(pPr ?? new XElement(W.pPr));
+        bool insertedNumPr = numPr is null;
 
         // Resolve the effective (numId, current ilvl). A direct w:numPr wins; otherwise the
         // paragraph is a list item only via its pStyle chain (e.g. python-docx "List Bullet",
@@ -10550,6 +10860,7 @@ public sealed partial class DocxSession : IDisposable
                 new XElement(W.ilvl, new XAttribute(W.val, next)),
                 new XElement(W.numId, new XAttribute(W.val, effectiveNumId!.Value))));
         }
+        TrackListPropertyMutation(element, oldPPr, insertedNumPr);
         // Flush the body mutation to the part stream immediately — same as NumberingFactory does for
         // the numbering part. Without this the materialized w:numPr lives only in the in-memory
         // XDocument; under WASM the typed-DOM/XDocument divergence means a later Save() serializes
@@ -10605,8 +10916,10 @@ public sealed partial class DocxSession : IDisposable
                 "RemoveListMembership requires a paragraph, heading, or list-item anchor", anchorId);
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+        if (RefuseNestedTrackedListChange(element, anchorId) is { } pending) return pending;
 
         var pPr = element.Element(W.pPr);
+        var oldPPr = new XElement(pPr ?? new XElement(W.pPr));
         var directNumPr = pPr?.Element(W.numPr);
         // Removing a direct numPr can expose numbering inherited from the paragraph style.
         // Materialize Word's numId=0 sentinel in that case so the explicit removal wins over
@@ -10623,6 +10936,7 @@ public sealed partial class DocxSession : IDisposable
                 new XElement(W.ilvl, new XAttribute(W.val, 0)),
                 new XElement(W.numId, new XAttribute(W.val, 0))));
         }
+        TrackListPropertyMutation(element, oldPPr, insertedNumPr: false);
         InvalidateProjectionCache();
         var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
         return new EditResult
@@ -10650,6 +10964,10 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ApplyListFormat requires a paragraph anchor", anchorId);
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+        if (RefuseNestedTrackedListChange(element, anchorId) is { } pending) return pending;
+
+        var oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
+        bool insertedNumPr = oldPPr.Element(W.numPr) is null && kind != ListFormat.None;
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -10669,6 +10987,8 @@ public sealed partial class DocxSession : IDisposable
                     new XElement(W.ilvl, new XAttribute(W.val, ilvl)),
                     new XElement(W.numId, new XAttribute(W.val, numId))));
             }
+
+            TrackListPropertyMutation(element, oldPPr, insertedNumPr);
 
             InvalidateProjectionCache();
             var freshIndex = AnchorIndex();
@@ -10702,6 +11022,8 @@ public sealed partial class DocxSession : IDisposable
     public EditResult ApplyListFormatRange(string firstAnchorId, string lastAnchorId, ListFormat kind)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported("ApplyListFormatRange", firstAnchorId);
         var firstTarget = FindAnchor(firstAnchorId);
         if (firstTarget is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"first anchor not found: {firstAnchorId}", firstAnchorId);
@@ -10829,6 +11151,9 @@ public sealed partial class DocxSession : IDisposable
     private EditResult ApplyListStartOverride(string anchorId, int? value)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported(
+                value is null ? "ClearListStartOverride" : "SetListStartOverride", anchorId);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);

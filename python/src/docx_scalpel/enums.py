@@ -189,7 +189,11 @@ class EditErrorCode(str, Enum):
     MANAGED_BOOKMARK = "managed_bookmark"
     EMPTY_HYPERLINK_SPAN = "empty_hyperlink_span"
     UNSUPPORTED_INLINE_BOUNDARY = "unsupported_inline_boundary"
+    REVISION_UNSUPPORTED = "revision_unsupported"
+    REVISION_MALFORMED = "revision_malformed"
+    REVISION_AMBIGUOUS = "revision_ambiguous"
     TRACKED_OPERATION_UNSUPPORTED = "tracked_operation_unsupported"
+    UNRESOLVED_STRUCTURAL_REVISION = "unresolved_structural_revision"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod

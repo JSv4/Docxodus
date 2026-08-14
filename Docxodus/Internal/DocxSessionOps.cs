@@ -861,6 +861,12 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
 
+    public static string AcceptAllRevisions(int handle) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AcceptAllRevisions());
+
+    public static string RejectAllRevisions(int handle) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectAllRevisions());
+
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();

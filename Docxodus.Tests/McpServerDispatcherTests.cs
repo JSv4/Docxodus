@@ -1786,7 +1786,13 @@ public class McpServerDispatcherTests : IDisposable
         var insertRev = Assert.Single(revisions, r => r.GetProperty("type").GetString() == "insert");
         Assert.Equal("selective edit", insertRev.GetProperty("text").GetString());
         Assert.Equal("Reviewer A", insertRev.GetProperty("author").GetString());
-        Assert.StartsWith("rev", insertRev.GetProperty("id").GetString());
+        Assert.StartsWith("rev2-", insertRev.GetProperty("id").GetString());
+        Assert.Equal("content_insert", insertRev.GetProperty("family").GetString());
+        Assert.Equal("supported", insertRev.GetProperty("resolutionStatus").GetString());
+        Assert.Equal("/word/document.xml", insertRev.GetProperty("partUri").GetString());
+        Assert.Equal("body", insertRev.GetProperty("scope").GetString());
+        Assert.NotEmpty(insertRev.GetProperty("constituentIds").EnumerateArray());
+        Assert.NotEmpty(insertRev.GetProperty("affectedAnchors").EnumerateArray());
 
         // Accept the insertion; the deletion keeps its id and resolves independently.
         var accepted = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
