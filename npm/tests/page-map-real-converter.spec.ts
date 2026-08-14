@@ -30,6 +30,11 @@ interface RealPaginationResult {
   marginColumns: number;
   duplicatePageCommentIds: number;
   activeMarginBackrefs: number;
+  endnoteReferenceCount: number;
+  endnoteTargetCount: number;
+  endnoteReferenceResolves: boolean;
+  endnoteLinkTargetsUnique: boolean;
+  endnoteMarkerText: string | null;
 }
 
 async function convertPaginateAndRegister(
@@ -91,6 +96,23 @@ async function convertPaginateAndRegister(
       activeMarginBackrefs: container.querySelectorAll(
         '.page-comment-margin a[href^="#"]',
       ).length,
+      endnoteReferenceCount: container.querySelectorAll(
+        'a[href^="#en-"]:not([href^="#en-ref-"])',
+      ).length,
+      endnoteReferenceResolves: Array.from(container.querySelectorAll<HTMLAnchorElement>(
+        'a[href^="#en-"]',
+      )).every((link) => {
+        const target = document.querySelector(link.getAttribute('href')!);
+        return target !== null && container.contains(target);
+      }),
+      endnoteLinkTargetsUnique: Array.from(container.querySelectorAll<HTMLAnchorElement>(
+        'a[href^="#en-"]',
+      )).every((link) => document.querySelectorAll(
+        `[id="${CSS.escape(link.getAttribute('href')!.slice(1))}"]`,
+      ).length === 1),
+      endnoteTargetCount: document.querySelectorAll('#en-1').length,
+      endnoteMarkerText: container.querySelector<HTMLElement>('#en-1')?.textContent?.trim()
+        ?? null,
     };
   }, {
     bytes: Array.from(docx),
@@ -137,6 +159,30 @@ test.describe('Real converter PageMap pipeline', () => {
     });
   }
 
+  for (const mode of [
+    { name: 'inline', value: 1 },
+    { name: 'margin', value: 2 },
+  ]) {
+    test(`collapsed ${mode.name} comment maps its visible reference`, async ({ page }) => {
+      const result = await convertPaginateAndRegister(
+        page,
+        generateTableCommentDocx(true),
+        mode.value,
+        false,
+        `collapsed-comment-${mode.name}-v1`,
+      );
+      const comments = result.fragments.filter((fragment) => fragment.story === 'comment');
+      expect(result.registration.success, JSON.stringify(result.registration)).toBe(true);
+      expect(comments.length).toBeGreaterThanOrEqual(3);
+      if (mode.value === 1) {
+        expect(comments.every((fragment) => fragment.inTableCell)).toBe(true);
+      } else {
+        expect(result.marginColumns).toBeGreaterThan(0);
+        expect(comments.every((fragment) => !fragment.inTableCell)).toBe(true);
+      }
+    });
+  }
+
   test('split real footnote keeps its fn definition identity on every continuation page', async ({ page }) => {
     const result = await convertPaginateAndRegister(
       page,
@@ -178,5 +224,10 @@ test.describe('Real converter PageMap pipeline', () => {
       JSON.stringify({ pages: result.pages, definitions, paragraphs }),
     ).toBeGreaterThan(1);
     expect(new Set(paragraphs.map((fragment) => fragment.pageNumber)).size).toBeGreaterThan(1);
+    expect(result.endnoteReferenceCount).toBeGreaterThan(0);
+    expect(result.endnoteTargetCount).toBe(1);
+    expect(result.endnoteReferenceResolves).toBe(true);
+    expect(result.endnoteLinkTargetsUnique).toBe(true);
+    expect(result.endnoteMarkerText).toMatch(/^i\.\s/);
   });
 });

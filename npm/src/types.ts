@@ -1788,12 +1788,22 @@ export interface PageCitationFragment {
   inTableCell: boolean;
 }
 
+export interface PageCitationPage {
+  pageNumber: number;
+  pageInSection: number;
+  width: number;
+  height: number;
+  sectionIndex?: number;
+  pageName: string;
+}
+
 export interface PageCitation {
   anchorId: string;
   availability: "available" | "unavailable";
   unavailableReason?: PageCitationUnavailableReason;
   documentVersion: number;
   rendererFingerprint: string;
+  pages: PageCitationPage[];
   fragments: PageCitationFragment[];
 }
 

@@ -784,6 +784,17 @@ class PageMapPage:
             out["sectionIndex"] = self.section_index
         return out
 
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PageMapPage":
+        return cls(
+            page_number=int(d["pageNumber"]),
+            page_in_section=int(d["pageInSection"]),
+            width=float(d["width"]),
+            height=float(d["height"]),
+            page_name=d["pageName"],
+            section_index=int(d["sectionIndex"]) if d.get("sectionIndex") is not None else None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PageMapFragment:
@@ -865,6 +876,7 @@ class PageCitation:
     availability: str
     document_version: int
     renderer_fingerprint: str
+    pages: tuple[PageMapPage, ...] = ()
     fragments: tuple[PageMapFragment, ...] = ()
     unavailable_reason: str | None = None
 
@@ -875,6 +887,7 @@ class PageCitation:
             availability=d["availability"],
             document_version=int(d["documentVersion"]),
             renderer_fingerprint=d.get("rendererFingerprint", ""),
+            pages=tuple(PageMapPage._from_wire(p) for p in d.get("pages", ())),
             fragments=tuple(PageMapFragment._from_wire(f) for f in d.get("fragments", ())),
             unavailable_reason=d.get("unavailableReason"),
         )

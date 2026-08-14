@@ -659,6 +659,13 @@ namespace Docxodus
         /// IDs of comments that have been referenced in the document (for rendering order).
         /// </summary>
         public List<int> ReferencedCommentIds { get; } = new List<int>();
+
+        /// <summary>
+        /// Comment ranges for which at least one visible run was emitted. A valid zero-width
+        /// comment has adjacent start/end markers and therefore never reaches ConvertRun while
+        /// open; its reference marker becomes the visible presentation anchor instead.
+        /// </summary>
+        public HashSet<int> RenderedRangeIds { get; } = new HashSet<int>();
     }
 
     /// <summary>
@@ -4288,6 +4295,18 @@ namespace Docxodus
                 new XAttribute("id", $"comment-ref-{id}"),
                 new XAttribute("class", prefix + "marker"));
 
+            var isCollapsedRange = !tracker.RenderedRangeIds.Contains(id.Value);
+            if (isCollapsedRange)
+            {
+                // A point comment has no highlighted run from which pagination can discover its
+                // owning page. Make the already-visible reference marker that presentation point.
+                // Margin mode uses data-comment-id to select the page-owned note clone; inline mode
+                // additionally carries the comment-story identities used by PageMap/search.
+                marker.Add(new XAttribute("data-comment-id", id.Value.ToString()));
+                if (settings.CommentRenderMode == CommentRenderMode.Inline && comment != null)
+                    marker.Add(SourceAnchorIdentityAttribute(settings, comment.SourceElement));
+            }
+
             if (comment != null && settings.IncludeCommentMetadata && comment.Author != null)
             {
                 marker.Add(new XAttribute("title", $"Comment by {comment.Author}"));
@@ -4302,7 +4321,19 @@ namespace Docxodus
             };
             marker.AddAnnotation(style);
 
-            return marker;
+            XElement presentation = marker;
+            if (isCollapsedRange && settings.CommentRenderMode == CommentRenderMode.Inline
+                && comment != null)
+            {
+                foreach (var paragraph in comment.ContentParagraphs)
+                {
+                    var identity = SourceAnchorIdentityAttribute(settings, paragraph);
+                    if (identity != null)
+                        presentation = new XElement(Xhtml.span, identity, presentation);
+                }
+            }
+
+            return presentation;
         }
 
         private static XElement RenderCommentsSection(WordprocessingDocument wordDoc,
@@ -6223,6 +6254,7 @@ namespace Docxodus
                     // For each open comment range, wrap the content
                     foreach (var commentId in tracker.OpenRanges.OrderBy(id => id))
                     {
+                        tracker.RenderedRangeIds.Add(commentId);
                         var highlightSpan = new XElement(Xhtml.span,
                             new XAttribute("class", prefix + "highlight"),
                             new XAttribute("data-comment-id", commentId.ToString()));

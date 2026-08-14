@@ -1659,12 +1659,18 @@ public sealed class DocxSession : IDisposable
             .ToArray();
         if (fragments.Length == 0)
             return UnavailableCitation(anchorId, request, PageCitationUnavailableReason.AnchorNotMapped);
+        var citedPageNumbers = fragments.Select(fragment => fragment.PageNumber).ToHashSet();
+        var pages = _registeredPageMap.Pages
+            .Where(page => citedPageNumbers.Contains(page.PageNumber))
+            .OrderBy(page => page.PageNumber)
+            .ToArray();
         return new PageCitation
         {
             AnchorId = anchorId,
             Availability = PageMapAvailability.Available,
             DocumentVersion = _version,
             RendererFingerprint = request.RendererFingerprint,
+            Pages = pages,
             Fragments = fragments,
         };
     }

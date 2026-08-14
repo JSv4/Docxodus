@@ -323,6 +323,62 @@ test.describe('PageMap materialization and citation navigation', () => {
     expect(result.pageSources).toContain('p:body:aria');
   });
 
+  test('clips fragment geometry to the visible overflow band, not only the page box', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const geometry = await page.evaluate((html) => {
+      const result = (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+        showPageNumbers: false,
+        fragmentParagraphs: false,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'clip-band-v1' },
+      });
+      return result.pageMap.fragments.find((fragment: any) =>
+        fragment.anchorId === 'p:body:clipped').geometry;
+    }, shell(`
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="60"
+           data-content-width="120" data-content-height="40"
+           data-margin-top="10" data-margin-right="1"
+           data-margin-bottom="10" data-margin-left="1">
+        <p data-source-anchor-id="p:body:clipped"
+           style="height:90pt;margin:0">partly visible overflow</p>
+      </div>`));
+    expect(geometry.y).toBeCloseTo(10, 0);
+    expect(geometry.height).toBeLessThanOrEqual(40.25);
+    expect(geometry.y + geometry.height).toBeLessThanOrEqual(50.25);
+  });
+
+  test('unsafe converter-shaped endnotes retain the conservative whole-block fallback', async ({ page }) => {
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const result = await page.evaluate((html) => {
+      const pagination = (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+        showPageNumbers: false,
+        fragmentParagraphs: true,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'unsafe-endnote-v1' },
+      });
+      const fragments = pagination.pageMap.fragments.filter((fragment: any) =>
+        fragment.anchorId === 'p:en:unsafe');
+      return {
+        count: fragments.length,
+        markedSafe: document.querySelectorAll('[data-pagination-safe-endnote="true"]').length,
+      };
+    }, shell(`
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="58"
+           data-content-width="120" data-content-height="56"
+           data-margin-top="1" data-margin-right="1"
+           data-margin-bottom="1" data-margin-left="1">
+        <section class="endnotes"><hr><ol style="list-style-type:lower-roman"><li id="en-1" value="1">
+          <p data-source-anchor-id="p:en:unsafe" style="font:10pt/10pt Arial;margin:0">
+            <span style="display:inline-block;white-space:nowrap">${words} ${words}</span>
+          </p>
+        </li></ol></section>
+      </div>`));
+    expect(result.count).toBe(1);
+    expect(result.markedSafe).toBe(0);
+  });
+
   test('refuses an available map when the source has no canonical inventory', async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');
     await addBundle(page);

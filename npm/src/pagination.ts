@@ -322,6 +322,9 @@ export interface PaginationOptions {
 // Maximum percentage of content height that footnotes can occupy
 // This allows footnotes to expand upward into body content space when needed
 const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
+// Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
+// rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
+const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
 
 // Minimum body content height per page (to avoid pages with only footnotes)
 const MIN_BODY_CONTENT_HEIGHT = 72; // 1 inch minimum body content
@@ -567,6 +570,7 @@ export class PaginationEngine {
     // Establish one active editor anchor and page-qualify every presentation fragment.
     // Full canonical source identities remain on all clones, including table cells.
     this.qualifyPageFragments(pages);
+    this.transferVisibleFragmentTargets();
     this.lastPages = pages;
 
     return {
@@ -633,10 +637,11 @@ export class PaginationEngine {
         const deliberatelyHidden = style.display === "none" || style.visibility === "hidden";
         if (deliberatelyHidden) continue;
         requiredAnchorIds.add(anchorId);
-        const left = Math.max(pageRect.left, rect.left);
-        const top = Math.max(pageRect.top, rect.top);
-        const right = Math.min(pageRect.right, rect.right);
-        const bottom = Math.min(pageRect.bottom, rect.bottom);
+        const visibleRect = this.intersectWithClippingAncestors(element, page.element, pageRect, rect);
+        const left = visibleRect.left;
+        const top = visibleRect.top;
+        const right = visibleRect.right;
+        const bottom = visibleRect.bottom;
         if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) {
           // A continued note/story clone can contain children clipped off this page which become
           // measurable on its next clone. Enforce completeness once every page has been inspected.
@@ -683,6 +688,44 @@ export class PaginationEngine {
       pages,
       fragments,
     };
+  }
+
+  /**
+   * Intersect an element with every ancestor that establishes an overflow clip before the page
+   * root. getBoundingClientRect() reports layout outside those clips, which is not rendered and
+   * therefore must not satisfy PageMap completeness or inflate portable geometry.
+   */
+  private intersectWithClippingAncestors(
+    element: HTMLElement,
+    page: HTMLElement,
+    pageRect: DOMRect,
+    rect: DOMRect,
+  ): { left: number; top: number; right: number; bottom: number } {
+    let left = Math.max(rect.left, pageRect.left);
+    let top = Math.max(rect.top, pageRect.top);
+    let right = Math.min(rect.right, pageRect.right);
+    let bottom = Math.min(rect.bottom, pageRect.bottom);
+    const clips = (value: string) =>
+      value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
+
+    for (let ancestor = element.parentElement;
+      ancestor && ancestor !== page;
+      ancestor = ancestor.parentElement) {
+      const style = window.getComputedStyle(ancestor);
+      const clipsX = clips(style.overflowX);
+      const clipsY = clips(style.overflowY);
+      if (!clipsX && !clipsY) continue;
+      const ancestorRect = ancestor.getBoundingClientRect();
+      if (clipsX) {
+        left = Math.max(left, ancestorRect.left);
+        right = Math.min(right, ancestorRect.right);
+      }
+      if (clipsY) {
+        top = Math.max(top, ancestorRect.top);
+        bottom = Math.min(bottom, ancestorRect.bottom);
+      }
+    }
+    return { left, top, right, bottom };
   }
 
   private storyForCanonicalAnchor(anchorId: string): PageMapStory {
@@ -799,6 +842,24 @@ export class PaginationEngine {
         activeStagingCanonicalIds.add(anchorId);
         activeBareAnchorIds.add(bareAnchorId);
       }
+    }
+  }
+
+  /**
+   * Page flow clones source blocks while the hidden staging tree stays in the document. Any HTML
+   * fragment target copied into a visible page would therefore resolve to its earlier hidden
+   * source. Transfer target ownership to the page presentation after flow is complete; registry
+   * and wrapper IDs that have no visible counterpart remain available to pagination internals.
+   */
+  private transferVisibleFragmentTargets(): void {
+    const visibleIds = new Set(Array.from(
+      this.containerElement.querySelectorAll<HTMLElement>("[id]"),
+    ).map((element) => element.id).filter(Boolean));
+    if (visibleIds.size === 0) return;
+    for (const source of Array.from(
+      this.stagingElement.querySelectorAll<HTMLElement>("[id]"),
+    )) {
+      if (visibleIds.has(source.id)) source.removeAttribute("id");
     }
   }
 
@@ -960,10 +1021,21 @@ export class PaginationEngine {
     }
 
     const listStyle = window.getComputedStyle(list);
-    items.forEach((item, itemIndex) => {
+    for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+      const item = items[itemIndex];
       const ownerAnchorId = item.dataset.sourceAnchorId;
       const paragraphs = Array.from(item.children) as HTMLElement[];
-      paragraphs.forEach((paragraph, paragraphIndex) => {
+      for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
+        const paragraph = paragraphs[paragraphIndex];
+        // The flattened clone no longer has the section/ol/li ancestors that supplied the
+        // source's computed layout. Validate while the real paragraph is still attached; the
+        // marker below records that completed check for canFragmentParagraph(), whose detached
+        // clone cannot obtain meaningful computed styles. A richer custom endnote falls back to
+        // the established indivisible section path instead of being range-split incorrectly.
+        if (!this.hasRangeFragmentSafeLayout(paragraph)) {
+          return null;
+        }
+
         const clone = paragraph.cloneNode(true) as HTMLElement;
         clone.dataset.paginationSafeEndnote = "true";
         clone.style.fontSize ||= sectionStyle.fontSize;
@@ -983,14 +1055,42 @@ export class PaginationEngine {
         }
 
         if (paragraphIndex === 0) {
-          const marker = item.getAttribute("value") || String(itemIndex + 1);
+          // Flattening must preserve both ends of the converter's endnote link and the list's
+          // numbering format. The outer id survives only on the leading range fragment; normal
+          // continuation cleanup removes it from every later fragment.
+          const itemId = item.id;
+          if (itemId) {
+            if (clone.id && clone.id !== itemId) return null;
+            clone.id = itemId;
+          }
+          const value = parseInt(item.getAttribute("value") || String(itemIndex + 1), 10);
+          const marker = this.formatOrderedListMarker(
+            Number.isFinite(value) ? value : itemIndex + 1,
+            listStyle.listStyleType,
+          );
           clone.insertBefore(document.createTextNode(`${marker}. `), clone.firstChild);
         }
         blocks.push(this.measureElement(clone, dims));
-      });
-    });
+      }
+    }
 
     return blocks;
+  }
+
+  /** Render the CSS ordered-list formats emitted by the converter after an endnote is flattened. */
+  private formatOrderedListMarker(value: number, listStyleType: string): string {
+    const format = (() => {
+      switch (listStyleType) {
+        case "lower-roman": return "lowerRoman";
+        case "upper-roman": return "upperRoman";
+        case "lower-alpha":
+        case "lower-latin": return "lowerLetter";
+        case "upper-alpha":
+        case "upper-latin": return "upperLetter";
+        default: return "decimal";
+      }
+    })();
+    return formatPageNumber(value, format);
   }
 
   /**
@@ -1517,41 +1617,42 @@ export class PaginationEngine {
     }
 
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
-    if (!isValidatedEndnote) {
-      const paragraphStyle = window.getComputedStyle(paragraph);
+    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph);
+  }
+
+  /**
+   * A range clone preserves nested inline formatting exactly. Anything that establishes its own
+   * box/layout context is deferred until a future fragmenter can model it accurately. Callers
+   * must invoke this while the paragraph is attached to the styled document.
+   */
+  private hasRangeFragmentSafeLayout(paragraph: HTMLElement): boolean {
+    const paragraphStyle = window.getComputedStyle(paragraph);
+    if (
+      paragraphStyle.display !== "block" ||
+      paragraphStyle.position !== "static" ||
+      paragraphStyle.float !== "none" ||
+      paragraphStyle.whiteSpace !== "normal" ||
+      paragraphStyle.breakBefore !== "auto" ||
+      paragraphStyle.breakAfter !== "auto" ||
+      paragraphStyle.breakInside === "avoid" ||
+      paragraphStyle.pageBreakBefore !== "auto" ||
+      paragraphStyle.pageBreakAfter !== "auto" ||
+      paragraphStyle.pageBreakInside === "avoid"
+    ) {
+      return false;
+    }
+
+    for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
+      const style = window.getComputedStyle(descendant);
       if (
-        paragraphStyle.display !== "block" ||
-        paragraphStyle.position !== "static" ||
-        paragraphStyle.float !== "none" ||
-        paragraphStyle.whiteSpace !== "normal" ||
-        paragraphStyle.breakBefore !== "auto" ||
-        paragraphStyle.breakAfter !== "auto" ||
-        paragraphStyle.breakInside === "avoid" ||
-        paragraphStyle.pageBreakBefore !== "auto" ||
-        paragraphStyle.pageBreakAfter !== "auto" ||
-        paragraphStyle.pageBreakInside === "avoid"
+        style.display !== "inline" ||
+        style.position !== "static" ||
+        style.float !== "none" ||
+        (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap")
       ) {
         return false;
       }
     }
-
-    // A range clone preserves nested inline formatting exactly. Anything that
-    // establishes its own box/layout context is intentionally deferred until a
-    // future fragmenter can model it accurately.
-    if (!isValidatedEndnote) {
-      for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
-        const style = window.getComputedStyle(descendant);
-        if (
-          style.display !== "inline" ||
-          style.position !== "static" ||
-          style.float !== "none" ||
-          (style.whiteSpace !== "normal" && style.whiteSpace !== "pre-wrap")
-        ) {
-          return false;
-        }
-      }
-    }
-
     return true;
   }
 
@@ -2349,14 +2450,16 @@ export class PaginationEngine {
     const finishPage = () => {
       const hasCurrentContinuation =
         (currentContinuation?.remainingElements.length ?? 0) > 0;
-      if (currentContent.length === 0 && !hasCurrentContinuation) return;
+      if (currentContent.length === 0 && currentFootnoteIds.length === 0
+          && !hasCurrentContinuation) return;
 
       let pageContinuation = currentContinuation;
+      const pageBands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
+      const maxFootnoteHeight = pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
       if (currentContinuation && currentContinuation.remainingElements.length > 0) {
-        const pageBands = this.getPageBands(dims, sectionIndex, pageInSection, pageNumber);
         const partition = this.splitContinuationForPage(
           currentContinuation,
-          pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
+          maxFootnoteHeight,
           dims.contentWidth,
         );
         pageContinuation = partition.current;
@@ -2371,6 +2474,60 @@ export class PaginationEngine {
           pageContinuation,
           dims.contentWidth,
         );
+      }
+
+      // A final body page can seed the next page with several whole notes. Partition that queue
+      // before materializing a note-only page: addPageFootnotes deliberately clips its band, so
+      // placing the entire queue in one page would keep the DOM nodes while making later notes
+      // invisible (and therefore absent from a geometry-clipped PageMap).
+      if (currentContent.length === 0 && currentFootnoteIds.length > 0
+          && currentPartialFootnotes.length === 0) {
+        const fittingIds: string[] = [];
+        for (let index = 0; index < currentFootnoteIds.length; index++) {
+          const footnoteId = currentFootnoteIds[index];
+          const candidateIds = [...fittingIds, footnoteId];
+          const candidateHeight = this.measureFootnotesHeight(
+            candidateIds, dims.contentWidth, pageContinuation);
+          const guardedCandidateHeight = candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT;
+          if (guardedCandidateHeight <= maxFootnoteHeight) {
+            fittingIds.push(footnoteId);
+            currentFootnoteHeight = guardedCandidateHeight;
+            continue;
+          }
+
+          const hasPageContinuation =
+            (pageContinuation?.remainingElements.length ?? 0) > 0;
+          if (fittingIds.length === 0 && !hasPageContinuation) {
+            // One note alone is taller than the note band. Split at the same safe paragraph
+            // boundaries used during body flow; if it is indivisible, preserve the established
+            // visible clipped fallback while still advancing the queue.
+            const source = this.footnoteRegistry.get(footnoteId);
+            const split = source
+              ? this.splitFootnoteToFit(
+                source,
+                maxFootnoteHeight - FOOTNOTE_MEASUREMENT_GUARD_PT,
+                dims.contentWidth,
+              )
+              : null;
+            fittingIds.push(footnoteId);
+            if (source && split && split.fits.length > 0 && split.overflow.length > 0) {
+              currentPartialFootnotes.push({ footnoteId, fittingElements: split.fits });
+              nextPageContinuation = {
+                footnoteId,
+                sourceAnchorId: source.dataset.sourceAnchorId,
+                remainingElements: split.overflow,
+              };
+              currentFootnoteHeight = maxFootnoteHeight;
+            } else {
+              currentFootnoteHeight = guardedCandidateHeight;
+            }
+            deferredFootnoteIds.push(...currentFootnoteIds.slice(index + 1));
+          } else {
+            deferredFootnoteIds.push(...currentFootnoteIds.slice(index));
+          }
+          break;
+        }
+        currentFootnoteIds = fittingIds;
       }
 
       const page = this.createPage(
@@ -2747,7 +2904,11 @@ export class PaginationEngine {
 
     // A split created while finishing the final body page still needs a page substrate.
     // Drain all remaining note paragraphs into footnote-only continuation pages.
-    while (currentContinuation && currentContinuation.remainingElements.length > 0) {
+    while (
+      currentFootnoteIds.length > 0
+      || deferredFootnoteIds.length > 0
+      || (currentContinuation?.remainingElements.length ?? 0) > 0
+    ) {
       finishPage();
     }
 

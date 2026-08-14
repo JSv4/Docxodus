@@ -114,6 +114,7 @@ public class PageMapTests
         var citation = session.GetPageCitation(anchors[0], request);
         Assert.Equal(PageMapAvailability.Available, citation.Availability);
         Assert.Equal(new[] { 1, 2 }, citation.Fragments.Select(fragment => fragment.PageNumber));
+        Assert.Equal(new[] { 1, 2 }, citation.Pages.Select(page => page.PageNumber));
 
         var match = Assert.Single(session.Grep("First", citationRequest: request));
         Assert.Equal(anchors[0], match.Citation?.AnchorId);
@@ -312,6 +313,14 @@ public class PageMapTests
             valid.Replace(", \"inTableCell\":false", string.Empty, StringComparison.Ordinal)));
         Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
             valid.Replace("\"inTableCell\":false", "\"inTableCell\":\"false\"", StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVerzion\":1",
+                StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"width\":612", "\"width\":612,\"widht\":612",
+                StringComparison.Ordinal)));
+        Assert.Throws<FormatException>(() => DocxSessionJson.ParsePageMap(
+            valid.Replace("\"x\":0", "\"x\":0,\"left\":0", StringComparison.Ordinal)));
 
         using var malformed = JsonDocument.Parse("{\"citation\":\"current page\"}");
         Assert.Throws<FormatException>(() =>
@@ -320,6 +329,10 @@ public class PageMapTests
             "{\"citation\":{\"documentVersion\":0}}");
         Assert.Throws<FormatException>(() =>
             DocxSessionJson.ParsePageCitationRequest(missingCitationField.RootElement));
+        using var extraCitationField = JsonDocument.Parse(
+            "{\"citation\":{\"documentVersion\":0,\"rendererFingerprint\":\"renderer\",\"page\":1}}");
+        Assert.Throws<FormatException>(() =>
+            DocxSessionJson.ParsePageCitationRequest(extraCitationField.RootElement));
     }
 
     [Fact]

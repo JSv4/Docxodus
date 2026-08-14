@@ -37,7 +37,11 @@ const STYLES = xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:styles>`);
 
 /** A two-paragraph native comment whose range lives in a table cell. */
-export function generateTableCommentDocx(): Uint8Array {
+export function generateTableCommentDocx(collapsed = false): Uint8Array {
+  const commentedBody = collapsed
+    ? `<w:commentRangeStart w:id="0"/><w:commentRangeEnd w:id="0"/>`
+    : `<w:commentRangeStart w:id="0"/><w:r><w:t>Cell comment target</w:t></w:r>
+      <w:commentRangeEnd w:id="0"/>`;
   return storedZip([
     {
       name: '[Content_Types].xml',
@@ -74,8 +78,7 @@ export function generateTableCommentDocx(): Uint8Array {
 <w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>
   <w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/></w:tblPr><w:tr><w:tc>
     <w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr>
-    <w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Cell comment target</w:t></w:r>
-      <w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
+    <w:p>${commentedBody}<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>
         <w:commentReference w:id="0"/></w:r></w:p>
   </w:tc></w:tr></w:tbl>
   <w:p><w:r><w:t>Following body paragraph.</w:t></w:r></w:p>

@@ -149,6 +149,11 @@ internal static class UiResources
     border-radius: 4px; background: #fff; cursor: pointer; }
   #dxo-refresh:hover { background: #f0f0f0; }
   #dxo-content { padding: 16px 20px; overflow: auto; }
+  .dxo-citation-page { position: relative; overflow: hidden; margin: 0 auto 20px;
+    background: white; box-shadow: 0 2px 12px rgba(0,0,0,.28); }
+  .dxo-page-label { position: absolute; top: 4pt; right: 6pt; color: #777;
+    font: 9pt/1 system-ui, sans-serif; }
+  .dxo-citation-fragment { position: absolute; overflow: visible; box-sizing: border-box; }
   .dxo-cited-fragment { outline: 3px solid #f4b400 !important;
     outline-offset: 2px; background-color: rgba(255, 235, 59, .18) !important; }
 </style>
@@ -185,6 +190,7 @@ internal static class UiResources
     for (var k = 0; k < nodes.length; k++)
       contentEl.appendChild(document.importNode(nodes[k], true));
     state.rendered = true;
+    if (state.pageNavigation === "available_registered_map") materializeCitationPage();
     var exactPage = navigateCitation();
     var citedPage = state.citation && state.citation.fragments && state.citation.fragments.length
       ? " · cited page " + state.citation.fragments[0].pageNumber : "";
@@ -199,6 +205,52 @@ internal static class UiResources
     for (var i = 0; i < nodes.length; i++)
       if (nodes[i].getAttribute(name) === value) return nodes[i];
     return null;
+  }
+
+  // The authoritative browser layout happened before registration. Reuse its page dimensions and
+  // fragment geometry to build the cited physical page; do not estimate or rerun a second layout
+  // algorithm inside this compact widget. The converter's paginated staging supplies the source
+  // subtree to place at that exact location.
+  function materializeCitationPage() {
+    var citation = state.citation;
+    if (!citation || citation.availability !== "available" || !citation.fragments
+        || !citation.fragments.length || !citation.pages || !citation.pages.length) return false;
+    var fragment = citation.fragments[0], pageInfo = null;
+    for (var i = 0; i < citation.pages.length; i++)
+      if (citation.pages[i].pageNumber === fragment.pageNumber) { pageInfo = citation.pages[i]; break; }
+    if (!pageInfo || !fragment.geometry) return false;
+
+    var source = byAttribute("data-source-anchor-id", citation.anchorId);
+    var page = document.createElement("div");
+    page.className = "dxo-citation-page";
+    page.setAttribute("data-page-number", String(fragment.pageNumber));
+    page.style.width = pageInfo.width + "pt";
+    page.style.height = pageInfo.height + "pt";
+
+    var label = document.createElement("div");
+    label.className = "dxo-page-label";
+    label.textContent = "Page " + fragment.pageNumber;
+    page.appendChild(label);
+
+    var viewport = document.createElement("div"), g = fragment.geometry;
+    viewport.className = "dxo-citation-fragment";
+    viewport.setAttribute("data-page-fragment-id", fragment.fragmentId);
+    viewport.setAttribute("data-source-anchor-id", citation.anchorId);
+    viewport.style.left = g.x + "pt";
+    viewport.style.top = g.y + "pt";
+    viewport.style.width = g.width + "pt";
+    viewport.style.height = g.height + "pt";
+    if (source) {
+      var clone = source.cloneNode(true);
+      if (clone.style) clone.style.margin = "0";
+      viewport.appendChild(clone);
+    } else {
+      viewport.textContent = citation.anchorId;
+    }
+    page.appendChild(viewport);
+    contentEl.innerHTML = "";
+    contentEl.appendChild(page);
+    return true;
   }
 
   function navigateCitation() {

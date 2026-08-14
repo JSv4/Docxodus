@@ -127,6 +127,8 @@ public sealed record PageCitation
     public PageCitationUnavailableReason? UnavailableReason { get; init; }
     required public long DocumentVersion { get; init; }
     required public string RendererFingerprint { get; init; }
+    /// <summary>Physical descriptors for the pages referenced by <see cref="Fragments"/>.</summary>
+    public IReadOnlyList<PageMapPage> Pages { get; init; } = Array.Empty<PageMapPage>();
     public IReadOnlyList<PageMapFragment> Fragments { get; init; } = Array.Empty<PageMapFragment>();
 }
 

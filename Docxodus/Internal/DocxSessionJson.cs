@@ -30,6 +30,8 @@ internal static class DocxSessionJson
     {
         if (root.ValueKind != JsonValueKind.Object)
             throw new FormatException("PageMap must be a JSON object");
+        EnsureOnlyProperties(root, "PageMap", "schemaVersion", "mode", "availability",
+            "documentVersion", "rendererFingerprint", "pages", "fragments");
 
         var pages = new List<PageMapPage>();
         var pagesElement = RequiredProperty(root, "pages", JsonValueKind.Array, "PageMap");
@@ -37,6 +39,8 @@ internal static class DocxSessionJson
         {
             if (page.ValueKind != JsonValueKind.Object)
                 throw new FormatException("PageMap pages must be objects");
+            EnsureOnlyProperties(page, "PageMap page", "pageNumber", "pageInSection", "width",
+                "height", "sectionIndex", "pageName");
 
             int? sectionIndex = null;
             if (page.TryGetProperty("sectionIndex", out var sectionIndexElement))
@@ -64,7 +68,10 @@ internal static class DocxSessionJson
         {
             if (fragment.ValueKind != JsonValueKind.Object)
                 throw new FormatException("PageMap fragments must be objects");
+            EnsureOnlyProperties(fragment, "PageMap fragment", "fragmentId", "anchorId",
+                "fragmentIndex", "pageNumber", "geometry", "story", "inTableCell");
             var geometry = RequiredProperty(fragment, "geometry", JsonValueKind.Object, "PageMap fragment");
+            EnsureOnlyProperties(geometry, "PageMap geometry", "x", "y", "width", "height");
             fragments.Add(new PageMapFragment
             {
                 FragmentId = RequiredString(fragment, "fragmentId", "PageMap fragment"),
@@ -99,6 +106,7 @@ internal static class DocxSessionJson
             return null;
         if (value.ValueKind != JsonValueKind.Object)
             throw new FormatException($"{key} must be a JSON object");
+        EnsureOnlyProperties(value, key, "documentVersion", "rendererFingerprint");
         return new PageCitationRequest(
             RequiredInt64(value, "documentVersion", key),
             RequiredString(value, "rendererFingerprint", key));
@@ -110,6 +118,15 @@ internal static class DocxSessionJson
         if (!root.TryGetProperty(name, out var value) || value.ValueKind != kind)
             throw new FormatException($"{owner} requires {name} with JSON type {kind}");
         return value;
+    }
+
+    private static void EnsureOnlyProperties(JsonElement root, string owner, params string[] allowed)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (System.Array.IndexOf(allowed, property.Name) < 0)
+                throw new FormatException($"{owner} contains unknown property {property.Name}");
+        }
     }
 
     private static string RequiredString(JsonElement root, string name, string owner) =>
@@ -830,13 +847,30 @@ internal static class DocxSessionJson
           .Append(",\"rendererFingerprint\":").Append(JsonString(citation.RendererFingerprint));
         if (citation.UnavailableReason is { } reason)
             sb.Append(",\"unavailableReason\":").Append(JsonString(EnumToSnake(reason)));
-        sb.Append(",\"fragments\":[");
+        sb.Append(",\"pages\":[");
+        for (int i = 0; i < citation.Pages.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapPage(sb, citation.Pages[i]);
+        }
+        sb.Append("],\"fragments\":[");
         for (int i = 0; i < citation.Fragments.Count; i++)
         {
             if (i > 0) sb.Append(',');
             AppendPageMapFragment(sb, citation.Fragments[i]);
         }
         sb.Append("]}");
+    }
+
+    private static void AppendPageMapPage(StringBuilder sb, PageMapPage page)
+    {
+        sb.Append("{\"pageNumber\":").Append(page.PageNumber)
+          .Append(",\"pageInSection\":").Append(page.PageInSection)
+          .Append(",\"width\":").Append(Invariant(page.Width))
+          .Append(",\"height\":").Append(Invariant(page.Height));
+        if (page.SectionIndex is { } sectionIndex)
+            sb.Append(",\"sectionIndex\":").Append(sectionIndex);
+        sb.Append(",\"pageName\":").Append(JsonString(page.PageName)).Append('}');
     }
 
     private static void AppendPageMapFragment(StringBuilder sb, PageMapFragment fragment)

@@ -53,6 +53,7 @@ def test_register_and_consume_page_map(tour_plan_bytes: bytes) -> None:
 
         citation = session.get_page_citation(target.id, request)
         assert citation.availability == "available"
+        assert citation.pages[0].width == 612
         assert citation.fragments[0].page_number == 1
 
         structural = session.find_by_kind("tbl", "body", request)

@@ -190,16 +190,30 @@ internal static class Dispatcher
         var session = Session(store, args);
         var anchorId = OptStr(args, "anchorId");
         var citationRequest = DocxSessionJson.ParsePageCitationRequest(args);
-        var html = anchorId is null
-            ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
-            : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false);
         var citationJson = anchorId is not null && citationRequest is not null
             ? DocxSessionOps.GetPageCitation(session.Handle, anchorId, citationRequest)
             : null;
+        var hasPhysicalCitation = false;
+        if (citationJson is not null)
+        {
+            using var citationDoc = JsonDocument.Parse(citationJson);
+            hasPhysicalCitation = citationDoc.RootElement.GetProperty("availability").GetString()
+                == "available";
+        }
+        // A cited preview carries paginated converter staging so the browser widget can project
+        // the exact registered page geometry without inventing layout. Ordinary preview remains
+        // the established lightweight continuous/block render.
+        var html = hasPhysicalCitation
+            ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, true, 1.0)
+            : anchorId is null
+                ? DocxSessionOps.RenderHtml(session.Handle, "docx-", false, false, 1.0)
+                : DocxSessionOps.RenderBlockHtml(session.Handle, anchorId, "docx-", false);
         return $"{{\"sessionId\":{JsonRpcIo.JsonString(session.Id)}"
             + (anchorId is null ? "" : $",\"anchorId\":{JsonRpcIo.JsonString(anchorId)}")
             + (citationJson is null ? "" : $",\"citation\":{citationJson}")
-            + ",\"pageNavigation\":\"unavailable_continuous_preview\""
+            + (hasPhysicalCitation
+                ? ",\"pageNavigation\":\"available_registered_map\""
+                : ",\"pageNavigation\":\"unavailable_continuous_preview\"")
             + $",\"html\":{JsonRpcIo.JsonString(html)}}}";
     }
 

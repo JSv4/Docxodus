@@ -66,7 +66,14 @@ internal static class ToolCatalog
                 "sessionId": { "type": "string" },
                 "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "check_preconditions"], "description": "markdown/text: projection; html: rendered HTML; blocks: metadata; info: version plus page/edit facts; version: monotonic document version; check_preconditions: read-only guard evaluation." },
                 "anchorId": { "type": "string", "description": "Optional scope/target anchor." },
-                "citation": { "type": "object", "description": "Optional exact layout token {documentVersion, rendererFingerprint}; scoped markdown includes explicit pageCitations when supplied." },
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                },
                 "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
@@ -74,14 +81,21 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_preview",
-            "Render a session's document (or a single block) to HTML for the host's inline preview widget. This MCP preview is continuous until #434 supplies paginated HTML, so citations show a page label and highlight the source anchor but cannot navigate a physical page box. The markup travels in the result's _meta for the widget only; call again after edits to refresh it.",
+            "Render a session's document (or a single block) to HTML for the host's inline preview widget. With an exact registered citation, the widget materializes the cited physical page and navigates to its highlighted fragment. The markup travels in the result's _meta for the widget only; call again after edits to refresh it.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "anchorId": { "type": "string", "description": "Optional. Render just this block (any addressable anchor, including hdr*/ftr* scopes) instead of the whole document. Whole-document renders include the converter's stylesheet; single-block renders are bare markup." }
-                ,"citation": { "type": "object", "description": "Optional exact layout token. When valid, the widget navigates/highlights the cited page fragment if the returned HTML contains that pagination substrate." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
               },
               "required": ["sessionId"]
             }
@@ -95,12 +109,74 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "action": { "type": "string", "enum": ["register", "status", "cite"] },
-                "pageMap": { "type": "object", "description": "register: versioned PageMap produced after browser pagination." },
+                "pageMap": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "schemaVersion": { "type": "integer", "const": 1 },
+                    "mode": { "type": "string", "enum": ["paginated", "continuous"] },
+                    "availability": { "type": "string", "enum": ["available", "unavailable"] },
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "pageInSection": { "type": "integer", "minimum": 1 },
+                          "width": { "type": "number", "exclusiveMinimum": 0 },
+                          "height": { "type": "number", "exclusiveMinimum": 0 },
+                          "sectionIndex": { "type": "integer", "minimum": 0 },
+                          "pageName": { "type": "string", "minLength": 1 }
+                        },
+                        "required": ["pageNumber", "pageInSection", "width", "height", "pageName"]
+                      }
+                    },
+                    "fragments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "fragmentId": { "type": "string", "minLength": 1 },
+                          "anchorId": { "type": "string", "minLength": 1 },
+                          "fragmentIndex": { "type": "integer", "minimum": 0 },
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "geometry": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {
+                              "x": { "type": "number", "minimum": 0 },
+                              "y": { "type": "number", "minimum": 0 },
+                              "width": { "type": "number", "exclusiveMinimum": 0 },
+                              "height": { "type": "number", "exclusiveMinimum": 0 }
+                            },
+                            "required": ["x", "y", "width", "height"]
+                          },
+                          "story": { "type": "string", "enum": ["body", "header", "footer", "footnote", "endnote", "comment"] },
+                          "inTableCell": { "type": "boolean" }
+                        },
+                        "required": ["fragmentId", "anchorId", "fragmentIndex", "pageNumber", "geometry", "story", "inTableCell"]
+                      }
+                    }
+                  },
+                  "required": ["schemaVersion", "mode", "availability", "documentVersion", "rendererFingerprint", "pages", "fragments"]
+                },
                 "expectedRendererFingerprint": { "type": "string", "description": "register: optional independently expected fingerprint; mismatch rejects the map." },
                 "anchorId": { "type": "string", "description": "cite: canonical kind:scope:unid anchor." },
-                "citation": { "type": "object", "description": "status/cite: exact {documentVersion, rendererFingerprint} layout token." }
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
               },
-              "required": ["sessionId", "action"]
+              "required": ["sessionId", "action"],
+              "oneOf": [
+                { "properties": { "action": { "const": "register" } }, "required": ["pageMap"] },
+                { "properties": { "action": { "const": "status" } } },
+                { "properties": { "action": { "const": "cite" } }, "required": ["anchorId", "citation"] }
+              ]
             }
             """),
         new ToolDefinition(
@@ -117,7 +193,14 @@ internal static class ToolCatalog
                 "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
                 "maxResults": { "type": "integer", "description": "Cap the number of matches returned. Default unlimited." }
-                ,"citation": { "type": "object", "description": "Optional exact {documentVersion, rendererFingerprint}; every search mode attaches an explicit citation result to each match." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
               },
               "required": ["sessionId", "mode", "query"]
             }
