@@ -917,6 +917,36 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Wire shape for <see cref="BatchResult"/>. <c>rolledBack</c> is the field a caller must read
+    /// before trusting anything else: it is the difference between "your steps failed" and "your
+    /// steps failed AND the ones that had already succeeded were reversed".
+    /// </summary>
+    public static string SerializeBatchResult(BatchResult r)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("{\"success\":").Append(r.Success ? "true" : "false");
+        sb.Append(",\"applied\":").Append(r.Applied);
+        sb.Append(",\"rolledBack\":").Append(r.RolledBack ? "true" : "false");
+        sb.Append(",\"failedStep\":").Append(r.FailedStep);
+        if (r.Error is not null)
+        {
+            sb.Append(",\"error\":{")
+              .Append("\"code\":\"").Append(EnumToSnake(r.Error.Code)).Append('"')
+              .Append(",\"message\":").Append(JsonString(r.Error.Message));
+            if (r.Error.AnchorId is not null)
+                sb.Append(",\"anchorId\":").Append(JsonString(r.Error.AnchorId));
+            sb.Append('}');
+        }
+
+        sb.Append(",\"created\":"); AppendAnchorArray(sb, r.Created);
+        sb.Append(",\"removed\":"); AppendAnchorArray(sb, r.Removed);
+        sb.Append(",\"modified\":"); AppendAnchorArray(sb, r.Modified);
+        sb.Append(",\"steps\":").Append(SerializeEditResults(r.Steps));
+        sb.Append('}');
+        return sb.ToString();
+    }
+
     public static void AppendAnchorArray(StringBuilder sb, IReadOnlyList<Anchor> anchors)
     {
         sb.Append('[');

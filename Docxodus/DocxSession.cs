@@ -1280,6 +1280,70 @@ public sealed class EditResult
 }
 
 /// <summary>
+/// How a <see cref="DocxSession.Batch"/> treats a step that fails.
+/// </summary>
+public sealed record BatchOptions
+{
+    /// <summary>
+    /// Reverse every step when any step fails, leaving the document exactly as the batch found
+    /// it (default). Set false for best-effort application, where clean failures are recorded
+    /// and the sequence continues.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort is NOT "no rollback ever". A step that failed with
+    /// <see cref="EditErrorCode.InternalError"/> threw partway and may have committed part of
+    /// its work, and a step rejected by <see cref="EditErrorCode.ValidationFailed"/> mutated
+    /// before the validator saw it; neither leaves a state worth keeping, so the batch reverses
+    /// regardless of this flag. What <c>Atomic = false</c> buys is tolerance of the failures
+    /// that provably did not touch the document — an anchor that no longer exists, a wrong-kind
+    /// target, malformed markdown.
+    /// </remarks>
+    public bool Atomic { get; init; } = true;
+
+    /// <summary>
+    /// Stop at the first failing step rather than attempting the rest (default). Ignored when
+    /// <see cref="Atomic"/> is true, where a failure ends the batch by definition.
+    /// </summary>
+    public bool StopOnError { get; init; } = true;
+}
+
+/// <summary>
+/// Aggregate outcome of <see cref="DocxSession.Batch"/>: one entry per step attempted, plus the
+/// union of what the surviving steps touched.
+/// </summary>
+/// <remarks>
+/// <see cref="Created"/>/<see cref="Removed"/>/<see cref="Modified"/> are the union across
+/// applied steps, de-duplicated by anchor id and empty when the batch rolled back. They are a
+/// summary for repaint, not a replay log: an anchor a step created and a later step deleted
+/// appears in both lists, because both things happened.
+/// </remarks>
+public sealed record BatchResult
+{
+    /// <summary>True when every attempted step succeeded and nothing was reversed.</summary>
+    public bool Success { get; init; }
+
+    /// <summary>One result per step attempted, in order. Shorter than the input when the batch
+    /// stopped early.</summary>
+    public IReadOnlyList<EditResult> Steps { get; init; } = Array.Empty<EditResult>();
+
+    /// <summary>Steps that succeeded and are still applied. Zero when the batch rolled back.</summary>
+    public int Applied { get; init; }
+
+    /// <summary>True when the document was restored to its pre-batch state.</summary>
+    public bool RolledBack { get; init; }
+
+    /// <summary>The first failing step's error, or null on success.</summary>
+    public EditError? Error { get; init; }
+
+    /// <summary>Zero-based index of the first failing step, or -1 on success.</summary>
+    public int FailedStep { get; init; } = -1;
+
+    public IReadOnlyList<Anchor> Created { get; init; } = Array.Empty<Anchor>();
+    public IReadOnlyList<Anchor> Removed { get; init; } = Array.Empty<Anchor>();
+    public IReadOnlyList<Anchor> Modified { get; init; } = Array.Empty<Anchor>();
+}
+
+/// <summary>
 /// Partial-update payload for <see cref="DocxSession.UpdateAnnotation"/>.
 /// Null fields leave the existing value unchanged. <see cref="MetadataPatch"/>
 /// is a per-key merge: a non-null value sets the key, an explicit null removes
@@ -1383,6 +1447,14 @@ public sealed class DocxSession : IDisposable
     private int _revisionCounter = 1000;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
+
+    // Batch state (see Batch). Depth, not a bool, so a Batch nested inside a step of another
+    // Batch joins the outer one rather than opening a second snapshot. _batchDamaged records
+    // that some step mutated before failing, which is what forces a rollback even in the
+    // non-atomic mode — a half-applied step is never a safe thing to keep.
+    private int _batchDepth;
+    private bool _batchDamaged;
+    private BatchOptions? _batchOptions;
 
     // Mutable session configuration (issue #304): seeded from _settings at construction,
     // switchable mid-session via SetTrackedChanges/SetRevisionAuthor. Session config, not
@@ -2255,7 +2327,7 @@ public sealed class DocxSession : IDisposable
         // detach during Apply and can no longer be resolved to a part afterwards.
         var modified = RevisionGroupAnchors(group, partUri);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var removedElements = Internal.RevisionOps.Apply(group, accept);
@@ -3325,7 +3397,7 @@ public sealed class DocxSession : IDisposable
         if (element is null)
             return new[] { EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId) };
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
@@ -3455,7 +3527,7 @@ public sealed class DocxSession : IDisposable
             ContextAfter = string.Empty,
         };
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (_trackedChanges == TrackedChangeMode.RenderInline)
@@ -4790,7 +4862,7 @@ public sealed class DocxSession : IDisposable
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (_trackedChanges == TrackedChangeMode.RenderInline)
@@ -4842,7 +4914,7 @@ public sealed class DocxSession : IDisposable
                 $"cannot delete a Word-reserved {target.Anchor.Kind} of type='{(string?)element.Attribute(W.type)}'",
                 anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             // Tracked-change mode wraps removed runs in w:del — only meaningful for
@@ -5059,7 +5131,7 @@ public sealed class DocxSession : IDisposable
                 anchorForPatchScope.Anchor.Id);
         }
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var index = AnchorIndex();
@@ -5281,7 +5353,7 @@ public sealed class DocxSession : IDisposable
         if (BlockMoveSafetyError(BuildBlockMoveContext(parent), source, target, pos) is { } safetyError)
             return EditResult.Fail(EditErrorCode.InvalidPosition, safetyError, sourceAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (_trackedChanges != TrackedChangeMode.RenderInline)
@@ -5792,7 +5864,7 @@ public sealed class DocxSession : IDisposable
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var created = new List<Anchor>();
@@ -5859,7 +5931,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var pPr = element.Element(W.pPr);
@@ -5986,7 +6058,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
                 "MergeParagraphs requires second anchor to be the immediate next sibling of first");
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             // Insert a single-space separator if both sides end/start with non-whitespace.
@@ -6107,7 +6179,7 @@ public sealed class DocxSession : IDisposable
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
         int baselineErrors = _settings.ValidateRawOps ? CountRealValidationErrors() : 0;
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             UnidHelper.AssignToSelfAndDescendants(parsedXml);
@@ -6116,8 +6188,10 @@ public sealed class DocxSession : IDisposable
 
             if (_settings.ValidateRawOps && CountRealValidationErrors() > baselineErrors)
             {
-                var preOp = _history.PopForUndo();
-                if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+                // A MUTATING clean failure: the element was already swapped in before the
+                // validator ran, so this path has to reverse its own damage — the same
+                // obligation a throw has, hence the same helper.
+                RollbackFailedOp();
                 return EditResult.Fail(EditErrorCode.ValidationFailed, "OpenXmlValidator found new errors", anchorId);
             }
 
@@ -6160,7 +6234,7 @@ public sealed class DocxSession : IDisposable
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
         int baselineErrors = _settings.ValidateRawOps ? CountRealValidationErrors() : 0;
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             UnidHelper.AssignToSelfAndDescendants(parsedXml);
@@ -6168,8 +6242,10 @@ public sealed class DocxSession : IDisposable
 
             if (_settings.ValidateRawOps && CountRealValidationErrors() > baselineErrors)
             {
-                var preOp = _history.PopForUndo();
-                if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+                // A MUTATING clean failure: the element was already swapped in before the
+                // validator ran, so this path has to reverse its own damage — the same
+                // obligation a throw has, hence the same helper.
+                RollbackFailedOp();
                 return EditResult.Fail(EditErrorCode.ValidationFailed, "OpenXmlValidator found new errors", anchorId);
             }
 
@@ -6277,7 +6353,7 @@ public sealed class DocxSession : IDisposable
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, cellAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             foreach (var p in cell!.Elements(W.p).ToList()) p.Remove();
@@ -6380,7 +6456,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"span [{actualSpan.Start},{actualSpan.Start + actualSpan.Length}) out of [0,{totalText.Length})", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             // Inline code references a "Code" character style by id; ensure it actually
@@ -6466,7 +6542,7 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var pPr = element.Element(W.pPr);
@@ -6602,7 +6678,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
                 "lineSpacingRule requires lineSpacing (w:lineRule qualifies w:line)", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var pPr = element.Element(W.pPr);
@@ -6739,7 +6815,7 @@ public sealed class DocxSession : IDisposable
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var edge = rule ?? new ParagraphBorderEdge { Style = "single", Size = 12, Color = "auto" };
@@ -6863,7 +6939,7 @@ public sealed class DocxSession : IDisposable
         if (alreadySet)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (kind == HeaderFooterKind.First) InsertSectPrTitlePg(sectPr);
@@ -6912,7 +6988,7 @@ public sealed class DocxSession : IDisposable
         if (paras.Count == 0) paras.Add(new XElement(W.p));
         ApplyHeaderFooterStyle(paras, isHeader);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
@@ -7028,7 +7104,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorWrongKind,
                 "InsertPageNumberField requires a paragraph anchor", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             foreach (var r in BuildPageNumberFieldRuns(field, format))
@@ -7211,7 +7287,7 @@ public sealed class DocxSession : IDisposable
         if (!mutate(sectPr is null ? new XElement(W.sectPr) : new XElement(sectPr)))
             return succeeded;
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (sectPr is null)
@@ -7318,7 +7394,7 @@ public sealed class DocxSession : IDisposable
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var part = EnsureNotePart(main, isFootnote);
@@ -7746,7 +7822,7 @@ public sealed class DocxSession : IDisposable
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var part = Internal.CommentOps.EnsureCommentsPart(main);
@@ -7871,7 +7947,7 @@ public sealed class DocxSession : IDisposable
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
@@ -7969,7 +8045,7 @@ public sealed class DocxSession : IDisposable
         if (main?.WordprocessingCommentsPart is null)
             return EditResult.Fail(EditErrorCode.InternalError, "no comments part", commentAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var rootParaId = Internal.CommentOps.EnsureThreadingMetadata(main, comment, resolved: resolved);
@@ -8065,7 +8141,7 @@ public sealed class DocxSession : IDisposable
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             Internal.StyleFactory.EnsureCommentStyles(_doc!);
@@ -8165,7 +8241,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.MalformedMarkdown,
                 $"ColumnWidths must have one positive width per column ({cols}); got {colWidths.Count}", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             const int contentTwips = 9576;           // ~6.65", a US-Letter content width
@@ -8497,7 +8573,7 @@ public sealed class DocxSession : IDisposable
             return err;
 
         var before = CaptureTableMetadata(tbl!);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             // A vertical merge crosses the insertion boundary exactly when the row on the far
@@ -8559,7 +8635,7 @@ public sealed class DocxSession : IDisposable
         int boundary = pos == Position.Before ? anchorCell.Start : anchorCell.End;
 
         var before = CaptureTableMetadata(tbl!);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             EnsureGridColumnsForMutation(tbl!);
@@ -8641,7 +8717,7 @@ public sealed class DocxSession : IDisposable
             return err;
 
         var before = CaptureTableMetadata(tbl!);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (tbl!.Elements(W.tr).Count() <= 1) tbl.Remove();
@@ -8684,7 +8760,7 @@ public sealed class DocxSession : IDisposable
         int doomed = RowGrid(tr!).First(g => g.Tc == tc).Start;
 
         var before = CaptureTableMetadata(tbl!);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             EnsureGridColumnsForMutation(tbl!);
@@ -8842,7 +8918,7 @@ public sealed class DocxSession : IDisposable
                 cellAnchorId);
 
         var before = CaptureTableMetadata(tbl);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             // Content first: everything the merge absorbs MOVES into the surviving cell. Detach
@@ -8922,7 +8998,7 @@ public sealed class DocxSession : IDisposable
         }
 
         var before = CaptureTableMetadata(tbl);
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var widths = GridColWidths(tbl);
@@ -9063,7 +9139,7 @@ public sealed class DocxSession : IDisposable
                 $"widths must list one positive twip value per column ({colCount}); got {widthsTwips?.Count ?? 0}",
                 cellAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (grid is null)
@@ -9130,7 +9206,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InvalidTableStyling,
                 "border size (eighths of a point) must be >= 0", cellAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var tblPr = GetOrCreateTblPr(tbl!);
@@ -9200,7 +9276,7 @@ public sealed class DocxSession : IDisposable
             else fill = "auto";
         }
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var cells = scope == TableShadingScope.Row ? tr!.Elements(W.tc).ToList() : new List<XElement> { tc! };
@@ -9251,7 +9327,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InvalidTableStyling,
                 "row height in twips must be >= 0", cellAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var trPr = tr!.Element(W.trPr);
@@ -9356,7 +9432,7 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InvalidListLevel,
                 $"resulting list level {next} out of [0,8]", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
         // define just level 0, so synthesize any missing levels before bumping ilvl.
         if (effectiveNumId.HasValue)
@@ -9438,7 +9514,7 @@ public sealed class DocxSession : IDisposable
         // whose Heading styles carry legal-outline numbering.
         bool needsStyleOverride = ResolveStyleNumbering(element).numId is not null;
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         directNumPr?.Remove();
         if (needsStyleOverride)
         {
@@ -9475,7 +9551,7 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var pPr = element.Element(W.pPr);
@@ -9568,7 +9644,7 @@ public sealed class DocxSession : IDisposable
         var memberUnids = members.Select(m => (string?)m.Attribute(PtOpenXml.Unid)).ToList();
         var partUri = firstTarget.PartUri;
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             if (kind == ListFormat.None)
@@ -9673,13 +9749,13 @@ public sealed class DocxSession : IDisposable
         if (value is null && Internal.NumberingFactory.GetStartOverride(_doc!, numId.Value, ilvl) is null)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var newNumId = Internal.NumberingFactory.CloneNumWithStartOverride(_doc!, numId.Value, ilvl, value);
             if (newNumId is null)
             {
-                _ = _history.PopForUndo();
+                DiscardPreOpSnapshot();
                 return EditResult.Fail(EditErrorCode.AnchorWrongKind,
                     $"numbering instance {numId} is not defined in the numbering part", anchorId);
             }
@@ -9797,12 +9873,12 @@ public sealed class DocxSession : IDisposable
         if (anchor is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var result = Internal.AnnotationOps.Add(_doc!, anchor, span, annotation);
             if (result.Success) InvalidateProjectionCache();
-            else _ = _history.PopForUndo();
+            else DiscardPreOpSnapshot();
             return result;
         }
         catch (Exception ex)
@@ -9817,12 +9893,12 @@ public sealed class DocxSession : IDisposable
     public EditResult RemoveAnnotation(string annotationId)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var result = Internal.AnnotationOps.Remove(_doc!, annotationId, CanonicalizeAnchorByUnid);
             if (result.Success) InvalidateProjectionCache();
-            else _ = _history.PopForUndo();
+            else DiscardPreOpSnapshot();
             return result;
         }
         catch (Exception ex)
@@ -9840,11 +9916,11 @@ public sealed class DocxSession : IDisposable
         if (update is null)
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "update is null");
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var result = Internal.AnnotationOps.Update(_doc!, annotationId, update);
-            if (!result.Success) _ = _history.PopForUndo();
+            if (!result.Success) DiscardPreOpSnapshot();
             return result;
         }
         catch (Exception ex)
@@ -9864,13 +9940,13 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorNotFound,
                 $"anchor not found: {newAnchorId}", newAnchorId);
 
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
         try
         {
             var result = Internal.AnnotationOps.Move(
                 _doc!, annotationId, anchor, newSpan, CanonicalizeAnchorByUnid);
             if (result.Success) InvalidateProjectionCache();
-            else _ = _history.PopForUndo();
+            else DiscardPreOpSnapshot();
             return result;
         }
         catch (Exception ex)
@@ -9917,7 +9993,7 @@ public sealed class DocxSession : IDisposable
     public CompactResult CompactRuns(ProjectionScopes scopes = ProjectionScopes.All)
     {
         ThrowIfDisposed();
-        _history.RecordPreOp(TakeSnapshot());
+        RecordPreOpSnapshot();
 
         int removed = 0;
         foreach (var part in EnumerateProjectedPartsForScopes(scopes))
@@ -9936,7 +10012,7 @@ public sealed class DocxSession : IDisposable
             part.PutXDocument();
         }
         if (removed > 0) InvalidateProjectionCache();
-        else _ = _history.PopForUndo();
+        else DiscardPreOpSnapshot();
         return new CompactResult { RunsRemoved = removed };
     }
 
@@ -9968,7 +10044,289 @@ public sealed class DocxSession : IDisposable
             yield return main.WordprocessingCommentsPart;
     }
 
+    // ─── Batch ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Open a batch: subsequent mutations share ONE pre-op snapshot and collapse into ONE undo
+    /// step, until the matching <see cref="EndBatch"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why batching exists.</b> Every mutation records a pre-op snapshot, and a snapshot
+    /// deep-clones every projected part — so its cost scales with the DOCUMENT, not with the edit.
+    /// A caller applying forty edits to a long filing therefore paid forty whole-document clones
+    /// and consumed forty entries of a twenty-deep ring, leaving the sequence it had just applied
+    /// only partially reversible. Both are properties of the loop, not of the work: N edits that
+    /// form one intent deserve one snapshot and one undo step. Agent callers hit this hardest,
+    /// because a plan is naturally a list of edits.</para>
+    ///
+    /// <para><b>Pair it, or lose the rollback.</b> An open batch holds the only snapshot that can
+    /// reverse its steps. Prefer <see cref="Batch"/>, which pairs them for you; reach for the
+    /// explicit form only when the steps cannot be expressed as <see cref="EditResult"/>-returning
+    /// delegates — a JSON dispatcher running its own switch, for instance.</para>
+    ///
+    /// <para>Nesting joins the outer batch rather than opening a second snapshot, so the whole tree
+    /// remains one undo step and the OUTERMOST <see cref="EndBatch"/> owns the outcome.</para>
+    /// </remarks>
+    /// <param name="options">Failure policy, read only when this call opens the outermost batch.</param>
+    /// <returns>False when the session is disposed; true once a batch is open.</returns>
+    public bool BeginBatch(BatchOptions? options = null)
+    {
+        if (_disposed) return false;
+        if (_batchDepth == 0)
+        {
+            _batchOptions = options ?? new BatchOptions();
+            _batchDamaged = false;
+            RecordPreOpSnapshot();
+        }
+
+        _batchDepth++;
+        return true;
+    }
+
+    /// <summary>
+    /// Close the batch opened by <see cref="BeginBatch"/>, keeping its edits or reversing them.
+    /// </summary>
+    /// <param name="commit">True to keep the batch's edits as one undo step; false to reverse them
+    /// and leave the document as the batch found it.</param>
+    /// <remarks>
+    /// <para>A commit is not unconditional. If any step reported that it mutated before failing —
+    /// it threw partway, or the validator rejected what it had already written — the batch reverses
+    /// regardless, because no per-step snapshot survives to unpick that step alone. This is what
+    /// stops batching from quietly reintroducing the half-applied mutations that per-op rollback
+    /// exists to prevent.</para>
+    ///
+    /// <para>On a nested call this only decrements: the outermost <see cref="EndBatch"/> performs
+    /// the commit or the rollback for the whole tree.</para>
+    /// </remarks>
+    public BatchResult EndBatch(bool commit = true)
+    {
+        if (_disposed)
+            return new BatchResult { Error = new EditError(EditErrorCode.SessionDisposed, "session disposed") };
+        if (_batchDepth == 0)
+        {
+            return new BatchResult
+            {
+                Error = new EditError(EditErrorCode.InternalError, "EndBatch called with no batch open"),
+            };
+        }
+
+        _batchDepth--;
+
+        // A nested close hands the decision up: damage stays recorded on the session, so the
+        // outermost EndBatch still sees it even though this level reported "done".
+        if (_batchDepth > 0) return new BatchResult { Success = commit };
+
+        bool damaged = _batchDamaged;
+        _batchDamaged = false;
+        var opts = _batchOptions ?? new BatchOptions();
+        _batchOptions = null;
+
+        if (!commit || damaged)
+        {
+            RollbackFailedOp();
+            InvalidateProjectionCache();
+            return new BatchResult
+            {
+                Success = false,
+                RolledBack = true,
+                Error = damaged
+                    ? new EditError(
+                        EditErrorCode.InternalError,
+                        "a batch step mutated before failing; the batch was reversed")
+                    : new EditError(EditErrorCode.InternalError, "batch reversed by the caller"),
+            };
+        }
+
+        InvalidateProjectionCache();
+        _ = opts;
+        return new BatchResult { Success = true };
+    }
+
+    /// <summary>
+    /// Apply a sequence of mutations as ONE logical operation: one pre-op snapshot, one undo step,
+    /// and — by default — all-or-nothing application.
+    /// </summary>
+    /// <param name="steps">The mutations, invoked in order. Write them as closures over this
+    /// session (<c>() =&gt; session.ReplaceText(anchor, "…")</c>). A step may open its own
+    /// <see cref="Batch"/>, which joins this one.</param>
+    /// <param name="options">Failure policy. Defaults to atomic, stop-on-error.</param>
+    /// <remarks>
+    /// <para><b>Undo grain.</b> A batch is one <see cref="Undo"/>. That is the point, and also the
+    /// trade: individual steps inside a completed batch are not separately reversible. Group what
+    /// the user would think of as a single action.</para>
+    ///
+    /// <para><b>Failure.</b> Under the default <see cref="BatchOptions.Atomic"/> the first failure
+    /// reverses everything, so a failed batch never leaves a partial document. Under best-effort,
+    /// clean failures are recorded and skipped — but a step that threw or was rejected by the
+    /// validator still reverses the whole batch. See <see cref="BatchOptions.Atomic"/>.</para>
+    ///
+    /// <para><b>Repaint.</b> The editor cannot observe session mutations, so a host driving this
+    /// directly still calls its own refresh when the batch returns — once for the batch, not once
+    /// per step, which is the second reason batching is worth having.</para>
+    /// </remarks>
+    public BatchResult Batch(IEnumerable<Func<EditResult>> steps, BatchOptions? options = null)
+    {
+        if (_disposed)
+            return new BatchResult { Error = new EditError(EditErrorCode.SessionDisposed, "session disposed") };
+        ArgumentNullException.ThrowIfNull(steps);
+        var opts = options ?? new BatchOptions();
+        var stepList = steps.ToList();
+        if (stepList.Count == 0) return new BatchResult { Success = true };
+
+        // Hold the mutation gate for the whole sequence, not per step. Individual ops take it
+        // themselves (it is reentrant on this thread), but a batch that released it between steps
+        // could interleave with a concurrent mutation and then reverse that mutation's work as part
+        // of its own rollback. The explicit BeginBatch/EndBatch form CANNOT offer this — its two
+        // halves are separate calls, and holding a lock across a JSON-RPC round trip is a deadlock
+        // waiting for a caller that never closes its batch.
+        lock (_mutationGate)
+            return BatchCore(stepList, opts);
+    }
+
+    private BatchResult BatchCore(List<Func<EditResult>> stepList, BatchOptions opts)
+    {
+        if (!BeginBatch(opts))
+            return new BatchResult { Error = new EditError(EditErrorCode.SessionDisposed, "session disposed") };
+
+        var results = new List<EditResult>(stepList.Count);
+        var created = new List<Anchor>();
+        var removed = new List<Anchor>();
+        var modified = new List<Anchor>();
+        EditError? firstError = null;
+        int failedStep = -1;
+        int applied = 0;
+        bool damaged = false;
+
+        for (int i = 0; i < stepList.Count; i++)
+        {
+            var step = stepList[i];
+            EditResult stepResult;
+            if (step is null)
+            {
+                stepResult = EditResult.Fail(EditErrorCode.MalformedMarkdown, $"batch step {i} is null");
+            }
+            else
+            {
+                try
+                {
+                    stepResult = step();
+                }
+                catch (Exception ex)
+                {
+                    // A step that threw OUT of the op, rather than one whose op caught and reported.
+                    // The op's own catch never ran, so nothing marked the batch damaged — do it here,
+                    // because a throw is exactly where partial work is most likely.
+                    LastInternalError = ex;
+                    _batchDamaged = true;
+                    stepResult = EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+                }
+            }
+
+            // Ops report damage through _batchDamaged (set by RollbackFailedOp, which cannot pop
+            // inside a batch). Read it per step so it attributes to the step that raised it.
+            if (_batchDamaged) damaged = true;
+
+            results.Add(stepResult);
+
+            if (stepResult.Success)
+            {
+                applied++;
+                created.AddRange(stepResult.Created);
+                removed.AddRange(stepResult.Removed);
+                modified.AddRange(stepResult.Modified);
+                continue;
+            }
+
+            if (firstError is null)
+            {
+                firstError = stepResult.Error;
+                failedStep = i;
+            }
+
+            // ValidationFailed mutated before it was rejected; InternalError may have. Either way
+            // the document is not in a state worth keeping, whatever the policy says.
+            if (stepResult.Error?.Code is EditErrorCode.InternalError or EditErrorCode.ValidationFailed)
+                damaged = true;
+
+            if (opts.Atomic || opts.StopOnError || damaged) break;
+        }
+
+        bool commit = firstError is null || (!opts.Atomic && !damaged);
+        var close = EndBatch(commit);
+
+        if (close.RolledBack)
+        {
+            return new BatchResult
+            {
+                Success = false,
+                Steps = results,
+                Applied = 0,
+                RolledBack = true,
+                Error = firstError ?? close.Error,
+                FailedStep = failedStep,
+            };
+        }
+
+        return new BatchResult
+        {
+            Success = firstError is null,
+            Steps = results,
+            Applied = applied,
+            RolledBack = false,
+            Error = firstError,
+            FailedStep = failedStep,
+            Created = DedupeAnchors(created),
+            Removed = DedupeAnchors(removed),
+            Modified = DedupeAnchors(modified),
+        };
+    }
+
+    /// <summary>Union of the anchors a batch's steps touched, first occurrence wins — a summary for
+    /// repaint, not a replay log.</summary>
+    private static IReadOnlyList<Anchor> DedupeAnchors(List<Anchor> anchors)
+    {
+        if (anchors.Count == 0) return Array.Empty<Anchor>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var deduped = new List<Anchor>(anchors.Count);
+        foreach (var anchor in anchors)
+            if (seen.Add(anchor.Id))
+                deduped.Add(anchor);
+        return deduped;
+    }
     // ─── Undo / Redo ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Capture the pre-op snapshot every mutation records before entering its <c>try</c> —
+    /// unless a <see cref="Batch"/> is open, in which case the batch already recorded one for
+    /// the whole sequence.
+    /// </summary>
+    /// <remarks>
+    /// The suppression is where a batch's cost saving actually lives, which is why it belongs
+    /// here rather than inside <see cref="Internal.UndoRing{T}"/>: a snapshot deep-clones every
+    /// projected part, and <c>TakeSnapshot()</c> is evaluated at the CALL SITE before the ring
+    /// ever sees it. Dropping the entry inside the ring would still pay for the clone; not
+    /// calling it is the only way to not pay.
+    /// </remarks>
+    private void RecordPreOpSnapshot()
+    {
+        if (_batchDepth > 0) return;
+        _history.RecordPreOp(TakeSnapshot());
+    }
+
+    /// <summary>
+    /// Discard the spare pre-op snapshot of a CLEAN failure — an op that detected a problem and
+    /// returned without mutating, whose snapshot must not evict a real edit from the bounded ring.
+    /// </summary>
+    /// <remarks>
+    /// A no-op inside a batch: there is no per-step entry to discard, and popping would consume
+    /// the batch's own snapshot — the one thing standing between a later failure and an
+    /// unreversible half-applied sequence.
+    /// </remarks>
+    private void DiscardPreOpSnapshot()
+    {
+        if (_batchDepth > 0) return;
+        _ = _history.PopForUndo();
+    }
 
     /// <summary>
     /// Roll the document back to the pre-op snapshot after a mutation threw partway through.
@@ -9985,9 +10343,14 @@ public sealed class DocxSession : IDisposable
     ///
     /// <para>Safe to call even when nothing was mutated before the throw — the restore just
     /// re-installs identical XML — so error paths need not reason about how far the op got.
-    /// Distinct from the CLEAN-failure paths (<c>else _ = _history.PopForUndo()</c>), which
+    /// Distinct from the CLEAN-failure paths (<see cref="DiscardPreOpSnapshot"/>), which
     /// discard deliberately: those ops detected a problem and returned WITHOUT mutating, so their
     /// snapshot is genuinely spare and must not evict a real edit from the bounded ring.</para>
+    ///
+    /// <para>Inside a <see cref="Batch"/> there is no per-step snapshot to restore, so this
+    /// records that the sequence is damaged and returns. The batch reverses the whole thing from
+    /// its own snapshot — one restore instead of two, and the only correct grain anyway once a
+    /// step has already committed edits the batch was meant to apply atomically.</para>
     ///
     /// <para>A failure of the restore itself is swallowed into <see cref="LastRollbackError"/>
     /// rather than thrown: the caller is already receiving an <see cref="EditErrorCode.InternalError"/>
@@ -9997,6 +10360,12 @@ public sealed class DocxSession : IDisposable
     /// </remarks>
     private void RollbackFailedOp()
     {
+        if (_batchDepth > 0)
+        {
+            _batchDamaged = true;
+            return;
+        }
+
         var (preOp, ok) = _history.PopForUndo();
         if (!ok) return;
         try

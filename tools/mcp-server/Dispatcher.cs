@@ -682,11 +682,43 @@ internal static class Dispatcher
         var batchCheck = Check(session, ParsePreconditions(args, MutationTarget(args)));
         if (batchCheck is not null) return batchCheck;
 
+        // One snapshot and one undo step for the whole sequence — the batch is the unit the caller
+        // asked for, so it is the unit the ring should hold. A forty-step plan used to cost forty
+        // whole-document clones and consume forty entries of a twenty-deep ring, which meant the
+        // plan an agent had just applied was already only half reversible by the time it finished.
+        //
+        // Best-effort, because this tool has always applied what it could and reported the rest.
+        // That is a policy about CLEAN failures only: the session still reverses the whole batch if
+        // a step mutated before failing, and no argument here can opt out of that.
+        //
+        // Preview is the same batch closed the other way. Counting how far to rewind — by steps
+        // first, then by version deltas — is no longer necessary at all: there is exactly one
+        // snapshot to restore, whatever each step cost.
+        var startingVersion = DocxSessionOps.GetVersion(session.Handle);
+        if (!DocxSessionOps.BeginBatch(session.Handle, atomic: false, stopOnError: false))
+            throw new McpToolException("session is disposed");
+
+        try
+        {
+            return RunMutationSteps(session, stepsEl, mode, startingVersion);
+        }
+        catch
+        {
+            // A malformed step throws out of the loop. Whatever earlier steps applied is not a
+            // state the caller asked for, and the batch holds the only snapshot that can undo it,
+            // so reverse before the exception leaves this frame.
+            DocxSessionOps.EndBatch(session.Handle, commit: false);
+            DocxSessionOps.RestorePreviewVersion(session.Handle, startingVersion);
+            throw;
+        }
+    }
+
+    private static string RunMutationSteps(
+        DocSession session, JsonElement stepsEl, string mode, long startingVersion)
+    {
         var results = new List<string>();
         var errors = new List<string>();
-        var startingVersion = DocxSessionOps.GetVersion(session.Handle);
         int applied = 0;
-        int committed = 0;
 
         foreach (var step in stepsEl.EnumerateArray())
         {
@@ -710,7 +742,6 @@ internal static class Dispatcher
                 throw new McpToolException($"docxodus_mutations does not accept the read-only action \"{stepAction}\" on {stepTool}");
 
             string resultJson;
-            var stepStartingVersion = DocxSessionOps.GetVersion(session.Handle);
             try
             {
                 resultJson = stepTool switch
@@ -742,12 +773,7 @@ internal static class Dispatcher
             }
             catch (JsonException) { /* non-EditResult shape (shouldn't happen for batchable tools); assume success */ }
 
-            if (succeeded)
-            {
-                applied++;
-                var versionDelta = DocxSessionOps.GetVersion(session.Handle) - stepStartingVersion;
-                committed = checked(committed + checked((int)versionDelta));
-            }
+            if (succeeded) applied++;
             else
             {
                 using var rdoc = JsonDocument.Parse(resultJson);
@@ -755,19 +781,38 @@ internal static class Dispatcher
             }
         }
 
-        if (mode == "preview")
+        // Preview keeps nothing; apply keeps what succeeded. Either way the session gets the final
+        // word: a step that mutated before failing reverses the batch whatever is asked for here.
+        var close = DocxSessionOps.EndBatch(session.Handle, commit: mode == "apply");
+        bool reversed;
+        using (var closeDoc = JsonDocument.Parse(close))
         {
-            for (int i = 0; i < committed; i++)
-                DocxSessionOps.Undo(session.Handle);
-            DocxSessionOps.RestorePreviewVersion(session.Handle, startingVersion);
+            reversed = closeDoc.RootElement.TryGetProperty("rolledBack", out var rb)
+                && rb.ValueKind == JsonValueKind.True;
+        }
+
+        // The document is back to where it started, so the version counter has to follow it —
+        // otherwise a preview (or a reversal) leaves callers holding a version that no longer
+        // describes any state the document was ever in, and their next precondition check fails
+        // against a mutation that did not happen.
+        if (reversed) DocxSessionOps.RestorePreviewVersion(session.Handle, startingVersion);
+
+        // In apply mode a reversal is not what the caller asked for, and it makes every "applied"
+        // count a lie — say so plainly rather than reporting partial success over a document that
+        // no longer has it. In preview mode the reversal IS the contract, so it is not an error.
+        if (reversed && mode == "apply")
+        {
+            applied = 0;
+            errors.Add(JsonRpcIo.JsonString(
+                "a step mutated before failing; the whole batch was reversed and the document is unchanged"));
         }
 
         var status = errors.Count == 0 ? "ok" : applied == 0 ? "failed" : "partial";
         return "{\"status\":\"" + status + "\",\"editsApplied\":" + applied
+            + ",\"rolledBack\":" + (reversed ? "true" : "false")
             + ",\"results\":[" + string.Join(",", results) + "]"
             + ",\"errors\":[" + string.Join(",", errors) + "]}";
     }
-
     // ─── Table ──────────────────────────────────────────────────────────
 
     private static string Table(SessionStore store, JsonElement args)
