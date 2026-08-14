@@ -42,6 +42,8 @@ public class IrValueTypeTests
     [Fact]
     public void IrAnchor_KindTokens_RoundTrip()
     {
+        Assert.Equal(IrAnchorKind.Col, IrAnchor.KindFromToken("col"));
+
         foreach (IrAnchorKind kind in Enum.GetValues(typeof(IrAnchorKind)))
         {
             var token = IrAnchor.KindToken(kind);

@@ -8,7 +8,8 @@ namespace Docxodus.Ir;
 /// The kind component of an IR anchor. The token strings (see <see cref="IrAnchor.KindToken"/>)
 /// are the markdown-projection anchor kinds produced by <c>WmlToMarkdownConverter.KindFor</c>,
 /// extended with <see cref="Img"/>/<see cref="Drw"/>/<see cref="Sdt"/>/<see cref="Unk"/> for
-/// IR-internal use.
+/// IR-internal use. <see cref="Col"/> is projection/index metadata for a table's
+/// <c>w:gridCol</c>; it is part of the closed anchor vocabulary even though it is not an IR block.
 /// </summary>
 internal enum IrAnchorKind
 {
@@ -18,6 +19,7 @@ internal enum IrAnchorKind
     Tbl,
     Tr,
     Tc,
+    Col,
     Cmt,
     Fn,
     En,
@@ -45,6 +47,7 @@ internal readonly record struct IrAnchor(IrAnchorKind Kind, string Scope, string
         IrAnchorKind.Tbl => "tbl",
         IrAnchorKind.Tr => "tr",
         IrAnchorKind.Tc => "tc",
+        IrAnchorKind.Col => "col",
         IrAnchorKind.Cmt => "cmt",
         IrAnchorKind.Fn => "fn",
         IrAnchorKind.En => "en",
@@ -65,6 +68,7 @@ internal readonly record struct IrAnchor(IrAnchorKind Kind, string Scope, string
         "tbl" => IrAnchorKind.Tbl,
         "tr" => IrAnchorKind.Tr,
         "tc" => IrAnchorKind.Tc,
+        "col" => IrAnchorKind.Col,
         "cmt" => IrAnchorKind.Cmt,
         "fn" => IrAnchorKind.Fn,
         "en" => IrAnchorKind.En,
