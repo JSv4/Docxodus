@@ -1769,11 +1769,12 @@ public class HtmlConversionOpsTests
         }
     }
 
-    // THE BATCH GATE: RenderBlocksHtml output must be ELEMENT-IDENTICAL to the
+    // THE BATCH GATE: RenderBlocksHtml output must be RENDER-IDENTICAL to the
     // corresponding data-anchor element of a full render — including list-item
     // markers deep in a list (numbering continuation, the M9 gap the single-block
     // path had) and contextualSpacing-dependent margins (neighbor context). This is
-    // deliberately stronger than HCO050's tag+text check.
+    // deliberately stronger than HCO050's tag+text check. XML attribute order and
+    // full-render-only canonical source provenance are not rendering semantics.
     [Fact]
     public void HCO081_RenderBlocksHtml_MatchesFullRenderFragments()
     {
@@ -1806,14 +1807,42 @@ public class HtmlConversionOpsTests
         foreach (var id in ids)
         {
             var unid = id.Substring(id.LastIndexOf(':') + 1);
-            var expected = fullByAnchor[unid].ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+            var expected = System.Xml.Linq.XElement.Parse(
+                fullByAnchor[unid].ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
             var actual = map.RootElement.GetProperty(id).GetString();
             Assert.NotNull(actual);
-            // One extra Parse round-trip on the actual normalizes serializer escaping
-            // (&#x00a0; vs the raw NBSP char) — the equality is structural + textual.
-            Assert.Equal(expected,
-                System.Xml.Linq.XElement.Parse(actual!).ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+            var actualElement = System.Xml.Linq.XElement.Parse(actual!);
+
+            // XML attribute order has no semantics. Full-document and block serializers
+            // can legitimately add independently computed attributes in different orders;
+            // canonicalize the non-rendering dimensions while retaining exact element,
+            // text, rendered-attribute, style, and child ordering comparisons.
+            var canonicalExpected = CanonicalizeRenderedFragment(expected);
+            var canonicalActual = CanonicalizeRenderedFragment(actualElement);
+            Assert.True(System.Xml.Linq.XNode.DeepEquals(canonicalExpected, canonicalActual),
+                $"block {id} differs:\nexpected: {canonicalExpected}\nactual:   {canonicalActual}");
         }
+    }
+
+    private static System.Xml.Linq.XElement CanonicalizeRenderedFragment(
+        System.Xml.Linq.XElement source)
+    {
+        var clone = new System.Xml.Linq.XElement(source);
+        foreach (var element in clone.DescendantsAndSelf())
+        {
+            // The full converter adds collision-safe PageMap provenance after resolving
+            // the original package story. A throwaway block shell deliberately cannot
+            // infer that original scope. Dedicated PageMapSourceIdentityTests pin that
+            // metadata contract; this oracle compares the rendered fragment itself.
+            element.Attribute("data-source-anchor-id")?.Remove();
+            var attributes = element.Attributes()
+                .Select(attribute => new System.Xml.Linq.XAttribute(attribute))
+                .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
+                .ThenBy(attribute => attribute.Name.LocalName, StringComparer.Ordinal)
+                .ToList();
+            element.ReplaceAttributes(attributes);
+        }
+        return clone;
     }
 
     // Regression: rendering a block AFTER a structural edit added a paragraph used to
