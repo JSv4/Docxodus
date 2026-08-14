@@ -1,0 +1,677 @@
+#nullable enable
+
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Docxodus.McpServer;
+using Xunit;
+
+namespace Docxodus.Tests;
+
+/// <summary>Issue #449: in-session idempotency and session-wide dispatch ordering.</summary>
+public sealed class McpMutationTransactionTests : IDisposable
+{
+    private readonly string _root;
+    private readonly string _path;
+    private readonly SessionStore _store;
+
+    public McpMutationTransactionTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), $"mcp-transactions-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+        _path = Path.Combine(_root, "document.docx");
+        File.WriteAllBytes(_path, DocxSession.CreateBlankDocxBytes());
+        _store = new SessionStore(new LocalFileDocumentStore(_root));
+    }
+
+    public void Dispose()
+    {
+        _store.CloseAll();
+        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+    }
+
+    [Fact]
+    public void MCP449_ResponseLossRetryIsByteExactAndDoesNotDisturbUndoRedo()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        var args = MutationArgs(sessionId, "tx-response-loss", anchor, "inserted exactly once");
+
+        // Simulate transport loss by discarding the first returned string.
+        var original = Dispatcher.Call(_store, "docxodus_mutations", J(args));
+        var parsed = J(original);
+        Assert.True(parsed.GetProperty("success").GetBoolean());
+        Assert.False(parsed.GetProperty("rolledBack").GetBoolean());
+        Assert.Equal("ok", parsed.GetProperty("status").GetString());
+        Assert.Equal(0, parsed.GetProperty("baseVersion").GetInt64());
+        Assert.Equal(1, parsed.GetProperty("resultVersion").GetInt64());
+        Assert.NotEmpty(parsed.GetProperty("packageHash").GetString()!);
+        var step = Assert.Single(parsed.GetProperty("steps").EnumerateArray());
+        Assert.Equal("docxodus_edit", step.GetProperty("tool").GetString());
+        Assert.Equal("insert_paragraph", step.GetProperty("action").GetString());
+        var edit = Assert.Single(step.GetProperty("results").EnumerateArray());
+        Assert.NotEmpty(edit.GetProperty("created")[0].GetProperty("id").GetString()!);
+        var identity = parsed.GetProperty("transaction");
+        Assert.Equal(1, identity.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("tx-response-loss", identity.GetProperty("transactionId").GetString());
+        Assert.StartsWith("sha256:", identity.GetProperty("requestFingerprint").GetString());
+        var retained = Assert.IsType<MutationTransactionRecord>(
+            _store.Get(sessionId).MutationTransactions.GetRecord("tx-response-loss"));
+        Assert.Equal(original, retained.SerializedResponse);
+        var retainedResult = J(retained.SerializedResponse!);
+        Assert.Equal(0, retainedResult.GetProperty("baseVersion").GetInt64());
+        Assert.Equal(1, retainedResult.GetProperty("resultVersion").GetInt64());
+        Assert.True(retainedResult.GetProperty("success").GetBoolean());
+        Assert.False(retainedResult.GetProperty("rolledBack").GetBoolean());
+        Assert.NotEmpty(retainedResult.GetProperty("packageHash").GetString()!);
+        var retainedStep = Assert.Single(retainedResult.GetProperty("steps").EnumerateArray());
+        Assert.Equal("docxodus_edit", retainedStep.GetProperty("tool").GetString());
+        Assert.Equal("insert_paragraph", retainedStep.GetProperty("action").GetString());
+        Assert.NotEmpty(Assert.Single(retainedStep.GetProperty("results").EnumerateArray())
+            .GetProperty("created")[0].GetProperty("id").GetString()!);
+
+        Assert.True(J(Dispatcher.Call(_store, "docxodus_edit", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "undo",
+        })))).GetProperty("success").GetBoolean());
+
+        var replay = Dispatcher.Call(_store, "docxodus_mutations", J(args));
+        Assert.Equal(original, replay);
+        Assert.True(J(Dispatcher.Call(_store, "docxodus_edit", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "redo",
+        })))).GetProperty("success").GetBoolean());
+        var markdown = GetMarkdown(_store, sessionId);
+        Assert.Equal(1, Occurrences(markdown, "inserted exactly once"));
+    }
+
+    [Fact]
+    public void MCP449_OmittedAtomicModeAndExplicitAtomicModeReplayExactly()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        var omitted = MutationArgs(sessionId, "tx-default-mode", anchor, "default mode");
+        var explicitAtomic = omitted.Replace(
+            "\"transactionId\":\"tx-default-mode\",",
+            "\"mode\":\"atomic\",\"transactionId\":\"tx-default-mode\",");
+
+        var first = Dispatcher.Call(_store, "docxodus_mutations", J(omitted));
+        var second = Dispatcher.Call(_store, "docxodus_mutations", J(explicitAtomic));
+
+        Assert.Equal(first, second);
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+    }
+
+    [Fact]
+    public void MCP449_SameIdDifferentRequestReturnsTypedConflictWithoutMutation()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        var first = Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(sessionId, "tx-conflict", anchor, "first")));
+        var conflict = J(Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(sessionId, "tx-conflict", anchor, "second"))));
+
+        Assert.True(J(first).GetProperty("success").GetBoolean());
+        Assert.Equal("transaction_conflict",
+            conflict.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+        Assert.DoesNotContain("second", GetMarkdown(_store, sessionId));
+    }
+
+    [Fact]
+    public void MCP449_AtomicRollbackAndBestEffortPartialResultsAreCached()
+    {
+        var atomicSession = OpenSession(_store, _path);
+        var atomicAnchor = FirstAnchor(_store, atomicSession);
+        var atomicArgs = JsonSerializer.Serialize(new
+        {
+            sessionId = atomicSession,
+            transactionId = "tx-atomic-failure",
+            mode = "atomic",
+            steps = new object[]
+            {
+                Step("replace_text", atomicAnchor, "speculative"),
+                Step("replace_text", "p:body:missing", "fail"),
+            },
+        });
+        var atomic = Dispatcher.Call(_store, "docxodus_mutations", J(atomicArgs));
+        Assert.Equal(atomic, Dispatcher.Call(_store, "docxodus_mutations", J(atomicArgs)));
+        var atomicResult = J(atomic);
+        Assert.Equal("failed", atomicResult.GetProperty("status").GetString());
+        Assert.True(atomicResult.GetProperty("rolledBack").GetBoolean());
+        Assert.Equal(0, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(atomicSession).Handle));
+
+        var partialSession = OpenSession(_store, _path);
+        var partialAnchor = FirstAnchor(_store, partialSession);
+        var partialArgs = JsonSerializer.Serialize(new
+        {
+            sessionId = partialSession,
+            transactionId = "tx-partial",
+            mode = "best_effort",
+            steps = new object[]
+            {
+                Step("replace_text", partialAnchor, "retained partial"),
+                Step("replace_text", "p:body:missing", "fail"),
+            },
+        });
+        var partial = Dispatcher.Call(_store, "docxodus_mutations", J(partialArgs));
+        Assert.Equal(partial, Dispatcher.Call(_store, "docxodus_mutations", J(partialArgs)));
+        Assert.Equal("partial", J(partial).GetProperty("status").GetString());
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(partialSession).Handle));
+        Assert.Contains("retained partial", GetMarkdown(_store, partialSession));
+    }
+
+    [Fact]
+    public void MCP449_PreconditionAndValidationFailuresReplayBeforeCurrentStateChecks()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        var guardedArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            transactionId = "tx-precondition",
+            preconditions = new { expectedVersion = 99 },
+            steps = new[] { Step("replace_text", anchor, "must not apply") },
+        });
+        var failed = Dispatcher.Call(_store, "docxodus_mutations", J(guardedArgs));
+        Assert.Equal("precondition_failed", J(failed).GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+
+        ReplaceDirect(_store, sessionId, anchor, "later state");
+        Assert.Equal(failed, Dispatcher.Call(_store, "docxodus_mutations", J(guardedArgs)));
+        Assert.Contains("later state", GetMarkdown(_store, sessionId));
+
+        var invalidArgs = $$"""
+            {"sessionId":{{JsonSerializer.Serialize(sessionId)}},"transactionId":"tx-validation","mode":"sideways","steps":[]}
+            """;
+        var invalid = Dispatcher.Call(_store, "docxodus_mutations", J(invalidArgs));
+        Assert.Equal("invalid_batch_step", J(invalid).GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(invalid, Dispatcher.Call(_store, "docxodus_mutations", J(invalidArgs)));
+    }
+
+    [Fact]
+    public void MCP449_PreviewDryRunDirectToolsAndStepArgsRejectTransactionIds()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        foreach (var previewProperties in new[]
+        {
+            "\"mode\":\"preview\"",
+            "\"mode\":\"atomic\",\"preview\":true",
+        })
+        {
+            var args = "{\"sessionId\":" + JsonSerializer.Serialize(sessionId)
+                + ",\"transactionId\":\"tx-preview\"," + previewProperties
+                + ",\"steps\":[{\"tool\":\"docxodus_edit\",\"args\":{\"action\":\"replace_text\""
+                + ",\"anchorId\":" + JsonSerializer.Serialize(anchor)
+                + ",\"markdown\":\"shadow\"}}]}";
+            var rejected = J(Dispatcher.Call(_store, "docxodus_mutations", J(args)));
+            Assert.Equal("invalid_transaction", rejected.GetProperty("failure")
+                .GetProperty("error").GetProperty("code").GetString());
+            Assert.False(rejected.TryGetProperty("transaction", out _));
+        }
+        Assert.Equal(0, _store.Get(sessionId).MutationTransactions.FullRecordCount);
+
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_edit",
+            J(JsonSerializer.Serialize(new
+            {
+                sessionId,
+                transactionId = "nested-direct",
+                action = "replace_text",
+                anchorId = anchor,
+                markdown = "no",
+            }))));
+
+        var nested = J(Dispatcher.Call(_store, "docxodus_mutations", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            steps = new[]
+            {
+                new
+                {
+                    tool = "docxodus_edit",
+                    args = new
+                    {
+                        transactionId = "nested-step",
+                        action = "replace_text",
+                        anchorId = anchor,
+                        markdown = "no",
+                    },
+                },
+            },
+        }))));
+        Assert.Equal("invalid_transaction", nested.GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void MCP449_CanonicalFingerprintNormalizesObjectsWhitespaceAndEscapesOnly()
+    {
+        var left = J("""
+            {
+              "sessionId": "session-a",
+              "transactionId": "tx-a",
+              "unknown": { "z": "\u0061", "a": true },
+              "steps": [1, { "right": null, "left": "same" }]
+            }
+            """);
+        var right = J("""{"steps":[1,{"left":"same","right":null}],"unknown":{"a":true,"z":"a"},"mode":"atomic","transactionId":"tx-b","sessionId":"session-b"}""");
+        Assert.Equal(
+            MutationTransactions.Fingerprint(left),
+            MutationTransactions.Fingerprint(right));
+
+        var baseline = MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"atomic","unknown":1}"""));
+        Assert.NotEqual(baseline,
+            MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"atomic","unknown":1.0}""")));
+        Assert.NotEqual(baseline,
+            MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"atomic","unknown":"1"}""")));
+        Assert.NotEqual(
+            MutationTransactions.Fingerprint(J("""{"steps":[],"unknown":"Spelling"}""")),
+            MutationTransactions.Fingerprint(J("""{"steps":[],"unknown":"spelling"}""")));
+        Assert.NotEqual(baseline,
+            MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"atomic","unknown":1,"extra":null}""")));
+        Assert.NotEqual(
+            MutationTransactions.Fingerprint(J("""{"steps":[1,2]}""")),
+            MutationTransactions.Fingerprint(J("""{"steps":[2,1]}""")));
+        Assert.NotEqual(
+            MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"apply"}""")),
+            MutationTransactions.Fingerprint(J("""{"steps":[],"mode":"best_effort"}""")));
+        Assert.NotEqual(
+            MutationTransactions.Fingerprint(J("""{"steps":[],"preview":false}""")),
+            MutationTransactions.Fingerprint(J("""{"steps":[]}""")));
+    }
+
+    [Fact]
+    public void MCP449_DuplicateKeysAtAnyDepthAreRejectedBeforeReservation()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var duplicate = "{\"sessionId\":" + JsonSerializer.Serialize(sessionId)
+            + ",\"transactionId\":\"tx-duplicate\",\"steps\":[{\"tool\":\"docxodus_edit\""
+            + ",\"args\":{\"action\":\"replace_text\",\"action\":\"replace_text\"}}]}";
+
+        var error = Assert.Throws<McpToolException>(() =>
+            Dispatcher.Call(_store, "docxodus_mutations", J(duplicate)));
+        Assert.Contains("duplicate JSON property", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, _store.Get(sessionId).MutationTransactions.FullRecordCount);
+        Assert.Null(_store.Get(sessionId).MutationTransactions.GetRecord("tx-duplicate"));
+    }
+
+    [Fact]
+    public void MCP449_JournalUsesGeneratedMetadataAndBoundedFullThenTombstoneFifos()
+    {
+        var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+        var recordNumber = 0;
+        var journal = new MutationTransactions(
+            fullRecordCapacity: 1,
+            tombstoneCapacity: 1,
+            utcNow: () => now,
+            recordIdFactory: () => $"record-{++recordNumber}");
+
+        var a = AssertReserved(journal.Begin("a", "sha256:a"));
+        Assert.Equal("record-1", a.RecordId);
+        Assert.Equal(now, a.StartedAt);
+        now = now.AddSeconds(1);
+        var completedA = journal.Complete(a, "{\"a\":1}");
+        Assert.Equal(now, completedA.CompletedAt);
+
+        var b = AssertReserved(journal.Begin("b", "sha256:b"));
+        now = now.AddSeconds(1);
+        journal.Complete(b, "{\"b\":1}");
+        Assert.Equal(1, journal.FullRecordCount);
+        Assert.Equal(1, journal.TombstoneCount);
+        Assert.Equal(MutationTransactionDecisionKind.ResultEvicted,
+            journal.Begin("a", "sha256:a").Kind);
+        Assert.Equal(MutationTransactionDecisionKind.Conflict,
+            journal.Begin("a", "sha256:different").Kind);
+
+        var c = AssertReserved(journal.Begin("c", "sha256:c"));
+        now = now.AddSeconds(1);
+        journal.Complete(c, "{\"c\":1}");
+        Assert.Null(journal.GetTombstone("a"));
+        Assert.Equal(MutationTransactionDecisionKind.Reserved,
+            journal.Begin("a", "sha256:fresh-after-both-fifos").Kind);
+    }
+
+    [Fact]
+    public void MCP449_DispatcherSerializesEvictedResultAndConflictAndReusesOnlyAfterTombstone()
+    {
+        using var store = new TestSessionStore(
+            new LocalFileDocumentStore(_root),
+            () => new MutationTransactions(fullRecordCapacity: 1, tombstoneCapacity: 1));
+        var sessionId = OpenSession(store.Value, _path);
+        var anchor = FirstAnchor(store.Value, sessionId);
+
+        string Args(string id, string markdown) => JsonSerializer.Serialize(new
+        {
+            sessionId,
+            transactionId = id,
+            steps = new[] { Step("replace_text", anchor, markdown) },
+        });
+
+        var firstA = Dispatcher.Call(store.Value, "docxodus_mutations", J(Args("a", "a1")));
+        Dispatcher.Call(store.Value, "docxodus_mutations", J(Args("b", "b1")));
+
+        var evicted = J(Dispatcher.Call(
+            store.Value, "docxodus_mutations", J(Args("a", "a1"))));
+        Assert.Equal("transaction_result_evicted", evicted.GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+        var conflict = J(Dispatcher.Call(
+            store.Value, "docxodus_mutations", J(Args("a", "different"))));
+        Assert.Equal("transaction_conflict", conflict.GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(2, Docxodus.Internal.DocxSessionOps.GetVersion(store.Value.Get(sessionId).Handle));
+
+        Dispatcher.Call(store.Value, "docxodus_mutations", J(Args("c", "c1")));
+        var reused = Dispatcher.Call(
+            store.Value, "docxodus_mutations", J(Args("a", "fresh after tombstone")));
+        Assert.NotEqual(firstA, reused);
+        Assert.True(J(reused).GetProperty("success").GetBoolean());
+        Assert.Equal(4, Docxodus.Internal.DocxSessionOps.GetVersion(store.Value.Get(sessionId).Handle));
+    }
+
+    [Fact]
+    public void MCP449_UnexpectedPostReservationFailureIsStructuredAndCached()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        var args = MutationArgs(sessionId, "tx-unexpected", anchor, "cannot execute");
+
+        // Invalidate only the lower-level handle while leaving the MCP session registered. This
+        // forces an unexpected registry failure after transaction reservation.
+        Docxodus.Internal.DocxSessionOps.CloseSession(_store.Get(sessionId).Handle);
+        var first = Dispatcher.Call(_store, "docxodus_mutations", J(args));
+        var failure = J(first);
+        Assert.Equal("internal_error", failure.GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(first, Dispatcher.Call(_store, "docxodus_mutations", J(args)));
+        Assert.Equal(1, _store.Get(sessionId).MutationTransactions.FullRecordCount);
+    }
+
+    [Fact]
+    public void MCP449_GeneratedRevisionTimestampAndIdentityReplayExactly()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+        ReplaceDirect(_store, sessionId, anchor, "revision target");
+        Dispatcher.Call(_store, "docxodus_track_changes", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "set_mode",
+            mode = "render_inline",
+            revisionAuthor = "Reviewer",
+        })));
+        var args = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            transactionId = "tx-generated-revision",
+            steps = new[]
+            {
+                new
+                {
+                    tool = "docxodus_edit",
+                    args = new
+                    {
+                        action = "replace_text",
+                        anchorId = anchor,
+                        markdown = "Generated metadata",
+                    },
+                },
+            },
+        });
+
+        var original = Dispatcher.Call(_store, "docxodus_mutations", J(args));
+        var revisions = J(original).GetProperty("revisionChanges")
+            .GetProperty("added").EnumerateArray().ToArray();
+        Assert.NotEmpty(revisions);
+        Assert.All(revisions, revision =>
+        {
+            Assert.NotEmpty(revision.GetProperty("id").GetString()!);
+            Assert.False(string.IsNullOrWhiteSpace(revision.GetProperty("date").GetString()));
+        });
+        Assert.Equal(original, Dispatcher.Call(_store, "docxodus_mutations", J(args)));
+    }
+
+    [Fact]
+    public void MCP449_TransactionIdsAreSessionScopedAndCloseClearsTheirLifecycle()
+    {
+        var firstSession = OpenSession(_store, _path);
+        var secondSession = OpenSession(_store, _path);
+        var firstResult = Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(firstSession, "same-id", FirstAnchor(_store, firstSession), "first session")));
+        var secondResult = Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(secondSession, "same-id", FirstAnchor(_store, secondSession), "second session")));
+        Assert.True(J(firstResult).GetProperty("success").GetBoolean());
+        Assert.True(J(secondResult).GetProperty("success").GetBoolean());
+
+        _store.Close(firstSession);
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_mutations",
+            J(MutationArgs(firstSession, "same-id", "p:body:any", "retry after close"))));
+        Assert.Contains("second session", GetMarkdown(_store, secondSession));
+    }
+
+    [Fact]
+    public void MCP449_ConcurrentIdenticalCallsSerializeToOneMutationAndOneExactReplay()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var args = J(MutationArgs(
+            sessionId, "tx-concurrent", FirstAnchor(_store, sessionId), "concurrent once"));
+        var start = new ManualResetEventSlim(false);
+        var results = new ConcurrentBag<string>();
+        var calls = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            start.Wait();
+            results.Add(Dispatcher.Call(_store, "docxodus_mutations", args));
+        })).ToArray();
+
+        start.Set();
+        Task.WaitAll(calls);
+        Assert.Equal(8, results.Count);
+        Assert.Single(results.Distinct(StringComparer.Ordinal));
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+        Assert.Equal(1, Occurrences(GetMarkdown(_store, sessionId), "concurrent once"));
+    }
+
+    [Fact]
+    public void MCP449_SaveCloseAndCloseAllWaitForTheSameSessionDispatchGate()
+    {
+        var blockingStore = new BlockingDocumentStore(DocxSession.CreateBlankDocxBytes());
+        var store = new SessionStore(blockingStore);
+        try
+        {
+            var sessionId = OpenSession(store, "document.docx");
+            var save = Task.Run(() => Dispatcher.Call(store, "docxodus_save",
+                J(JsonSerializer.Serialize(new { sessionId }))));
+            Assert.True(blockingStore.WriteEntered.Wait(TimeSpan.FromSeconds(5)));
+            var close = Task.Run(() => Dispatcher.Call(store, "docxodus_close",
+                J(JsonSerializer.Serialize(new { sessionId }))));
+            Assert.False(close.Wait(TimeSpan.FromMilliseconds(100)));
+            blockingStore.ReleaseWrite.Set();
+            Assert.True(save.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(close.Wait(TimeSpan.FromSeconds(5)));
+
+            var closeAllSession = OpenSession(store, "document.docx");
+            var entered = new ManualResetEventSlim(false);
+            var release = new ManualResetEventSlim(false);
+            var action = Task.Run(() => store.Dispatch(closeAllSession, () =>
+            {
+                entered.Set();
+                release.Wait();
+                return "{}";
+            }));
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            var closeAll = Task.Run(store.CloseAll);
+            Assert.False(closeAll.Wait(TimeSpan.FromMilliseconds(100)));
+            release.Set();
+            Assert.True(action.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(closeAll.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Throws<McpToolException>(() => store.Get(closeAllSession));
+        }
+        finally
+        {
+            blockingStore.ReleaseWrite.Set();
+            store.CloseAll();
+        }
+    }
+
+    [Fact]
+    public void MCP449_SaveThenRetryPreservesTheSavedMutationWithoutApplyingAgain()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var args = MutationArgs(
+            sessionId, "tx-save", FirstAnchor(_store, sessionId), "saved transaction");
+        var original = Dispatcher.Call(_store, "docxodus_mutations", J(args));
+        Dispatcher.Call(_store, "docxodus_save", J(JsonSerializer.Serialize(new { sessionId })));
+        Assert.Equal(original, Dispatcher.Call(_store, "docxodus_mutations", J(args)));
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+
+        Dispatcher.Call(_store, "docxodus_close", J(JsonSerializer.Serialize(new { sessionId })));
+        var reopened = OpenSession(_store, _path);
+        Assert.Contains("saved transaction", GetMarkdown(_store, reopened));
+        var reused = Dispatcher.Call(_store, "docxodus_mutations", J(MutationArgs(
+            reopened, "tx-save", FirstAnchor(_store, reopened), "fresh identity after reopen")));
+        Assert.True(J(reused).GetProperty("success").GetBoolean());
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(reopened).Handle));
+        Assert.Contains("fresh identity after reopen", GetMarkdown(_store, reopened));
+    }
+
+    [Fact]
+    public void MCP449_ToolSchemaDocumentsBoundedApplyingTransactionIdentity()
+    {
+        var tool = Assert.Single(ToolCatalog.Tools,
+            candidate => candidate.Name == "docxodus_mutations");
+        var schema = J(tool.InputSchemaJson);
+        var transactionId = schema.GetProperty("properties").GetProperty("transactionId");
+        Assert.Equal("string", transactionId.GetProperty("type").GetString());
+        Assert.Equal(1, transactionId.GetProperty("minLength").GetInt32());
+        Assert.Equal(MutationTransactions.MaxTransactionIdLength,
+            transactionId.GetProperty("maxLength").GetInt32());
+        Assert.Contains("APPLYING", transactionId.GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(128, MutationTransactions.DefaultFullRecordCapacity);
+        Assert.Equal(1024, MutationTransactions.DefaultTombstoneCapacity);
+    }
+
+    private static MutationTransactionRecord AssertReserved(MutationTransactionDecision decision)
+    {
+        Assert.Equal(MutationTransactionDecisionKind.Reserved, decision.Kind);
+        return Assert.IsType<MutationTransactionRecord>(decision.Record);
+    }
+
+    private static object Step(string action, string anchorId, string markdown) => new
+    {
+        tool = "docxodus_edit",
+        args = new { action, anchorId, markdown },
+    };
+
+    private static string MutationArgs(
+        string sessionId,
+        string transactionId,
+        string anchorId,
+        string markdown) => JsonSerializer.Serialize(new
+    {
+        sessionId,
+        transactionId,
+        steps = new[]
+        {
+            new
+            {
+                tool = "docxodus_edit",
+                args = new
+                {
+                    action = "insert_paragraph",
+                    anchorId,
+                    position = "after",
+                    markdown,
+                },
+            },
+        },
+    });
+
+    private static string OpenSession(SessionStore store, string path)
+    {
+        var opened = J(Dispatcher.Call(store, "docxodus_open",
+            J(JsonSerializer.Serialize(new { path }))));
+        return opened.GetProperty("sessionId").GetString()!;
+    }
+
+    private static string FirstAnchor(SessionStore store, string sessionId)
+    {
+        var content = J(Dispatcher.Call(store, "docxodus_get_content",
+            J(JsonSerializer.Serialize(new { sessionId, format = "markdown" }))));
+        return content.GetProperty("anchorIndex").EnumerateObject().First().Name;
+    }
+
+    private static string GetMarkdown(SessionStore store, string sessionId) =>
+        J(Dispatcher.Call(store, "docxodus_get_content",
+            J(JsonSerializer.Serialize(new { sessionId, format = "markdown" }))))
+        .GetProperty("markdown").GetString()!;
+
+    private static void ReplaceDirect(
+        SessionStore store,
+        string sessionId,
+        string anchorId,
+        string markdown)
+    {
+        var result = J(Dispatcher.Call(store, "docxodus_edit", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "replace_text",
+            anchorId,
+            markdown,
+        }))));
+        Assert.True(result.GetProperty("success").GetBoolean());
+    }
+
+    private static int Occurrences(string value, string search)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(search, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += search.Length;
+        }
+        return count;
+    }
+
+    private static JsonElement J(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private sealed class BlockingDocumentStore : IDocumentStore
+    {
+        private readonly byte[] _bytes;
+
+        public BlockingDocumentStore(byte[] bytes) => _bytes = bytes;
+
+        public string Kind => "blocking-test";
+        public string RootDescription => "blocking-test";
+        public ManualResetEventSlim WriteEntered { get; } = new(false);
+        public ManualResetEventSlim ReleaseWrite { get; } = new(false);
+        public string Resolve(string location) => location;
+        public byte[] Read(string resolvedLocation) => _bytes.ToArray();
+
+        public void Write(string resolvedLocation, byte[] bytes)
+        {
+            WriteEntered.Set();
+            ReleaseWrite.Wait();
+        }
+    }
+
+    private sealed class TestSessionStore : IDisposable
+    {
+        public TestSessionStore(
+            IDocumentStore documents,
+            Func<MutationTransactions> journalFactory) =>
+            Value = new SessionStore(documents, journalFactory);
+
+        public SessionStore Value { get; }
+
+        public void Dispose() => Value.CloseAll();
+    }
+}

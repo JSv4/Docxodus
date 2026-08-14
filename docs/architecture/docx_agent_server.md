@@ -498,6 +498,40 @@ modulo those generated ids/timestamps. Such receipts carry warnings; clients mus
 id or `packageHash` equality unless the operation supplies stable ids/timestamps or is otherwise
 known deterministic.
 
+Applying batches may carry a caller-chosen root `transactionId` (a non-empty string up to 256
+characters). Its first terminal success, partial result, structured failure, precondition failure,
+or safely-caught exception is recorded for the lifetime of that open session. An identical retry
+returns the original serialized `MutationBatchResult` byte-for-byte before evaluating current
+preconditions or running a step; it therefore preserves generated anchors, timestamps, versions,
+outcome, semantic deltas, and `packageHash` from the original call. The result has one additional
+top-level identity — not a parallel receipt model:
+
+```json
+{
+  "transaction": {
+    "schemaVersion": 1,
+    "transactionId": "caller-operation-42",
+    "requestFingerprint": "sha256:..."
+  }
+}
+```
+
+The request fingerprint excludes only root `sessionId` and `transactionId`; it sorts object keys,
+normalizes JSON whitespace and equivalent string escapes, preserves array order, string spelling,
+numeric token spelling, unknown properties, and every omitted/explicit distinction except the root
+default `mode` (`mode` omitted is canonicalized as `"atomic"`). Deprecated `apply` remains distinct
+from `best_effort`. Duplicate keys are rejected at any depth. Reusing an id for a different
+fingerprint returns `transaction_conflict`. The per-session journal retains 128 full responses,
+then 1,024 response-less FIFO tombstones; an identical retry whose response has been evicted returns
+`transaction_result_evicted`, while its tombstone still prevents conflicting reuse. Once the
+tombstone expires—or the session is closed—the identity is no longer known. Transaction ids are
+for mutating batches only: direct tools, step args, `mode: preview`, and `preview: true` reject them.
+Replay after an ordinary undo or redo still returns the historical response: it never reapplies,
+undoes, or redoes the mutation, changes the current document, or moves either history cursor. A
+caller that wants an undone mutation present again must use ordinary `redo` while it remains
+available. Saving preserves the in-session journal. Closing clears it, and reopening the document
+starts a new transaction-identity namespace even when it opens the same saved file.
+
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A

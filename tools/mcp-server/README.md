@@ -97,6 +97,17 @@ markdown projection and search tools return:
 | `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
 
+Applying `docxodus_mutations` batches can include a caller-chosen root `transactionId`. During the
+open session, retrying the same canonical request returns the exact original serialized batch
+result without applying again or rechecking guards; a different request with that id fails with
+`transaction_conflict`. Results expose
+`transaction: { schemaVersion: 1, transactionId, requestFingerprint }`. Preview/dry-run batches and
+direct or nested step calls reject transaction ids. Retention is bounded per session (128 complete
+responses followed by 1,024 response-less tombstones). Save preserves this journal; close clears
+it, and reopen starts a new identity namespace. Replay after undo/redo returns the historical
+response without changing the document or either history cursor; use ordinary redo to restore an
+undone mutation.
+
 ## Known gaps
 
 A few capabilities a full-featured document-editing agent surface might want are not yet
