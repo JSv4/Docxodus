@@ -15,7 +15,7 @@ to `tools/python-host/` (a stdio host for a *library-shaped* API, one request pe
 this server groups the same underlying `DocxSession` surface into a smaller number of
 **intent-shaped tools**, because that is the granularity an LLM tool-calling loop wants — a model
 picks from a short, memorable list of verbs (`docxodus_edit`, `docxodus_format`,
-`docxodus_table`, …) with an `action` discriminator, rather than one MCP tool per one of
+`docxodus_table`, `docxodus_links`, …) with an `action` discriminator, rather than one MCP tool per one of
 `DocxSession`'s ~40 public methods.
 
 Every tool call ultimately routes through `Docxodus.Internal.DocxSessionOps` (and, for tracked
@@ -28,7 +28,7 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
 grouped-intent tools (read / preview / pagination / search / edit / format / create / list /
-comment / annotate / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+comment / annotate / links / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -103,7 +103,7 @@ unknown methods, which a well-behaved client should never produce.
 ```
 docxodus_open(path) → session_id
    ↓ (any number of docxodus_edit / docxodus_format / docxodus_create / docxodus_table /
-   ↓  docxodus_list / docxodus_comment / docxodus_annotate / docxodus_track_changes /
+   ↓  docxodus_list / docxodus_comment / docxodus_annotate / docxodus_links / docxodus_track_changes /
    ↓  docxodus_mutations calls)
 docxodus_save(session_id, path?)
    ↓
@@ -374,6 +374,20 @@ entries it owned and clears child links that would otherwise dangle. Documented 
 Deliberately distinct from `docxodus_comment`: the overlay semantically tags regions for
 external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
+### `docxodus_links` — native hyperlinks and bookmarks
+
+`list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
+`list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
+the first-class session API. Hyperlink targets use `targetKind: "external"|"internal"`; bookmark
+ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
+same numeric `ProjectionScopes` flag mask as the core API.
+
+The result is structured enough for an agent to round-trip unchanged: hyperlink ids feed update
+or remove, while bookmark names feed move/rename/remove. Missing targets, duplicate/invalid names,
+cross-part ranges, active inbound links, unsupported inline boundaries, and tracked-mode metadata
+edits are ordinary typed `EditResult` failures. External relationships are owned by the actual
+body/header/footer/note part; internal targets are relationship-free `w:anchor` links.
+
 ### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode
 
 `set_mode` (issue #304) switches how the session records its *own subsequent* edits —
@@ -421,7 +435,7 @@ per-revision listing does not enumerate (see Known gaps).
 ### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
-`docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment` (their `undo`/`redo` and
+`docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
 sequence of *mutations*).
 

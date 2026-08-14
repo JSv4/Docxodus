@@ -29,6 +29,7 @@ from .enums import (
     EditErrorCode,
     EmptyParagraphMode,
     HeaderFooterKind,
+    HyperlinkKind,
     LineSpacingRule,
     MutationBatchMode,
     ParagraphAlignment,
@@ -97,6 +98,10 @@ __all__ = [
     "WmlToMarkdownConverterSettings",
     "DocumentAnnotation",
     "AnnotationUpdate",
+    "DocumentRange",
+    "HyperlinkInfo",
+    "BookmarkRangeSegment",
+    "BookmarkInfo",
     "EditSummary",
     "ReplaceOptions",
     "DocxDiffSettings",
@@ -627,6 +632,91 @@ class CharSpan:
 
     def to_wire(self) -> dict[str, int]:
         return {"start": self.start, "length": self.length}
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentRange:
+    """Two-ended, end-exclusive bookmark range; endpoints must share one story part."""
+
+    start_anchor_id: str
+    start_offset: int
+    end_anchor_id: str
+    end_offset: int
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "startAnchorId": self.start_anchor_id,
+            "startOffset": self.start_offset,
+            "endAnchorId": self.end_anchor_id,
+            "endOffset": self.end_offset,
+        }
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocumentRange":
+        return cls(d["startAnchorId"], int(d["startOffset"]), d["endAnchorId"], int(d["endOffset"]))
+
+
+@dataclass(frozen=True, slots=True)
+class HyperlinkInfo:
+    id: str
+    kind: HyperlinkKind
+    owning_part_uri: str
+    scope: str
+    anchor_id: str
+    span: CharSpan
+    text: str
+    target: str | None = None
+    relationship_id: str | None = None
+    relationship_is_external: bool | None = None
+    is_broken: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "HyperlinkInfo":
+        return cls(d["id"], HyperlinkKind(d["kind"]), d["owningPartUri"], d["scope"],
+                   d["anchorId"], CharSpan._from_wire(d["span"]), d.get("text", ""),
+                   d.get("target"), d.get("relationshipId"), d.get("relationshipIsExternal"),
+                   bool(d.get("isBroken", False)))
+
+
+@dataclass(frozen=True, slots=True)
+class BookmarkRangeSegment:
+    owning_part_uri: str
+    scope: str
+    anchor_id: str
+    span: CharSpan
+    text: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "BookmarkRangeSegment":
+        return cls(d["owningPartUri"], d["scope"], d["anchorId"],
+                   CharSpan._from_wire(d["span"]), d.get("text", ""))
+
+
+@dataclass(frozen=True, slots=True)
+class BookmarkInfo:
+    name: str
+    bookmark_id: str
+    start_part_uri: str
+    start_scope: str
+    end_part_uri: str | None
+    end_scope: str | None
+    range: DocumentRange | None
+    segments: tuple[BookmarkRangeSegment, ...]
+    text: str
+    is_paired: bool
+    is_managed: bool
+    is_valid: bool
+    validation_error: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "BookmarkInfo":
+        return cls(d["name"], d["bookmarkId"], d["startPartUri"], d["startScope"],
+                   d.get("endPartUri"), d.get("endScope"),
+                   DocumentRange._from_wire(d["range"]) if d.get("range") else None,
+                   tuple(BookmarkRangeSegment._from_wire(s) for s in d.get("segments", ())),
+                   d.get("text", ""), bool(d.get("isPaired", False)),
+                   bool(d.get("isManaged", False)), bool(d.get("isValid", False)),
+                   d.get("validationError"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1317,6 +1407,8 @@ class EditResult:
     error: EditError | None = None
     annotation_id: str | None = None
     table_anchors: TableAnchorMapping | None = None
+    hyperlink_id: str | None = None
+    bookmark_name: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
@@ -1332,6 +1424,8 @@ class EditResult:
             annotation_id=d.get("annotationId"),
             table_anchors=TableAnchorMapping._from_wire(d["tableAnchors"])
             if d.get("tableAnchors") else None,
+            hyperlink_id=d.get("hyperlinkId"),
+            bookmark_name=d.get("bookmarkName"),
         )
 
 

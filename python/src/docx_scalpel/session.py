@@ -32,6 +32,7 @@ from .enums import (
     ContextBoundary,
     DiffFormat,
     HeaderFooterKind,
+    HyperlinkKind,
     ListFormat,
     MutationBatchMode,
     PageNumberField,
@@ -48,11 +49,13 @@ from .types import (
     AnchorTarget,
     AnnotationUpdate,
     BlockMetadata,
+    BookmarkInfo,
     BulkEditResult,
     CharSpan,
     CommentListEntry,
     CrossBlockMatch,
     DocumentAnnotation,
+    DocumentRange,
     DocxDiffConflict,
     DocxDiffConsolidatedRevision,
     DocxDiffConsolidateSettings,
@@ -68,6 +71,7 @@ from .types import (
     FormatOp,
     FormattingInspection,
     HtmlOptions,
+    HyperlinkInfo,
     InlineSpan,
     ListMembership,
     MarkdownProjection,
@@ -856,6 +860,44 @@ class DocxSession:
             args["citation"] = citation.to_wire()
         result = self._call("find_by_bookmark", args)
         return tuple(AnchorTarget._from_wire(a) for a in result)
+
+    def list_hyperlinks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[HyperlinkInfo, ...]:
+        result = self._call("list_hyperlinks", {"scopes": int(scopes)})
+        return tuple(HyperlinkInfo._from_wire(item) for item in result)
+
+    def add_hyperlink(self, anchor_id: str, span: CharSpan, kind: HyperlinkKind,
+                      target: str) -> EditResult:
+        return EditResult._from_wire(self._call("add_hyperlink", {
+            "anchorId": anchor_id, "start": span.start, "length": span.length,
+            "kind": kind.value, "target": target,
+        }))
+
+    def update_hyperlink(self, hyperlink_id: str, kind: HyperlinkKind,
+                         target: str) -> EditResult:
+        return EditResult._from_wire(self._call("update_hyperlink", {
+            "hyperlinkId": hyperlink_id, "kind": kind.value, "target": target,
+        }))
+
+    def remove_hyperlink(self, hyperlink_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("remove_hyperlink", {"hyperlinkId": hyperlink_id}))
+
+    def list_bookmarks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[BookmarkInfo, ...]:
+        result = self._call("list_bookmarks", {"scopes": int(scopes)})
+        return tuple(BookmarkInfo._from_wire(item) for item in result)
+
+    def add_bookmark(self, name: str, range: DocumentRange) -> EditResult:
+        return EditResult._from_wire(self._call("add_bookmark", {"name": name, **range.to_wire()}))
+
+    def rename_bookmark(self, name: str, new_name: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("rename_bookmark", {"name": name, "newName": new_name}))
+
+    def move_bookmark(self, name: str, range: DocumentRange) -> EditResult:
+        return EditResult._from_wire(self._call("move_bookmark", {"name": name, **range.to_wire()}))
+
+    def remove_bookmark(self, name: str) -> EditResult:
+        return EditResult._from_wire(self._call("remove_bookmark", {"name": name}))
 
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
         result = self._call("list_annotations", {})

@@ -40,6 +40,7 @@ internal static class Dispatcher
         "docxodus_create" => Create(store, args),
         "docxodus_list" => ListTool(store, args),
         "docxodus_comment" => Comment(store, args),
+        "docxodus_links" => Links(store, args),
         "docxodus_annotate" => Annotate(store, args),
         "docxodus_track_changes" => TrackChanges(store, args),
         "docxodus_mutations" => Mutations(store, args),
@@ -533,6 +534,53 @@ internal static class Dispatcher
 
     private static bool IsMutatingCommentAction(string action) => action != "list";
 
+    // ─── Native hyperlinks / bookmarks (issue #451) ───────────────────
+
+    private static string Links(SessionStore store, JsonElement args)
+    {
+        var session = Session(store, args);
+        return RunLinksAction(session, Str(args, "action"), args);
+    }
+
+    private static string RunLinksAction(DocSession session, string action, JsonElement args) => action switch
+    {
+        "list_hyperlinks" => $"{{\"hyperlinks\":{DocxSessionOps.ListHyperlinks(session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+        "add_hyperlink" => DocxSessionOps.AddHyperlink(session.Handle, Str(args, "anchorId"),
+            Int(args, "startOffset"), Int(args, "length"), Str(args, "kind"), Str(args, "target")),
+        "update_hyperlink" => DocxSessionOps.UpdateHyperlink(session.Handle,
+            Str(args, "hyperlinkId"), Str(args, "kind"), Str(args, "target")),
+        "remove_hyperlink" => DocxSessionOps.RemoveHyperlink(session.Handle, Str(args, "hyperlinkId")),
+        "list_bookmarks" => $"{{\"bookmarks\":{DocxSessionOps.ListBookmarks(session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+        "add_bookmark" => BookmarkRangeAction(session, args, move: false),
+        "move_bookmark" => BookmarkRangeAction(session, args, move: true),
+        "rename_bookmark" => DocxSessionOps.RenameBookmark(session.Handle, Str(args, "name"), Str(args, "newName")),
+        "remove_bookmark" => DocxSessionOps.RemoveBookmark(session.Handle, Str(args, "name")),
+        _ => throw new McpToolException($"unknown docxodus_links action: {action}"),
+    };
+
+    private static string BookmarkRangeAction(DocSession session, JsonElement args, bool move) =>
+        move
+            ? DocxSessionOps.MoveBookmark(session.Handle, Str(args, "name"),
+                Str(args, "startAnchorId"), Int(args, "startOffset"),
+                Str(args, "endAnchorId"), Int(args, "endOffset"))
+            : DocxSessionOps.AddBookmark(session.Handle, Str(args, "name"),
+                Str(args, "startAnchorId"), Int(args, "startOffset"),
+                Str(args, "endAnchorId"), Int(args, "endOffset"));
+
+    private static ProjectionScopes ParseLinkScopes(string? scope) => scope switch
+    {
+        null or "all" => ProjectionScopes.All,
+        "body" => ProjectionScopes.Body,
+        "headers" => ProjectionScopes.Headers,
+        "footers" => ProjectionScopes.Footers,
+        "footnotes" => ProjectionScopes.Footnotes,
+        "endnotes" => ProjectionScopes.Endnotes,
+        _ => throw new McpToolException($"unknown link scope: {scope}"),
+    };
+
+    private static bool IsMutatingLinksAction(string action) =>
+        action is not ("list_hyperlinks" or "list_bookmarks");
+
     private static string AddComment(DocSession session, JsonElement args)
     {
         var anchorId = OptStr(args, "anchorId");
@@ -786,6 +834,7 @@ internal static class Dispatcher
                     "docxodus_table" => RunTableAction(session, action, mutationArgs),
                     "docxodus_list" => RunListAction(session, action, mutationArgs),
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
+                    "docxodus_links" => RunLinksAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
@@ -814,6 +863,8 @@ internal static class Dispatcher
             "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
                 or "set_start" or "clear_start" or "remove",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
+            "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
+                or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
             _ => false,
         };
         return known ? null : new EditError(
@@ -1057,6 +1108,30 @@ internal static class Dispatcher
                 break;
             case ("docxodus_comment", "remove"):
                 RequireStrings(args, "commentAnchorId");
+                break;
+
+            case ("docxodus_links", "add_hyperlink"):
+                RequireStrings(args, "anchorId", "kind", "target");
+                RequireNumbers(args, "startOffset", "length");
+                ValidateRequiredEnum(args, "kind", "external", "internal");
+                break;
+            case ("docxodus_links", "update_hyperlink"):
+                RequireStrings(args, "hyperlinkId", "kind", "target");
+                ValidateRequiredEnum(args, "kind", "external", "internal");
+                break;
+            case ("docxodus_links", "remove_hyperlink"):
+                RequireStrings(args, "hyperlinkId");
+                break;
+            case ("docxodus_links", "add_bookmark"):
+            case ("docxodus_links", "move_bookmark"):
+                RequireStrings(args, "name", "startAnchorId", "endAnchorId");
+                RequireNumbers(args, "startOffset", "endOffset");
+                break;
+            case ("docxodus_links", "rename_bookmark"):
+                RequireStrings(args, "name", "newName");
+                break;
+            case ("docxodus_links", "remove_bookmark"):
+                RequireStrings(args, "name");
                 break;
         }
     }

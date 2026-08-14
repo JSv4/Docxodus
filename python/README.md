@@ -148,6 +148,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **Inspection** | `list_styles`, `get_formatting`, `list_inline_spans`, `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |
+| **Native links/bookmarks** | `list_hyperlinks`, `add_hyperlink`, `update_hyperlink`, `remove_hyperlink`, `list_bookmarks`, `add_bookmark`, `move_bookmark`, `rename_bookmark`, `remove_bookmark` |
 | **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
 | **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering` |

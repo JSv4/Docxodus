@@ -79,6 +79,19 @@ All notable changes to this project will be documented in this file.
   evaluation, counting, and the whole multi-match rewrite share one mutation gate
   and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
   replacement.
+- **First-class hyperlinks and bookmarks across every editing surface (#448/#451/#469/#470).**
+  `DocxSession` can enumerate and mutate external or bookmark-target hyperlinks and paired,
+  multi-paragraph bookmarks with exact character spans. External relationships are owned and
+  reused by the containing body/header/footer/footnote/endnote part; internal links use
+  `w:anchor` without a package relationship. Rename retargets inbound links atomically, removal
+  refuses live targets, malformed/cross-part ranges return structured errors, destructive edits
+  cannot orphan markers, and undo/redo restores relationship topology. The same contract is
+  exposed through JSON ops, WASM/npm, stdio/Python, and MCP (`docxodus_links`); Markdown links now
+  use the same owner-aware promotion and orphan cleanup. Coverage includes Open XML validation,
+  save/reopen identity, exact run-format boundaries, repeated story-scoped bookmark ids, tracked
+  limitations, and relationship cleanup. This supersedes the earlier tracked-move clone policy:
+  a tracked block move containing bookmark markers now fails before snapshot instead of creating
+  two simultaneously-live copies of a globally unique bookmark name.
 - **Complete inspect-before-edit formatting surface (#448).** `DocxSession` now exposes an explicit
   style catalog (`ListStyles`), direct-versus-effective paragraph/run formatting
   (`GetFormatting`), and enumerable mutation-compatible run spans (`ListInlineSpans`). Effective

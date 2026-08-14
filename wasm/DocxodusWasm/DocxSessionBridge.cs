@@ -546,6 +546,45 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListComments(int h) => DocxSessionOps.ListComments(h);
 
+    [JSExport]
+    public static string ListHyperlinks(int h, int scopes) =>
+        DocxSessionOps.ListHyperlinks(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string AddHyperlink(int h, string anchor, int start, int length,
+        string kind, string target) =>
+        DocxSessionOps.AddHyperlink(h, anchor, start, length, kind, target);
+
+    [JSExport]
+    public static string UpdateHyperlink(int h, string hyperlinkId, string kind, string target) =>
+        DocxSessionOps.UpdateHyperlink(h, hyperlinkId, kind, target);
+
+    [JSExport]
+    public static string RemoveHyperlink(int h, string hyperlinkId) =>
+        DocxSessionOps.RemoveHyperlink(h, hyperlinkId);
+
+    [JSExport]
+    public static string ListBookmarks(int h, int scopes) =>
+        DocxSessionOps.ListBookmarks(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string AddBookmark(int h, string name, string startAnchor, int startOffset,
+        string endAnchor, int endOffset) =>
+        DocxSessionOps.AddBookmark(h, name, startAnchor, startOffset, endAnchor, endOffset);
+
+    [JSExport]
+    public static string RenameBookmark(int h, string name, string newName) =>
+        DocxSessionOps.RenameBookmark(h, name, newName);
+
+    [JSExport]
+    public static string MoveBookmark(int h, string name, string startAnchor, int startOffset,
+        string endAnchor, int endOffset) =>
+        DocxSessionOps.MoveBookmark(h, name, startAnchor, startOffset, endAnchor, endOffset);
+
+    [JSExport]
+    public static string RemoveBookmark(int h, string name) =>
+        DocxSessionOps.RemoveBookmark(h, name);
+
     /// <summary>Markup-native tracked-revision listing (issue #318), document order:
     /// <c>[{"id","type","author","date"?,"text","anchorId"?}]</c>. Ids are stable while
     /// the markup exists and address AcceptRevision/RejectRevision; type is

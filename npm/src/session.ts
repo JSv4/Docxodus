@@ -7,12 +7,14 @@ import type {
   AnchorTargetRef,
   AnnotationUpdate,
   BlockMetadata,
+  BookmarkInfo,
   BulkEditResult,
   CharSpan,
   CommentListEntry,
   CrossBlockMatch,
   DiffEntry,
   DocumentAnnotation,
+  DocumentRange,
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
@@ -24,6 +26,8 @@ import type {
   FormatOp,
   FormattingInspection,
   HeaderFooterKind,
+  HyperlinkInfo,
+  HyperlinkKind,
   InlineSpan,
   NumberFormat,
   PageNumberField,
@@ -61,7 +65,7 @@ import type {
   TextMatch,
 } from "./types.js";
 import type { PageMap } from "./pagination.js";
-import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, TrackedChangeMode } from "./types.js";
+import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, ProjectionScopes, TrackedChangeMode } from "./types.js";
 
 function mutationBatchChangeSet<T>(
   before: readonly T[],
@@ -967,6 +971,46 @@ export class DocxSession {
   /** The document's native Word comments in comments-part order. */
   listComments(): CommentListEntry[] {
     return JSON.parse(this.wasm.ListComments(this.handle)) as CommentListEntry[];
+  }
+
+  listHyperlinks(scopes: ProjectionScopes = ProjectionScopes.All): HyperlinkInfo[] {
+    return JSON.parse(this.wasm.ListHyperlinks(this.handle, scopes)) as HyperlinkInfo[];
+  }
+
+  addHyperlink(anchorId: string, span: CharSpan, kind: HyperlinkKind, target: string): EditResult {
+    return JSON.parse(this.wasm.AddHyperlink(
+      this.handle, anchorId, span.start, span.length, kind, target,
+    )) as EditResult;
+  }
+
+  updateHyperlink(hyperlinkId: string, kind: HyperlinkKind, target: string): EditResult {
+    return JSON.parse(this.wasm.UpdateHyperlink(this.handle, hyperlinkId, kind, target)) as EditResult;
+  }
+
+  removeHyperlink(hyperlinkId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveHyperlink(this.handle, hyperlinkId)) as EditResult;
+  }
+
+  listBookmarks(scopes: ProjectionScopes = ProjectionScopes.All): BookmarkInfo[] {
+    return JSON.parse(this.wasm.ListBookmarks(this.handle, scopes)) as BookmarkInfo[];
+  }
+
+  addBookmark(name: string, range: DocumentRange): EditResult {
+    return JSON.parse(this.wasm.AddBookmark(this.handle, name,
+      range.startAnchorId, range.startOffset, range.endAnchorId, range.endOffset)) as EditResult;
+  }
+
+  renameBookmark(name: string, newName: string): EditResult {
+    return JSON.parse(this.wasm.RenameBookmark(this.handle, name, newName)) as EditResult;
+  }
+
+  moveBookmark(name: string, range: DocumentRange): EditResult {
+    return JSON.parse(this.wasm.MoveBookmark(this.handle, name,
+      range.startAnchorId, range.startOffset, range.endAnchorId, range.endOffset)) as EditResult;
+  }
+
+  removeBookmark(name: string): EditResult {
+    return JSON.parse(this.wasm.RemoveBookmark(this.handle, name)) as EditResult;
   }
 
   // ─── Tracked revisions (issue #318) ──────────────────────────────────

@@ -512,6 +512,72 @@ internal static class DocxSessionOps
     public static string ListComments(int handle) =>
         DocxSessionJson.SerializeCommentList(SessionRegistry.Get(handle).ListComments());
 
+    // ─── Hyperlinks / bookmarks (issue #451) ───────────────────────────
+
+    public static string ListHyperlinks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeHyperlinks(SessionRegistry.Get(handle).ListHyperlinks(scopes));
+
+    public static string AddHyperlink(int handle, string anchorId, int start, int length,
+        string kind, string target)
+    {
+        var session = SessionRegistry.Get(handle);
+        if (!TryParseHyperlinkTarget(kind, target, out var parsed))
+            return InvalidHyperlinkKind(kind, anchorId);
+        return DocxSessionJson.Serialize(session.AddHyperlink(anchorId,
+            new CharSpan(start, length), parsed));
+    }
+
+    public static string UpdateHyperlink(int handle, string hyperlinkId, string kind, string target)
+    {
+        var session = SessionRegistry.Get(handle);
+        if (!TryParseHyperlinkTarget(kind, target, out var parsed))
+            return InvalidHyperlinkKind(kind);
+        return DocxSessionJson.Serialize(session.UpdateHyperlink(hyperlinkId, parsed));
+    }
+
+    public static string RemoveHyperlink(int handle, string hyperlinkId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveHyperlink(hyperlinkId));
+
+    public static string ListBookmarks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeBookmarks(SessionRegistry.Get(handle).ListBookmarks(scopes));
+
+    public static string AddBookmark(int handle, string name, string startAnchorId, int startOffset,
+        string endAnchorId, int endOffset) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddBookmark(name,
+            new DocumentRange(startAnchorId, startOffset, endAnchorId, endOffset)));
+
+    public static string RenameBookmark(int handle, string name, string newName) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RenameBookmark(name, newName));
+
+    public static string MoveBookmark(int handle, string name, string startAnchorId, int startOffset,
+        string endAnchorId, int endOffset) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MoveBookmark(name,
+            new DocumentRange(startAnchorId, startOffset, endAnchorId, endOffset)));
+
+    public static string RemoveBookmark(int handle, string name) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveBookmark(name));
+
+    private static bool TryParseHyperlinkTarget(string kind, string target,
+        out HyperlinkTarget parsed)
+    {
+        if (string.Equals(kind, "internal", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = HyperlinkTarget.Internal(target);
+            return true;
+        }
+        if (string.Equals(kind, "external", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = HyperlinkTarget.External(target);
+            return true;
+        }
+        parsed = null!;
+        return false;
+    }
+
+    private static string InvalidHyperlinkKind(string kind, string? anchorId = null) =>
+        DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidHyperlinkTarget,
+            $"unknown hyperlink target kind '{kind}'; expected 'internal' or 'external'", anchorId));
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op,

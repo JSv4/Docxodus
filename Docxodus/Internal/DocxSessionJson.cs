@@ -661,6 +661,10 @@ internal static class DocxSessionJson
         }
         if (r.AnnotationId is not null)
             sb.Append(",\"annotationId\":").Append(JsonString(r.AnnotationId));
+        if (r.HyperlinkId is not null)
+            sb.Append(",\"hyperlinkId\":").Append(JsonString(r.HyperlinkId));
+        if (r.BookmarkName is not null)
+            sb.Append(",\"bookmarkName\":").Append(JsonString(r.BookmarkName));
         if (r.Patch is not null)
         {
             sb.Append(",\"patch\":{")
@@ -903,6 +907,73 @@ internal static class DocxSessionJson
 
     private static string Invariant(double value) =>
         value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+    public static string SerializeHyperlinks(IReadOnlyList<HyperlinkInfo> links)
+    {
+        var sb = new StringBuilder(links.Count * 220 + 2).Append('[');
+        for (int i = 0; i < links.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var link = links[i];
+            sb.Append("{\"id\":").Append(JsonString(link.Id))
+              .Append(",\"kind\":").Append(JsonString(link.Kind == HyperlinkKind.Internal ? "internal" : "external"))
+              .Append(",\"owningPartUri\":").Append(JsonString(link.OwningPartUri))
+              .Append(",\"scope\":").Append(JsonString(link.Scope))
+              .Append(",\"anchorId\":").Append(JsonString(link.AnchorId))
+              .Append(",\"span\":{\"start\":").Append(link.Span.Start)
+              .Append(",\"length\":").Append(link.Span.Length).Append('}')
+              .Append(",\"text\":").Append(JsonString(link.Text));
+            if (link.Target is not null) sb.Append(",\"target\":").Append(JsonString(link.Target));
+            if (link.RelationshipId is not null) sb.Append(",\"relationshipId\":").Append(JsonString(link.RelationshipId));
+            if (link.RelationshipIsExternal is not null)
+                sb.Append(",\"relationshipIsExternal\":").Append(link.RelationshipIsExternal.Value ? "true" : "false");
+            sb.Append(",\"isBroken\":").Append(link.IsBroken ? "true" : "false").Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
+    public static string SerializeBookmarks(IReadOnlyList<BookmarkInfo> bookmarks)
+    {
+        var sb = new StringBuilder(bookmarks.Count * 320 + 2).Append('[');
+        for (int i = 0; i < bookmarks.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var bookmark = bookmarks[i];
+            sb.Append("{\"name\":").Append(JsonString(bookmark.Name))
+              .Append(",\"bookmarkId\":").Append(JsonString(bookmark.BookmarkId))
+              .Append(",\"startPartUri\":").Append(JsonString(bookmark.StartPartUri))
+              .Append(",\"startScope\":").Append(JsonString(bookmark.StartScope));
+            if (bookmark.EndPartUri is not null) sb.Append(",\"endPartUri\":").Append(JsonString(bookmark.EndPartUri));
+            if (bookmark.EndScope is not null) sb.Append(",\"endScope\":").Append(JsonString(bookmark.EndScope));
+            if (bookmark.Range is { } range)
+            {
+                sb.Append(",\"range\":{\"startAnchorId\":").Append(JsonString(range.StartAnchorId))
+                  .Append(",\"startOffset\":").Append(range.StartOffset)
+                  .Append(",\"endAnchorId\":").Append(JsonString(range.EndAnchorId))
+                  .Append(",\"endOffset\":").Append(range.EndOffset).Append('}');
+            }
+            sb.Append(",\"segments\":[");
+            for (int s = 0; s < bookmark.Segments.Count; s++)
+            {
+                if (s > 0) sb.Append(',');
+                var segment = bookmark.Segments[s];
+                sb.Append("{\"owningPartUri\":").Append(JsonString(segment.OwningPartUri))
+                  .Append(",\"scope\":").Append(JsonString(segment.Scope))
+                  .Append(",\"anchorId\":").Append(JsonString(segment.AnchorId))
+                  .Append(",\"span\":{\"start\":").Append(segment.Span.Start)
+                  .Append(",\"length\":").Append(segment.Span.Length).Append('}')
+                  .Append(",\"text\":").Append(JsonString(segment.Text)).Append('}');
+            }
+            sb.Append(']').Append(",\"text\":").Append(JsonString(bookmark.Text))
+              .Append(",\"isPaired\":").Append(bookmark.IsPaired ? "true" : "false")
+              .Append(",\"isManaged\":").Append(bookmark.IsManaged ? "true" : "false")
+              .Append(",\"isValid\":").Append(bookmark.IsValid ? "true" : "false");
+            if (bookmark.ValidationError is not null)
+                sb.Append(",\"validationError\":").Append(JsonString(bookmark.ValidationError));
+            sb.Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
 
     public static string SerializeEditResults(IReadOnlyList<EditResult> results)
     {

@@ -196,13 +196,11 @@ public class DocxSessionMoveBlockTests
         Assert.Contains("cross-block comment range", result.Error.Message);
     }
 
-    // A tracked move clones the source paragraph. Every id-bearing marker in the clone is a
-    // SECOND live copy, so the ids must be made unique or the document violates the schema's
-    // id-uniqueness constraint while the revision is pending — the exact state a redline is
-    // sent out in. Mirrors IrMarkupRenderer.NormalizeBookmarks step (B): both copies keep the
-    // NAME (each survives its own resolution); only the ids are renumbered.
+    // A tracked move keeps source and destination copies live simultaneously. A bookmark has
+    // document-global name identity, so it cannot be duplicated faithfully across both sides;
+    // moving it to only one side would lose it on either accept or reject. Reject explicitly.
     [Fact]
-    public void MoveBlock_TrackedParagraph_GivesClonedBookmarksFreshIds()
+    public void MoveBlock_TrackedParagraph_WithBookmark_IsExplicitlyUnsupported()
     {
         using var session = new DocxSession(
             Document(
@@ -217,23 +215,11 @@ public class DocxSessionMoveBlockTests
             });
         var anchors = ParagraphAnchors(session);
 
-        Assert.True(session.MoveBlock(anchors[0], anchors[2], Position.After).Success);
+        var result = session.MoveBlock(anchors[0], anchors[2], Position.After);
 
-        var saved = session.Save();
-        AssertValid(saved);
-        using var stream = new MemoryStream(saved);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var main = document.MainDocumentPart!.GetXDocument();
-        var starts = main.Descendants(W.bookmarkStart).ToList();
-        var ends = main.Descendants(W.bookmarkEnd).ToList();
-
-        Assert.Equal(2, starts.Count);
-        Assert.Equal(2, ends.Count);
-        // Both copies keep the name; the ids are distinct and each start still pairs with an end.
-        Assert.All(starts, s => Assert.Equal("_Ref1", (string?)s.Attribute(W.name)));
-        var startIds = starts.Select(s => (string?)s.Attribute(W.id)).ToList();
-        Assert.Equal(2, startIds.Distinct().Count());
-        Assert.Equal(startIds.OrderBy(x => x), ends.Select(e => (string?)e.Attribute(W.id)).OrderBy(x => x));
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, result.Error!.Code);
+        Assert.Single(session.ListBookmarks());
     }
 
     // The drag UI gates its drop indicators on this, so it has to agree with MoveBlock exactly:
