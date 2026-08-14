@@ -500,9 +500,8 @@ public class DocxSessionPreviewBatchTests
     }
 
     private sealed record Fingerprint(
-        byte[] NormalBytes,
-        byte[] PersistedBytes,
-        IReadOnlyDictionary<string, string> OpcEntries,
+        IReadOnlyDictionary<string, string> NormalOpcEntries,
+        IReadOnlyDictionary<string, string> PersistedOpcEntries,
         string Markdown,
         string[] Anchors,
         long Version,
@@ -528,6 +527,9 @@ public class DocxSessionPreviewBatchTests
         {
             // Observe Save output on complete package clones. Calling Save on the live session
             // would itself replace its read caches and make the invariant probe perturb state.
+            // Compare entry payloads rather than raw ZIP bytes: DOS entry timestamps are transport
+            // metadata and may advance across successive clone saves. This matches
+            // GetPackageContentHash's policy of excluding ZIP timestamps and compression details.
             var projection = session.Project();
             _ = session.AnchorIndex();
             byte[] normal;
@@ -537,8 +539,7 @@ public class DocxSessionPreviewBatchTests
             using (var persistedClone = session.CreateShadowSession())
                 persisted = persistedClone.Save(persistAnchorIds: true);
             return new Fingerprint(
-                normal,
-                persisted,
+                HashOpcEntries(normal),
                 HashOpcEntries(persisted),
                 projection.Markdown,
                 projection.AnchorIndex.Select(pair =>
@@ -572,11 +573,12 @@ public class DocxSessionPreviewBatchTests
             Assert.Same(CachedAnchorIndex, PrivateField<object?>(session, "_cachedAnchorIndex"));
             Assert.Same(RawOps, PrivateField<object?>(session, "_raw"));
             var after = Capture(session);
-            Assert.Equal(NormalBytes, after.NormalBytes);
-            Assert.Equal(PersistedBytes, after.PersistedBytes);
             Assert.Equal(
-                OpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal),
-                after.OpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+                NormalOpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+                after.NormalOpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+            Assert.Equal(
+                PersistedOpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+                after.PersistedOpcEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal));
             Assert.Equal(Markdown, after.Markdown);
             Assert.Equal(Anchors, after.Anchors);
             Assert.Equal(Version, after.Version);
