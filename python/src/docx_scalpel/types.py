@@ -1345,7 +1345,14 @@ class WmlToMarkdownConverterSettings:
 class DocxSessionSettings:
     """Constructor settings passed to ``open_session(bytes, settings=...)``."""
 
-    undo_depth: int = 50
+    #: Maximum undo steps retained (default 20, was 50). Each step is a full document
+    #: snapshot, so this is a step count and not a memory bound -- see
+    #: ``undo_memory_budget_bytes``.
+    undo_depth: int = 20
+    #: Approximate ceiling in bytes on memory held by undo/redo snapshots (default 128 MiB).
+    #: Oldest history is discarded when exceeded, so on a large document undo may not reach
+    #: the full ``undo_depth``; one step is always retained. 0 bounds by depth alone.
+    undo_memory_budget_bytes: int = 128 * 1024 * 1024
     validate_raw_ops: bool = False
     tracked_changes: TrackedChangeMode = TrackedChangeMode.ACCEPT
     revision_author: str | None = None
@@ -1357,6 +1364,7 @@ class DocxSessionSettings:
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "undoDepth": self.undo_depth,
+            "undoMemoryBudgetBytes": self.undo_memory_budget_bytes,
             "validateRawOps": self.validate_raw_ops,
             "trackedChanges": self.tracked_changes.value,
             "persistAnchorIds": self.persist_anchor_ids,

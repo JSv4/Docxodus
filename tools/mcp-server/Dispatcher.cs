@@ -61,11 +61,16 @@ internal static class Dispatcher
             "strip_deletions" => TrackedChangeMode.StripDeletions,
             _ => TrackedChangeMode.Accept,
         };
+        // Defaults come from the settings object, not repeated literals, so this surface cannot
+        // drift from the .NET default the way the hardcoded undoDepth of 50 had.
+        var settingDefaults = new DocxSessionSettings();
         var settings = new DocxSessionSettings
         {
             TrackedChanges = tracked,
             RevisionAuthor = OptStr(args, "revisionAuthor"),
-            UndoDepth = IntOpt(args, "undoDepth", 50),
+            UndoDepth = IntOpt(args, "undoDepth", settingDefaults.UndoDepth),
+            UndoMemoryBudgetBytes = LongOpt(
+                args, "undoMemoryBudgetBytes", settingDefaults.UndoMemoryBudgetBytes),
             PersistAnchorIds = BoolOpt(args, "persistAnchorIds", false),
         };
 
@@ -759,6 +764,10 @@ internal static class Dispatcher
     private static int IntOpt(JsonElement args, string name, int fallback) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt32() : fallback;
+
+    private static long LongOpt(JsonElement args, string name, long fallback) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt64() : fallback;
 
     private static int? OptInt(JsonElement args, string name) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
