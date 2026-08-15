@@ -299,6 +299,13 @@ Two conventions worth pinning down because they affect agent reasoning:
 
 **Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
+Structural tracking is deliberately capability-gated. Row insertion/deletion and column
+insertion emit native Word row/cell/property revisions; single-paragraph list application,
+removal, and level changes emit `numPr/w:ins` or `pPrChange`. Shapes without a safely reversible
+encoding—tracked column deletion, merge/unmerge, range list formatting, and list-start
+overrides—return `TrackedOperationUnsupported` without mutation or history. A table with a live
+cell structural revision returns `UnresolvedStructuralRevision` before another structural edit.
+
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
 ## When to use what
@@ -1259,28 +1266,55 @@ Semantics:
   stdio host + docx-scalpel (`set_tracked_changes`/`set_revision_author`), MCP
   (`docxodus_track_changes` action `set_mode`).
 
-## Per-revision accept/reject (issue #318)
+## Tracked-revision registry and resolution (issues #318, #455)
 
 Tracked-change resolution used to be all-or-nothing (`RevisionProcessor` over the whole
 document); the single most common review action — accept one revision, reject another —
-required emulation. Three session ops close that gap:
+required emulation. The session now exposes one live, part-aware registry and uses it for
+individual and bulk resolution:
 
 | Method | Description |
 |--------|-------------|
-| `ListRevisions()` | Read-only: `RevisionListEntry(Id, Type, Author, Date?, Text, AnchorId?)` in document order across body, headers, footers, footnotes, endnotes. Read directly off the live markup — no accept-all/reject-all re-diff — so `Author`/`Date` are the markup's true `w:author`/`w:date` and the call is cheap on large documents. Physically contiguous markup of the same kind+author groups into ONE entry per user-visible change: an inserted paragraph is one revision (runs + mark, `Text` ends in `¶`), a row-deleted table row absorbs its cell markup, a named move pair is one `"move"` entry covering both sides. `Id` (`"rev"` + the group's smallest `w:id`) is stable across calls and across resolution of *other* revisions. `Type` is `"insert"`/`"delete"`/`"move"`/`"format"`. |
+| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, content-control envelopes, and numbering-property revisions. Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
 | `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
 | `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
+| `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation. |
 
-Mechanics live in `Docxodus/Internal/RevisionOps.cs`; the per-element semantics mirror
-`RevisionProcessor`'s transforms, applied to one group in place. An unknown, already-resolved,
-or since-removed id fails with `RevisionNotFound` — re-list for the current set. v1 does not
-enumerate `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del ranges, or
-`w:numPr` numbering-ins markers; whole-document accept/reject still handles those. Wired
-through every surface: WASM/npm (`listRevisions`/`acceptRevision`/`rejectRevision`), stdio
-host + docx-scalpel (`list_revisions`/`accept_revision`/`reject_revision`), MCP
-(`docxodus_track_changes` actions `list`/`accept`/`reject` with `revisionId`).
+Mechanics live in `Docxodus/Internal/RevisionRegistry.cs` and `RevisionOps.cs`; the
+per-element semantics mirror `RevisionProcessor`'s transforms, applied to one atomic group in
+place. An unknown, already-resolved, or since-removed id fails with `RevisionNotFound`; unsafe
+entries use `RevisionUnsupported`, `RevisionMalformed`, or `RevisionAmbiguous`. Wired through
+every surface: WASM/npm, the stdio host + docx-scalpel, and MCP `docxodus_track_changes`.
 The same ids can be passed to `AddCommentToRevision` (or `docxodus_comment add` with
 `revisionId`) to anchor review discussion to the exact live change before it is resolved.
+
+### Bulk resolution now fails closed — and that is a capability change
+
+Before #455, `AcceptAllRevisions`/`RejectAllRevisions` were a whole-document
+`RevisionProcessor` byte transform that always succeeded. They are now the selective resolver
+run over every registry entry, and the resolver **refuses the whole operation** on the first
+entry it cannot resolve safely. There is deliberately **no `force` mode**: a document whose
+revision markup the registry does not understand cannot be bulk-resolved through any surface.
+
+Concretely, these shapes were resolvable before and are refused now:
+
+| Shape | Status | Diagnostic |
+|-------|--------|-----------|
+| A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
+| A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
+| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
+| `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges | `Unsupported` | `unsupported_custom_xml_move_range` |
+| `w:ins`/`w:del` inside an `m:ctrlPr` (math control properties) | `Unsupported` | `unsupported_revision_family` |
+| `w:del` on a run's `w:rPr` or on a paragraph's `w:numPr` | `Unsupported` | `unsupported_revision_family` |
+| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Unsupported` | `unsupported_revision_family` |
+| `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
+| A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
+
+`RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
+public, so a caller that needs the old always-succeeding behaviour can run the transform over
+saved bytes and reopen the session. Whether the session surface should grow an explicit
+opt-in escape hatch is an open public-API decision, not something the resolver should decide
+silently.
 
 ## ApplyFormat — substring and TextMatch overloads
 
@@ -1811,9 +1845,10 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
 | Re-list revisions (`ListRevisions`) and reissue with a current id | `RevisionNotFound` |
 | Re-list native objects and reissue with a current id/name | `HyperlinkNotFound`, `BookmarkNotFound` |
+| Inspect the revision diagnostic and repair/reopen the source document | `RevisionUnsupported`, `RevisionMalformed`, `RevisionAmbiguous` |
 | Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan`, `EmptyHyperlinkSpan` |
 | Fix the target/name or resolve the existing reference first | `DuplicateBookmarkName`, `InvalidBookmarkName`, `InvalidHyperlinkTarget`, `MissingBookmarkTarget`, `BookmarkInUse`, `ManagedBookmark` |
-| Choose a safe run/range boundary or switch subsequent edits out of tracked mode | `UnsupportedInlineBoundary`, `TrackedOperationUnsupported` |
+| Choose a safe run/range boundary, resolve the pending structural revision, or switch subsequent edits out of tracked mode | `UnsupportedInlineBoundary`, `UnresolvedStructuralRevision`, `TrackedOperationUnsupported` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query `ListStyles()` for a current style id, or `GetListMembership()` for the valid numbering level | `UnknownStyle`, `InvalidListLevel` |

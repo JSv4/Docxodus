@@ -1933,9 +1933,7 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
-    /// <summary>Serialize <see cref="DocxSession.ListRevisions"/> output:
-    /// <c>[{"id","type","author","date"?,"text","anchorId"?}]</c> (date/anchorId
-    /// omitted when null).</summary>
+    /// <summary>Serialize the strict, part-aware revision registry wire shape.</summary>
     public static string SerializeRevisionList(IReadOnlyList<RevisionListEntry> revisions)
     {
         var sb = new StringBuilder(64 + revisions.Count * 128);
@@ -1946,15 +1944,64 @@ internal static class DocxSessionJson
             var r = revisions[i];
             sb.Append("{\"id\":").Append(JsonString(r.Id))
               .Append(",\"type\":").Append(JsonString(r.Type))
+              .Append(",\"family\":").Append(JsonString(RevisionFamilyWire(r.Family)))
+              .Append(",\"constituentIds\":[");
+            for (int c = 0; c < r.ConstituentIds.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                sb.Append(JsonString(r.ConstituentIds[c]));
+            }
+            sb.Append(']')
               .Append(",\"author\":").Append(JsonString(r.Author));
             if (r.Date is not null) sb.Append(",\"date\":").Append(JsonString(r.Date));
-            sb.Append(",\"text\":").Append(JsonString(r.Text));
+            sb.Append(",\"text\":").Append(JsonString(r.Text))
+              .Append(",\"partUri\":").Append(JsonString(r.PartUri))
+              .Append(",\"scope\":").Append(JsonString(r.Scope));
             if (r.AnchorId is not null) sb.Append(",\"anchorId\":").Append(JsonString(r.AnchorId));
+            sb.Append(",\"affectedAnchors\":");
+            AppendAnchorArray(sb, r.AffectedAnchors);
+            sb.Append(",\"resolutionStatus\":")
+              .Append(JsonString(RevisionStatusWire(r.ResolutionStatus)));
+            if (r.Diagnostic is not null)
+            {
+                sb.Append(",\"diagnostic\":{\"code\":")
+                  .Append(JsonString(r.Diagnostic.Code))
+                  .Append(",\"message\":").Append(JsonString(r.Diagnostic.Message))
+                  .Append('}');
+            }
             sb.Append('}');
         }
         sb.Append(']');
         return sb.ToString();
     }
+
+    private static string RevisionFamilyWire(RevisionFamily family) => family switch
+    {
+        RevisionFamily.ContentInsert => "content_insert",
+        RevisionFamily.ContentDelete => "content_delete",
+        RevisionFamily.Move => "move",
+        RevisionFamily.ParagraphMark => "paragraph_mark",
+        RevisionFamily.RowInsert => "row_insert",
+        RevisionFamily.RowDelete => "row_delete",
+        RevisionFamily.CellInsert => "cell_insert",
+        RevisionFamily.CellDelete => "cell_delete",
+        RevisionFamily.CellMerge => "cell_merge",
+        RevisionFamily.ContentControlInsert => "content_control_insert",
+        RevisionFamily.ContentControlDelete => "content_control_delete",
+        RevisionFamily.NumberingPropertiesInsert => "numbering_properties_insert",
+        RevisionFamily.NumberingChange => "numbering_change",
+        RevisionFamily.PropertiesChange => "properties_change",
+        _ => "unsupported",
+    };
+
+    private static string RevisionStatusWire(RevisionResolutionStatus status) => status switch
+    {
+        RevisionResolutionStatus.Supported => "supported",
+        RevisionResolutionStatus.Unsupported => "unsupported",
+        RevisionResolutionStatus.Malformed => "malformed",
+        RevisionResolutionStatus.Ambiguous => "ambiguous",
+        _ => "unsupported",
+    };
 
     /// <summary>
     /// Parse an ISO-8601 comment date from the wire; null/empty → null (the deterministic

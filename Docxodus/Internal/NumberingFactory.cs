@@ -13,8 +13,8 @@ namespace Docxodus.Internal;
 /// <see cref="DocxSession.ApplyListFormat"/> / <see cref="DocxSession.ApplyListFormatRange"/>
 /// use this when no suitable numbering exists. Definitions are tagged with a fixed marker
 /// <c>w:nsid</c> per format and resolved find-or-create, so the op is idempotent across calls,
-/// save/reopen, and undo (the numbering part is not snapshotted; the paragraph's <c>w:numPr</c>
-/// is).
+/// save/reopen, and undo/redo. Session snapshots cover both the numbering part and paragraph
+/// <c>w:numPr</c> references.
 /// </summary>
 internal static class NumberingFactory
 {
@@ -39,6 +39,14 @@ internal static class NumberingFactory
         ListFormat.UpperRomanParenthesis => "0D0CC102",
         _ => throw new ArgumentOutOfRangeException(nameof(fmt), fmt, "no numbering definition for this format"),
     };
+
+    internal static bool IsDocxodusDefinition(XElement abstractNum)
+    {
+        var nsid = (string?)abstractNum.Element(W + "nsid")?.Attribute(W + "val");
+        return Enum.GetValues<ListFormat>()
+            .Where(format => format != ListFormat.None)
+            .Any(format => string.Equals(nsid, NsidFor(format), StringComparison.OrdinalIgnoreCase));
+    }
 
     // Standard Word bullet cycle (•, o, ▪) for synthesized nested levels — same glyph/font set
     // BuildAbstractNum emits for our own multi-level lists, so source and synthesized lists nest
@@ -92,6 +100,28 @@ internal static class NumberingFactory
         // projected parts (body/headers/...), not the numbering part we just mutated.
         part.PutXDocument();
         return (int)num.Attribute(W + "numId")!;
+    }
+
+    /// <summary>
+    /// Return whether <see cref="EnsureNumbering"/> would have to add either the
+    /// Docxodus-owned abstract definition or its concrete <c>w:num</c> instance.
+    /// This is a read-only preflight for tracked operations: a paragraph revision can
+    /// restore <c>w:numPr</c>, but cannot carry a before-image for numbering.xml.
+    /// </summary>
+    internal static bool WouldEnsureNumberingMutate(WordprocessingDocument doc, ListFormat fmt)
+    {
+        if (fmt == ListFormat.None) return false;
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        if (root is null) return true;
+
+        string nsid = NsidFor(fmt);
+        var abstractNum = root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Element(W + "nsid")?.Attribute(W + "val") == nsid);
+        if (abstractNum is null) return true;
+
+        var abstractId = (string?)abstractNum.Attribute(W + "abstractNumId");
+        return abstractId is null || !root.Elements(W + "num").Any(n =>
+            (string?)n.Element(W + "abstractNumId")?.Attribute(W + "val") == abstractId);
     }
 
     private static int NextId(XElement root, string elemLocalName, string idAttrLocalName)
@@ -222,10 +252,9 @@ internal static class NumberingFactory
     /// new numId, or null when <paramref name="numId"/> resolves to no <c>w:num</c>.
     /// </summary>
     /// <remarks>
-    /// Additive-only ON PURPOSE: the source num is never mutated, because the numbering part is
-    /// not snapshotted (see the class remarks) — the caller repoints the affected paragraphs'
-    /// <c>w:numPr</c> at the clone, which IS snapshotted, so undo restores the paragraphs and
-    /// merely strands the clone unreferenced (harmless, like an undone <see cref="EnsureNumbering"/>).
+    /// Additive-only ON PURPOSE: the source num may be shared by paragraphs outside the requested
+    /// sequence, so the caller repoints only the affected paragraphs' <c>w:numPr</c> at a clone.
+    /// Session snapshots restore both the paragraph references and the numbering definition.
     /// </remarks>
     public static int? CloneNumWithStartOverride(WordprocessingDocument doc, int numId, int ilvl, int? value)
     {
@@ -352,5 +381,24 @@ internal static class NumberingFactory
             part.PutXDocument();
         }
         return mutated;
+    }
+
+    /// <summary>
+    /// Return whether <see cref="EnsureLevelDefined"/> would mutate the live abstract
+    /// numbering definition. Missing/invalid numbering references return false because
+    /// <see cref="EnsureLevelDefined"/> would likewise make no package change.
+    /// </summary>
+    internal static bool WouldEnsureLevelDefinedMutate(
+        WordprocessingDocument doc, int numId, int targetIlvl)
+    {
+        if (targetIlvl < 0 || targetIlvl > 8) return false;
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root?.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+        var abstractId = (string?)num?.Element(W + "abstractNumId")?.Attribute(W + "val");
+        var abstractNum = abstractId is null ? null : root?.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Attribute(W + "abstractNumId") == abstractId);
+        return abstractNum is not null && !abstractNum.Elements(W + "lvl").Any(level =>
+            (string?)level.Attribute(W + "ilvl") == targetIlvl.ToString());
     }
 }

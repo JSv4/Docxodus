@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Structural tracked revisions and one live revision registry (#455).** *(Breaking — see
+  the Breaking changes section below.)* `DocxSession` now enumerates and resolves the
+  structural revision families it previously ignored —
+  table-cell insert/delete/merge (`w:cellIns`/`w:cellDel`/`w:cellMerge`), content-control
+  (`w:sdt`) insert/delete envelopes, and numbering revisions (`w:numPr/w:ins`,
+  `w:numberingChange`) — through the same part-aware registry that already owned
+  content, paragraph-mark, row, move, and `*PrChange` revisions. `RevisionListEntry`
+  gains `Family`, `ConstituentIds`, `PartUri`, `Scope`, `AffectedAnchors`,
+  `ResolutionStatus`, and `Diagnostic`; `AcceptAllRevisions`/`RejectAllRevisions` become
+  ordinary undoable session mutations built on the selective resolver instead of a
+  whole-document `RevisionProcessor` byte transform plus a session rebind. Structural
+  editing in `TrackedChangeMode.RenderInline` emits native markup for table row
+  insert/delete and column insert, and for single-paragraph list application, removal,
+  and level changes; shapes with no safely reversible encoding return
+  `TrackedOperationUnsupported` without mutating or recording history, and a table with
+  an unresolved cell revision returns `UnresolvedStructuralRevision`. Rippled through
+  `DocxSessionOps`/JSON, WASM/npm, the stdio host + `docx-scalpel`, and MCP
+  `docxodus_track_changes` (now also usable as a `docxodus_mutations` batch step). See
+  `docs/architecture/docx_mutation_api.md` and `docx_agent_server.md`.
 - **Canonical table addressing and complete table-operation ripple (#450, absorbing
   #471).** Tables now expose explicit stable identities for the `w:tbl`, every
   `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus
@@ -196,6 +215,37 @@ All notable changes to this project will be documented in this file.
   `UndoHistoryTrimmedForMemory`** — makes the bound observable. The last is sticky
   and reports that the *budget*, not the depth, discarded history, so an editor can
   explain why undo stops short of the configured depth instead of appearing broken.
+
+### Breaking changes
+- **`RevisionListEntry` is a required-init record, not a positional one (#455).** It was
+  `RevisionListEntry(string Id, string Type, string Author, string? Date, string Text,
+  string? AnchorId)`; it is now an init-only record with the members above. Positional
+  construction and deconstruction no longer compile in .NET, and in Python the fourth
+  positional argument of `docx_scalpel.types.RevisionListEntry` is now `family`, not
+  `date` — a positional caller silently rebinds. Construct by name on both surfaces.
+- **Revision ids changed format from `revNNN` to opaque `rev2-<hex>` (#455).** Ids are
+  emitted in the new format only. A legacy `revNNN` id is still accepted as *input* to
+  `AcceptRevision`/`RejectRevision` when it identifies exactly one live revision, and fails
+  with `RevisionNotFound` otherwise. Do not pattern-match, sort, or derive `w:id` values
+  from an id — re-list and use the value verbatim.
+- **MCP `docxodus_track_changes` `accept_all`/`reject_all` return a full `EditResult`,
+  not `{"success": true}` (#455).** Callers now get `modified`/`removed` anchors and, on
+  failure, a typed `error`. The old shape had no failure representation at all.
+- **Bulk revision resolution fails closed and has no `force` mode (#455).** Accepting or
+  rejecting everything used to be a whole-document `RevisionProcessor` transform that
+  always succeeded. It is now the selective resolver over every registry entry and
+  refuses the entire operation — mutating nothing — on the first entry it cannot resolve
+  safely: a missing or non-numeric `w:id`, one `w:id` shared by two live revisions in one
+  part, `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges, `w:ins`/`w:del`
+  under `m:ctrlPr`, `w:del` on a run's `w:rPr` or a paragraph's `w:numPr`, a `w:sdt`
+  envelope whose range topology is not Word's two-pair shape, an unattached
+  `w:numberingChange`, or a malformed cell marker. `RevisionProcessor.AcceptRevisions`/
+  `RejectRevisions` still handle all of these and stay public, so the previous behaviour
+  is reachable over saved bytes. Full table in `docs/architecture/docx_mutation_api.md`.
+- **`EditErrorCode.TrackedOperationUnsupported` moved down the enum (#455),** shifting the
+  numeric values of about ten members. The wire is unaffected (every transport serializes
+  the name), but a .NET consumer that persisted or compared the integer values must
+  recompile.
 
 ### Changed
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its

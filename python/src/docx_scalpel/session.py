@@ -1519,6 +1519,22 @@ class DocxSession:
             self._call("reject_revision", {"revisionId": revision_id})
         )
 
+    def accept_all_revisions(self) -> EditResult:
+        """Accept every live revision as one undoable mutation.
+
+        Fails closed: an unsupported, malformed, or ambiguous registry entry aborts the
+        whole operation (``revision_unsupported``/``revision_malformed``/
+        ``revision_ambiguous``) and nothing is mutated. There is no force mode — call
+        ``list_revisions`` and read each entry's ``diagnostic``. Honors an active
+        ``preconditions`` context like any other mutation."""
+        return EditResult._from_wire(self._call("accept_all_revisions", {}))
+
+    def reject_all_revisions(self) -> EditResult:
+        """Reject every live revision as one undoable mutation.
+
+        Fails closed the same way ``accept_all_revisions`` does."""
+        return EditResult._from_wire(self._call("reject_all_revisions", {}))
+
     # -- Tier C: formatting -----------------------------------------------
 
     def apply_format(

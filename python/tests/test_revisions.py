@@ -1,4 +1,4 @@
-"""Selective per-revision accept/reject (issue #318).
+"""Live revision registry and selective/bulk resolution (issues #318 and #455).
 
 ``list_revisions`` reads tracked revisions directly off the live markup with
 stable ids and the markup's true authors; ``accept_revision``/``reject_revision``
@@ -36,7 +36,14 @@ def test_list_revisions_reads_markup_identity(tour_plan_bytes: bytes) -> None:
         assert len(revisions) == 2  # one delete (old text) + one insert (new text)
         assert {r.type for r in revisions} == {"delete", "insert"}
         assert all(r.author == "py-reviewer" for r in revisions)
-        assert all(r.id.startswith("rev") for r in revisions)
+        assert all(r.id.startswith("rev2-") for r in revisions)
+        assert {r.family for r in revisions} == {"content_delete", "content_insert"}
+        assert all(r.constituent_ids for r in revisions)
+        assert all(r.part_uri == "/word/document.xml" for r in revisions)
+        assert all(r.scope == "body" for r in revisions)
+        assert all(r.affected_anchors for r in revisions)
+        assert all(r.resolution_status == "supported" for r in revisions)
+        assert all(r.diagnostic is None for r in revisions)
         insert = next(r for r in revisions if r.type == "insert")
         assert insert.text == "Tracked rewrite."
         assert insert.anchor_id is not None
@@ -91,3 +98,19 @@ def test_reject_revision_is_undoable(tour_plan_bytes: bytes) -> None:
 
         assert session.undo()
         assert insert.id in [r.id for r in session.list_revisions()]
+
+
+def test_bulk_resolution_is_undoable(tour_plan_bytes: bytes) -> None:
+    for accept in (True, False):
+        with open_session(tour_plan_bytes) as session:
+            session.set_tracked_changes(TrackedChangeMode.RENDER_INLINE)
+            anchor = _first_body_paragraph(session)
+            assert session.replace_text(anchor, "Bulk resolution.").success
+            before = [r.id for r in session.list_revisions()]
+
+            result = (session.accept_all_revisions() if accept
+                      else session.reject_all_revisions())
+            assert result.success, result.error
+            assert session.list_revisions() == ()
+            assert session.undo()
+            assert [r.id for r in session.list_revisions()] == before

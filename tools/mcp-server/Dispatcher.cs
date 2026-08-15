@@ -687,6 +687,11 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var action = Str(args, "action");
+        return RunTrackChangesAction(session, action, args);
+    }
+
+    private static string RunTrackChangesAction(DocSession session, string action, JsonElement args)
+    {
         switch (action)
         {
             case "list":
@@ -696,7 +701,8 @@ internal static class Dispatcher
                 // true authors/dates, and none of the ~seconds-long accept-all/reject-all
                 // re-diff the old listing paid on large documents.
                 var revisionsJson = "{\"revisions\":" + DocxSessionOps.ListRevisions(session.Handle) + "}";
-                return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"));
+                return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"),
+                    OptStr(args, "family"), OptStr(args, "resolutionStatus"), OptStr(args, "partUri"));
             }
             case "accept":
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
@@ -705,31 +711,11 @@ internal static class Dispatcher
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
                     DocxSessionOps.RejectRevision(session.Handle, Str(args, "revisionId")));
             case "accept_all":
-            {
-                var preconditions = ParsePreconditions(args, MutationTarget(args));
-                var check = Check(session, preconditions);
-                if (check is not null) return check;
-                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
-                // SaveWithAnchorIds (not Save) so the transformed bytes still carry the
-                // PtOpenXml:Unid attributes Rebind's reopen needs to keep anchor ids stable.
-                var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
-                var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("session.docx", bytes));
-                store.Rebind(session, accepted.DocumentByteArray);
-                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
-                return "{\"success\":true}";
-            }
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.AcceptAllRevisions(session.Handle));
             case "reject_all":
-            {
-                var preconditions = ParsePreconditions(args, MutationTarget(args));
-                var check = Check(session, preconditions);
-                if (check is not null) return check;
-                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
-                var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
-                var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("session.docx", bytes));
-                store.Rebind(session, rejected.DocumentByteArray);
-                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
-                return "{\"success\":true}";
-            }
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.RejectAllRevisions(session.Handle));
             case "set_mode":
             {
                 var modeStr = Str(args, "mode");
@@ -751,9 +737,11 @@ internal static class Dispatcher
         }
     }
 
-    private static string FilterRevisions(string revisionsJson, string? author, string? changeType)
+    private static string FilterRevisions(string revisionsJson, string? author, string? changeType,
+        string? family, string? resolutionStatus, string? partUri)
     {
-        if (author is null && changeType is null) return revisionsJson;
+        if (author is null && changeType is null && family is null
+            && resolutionStatus is null && partUri is null) return revisionsJson;
         using var doc = JsonDocument.Parse(revisionsJson);
         if (!doc.RootElement.TryGetProperty("revisions", out var revisions) || revisions.ValueKind != JsonValueKind.Array)
             return revisionsJson;
@@ -766,6 +754,17 @@ internal static class Dispatcher
                 continue;
             if (changeType is not null
                 && (!r.TryGetProperty("type", out var t) || !string.Equals(t.GetString(), changeType, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (family is not null
+                && (!r.TryGetProperty("family", out var f) || !string.Equals(f.GetString(), family, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (resolutionStatus is not null
+                && (!r.TryGetProperty("resolutionStatus", out var status)
+                    || !string.Equals(status.GetString(), resolutionStatus, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (partUri is not null
+                && (!r.TryGetProperty("partUri", out var part)
+                    || !string.Equals(part.GetString(), partUri, StringComparison.Ordinal)))
                 continue;
             kept.Add(r.GetRawText());
         }
@@ -880,6 +879,7 @@ internal static class Dispatcher
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
                     "docxodus_links" => RunLinksAction(session, action, mutationArgs),
                     "docxodus_images" => RunImagesAction(session, action, mutationArgs),
+                    "docxodus_track_changes" => RunTrackChangesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
@@ -912,6 +912,8 @@ internal static class Dispatcher
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
             "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
+            "docxodus_track_changes" => action is "accept" or "reject"
+                or "accept_all" or "reject_all",
             _ => false,
         };
         return known ? null : new EditError(
@@ -1204,6 +1206,14 @@ internal static class Dispatcher
                 break;
             case ("docxodus_images", "remove"):
                 RequireStrings(args, "imageId");
+                break;
+
+            case ("docxodus_track_changes", "accept"):
+            case ("docxodus_track_changes", "reject"):
+                RequireStrings(args, "revisionId");
+                break;
+            case ("docxodus_track_changes", "accept_all"):
+            case ("docxodus_track_changes", "reject_all"):
                 break;
         }
     }

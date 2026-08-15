@@ -662,6 +662,14 @@ public static partial class DocxSessionBridge
     public static string RejectRevision(int h, string revisionId) =>
         DocxSessionOps.RejectRevision(h, revisionId);
 
+    /// <summary>Accept all supported live revisions as one undoable session mutation.</summary>
+    [JSExport]
+    public static string AcceptAllRevisions(int h) => DocxSessionOps.AcceptAllRevisions(h);
+
+    /// <summary>Reject all supported live revisions as one undoable session mutation.</summary>
+    [JSExport]
+    public static string RejectAllRevisions(int h) => DocxSessionOps.RejectAllRevisions(h);
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));

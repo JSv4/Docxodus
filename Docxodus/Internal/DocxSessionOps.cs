@@ -84,9 +84,6 @@ internal static class DocxSessionOps
             : new EditResult { Success = false, Error = error });
     }
 
-    internal static void RestoreVersionAfterRebind(int handle, long version) =>
-        SessionRegistry.Get(handle).RestoreVersionAfterRebind(version);
-
     public static string ExecuteBatch(
         int handle,
         MutationBatchMode mode,
@@ -879,6 +876,14 @@ internal static class DocxSessionOps
     public static string RejectRevision(int handle, string revisionId,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
+
+    public static string AcceptAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptAllRevisions());
+
+    public static string RejectAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectAllRevisions());
 
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
