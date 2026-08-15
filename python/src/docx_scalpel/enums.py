@@ -195,6 +195,16 @@ class EditErrorCode(str, Enum):
     REVISION_AMBIGUOUS = "revision_ambiguous"
     TRACKED_OPERATION_UNSUPPORTED = "tracked_operation_unsupported"
     UNRESOLVED_STRUCTURAL_REVISION = "unresolved_structural_revision"
+    CONTENT_CONTROL_NOT_FOUND = "content_control_not_found"
+    CONTENT_CONTROL_MALFORMED = "content_control_malformed"
+    CONTENT_CONTROL_UNSUPPORTED = "content_control_unsupported"
+    CONTENT_CONTROL_LOCKED = "content_control_locked"
+    CONTENT_CONTROL_BOUND = "content_control_bound"
+    CONTENT_CONTROL_WRONG_TYPE = "content_control_wrong_type"
+    INVALID_CONTENT_CONTROL_VALUE = "invalid_content_control_value"
+    CONTENT_CONTROL_PLACEMENT_UNSUPPORTED = "content_control_placement_unsupported"
+    CONTENT_CONTROL_NESTED_FILL_UNSUPPORTED = "content_control_nested_fill_unsupported"
+    REPEATING_SECTION_CONSTRAINT = "repeating_section_constraint"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod

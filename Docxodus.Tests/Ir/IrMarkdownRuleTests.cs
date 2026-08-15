@@ -420,7 +420,7 @@ public class IrMarkdownRuleTests
     /// <summary>A block-level <c>w:sdt</c> wrapping a paragraph is SKIPPED by the oracle's EmitBlocks
     /// (it dispatches only direct w:p/w:tbl/w:sectPr), so its paragraph does not render.</summary>
     [Fact]
-    public void Rule_BlockSdt_SkippedFromMarkdown()
+    public void Rule_BlockSdt_PublicAnchorIsIndexedButSkippedFromMarkdown()
     {
         var doc = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t>before</w:t></w:r></w:p>" +
@@ -433,11 +433,11 @@ public class IrMarkdownRuleTests
         var inner = Assert.IsType<IrParagraph>(Assert.Single(sdt.Blocks));
         var result = IrMarkdownEmitter.Emit(ir, new WmlToMarkdownConverterSettings());
 
-        // The public projection follows the oracle's split behavior: skip the direct wrapper in
-        // markdown, but index its descendant paragraph. The internal sdt anchor must not leak.
+        // The wrapper stays visually transparent in markdown, but issue #452 makes its native
+        // content-control identity a public anchor alongside the descendant paragraph.
         Assert.DoesNotContain("inside cc", result.Markdown);
         Assert.Contains(inner.Anchor.ToString(), result.AnchorIndex.Keys);
-        Assert.DoesNotContain(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
+        Assert.Contains(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
     }
 
     [Fact]
@@ -458,7 +458,7 @@ public class IrMarkdownRuleTests
 
         Assert.Contains("inside cell", result.Markdown);
         Assert.Contains(inner.Anchor.ToString(), result.AnchorIndex.Keys);
-        Assert.DoesNotContain(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
+        Assert.Contains(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
     }
 
     /// <summary>A tab inside a formatted run lands INSIDE that run's delimiter span (the oracle groups a

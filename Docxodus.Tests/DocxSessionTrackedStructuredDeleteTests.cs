@@ -35,11 +35,13 @@ public class DocxSessionTrackedStructuredDeleteTests
         var from = FindByText(session, projection, "delete start");
         var controlled = FindByText(session, projection, "controlled paragraph");
         var to = FindByText(session, projection, "after");
+        var controlAnchor = Assert.Single(projection.AnchorIndex.Values,
+            target => target.Anchor.Kind == "sdt").Anchor.Id;
 
         var result = session.DeleteRange(from, to);
 
         Assert.True(result.Success, result.Error?.Message);
-        AssertAnchorAccounting(result, new[] { from, controlled }, Array.Empty<string>());
+        AssertAnchorAccounting(result, new[] { from, controlAnchor, controlled }, Array.Empty<string>());
 
         var tracked = session.Save();
         var body = Body(tracked);
@@ -65,13 +67,16 @@ public class DocxSessionTrackedStructuredDeleteTests
         var outerParagraph = FindByText(session, projection, "outer paragraph");
         var innerParagraph = FindByText(session, projection, "inner paragraph");
         var to = FindByText(session, projection, "after");
+        var controls = projection.AnchorIndex.Values
+            .Where(target => target.Anchor.Kind == "sdt")
+            .Select(target => target.Anchor.Id);
 
         var result = session.DeleteRange(from, to);
 
         Assert.True(result.Success, result.Error?.Message);
         AssertAnchorAccounting(
             result,
-            new[] { from, outerParagraph, innerParagraph },
+            new[] { from, outerParagraph, innerParagraph }.Concat(controls),
             Array.Empty<string>());
 
         var tracked = session.Save();
@@ -123,6 +128,8 @@ public class DocxSessionTrackedStructuredDeleteTests
             .Where(target => tableUnids.Contains(target.Unid))
             .Select(target => target.Anchor.Id)
             .Append(from)
+            .Append(Assert.Single(projection.AnchorIndex.Values,
+                target => target.Anchor.Kind == "sdt").Anchor.Id)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -198,11 +205,13 @@ public class DocxSessionTrackedStructuredDeleteTests
         var heading = FindByText(session, projection, "Delete section");
         var controlled = FindByText(session, projection, "controlled section payload");
         var section = projection.AnchorIndex.Values.Single(target => target.Anchor.Kind == "sec").Anchor.Id;
+        var control = Assert.Single(projection.AnchorIndex.Values,
+            target => target.Anchor.Kind == "sdt").Anchor.Id;
 
         var result = session.DeleteSection(heading);
 
         Assert.True(result.Success, result.Error?.Message);
-        AssertAnchorAccounting(result, new[] { heading, controlled }, new[] { section });
+        AssertAnchorAccounting(result, new[] { heading, control, controlled }, new[] { section });
         var tracked = session.Save();
         Assert.Single(Body(tracked).Elements(W.sdt));
         Assert.Empty(Body(tracked).Elements(W.sectPr));
@@ -267,7 +276,8 @@ public class DocxSessionTrackedStructuredDeleteTests
         MarkdownProjection projection,
         string text) =>
         projection.AnchorIndex.Values
-            .Single(target => session.GetAnchorInfo(target.Anchor.Id)?.TextPreview == text)
+            .Single(target => target.Anchor.Kind is "p" or "h" or "li"
+                && session.GetAnchorInfo(target.Anchor.Id)?.TextPreview == text)
             .Anchor.Id;
 
     private static Paragraph ParagraphWithText(string text) =>

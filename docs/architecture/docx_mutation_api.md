@@ -229,7 +229,7 @@ For the full public surface — exact method signatures, settings, value types �
 
 An anchor id looks like `{#h:body:7b9f61007f9341c8aa5878ee63ffc874}`. The parts:
 
-- `kind` — what kind of OOXML element this is (`p`, `h`, `li`, `tbl`, `tr`, `tc`, `cmt`, `fn`, `en`, `img`, `drw`, `unk`).
+- `kind` — what kind of OOXML element this is (`p`, `h`, `li`, `tbl`, `tr`, `tc`, `sdt`, `cmt`, `fn`, `en`, `img`, `drw`, `unk`).
 - `scope` — which package part it lives in (`body`, `hdr1`/`hdr2`/…, `ftr1`/…, `fn`, `en`, `cmt`).
 - `unid` — a 32-char hex stable identifier (Docxodus's `PtOpenXml.Unid`).
 
@@ -248,7 +248,9 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
 - If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`, or target a tracked change from `ListRevisions()` with `AddCommentToRevision(revisionId, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
-- For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
+- For everything OOXML can do that markdown can't (complex tables, math, and unmodeled drawings) → `session.Raw.*`.
+  Native Word content controls instead use the typed surface in
+  [`native_content_controls.md`](native_content_controls.md).
 
 We didn't pick CommonMark or GFM as the input language because the projector's subset is small and well-defined; running a full parser against that subset would import surprise (e.g., GFM tables silently splitting paragraphs, autolinks mis-classifying spans). The hand-rolled parser is ~300 LOC, has no dependencies, and gives us complete control over what gets rejected and why.
 
@@ -288,6 +290,9 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `UpdateComment(cmt, md)` | the new body paragraph anchors (scope `cmt`) | the old body paragraph anchors | `cmt` | `cmt` |
 | `SetCommentResolved(cmt, resolved)` | — | — | `cmt` | `cmt` |
 | `RemoveComment(cmt)` | — | `cmt` + descendant paragraph anchors (the `DeleteBlock(cmt)` shape) | — | nearest stable ancestor |
+| content-control fill (`FillContentControlText`, rich text, checkbox, date, list, or picture) | — | — | selected `sdt` | selected `sdt` |
+| `AddRepeatingSectionItem(section)` | fresh item `sdt` | — | section `sdt` | section `sdt` |
+| `RemoveRepeatingSectionItem(item)` | — | item `sdt` | section `sdt` | section `sdt` |
 | `Raw.InsertXml(a, pos, xml)` | every block in the new XML | — | — | enclosing parent |
 | `Raw.ReplaceXml(a, xml)` | unids present in the new XML but not the old (typical for caller-authored XML) | unids present in the old element but not the new (when `a` itself is gone) | unids present in both (typical for the `GetXml → mutate → ReplaceXml` round trip, which preserves Unids) | enclosing parent |
 | `Undo()` / `Redo()` | (diff vs current) | (diff vs current) | (diff vs current) | `null` — caller re-projects |
@@ -395,7 +400,7 @@ What am I editing?
 │
 ├── Inserting/deleting table rows or columns, merging cells,
 │   embedding a chart, inserting a math equation,
-│   adding a content control?
+│   creating a new arbitrary content control?
 │       → Drop to session.Raw.*  (v2 ops planned for the common cases)
 │
 └── Anything that needs an undo guard?
@@ -521,8 +526,8 @@ preserved until the revision is resolved.
 
 Anchor accounting describes what actually happened. Ordinary paragraph/table
 top-level anchors remain the compact `Modified` contract. A structured wrapper
-has no anchor of its own, so every anchored descendant retained under that
-wrapper appears in `Modified`, without duplicates. A remaining structural
+has its own `sdt` anchor, so that wrapper and every anchored descendant retained
+under it appear in `Modified`, without duplicates. A remaining structural
 fall-through that must be hard-removed appears in `Removed`; it is never silently
 omitted from both lists.
 
@@ -2096,7 +2101,8 @@ formatting path and is tracked separately.
 Each `InlineSpan` reports the containing mutation-ready `AnchorId`, stable run `RunUnid`, flat-text
 `Span`, text, `Direct` run properties, and `Effective` run properties. `AnchorId` + `Span` can be
 passed directly to `ApplyFormat`. These are run/format spans only; hyperlink, bookmark, revision,
-content-control, and other inline memberships are separate follow-ons (#451/#452/#455).
+content-control membership is reported separately through `ContentControlAnchorIds`;
+bookmark, revision, and other inline memberships remain separate follow-ons.
 
 ### `BlockMetadata`
 

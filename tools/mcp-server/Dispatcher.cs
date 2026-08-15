@@ -42,6 +42,7 @@ internal static class Dispatcher
         "docxodus_comment" => Comment(store, args),
         "docxodus_links" => Links(store, args),
         "docxodus_images" => Images(store, args),
+        "docxodus_content_controls" => ContentControls(store, args),
         "docxodus_annotate" => Annotate(store, args),
         "docxodus_track_changes" => TrackChanges(store, args),
         "docxodus_mutations" => Mutations(store, args),
@@ -625,6 +626,58 @@ internal static class Dispatcher
             title.ValueKind == JsonValueKind.Null ? null : title.GetString());
     }
 
+    // ─── Native content controls (issue #452) ─────────────────────────
+
+    private static string ContentControls(SessionStore store, JsonElement args)
+    {
+        var session = Session(store, args);
+        var action = Str(args, "action");
+        if (action == "list")
+            return RunContentControlsAction(session, action, args);
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+            RunContentControlsAction(session, action, args));
+    }
+
+    private static string RunContentControlsAction(
+        DocSession session, string action, JsonElement args) => action switch
+    {
+        "list" => $"{{\"contentControls\":{DocxSessionOps.ListContentControls(
+            session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+        "fill_text" => DocxSessionOps.FillContentControlText(session.Handle,
+            Str(args, "anchorId"), Str(args, "text"), BuildContentControlOptionsJson(args)),
+        "fill_rich_text" => DocxSessionOps.FillContentControlRichText(session.Handle,
+            Str(args, "anchorId"), Str(args, "markdown"), BuildContentControlOptionsJson(args)),
+        "set_checked" => DocxSessionOps.SetContentControlChecked(session.Handle,
+            Str(args, "anchorId"), RequiredBool(args, "checked"), BuildContentControlOptionsJson(args)),
+        "set_date" => DocxSessionOps.SetContentControlDate(session.Handle,
+            Str(args, "anchorId"), Str(args, "value"), OptionalStringValue(args, "displayText"),
+            BuildContentControlOptionsJson(args)),
+        "select_item" => DocxSessionOps.SelectContentControlItem(session.Handle,
+            Str(args, "anchorId"), Str(args, "value"), BuildContentControlOptionsJson(args)),
+        "fill_picture" => DocxSessionOps.FillContentControlPicture(session.Handle,
+            Str(args, "anchorId"), Str(args, "imageBase64"), BuildContentControlOptionsJson(args)),
+        "add_repeating_item" => DocxSessionOps.AddRepeatingSectionItem(session.Handle,
+            Str(args, "sectionAnchorId"), OptionalStringValue(args, "afterItemAnchorId"),
+            BuildContentControlOptionsJson(args)),
+        "remove_repeating_item" => DocxSessionOps.RemoveRepeatingSectionItem(session.Handle,
+            Str(args, "itemAnchorId")),
+        _ => throw new McpToolException($"unknown docxodus_content_controls action: {action}"),
+    };
+
+    private static string BuildContentControlOptionsJson(JsonElement args)
+    {
+        var policy = OptionalStringValue(args, "bindingPolicy");
+        return policy is null ? "{}" : JsonSerializer.Serialize(new { bindingPolicy = policy });
+    }
+
+    private static bool RequiredBool(JsonElement args, string name)
+    {
+        if (args.TryGetProperty(name, out var value)
+            && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            return value.GetBoolean();
+        throw new McpToolException($"missing boolean \"{name}\"");
+    }
+
     private static string AddComment(DocSession session, JsonElement args)
     {
         var anchorId = OptStr(args, "anchorId");
@@ -879,6 +932,8 @@ internal static class Dispatcher
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
                     "docxodus_links" => RunLinksAction(session, action, mutationArgs),
                     "docxodus_images" => RunImagesAction(session, action, mutationArgs),
+                    "docxodus_content_controls" => RunContentControlsAction(
+                        session, action, mutationArgs),
                     "docxodus_track_changes" => RunTrackChangesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
@@ -912,6 +967,9 @@ internal static class Dispatcher
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
             "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
+            "docxodus_content_controls" => action is "fill_text" or "fill_rich_text"
+                or "set_checked" or "set_date" or "select_item" or "fill_picture"
+                or "add_repeating_item" or "remove_repeating_item",
             "docxodus_track_changes" => action is "accept" or "reject"
                 or "accept_all" or "reject_all",
             _ => false,
@@ -1208,6 +1266,41 @@ internal static class Dispatcher
                 RequireStrings(args, "imageId");
                 break;
 
+            case ("docxodus_content_controls", "fill_text"):
+                RequireStrings(args, "anchorId", "text");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "fill_rich_text"):
+                RequireStrings(args, "anchorId", "markdown");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "set_checked"):
+                RequireStrings(args, "anchorId");
+                _ = RequiredBool(args, "checked");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "set_date"):
+                RequireStrings(args, "anchorId", "value");
+                ValidateOptionalString(args, "displayText");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "select_item"):
+                RequireStrings(args, "anchorId", "value");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "fill_picture"):
+                RequireStrings(args, "anchorId", "imageBase64");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "add_repeating_item"):
+                RequireStrings(args, "sectionAnchorId");
+                ValidateOptionalString(args, "afterItemAnchorId");
+                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                break;
+            case ("docxodus_content_controls", "remove_repeating_item"):
+                RequireStrings(args, "itemAnchorId");
+                break;
+
             case ("docxodus_track_changes", "accept"):
             case ("docxodus_track_changes", "reject"):
                 RequireStrings(args, "revisionId");
@@ -1472,6 +1565,7 @@ internal static class Dispatcher
         {
             "anchorId", "cellAnchorId", "sourceAnchorId", "fromAnchorId", "firstAnchorId",
             "headingAnchorId", "bodyAnchorId", "commentAnchorId", "newAnchorId",
+            "sectionAnchorId", "itemAnchorId",
         })
         {
             if (args.ValueKind == JsonValueKind.Object
