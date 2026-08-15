@@ -89,6 +89,34 @@ All notable changes to this project will be documented in this file.
   WASM/npm, stdio/Python, and MCP surfaces (`get_content` formats `styles`, `formatting`, `spans`;
   `info` is per-anchor). Returned style ids, anchors, and spans are tested by feeding them unchanged
   into their matching mutation APIs. Table geometry and inline memberships remain separate work.
+
+  **Breaking (source):** `ListMembership` and `SectionInfo` gained a `required` `AnchorId`
+  property. External code that constructs either record with an object initializer must now set
+  it; consumers that only read the records are unaffected.
+
+  **Known limitation.** "Effective" is a shorter cascade than the render oracle: it excludes the
+  numbering-level `w:pPr` and the table-style/`w:tblStylePr` layers, so a list item whose indent
+  lives only in `w:abstractNum/w:lvl/w:pPr/w:ind` reports `LeftIndentTwips = 0`, and a run bolded
+  by a `firstRow` table style reports `Bold = false`. Both are pinned by tests and stated in
+  `docs/architecture/docx_mutation_api.md`; `GetListMembership` exposes the real numbering
+  indentation in the meantime.
+- **Style/formatting introspection is annotation-independent and cycle-safe.** Three fixes to the
+  new read surface: effective paragraph properties no longer vary with whether
+  `ListItemRetriever`'s (lazily cached) list annotations happen to be present, so `GetFormatting`
+  answers the same for a projected and an unprojected session and cannot be changed by an
+  intervening `GetListMembership`; `ST_OnOff` values now parse through `PtUtil.ToBoolean` — the
+  parser the renderer uses — so `w:val="False"` reads as false instead of true, and a value outside
+  `ST_OnOff` reads as unknown instead of true (this also aligns `IsDefault`/`SemiHidden`/
+  `QuickFormat` and the default-paragraph-style lookup with the resolver that consumes `w:default`);
+  and `FormattingAssembler`'s four `w:basedOn` walkers gained cycle guards, so a document declaring
+  `A basedOn A` (or `A → B → A`) no longer hangs `ListStyles`, which rolls up every style in the
+  catalog including ones no content references.
+- **Block renders stamp `data-source-anchor-id`.** `RenderBlocksHtml` / `RenderBlockHtml` now carry
+  the canonical source anchor id from the original package onto the rendered block, matching the
+  full render. Previously only the full and paginated renders emitted it, so an incrementally
+  re-rendered block silently dropped the addressing attribute `npm/src/pagination.ts` resolves page
+  citations by. The id is carried, never re-derived from the throwaway shell — a shell hoists note
+  paragraphs into its body and would otherwise stamp a `body`-scoped id onto footnote content.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:

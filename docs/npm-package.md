@@ -104,6 +104,12 @@ as false or zero. The matching `effective` record resolves document defaults and
 chain. `getListMembership` and `getSectionInfo` likewise return their query `anchorId` so callers
 do not have to translate between inspection and mutation coordinate systems.
 
+`effective` is deliberately a shorter cascade than the renderer's: it excludes the numbering
+level's own paragraph properties and the table style's conditional formatting, so a list item
+indented only by its numbering definition reports `leftIndentTwips: 0` and a run bolded by a
+`firstRow` table style reports `bold: false`. Use `getListMembership` for the real numbering
+indentation. See `docs/architecture/docx_mutation_api.md` for the exact layer list.
+
 ### Core Functions
 
 #### `initialize(basePath?: string): Promise<void>`

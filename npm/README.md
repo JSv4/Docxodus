@@ -213,6 +213,38 @@ function DocumentComparer() {
 
 ## API Reference
 
+### Stateful inspection and editing
+
+`openDocxSession(bytes)` exposes the live document rather than a one-shot conversion. Inspect the
+source before writing it: `listStyles()` returns the document's actual paragraph/character/table
+styles, `getFormatting(anchorId)` keeps `directParagraph` separate from `effectiveParagraph`, and
+`listInlineSpans(anchorId)` returns `anchorId` + `span` pairs accepted unchanged by `applyFormat`.
+
+```typescript
+const session = openDocxSession(bytes);
+try {
+  const anchorId = Object.keys(session.project().anchorIndex)[0];
+  const style = session.listStyles().find(s => s.name === "Strong Custom");
+  const run = session.listInlineSpans(anchorId).find(s => s.text === "Defined Term");
+  if (style && run) {
+    session.applyFormat(run.anchorId, run.span, { runStyle: style.id });
+  }
+} finally {
+  session.close();
+}
+```
+
+An omitted property in a `direct` record means "not written at this layer"; it must not be treated
+as false or zero. The matching `effective` record resolves document defaults and the full style
+chain. `getListMembership` and `getSectionInfo` likewise return their query `anchorId` so callers
+do not have to translate between inspection and mutation coordinate systems.
+
+`effective` is deliberately a shorter cascade than the renderer's: it excludes the numbering
+level's own paragraph properties and the table style's conditional formatting, so a list item
+indented only by its numbering definition reports `leftIndentTwips: 0` and a run bolded by a
+`firstRow` table style reports `bold: false`. Use `getListMembership` for the real numbering
+indentation. See `docs/architecture/docx_mutation_api.md` for the exact layer list.
+
 ### Core Functions
 
 #### `initialize(basePath?: string): Promise<void>`

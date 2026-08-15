@@ -332,17 +332,33 @@ internal static class FormattingIntrospectionOps
             ? value
             : null;
 
-    private static bool? ReadOnOffElement(XElement? element) =>
-        element is null ? null : ReadOnOffAttribute(element.Attribute(W.val)) ?? true;
+    private static bool? ReadOnOffElement(XElement? element)
+    {
+        if (element is null) return null;
+        var attribute = element.Attribute(W.val);
+        // ST_OnOff: a toggle element written without w:val is "on". Only an ABSENT attribute
+        // means that — an unreadable one means "unknown", never "on".
+        return attribute is null ? true : ReadOnOffAttribute(attribute);
+    }
 
+    /// <summary>
+    /// Parse an <c>ST_OnOff</c> attribute the way the renderer does. Single owner:
+    /// <see cref="PtExtensions.ToBoolean"/> is the parser <see cref="FormattingAssembler"/> and
+    /// the whole render path already use — it lowercases first, so a writer emitting
+    /// <c>bool.ToString()</c> (<c>w:val="False"</c>) is read here exactly as the rendered
+    /// document reads it. Its fallback cast throws for values outside <c>ST_OnOff</c>; a read
+    /// API over arbitrary uploaded documents reports "unknown" instead of failing the query.
+    /// </summary>
     private static bool? ReadOnOffAttribute(XAttribute? attribute)
     {
         if (attribute is null) return null;
-        return attribute.Value switch
+        try
         {
-            "1" or "true" or "on" => true,
-            "0" or "false" or "off" => false,
-            _ => null,
-        };
+            return attribute.ToBoolean();
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 }

@@ -1823,9 +1823,10 @@ for an unknown/inapplicable single-anchor query).
 `ListStyles()` enumerates the document's explicit paragraph, character, table, and numbering style
 definitions. Each `StyleInfo` includes `Id`, `Name`, `Type`, `BasedOn`, `Next`, default/custom
 flags, resolved latent-style gallery metadata, and the high-signal resolved paragraph/run/table
-properties appropriate to its type. Resolution uses `FormattingAssembler`'s existing rollups; it
-is not a second inheritance engine. A returned paragraph style `Id` is accepted unchanged by
-`SetParagraphStyle`; a returned character style `Id` is accepted as `FormatOp.RunStyle`.
+properties appropriate to its type. Resolution reuses `FormattingAssembler`'s style rollups — but
+see **What "effective" includes** below: it is a *shorter cascade* than the renderer applies, not
+the same one. A returned paragraph style `Id` is accepted unchanged by `SetParagraphStyle`; a
+returned character style `Id` is accepted as `FormatOp.RunStyle`.
 
 `GetFormatting(anchor)` is paragraph-only and explicitly separates:
 
@@ -1833,6 +1834,43 @@ is not a second inheritance engine. A returned paragraph style `Id` is accepted 
 - `EffectiveParagraph`: document defaults + full paragraph style chain + direct properties, with
   ordinary schema defaults filled for alignment, spacing, indentation, line spacing, and toggles.
 - `Runs`: the same entries returned by `ListInlineSpans(anchor)`.
+
+#### What "effective" includes — and what it does not
+
+This is the resolver's exact contract. **It is not the render oracle's cascade**, and where the two
+differ the render (`WmlToHtmlConverter`) is what Word actually shows.
+
+`EffectiveParagraph` = `w:docDefaults/w:pPrDefault` + the `w:pStyle` `basedOn` chain + the
+paragraph's direct `w:pPr`. It does **not** include:
+
+- the **numbering level's** `w:pPr` (`w:abstractNum/w:lvl/w:pPr`, and a `w:lvlOverride/w:lvl`
+  form of it), which the render path applies in `AssembleParagraphProperties` with its own
+  `FromParagraph`/`FromStyle` priority;
+- the **table style / `w:tblStylePr`** `w:pPr` layer for a paragraph inside a table.
+
+`InlineSpan.Effective` = `w:docDefaults/w:rPrDefault` + the character/paragraph style chain +
+the run's direct `w:rPr` + theme-font resolution. It does **not** toggle-merge the **table
+style's** conditional `w:rPr` the way `AnnotateRunProperties` does.
+
+Concretely, and pinned by `BM021`/`BM022`:
+
+| Document | Renders as | `GetFormatting` reports |
+|---|---|---|
+| List item whose indent lives only in `w:abstractNum/w:lvl/w:pPr/w:ind` (the normal case) | indented | `LeftIndentTwips = 0` |
+| Run in a `firstRow`-styled table whose bold comes from `w:tblStylePr` | bold | `Bold = false` |
+
+`GetListMembership` surfaces the numbering level's real `Start`, `LevelText`, and indentation
+separately, so the list case is recoverable by the caller today.
+
+The exclusions are deliberate rather than accidental. The numbering layer is only applied by
+`ParagraphStyleRollup` when the paragraph carries `ListItemRetriever`'s `ListItemInfo` annotation,
+and that annotation is a lazily built **cache** — present or absent depending only on whether
+something rendered, projected, or resolved a list label earlier in the session. Reading it would
+make a pure read API answer the same unmutated document two different ways depending on call
+order, so the resolver deliberately resolves against an annotation-free probe. That determinism
+costs the numbering layer even for a projected session, which before this was the one case that
+happened to get the fuller answer. Unifying the two cascades means changing the render oracle's
+formatting path and is tracked separately.
 
 Each `InlineSpan` reports the containing mutation-ready `AnchorId`, stable run `RunUnid`, flat-text
 `Span`, text, `Direct` run properties, and `Effective` run properties. `AnchorId` + `Span` can be
