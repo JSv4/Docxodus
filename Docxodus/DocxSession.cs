@@ -1574,6 +1574,14 @@ public sealed class DocxSession : IDisposable
     private readonly Stack<TransactionState> _transactions = new();
     private long _nextTransactionId;
     private int _transactionPendingMutations;
+    // Monotonic within a transaction: incremented on every recorded op and NEVER decremented.
+    // _transactionPendingMutations tracks the live history depth and so falls back to its
+    // baseline when an op self-rolls-back (RollbackFailedOp pops its own pre-op entry) — it
+    // cannot answer "did this scope ever touch the package?". Ops write parts that the
+    // selective per-op snapshot deliberately excludes (the numbering part), so a scope whose
+    // pending count nets back to baseline can still have left the package dirty. That question
+    // is what decides whether a rollback must reopen the checkpoint, so it gets its own witness.
+    private long _transactionMutationEpoch;
     private int _revisionCounter = 1000;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
@@ -1592,6 +1600,7 @@ public sealed class DocxSession : IDisposable
         DocumentSnapshot PackageSnapshot,
         Internal.UndoRing<DocumentSnapshot>.State History,
         int PendingMutations,
+        long MutationEpoch,
         TrackedChangeMode TrackedChanges,
         string? RevisionAuthor,
         Exception? LastInternalError,
@@ -2797,6 +2806,7 @@ public sealed class DocxSession : IDisposable
                 TakePackageSnapshot(),
                 _history.CaptureState(),
                 _transactionPendingMutations,
+                _transactionMutationEpoch,
                 _trackedChanges,
                 _revisionAuthor,
                 LastInternalError,
@@ -2831,7 +2841,11 @@ public sealed class DocxSession : IDisposable
                 // An inner commit stays represented by its ordinary speculative history entries.
                 // The outermost commit is the only boundary that squashes them into one
                 // full-package pre-batch snapshot and advances caller-visible version once.
-                bool mutated = _transactionPendingMutations > state.PendingMutations;
+                // The epoch, not the pending count, decides: a scope whose ops all self-rolled
+                // back nets the pending count to baseline yet may still have left the package
+                // dirty, and squashing that into "nothing happened" would strand it with no
+                // undo entry and no version bump.
+                bool mutated = _transactionMutationEpoch > state.MutationEpoch;
                 _history.RestoreState(state.History);
                 _transactionPendingMutations = state.PendingMutations;
                 _version = state.PackageSnapshot.Version;
@@ -2844,6 +2858,12 @@ public sealed class DocxSession : IDisposable
                     _transactionPendingMutations = state.PendingMutations;
                     _version = checked(state.PackageSnapshot.Version + 1);
                 }
+                // Only the pending count is rewound here. It is a live history depth that must
+                // agree with the history state just restored; the epoch is deliberately left
+                // monotonic because it is only ever read against a baseline captured at some
+                // enclosing begin — and after this pop there is no enclosing scope left. An
+                // inner commit rewinds neither: the outer scope must still see that its nested
+                // work touched the package.
             }
 
             // Do not orphan the transaction if validation or restoration failed. The caller may
@@ -2862,15 +2882,21 @@ public sealed class DocxSession : IDisposable
     {
         try
         {
-            // Every session mutation records before touching package state. If the pending count
-            // is unchanged, the scope performed only reads/configuration work (or an operation
-            // already restored its own failed-op snapshot). Reopening the checkpoint in that case
-            // is observably worse: OPC rewrites ZIP timestamps even for a no-op rollback. Keep the
-            // live package byte-pure while still restoring history/configuration below.
-            if (_transactionPendingMutations > state.PendingMutations)
+            // Every session mutation records before touching package state, so an unchanged
+            // epoch means the scope performed only reads/configuration work and the live package
+            // is still byte-identical to the checkpoint. Reopening it in that case is observably
+            // worse: OPC rewrites ZIP timestamps even for a no-op rollback. Keep the live package
+            // byte-pure while still restoring history/configuration below.
+            //
+            // The epoch, not the pending count, is the witness. RollbackFailedOp pops the op's own
+            // pre-op entry, so ~40 ops return the pending count to baseline on their failure path
+            // while their selective restore leaves parts the snapshot excludes (the numbering part)
+            // dirty. Skipping the package restore there reported a rollback that never happened.
+            if (_transactionMutationEpoch > state.MutationEpoch)
                 RestoreSnapshot(state.PackageSnapshot);
             _history.RestoreState(state.History);
             _transactionPendingMutations = state.PendingMutations;
+            _transactionMutationEpoch = state.MutationEpoch;
             _trackedChanges = state.TrackedChanges;
             _revisionAuthor = state.RevisionAuthor;
             LastInternalError = state.LastInternalError;
@@ -10903,9 +10929,14 @@ public sealed class DocxSession : IDisposable
     private void OnHistoryRecordPreOp()
     {
         if (_transactions.Count > 0)
+        {
             _transactionPendingMutations = checked(_transactionPendingMutations + 1);
+            _transactionMutationEpoch = checked(_transactionMutationEpoch + 1);
+        }
         else
+        {
             AdvanceVersion();
+        }
     }
 
     private void OnHistoryPopUndo(DocumentSnapshot snapshot)
@@ -10948,6 +10979,7 @@ public sealed class DocxSession : IDisposable
             _raw = null;
             _transactions.Clear();
             _transactionPendingMutations = 0;
+            _transactionMutationEpoch = 0;
         }
         finally
         {

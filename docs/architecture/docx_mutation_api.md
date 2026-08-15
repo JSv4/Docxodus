@@ -176,6 +176,21 @@ npm exposes this as `session.previewBatch(steps, mode, { html, htmlAnchorId })` 
 that receive the shadow session, stdio/Python as `session.preview_batch(steps, mode,
 html_mode=…, html_anchor_id=…)`, and MCP as `docxodus_mutations` with `"mode": "preview"`.
 
+Two properties of the wire-serialized transports (MCP and stdio, which round-trip
+each step's `EditResult` through `DocxSessionJson`) are worth stating explicitly:
+
+- **Step receipts are lossless.** A batched structural table op keeps its
+  `tableAnchors` mapping, so a caller can address the rows/columns/cells the same
+  batch just created. `DocxSessionJson.ParseEditResult` is the inverse of
+  `Serialize(EditResult)`; adding a field to one without the other silently deletes
+  it from every batch receipt.
+- **`expectedMatchCount` is evaluated late.** Every other guard is decided by the
+  read-only preflight — at the batch-start boundary in atomic mode. A match count
+  can only be evaluated by an op that has enumerated the live matches, and
+  `ReplaceTextRange` is the sole supplier, so that one guard is carried into the
+  step and enforced at the step's own turn. A batch mixing an `expectedText` and an
+  `expectedMatchCount` guard therefore compares them against two different states.
+
 ## Architecture
 
 ```

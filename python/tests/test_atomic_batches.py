@@ -10,6 +10,8 @@ from docx_scalpel import (
     MutationBatchResult,
     MutationBatchStep,
     MutationPreviewHtmlMode,
+    Position,
+    TableAnchorEntityKind,
     open_session,
 )
 
@@ -186,3 +188,36 @@ def test_preview_html_mode_is_an_enum_matching_the_wire_strings() -> None:
     assert MutationPreviewHtmlMode.NONE.value == "none"
     assert MutationPreviewHtmlMode("scoped") is MutationPreviewHtmlMode.SCOPED
     assert MutationPreviewHtmlMode("full") is MutationPreviewHtmlMode.FULL
+
+
+def test_structural_table_steps_are_batchable(tour_plan_bytes: bytes) -> None:
+    """Table edits are in scope for #445, and the batch surface must match the agent one."""
+    with open_session(tour_plan_bytes) as session:
+        target = _body_paragraphs(session)[0]
+
+        result = session.execute_batch(
+            [
+                MutationBatchStep(
+                    "insert_table",
+                    {
+                        "anchorId": target,
+                        "position": Position.AFTER.value,
+                        "rows": 2,
+                        "columns": 2,
+                    },
+                ),
+                MutationBatchStep(
+                    "replace_text",
+                    {"anchorId": target, "markdown": "Table batch anchor."},
+                ),
+            ]
+        )
+
+        assert result.success, result.failure
+        assert len(result.steps) == 2
+        # The receipt must carry the cell-anchor map, or the caller cannot address the
+        # cells the same batch just created.
+        mapping = result.steps[0].results[0].table_anchors
+        assert mapping is not None
+        assert any(loc.entity_kind is TableAnchorEntityKind.CELL for loc in mapping.added)
+        assert session.get_version() == 1
