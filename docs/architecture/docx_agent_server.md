@@ -378,9 +378,10 @@ external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
 `list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
-the first-class session API. Hyperlink targets use `targetKind: "external"|"internal"`; bookmark
+the first-class session API. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
-same numeric `ProjectionScopes` flag mask as the core API.
+same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
+paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.
 
 The result is structured enough for an agent to round-trip unchanged: hyperlink ids feed update
 or remove, while bookmark names feed move/rename/remove. Missing targets, duplicate/invalid names,

@@ -6392,15 +6392,8 @@ public sealed partial class DocxSession : IDisposable
             (pos == Position.After && ReferenceEquals(target.NextNode, source)))
             return new EditResult { Success = true };
 
-        // A native tracked move keeps source and destination copies live simultaneously.
-        // Duplicating bookmark names violates global bookmark identity; moving the markers to
-        // only one side would lose them on either accept or reject. Reject explicitly instead
-        // of emitting an ambiguous pending document.
-        if (_trackedChanges == TrackedChangeMode.RenderInline
-            && source.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
-            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                "tracked block moves containing bookmark markers are unsupported because both revision sides are live",
-                sourceAnchorId);
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary, bookmarkRejection, sourceAnchorId);
 
         if (MoveSourceRejection(source) is { } sourceRejection)
             return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
@@ -6475,6 +6468,16 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    /// <summary>A native tracked move keeps source and destination copies live simultaneously.
+    /// Duplicating bookmark names violates global bookmark identity; moving the markers to only one
+    /// side would lose them on either accept or reject. Reject explicitly instead of emitting an
+    /// ambiguous pending document.</summary>
+    private string? TrackedBookmarkMoveRejection(XElement source) =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+        && source.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
+            ? "tracked block moves containing bookmark markers are unsupported because both revision sides are live"
+            : null;
+
     /// <summary>Reject reasons that depend only on the SOURCE block — if one applies, the block
     /// cannot be moved anywhere, so <see cref="ValidMoveTargets"/> can answer with an empty set
     /// without testing a single target. Shared with <see cref="MoveBlock"/> so the drag UI and the
@@ -6483,6 +6486,12 @@ public sealed partial class DocxSession : IDisposable
     {
         if (source.Name == W.p && source.Element(W.pPr)?.Element(W.sectPr) is not null)
             return "cannot move a paragraph that owns a section break";
+
+        // MoveBlock tests this first and reports it as UnsupportedInlineBoundary; repeating the
+        // PREDICATE (not the check) here is what keeps ValidMoveTargets from advertising a drop the
+        // engine will refuse. One owner, two callers, two error codes.
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return bookmarkRejection;
 
         // Re-wrapping an existing revision can create illegal nested move markup. Direct
         // mode can carry ordinary ins/del content safely, but an existing named move range
@@ -12624,7 +12633,13 @@ public sealed partial class DocxSession : IDisposable
         if (movedChildren.Count == 0) return;
 
         var newLink = new XElement(W.hyperlink);
-        foreach (var a in hyperlink.Attributes()) newLink.SetAttributeValue(a.Name, a.Value);
+        // Every attribute EXCEPT the Unid: that one is this hyperlink's identity, and the public
+        // hl:<scope>:<unid> id is derived from it. Cloning it would give the two halves the same id,
+        // so FindHyperlinkElement would match only the first and Update/RemoveHyperlink would
+        // silently act on half the link.
+        foreach (var a in hyperlink.Attributes())
+            if (a.Name != PtOpenXml.Unid) newLink.SetAttributeValue(a.Name, a.Value);
+        newLink.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
         foreach (var child in movedChildren) { child.Remove(); newLink.Add(child); }
         hyperlink.AddAfterSelf(newLink);
     }

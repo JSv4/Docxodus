@@ -575,6 +575,7 @@ internal static class Dispatcher
         "footers" => ProjectionScopes.Footers,
         "footnotes" => ProjectionScopes.Footnotes,
         "endnotes" => ProjectionScopes.Endnotes,
+        "comments" => ProjectionScopes.Comments,
         _ => throw new McpToolException($"unknown link scope: {scope}"),
     };
 

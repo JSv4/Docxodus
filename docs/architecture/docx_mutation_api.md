@@ -370,7 +370,10 @@ the whole table instead).
 
 Returns the blocks `sourceAnchorId` may legally move next to, in document order; empty when the
 block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a listed
-`(target, side)` pair is one `MoveBlock` accepts.
+`(target, side)` pair is one `MoveBlock` accepts. That sharing has to reach the **mode-dependent**
+rejections too: in `RenderInline` mode a bookmark-bearing source cannot move at all, and since
+Word puts a `_Toc` bookmark on every heading, a rejection this gate did not know about would draw
+drop indicators over most of a TOC'd contract before every drop hard-failed.
 
 **The two sides are reported separately, and that distinction is load-bearing.** Landing *into* a
 cross-block bookmark/comment/permission range changes its membership while landing outside it does
@@ -496,23 +499,64 @@ attribute so part-backed content such as images can reuse the same ownership/orp
 `HyperlinkInfo` reports the owner part/scope, enclosing anchor, exact half-open `CharSpan`, visible
 text, target, relationship metadata, and broken-target state. A hyperlink id follows the anchor
 identity contract: stable for the live session and across `Save(true)` / `PersistAnchorIds`, but
-not promised across a default save that strips Docxodus Unids.
+not promised across a default save that strips Docxodus Unids. Splitting a paragraph inside a link
+cuts the `w:hyperlink` in two and gives each half its own identity, so both stay individually
+addressable by `UpdateHyperlink`/`RemoveHyperlink`.
+
+`AddHyperlink` relocates the whole contiguous sibling range it covers, not just the `w:r` elements.
+A zero-width marker sitting between two selected runs — `w:bookmarkStart`/`End`,
+`w:commentRangeStart`/`End`, `w:proofErr` — is a legal `w:hyperlink` child and moves *inside* the
+new link at its original position. Stranding it after the link would, for a bookmark whose start
+lies inside the span, put the start after its own end and break the pair permanently. Content
+outside the span keeps its side, so document order is preserved for every marker.
+
+Story scope covers body, headers, footers, footnotes, endnotes, **and comments**: a comment
+paragraph is anchor-addressable (`p:cmt:…`) and editable, so it owns its own hyperlink
+relationships and can host bookmark markers like any other story.
 
 Bookmark names follow Word's UI-safe form: 1–40 characters, starting with a letter or underscore,
-then letters, digits, or underscores. Names are globally unique; numeric `w:id` pairing is scoped
+then letters, digits, or underscores. **Word's own namespace is closed to creation.** `AddBookmark`
+and `RenameBookmark`'s destination name refuse `_GoBack`, `_Toc*`, `_Ref*`, `_Hlt*`, and `_Hlk*`
+with `InvalidBookmarkName`: Word allocates and rewrites those for itself (a TOC refresh regenerates
+the whole `_Toc*` family), so a name placed there is reallocated or clobbered under the caller.
+Bookmarks Word already put there are *not* frozen — they list, rename, move, and remove like any
+other, with their cross-reference fields retargeted or blocking removal as usual. Renaming a `_Toc*`
+bookmark is simply not durable, because the next TOC refresh regenerates it.
+
+Names are globally unique; numeric `w:id` pairing is scoped
 to the owning story part because real Word files reuse numeric ids across parts. A
 `DocumentRange` may cross paragraphs but both endpoints must belong to the same body, individual
-header/footer, footnote, or endnote part. `BookmarkInfo.Range` carries the two endpoint anchors and
+header/footer, footnote, endnote, or comments part. `BookmarkInfo.Range` carries the two endpoint anchors and
 offsets; `Segments` supplies exact per-paragraph spans and text. Unmatched starts and ambiguous
 same-story numeric ids or duplicate names remain visible as invalid diagnostics. Orphan end markers
 have no name/start coordinate and are not returned as rows, but still participate in fresh numeric
 id allocation. `_Docxodus_Ann_*` bookmarks are owned by the annotation subsystem and reject generic
 bookmark mutation.
 
-Rename first requires one coherent same-story pair, then changes the start marker and every inbound
-`w:hyperlink/@w:anchor` across all stories in one undo step. Remove refuses `BookmarkInUse`; move
-validates the destination before detaching the old
-pair and retains its numeric id. Structural edits likewise reject a pair crossing the deletion
+**A bookmark has two consumer families, and both count as "referenced."** Beyond
+`w:hyperlink/@w:anchor`, Word cross-references a bookmark through `REF`, `PAGEREF`, `NOTEREF`, and
+`HYPERLINK \l` field instructions — carried either in `w:fldSimple/@w:instr` or in the
+`w:instrText` runs between a `w:fldChar` begin and its matching separate/end, and split across
+several runs as often as not. Every entry in a Word table of contents is a `PAGEREF` over a `_Toc`
+bookmark. Rename first requires one coherent same-story pair, then changes the start marker and
+retargets **both** families across all stories in one undo step, splicing only the name token so
+switches (`\h`, `\* MERGEFORMAT`) survive verbatim; a split instruction is coalesced onto its first
+`w:instrText`. Seeing only the anchor links would leave "Error! Bookmark not defined." behind.
+`BookmarkInUse` is judged against both families too, so removing a bookmark a TOC still cites is
+refused rather than silently dangling it.
+
+**Know the reach of that guard before you rely on it.** It also gates structural deletion, and it is
+reference-scoped: a deletion is refused only while a reference *survives outside* the deleted
+region. Word puts a `_Toc` bookmark on every heading and keeps the matching `PAGEREF` in a different
+paragraph, so on a TOC'd document `DeleteBlock(heading)` is refused — in **default, untracked** mode,
+with no force/opt-out. Delete the citing field (or the whole TOC) first, or rename rather than
+remove. This is the same no-dangling-reference policy that has always covered `w:anchor` links; what
+changed is how much of a real contract it reaches.
+
+Move validates the destination before detaching the old pair. It retains its numeric id for a
+same-part move; a **cross-part** move takes a fresh document-global id, because `w:id` is
+part-scoped and carrying it into a part that already uses that decimal makes *both* bookmarks
+unresolvable. Structural edits likewise reject a pair crossing the deletion
 boundary, a targeted pair, or a managed pair before snapshotting. Whole-paragraph replacement keeps
 endpoint character coordinates and clamps them to the new end; surgical replacement, split, merge,
 and direct block moves preserve marker order. First-class hyperlink/bookmark metadata mutations are
