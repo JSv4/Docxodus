@@ -168,6 +168,38 @@ internal static class HtmlConversionOps
         ConvertToHtml(SessionRegistry.Get(handle), options);
 
     /// <summary>
+    /// The single definition of the option profile a mutation-batch preview renders with
+    /// (<see cref="MutationPreviewHtmlMode.Full"/>). A preview answers "what would the document
+    /// become", so it shows everything the applied document would carry — tracked changes,
+    /// comments, annotations, notes, headers/footers — rather than the editor's authoring view.
+    /// Every surface MUST consume this rather than restating the flags: the typed core, the
+    /// handle façade, both bridges and both clients must agree about what a preview shows, or
+    /// two callers previewing the same batch see materially different documents.
+    /// </summary>
+    public static HtmlConversionOptions PreviewDocumentOptions() => new()
+    {
+        CommentRenderMode = 0,
+        RenderAnnotations = true,
+        RenderFootnotesAndEndnotes = true,
+        RenderHeadersAndFooters = true,
+        RenderTrackedChanges = true,
+        StampAnchors = true,
+    };
+
+    /// <summary>
+    /// The single definition of the option profile a scoped
+    /// (<see cref="MutationPreviewHtmlMode.Scoped"/>) preview renders one block with. Tracked
+    /// changes stay on for the same reason as <see cref="PreviewDocumentOptions"/>: a scoped
+    /// redline preview that hides its own redlines shows the caller nothing.
+    /// </summary>
+    public static HtmlConversionOptions PreviewBlockOptions() => new()
+    {
+        RenderTrackedChanges = true,
+        RenderFootnotesAndEndnotes = true,
+        StampAnchors = true,
+    };
+
+    /// <summary>
     /// Render a single block (addressed by a <c>kind:scope:unid</c> anchor) to faithful
     /// HTML. Builds a throwaway document that copies the source's styles/numbering/theme
     /// parts and contains just the one block, then runs the standard converter. The full
@@ -407,6 +439,10 @@ internal static class HtmlConversionOps
             if ((string?)t.Attribute(PtOpenXml.Unid) is { } u) wantedUnids.Add(u);
         }
 
+        // The session's own anchor index IS the identity the caller addressed these blocks by,
+        // and it is cached, so repeated stamped renders do not rebuild it.
+        var identity = BlockSourceIdentity.For(options.StampAnchors, session.AnchorIndex(), liveDoc);
+
         // Per parent: order block-level children, merge each target's ±1 window into runs.
         var bodyContent = new List<XElement>();
         foreach (var parentGroup in targets.Where(t => t.Parent is not null).GroupBy(t => t.Parent!))
@@ -431,7 +467,11 @@ internal static class HtmlConversionOps
                 }
                 idx++;
                 for (int i = start; i <= end; i++)
-                    bodyContent.Add(CloneWithListAnnotations(siblings[i]));
+                {
+                    var clone = CloneWithListAnnotations(siblings[i]);
+                    identity?.Record(siblings[i], clone);
+                    bodyContent.Add(clone);
+                }
             }
         }
 
@@ -450,7 +490,10 @@ internal static class HtmlConversionOps
         renderDoc.MainDocumentPart!.PutXDocument(
             BuildBodyDocument(bodyContent.Cast<object>().ToArray()));
 
-        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, BuildBlockConverterSettings(options));
+        var blockSettings = BuildBlockConverterSettings(options);
+        if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
+
+        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
         foreach (var e in htmlElement.Descendants())
         {
             var u = (string?)e.Attribute("data-anchor");
@@ -514,6 +557,84 @@ internal static class HtmlConversionOps
         return clone;
     }
 
+    /// <summary>
+    /// Carries canonical <c>data-source-anchor-id</c> provenance from the ORIGINAL package onto
+    /// the throwaway shell's clones.
+    /// </summary>
+    /// <remarks>
+    /// The full render builds that identity by indexing the document it is converting
+    /// (<see cref="WmlToHtmlConverter"/>'s <c>StampCanonicalSourceAnchors</c> block). A block
+    /// shell must NOT do the same: its body is not the source's body — <c>fn:</c>/<c>en:</c>
+    /// note paragraphs are hoisted into it, so a shell-derived index would resolve them to the
+    /// <c>body</c> scope and stamp a confidently WRONG id onto the very attribute
+    /// <c>npm/src/pagination.ts</c> resolves citations by. The scope is not inferred here, it is
+    /// carried: the caller already knows which live element produced each clone.
+    ///
+    /// Two tiers, mirroring the full render's own provider: clone object identity first, then a
+    /// Unid fallback for the case where converter preprocessing rebuilds an element (attributes,
+    /// including <c>PtOpenXml:Unid</c>, ride along — that is what <c>data-anchor</c> depends on).
+    /// Content-addressed Unids can collide across parts, so an ambiguous Unid stamps NOTHING
+    /// rather than the wrong story's id.
+    /// </remarks>
+    private sealed class BlockSourceIdentity
+    {
+        private readonly Dictionary<XElement, string> _liveIdByElement;
+        private readonly Dictionary<XElement, string> _idByClone = new();
+        private readonly Dictionary<string, string?> _idByUnid = new(StringComparer.Ordinal);
+
+        private BlockSourceIdentity(Dictionary<XElement, string> liveIdByElement) =>
+            _liveIdByElement = liveIdByElement;
+
+        /// <summary>
+        /// Build a carrier over <paramref name="index"/>, or null when the caller did not ask
+        /// for anchor stamping (the editor's incremental swap path) — the index walk is not
+        /// paid for a render that will not use it.
+        /// </summary>
+        public static BlockSourceIdentity? For(
+            bool enabled, IReadOnlyDictionary<string, AnchorTarget> index, WordprocessingDocument doc)
+        {
+            if (!enabled) return null;
+            var liveIdByElement = new Dictionary<XElement, string>();
+            foreach (var target in index.Values)
+            {
+                var source = target.Resolve(doc);
+                if (source is not null) liveIdByElement[source] = target.Anchor.Id;
+            }
+            return new BlockSourceIdentity(liveIdByElement);
+        }
+
+        /// <summary>Record the source-to-clone correspondence for one cloned block subtree.</summary>
+        public void Record(XElement source, XElement clone)
+        {
+            using var s = source.DescendantsAndSelf().GetEnumerator();
+            using var c = clone.DescendantsAndSelf().GetEnumerator();
+            while (s.MoveNext() && c.MoveNext())
+            {
+                if (!_liveIdByElement.TryGetValue(s.Current, out var id)) continue;
+                _idByClone[c.Current] = id;
+                if ((string?)c.Current.Attribute(PtOpenXml.Unid) is not { Length: > 0 } unid) continue;
+                if (_idByUnid.TryGetValue(unid, out var existing))
+                {
+                    if (!string.Equals(existing, id, StringComparison.Ordinal)) _idByUnid[unid] = null;
+                }
+                else
+                {
+                    _idByUnid[unid] = id;
+                }
+            }
+        }
+
+        /// <summary>The <see cref="WmlToHtmlConverterSettings.SourceAnchorIdentityProvider"/>.</summary>
+        public string? Resolve(XElement element)
+        {
+            if (_idByClone.TryGetValue(element, out var id)) return id;
+            return (string?)element.Attribute(PtOpenXml.Unid) is { Length: > 0 } unid
+                && _idByUnid.TryGetValue(unid, out var byUnid)
+                    ? byUnid
+                    : null;
+        }
+    }
+
     /// <summary>Session-attached render for a registered session handle.</summary>
     public static string RenderBlockHtml(int handle, string anchorId, HtmlConversionOptions options) =>
         RenderBlockHtml(SessionRegistry.Get(handle), anchorId, options);
@@ -561,6 +682,16 @@ internal static class HtmlConversionOps
     {
         var unid = (string?)blockElement.Attribute(PtOpenXml.Unid);
 
+        // Same contract as the batch path: canonical source provenance is carried from the
+        // source package, never re-derived from the throwaway body.
+        var identity = BlockSourceIdentity.For(
+            options.StampAnchors,
+            WmlToMarkdownConverter.BuildAnchorIndexOnly(
+                sourceDoc, new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All }),
+            sourceDoc);
+        var blockClone = new XElement(blockElement);
+        identity?.Record(blockElement, blockClone);
+
         // Build a throwaway doc: copied formatting parts + just this block.
         using var blockStream = new MemoryStream();
         using (var blockDoc = WordprocessingDocument.Create(
@@ -568,11 +699,13 @@ internal static class HtmlConversionOps
         {
             var main = blockDoc.AddMainDocumentPart();
             AddFormattingParts(blockDoc, sourceDoc);
-            main.PutXDocument(BuildBodyDocument(new XElement(blockElement)));
+            main.PutXDocument(BuildBodyDocument(blockClone));
         }
         blockStream.Position = 0;
         using var renderDoc = WordprocessingDocument.Open(blockStream, true);
-        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, BuildBlockConverterSettings(options));
+        var blockSettings = BuildBlockConverterSettings(options);
+        if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
+        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
         return ExtractBlockHtml(htmlElement, unid);
     }
 

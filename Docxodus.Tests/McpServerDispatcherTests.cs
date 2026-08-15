@@ -1308,8 +1308,117 @@ public class McpServerDispatcherTests : IDisposable
         Assert.DoesNotContain("first atomic state", markdown);
     }
 
+    [Theory]
+    [InlineData("atomic")]
+    [InlineData("apply")]
+    public void MCP098_BatchedReplaceTextRange_EnforcesExpectedMatchCount(string mode)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"Company Company Company Company"}""")))
+            .GetProperty("success").GetBoolean());
+
+        // The count guard can only be evaluated by the op that enumerated the live matches, so
+        // stripping it from the dispatched step made it a silent no-op — all four occurrences
+        // were replaced instead of the batch failing. Both the new atomic mode and the legacy
+        // "apply" alias must reject the step and leave the anchor untouched.
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "{{mode}}",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text_range", "anchorId": "{{anchor}}", "find": "Company", "replace": "Acme", "preconditions": { "expectedMatchCount": 1 } } }
+              ]
+            }
+            """)));
+
+        Assert.False(batch.GetProperty("success").GetBoolean());
+        var failure = batch.GetProperty("failure");
+        Assert.Equal(0, failure.GetProperty("index").GetInt32());
+        Assert.Equal("precondition_failed", failure.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("match_count",
+            failure.GetProperty("error").GetProperty("precondition").GetProperty("condition").GetString());
+
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.DoesNotContain("Acme", markdown);
+        Assert.Contains("Company Company Company Company", markdown);
+    }
+
+    [Theory]
+    [InlineData("atomic")]
+    [InlineData("apply")]
+    public void MCP098B_BatchedReplaceTextRange_MatchingExpectedMatchCountStillApplies(string mode)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"Company Company"}""")))
+            .GetProperty("success").GetBoolean());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "{{mode}}",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text_range", "anchorId": "{{anchor}}", "find": "Company", "replace": "Acme", "preconditions": { "expectedMatchCount": 2 } } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Contains("Acme Acme", markdown);
+    }
+
     [Fact]
-    public void MCP099_TrackChangesBatchPreviewIsIsolatedAndAtomicApplyResolvesRevision()
+    public void MCP099_BatchedTableStep_KeepsTableAnchorMappingInItsReceipt()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_table", "args": { "action": "insert", "anchorId": "{{anchor}}", "position": "after", "rows": 2, "columns": 2 } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        // The batch re-serializes every step through the shared EditResult wire shape, so a
+        // parser that dropped tableAnchors left an agent with no cell-anchor map for the cells
+        // its own step had just created.
+        var result = batch.GetProperty("steps")[0].GetProperty("results")[0];
+        var mapping = result.GetProperty("tableAnchors");
+        var added = mapping.GetProperty("added");
+        Assert.NotEmpty(added.EnumerateArray());
+        var cells = added.EnumerateArray()
+            .Where(x => x.GetProperty("entityKind").GetString() == "cell")
+            .ToArray();
+        Assert.Equal(4, cells.Length);
+        Assert.All(cells, cell =>
+        {
+            Assert.StartsWith("tc:", cell.GetProperty("anchor").GetProperty("id").GetString());
+            Assert.True(cell.TryGetProperty("rowIndex", out _));
+            Assert.True(cell.TryGetProperty("columnIndex", out _));
+        });
+    }
+
+    [Fact]
+    public void MCP146_TrackChangesBatchPreviewIsIsolatedAndAtomicApplyResolvesRevision()
     {
         var sessionId = OpenSession(trackedChanges: "render_inline");
         var sessionArg = JsonSerializer.Serialize(sessionId);
@@ -2243,7 +2352,7 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
-    public void MCP146_ContentControls_ListFillDetachAndBatchPreview_AreFirstClass()
+    public void MCP147_ContentControls_ListFillDetachAndBatchPreview_AreFirstClass()
     {
         File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
         var sessionId = OpenSession();
@@ -2304,7 +2413,7 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
-    public void MCP147_ContentControlPreview_RefusalsNeverConsumePreexistingUndoHistory()
+    public void MCP148_ContentControlPreview_RefusalsNeverConsumePreexistingUndoHistory()
     {
         File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
         var sessionId = OpenSession();
@@ -2414,7 +2523,7 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
-    public void MCP148_ContentControlReceiptsAndBestEffortBatch_PreserveSdtIdentities()
+    public void MCP149_ContentControlReceiptsAndBestEffortBatch_PreserveSdtIdentities()
     {
         File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
         var sessionId = OpenSession();

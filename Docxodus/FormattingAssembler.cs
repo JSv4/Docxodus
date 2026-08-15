@@ -2213,8 +2213,13 @@ namespace Docxodus
         {
             XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             string currentStyle = tblStyleName;
+            // Cycle guard: see ParaStyleParaPropsStack. A self- or mutually-basedOn table style
+            // terminates here instead of looping forever.
+            var visitedTableStyles = new HashSet<string>(StringComparer.Ordinal);
             while (true)
             {
+                if (currentStyle == null || !visitedTableStyles.Add(currentStyle))
+                    yield break;
                 XElement style = sXDoc
                     .Root
                     .Elements(W.style).Where(s => (string)s.Attribute(W.type) == "table" &&
@@ -2457,6 +2462,9 @@ namespace Docxodus
         /// Non-mutating paragraph-property resolver for anchor introspection. Cascades document
         /// defaults, the paragraph style chain (through <see cref="ParagraphStyleRollup"/>), and
         /// the paragraph's direct <c>w:pPr</c>, returning a detached effective <c>w:pPr</c>.
+        /// Deliberately EXCLUDES the numbering-level and table-style <c>pPr</c> layers the render
+        /// path applies in <c>AssembleParagraphProperties</c> — see the "effective formatting
+        /// cascade" limits in <c>docs/architecture/docx_mutation_api.md</c>.
         /// </summary>
         internal static XElement ResolveEffectiveParagraphProperties(
             WordprocessingDocument wDoc, XElement paragraph)
@@ -2476,8 +2484,18 @@ namespace Docxodus
                 .Element(W.docDefaults)?
                 .Element(W.pPrDefault)?
                 .Element(W.pPr) ?? new XElement(W.pPr);
+
+            // ParagraphStyleRollup folds an extra numbering-level pPr layer in whenever the
+            // paragraph carries ListItemRetriever's ListItemInfo annotation. Those annotations
+            // are a lazily built CACHE: whether a live document holds them depends only on
+            // whether something rendered, projected, or resolved a list label first. Reading
+            // them from a pure read API would make the same unmutated document answer this
+            // query two different ways depending on call order. Resolve against an
+            // annotation-free probe (a clone drops annotations) so "effective" is a function of
+            // the document alone — at the cost of pinning the shorter cascade documented above.
+            var probe = new XElement(W.p, paragraph.Attributes(), paragraph.Element(W.pPr));
             var styleRollup = ParagraphStyleRollup(
-                paragraph, stylesXDoc, defaultParagraphStyleName);
+                probe, stylesXDoc, defaultParagraphStyleName);
             var inherited = MergeStyleElement(styleRollup, defaults);
             return new XElement(MergeStyleElement(direct, inherited));
         }
@@ -2624,8 +2642,16 @@ namespace Docxodus
             if (stylesXDoc == null)
                 yield break;
             var localParaStyleName = paraStyleName;
+            // w:basedOn is caller-supplied data, not a guaranteed tree: a document declaring
+            // A basedOn A (or A -> B -> A) would otherwise spin here forever. Terminate on the
+            // repeat and yield what accumulated — a cyclic style is a broken document, not a
+            // reason for a read API over uploaded files to hang.
+            var visitedParaStyles = new HashSet<string>(StringComparer.Ordinal);
             while (localParaStyleName != null)
             {
+                if (!visitedParaStyles.Add(localParaStyleName))
+                    yield break;
+
                 // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
                 XElement paraStyle;
                 if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
@@ -2960,8 +2986,13 @@ namespace Docxodus
             var localParaStyleName = paraStyleName;
             var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             var rValue = new Stack<XElement>();
+            // Cycle guard: see ParaStyleParaPropsStack.
+            var visitedParaStyles = new HashSet<string>(StringComparer.Ordinal);
             while (localParaStyleName != null)
             {
+                if (!visitedParaStyles.Add(localParaStyleName))
+                    return rValue;
+
                 // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
                 XElement paraStyle;
                 if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
@@ -3003,8 +3034,13 @@ namespace Docxodus
             var localCharStyleName = charStyleName;
             var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             var rValue = new Stack<XElement>();
+            // Cycle guard: see ParaStyleParaPropsStack.
+            var visitedCharStyles = new HashSet<string>(StringComparer.Ordinal);
             while (localCharStyleName != null)
             {
+                if (!visitedCharStyles.Add(localCharStyleName))
+                    return rValue;
+
                 XElement basedOn = null;
                 XElement charStyle = null;
 

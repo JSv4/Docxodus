@@ -833,6 +833,209 @@ public class DocxSessionStructuralRevisionTests
             FirstDifference(MainRoot(expected), MainRoot(actual)));
     }
 
+    /// <summary>
+    /// A revision a batch never touches is neither added nor modified. RevisionListEntry
+    /// carries collection members (ConstituentIds/AffectedAnchors), so the batch change set
+    /// must compare the SERIALIZED projection: record <c>==</c> falls back to reference
+    /// equality per collection and would report every surviving revision as modified — which
+    /// then fires the execution-clock warning that tells callers not to trust packageHash.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DS45527_BatchReceipt_LeavesUntouchedRevisionsOutOfTheChangeSet(bool preview)
+    {
+        var input = BuildSeparatedInsertions();
+        using var session = new DocxSession(input);
+        var existing = session.ListRevisions();
+        Assert.Equal(3, existing.Count);
+        Assert.All(existing, revision => Assert.NotEmpty(revision.ConstituentIds));
+        var untouched = session.Project().AnchorIndex.Values
+            .Last(a => a.Anchor.Scope == "body" && a.Anchor.Kind == "p").Anchor.Id;
+
+        MutationBatchStep[] Steps() => new[]
+        {
+            new MutationBatchStep("docx_edit", "replace_text",
+                s => s.ReplaceText(untouched, "Unrelated edit.")),
+        };
+        var result = preview ? session.PreviewBatch(Steps()) : session.ExecuteBatch(Steps());
+
+        Assert.True(result.Success, result.Failure?.Error.Message);
+        Assert.Empty(result.RevisionChanges.Added);
+        Assert.Empty(result.RevisionChanges.Removed);
+        Assert.Empty(result.RevisionChanges.Modified);
+        Assert.DoesNotContain(result.Warnings,
+            warning => warning.Contains("Tracked-revision date attributes", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// <c>w:tblPr</c> and <c>w:tblGrid</c> are REQUIRED children of CT_Tbl. A tracked property
+    /// mutation over a table that has an empty (or absent) one archives an empty payload; the
+    /// reject must restore that empty element, never delete it and leave Word repairing the file.
+    /// </summary>
+    [Theory]
+    [InlineData("tblPr")]
+    [InlineData("tblGrid")]
+    public void DS45528_RejectingEmptyArchivedTableProperties_KeepsRequiredTableChildren(
+        string container)
+    {
+        var baseline = MutateMain(BuildTableDocument(), root =>
+        {
+            var table = root.Descendants(W.tbl).First();
+            if (container == "tblPr") table.Element(W.tblPr)!.RemoveNodes();
+            else table.Element(W.tblGrid)!.Remove();
+        });
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Shell Reviewer",
+        });
+        var cell = FirstCellAnchor(session);
+
+        var mutation = container == "tblPr"
+            ? session.SetTableBorders(cell, new TableBorderSpec
+            {
+                Scope = TableBorderScope.All,
+                Style = "single",
+                Size = 8,
+            })
+            : session.InsertTableColumn(cell, Position.After);
+        Assert.True(mutation.Success, mutation.Error?.Message);
+
+        // The grid change is grouped with the cell insertions it belongs to, so one entry
+        // covers the whole tracked column transaction.
+        var revision = Assert.Single(session.ListRevisions());
+        var rejected = session.RejectRevision(revision.Id);
+
+        Assert.True(rejected.Success, rejected.Error?.Message);
+        var table = MainRoot(session.Save()).Descendants(W.tbl).First();
+        Assert.NotNull(table.Element(W.tblPr));
+        Assert.NotNull(table.Element(W.tblGrid));
+        Assert.Empty(ValidationErrors(session.Save()));
+    }
+
+    /// <summary>
+    /// CT_TrPr orders base properties → ins → del → trPrChange. A second tracked operation on a
+    /// row that already carries an unresolved <c>w:trPrChange</c> is refused the same way every
+    /// other tracked table mutation is, and resolving the pending change first lets the delete
+    /// through with schema-ordered markup.
+    /// </summary>
+    [Fact]
+    public void DS45529_TrackedRowDelete_RefusesOverPendingRowFormatChangeAndStaysSchemaOrdered()
+    {
+        using var session = new DocxSession(BuildTableDocument(), new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Row Reviewer",
+        });
+        var cell = FirstCellAnchor(session);
+        Assert.True(session.SetTableRowOptions(cell, new TableRowOptions { RepeatHeader = true })
+            .Success);
+        var pending = Assert.Single(session.ListRevisions());
+        var beforeRefusal = MainRoot(session.Save());
+        long versionBeforeRefusal = session.Version;
+
+        var refused = session.DeleteTableRow(cell);
+
+        Assert.False(refused.Success);
+        Assert.Equal(EditErrorCode.UnresolvedStructuralRevision, refused.Error!.Code);
+        Assert.Equal(versionBeforeRefusal, session.Version);
+        Assert.True(XNode.DeepEquals(beforeRefusal, MainRoot(session.Save())));
+
+        Assert.True(session.AcceptRevision(pending.Id).Success);
+        var deleted = session.DeleteTableRow(FirstCellAnchor(session));
+
+        Assert.True(deleted.Success, deleted.Error?.Message);
+        var trPr = MainRoot(session.Save()).Descendants(W.tr).First().Element(W.trPr)!;
+        var order = trPr.Elements().Select(e => e.Name.LocalName).ToList();
+        Assert.Contains("del", order);
+        Assert.True(order.IndexOf("del") > order.IndexOf("tblHeader"),
+            $"w:del must follow the CT_TrPrBase property set; got {string.Join(",", order)}");
+        Assert.Empty(ValidationErrors(session.Save()));
+    }
+
+    /// <summary>
+    /// Session-minted <c>w:id</c>s must not collide with ids the document already uses: two live
+    /// groups sharing one id in a part are permanently Ambiguous — neither individually nor bulk
+    /// resolvable. Word and DocxDiff both emit four-digit ids, so a fixed start point collides.
+    /// </summary>
+    [Fact]
+    public void DS45530_SessionMintedRevisionIds_DoNotCollideWithExistingDocumentIds()
+    {
+        var input = MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            var run = root.Descendants(W.p).First().Elements(W.r).First();
+            run.ReplaceWith(new XElement(W.ins,
+                new XAttribute(W.id, "1001"),
+                new XAttribute(W.author, "Existing Producer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                new XElement(run)));
+        });
+        using var session = new DocxSession(input, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Session Author",
+        });
+        var target = session.Project().AnchorIndex.Values
+            .Last(a => a.Anchor.Scope == "body" && a.Anchor.Kind == "p").Anchor.Id;
+
+        Assert.True(session.ReplaceText(target, "Rewritten by the session.").Success);
+
+        var revisions = session.ListRevisions();
+        Assert.True(revisions.Count > 1);
+        Assert.All(revisions, revision =>
+            Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus));
+        var ids = revisions.SelectMany(r => r.ConstituentIds).ToList();
+        Assert.Equal(ids.Count, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("1001", ids);
+
+        var accepted = session.AcceptAllRevisions();
+
+        Assert.True(accepted.Success, accepted.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+    }
+
+    /// <summary>
+    /// Resolving a wholly revised paragraph removes the emptied block — but never the last
+    /// block-level child of its container. A <c>w:tc</c> (or note/comment/header/body) with no
+    /// <c>w:p</c>/<c>w:tbl</c> left violates the content model and sends Word into repair, so
+    /// there the paragraph survives and only its mark revision is stripped.
+    /// </summary>
+    [Fact]
+    public void DS45531_ResolvingTheOnlyParagraphOfACell_KeepsTheCellsBlockContent()
+    {
+        var input = MutateMain(BuildTableDocument(), root =>
+        {
+            var paragraph = root.Descendants(W.tc).First().Elements(W.p).First();
+            var runs = paragraph.Elements(W.r).ToList();
+            foreach (var run in runs) run.Remove();
+            var pPr = paragraph.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); paragraph.AddFirst(pPr); }
+            var rPr = pPr.Element(W.rPr);
+            if (rPr is null) { rPr = new XElement(W.rPr); pPr.AddFirst(rPr); }
+            rPr.AddFirst(new XElement(W.ins,
+                new XAttribute(W.id, "9001"),
+                new XAttribute(W.author, "Cell Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z")));
+            paragraph.Add(new XElement(W.ins,
+                new XAttribute(W.id, "9002"),
+                new XAttribute(W.author, "Cell Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                runs));
+        });
+        using var session = new DocxSession(input);
+
+        var rejected = session.RejectAllRevisions();
+
+        Assert.True(rejected.Success, rejected.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var saved = session.Save();
+        var cell = MainRoot(saved).Descendants(W.tc).First();
+        Assert.NotEmpty(cell.Elements(W.p));
+        Assert.Empty(cell.Descendants(W.ins));
+        Assert.Empty(ValidationErrors(saved));
+    }
+
     private static byte[] BuildSingleLevelBulletDocument()
     {
         byte[] listed;

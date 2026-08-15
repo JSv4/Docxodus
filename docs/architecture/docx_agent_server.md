@@ -28,7 +28,7 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
 grouped-intent tools (read / preview / pagination / search / edit / format / create / list /
-comment / annotate / links / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+comment / annotate / links / images / content-controls / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -81,7 +81,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 17 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 19 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -374,9 +374,10 @@ external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
 `list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
-the first-class session API. Hyperlink targets use `targetKind: "external"|"internal"`; bookmark
+the first-class session API. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
-same numeric `ProjectionScopes` flag mask as the core API.
+same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
+paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.
 
 The result is structured enough for an agent to round-trip unchanged: hyperlink ids feed update
 or remove, while bookmark names feed move/rename/remove. Missing targets, duplicate/invalid names,
@@ -492,7 +493,7 @@ rebuilding the live registry after each entry; the complete operation is atomic 
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
 `docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links`/
-`docxodus_images`/`docxodus_content_controls` (their `undo`/`redo` and
+`docxodus_images`/`docxodus_content_controls`/`docxodus_track_changes` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
 sequence of *mutations*).
 
@@ -521,12 +522,26 @@ state, version, caches, settings, and both history cursors were never mutation t
 
 Preview receipts use the same typed result as apply: `baseVersion`, predicted `resultVersion`, each
 step's `created`/`removed`/`modified` anchors and markdown patch, revision/comment/annotation
-`{ added, removed, modified }` deltas, warnings, and a `packageHash`. `previewHtml` may be `scoped`
-(with `previewAnchorId`) or `full`; rendering occurs only from the final shadow package, and an
-optional rendering failure is a warning rather than turning a committed/predicted mutation into an
-apparent failure. The content hash is SHA-256 over sorted OPC entry names plus their uncompressed
-payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but not XML
-timestamps or generated OOXML ids.
+`{ added, removed, modified }` deltas, warnings, and a `packageHash`. Delta membership is decided on
+each entry's serialized wire projection, never on CLR object equality, so a pre-existing revision or
+comment a batch never touched is reported in no bucket at all. `packageHash` is `null` — never an
+empty string — when it could not be computed, so an unavailable hash cannot compare equal to another
+unavailable hash. `previewHtml` may be `scoped` (with `previewAnchorId`) or `full`; rendering occurs
+only from the final shadow package, and an optional rendering failure is a warning rather than
+turning a committed/predicted mutation into an apparent failure. The render profile is owned once, by
+`HtmlConversionOps.PreviewDocumentOptions()`/`PreviewBlockOptions()`, and every surface (typed core,
+handle façade, WASM bridge, npm, stdio/Python, this server) consumes it — a preview shows tracked
+changes, comments, annotations, notes and headers/footers, which is deliberately NOT the editor's
+authoring render profile. The content hash is SHA-256 over sorted OPC entry names plus their
+uncompressed payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but
+not XML timestamps or generated OOXML ids.
+
+Receipt enrichment is unconditional and is not free. Every batch — applied or previewed — inspects
+revisions, comments and annotations twice (before and after, each forcing an anchor index) and
+computes `packageHash`, which serializes a full package checkpoint and hashes it. A preview adds a
+package clone and a second open `WordprocessingDocument` on top, roughly doubling peak memory for its
+duration. On a large document this is the dominant cost of a small batch. There is currently no
+opt-out; whether to gate it behind a setting is an open public-API decision.
 
 Equivalence is exact for deterministic batches: replaying at the same base state produces the same
 step outcomes, semantic deltas, and package hash. For create/comment/note/image operations that
@@ -541,7 +556,12 @@ camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
 failure is the standard structured `precondition_failed` result. Atomic mode
 evaluates all step guards at the common batch-start boundary; best-effort mode
-evaluates them sequentially. `docxodus_get_content` with `format: "version"` reads the current
+evaluates them sequentially. `expectedMatchCount` is the single exception in both
+modes: only the replacement itself can count live matches, so that guard is carried
+into the step and enforced at the step's own turn against the state the step sees.
+A batched step's receipt is the ordinary `EditResult` envelope in full — a table
+step keeps its `tableAnchors` mapping, so an agent can address the cells the same
+batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.
@@ -625,10 +645,18 @@ Capabilities a full-featured document-editing agent surface might have, that Doc
 doesn't yet support — called out explicitly rather than faked, per this server's design goal of
 never claiming a capability it doesn't have:
 
-- **Unsafe revision topology fails closed.** The live registry resolves the supported content,
-  property, table-cell, content-control, and numbering families. A recognized family with no
-  safe resolver, or malformed/ambiguous native topology, remains visible with a diagnostic and
-  blocks both selective and bulk resolution until the source document is repaired.
+- **Unsafe revision topology fails closed — including for `accept_all`/`reject_all`.** The live
+  registry resolves the supported content, property, table-cell, content-control, and numbering
+  families. A recognized family with no safe resolver, or malformed/ambiguous native topology,
+  remains visible with a diagnostic and blocks both selective and bulk resolution until the
+  source document is repaired. This is a capability change: before #455, `accept_all`/
+  `reject_all` were a whole-document `RevisionProcessor` transform that always succeeded, and
+  there is deliberately no `force` mode. The refusing shapes are a missing or non-numeric
+  `w:id`, one `w:id` shared by two live groups in one part, `w:customXmlMoveFromRange*`/
+  `w:customXmlMoveToRange*` ranges, `w:ins`/`w:del` under `m:ctrlPr`, `w:del` on a run's
+  `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
+  two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
+  `docx_mutation_api.md`.
 - **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
   block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
   `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by

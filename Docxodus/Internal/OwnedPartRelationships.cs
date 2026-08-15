@@ -23,6 +23,14 @@ internal static partial class OwnedPartRelationships
         public string PartUri => Part.Uri.ToString();
     }
 
+    /// <summary>
+    /// Every part that hosts editable story content, tagged with the projection scope name its
+    /// paragraph anchors carry. This is the authority on "which parts do links/bookmarks live in",
+    /// so an omission here is not a narrower answer — it is a null <see cref="FindOwner"/>, which
+    /// silently drops results, skips a relationship, or throws. The comments part is included for
+    /// that reason: a comment paragraph is anchor-addressable (<c>p:cmt:…</c>) and editable, so it
+    /// owns its own hyperlink relationships and can hold bookmark markers like any other story.
+    /// </summary>
     internal static IReadOnlyList<Owner> StoryParts(WordprocessingDocument document)
     {
         var result = new List<Owner>();
