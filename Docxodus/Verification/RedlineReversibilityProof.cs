@@ -130,6 +130,7 @@ public sealed record RedlineProofPathResult
     required public bool Equivalent { get; init; }
     required public IReadOnlyList<string> RequestedRevisionIds { get; init; }
     required public IReadOnlyList<string> ResolvedRevisionIds { get; init; }
+    required public IReadOnlyList<string> ImplicitlyResolvedRevisionIds { get; init; }
     required public IReadOnlyList<RedlineRevisionIdentity> SurvivingPreExistingRevisions { get; init; }
     required public bool PreExistingRevisionsPreserved { get; init; }
     required public RedlineModeledSemanticComparison ModeledSemantic { get; init; }

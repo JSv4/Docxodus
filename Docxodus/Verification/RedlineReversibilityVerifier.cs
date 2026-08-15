@@ -172,6 +172,7 @@ public static class RedlineReversibilityVerifier
         var findings = new List<RedlineProofFinding>();
         var requestedIds = generated.Select(item => item.Id).ToArray();
         var resolvedIds = new List<string>(requestedIds.Length);
+        var implicitlyResolvedIds = new List<string>();
         byte[]? outputBytes = null;
         IReadOnlyList<RevisionListEntry> survivingEntries = Array.Empty<RevisionListEntry>();
         bool completed = true;
@@ -185,17 +186,35 @@ public static class RedlineReversibilityVerifier
                     .SingleOrDefault(item => string.Equals(item.Id, requested.Id, StringComparison.Ordinal));
                 if (current is null)
                 {
-                    completed = false;
+                    var liveRevisions = session.ListRevisions().Select(ToIdentity).ToArray();
+                    var overlapping = liveRevisions.FirstOrDefault(item =>
+                        RevisionOverlaps(requested, item));
+                    if (overlapping is not null)
+                    {
+                        completed = false;
+                        findings.Add(Finding(
+                            "generated_revision_identity_changed",
+                            VerificationFindingSeverity.Error,
+                            $"Generated revision '{requested.Id}' changed identity to '{overlapping.Id}' during resolution.",
+                            new ChangeLocation { EntryUri = requested.PartUri },
+                            requested.AnchorId,
+                            new[] { requested.Id, overlapping.Id },
+                            "Regenerate a redline whose generated revision identities remain stable during selective resolution.",
+                            direction));
+                        break;
+                    }
+
+                    implicitlyResolvedIds.Add(requested.Id);
                     findings.Add(Finding(
-                        "generated_revision_disappeared",
-                        VerificationFindingSeverity.Error,
-                        $"Generated revision '{requested.Id}' disappeared before it could be resolved.",
+                        "generated_revision_consumed_by_resolution",
+                        VerificationFindingSeverity.Info,
+                        $"Generated revision '{requested.Id}' was consumed while resolving a linked generated revision.",
                         new ChangeLocation { EntryUri = requested.PartUri },
                         requested.AnchorId,
                         new[] { requested.Id },
-                        "Regenerate a redline without nested or overlapping generated revision groups.",
+                        "No action is required when the path output matches its target and no generated revisions survive.",
                         direction));
-                    break;
+                    continue;
                 }
 
                 if (current.ResolutionStatus != RevisionResolutionStatus.Supported)
@@ -253,6 +272,23 @@ public static class RedlineReversibilityVerifier
             .Select(ToIdentity)
             .OrderBy(RevisionSortKey, StringComparer.Ordinal)
             .ToArray();
+        var survivingGenerated = generated.Where(requested => surviving.Any(item =>
+                string.Equals(item.Id, requested.Id, StringComparison.Ordinal)
+                || RevisionOverlaps(requested, item)))
+            .ToArray();
+        if (survivingGenerated.Length > 0)
+        {
+            completed = false;
+            findings.Add(Finding(
+                "generated_revisions_survived_resolution",
+                VerificationFindingSeverity.Error,
+                $"The {DirectionName(direction)} path left {survivingGenerated.Length} generated revision(s) unresolved.",
+                revisionIds: survivingGenerated.Select(item => item.Id).ToArray(),
+                remediation: "Inspect the generated revision topology and selective resolver results.",
+                direction: direction));
+        }
+        if (resolvedIds.Count + implicitlyResolvedIds.Count != requestedIds.Length)
+            completed = false;
         bool preExistingPreserved = VerifyPreExisting(
             direction, preExisting, surviving, findings);
 
@@ -266,6 +302,7 @@ public static class RedlineReversibilityVerifier
                     Equivalent = false,
                     RequestedRevisionIds = requestedIds,
                     ResolvedRevisionIds = resolvedIds,
+                    ImplicitlyResolvedRevisionIds = implicitlyResolvedIds,
                     SurvivingPreExistingRevisions = surviving,
                     PreExistingRevisionsPreserved = preExistingPreserved,
                     ModeledSemantic = SemanticUnavailable(),
@@ -381,6 +418,7 @@ public static class RedlineReversibilityVerifier
                 Equivalent = equivalent,
                 RequestedRevisionIds = requestedIds,
                 ResolvedRevisionIds = resolvedIds,
+                ImplicitlyResolvedRevisionIds = implicitlyResolvedIds,
                 SurvivingPreExistingRevisions = surviving,
                 PreExistingRevisionsPreserved = preExistingPreserved,
                 ModeledSemantic = semantic,

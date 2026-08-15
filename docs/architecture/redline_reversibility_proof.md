@@ -50,9 +50,15 @@ selective resolver exposed by `DocxSession`. Resolution is deterministic and reb
 the live registry after every operation, because resolving an outer revision can
 expose or detach nested markup.
 
+Resolving one native revision can atomically consume a linked generated sibling (for
+example, paragraph-mark and paragraph-property markup that Word treats as one
+closure). The proof records that sibling separately as implicitly resolved only when
+none of its native constituents remain live. A changed identity or surviving
+constituent still fails closed, and target equivalence remains mandatory.
+
 Each path records:
 
-- the generated revision IDs requested and successfully resolved;
+- the generated revision IDs requested, explicitly resolved, and implicitly consumed;
 - the surviving pre-existing revision identities;
 - the actual output package identity;
 - the expected package identity;
