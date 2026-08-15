@@ -12,7 +12,9 @@ All notable changes to this project will be documented in this file.
   ordered OPC-content, and normalized-semantic SHA-256 identities. XML normalization ignores only
   documented serialization choices through an explicit known-content-type allowlist, preserves
   unknown vendor-extension/custom XML whitespace and `xml:space`, and
-  keeps Strict and Transitional namespaces distinct. Available from .NET, live sessions,
+  keeps Strict and Transitional namespaces distinct. Declared and actual payload reads now also
+  have a configurable absolute per-entry byte ceiling alongside the aggregate and compression-ratio
+  limits. Available from .NET, live sessions,
   WASM/npm (including workers), the stdio Python host/client, and MCP
   `docxodus_get_content(format: "manifest")`.
 
@@ -51,9 +53,11 @@ All notable changes to this project will be documented in this file.
   target swaps at relationship-reference locations remain visible. Unknown XML
   remains visible with whitespace-, comment-, and processing-instruction-preserving
   normalized digests; full-part style/numbering/theme residuals cover values outside
-  the typed IR registries. Package inspection runs before SDK parsing and has
+  the typed IR registries. Package inspection reuses #456's manifest generator, XML normalizer,
+  relationship resolution, safety limits, and finding locations; it runs before SDK parsing and has
   configurable entry-count, part-URI, per-entry, aggregate-decompressed-byte, and
-  compression-ratio bounds, with duplicate part names and relationship ids rejected.
+  compression-ratio bounds, with duplicate part names and relationship ids rejected. Invalid
+  manifests fail closed even when the package-change supplement is disabled.
   The formal v1 JSON Schema is published at
   [`docs/schemas/semantic-changes-v1.schema.json`](docs/schemas/semantic-changes-v1.schema.json).
   The existing redline, revision,

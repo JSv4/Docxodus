@@ -27,16 +27,20 @@ using var session = new DocxSession(bytes);
 var sessionChanges = session.GetSemanticChanges();
 ```
 
-`SemanticDiffOptions` carries the existing `DocxDiffSettings` and enables the
-package supplement by default. Its default package limits are 10,000 ZIP entries,
-64 MiB of decompressed data per entry, 256 MiB of aggregate decompressed data,
-a 1,000:1 maximum compression ratio, and 2,048 decoded characters per package-part
-URI. Integer and byte bounds must be positive; the ratio must also be finite. Entry
+`SemanticDiffOptions` carries the existing `DocxDiffSettings`, enables the package
+supplement by default, and exposes its shared `PackageManifestOptions` as
+`PackageOptions`. The semantic defaults are 10,000 ZIP entries, 64 MiB of
+decompressed data per entry and per parsed XML part, 256 MiB of aggregate
+decompressed data, a 1,000:1 maximum compression ratio, and 2,048 decoded
+characters per package-part URI. Integer and byte bounds must be positive; the
+ratio must also be finite. Entry
 names reject backslashes, control characters, malformed escaping, traversal, and
 case-insensitive duplicates after URI decoding. Relationship parts reject duplicate
 relationship ids. Declared ZIP sizes provide early rejection, while per-entry and
 aggregate byte budgets are also enforced against the actual decompressed streams.
-This inspection runs before revision pre-acceptance and Open XML SDK/IR parsing.
+The manifest preflight runs before revision pre-acceptance and Open XML SDK/IR
+parsing even when `IncludePackageChanges` is `false`; disabling the supplement
+does not disable validation.
 
 The session baseline is controlled by
 `DocxSessionSettings.CaptureInitialProjection` (default `true`). Enabling it now
@@ -126,12 +130,14 @@ The package supplement deliberately suppresses representation-only differences:
 - binary unknown parts and media are represented by bounded size/content-type
   facts and SHA-256 digests rather than embedded payloads.
 
-The package reader obtains content types from `[Content_Types].xml`. Malformed or
-unknown content remains visible as opaque data when it is safe to inspect; packages
-that violate an archive safety boundary fail before reaching the SDK. Package-validity
-diagnostics and the reusable manifest/delta implementation are owned by issue #456.
-The internal `ISemanticPackageChangeDetector` boundary is the integration seam for
-using that shared manifest without changing this public schema.
+The package supplement consumes the same bounded pass as
+`PackageManifestGenerator`: shared content-type resolution, relationship
+enumeration, `ChangeLocation` diagnostics, raw digests, and
+`XmlSemanticNormalizer` results. Its internal inspection view retains detached
+parsed XML trees, but no archive handles or duplicate raw payloads, so there is no
+second ZIP/XML reader with a divergent safety policy. Any error-severity manifest
+finding fails closed before the SDK. Well-formed unknown/vendor content remains
+visible as opaque data when it is safe to inspect.
 
 ## Performance guard
 
@@ -140,8 +146,8 @@ builds two 1,000-paragraph documents with one text edit. The complementary
 `Dense_table_document_single_edit_has_bounded_time_and_output` test builds 200
 tables (400 rows) with one cell edit. Both exercise the default package supplement,
 require completion under 30 seconds, and cap canonical output at 1,000,000 bytes.
-On the 2026-08-15 final development run, the paragraph guard reported 132.3 ms,
-one change, and 589 canonical bytes; the dense-table guard reported 179.7 ms,
+On the 2026-08-15 final integration run, the paragraph guard reported 132.4 ms,
+one change, and 589 canonical bytes; the dense-table guard reported 205.0 ms,
 eight changes, and 6,663 canonical bytes.
 The package supplement bounds entry count, URI length, compression ratio, and both
 per-entry and aggregate actual decompressed bytes; it does not impose a whole-result
