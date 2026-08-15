@@ -32,9 +32,14 @@ have a misleading meaning.
 The stateless operation hashes the exact supplied bytes. The session operation first creates the
 same isolated logical checkpoint used by transaction snapshots: it clones the package and overlays
 dirty cached XML on the clone. Unsaved edits are therefore represented, while the live package,
-cache objects, undo/redo history, and document version are unchanged. The session manifest's raw
-digest describes those deterministic checkpoint bytes, not necessarily the original file opened
-at the start of the session.
+cache objects, undo/redo history, and document version are unchanged.
+
+**All three session digests describe the checkpoint, not the opened file.** Serializing a package
+through the SDK rewrites XML and repacks the ZIP, so a session manifest taken immediately after
+opening a document normally differs from the stateless manifest of the same bytes in the raw,
+ordered *and* normalized-semantic digest. Compare session manifests with session manifests and
+stateless manifests with stateless manifests; comparing across the two entry points measures the
+round-trip, not the edits.
 
 ## Schema-v1 envelope
 
@@ -46,7 +51,9 @@ The top-level fields are emitted in this fixed order:
 
 Every digest is `{ "algorithm": "SHA-256", "value": "<lower-case hex>" }`. A digest is `null`
 when safety limits, encryption, or unreadable content prevent computing it; absence is never
-represented by an empty digest.
+represented by an empty digest. In particular, breaching the entry-count or total-expansion limit
+suppresses both content digests: an inspection that stopped early has not seen the whole package,
+and two packages differing only past the cut must not compare equal.
 
 `packageKind` is one of `opc`, `zip`, `zip-encrypted`, `ole-encrypted`, `ole`, or `malformed`.
 Password-encrypted OOXML commonly appears as an OLE compound file containing `EncryptedPackage`
@@ -67,22 +74,38 @@ duplicate names. Each record contains:
 
 `[Content_Types].xml` and relationship parts receive their package-defined implicit MIME types.
 A normal part without a matching Default or Override retains `contentType: null` and produces
-`missing_content_type`; the manifest does not invent a MIME type. `contentTypes` preserves every
-Default/Override declaration, including duplicate occurrences, while separately reporting
-duplicate keys, conflicting values, and Override targets that do not exist.
+`missing_content_type`; the manifest does not invent a MIME type. `missing_content_type` is only
+emitted when `[Content_Types].xml` was actually parsed — when the declaration file itself is
+absent, malformed, oversize, or unreadable, the manifest says so once
+(`missing_content_types` / `malformed_content_types` / `content_types_unreadable`) instead of
+blaming every part in the package. `contentTypes` preserves every Default/Override declaration,
+including duplicate occurrences, while separately reporting duplicate keys, conflicting values,
+and Override targets that do not exist.
+
+**Directory-only ZIP entries.** OPC packages should not carry them, but 7-Zip, Windows'
+*Send to → Compressed folder*, several Java/PHP zip writers, and some Word templates do, and Word
+opens those files. They are inventoried with a trailing-slash URI (`/word/`), reported as a
+`directory_entry` **warning** rather than an error, exempt from content-type resolution, and
+excluded from both content digests — adding or dropping folder entries is repackaging, not a
+document change.
 
 ### Relationships
 
 `relationships` includes every readable package-level and part-level Relationship with owner URI,
 Id, type, raw target, normalized target mode, resolved internal target URI, and target presence.
-`/` is the package owner. Relative targets are resolved against the owning part and cannot escape
-the package root. External targets are retained but never dereferenced.
+`/` is the package owner. Targets may be relative to the owning part or package-absolute
+(`/word/document.xml`, the form the Open XML SDK writes); neither can escape the package root.
+A target is external only when it carries an RFC 3986 scheme, never merely because it starts with
+a slash. External targets are retained but never dereferenced.
 
 The generator distinguishes:
 
 - `missing_target`: a declared internal Relationship resolves to a package part that is absent;
 - `dangling_relationship`: an XML `r:id`/`r:embed`/`r:link`-style reference has no Relationship in
   its owning part;
+- `relationship_part_unreadable`: the `.rels` part exists but was never parsed, so its
+  relationships are unknown. `dangling_relationship` is suppressed for that owner — every
+  reference would otherwise look dangling because of one unread file;
 - duplicate or conflicting Relationship IDs within one owner;
 - a relationship part whose owner is absent or whose URI cannot identify an owner.
 
@@ -113,7 +136,14 @@ little-endian 32-bit integers and entry sizes use little-endian 64-bit integers.
 canonical URI using ordinal comparison, then by occurrence. Using the already-computed per-entry
 digest avoids a second decompression pass over untrusted input.
 Duplicates receive occurrences by raw digest, size, then original archive index, so archive order
-does not perturb otherwise distinguishable duplicates.
+does not perturb otherwise distinguishable duplicates. Directory-only entries contribute to
+neither digest.
+
+Each semantic-digest entry is tagged with the identity it contributed: `X` a normalized XML
+digest, `B` opaque binary bytes, `U` an entry whose declared content type says XML but which
+could not be parsed. A `U` entry falls back to its exact bytes, so one unparsable part costs that
+part its serialization independence rather than costing the whole package its identity. The tag is
+part of the hashed stream, so a part cannot silently move between the three states.
 
 Interpret a comparison as follows:
 
@@ -132,8 +162,12 @@ Schema v1 parses with DTD processing prohibited, no external resolver, preserved
 processing instructions, and whitespace, and a configured character ceiling. Its digest token
 stream applies these rules:
 
-- XML declarations, BOM/encoding choice, namespace-prefix spelling, and namespace-declaration
-  placement are ignored.
+- XML declarations, BOM/encoding choice, namespace-prefix spelling *in element and attribute
+  names*, and namespace-declaration placement are ignored. A prefix appearing inside an attribute
+  *value* — `mc:Ignorable="w14"`, `xsi:type` and other QName-valued attributes — is hashed as
+  written, so renaming such a prefix reports a semantic difference. Schema v1 does not interpret
+  attribute values, and treating an unknown value as a QName would be a guess; this is a known
+  conservative limitation, not a claim that the two documents differ.
 - Element and attribute names use expanded `{namespace URI, local name}` identity. Non-namespace
   attributes sort ordinally by namespace URI, local name, then value.
 - Attribute order, quote style, entity spelling, empty-element spelling, and CDATA-versus-text
@@ -208,6 +242,16 @@ external Relationship targets.
 Encryption flags are read from classic or ZIP64 central-directory metadata. If that metadata
 cannot be parsed authoritatively, the manifest emits `zip_encryption_detection_unavailable`, sets
 each affected entry's `isEncrypted` to `null`, and does not read or hash those entry payloads.
+This detection is deliberately stricter than `System.IO.Compression.ZipArchive`: it requires the
+end-of-central-directory record to terminate the file exactly and its entry count to match, so a
+ZIP carrying a prepended stub, an appended signature, or a miscounted comment fails closed. Such a
+package still yields its raw digest, entry inventory, and findings, but no content digest and no
+resolved content types — deciding that an unreadable central directory contains no encrypted
+entries is a claim the manifest will not make.
+
+The entry-count limit truncates inspection at `MaxEntryCount`. Declared expansion is nonetheless
+summed over the whole central directory, so a package cannot dodge the size budget by also
+breaching the entry-count limit.
 
 ## Examples
 
@@ -232,3 +276,26 @@ before = generate_package_manifest(docx_bytes)
 with open_session(docx_bytes) as session:
     current = session.get_package_manifest()
 ```
+
+## Known limits of schema v1
+
+Recorded so a reader does not mistake an accepted trade-off for an oversight.
+
+- **`PackageManifestOptions` is a .NET-only surface.** WASM, npm, the stdio Python host, and MCP
+  call the parameterless overloads and therefore always use the defaults above. A browser or
+  Python caller cannot raise `MaxXmlPartBytes` for a legitimately large package; it receives the
+  degraded manifest instead. Plumbing the options object through the four transports is a
+  separate change.
+- **Parsed XML is retained for the whole generation.** Every readable XML part stays materialized
+  as an `XDocument` until the manifest is returned, so the documented limits bound bytes read but
+  not the larger in-memory DOM. The defaults are sized for documents, not for adversarial archives
+  of maximum-size XML parts; lower `MaxTotalUncompressedBytes` and `MaxXmlPartBytes` when
+  inspecting untrusted input in a memory-constrained host.
+- **The WASM export accepts any buffer size.** `DocumentConverter.GeneratePackageManifest` skips
+  the 100 MB `MaxDocumentSizeBytes` guard its sibling exports apply, because triaging an
+  oversized or malformed package is the point of the operation. The manifest's own limits still
+  apply, but a browser caller is responsible for not marshaling a buffer its tab cannot hold.
+- **Manifest JSON grows with the package.** It is roughly 10–40 KB for a typical document and
+  scales with entry, relationship and finding counts. `docxodus_get_content(format: "manifest")`
+  returns the whole artifact with no summary mode, so an agent budgeting context should read
+  `isValid` and `findings` rather than the full envelope.

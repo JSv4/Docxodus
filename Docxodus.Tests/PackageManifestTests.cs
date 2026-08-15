@@ -483,6 +483,10 @@ public class PackageManifestTests
         Assert.All(json.RootElement.GetProperty("entries").EnumerateArray(), entry =>
             Assert.Equal(JsonValueKind.Null, entry.GetProperty("isEncrypted").ValueKind));
         Assert.Null(manifest.OrderedOpcContentDigest);
+
+        // Not reading [Content_Types].xml is one failure, not one failure per part.
+        Assert.DoesNotContain(manifest.Findings, finding => finding.Code == "missing_content_type");
+        Assert.Single(manifest.Findings, finding => finding.Code == "content_types_unreadable");
     }
 
     [Fact]
@@ -628,6 +632,240 @@ public class PackageManifestTests
         Assert.Equal("/word/document.xml", relationship.ResolvedTargetUri);
         Assert.True(relationship.IsTargetPresent);
     }
+
+    [Fact]
+    public void PM028_DirectoryOnlyZipEntries_AreWarningsAndDoNotInvalidateThePackage()
+    {
+        var entries = MinimalEntries().ToList();
+        entries.Insert(0, ("word/", Array.Empty<byte>()));
+        entries.Insert(1, ("_rels/", Array.Empty<byte>()));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp));
+
+        Assert.True(manifest.IsValid, string.Join("\n", manifest.Findings.Select(f => f.Code)));
+        Assert.DoesNotContain(manifest.Findings, finding => finding.Code == "unsafe_entry_path");
+        var directories = manifest.Findings.Where(f => f.Code == "directory_entry").ToList();
+        Assert.Equal(2, directories.Count);
+        Assert.All(directories,
+            finding => Assert.Equal(VerificationFindingSeverity.Warning, finding.Severity));
+        Assert.Contains(manifest.Entries, entry => entry.Uri == "/word/");
+    }
+
+    [Fact]
+    public void PM029_DirectoryEntries_DoNotPerturbContentIdentities()
+    {
+        var withDirectories = MinimalEntries().ToList();
+        withDirectories.Insert(0, ("word/", Array.Empty<byte>()));
+
+        var plain = PackageManifestGenerator.Generate(
+            BuildZip(MinimalEntries(), CompressionLevel.NoCompression, DefaultTimestamp));
+        var padded = PackageManifestGenerator.Generate(
+            BuildZip(withDirectories, CompressionLevel.NoCompression, DefaultTimestamp));
+
+        Assert.Equal(plain.OrderedOpcContentDigest, padded.OrderedOpcContentDigest);
+        Assert.Equal(plain.NormalizedSemanticDigest, padded.NormalizedSemanticDigest);
+    }
+
+    [Fact]
+    public void PM030_EntryCountTruncation_SuppressesContentIdentities()
+    {
+        var options = new PackageManifestOptions { MaxEntryCount = 5 };
+
+        var first = PackageManifestGenerator.Generate(TruncationPackage(0x01), options);
+        var second = PackageManifestGenerator.Generate(TruncationPackage(0xfe), options);
+
+        Assert.Contains(first.Findings, finding => finding.Code == "entry_count_limit_exceeded");
+        Assert.NotEqual(first.RawPackageBytesDigest, second.RawPackageBytesDigest);
+        Assert.Null(first.OrderedOpcContentDigest);
+        Assert.Null(first.NormalizedSemanticDigest);
+    }
+
+    [Fact]
+    public void PM031_DeclaredExpansionTotal_CoversEntriesBeyondTheInspectionLimit()
+    {
+        var entries = MinimalEntries().ToList();
+        for (var index = 0; index < 20; index++)
+            entries.Add(($"word/blob{index:D2}.bin", new byte[4096]));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp),
+            new PackageManifestOptions { MaxEntryCount = 5, MaxTotalUncompressedBytes = 20_000 });
+
+        Assert.Contains(manifest.Findings,
+            finding => finding.Code == "total_expansion_limit_exceeded");
+    }
+
+    [Fact]
+    public void PM032_OversizeContentTypes_ReportsTheXmlLimitOnce()
+    {
+        var entries = MinimalEntries().ToList();
+        entries[0] = ("[Content_Types].xml", Utf8(OversizeContentTypes()));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp),
+            new PackageManifestOptions { MaxXmlPartBytes = 1500 });
+
+        Assert.Single(manifest.Findings, finding =>
+            finding.Code == "xml_size_limit_exceeded"
+            && finding.Location?.EntryUri == "/[Content_Types].xml");
+    }
+
+    [Fact]
+    public void PM033_UnreadableContentTypes_ReportOnceInsteadOfPerEntry()
+    {
+        var package = RewriteEntry(
+            BuildZip(MinimalEntries(), CompressionLevel.NoCompression, DefaultTimestamp),
+            "[Content_Types].xml", _ => "<not-types/>");
+
+        var manifest = PackageManifestGenerator.Generate(package);
+
+        Assert.Contains(manifest.Findings, finding => finding.Code == "malformed_content_types");
+        Assert.Contains(manifest.Findings, finding => finding.Code == "content_types_unreadable");
+        Assert.DoesNotContain(manifest.Findings, finding => finding.Code == "missing_content_type");
+        Assert.Equal("unresolved",
+            manifest.Entries.Single(entry => entry.Uri == "/word/document.xml").ContentTypeSource);
+    }
+
+    [Fact]
+    public void PM034_UnreadableRelationshipPart_IsReportedInsteadOfFakeDanglingIds()
+    {
+        var entries = MinimalEntries().ToList();
+        entries[2] = ("word/document.xml", Utf8("""
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <w:body><w:p><w:hyperlink r:id="rIdReal"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p></w:body>
+            </w:document>
+            """));
+        entries.Add(("word/_rels/document.xml.rels", Utf8(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+            + "<!--" + new string('p', 4000) + "-->"
+            + "<Relationship Id=\"rIdReal\" Type=\"urn:t\" Target=\"https://example.test\" TargetMode=\"External\"/>"
+            + "</Relationships>")));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp),
+            new PackageManifestOptions { MaxXmlPartBytes = 2000 });
+
+        Assert.DoesNotContain(manifest.Findings, finding => finding.Code == "dangling_relationship");
+        Assert.Contains(manifest.Findings, finding =>
+            finding.Code == "relationship_part_unreadable"
+            && finding.Location?.EntryUri == "/word/_rels/document.xml.rels");
+    }
+
+    [Fact]
+    public void PM035_UnparsableXmlPart_KeepsAPackageSemanticIdentity()
+    {
+        var left = PackageManifestGenerator.Generate(MalformedXmlPackage("<open>"));
+        var right = PackageManifestGenerator.Generate(MalformedXmlPackage("<other>"));
+
+        Assert.Contains(left.Findings, finding => finding.Code == "malformed_xml");
+        Assert.NotNull(left.NormalizedSemanticDigest);
+        Assert.NotEqual(left.NormalizedSemanticDigest, right.NormalizedSemanticDigest);
+    }
+
+    [Fact]
+    public void PM036_UnparsableXmlPart_StillIgnoresSerializationOfTheReadableParts()
+    {
+        var compact = MalformedXmlPackage("<open>");
+        var pretty = RewriteEntry(compact, "word/document.xml",
+            xml => xml.Replace("><", ">\n  <", StringComparison.Ordinal));
+
+        var left = PackageManifestGenerator.Generate(compact).NormalizedSemanticDigest;
+        var right = PackageManifestGenerator.Generate(pretty).NormalizedSemanticDigest;
+
+        Assert.NotNull(left);
+        Assert.Equal(left, right);
+    }
+
+    [Fact]
+    public void PM037_BlankSessionManifest_IsValid()
+    {
+        var handle = DocxSessionOps.OpenSession(DocxSessionOps.CreateBlankDocx(), settings: null);
+        try
+        {
+            using var parsed = JsonDocument.Parse(VerificationOps.GetPackageManifest(handle));
+            var codes = parsed.RootElement.GetProperty("findings").EnumerateArray()
+                .Select(finding => finding.GetProperty("code").GetString())
+                .ToList();
+            Assert.True(parsed.RootElement.GetProperty("isValid").GetBoolean(),
+                string.Join(",", codes));
+        }
+        finally
+        {
+            DocxSessionOps.CloseSession(handle);
+        }
+    }
+
+    [Fact]
+    public void PM038_EveryCommittedDocxFixture_ProducesAValidManifest()
+    {
+        // The manifest is a verification artifact: a real Word-authored package that Word opens
+        // must not be reported invalid. Fixtures listed here are genuinely malformed, and each
+        // one names its defect so a regression cannot hide behind the allowlist.
+        var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CA009-altChunk.docx"] =
+                "declares /word/afchunk2.dat as wordprocessingml.document.main+xml while the payload is a ZIP",
+        };
+        var directory = new DirectoryInfo("../../../../TestFiles/");
+        Assert.True(directory.Exists);
+
+        var invalid = new List<string>();
+        foreach (var file in directory.EnumerateFiles("*.docx", SearchOption.AllDirectories)
+                     .OrderBy(file => file.Name, StringComparer.Ordinal))
+        {
+            var manifest = PackageManifestGenerator.Generate(File.ReadAllBytes(file.FullName));
+            if (manifest.IsValid || known.ContainsKey(file.Name))
+                continue;
+            invalid.Add($"{file.Name}: " + string.Join(",", manifest.Findings
+                .Where(finding => finding.Severity == VerificationFindingSeverity.Error)
+                .Select(finding => finding.Code).Distinct()));
+        }
+
+        Assert.Empty(invalid);
+    }
+
+    [Fact]
+    public void PM039_RelationshipReferenceOnTheRootElement_IsCheckedForClosure()
+    {
+        var entries = MinimalEntries().ToList();
+        entries[2] = ("word/document.xml", Utf8("""
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                        r:id="rIdOnRoot"><w:body><w:p/></w:body></w:document>
+            """));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp));
+
+        Assert.Contains(manifest.Findings, finding =>
+            finding.Code == "dangling_relationship"
+            && finding.Location?.RelationshipId == "rIdOnRoot");
+    }
+
+    private static byte[] TruncationPackage(byte tail)
+    {
+        var entries = MinimalEntries().ToList();
+        for (var index = 0; index < 8; index++)
+            entries.Add(($"word/extra{index}.bin", new[] { (byte)index }));
+        entries.Add(("word/zzz-payload.bin", new[] { tail, tail, tail }));
+        return BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp);
+    }
+
+    private static byte[] MalformedXmlPackage(string payload)
+    {
+        var entries = MinimalEntries().ToList();
+        entries.Add(("word/broken.xml", Utf8(payload)));
+        return BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp);
+    }
+
+    private static string OversizeContentTypes() => """
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+          <Default Extension="xml" ContentType="application/xml"/>
+          <Default Extension="bin" ContentType="application/octet-stream"/>
+          <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+        """ + "<!--" + new string('q', 3000) + "--></Types>";
 
     private static readonly DateTimeOffset DefaultTimestamp =
         new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);

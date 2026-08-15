@@ -147,7 +147,13 @@ public static class PackageManifestGenerator
                 "ZIP central-directory encryption flags could not be parsed authoritatively.",
                 new ChangeLocation { PropertyPath = "entries[].isEncrypted" });
         }
-        if (archiveEntries.Count > options.MaxEntryCount)
+
+        // Declared expansion is measured over the whole central directory. Measuring it only over
+        // the entries we go on to inspect would let a package dodge the budget by also breaching
+        // the entry-count limit.
+        var declaredTotal = SumDeclaredSizes(archiveEntries);
+        var entryCountExceeded = archiveEntries.Count > options.MaxEntryCount;
+        if (entryCountExceeded)
         {
             AddFinding(findings, "entry_count_limit_exceeded", VerificationFindingSeverity.Error,
                 $"Package has {archiveEntries.Count.ToString(CultureInfo.InvariantCulture)} entries; " +
@@ -157,11 +163,11 @@ public static class PackageManifestGenerator
         }
 
         var works = new List<EntryWork>(archiveEntries.Count);
-        long declaredTotal = 0;
         for (var index = 0; index < archiveEntries.Count; index++)
         {
             var archiveEntry = archiveEntries[index];
             var validEntryPath = TryCanonicalizeEntryName(archiveEntry.FullName, out var uri);
+            var isDirectory = validEntryPath && uri.EndsWith("/", StringComparison.Ordinal);
             if (!validEntryPath)
             {
                 AddFinding(findings, "unsafe_entry_path", VerificationFindingSeverity.Error,
@@ -190,15 +196,6 @@ public static class PackageManifestGenerator
                     "ZIP entry metadata could not be read.", new ChangeLocation { EntryUri = uri });
             }
 
-            try
-            {
-                declaredTotal = checked(declaredTotal + length);
-            }
-            catch (OverflowException)
-            {
-                declaredTotal = long.MaxValue;
-            }
-
             bool? encrypted = encryptedFlags is not null && index < encryptedFlags.Count
                 ? encryptedFlags[index]
                 : null;
@@ -220,8 +217,7 @@ public static class PackageManifestGenerator
                     new ChangeLocation { EntryUri = uri });
             }
 
-            if (archiveEntry.FullName.EndsWith("/", StringComparison.Ordinal)
-                || archiveEntry.FullName.EndsWith("\\", StringComparison.Ordinal))
+            if (isDirectory)
             {
                 AddFinding(findings, "directory_entry", VerificationFindingSeverity.Warning,
                     "OPC packages should not contain directory-only ZIP entries.",
@@ -233,6 +229,7 @@ public static class PackageManifestGenerator
                 ArchiveEntry = archiveEntry,
                 ArchiveIndex = index,
                 Uri = uri,
+                IsDirectory = isDirectory,
                 Size = length,
                 CompressedSize = compressedLength,
                 IsEncrypted = encrypted,
@@ -256,13 +253,24 @@ public static class PackageManifestGenerator
         foreach (var work in works)
         {
             (work.ContentType, work.ContentTypeSource) = contentTypeMap.Resolve(work.Uri);
-            work.IsXml = IsXml(work.Uri, work.ContentType);
-            if (work.ContentType is null && !IsDirectory(work.ArchiveEntry.FullName))
+            work.IsXml = !work.IsDirectory && IsXml(work.Uri, work.ContentType);
+
+            // Only a readable [Content_Types].xml lets us claim a *part* has no declaration.
+            // Reporting it per entry when the map itself was never parsed turns one systemic
+            // failure into one error per entry and misnames the cause.
+            if (work.ContentType is null && !work.IsDirectory && contentTypeMap.IsAvailable)
             {
                 AddFinding(findings, "missing_content_type", VerificationFindingSeverity.Error,
                     "No content-type Override or Default matches this package entry.",
                     new ChangeLocation { EntryUri = work.Uri });
             }
+        }
+        if (!contentTypeMap.IsAvailable
+            && works.Any(work => string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)))
+        {
+            AddFinding(findings, "content_types_unreadable", VerificationFindingSeverity.Error,
+                "[Content_Types].xml is present but could not be used, so no part content type was resolved.",
+                new ChangeLocation { EntryUri = ContentTypesUri });
         }
         ValidateContentTypeTargets(contentTypeMap, works, findings);
 
@@ -277,24 +285,21 @@ public static class PackageManifestGenerator
 
         FindConflictingEntries(works, findings);
         AssignStableOccurrences(works);
-        var relationships = ReadRelationships(works, options, findings);
-        ValidateRelationshipReferences(works, relationships, findings);
+        var relationships = ReadRelationships(works, options, findings, out var unreadableOwners);
+        ValidateRelationshipReferences(works, relationships, unreadableOwners, findings);
         var facts = BuildFacts(works, relationships);
 
+        // A truncated inspection has not seen the whole package, so it cannot state a content
+        // identity: two packages differing only past the cut would otherwise compare equal.
         VerificationDigest? orderedContentDigest = null;
-        if (!totalLimitExceeded
+        if (!totalLimitExceeded && !entryCountExceeded
             && works.All(work => work.RawBytesDigest is not null
                 && work.IsEncrypted == false && !work.RatioExceeded))
         {
             orderedContentDigest = ComputeOrderedContentDigest(works);
         }
 
-        VerificationDigest? semanticDigest = null;
-        if (orderedContentDigest is not null
-            && works.All(work => !work.IsXml || work.NormalizedXmlDigest is not null))
-        {
-            semanticDigest = ComputeSemanticDigest(works);
-        }
+        var semanticDigest = orderedContentDigest is null ? null : ComputeSemanticDigest(works);
 
         var entryModels = works
             .OrderBy(work => work.Uri, StringComparer.Ordinal)
@@ -407,6 +412,7 @@ public static class PackageManifestGenerator
             return ContentTypeMap.Empty;
         if (selected.Size > options.MaxXmlPartBytes)
         {
+            selected.XmlLimitReported = true;
             AddFinding(findings, "xml_size_limit_exceeded", VerificationFindingSeverity.Error,
                 "[Content_Types].xml exceeds the configured XML parsing limit.",
                 new ChangeLocation { EntryUri = selected.Uri });
@@ -456,8 +462,9 @@ public static class PackageManifestGenerator
             return true;
 
         var captureXml = work.IsXml && work.Size <= options.MaxXmlPartBytes;
-        if (work.IsXml && !captureXml)
+        if (work.IsXml && !captureXml && !work.XmlLimitReported)
         {
+            work.XmlLimitReported = true;
             AddFinding(findings, "xml_size_limit_exceeded", VerificationFindingSeverity.Error,
                 "XML entry exceeds the configured XML parsing limit; its raw digest is retained.",
                 new ChangeLocation { EntryUri = work.Uri });
@@ -577,16 +584,29 @@ public static class PackageManifestGenerator
     private static IReadOnlyList<PackageRelationship> ReadRelationships(
         IReadOnlyList<EntryWork> works,
         PackageManifestOptions options,
-        List<VerificationFinding> findings)
+        List<VerificationFinding> findings,
+        out HashSet<string> unreadableOwners)
     {
         var entryUris = works.Select(work => work.Uri).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        unreadableOwners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var relationships = new List<PackageRelationship>();
         foreach (var work in works.Where(work => IsRelationshipPart(work.Uri))
                      .OrderBy(work => work.Uri, StringComparer.Ordinal)
                      .ThenBy(work => work.Occurrence))
         {
             if (work.Xml?.Root is null)
+            {
+                // The part exists but was never parsed (size limit, encryption, unreadable
+                // payload). Say so, rather than emitting an empty relationship set that reads
+                // as "this part declares nothing".
+                var skippedOwner = RelationshipOwner(work.Uri);
+                if (skippedOwner is not null)
+                    unreadableOwners.Add(skippedOwner);
+                AddFinding(findings, "relationship_part_unreadable", VerificationFindingSeverity.Error,
+                    "Relationship part could not be parsed, so its relationships are unknown.",
+                    new ChangeLocation { EntryUri = work.Uri, OwnerUri = skippedOwner });
                 continue;
+            }
             if (work.Xml.Root.Name.LocalName != "Relationships"
                 || !IsPackageRelationshipsNamespace(work.Xml.Root.Name.NamespaceName))
             {
@@ -709,6 +729,7 @@ public static class PackageManifestGenerator
     private static void ValidateRelationshipReferences(
         IReadOnlyList<EntryWork> works,
         IReadOnlyList<PackageRelationship> relationships,
+        HashSet<string> unreadableOwners,
         List<VerificationFinding> findings)
     {
         var idsByOwner = relationships
@@ -722,9 +743,12 @@ public static class PackageManifestGenerator
                      && !IsRelationshipPart(work.Uri)
                      && !string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)))
         {
+            // Without a parsed .rels part we do not know which IDs the part defines, so every
+            // reference would look dangling. relationship_part_unreadable already named the cause.
+            if (unreadableOwners.Contains(work.Uri))
+                continue;
             idsByOwner.TryGetValue(work.Uri, out var ids);
             foreach (var attribute in work.Xml!.Descendants()
-                         .Prepend(work.Xml.Root!)
                          .Attributes()
                          .Where(attribute =>
                              IsOfficeRelationshipNamespace(attribute.Name.NamespaceName)
@@ -932,8 +956,14 @@ public static class PackageManifestGenerator
             AppendString(hash, work.Uri);
             AppendInt32(hash, work.Occurrence);
             AppendString(hash, work.ContentType ?? string.Empty);
-            hash.AppendData(new[] { work.IsXml ? (byte)'X' : (byte)'B' });
-            AppendString(hash, (work.IsXml ? work.NormalizedXmlDigest : work.RawBytesDigest)!.Value);
+
+            // 'X' normalized XML, 'B' opaque binary, 'U' an entry that claims to be XML but could
+            // not be parsed. 'U' falls back to the exact bytes so one unparsable part costs that
+            // part its serialization-independence rather than costing the package its identity.
+            var normalized = work.IsXml ? work.NormalizedXmlDigest : null;
+            var kind = !work.IsXml ? (byte)'B' : normalized is not null ? (byte)'X' : (byte)'U';
+            hash.AppendData(new[] { kind });
+            AppendString(hash, (normalized ?? work.RawBytesDigest)!.Value);
         }
         return new VerificationDigest
         {
@@ -955,8 +985,11 @@ public static class PackageManifestGenerator
         }
     }
 
+    // Directory-only entries carry no content, so they stay out of both content identities: a
+    // repack that adds or drops folder entries is packaging, not a document change.
     private static IEnumerable<EntryWork> StableEntryOrder(IReadOnlyList<EntryWork> works) =>
-        works.OrderBy(work => work.Uri, StringComparer.Ordinal)
+        works.Where(work => !work.IsDirectory)
+            .OrderBy(work => work.Uri, StringComparer.Ordinal)
             .ThenBy(work => work.Occurrence);
 
     private static void FindDuplicateEntryNames(
@@ -1024,9 +1057,7 @@ public static class PackageManifestGenerator
             && KnownOoxmlXmlContentTypes.Contains(work.ContentType));
 
     private static bool IsRelationshipPart(string uri) =>
-        uri.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)
-        && (uri.StartsWith("/_rels/", StringComparison.OrdinalIgnoreCase)
-            || uri.Contains("/_rels/", StringComparison.OrdinalIgnoreCase));
+        XmlSemanticNormalizer.IsRelationshipPart(uri);
 
     private static string? RelationshipOwner(string relationshipPartUri)
     {
@@ -1127,12 +1158,45 @@ public static class PackageManifestGenerator
     private static bool TryCanonicalizeEntryName(string name, out string canonical)
     {
         canonical = "/" + name.Replace('\\', '/').TrimStart('/');
-        if (!TryDecodeOpcPath(name, requireAbsolute: false, allowRelative: true,
+
+        // A single trailing forward slash marks a directory-only entry. Those are packaging
+        // artifacts, not OPC parts, so the grammar is applied to the path they name and the
+        // slash is kept in the canonical URI so a folder can never collide with a real part.
+        // A trailing backslash is still a malformed path and is left to fail below.
+        var isDirectory = name.EndsWith("/", StringComparison.Ordinal);
+        var body = isDirectory ? name[..^1] : name;
+        if (body.Length == 0)
+            return false;
+        if (!TryDecodeOpcPath(body, requireAbsolute: false, allowRelative: true,
                 allowDotSegments: false, out var isAbsolute, out var segments)
             || isAbsolute)
             return false;
-        canonical = "/" + string.Join('/', segments);
-        return IsValidDecodedPartName(canonical);
+        var joined = "/" + string.Join('/', segments);
+        if (!IsValidDecodedPartName(joined))
+            return false;
+        canonical = isDirectory ? joined + "/" : joined;
+        return true;
+    }
+
+    private static long SumDeclaredSizes(IReadOnlyList<ZipArchiveEntry> entries)
+    {
+        long total = 0;
+        foreach (var entry in entries)
+        {
+            try
+            {
+                total = checked(total + entry.Length);
+            }
+            catch (InvalidDataException)
+            {
+                // Unreadable metadata is reported per entry while inspecting it.
+            }
+            catch (OverflowException)
+            {
+                return long.MaxValue;
+            }
+        }
+        return total;
     }
 
     private static bool TryCanonicalizePartName(string rawName, out string canonical)
@@ -1544,9 +1608,6 @@ public static class PackageManifestGenerator
         return true;
     }
 
-    private static bool IsDirectory(string name) =>
-        name.EndsWith("/", StringComparison.Ordinal) || name.EndsWith('\\');
-
     private static bool ContainsUtf16Name(byte[] bytes, string value)
     {
         var needle = Encoding.Unicode.GetBytes(value);
@@ -1571,10 +1632,12 @@ public static class PackageManifestGenerator
         required public ZipArchiveEntry ArchiveEntry { get; init; }
         required public int ArchiveIndex { get; init; }
         required public string Uri { get; init; }
+        required public bool IsDirectory { get; init; }
         required public long Size { get; init; }
         required public long CompressedSize { get; init; }
         public bool? IsEncrypted { get; init; }
         required public bool RatioExceeded { get; init; }
+        public bool XmlLimitReported { get; set; }
         public int Occurrence { get; set; }
         public long ActualSize { get; set; }
         public string? ContentType { get; set; }
@@ -1613,7 +1676,8 @@ public static class PackageManifestGenerator
         public static readonly ContentTypeMap Empty = new(
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            Array.Empty<PackageContentTypeDeclaration>());
+            Array.Empty<PackageContentTypeDeclaration>(),
+            isAvailable: false);
 
         private readonly IReadOnlyDictionary<string, string> _defaults;
         private readonly IReadOnlyDictionary<string, string> _overrides;
@@ -1621,14 +1685,19 @@ public static class PackageManifestGenerator
         private ContentTypeMap(
             IReadOnlyDictionary<string, string> defaults,
             IReadOnlyDictionary<string, string> overrides,
-            IReadOnlyList<PackageContentTypeDeclaration> declarations)
+            IReadOnlyList<PackageContentTypeDeclaration> declarations,
+            bool isAvailable)
         {
             _defaults = defaults;
             _overrides = overrides;
             Declarations = declarations;
+            IsAvailable = isAvailable;
         }
 
         public IReadOnlyList<PackageContentTypeDeclaration> Declarations { get; }
+
+        /// <summary>Whether <c>[Content_Types].xml</c> was parsed, however few declarations it held.</summary>
+        public bool IsAvailable { get; }
 
         public (string? ContentType, string Source) Resolve(string uri)
         {
@@ -1750,7 +1819,8 @@ public static class PackageManifestGenerator
                 .ThenBy(declaration => declaration.Key, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(declaration => declaration.ContentType, StringComparer.Ordinal)
                 .ThenBy(declaration => declaration.Occurrence)
-                .ToList());
+                .ToList(),
+                isAvailable: true);
         }
     }
 

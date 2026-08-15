@@ -38,7 +38,11 @@ internal static class XmlSemanticNormalizer
             IgnoreProcessingInstructions = false,
             IgnoreWhitespace = false,
             MaxCharactersInDocument = maxCharacters,
-            MaxCharactersFromEntities = 0,
+
+            // XmlReaderSettings treats 0 as "no limit", so it must carry a real ceiling to be a
+            // limit at all. DtdProcessing.Prohibit already makes declared entities unreachable;
+            // this keeps the cap correct if that ever relaxes.
+            MaxCharactersFromEntities = maxCharacters,
         };
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = XmlReader.Create(stream, settings);
@@ -204,10 +208,14 @@ internal static class XmlSemanticNormalizer
             yield return new XText(pending.ToString());
     }
 
-    private static bool IsRelationshipPart(string uri) =>
+    /// <summary>
+    /// Whether a canonical package URI names an OPC relationship part. Shared with
+    /// <see cref="PackageManifestGenerator"/> so the normalizer and the generator can never
+    /// disagree about which parts receive OPC metadata child ordering.
+    /// </summary>
+    internal static bool IsRelationshipPart(string uri) =>
         uri.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)
-        && (uri.StartsWith("/_rels/", StringComparison.OrdinalIgnoreCase)
-            || uri.Contains("/_rels/", StringComparison.OrdinalIgnoreCase));
+        && uri.Contains("/_rels/", StringComparison.OrdinalIgnoreCase);
 
     private static void WriteName(IncrementalHash hash, XName name)
     {
