@@ -1050,8 +1050,11 @@ public static class PackageManifestGenerator
         out bool invalidTarget)
     {
         invalidTarget = false;
-        if (Uri.TryCreate(target, UriKind.Absolute, out var absolute)
-            && !string.IsNullOrEmpty(absolute.Scheme))
+        // A leading slash is a valid package-absolute path. Uri.TryCreate(..., Absolute)
+        // interprets it as a file URI and invents the "file" scheme, which made every SDK-authored
+        // target such as /word/document.xml fail preflight. Only an RFC 3986 scheme written in the
+        // relationship value makes an internal target invalid.
+        if (HasUriScheme(target))
         {
             invalidTarget = true;
             return null;
@@ -1101,6 +1104,25 @@ public static class PackageManifestGenerator
         }
         return resolved;
     }
+
+    private static bool HasUriScheme(string value)
+    {
+        if (value.Length < 2 || !IsAsciiLetter(value[0]))
+            return false;
+        for (var index = 1; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character == ':')
+                return true;
+            if (!(IsAsciiLetter(character) || char.IsAsciiDigit(character)
+                    || character is '+' or '-' or '.'))
+                return false;
+        }
+        return false;
+    }
+
+    private static bool IsAsciiLetter(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
     private static bool TryCanonicalizeEntryName(string name, out string canonical)
     {

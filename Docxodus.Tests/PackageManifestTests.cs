@@ -610,6 +610,25 @@ public class PackageManifestTests
         Assert.Equal(0, manifest.Facts.Annotations.ResolvedComments);
     }
 
+    [Fact]
+    public void PM027_PackageAbsoluteRelationshipTargets_AreValidInternalPaths()
+    {
+        var package = RewriteEntry(
+            BuildZip(MinimalEntries(), CompressionLevel.NoCompression, DefaultTimestamp),
+            "_rels/.rels",
+            xml => xml.Replace("Target=\"word/document.xml\"",
+                "Target=\"/word/document.xml\"", StringComparison.Ordinal));
+
+        var manifest = PackageManifestGenerator.Generate(package);
+
+        Assert.DoesNotContain(manifest.Findings,
+            finding => finding.Code == "invalid_relationship_target");
+        var relationship = Assert.Single(manifest.Relationships,
+            item => item.OwnerUri == "/" && item.Target == "/word/document.xml");
+        Assert.Equal("/word/document.xml", relationship.ResolvedTargetUri);
+        Assert.True(relationship.IsTargetPresent);
+    }
+
     private static readonly DateTimeOffset DefaultTimestamp =
         new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
