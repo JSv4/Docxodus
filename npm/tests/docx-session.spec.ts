@@ -426,7 +426,9 @@ test.describe('DocxSession (WASM bridge)', () => {
           .map(([id]) => id)[0];
 
         const inserted = JSON.parse(bridge.InsertTable(handle, anchorId, 'after', 3, 3, ''));
-        const topLeft = inserted.created[0].id;   // row-major cell paragraphs
+        // Canonical table addressing: InsertTable reports row-major `tc` cell anchors, and
+        // every cell op takes that same anchor.
+        const topLeft = inserted.created[0].id;   // row 0, column 0
         const midRight = inserted.created[5].id;  // row 1, column 2 — outside the rectangle
 
         // A 2x2 header block: w:gridSpan across, w:vMerge down.
@@ -440,10 +442,19 @@ test.describe('DocxSession (WASM bridge)', () => {
         const unmerged = JSON.parse(bridge.UnmergeCells(handle, topLeft));
         const again = JSON.parse(bridge.UnmergeCells(handle, topLeft));
 
+        // The cell outside the rectangle must still be addressable down to its text. A `tc`
+        // anchor is not a text anchor, so go through the canonical resolution the API gives
+        // for exactly this: the cell reports its own paragraphs, and ReplaceText takes one.
+        const surviving = JSON.parse(bridge.ResolveTableCellAnchor(handle, midRight));
+        const survivingParagraph = surviving.cell?.paragraphAnchors?.[0]?.id;
+
         return {
           mergedOk: merged.success,
-          survivingAnchorAddressable:
-            JSON.parse(bridge.ReplaceText(handle, midRight, 'still editable')).success,
+          survivingCoordinate: surviving.cell
+            ? [surviving.cell.rowIndex, surviving.cell.columnIndex]
+            : null,
+          survivingAnchorAddressable: survivingParagraph !== undefined
+            && JSON.parse(bridge.ReplaceText(handle, survivingParagraph, 'still editable')).success,
           opaque: mergedMd.includes('```table'),
           clippedCode: clipped.error?.code,
           unmergedOk: unmerged.success,
@@ -455,6 +466,8 @@ test.describe('DocxSession (WASM bridge)', () => {
     }, Array.from(bytes));
 
     expect(result.mergedOk).toBe(true);
+    // The ordinal into `created` still names the cell the comment claims it does.
+    expect(result.survivingCoordinate).toEqual([1, 2]);
     expect(result.survivingAnchorAddressable).toBe(true);
     expect(result.opaque).toBe(true);
     expect(result.clippedCode).toBe('invalid_table_merge');

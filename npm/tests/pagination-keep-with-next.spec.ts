@@ -119,7 +119,11 @@ test.describe('Pagination keep-with-next chains', () => {
       [],
       ['heading', 'body'],
     ]);
-    expect(result.footnotePages).toEqual([true, true, false]);
+    // The note is 3 x 30pt against a 60pt band (60% of a 100pt body), and the band carries
+    // the separator: one paragraph measures 40.5pt and two measure 70.5pt, so exactly one
+    // paragraph fits per page and the tail needs a third note area. The chain placement is
+    // what this test pins; the note simply keeps flowing under it rather than being clipped.
+    expect(result.footnotePages).toEqual([true, true, true]);
   });
 
   test('does not force a chain onto a fresh page without room for its pending continuation', async ({ page }) => {
@@ -142,10 +146,15 @@ test.describe('Pagination keep-with-next chains', () => {
 
     const result = await paginateWithFootnoteInfo(page);
 
+    // The chain is placed greedily: `heading` stays with `lead`, `body` opens page 2. The
+    // trailing page carries no body text — it is the note-only substrate for the last
+    // paragraph of the continuation (see the band arithmetic above), which the engine
+    // drains rather than clipping off the bottom of page 2.
     expect(result.content).toEqual([
       ['lead1', 'heading'],
       ['body'],
+      [],
     ]);
-    expect(result.footnotePages).toEqual([true, true]);
+    expect(result.footnotePages).toEqual([true, true, true]);
   });
 });
