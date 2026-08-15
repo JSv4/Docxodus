@@ -962,6 +962,13 @@ public class McpServerDispatcherTests : IDisposable
         var sessionArg = JsonSerializer.Serialize(sessionId);
         var anchor = FirstBodyAnchorId(sessionId, _store);
 
+        // Preserve a live redo cursor across preview; apply-then-undo used to destroy it.
+        Assert.True(ReplaceText(_store, sessionId, anchor, "redo target")
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")))
+            .GetProperty("success").GetBoolean());
+
         var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
         var versionBefore = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
@@ -973,12 +980,23 @@ public class McpServerDispatcherTests : IDisposable
             {
               "sessionId": {{sessionArg}},
               "mode": "preview",
+              "previewHtml": "full",
               "steps": [
                 { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "should not stick" } }
               ]
             }
             """)));
         Assert.Equal("ok", batch.GetProperty("status").GetString());
+        Assert.True(batch.GetProperty("preview").GetBoolean());
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        Assert.Equal(versionBefore, batch.GetProperty("baseVersion").GetInt64());
+        Assert.Equal(versionBefore + 1, batch.GetProperty("resultVersion").GetInt64());
+        Assert.Equal(64, batch.GetProperty("packageHash").GetString()!.Length);
+        Assert.Single(batch.GetProperty("steps").EnumerateArray());
+        Assert.True(batch.GetProperty("revisionChanges").TryGetProperty("added", out _));
+        Assert.True(batch.GetProperty("commentChanges").TryGetProperty("added", out _));
+        Assert.True(batch.GetProperty("annotationChanges").TryGetProperty("added", out _));
+        Assert.Contains("should not stick", batch.GetProperty("html").GetString());
 
         var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J($$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
             .GetProperty("markdown").GetString()!;
@@ -987,6 +1005,57 @@ public class McpServerDispatcherTests : IDisposable
             $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
             .GetProperty("version").GetInt64();
         Assert.Equal(versionBefore, versionAfter);
+
+        var undo = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")));
+        Assert.False(undo.GetProperty("success").GetBoolean());
+        var redo = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"redo"}""")));
+        Assert.True(redo.GetProperty("success").GetBoolean());
+        var redone = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Contains("redo target", redone);
+    }
+
+    [Fact]
+    public void MCP098_Mutations_PreviewFlagSupportsExplicitBestEffortWithoutLivePartialApply()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "best_effort",
+              "preview": true,
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "shadow partial" } },
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "p:body:missing", "markdown": "failure" } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("preview").GetBoolean());
+        Assert.Equal("best_effort", batch.GetProperty("mode").GetString());
+        Assert.Equal("partial", batch.GetProperty("status").GetString());
+        Assert.False(batch.GetProperty("success").GetBoolean());
+        Assert.False(batch.GetProperty("rolledBack").GetBoolean());
+        Assert.Equal(batch.GetProperty("baseVersion").GetInt64() + 1,
+            batch.GetProperty("resultVersion").GetInt64());
+        Assert.Contains(batch.GetProperty("warnings").EnumerateArray(),
+            warning => warning.GetString()!.Contains("Best-effort", StringComparison.Ordinal));
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Equal(before, after);
+        Assert.Equal(0, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
     }
 
     [Fact]

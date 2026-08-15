@@ -30,6 +30,15 @@ public static partial class DocxSessionBridge
     public static int OpenSession(byte[] bytes, string settingsJson) =>
         DocxSessionOps.OpenSession(bytes, DocxSessionJson.ParseSettings(settingsJson));
 
+    /// <summary>
+    /// Open a complete temporary clone of a live session for callback-based npm preview. The
+    /// returned handle has independent package bytes, caches, configuration scalars, and fresh
+    /// undo/redo history; callers must close it. Abandonment cannot affect the live handle.
+    /// </summary>
+    [JSExport]
+    public static int OpenPreviewSession(int liveHandle) =>
+        SessionRegistry.CloneSessionForPreview(liveHandle);
+
     [JSExport]
     public static void CloseSession(int handle)
     {
@@ -82,6 +91,11 @@ public static partial class DocxSessionBridge
     {
         return DocxSessionOps.GetPageCitation(handle, anchorId, ParseRequiredCitationRequest(requestJson));
     }
+
+    /// <summary>Canonical content SHA-256 used by apply/preview equivalence receipts.</summary>
+    [JSExport]
+    public static string GetPackageContentHash(int handle) =>
+        DocxSessionOps.GetPackageContentHash(handle);
 
     /// <summary>Read-only optimistic guard evaluation. A successful result applies no mutation.</summary>
     [JSExport]
@@ -255,6 +269,33 @@ public static partial class DocxSessionBridge
             return DocxSessionOps.RenderHtml(
                 h, cssPrefix, fabricateClasses, paginated, scale, renderTrackedChanges);
         }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>
+    /// Render a preview shadow with the façade's own preview profile, so a browser preview and a
+    /// stdio/MCP preview of the same batch describe the same document. The editor's
+    /// <see cref="RenderHtml"/> profile is deliberately NOT reused here — it hides comments and
+    /// annotations. Same error convention: HTML starts with '&lt;', an error object with '{'.
+    /// </summary>
+    [JSExport]
+    public static string RenderPreviewHtml(int h)
+    {
+        try { return DocxSessionOps.RenderPreviewHtml(h); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Scoped counterpart of <see cref="RenderPreviewHtml"/>.</summary>
+    [JSExport]
+    public static string RenderPreviewBlockHtml(int h, string anchorId)
+    {
+        try { return DocxSessionOps.RenderPreviewBlockHtml(h, anchorId); }
         catch (System.Exception ex)
         {
             return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";

@@ -411,7 +411,7 @@ whole-document resolution: they transform via `RevisionProcessor` and swap the s
 underlying handle in place (`SessionStore.Rebind`), which also covers the exotic families the
 per-revision listing does not enumerate (see Known gaps).
 
-### `docxodus_mutations` — atomic batches, explicit partial apply, or legacy preview
+### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
 `docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment` (their `undo`/`redo` and
@@ -429,9 +429,48 @@ state, version, and undo/redo cursors; the receipt identifies the failing
 order and evaluates a step preflight immediately before that step, returning a
 `{ status, editsApplied, results, errors }`-compatible receipt (`status` is
 `ok`/`partial`/`failed`). `mode: apply` is a deprecated compatibility alias for
-`best_effort`; new clients should use the risk-signaling spelling. `mode: preview` runs every step exactly the same way, then calls
-`DocxSessionOps.Undo` once per step that actually mutated before returning — see Known gaps for
-why this is "apply-then-undo" rather than a true no-op dry run.
+`best_effort`; new clients should use the risk-signaling spelling.
+
+Preview never executes against the live handle. `mode: preview` is an atomic-preview shorthand;
+`previewPolicy: best_effort` opts into partial-success prediction. New clients may instead combine
+`preview: true` with `mode: atomic` or `mode: best_effort`. The server captures the complete logical
+OPC package (all parts, relationships, media, and opaque custom XML), mutable session configuration,
+version and revision/transaction generators, and the original `GetDiff()` baseline into an isolated
+shadow session with independent caches and empty undo/redo history. It then builds the same step
+delegates and invokes the same `ExecuteBatch` path used by apply. Success, structured failure, thrown
+exceptions, timeout/abandonment, and disposal therefore need no live rollback: live bytes, anchor
+state, version, caches, settings, and both history cursors were never mutation targets.
+
+Preview receipts use the same typed result as apply: `baseVersion`, predicted `resultVersion`, each
+step's `created`/`removed`/`modified` anchors and markdown patch, revision/comment/annotation
+`{ added, removed, modified }` deltas, warnings, and a `packageHash`. Delta membership is decided on
+each entry's serialized wire projection, never on CLR object equality, so a pre-existing revision or
+comment a batch never touched is reported in no bucket at all. `packageHash` is `null` — never an
+empty string — when it could not be computed, so an unavailable hash cannot compare equal to another
+unavailable hash. `previewHtml` may be `scoped` (with `previewAnchorId`) or `full`; rendering occurs
+only from the final shadow package, and an optional rendering failure is a warning rather than
+turning a committed/predicted mutation into an apparent failure. The render profile is owned once, by
+`HtmlConversionOps.PreviewDocumentOptions()`/`PreviewBlockOptions()`, and every surface (typed core,
+handle façade, WASM bridge, npm, stdio/Python, this server) consumes it — a preview shows tracked
+changes, comments, annotations, notes and headers/footers, which is deliberately NOT the editor's
+authoring render profile. The content hash is SHA-256 over sorted OPC entry names plus their
+uncompressed payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but
+not XML timestamps or generated OOXML ids.
+
+Receipt enrichment is unconditional and is not free. Every batch — applied or previewed — inspects
+revisions, comments and annotations twice (before and after, each forcing an anchor index) and
+computes `packageHash`, which serializes a full package checkpoint and hashes it. A preview adds a
+package clone and a second open `WordprocessingDocument` on top, roughly doubling peak memory for its
+duration. On a large document this is the dominant cost of a small batch. There is currently no
+opt-out; whether to gate it behind a setting is an open public-API decision.
+
+Equivalence is exact for deterministic batches: replaying at the same base state produces the same
+step outcomes, semantic deltas, and package hash. For create/comment/note/image operations that
+generate anchors or OOXML ids, and operations that stamp the execution clock, equivalence means the
+same success/failure outcomes and the same document structure, content, and relationship semantics
+modulo those generated ids/timestamps. Such receipts carry warnings; clients must not require anchor
+id or `packageHash` equality unless the operation supplies stable ids/timestamps or is otherwise
+known deterministic.
 
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,
@@ -445,8 +484,8 @@ A batched step's receipt is the ordinary `EditResult` envelope in full — a tab
 step keeps its `tableAnchors` mapping, so an agent can address the cells the same
 batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
-without mutating. Preview restores its starting version after undoing speculative
-steps, so a dry-run does not make an otherwise-current plan stale.
+without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
+dry-run does not make an otherwise-current live plan stale.
 
 ### `docxodus_table` — tables
 
@@ -536,12 +575,13 @@ never claiming a capability it doesn't have:
   composing `InsertParagraph` (plain text) + `ApplyListFormat` (which *does* write real
   `w:numPr` via `NumberingFactory.EnsureNumbering`) — two calls, not a gap in what's reachable,
   just not a single one-shot "insert a numbered list" primitive.
-- **`docxodus_mutations`'s `preview` mode is apply-then-undo, not a true dry run.** It runs every
-  step for real, then calls the session's `Undo()` once per step that mutated. This composes
-  correctly with everything else (bounded undo ring, anchor lifecycle) but consumes undo-ring
-  depth like any other edit sequence, and a crash between "apply" and "undo" would leave the
-  session mutated — acceptable for a local, single-process tool server, worth knowing if this
-  surface is ever exposed somewhere more failure-sensitive.
+- **Generated-id previews are semantically, not necessarily byte-for-byte, replay-equivalent.**
+  Create/comment/note/image paths can allocate fresh anchors or OOXML ids, and tracked revisions
+  can stamp the execution clock. Preview and apply still take the identical dispatch path and
+  predict the same structure/content/relationship effects, but a later apply may return different
+  generated anchor ids and a different `packageHash`. The receipt warns whenever a successful step
+  reports created anchors or another known execution-generated field. Deterministic mutation-only
+  batches retain exact receipt/hash equivalence.
 
 ## Testing
 

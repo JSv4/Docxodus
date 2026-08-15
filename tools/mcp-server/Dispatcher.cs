@@ -605,7 +605,7 @@ internal static class Dispatcher
                 var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
                 var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("session.docx", bytes));
                 store.Rebind(session, accepted.DocumentByteArray);
-                DocxSessionOps.RestorePreviewVersion(session.Handle, nextVersion);
+                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
                 return "{\"success\":true}";
             }
             case "reject_all":
@@ -617,7 +617,7 @@ internal static class Dispatcher
                 var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
                 var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("session.docx", bytes));
                 store.Rebind(session, rejected.DocumentByteArray);
-                DocxSessionOps.RestorePreviewVersion(session.Handle, nextVersion);
+                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
                 return "{\"success\":true}";
             }
             case "set_mode":
@@ -664,15 +664,9 @@ internal static class Dispatcher
 
     // ─── Mutations (batch) ──────────────────────────────────────────────
 
-    private static readonly HashSet<string> BatchableTools = new()
-    {
-        "docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list",
-        "docxodus_comment",
-    };
-
     private static string Mutations(SessionStore store, JsonElement args)
     {
-        var session = Session(store, args);
+        var liveSession = Session(store, args);
         var mode = args.TryGetProperty("mode", out _)
             ? Str(args, "mode")
             : "atomic";
@@ -681,106 +675,63 @@ internal static class Dispatcher
         if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
             throw new McpToolException("docxodus_mutations requires an array \"steps\"");
 
-        var batchCheck = Check(session, ParsePreconditions(args, MutationTarget(args)));
-        if (batchCheck is not null) return batchCheck;
-
-        // #445: committed batch modes run through the core transaction primitive. `apply` is the
-        // backward-compatible alias for the old partial executor and is reported as best_effort;
-        // new callers should spell that risk explicitly. Preview remains the pre-existing
-        // apply-then-undo path until isolated previews land separately in #446.
-        if (mode != "preview")
+        var preview = mode == "preview" || BoolOpt(args, "preview", false);
+        if (mode == "apply" && preview)
+            throw new McpToolException("docxodus_mutations preview cannot be combined with deprecated mode 'apply'");
+        var policyName = mode == "preview"
+            ? OptStr(args, "previewPolicy") ?? "atomic"
+            : mode;
+        if (policyName is not ("atomic" or "best_effort" or "apply"))
+            throw new McpToolException($"unknown docxodus_mutations previewPolicy: {policyName}");
+        var coreMode = policyName == "atomic"
+            ? MutationBatchMode.Atomic
+            : MutationBatchMode.BestEffort;
+        var htmlMode = OptStr(args, "previewHtml") switch
         {
-            var steps = BuildMutationBatchSteps(session, stepsEl, legacyApply: mode == "apply");
-            var coreMode = mode == "atomic"
-                ? MutationBatchMode.Atomic
-                : MutationBatchMode.BestEffort;
-            return DocxSessionOps.ExecuteBatch(session.Handle, coreMode, steps);
-        }
+            null or "none" => MutationPreviewHtmlMode.None,
+            "scoped" => MutationPreviewHtmlMode.Scoped,
+            "full" => MutationPreviewHtmlMode.Full,
+            var value => throw new McpToolException($"unknown docxodus_mutations previewHtml: {value}"),
+        };
+        if (!preview && htmlMode != MutationPreviewHtmlMode.None)
+            throw new McpToolException("previewHtml is only valid for a preview batch");
 
-        var results = new List<string>();
-        var errors = new List<string>();
-        var startingVersion = DocxSessionOps.GetVersion(session.Handle);
-        int applied = 0;
-        int committed = 0;
-
-        foreach (var step in stepsEl.EnumerateArray())
+        if (preview)
         {
-            var stepTool = step.TryGetProperty("tool", out var toolEl) && toolEl.ValueKind == JsonValueKind.String
-                ? toolEl.GetString()! : throw new McpToolException("mutation step missing string \"tool\"");
-            if (!BatchableTools.Contains(stepTool))
-                throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step (undo/redo and read-only actions are not batchable)");
-            var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
-                ? a : throw new McpToolException("mutation step missing object \"args\"");
-            var stepAction = stepArgs.TryGetProperty("action", out var actEl) && actEl.ValueKind == JsonValueKind.String
-                ? actEl.GetString()! : throw new McpToolException("mutation step args missing string \"action\"");
-
-            bool isMutating = stepTool switch
-            {
-                "docxodus_edit" => IsMutatingEditAction(stepAction),
-                "docxodus_list" => IsMutatingListAction(stepAction),
-                "docxodus_comment" => IsMutatingCommentAction(stepAction),
-                _ => true, // every docxodus_format/docxodus_create/docxodus_table action mutates
-            };
-            if (!isMutating)
-                throw new McpToolException($"docxodus_mutations does not accept the read-only action \"{stepAction}\" on {stepTool}");
-
-            string resultJson;
-            var stepStartingVersion = DocxSessionOps.GetVersion(session.Handle);
-            try
-            {
-                resultJson = stepTool switch
+            return DocxSessionOps.PreviewBatch(
+                liveSession.Handle,
+                coreMode,
+                shadowHandle =>
                 {
-                    "docxodus_edit" => RunEditAction(session, stepAction, stepArgs),
-                    "docxodus_format" => RunFormatAction(session, stepAction, stepArgs),
-                    "docxodus_create" => RunCreateAction(session, stepAction, stepArgs),
-                    "docxodus_table" => RunTableAction(session, stepAction, stepArgs),
-                    "docxodus_list" => RunListAction(session, stepAction, stepArgs),
-                    "docxodus_comment" => RunCommentAction(session, stepAction, stepArgs),
-                    _ => throw new McpToolException($"unreachable: {stepTool}"),
-                };
-            }
-            catch (McpToolException ex)
-            {
-                errors.Add(JsonRpcIo.JsonString(ex.Message));
-                results.Add($"{{\"success\":false,\"error\":{{\"message\":{JsonRpcIo.JsonString(ex.Message)}}}}}");
-                continue;
-            }
-
-            results.Add(resultJson);
-            bool succeeded = true;
-            try
-            {
-                using var rdoc = JsonDocument.Parse(resultJson);
-                if (rdoc.RootElement.ValueKind == JsonValueKind.Object
-                    && rdoc.RootElement.TryGetProperty("success", out var s) && s.ValueKind == JsonValueKind.False)
-                    succeeded = false;
-            }
-            catch (JsonException) { /* non-EditResult shape (shouldn't happen for batchable tools); assume success */ }
-
-            if (succeeded)
-            {
-                applied++;
-                var versionDelta = DocxSessionOps.GetVersion(session.Handle) - stepStartingVersion;
-                committed = checked(committed + checked((int)versionDelta));
-            }
-            else
-            {
-                using var rdoc = JsonDocument.Parse(resultJson);
-                errors.Add(rdoc.RootElement.TryGetProperty("error", out var e) ? e.GetRawText() : "\"step failed\"");
-            }
+                    var shadow = new DocSession
+                    {
+                        Id = liveSession.Id,
+                        Handle = shadowHandle,
+                    };
+                    var batchCheck = Check(shadow, ParsePreconditions(args, MutationTarget(args)));
+                    if (batchCheck is not null)
+                    {
+                        return new[]
+                        {
+                            DocxSessionOps.SerializedBatchStep(
+                                "docxodus_mutations",
+                                "preconditions",
+                                () => batchCheck),
+                        };
+                    }
+                    return BuildMutationBatchSteps(shadow, stepsEl, legacyApply: false);
+                },
+                new MutationBatchPreviewOptions
+                {
+                    HtmlMode = htmlMode,
+                    HtmlAnchorId = OptStr(args, "previewAnchorId"),
+                });
         }
 
-        if (mode == "preview")
-        {
-            for (int i = 0; i < committed; i++)
-                DocxSessionOps.Undo(session.Handle);
-            DocxSessionOps.RestorePreviewVersion(session.Handle, startingVersion);
-        }
-
-        var status = errors.Count == 0 ? "ok" : applied == 0 ? "failed" : "partial";
-        return "{\"status\":\"" + status + "\",\"editsApplied\":" + applied
-            + ",\"results\":[" + string.Join(",", results) + "]"
-            + ",\"errors\":[" + string.Join(",", errors) + "]}";
+        var liveBatchCheck = Check(liveSession, ParsePreconditions(args, MutationTarget(args)));
+        if (liveBatchCheck is not null) return liveBatchCheck;
+        var liveSteps = BuildMutationBatchSteps(liveSession, stepsEl, legacyApply: mode == "apply");
+        return DocxSessionOps.ExecuteBatch(liveSession.Handle, coreMode, liveSteps);
     }
 
     private static IReadOnlyList<MutationBatchStep> BuildMutationBatchSteps(

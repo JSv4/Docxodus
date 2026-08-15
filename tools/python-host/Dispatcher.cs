@@ -76,6 +76,7 @@ internal static class Dispatcher
                 ?? throw new FormatException("args missing object \"citation\"")),
         "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
         "execute_batch" => ExecuteBatch(args),
+        "preview_batch" => ExecuteBatch(args, preview: true),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -615,9 +616,9 @@ internal static class Dispatcher
         };
     }
 
-    private static string ExecuteBatch(JsonElement args)
+    private static string ExecuteBatch(JsonElement args, bool preview = false)
     {
-        var handle = Handle(args);
+        var liveHandle = Handle(args);
         var mode = args.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String
             ? m.GetString() : "atomic";
         var batchMode = mode switch
@@ -629,26 +630,52 @@ internal static class Dispatcher
         if (!args.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array)
             throw new ArgumentException("execute_batch requires an array 'steps'");
 
-        var parsed = new List<MutationBatchStep>();
-        foreach (var step in steps.EnumerateArray())
+        IEnumerable<MutationBatchStep> ParseSteps(int targetHandle)
         {
-            if (step.ValueKind != JsonValueKind.Object)
-                throw new ArgumentException("each batch step must be an object");
-            var operation = step.TryGetProperty("operation", out var op) && op.ValueKind == JsonValueKind.String
-                ? op.GetString()! : throw new ArgumentException("batch step missing string 'operation'");
-            var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
-                ? WithHandle(a, handle) : WithHandle(default, handle);
-            EditError? preflight = IsBatchableMutation(operation)
-                ? null
-                : new EditError(EditErrorCode.InvalidBatchStep,
-                    $"unsupported or non-mutation batch operation: {operation}");
-            parsed.Add(DocxSessionOps.SerializedBatchStep(
-                "docx_scalpel",
-                operation,
-                () => Dispatch(operation, stepArgs),
-                preflight is null ? null : () => preflight));
+            var parsed = new List<MutationBatchStep>();
+            foreach (var step in steps.EnumerateArray())
+            {
+                if (step.ValueKind != JsonValueKind.Object)
+                    throw new ArgumentException("each batch step must be an object");
+                var operation = step.TryGetProperty("operation", out var op) && op.ValueKind == JsonValueKind.String
+                    ? op.GetString()! : throw new ArgumentException("batch step missing string 'operation'");
+                var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                    ? WithHandle(a, targetHandle) : WithHandle(default, targetHandle);
+                EditError? preflight = IsBatchableMutation(operation)
+                    ? null
+                    : new EditError(EditErrorCode.InvalidBatchStep,
+                        $"unsupported or non-mutation batch operation: {operation}");
+                parsed.Add(DocxSessionOps.SerializedBatchStep(
+                    "docx_scalpel",
+                    operation,
+                    () => Dispatch(operation, stepArgs),
+                    preflight is null ? null : () => preflight));
+            }
+            return parsed;
         }
-        return DocxSessionOps.ExecuteBatch(handle, batchMode, parsed);
+
+        if (!preview)
+            return DocxSessionOps.ExecuteBatch(liveHandle, batchMode, ParseSteps(liveHandle));
+
+        var htmlMode = args.TryGetProperty("htmlMode", out var html) && html.ValueKind == JsonValueKind.String
+            ? html.GetString() switch
+            {
+                "scoped" => MutationPreviewHtmlMode.Scoped,
+                "full" => MutationPreviewHtmlMode.Full,
+                null or "none" => MutationPreviewHtmlMode.None,
+                var value => throw new ArgumentException($"unknown preview html mode: {value}"),
+            }
+            : MutationPreviewHtmlMode.None;
+        return DocxSessionOps.PreviewBatch(
+            liveHandle,
+            batchMode,
+            ParseSteps,
+            new MutationBatchPreviewOptions
+            {
+                HtmlMode = htmlMode,
+                HtmlAnchorId = args.TryGetProperty("htmlAnchorId", out var anchor)
+                    && anchor.ValueKind == JsonValueKind.String ? anchor.GetString() : null,
+            });
     }
 
     private static JsonElement WithHandle(JsonElement args, int handle)

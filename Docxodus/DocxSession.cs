@@ -4,9 +4,13 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using GridCell = Docxodus.Internal.TableGridCell;
@@ -1231,15 +1235,64 @@ public sealed record MutationBatchFailure(
     EditError Error,
     bool RolledBack);
 
+/// <summary>Added, removed, and modified semantic objects predicted or produced by a batch.</summary>
+public sealed record MutationBatchChangeSet<T>(
+    IReadOnlyList<T> Added,
+    IReadOnlyList<T> Removed,
+    IReadOnlyList<T> Modified)
+{
+    public static MutationBatchChangeSet<T> Empty { get; } = new(
+        Array.Empty<T>(), Array.Empty<T>(), Array.Empty<T>());
+}
+
+/// <summary>Optional HTML projection generated only from an isolated preview session.</summary>
+public enum MutationPreviewHtmlMode
+{
+    None,
+    Scoped,
+    Full,
+}
+
+/// <summary>Optional outputs for <see cref="DocxSession.PreviewBatch"/>.</summary>
+public sealed record MutationBatchPreviewOptions
+{
+    public MutationPreviewHtmlMode HtmlMode { get; init; }
+    public string? HtmlAnchorId { get; init; }
+}
+
 /// <summary>Structured result of an atomic or explicit best-effort mutation batch.</summary>
 public sealed record MutationBatchResult
 {
     public MutationBatchMode Mode { get; init; }
+    public bool Preview { get; init; }
     public bool Success { get; init; }
     public bool RolledBack { get; init; }
+    public long BaseVersion { get; init; }
+    public long ResultVersion { get; init; }
+    /// <summary>
+    /// SHA-256 over ordered OPC entry names and uncompressed payload bytes. ZIP compression,
+    /// timestamps, and entry framing are deliberately excluded; XML payload timestamps remain.
+    /// A deterministic replay at <see cref="BaseVersion"/> should produce this hash. Generated
+    /// anchors/OOXML ids and execution timestamps make other batches only semantically equivalent;
+    /// callers must consult <see cref="Warnings"/> before using the hash as a replay assertion.
+    ///
+    /// <c>null</c> — never an empty string — when the hash could not be computed (the reason is
+    /// in <see cref="Warnings"/>). An absent hash must not compare equal to another absent hash:
+    /// a sentinel that does turns <c>preview.PackageHash == applied.PackageHash</c> into an
+    /// assertion that passes precisely when it has nothing to assert.
+    /// </summary>
+    public string? PackageHash { get; init; }
     public IReadOnlyList<MutationBatchStepResult> Steps { get; init; } =
         Array.Empty<MutationBatchStepResult>();
     public MutationBatchFailure? Failure { get; init; }
+    public MutationBatchChangeSet<RevisionListEntry> RevisionChanges { get; init; } =
+        MutationBatchChangeSet<RevisionListEntry>.Empty;
+    public MutationBatchChangeSet<CommentListEntry> CommentChanges { get; init; } =
+        MutationBatchChangeSet<CommentListEntry>.Empty;
+    public MutationBatchChangeSet<DocumentAnnotation> AnnotationChanges { get; init; } =
+        MutationBatchChangeSet<DocumentAnnotation>.Empty;
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+    public string? Html { get; init; }
 }
 
 /// <summary>
@@ -1554,6 +1607,14 @@ public sealed class DocxSession : IDisposable
         Exception? LastRollbackError);
 
     public DocxSession(byte[] docxBytes, DocxSessionSettings? settings = null)
+        : this(docxBytes, settings, skipInitialProjectionCapture: false)
+    {
+    }
+
+    private DocxSession(
+        byte[] docxBytes,
+        DocxSessionSettings? settings,
+        bool skipInitialProjectionCapture)
     {
         ArgumentNullException.ThrowIfNull(docxBytes);
         _settings = settings ?? new DocxSessionSettings();
@@ -1570,7 +1631,7 @@ public sealed class DocxSession : IDisposable
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
 
-        if (_settings.CaptureInitialProjection)
+        if (_settings.CaptureInitialProjection && !skipInitialProjectionCapture)
             _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
     }
 
@@ -2856,16 +2917,373 @@ public sealed class DocxSession : IDisposable
         IEnumerable<MutationBatchStep> steps,
         MutationBatchMode mode = MutationBatchMode.Atomic)
     {
+        lock (_mutationGate)
+        {
+            var materialized = MaterializeBatchSteps(steps, mode);
+            var before = ObserveBatchSemantics();
+            var baseVersion = _version;
+            var result = mode == MutationBatchMode.Atomic
+                ? ExecuteAtomicBatch(materialized)
+                : ExecuteBestEffortBatch(materialized);
+            return CompleteBatchResult(result, before, baseVersion);
+        }
+    }
+
+    /// <summary>
+    /// Execute the identical batch delegates on a complete isolated clone. The live session is
+    /// used only long enough to clone its current logical package and scalar configuration under
+    /// the mutation gate; guards, mutations, history writes, semantic inspection, package hashing,
+    /// and optional HTML rendering all target the shadow. Abandoning or disposing the shadow can
+    /// therefore never require live rollback.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Caller contract.</b> Each step's callbacks receive the shadow session as their
+    /// <c>DocxSession</c> argument — <em>address that argument</em>. A callback written as
+    /// <c>s =&gt; liveSession.ReplaceText(...)</c>, closing over the live session instead of using
+    /// <c>s</c>, mutates the LIVE document, and this overload cannot prevent it: a delegate may
+    /// call anything it can reach.</para>
+    /// <para>The handle-shaped seams are intrinsically safe by construction, because a step
+    /// factory there is handed only the temporary shadow handle and never sees the live one:
+    /// <c>DocxSessionOps.PreviewBatch</c> for stdio/MCP, and the <c>OpenPreviewSession</c> bridge
+    /// export for the browser client. Prefer those when the steps are not written by the same
+    /// author as the call.</para>
+    /// <para>Enrichment cost is not free and has no opt-out: see the receipt cost note in
+    /// <c>docs/architecture/docx_mutation_api.md</c>.</para>
+    /// </remarks>
+    public MutationBatchResult PreviewBatch(
+        IEnumerable<MutationBatchStep> steps,
+        MutationBatchMode mode = MutationBatchMode.Atomic,
+        MutationBatchPreviewOptions? options = null)
+    {
+        ValidatePreviewOptions(options);
+        var materialized = MaterializeBatchSteps(steps, mode);
+        using var shadow = CreateShadowSession();
+        return shadow.FinalizePreviewResult(shadow.ExecuteBatch(materialized, mode), options);
+    }
+
+    internal static void ValidatePreviewOptions(MutationBatchPreviewOptions? options)
+    {
+        if (options is not null && !Enum.IsDefined(options.HtmlMode))
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options.HtmlMode, "unknown preview HTML mode");
+    }
+
+    private static MutationBatchStep[] MaterializeBatchSteps(
+        IEnumerable<MutationBatchStep> steps,
+        MutationBatchMode mode)
+    {
         ArgumentNullException.ThrowIfNull(steps);
         if (!Enum.IsDefined(mode))
             throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown mutation batch mode");
         var materialized = steps.ToArray();
-        if (materialized.Any(s => s is null))
+        if (materialized.Any(step => step is null))
             throw new ArgumentException("batch steps cannot contain null", nameof(steps));
+        return materialized;
+    }
 
-        return mode == MutationBatchMode.Atomic
-            ? ExecuteAtomicBatch(materialized)
-            : ExecuteBestEffortBatch(materialized);
+    private sealed record BatchSemanticObservation(
+        IReadOnlyList<RevisionListEntry>? Revisions,
+        IReadOnlyList<CommentListEntry>? Comments,
+        IReadOnlyList<DocumentAnnotation>? Annotations,
+        IReadOnlyList<string> Warnings);
+
+    private BatchSemanticObservation ObserveBatchSemantics()
+    {
+        IReadOnlyList<RevisionListEntry>? revisions = null;
+        IReadOnlyList<CommentListEntry>? comments = null;
+        IReadOnlyList<DocumentAnnotation>? annotations = null;
+        var warnings = new List<string>();
+        try { revisions = ListRevisions(); }
+        catch (Exception ex) { warnings.Add($"Revision delta inspection unavailable: {ex.Message}"); }
+        try { comments = ListComments(); }
+        catch (Exception ex) { warnings.Add($"Comment delta inspection unavailable: {ex.Message}"); }
+        try { annotations = ListAnnotations(); }
+        catch (Exception ex) { warnings.Add($"Annotation delta inspection unavailable: {ex.Message}"); }
+        return new BatchSemanticObservation(revisions, comments, annotations, warnings);
+    }
+
+    private MutationBatchResult CompleteBatchResult(
+        MutationBatchResult result,
+        BatchSemanticObservation before,
+        long baseVersion)
+    {
+        var after = ObserveBatchSemantics();
+        var warnings = before.Warnings.Concat(after.Warnings).ToList();
+        // Equivalence is decided on the SERIALIZED projection of each entry, never on CLR
+        // equality. That is the shape every transport actually publishes, it is exactly what
+        // npm's `mutationBatchChangeSet` compares (JSON.stringify of the same wire objects), and
+        // it stays correct if an entry type ever grows a collection member — record `==` would
+        // then fall back to reference equality per element and report every surviving object as
+        // modified.
+        var revisionChanges = SafeChangeSet(
+            before.Revisions, after.Revisions, revision => revision.Id,
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { left }),
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { right }),
+                StringComparison.Ordinal),
+            "revision", warnings);
+        var commentChanges = SafeChangeSet(
+            before.Comments, after.Comments, comment => comment.DefAnchorId,
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeCommentList(new[] { left }),
+                Internal.DocxSessionJson.SerializeCommentList(new[] { right }),
+                StringComparison.Ordinal),
+            "comment", warnings);
+        var annotationChanges = SafeChangeSet(
+            before.Annotations, after.Annotations, annotation => annotation.Id,
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeAnnotations(new[] { left }),
+                Internal.DocxSessionJson.SerializeAnnotations(new[] { right }),
+                StringComparison.Ordinal),
+            "annotation", warnings);
+        if (revisionChanges.Added.Concat(revisionChanges.Modified).Any(revision => revision.Date is not null))
+        {
+            warnings.Add(
+                "Tracked-revision date attributes may use the execution clock; compare revision " +
+                "ids, authors, types, text, and anchors across separate executions.");
+        }
+        if (commentChanges.Added.Concat(commentChanges.Modified).Any(comment => comment.Date is not null))
+        {
+            warnings.Add(
+                "Comment date attributes may be generated from the execution clock; supply dates " +
+                "explicitly when byte-identical replay is required.");
+        }
+        if (annotationChanges.Added.Any(annotation => annotation.Created.HasValue))
+        {
+            warnings.Add(
+                "Auto-generated annotation ids or creation timestamps are execution metadata; " +
+                "supply id and created explicitly when byte-identical replay is required.");
+        }
+        try
+        {
+            if (result.Steps.SelectMany(step => step.Results).Any(edit => edit.Created.Count > 0))
+            {
+                warnings.Add(
+                    "Created anchors and related OOXML ids may be generated independently on replay; " +
+                    "preview/apply equivalence is semantic and packageHash or anchor ids may differ.");
+            }
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"Generated-field warning inspection unavailable: {ex.Message}");
+        }
+        if (result.Mode == MutationBatchMode.BestEffort && !result.Success)
+            warnings.Add("Best-effort execution retains every successful step despite later failures.");
+
+        string? packageHash = null;
+        try { packageHash = GetPackageContentHash(); }
+        catch (Exception ex) { warnings.Add($"Package equivalence hash unavailable: {ex.Message}"); }
+
+        return result with
+        {
+            BaseVersion = baseVersion,
+            ResultVersion = _version,
+            PackageHash = packageHash,
+            RevisionChanges = revisionChanges,
+            CommentChanges = commentChanges,
+            AnnotationChanges = annotationChanges,
+            Warnings = warnings,
+        };
+    }
+
+    private static MutationBatchChangeSet<T> SafeChangeSet<T>(
+        IReadOnlyList<T>? before,
+        IReadOnlyList<T>? after,
+        Func<T, string> key,
+        Func<T, T, bool> equivalent,
+        string kind,
+        List<string> warnings)
+    {
+        if (before is null || after is null)
+            return MutationBatchChangeSet<T>.Empty;
+        try { return ChangeSet(before, after, key, equivalent); }
+        catch (Exception ex)
+        {
+            warnings.Add($"{kind} delta comparison unavailable: {ex.Message}");
+            return MutationBatchChangeSet<T>.Empty;
+        }
+    }
+
+    private static MutationBatchChangeSet<T> ChangeSet<T>(
+        IReadOnlyList<T> before,
+        IReadOnlyList<T> after,
+        Func<T, string> key,
+        Func<T, T, bool> equivalent)
+    {
+        static Dictionary<string, List<int>> IndexByKey(
+            IReadOnlyList<T> items,
+            Func<T, string> selectKey)
+        {
+            var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            for (var index = 0; index < items.Count; index++)
+            {
+                var itemKey = selectKey(items[index]) ?? string.Empty;
+                if (!groups.TryGetValue(itemKey, out var indices))
+                    groups[itemKey] = indices = new List<int>();
+                indices.Add(index);
+            }
+            return groups;
+        }
+
+        // Real-world packages occasionally contain duplicate revision ids across story parts.
+        // Treat each identity as a multiset: match equivalent occurrences first, classify paired
+        // leftovers as modified, then classify cardinality differences as added/removed. This is
+        // deterministic and cannot throw merely because a package is malformed or unconventional.
+        var beforeGroups = IndexByKey(before, key);
+        var afterGroups = IndexByKey(after, key);
+        var beforeMatched = new bool[before.Count];
+        var afterMatched = new bool[after.Count];
+        var afterModified = new bool[after.Count];
+
+        foreach (var group in afterGroups)
+        {
+            if (!beforeGroups.TryGetValue(group.Key, out var beforeIndices))
+                continue;
+
+            foreach (var afterIndex in group.Value)
+            {
+                var beforeIndex = beforeIndices.FirstOrDefault(
+                    candidate => !beforeMatched[candidate]
+                        && equivalent(before[candidate], after[afterIndex]),
+                    -1);
+                if (beforeIndex < 0) continue;
+                beforeMatched[beforeIndex] = true;
+                afterMatched[afterIndex] = true;
+            }
+
+            var remainingBefore = beforeIndices.Where(index => !beforeMatched[index]).ToArray();
+            var remainingAfter = group.Value.Where(index => !afterMatched[index]).ToArray();
+            var modifiedCount = Math.Min(remainingBefore.Length, remainingAfter.Length);
+            for (var index = 0; index < modifiedCount; index++)
+            {
+                beforeMatched[remainingBefore[index]] = true;
+                afterMatched[remainingAfter[index]] = true;
+                afterModified[remainingAfter[index]] = true;
+            }
+        }
+
+        return new MutationBatchChangeSet<T>(
+            after.Where((_, index) => !afterMatched[index]).ToArray(),
+            before.Where((_, index) => !beforeMatched[index]).ToArray(),
+            after.Where((_, index) => afterModified[index]).ToArray());
+    }
+
+    /// <summary>Create a complete isolated clone for handle-based façades and abandonment tests.</summary>
+    internal DocxSession CreateShadowSession()
+    {
+        lock (_mutationGate)
+        {
+            ThrowIfDisposed();
+            var snapshot = TakePackageSnapshot();
+            var shadow = new DocxSession(
+                snapshot.PackageBytes!,
+                CloneSettingsForShadow(),
+                skipInitialProjectionCapture: true)
+            {
+                _version = _version,
+                _revisionCounter = snapshot.RevisionCounter ?? _revisionCounter,
+                _lastFormatRevisionTicks = snapshot.LastFormatRevisionTicks ?? _lastFormatRevisionTicks,
+                _nextTransactionId = _nextTransactionId,
+                _initialProjection = CloneProjection(_initialProjection),
+                _trackedChanges = _trackedChanges,
+                _revisionAuthor = _revisionAuthor,
+            };
+            return shadow;
+        }
+    }
+
+    private static MarkdownProjection? CloneProjection(MarkdownProjection? source)
+    {
+        if (source is null) return null;
+        return new MarkdownProjection
+        {
+            Markdown = source.Markdown,
+            AnchorIndex = source.AnchorIndex.ToDictionary(
+                pair => pair.Key,
+                pair => new AnchorTarget
+                {
+                    Anchor = pair.Value.Anchor,
+                    PartUri = pair.Value.PartUri,
+                    Unid = pair.Value.Unid,
+                    TextPreview = pair.Value.TextPreview,
+                    AutoNumberPrefix = pair.Value.AutoNumberPrefix,
+                },
+                StringComparer.Ordinal),
+        };
+    }
+
+    private DocxSessionSettings CloneSettingsForShadow()
+    {
+        var projection = _settings.ProjectionSettings;
+        return new DocxSessionSettings
+        {
+            UndoDepth = _settings.UndoDepth,
+            UndoMemoryBudgetBytes = _settings.UndoMemoryBudgetBytes,
+            ValidateRawOps = _settings.ValidateRawOps,
+            TrackedChanges = _settings.TrackedChanges,
+            RevisionAuthor = _settings.RevisionAuthor,
+            PersistAnchorIds = _settings.PersistAnchorIds,
+            SmartQuotes = _settings.SmartQuotes,
+            EmitMarkdownPatch = _settings.EmitMarkdownPatch,
+            CaptureInitialProjection = _settings.CaptureInitialProjection,
+            ProjectionSettings = new WmlToMarkdownConverterSettings
+            {
+                Scopes = projection.Scopes,
+                HeadingLevelOffset = projection.HeadingLevelOffset,
+                AnchorMode = projection.AnchorMode,
+                TableMode = projection.TableMode,
+                TableInlineCellMax = projection.TableInlineCellMax,
+                TrackedChanges = projection.TrackedChanges,
+                ResolveNumbering = projection.ResolveNumbering,
+                ImageUriBuilder = projection.ImageUriBuilder,
+                EmptyParagraphs = projection.EmptyParagraphs,
+                AnchorIdRendering = projection.AnchorIdRendering,
+            },
+        };
+    }
+
+    /// <summary>Mark a result produced on this shadow and optionally render shadow-only HTML.</summary>
+    internal MutationBatchResult FinalizePreviewResult(
+        MutationBatchResult result,
+        MutationBatchPreviewOptions? options)
+    {
+        var warnings = result.Warnings.ToList();
+        string? html = null;
+        try
+        {
+            switch (options?.HtmlMode ?? MutationPreviewHtmlMode.None)
+            {
+                case MutationPreviewHtmlMode.None:
+                    break;
+                case MutationPreviewHtmlMode.Scoped when string.IsNullOrWhiteSpace(options?.HtmlAnchorId):
+                    warnings.Add("Scoped HTML was requested without htmlAnchorId; no HTML was generated.");
+                    break;
+                case MutationPreviewHtmlMode.Scoped:
+                    html = Internal.HtmlConversionOps.RenderBlockHtml(
+                        this,
+                        options!.HtmlAnchorId!,
+                        Internal.HtmlConversionOps.PreviewBlockOptions());
+                    break;
+                case MutationPreviewHtmlMode.Full:
+                    html = Internal.HtmlConversionOps.ConvertToHtml(
+                        this,
+                        Internal.HtmlConversionOps.PreviewDocumentOptions());
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(options), "unknown preview HTML mode");
+            }
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"Preview HTML could not be generated: {ex.Message}");
+        }
+
+        return result with
+        {
+            Preview = true,
+            Warnings = warnings,
+            Html = html,
+        };
     }
 
     private MutationBatchResult ExecuteAtomicBatch(IReadOnlyList<MutationBatchStep> steps)
@@ -10533,7 +10951,7 @@ public sealed class DocxSession : IDisposable
 
     /// <summary>Restore the caller-visible version after rolling back speculative preview work.
     /// Internal by design: committed undo/redo must remain monotonic.</summary>
-    internal void RestorePreviewVersion(long version) => _version = version;
+    internal void RestoreVersionAfterRebind(long version) => _version = version;
 
     /// <summary>
     /// Dispose the session and abandon any active transactions. Active scopes may only be
@@ -10717,6 +11135,44 @@ public sealed class DocxSession : IDisposable
             clone.Save();
         }
         return ZipPackageOutputNormalizer.Normalize(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Deterministic digest of the current logical OPC package. The checkpoint clone overlays
+    /// dirty XDocument caches without writing them to this session. Hashing ordered uncompressed
+    /// entry payloads excludes ZIP timestamps/compression while retaining every part byte and
+    /// relationship payload, including media and opaque custom XML.
+    /// </summary>
+    internal string GetPackageContentHash()
+    {
+        var packageBytes = SerializePackageCheckpoint();
+        try
+        {
+            using var stream = new MemoryStream(packageBytes, writable: false);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[81920];
+            Span<byte> intBuffer = stackalloc byte[sizeof(int)];
+            Span<byte> longBuffer = stackalloc byte[sizeof(long)];
+            foreach (var entry in archive.Entries.OrderBy(entry => entry.FullName, StringComparer.Ordinal))
+            {
+                var name = Encoding.UTF8.GetBytes(entry.FullName);
+                BinaryPrimitives.WriteInt32LittleEndian(intBuffer, name.Length);
+                hash.AppendData(intBuffer);
+                hash.AppendData(name);
+                BinaryPrimitives.WriteInt64LittleEndian(longBuffer, entry.Length);
+                hash.AppendData(longBuffer);
+                using var input = entry.Open();
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                    hash.AppendData(buffer, 0, read);
+            }
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+        catch (InvalidDataException)
+        {
+            return Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant();
+        }
     }
 
     private static IEnumerable<OpenXmlPart> EnumeratePackageParts(OpenXmlPackage package)

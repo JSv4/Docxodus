@@ -168,6 +168,38 @@ internal static class HtmlConversionOps
         ConvertToHtml(SessionRegistry.Get(handle), options);
 
     /// <summary>
+    /// The single definition of the option profile a mutation-batch preview renders with
+    /// (<see cref="MutationPreviewHtmlMode.Full"/>). A preview answers "what would the document
+    /// become", so it shows everything the applied document would carry — tracked changes,
+    /// comments, annotations, notes, headers/footers — rather than the editor's authoring view.
+    /// Every surface MUST consume this rather than restating the flags: the typed core, the
+    /// handle façade, both bridges and both clients must agree about what a preview shows, or
+    /// two callers previewing the same batch see materially different documents.
+    /// </summary>
+    public static HtmlConversionOptions PreviewDocumentOptions() => new()
+    {
+        CommentRenderMode = 0,
+        RenderAnnotations = true,
+        RenderFootnotesAndEndnotes = true,
+        RenderHeadersAndFooters = true,
+        RenderTrackedChanges = true,
+        StampAnchors = true,
+    };
+
+    /// <summary>
+    /// The single definition of the option profile a scoped
+    /// (<see cref="MutationPreviewHtmlMode.Scoped"/>) preview renders one block with. Tracked
+    /// changes stay on for the same reason as <see cref="PreviewDocumentOptions"/>: a scoped
+    /// redline preview that hides its own redlines shows the caller nothing.
+    /// </summary>
+    public static HtmlConversionOptions PreviewBlockOptions() => new()
+    {
+        RenderTrackedChanges = true,
+        RenderFootnotesAndEndnotes = true,
+        StampAnchors = true,
+    };
+
+    /// <summary>
     /// Render a single block (addressed by a <c>kind:scope:unid</c> anchor) to faithful
     /// HTML. Builds a throwaway document that copies the source's styles/numbering/theme
     /// parts and contains just the one block, then runs the standard converter. The full

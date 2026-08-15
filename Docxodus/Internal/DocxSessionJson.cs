@@ -1081,8 +1081,13 @@ internal static class DocxSessionJson
                 ? "partial" : "failed";
         sb.Append("{\"mode\":").Append(JsonString(mode))
           .Append(",\"status\":").Append(JsonString(status))
+          .Append(",\"preview\":").Append(result.Preview ? "true" : "false")
           .Append(",\"success\":").Append(result.Success ? "true" : "false")
           .Append(",\"rolledBack\":").Append(result.RolledBack ? "true" : "false")
+          .Append(",\"baseVersion\":").Append(result.BaseVersion)
+          .Append(",\"resultVersion\":").Append(result.ResultVersion)
+          .Append(",\"packageHash\":")
+          .Append(result.PackageHash is null ? "null" : JsonString(result.PackageHash))
           .Append(",\"steps\":[");
         for (int i = 0; i < result.Steps.Count; i++)
         {
@@ -1132,8 +1137,34 @@ internal static class DocxSessionJson
               .Append(",\"rolledBack\":").Append(failure.RolledBack ? "true" : "false")
               .Append('}');
         }
+        sb.Append(",\"revisionChanges\":");
+        AppendChangeSet(sb, result.RevisionChanges, SerializeRevisionList);
+        sb.Append(",\"commentChanges\":");
+        AppendChangeSet(sb, result.CommentChanges, SerializeCommentList);
+        sb.Append(",\"annotationChanges\":");
+        AppendChangeSet(sb, result.AnnotationChanges, SerializeAnnotations);
+        sb.Append(",\"warnings\":[");
+        for (int i = 0; i < result.Warnings.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(JsonString(result.Warnings[i]));
+        }
+        sb.Append(']')
+          .Append(",\"html\":")
+          .Append(result.Html is null ? "null" : JsonString(result.Html));
         sb.Append('}');
         return sb.ToString();
+    }
+
+    private static void AppendChangeSet<T>(
+        StringBuilder sb,
+        MutationBatchChangeSet<T> changes,
+        System.Func<IReadOnlyList<T>, string> serialize)
+    {
+        sb.Append("{\"added\":").Append(serialize(changes.Added))
+          .Append(",\"removed\":").Append(serialize(changes.Removed))
+          .Append(",\"modified\":").Append(serialize(changes.Modified))
+          .Append('}');
     }
 
     public static void AppendAnchorArray(StringBuilder sb, IReadOnlyList<Anchor> anchors)

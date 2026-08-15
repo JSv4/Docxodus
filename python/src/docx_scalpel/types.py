@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Generic, Mapping, Sequence, TypeVar
 
 from .enums import (
     AnchorIdRendering,
@@ -61,6 +61,7 @@ __all__ = [
     "MutationBatchStep",
     "MutationBatchStepResult",
     "MutationBatchFailure",
+    "MutationBatchChangeSet",
     "MutationBatchResult",
     "BlockMetadata",
     "BulkEditResult",
@@ -1179,6 +1180,31 @@ class MutationBatchFailure:
         )
 
 
+_BatchItem = TypeVar("_BatchItem")
+
+
+@dataclass(frozen=True, slots=True)
+class MutationBatchChangeSet(Generic[_BatchItem]):
+    """Added, removed, and modified semantic objects produced by apply or preview."""
+
+    added: tuple[_BatchItem, ...] = ()
+    removed: tuple[_BatchItem, ...] = ()
+    modified: tuple[_BatchItem, ...] = ()
+
+    @classmethod
+    def _from_wire(
+        cls,
+        d: Mapping[str, Any] | None,
+        decode: Callable[[Mapping[str, Any]], _BatchItem],
+    ) -> "MutationBatchChangeSet[_BatchItem]":
+        value = d or {}
+        return cls(
+            added=tuple(decode(item) for item in value.get("added", ())),
+            removed=tuple(decode(item) for item in value.get("removed", ())),
+            modified=tuple(decode(item) for item in value.get("modified", ())),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class MutationBatchResult:
     mode: MutationBatchMode
@@ -1187,6 +1213,23 @@ class MutationBatchResult:
     rolled_back: bool
     steps: tuple[MutationBatchStepResult, ...]
     failure: MutationBatchFailure | None = None
+    preview: bool = False
+    base_version: int = 0
+    result_version: int = 0
+    #: ``None`` — never ``""`` — when the hash could not be computed (the reason is in
+    #: ``warnings``). An absent hash must not compare equal to another absent hash.
+    package_hash: str | None = None
+    revision_changes: MutationBatchChangeSet[RevisionListEntry] = field(
+        default_factory=MutationBatchChangeSet
+    )
+    comment_changes: MutationBatchChangeSet[CommentListEntry] = field(
+        default_factory=MutationBatchChangeSet
+    )
+    annotation_changes: MutationBatchChangeSet[DocumentAnnotation] = field(
+        default_factory=MutationBatchChangeSet
+    )
+    warnings: tuple[str, ...] = ()
+    html: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchResult":
@@ -1198,6 +1241,23 @@ class MutationBatchResult:
             rolled_back=bool(d.get("rolledBack", False)),
             steps=tuple(MutationBatchStepResult._from_wire(s) for s in d.get("steps", ())),
             failure=MutationBatchFailure._from_wire(failure) if failure else None,
+            preview=bool(d.get("preview", False)),
+            base_version=int(d.get("baseVersion", 0)),
+            result_version=int(d.get("resultVersion", 0)),
+            package_hash=(
+                None if d.get("packageHash") is None else str(d["packageHash"])
+            ),
+            revision_changes=MutationBatchChangeSet._from_wire(
+                d.get("revisionChanges"), RevisionListEntry._from_wire
+            ),
+            comment_changes=MutationBatchChangeSet._from_wire(
+                d.get("commentChanges"), CommentListEntry._from_wire
+            ),
+            annotation_changes=MutationBatchChangeSet._from_wire(
+                d.get("annotationChanges"), DocumentAnnotation._from_wire
+            ),
+            warnings=tuple(str(value) for value in d.get("warnings", ())),
+            html=d.get("html"),
         )
 
 
