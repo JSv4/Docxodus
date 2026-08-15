@@ -85,7 +85,7 @@ markdown projection and search tools return:
 |------|---------|
 | `docxodus_open` / `docxodus_save` / `docxodus_close` | Session lifecycle |
 | `docxodus_pagination` | Register, inspect, or query an externally materialized PageMap |
-| `docxodus_get_content` | Read as markdown, HTML, plain text, block metadata, or document info |
+| `docxodus_get_content` | Read markdown/HTML/text, block or section facts, styles, direct/effective formatting, and mutation-ready inline spans |
 | `docxodus_search` | Find text (literal/regex), or blocks by kind/annotation/bookmark |
 | `docxodus_edit` | Insert/replace/delete text and blocks, split/merge paragraphs, undo/redo |
 | `docxodus_format` | Character and paragraph formatting, list level |

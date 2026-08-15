@@ -1736,15 +1736,27 @@ internal static class DocxSessionJson
     public static string SerializeListMembershipOrNull(ListMembership? list)
     {
         if (list is null) return "null";
-        var sb = new StringBuilder(128);
-        sb.Append("{\"numId\":").Append(list.NumId)
+        var sb = new StringBuilder(256);
+        sb.Append("{\"anchorId\":").Append(JsonString(list.AnchorId))
+          .Append(",\"numId\":").Append(list.NumId)
           .Append(",\"abstractNumId\":").Append(list.AbstractNumId)
           .Append(",\"level\":").Append(list.Level)
           .Append(",\"format\":").Append(JsonString(NumberFormatToString(list.Format)))
+          .Append(",\"start\":").Append(list.Start)
           .Append(",\"isAutoNumbered\":").Append(list.IsAutoNumbered ? "true" : "false")
           .Append(",\"fromStyle\":").Append(list.FromStyle ? "true" : "false");
         if (list.StartOverride.HasValue)
             sb.Append(",\"startOverride\":").Append(list.StartOverride.Value);
+        if (list.LevelText is not null)
+            sb.Append(",\"levelText\":").Append(JsonString(list.LevelText));
+        if (list.LeftIndentTwips.HasValue)
+            sb.Append(",\"leftIndentTwips\":").Append(list.LeftIndentTwips.Value);
+        if (list.RightIndentTwips.HasValue)
+            sb.Append(",\"rightIndentTwips\":").Append(list.RightIndentTwips.Value);
+        if (list.FirstLineIndentTwips.HasValue)
+            sb.Append(",\"firstLineIndentTwips\":").Append(list.FirstLineIndentTwips.Value);
+        if (list.HangingIndentTwips.HasValue)
+            sb.Append(",\"hangingIndentTwips\":").Append(list.HangingIndentTwips.Value);
         if (list.GeneratedLabel is not null)
             sb.Append(",\"generatedLabel\":").Append(JsonString(list.GeneratedLabel));
         sb.Append('}');
@@ -1755,7 +1767,8 @@ internal static class DocxSessionJson
     {
         if (info is null) return "null";
         var sb = new StringBuilder(256);
-        sb.Append("{\"sectionUnid\":").Append(JsonString(info.SectionUnid))
+        sb.Append("{\"anchorId\":").Append(JsonString(info.AnchorId))
+          .Append(",\"sectionUnid\":").Append(JsonString(info.SectionUnid))
           .Append(",\"pageWidthTwips\":").Append(info.PageWidthTwips)
           .Append(",\"pageHeightTwips\":").Append(info.PageHeightTwips)
           .Append(",\"landscape\":").Append(info.Landscape ? "true" : "false")
@@ -1787,6 +1800,262 @@ internal static class DocxSessionJson
             sb.Append(",\"pageNumberFormat\":").Append(JsonString(NumberFormatToString(pnFormat)));
         sb.Append('}');
         return sb.ToString();
+    }
+
+    public static string SerializeStyles(IReadOnlyList<StyleInfo> styles)
+    {
+        var sb = new StringBuilder(styles.Count * 400 + 2);
+        sb.Append('[');
+        for (int i = 0; i < styles.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var style = styles[i];
+            sb.Append("{\"id\":").Append(JsonString(style.Id))
+              .Append(",\"name\":").Append(JsonString(style.Name))
+              .Append(",\"type\":").Append(JsonString(style.Type));
+            if (style.BasedOn is not null)
+                sb.Append(",\"basedOn\":").Append(JsonString(style.BasedOn));
+            if (style.Next is not null)
+                sb.Append(",\"next\":").Append(JsonString(style.Next));
+            sb.Append(",\"isDefault\":").Append(style.IsDefault ? "true" : "false")
+              .Append(",\"isCustom\":").Append(style.IsCustom ? "true" : "false")
+              .Append(",\"hasLatentException\":").Append(style.HasLatentException ? "true" : "false");
+            if (style.UiPriority.HasValue)
+                sb.Append(",\"uiPriority\":").Append(style.UiPriority.Value);
+            AppendNullableBool(sb, "semiHidden", style.SemiHidden);
+            AppendNullableBool(sb, "unhideWhenUsed", style.UnhideWhenUsed);
+            AppendNullableBool(sb, "quickFormat", style.QuickFormat);
+            AppendNullableBool(sb, "locked", style.Locked);
+            if (style.ResolvedParagraph is not null)
+            {
+                sb.Append(",\"resolvedParagraph\":");
+                AppendParagraphFormatting(sb, style.ResolvedParagraph);
+            }
+            if (style.ResolvedRun is not null)
+            {
+                sb.Append(",\"resolvedRun\":");
+                AppendRunFormattingInfo(sb, style.ResolvedRun);
+            }
+            if (style.ResolvedTable is not null)
+            {
+                sb.Append(",\"resolvedTable\":");
+                AppendTableStyleFormatting(sb, style.ResolvedTable);
+            }
+            sb.Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    public static string SerializeFormattingInspectionOrNull(FormattingInspection? inspection)
+    {
+        if (inspection is null) return "null";
+        var sb = new StringBuilder(512 + inspection.Runs.Count * 300);
+        sb.Append("{\"anchorId\":").Append(JsonString(inspection.AnchorId))
+          .Append(",\"directParagraph\":");
+        AppendParagraphFormatting(sb, inspection.DirectParagraph);
+        sb.Append(",\"effectiveParagraph\":");
+        AppendParagraphFormatting(sb, inspection.EffectiveParagraph);
+        sb.Append(",\"runs\":");
+        AppendInlineSpans(sb, inspection.Runs);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    public static string SerializeInlineSpans(IReadOnlyList<InlineSpan> spans)
+    {
+        var sb = new StringBuilder(spans.Count * 300 + 2);
+        AppendInlineSpans(sb, spans);
+        return sb.ToString();
+    }
+
+    private static void AppendInlineSpans(StringBuilder sb, IReadOnlyList<InlineSpan> spans)
+    {
+        sb.Append('[');
+        for (int i = 0; i < spans.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var span = spans[i];
+            sb.Append("{\"anchorId\":").Append(JsonString(span.AnchorId))
+              .Append(",\"runUnid\":").Append(JsonString(span.RunUnid))
+              .Append(",\"span\":{\"start\":").Append(span.Span.Start)
+              .Append(",\"length\":").Append(span.Span.Length).Append('}')
+              .Append(",\"text\":").Append(JsonString(span.Text))
+              .Append(",\"direct\":");
+            AppendRunFormattingInfo(sb, span.Direct);
+            sb.Append(",\"effective\":");
+            AppendRunFormattingInfo(sb, span.Effective);
+            sb.Append('}');
+        }
+        sb.Append(']');
+    }
+
+    private static void AppendParagraphFormatting(StringBuilder sb, ParagraphFormatting f)
+    {
+        sb.Append('{');
+        bool has = false;
+        void StringValue(string name, string? value)
+        {
+            if (value is null) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(JsonString(value));
+        }
+        void IntValue(string name, int? value)
+        {
+            if (!value.HasValue) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(value.Value);
+        }
+        void BoolValue(string name, bool? value)
+        {
+            if (!value.HasValue) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(value.Value ? "true" : "false");
+        }
+
+        StringValue("styleId", f.StyleId);
+        StringValue("alignment", f.Alignment switch
+        {
+            ParagraphAlignment.Center => "center",
+            ParagraphAlignment.Right => "right",
+            ParagraphAlignment.Justify => "justify",
+            ParagraphAlignment.Left => "left",
+            _ => null,
+        });
+        IntValue("leftIndentTwips", f.LeftIndentTwips);
+        IntValue("rightIndentTwips", f.RightIndentTwips);
+        IntValue("firstLineIndentTwips", f.FirstLineIndentTwips);
+        IntValue("hangingIndentTwips", f.HangingIndentTwips);
+        IntValue("spacingBeforeTwips", f.SpacingBeforeTwips);
+        IntValue("spacingAfterTwips", f.SpacingAfterTwips);
+        IntValue("lineSpacing", f.LineSpacing);
+        StringValue("lineSpacingRule", f.LineSpacingRule switch
+        {
+            LineSpacingRule.Exact => "exact",
+            LineSpacingRule.AtLeast => "atLeast",
+            LineSpacingRule.Auto => "auto",
+            _ => null,
+        });
+        BoolValue("keepNext", f.KeepNext);
+        BoolValue("keepLines", f.KeepLines);
+        BoolValue("pageBreakBefore", f.PageBreakBefore);
+        IntValue("outlineLevel", f.OutlineLevel);
+        StringValue("shadingFill", f.ShadingFill);
+        AppendBorder("topBorder", f.TopBorder);
+        AppendBorder("bottomBorder", f.BottomBorder);
+        sb.Append('}');
+
+        void AppendBorder(string name, ParagraphBorderEdge? edge)
+        {
+            if (edge is null) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(":{");
+            bool edgeHas = false;
+            void EdgeString(string key, string? value)
+            {
+                if (value is null) return;
+                if (edgeHas) sb.Append(',');
+                edgeHas = true;
+                sb.Append(JsonString(key)).Append(':').Append(JsonString(value));
+            }
+            void EdgeInt(string key, int? value)
+            {
+                if (!value.HasValue) return;
+                if (edgeHas) sb.Append(',');
+                edgeHas = true;
+                sb.Append(JsonString(key)).Append(':').Append(value.Value);
+            }
+            EdgeString("style", edge.Style);
+            EdgeInt("size", edge.Size);
+            EdgeString("color", edge.Color);
+            EdgeInt("space", edge.Space);
+            sb.Append('}');
+        }
+    }
+
+    private static void AppendRunFormattingInfo(StringBuilder sb, RunFormattingInfo f)
+    {
+        sb.Append('{');
+        bool has = false;
+        void StringValue(string name, string? value)
+        {
+            if (value is null) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(JsonString(value));
+        }
+        void BoolValue(string name, bool? value)
+        {
+            if (!value.HasValue) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(value.Value ? "true" : "false");
+        }
+        StringValue("styleId", f.StyleId);
+        BoolValue("bold", f.Bold);
+        BoolValue("italic", f.Italic);
+        BoolValue("underline", f.Underline);
+        StringValue("underlineStyle", f.UnderlineStyle);
+        BoolValue("strike", f.Strike);
+        BoolValue("code", f.Code);
+        StringValue("color", f.Color);
+        StringValue("highlight", f.Highlight);
+        StringValue("vertAlign", f.VertAlign);
+        if (f.FontSizePts.HasValue)
+        {
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append("\"fontSizePts\":").Append(f.FontSizePts.Value.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        }
+        StringValue("fontFamily", f.FontFamily);
+        BoolValue("caps", f.Caps);
+        BoolValue("smallCaps", f.SmallCaps);
+        BoolValue("hidden", f.Hidden);
+        sb.Append('}');
+    }
+
+    private static void AppendTableStyleFormatting(StringBuilder sb, TableStyleFormatting f)
+    {
+        sb.Append('{');
+        bool has = false;
+        void StringValue(string name, string? value)
+        {
+            if (value is null) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(JsonString(value));
+        }
+        void IntValue(string name, int? value)
+        {
+            if (!value.HasValue) return;
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append(JsonString(name)).Append(':').Append(value.Value);
+        }
+        StringValue("alignment", f.Alignment);
+        IntValue("widthTwips", f.WidthTwips);
+        IntValue("indentTwips", f.IndentTwips);
+        StringValue("layout", f.Layout);
+        if (f.HasBorders.HasValue)
+        {
+            if (has) sb.Append(',');
+            has = true;
+            sb.Append("\"hasBorders\":").Append(f.HasBorders.Value ? "true" : "false");
+        }
+        StringValue("cellShadingFill", f.CellShadingFill);
+        sb.Append('}');
+    }
+
+    private static void AppendNullableBool(StringBuilder sb, string name, bool? value)
+    {
+        if (!value.HasValue) return;
+        sb.Append(',').Append(JsonString(name)).Append(':')
+          .Append(value.Value ? "true" : "false");
     }
 
     private static void AppendHeaderFooterRefs(

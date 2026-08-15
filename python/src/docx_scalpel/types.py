@@ -79,6 +79,12 @@ __all__ = [
     "PageMapRect",
     "PageMapRegistrationResult",
     "PageMapStatus",
+    "ParagraphFormatting",
+    "RunFormattingInfo",
+    "TableStyleFormatting",
+    "StyleInfo",
+    "InlineSpan",
+    "FormattingInspection",
     "RunFormatting",
     "RunFragment",
     "SectionInfo",
@@ -455,25 +461,39 @@ class NumberFormat(str, Enum):
 class ListMembership:
     """Numbering facts for a list-item paragraph."""
 
+    anchor_id: str
     num_id: int
     abstract_num_id: int
     level: int
     format: NumberFormat
     is_auto_numbered: bool
     from_style: bool
+    start: int = 1
     start_override: int | None = None
+    level_text: str | None = None
+    left_indent_twips: int | None = None
+    right_indent_twips: int | None = None
+    first_line_indent_twips: int | None = None
+    hanging_indent_twips: int | None = None
     generated_label: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ListMembership":
         return cls(
+            anchor_id=d["anchorId"],
             num_id=int(d["numId"]),
             abstract_num_id=int(d["abstractNumId"]),
             level=int(d["level"]),
             format=NumberFormat._from_wire(d["format"]),
             is_auto_numbered=bool(d["isAutoNumbered"]),
             from_style=bool(d["fromStyle"]),
+            start=int(d.get("start", 1)),
             start_override=int(d["startOverride"]) if "startOverride" in d else None,
+            level_text=d.get("levelText"),
+            left_indent_twips=(int(d["leftIndentTwips"]) if "leftIndentTwips" in d else None),
+            right_indent_twips=(int(d["rightIndentTwips"]) if "rightIndentTwips" in d else None),
+            first_line_indent_twips=(int(d["firstLineIndentTwips"]) if "firstLineIndentTwips" in d else None),
+            hanging_indent_twips=(int(d["hangingIndentTwips"]) if "hangingIndentTwips" in d else None),
             generated_label=d.get("generatedLabel"),
         )
 
@@ -534,6 +554,7 @@ class HeaderFooterRef:
 class SectionInfo:
     """Page-layout snapshot for the w:sectPr that governs an anchor."""
 
+    anchor_id: str
     section_unid: str
     page_width_twips: int
     page_height_twips: int
@@ -561,6 +582,7 @@ class SectionInfo:
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "SectionInfo":
         return cls(
+            anchor_id=d.get("anchorId", ""),
             section_unid=d["sectionUnid"],
             page_width_twips=int(d["pageWidthTwips"]),
             page_height_twips=int(d["pageHeightTwips"]),
@@ -650,6 +672,15 @@ class ParagraphBorderEdge:
     color: str | None = None
     space: int | None = None
 
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ParagraphBorderEdge":
+        return cls(
+            style=d.get("style"),
+            size=int(d["size"]) if "size" in d else None,
+            color=d.get("color"),
+            space=int(d["space"]) if "space" in d else None,
+        )
+
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.style is not None: out["style"] = self.style
@@ -705,6 +736,181 @@ class ParagraphFormatOp:
         if self.bottom_border is not None: out["bottomBorder"] = self.bottom_border.to_wire()
         if self.clear_borders is not None: out["clearBorders"] = self.clear_borders
         return out
+
+
+@dataclass(frozen=True, slots=True)
+class ParagraphFormatting:
+    """High-signal paragraph properties at one direct/effective cascade layer."""
+
+    style_id: str | None = None
+    alignment: ParagraphAlignment | None = None
+    left_indent_twips: int | None = None
+    right_indent_twips: int | None = None
+    first_line_indent_twips: int | None = None
+    hanging_indent_twips: int | None = None
+    spacing_before_twips: int | None = None
+    spacing_after_twips: int | None = None
+    line_spacing: int | None = None
+    line_spacing_rule: LineSpacingRule | None = None
+    keep_next: bool | None = None
+    keep_lines: bool | None = None
+    page_break_before: bool | None = None
+    outline_level: int | None = None
+    shading_fill: str | None = None
+    top_border: ParagraphBorderEdge | None = None
+    bottom_border: ParagraphBorderEdge | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ParagraphFormatting":
+        return cls(
+            style_id=d.get("styleId"),
+            alignment=(ParagraphAlignment(d["alignment"]) if "alignment" in d else None),
+            left_indent_twips=int(d["leftIndentTwips"]) if "leftIndentTwips" in d else None,
+            right_indent_twips=int(d["rightIndentTwips"]) if "rightIndentTwips" in d else None,
+            first_line_indent_twips=int(d["firstLineIndentTwips"]) if "firstLineIndentTwips" in d else None,
+            hanging_indent_twips=int(d["hangingIndentTwips"]) if "hangingIndentTwips" in d else None,
+            spacing_before_twips=int(d["spacingBeforeTwips"]) if "spacingBeforeTwips" in d else None,
+            spacing_after_twips=int(d["spacingAfterTwips"]) if "spacingAfterTwips" in d else None,
+            line_spacing=int(d["lineSpacing"]) if "lineSpacing" in d else None,
+            line_spacing_rule=(LineSpacingRule(d["lineSpacingRule"]) if "lineSpacingRule" in d else None),
+            keep_next=d.get("keepNext"),
+            keep_lines=d.get("keepLines"),
+            page_break_before=d.get("pageBreakBefore"),
+            outline_level=int(d["outlineLevel"]) if "outlineLevel" in d else None,
+            shading_fill=d.get("shadingFill"),
+            top_border=(ParagraphBorderEdge._from_wire(d["topBorder"]) if "topBorder" in d else None),
+            bottom_border=(ParagraphBorderEdge._from_wire(d["bottomBorder"]) if "bottomBorder" in d else None),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RunFormattingInfo:
+    """High-signal character properties; absent direct values remain ``None``."""
+
+    style_id: str | None = None
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    underline_style: str | None = None
+    strike: bool | None = None
+    code: bool | None = None
+    color: str | None = None
+    highlight: str | None = None
+    vert_align: str | None = None
+    font_size_pts: float | None = None
+    font_family: str | None = None
+    caps: bool | None = None
+    small_caps: bool | None = None
+    hidden: bool | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RunFormattingInfo":
+        return cls(
+            style_id=d.get("styleId"), bold=d.get("bold"), italic=d.get("italic"),
+            underline=d.get("underline"), underline_style=d.get("underlineStyle"),
+            strike=d.get("strike"), code=d.get("code"), color=d.get("color"),
+            highlight=d.get("highlight"), vert_align=d.get("vertAlign"),
+            font_size_pts=float(d["fontSizePts"]) if "fontSizePts" in d else None,
+            font_family=d.get("fontFamily"), caps=d.get("caps"),
+            small_caps=d.get("smallCaps"), hidden=d.get("hidden"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TableStyleFormatting:
+    alignment: str | None = None
+    width_twips: int | None = None
+    indent_twips: int | None = None
+    layout: str | None = None
+    has_borders: bool | None = None
+    cell_shading_fill: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TableStyleFormatting":
+        return cls(
+            alignment=d.get("alignment"),
+            width_twips=int(d["widthTwips"]) if "widthTwips" in d else None,
+            indent_twips=int(d["indentTwips"]) if "indentTwips" in d else None,
+            layout=d.get("layout"), has_borders=d.get("hasBorders"),
+            cell_shading_fill=d.get("cellShadingFill"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StyleInfo:
+    """One explicit style definition; ``id`` is accepted by style mutations."""
+
+    id: str
+    name: str
+    type: str
+    is_default: bool
+    is_custom: bool
+    has_latent_exception: bool
+    based_on: str | None = None
+    next: str | None = None
+    ui_priority: int | None = None
+    semi_hidden: bool | None = None
+    unhide_when_used: bool | None = None
+    quick_format: bool | None = None
+    locked: bool | None = None
+    resolved_paragraph: ParagraphFormatting | None = None
+    resolved_run: RunFormattingInfo | None = None
+    resolved_table: TableStyleFormatting | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "StyleInfo":
+        return cls(
+            id=d["id"], name=d["name"], type=d["type"],
+            is_default=bool(d["isDefault"]), is_custom=bool(d["isCustom"]),
+            has_latent_exception=bool(d["hasLatentException"]),
+            based_on=d.get("basedOn"), next=d.get("next"),
+            ui_priority=int(d["uiPriority"]) if "uiPriority" in d else None,
+            semi_hidden=d.get("semiHidden"), unhide_when_used=d.get("unhideWhenUsed"),
+            quick_format=d.get("quickFormat"), locked=d.get("locked"),
+            resolved_paragraph=(ParagraphFormatting._from_wire(d["resolvedParagraph"]) if "resolvedParagraph" in d else None),
+            resolved_run=(RunFormattingInfo._from_wire(d["resolvedRun"]) if "resolvedRun" in d else None),
+            resolved_table=(TableStyleFormatting._from_wire(d["resolvedTable"]) if "resolvedTable" in d else None),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InlineSpan:
+    """Text-bearing run; ``anchor_id`` + ``span`` can be passed to ``apply_format``."""
+
+    anchor_id: str
+    run_unid: str
+    span: CharSpan
+    text: str
+    direct: RunFormattingInfo
+    effective: RunFormattingInfo
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "InlineSpan":
+        return cls(
+            anchor_id=d["anchorId"], run_unid=d["runUnid"],
+            span=CharSpan._from_wire(d["span"]), text=d["text"],
+            direct=RunFormattingInfo._from_wire(d["direct"]),
+            effective=RunFormattingInfo._from_wire(d["effective"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FormattingInspection:
+    """Explicitly separated direct and effective formatting for one paragraph."""
+
+    anchor_id: str
+    direct_paragraph: ParagraphFormatting
+    effective_paragraph: ParagraphFormatting
+    runs: tuple[InlineSpan, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "FormattingInspection":
+        return cls(
+            anchor_id=d["anchorId"],
+            direct_paragraph=ParagraphFormatting._from_wire(d["directParagraph"]),
+            effective_paragraph=ParagraphFormatting._from_wire(d["effectiveParagraph"]),
+            runs=tuple(InlineSpan._from_wire(v) for v in d.get("runs", ())),
+        )
 
 
 @dataclass(frozen=True, slots=True)

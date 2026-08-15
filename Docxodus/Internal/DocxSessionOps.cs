@@ -314,6 +314,15 @@ internal static class DocxSessionOps
     public static string GetSectionInfo(int handle, string anchorId) =>
         DocxSessionJson.SerializeSectionInfoOrNull(SessionRegistry.Get(handle).GetSectionInfo(anchorId));
 
+    public static string ListStyles(int handle) =>
+        DocxSessionJson.SerializeStyles(SessionRegistry.Get(handle).ListStyles());
+
+    public static string GetFormatting(int handle, string anchorId) =>
+        DocxSessionJson.SerializeFormattingInspectionOrNull(SessionRegistry.Get(handle).GetFormatting(anchorId));
+
+    public static string ListInlineSpans(int handle, string anchorId) =>
+        DocxSessionJson.SerializeInlineSpans(SessionRegistry.Get(handle).ListInlineSpans(anchorId));
+
     public static string FindByText(int handle, string needle, FindOptions? options) =>
         DocxSessionJson.SerializeAnchorTargetOrNull(SessionRegistry.Get(handle).FindByText(needle, options));
 

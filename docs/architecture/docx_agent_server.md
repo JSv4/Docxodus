@@ -236,14 +236,21 @@ Three lifecycle tools, thirteen grouped-intent tools. Every grouped tool takes `
 `html` (`DocxSessionOps.RenderHtml`/`RenderBlockHtml`), `text` (markdown with a best-effort
 regex-based syntax strip — an approximation, not a real markdown parser; use `markdown` for
 anything that needs to survive a write-back), `blocks` (every addressable block's
-`BlockMetadata` — style id/name, outline level, list facts), `info` (`GetEditSummary` plus the
-`SectionInfo` of the first body block found). Optional `anchorId` scopes
+`BlockMetadata` — style id/name, outline level, list facts), `styles` (the document's style catalog
+with resolved high-signal properties), `formatting` (explicit direct/effective paragraph and run
+formatting for `anchorId`), `spans` (enumerable mutation-compatible inline spans for `anchorId`),
+and `info` (`GetEditSummary` plus the `SectionInfo` governing `anchorId`, or the first body block
+when it is omitted). `anchorId` is required for `formatting`/`spans`; otherwise it optionally scopes
 `markdown`/`text`/`html` to one block's subtree via
 `ProjectionDepth.SubtreeAndFollowingSiblings`. The full markdown/text/blocks
 reads include every projected package story, including `hdr*`/`ftr*`; an `anchorId` returned by
 `set_header_text` or `set_footer_text` can also be handed straight back to markdown, text, or HTML
 read-back. (The unscoped continuous HTML render is body-oriented; use the story anchor for
 header/footer HTML.)
+
+The read surface is designed for inspect-before-edit workflows: style ids returned by `styles`,
+anchors returned by list/section/formatting records, and `(anchorId, span)` pairs returned by
+`spans` are accepted unchanged by the corresponding mutation tools.
 
 ### `docxodus_preview` — render for the inline widget
 

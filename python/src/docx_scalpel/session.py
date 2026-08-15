@@ -67,7 +67,9 @@ from .types import (
     FillOptions,
     FindOptions,
     FormatOp,
+    FormattingInspection,
     HtmlOptions,
+    InlineSpan,
     ListMembership,
     MarkdownProjection,
     MutationBatchResult,
@@ -83,6 +85,7 @@ from .types import (
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
+    StyleInfo,
     TemplatePlaceholder,
     TextMatch,
     TableBorderSpec,
@@ -960,6 +963,21 @@ class DocxSession:
         Returns None for anchors outside the body part."""
         result = self._call("get_section_info", {"anchorId": anchor_id})
         return SectionInfo._from_wire(result) if result else None
+
+    def list_styles(self) -> tuple[StyleInfo, ...]:
+        """Enumerate explicit document styles with resolved high-signal properties."""
+        result = self._call("list_styles", {})
+        return tuple(StyleInfo._from_wire(style) for style in result)
+
+    def get_formatting(self, anchor_id: str) -> FormattingInspection | None:
+        """Inspect explicitly separated direct/effective formatting for a paragraph."""
+        result = self._call("get_formatting", {"anchorId": anchor_id})
+        return FormattingInspection._from_wire(result) if result else None
+
+    def list_inline_spans(self, anchor_id: str) -> tuple[InlineSpan, ...]:
+        """Enumerate text runs as mutation-compatible anchor/span pairs."""
+        result = self._call("list_inline_spans", {"anchorId": anchor_id})
+        return tuple(InlineSpan._from_wire(span) for span in result)
 
     # -- discovery: summaries ---------------------------------------------
 

@@ -155,9 +155,14 @@ internal static class Dispatcher
             {
                 var editSummary = DocxSessionOps.GetEditSummary(session.Handle);
                 string sectionInfo = "null";
-                var projectionJson = DocxSessionOps.Project(session.Handle);
-                using (var doc = JsonDocument.Parse(projectionJson))
+                if (anchorId is not null)
                 {
+                    sectionInfo = DocxSessionOps.GetSectionInfo(session.Handle, anchorId);
+                }
+                else
+                {
+                    var projectionJson = DocxSessionOps.Project(session.Handle);
+                    using var doc = JsonDocument.Parse(projectionJson);
                     foreach (var prop in doc.RootElement.GetProperty("anchorIndex").EnumerateObject())
                     {
                         var kind = prop.Value.GetProperty("kind").GetString();
@@ -176,6 +181,19 @@ internal static class Dispatcher
             case "check_preconditions":
                 return DocxSessionOps.CheckPreconditions(
                     session.Handle, ParsePreconditions(args, OptStr(args, "anchorId")));
+
+            case "styles":
+                return $"{{\"styles\":{DocxSessionOps.ListStyles(session.Handle)}}}";
+
+            case "formatting":
+                if (anchorId is null)
+                    throw new McpToolException("formatting requires anchorId");
+                return $"{{\"formatting\":{DocxSessionOps.GetFormatting(session.Handle, anchorId)}}}";
+
+            case "spans":
+                if (anchorId is null)
+                    throw new McpToolException("spans requires anchorId");
+                return $"{{\"spans\":{DocxSessionOps.ListInlineSpans(session.Handle, anchorId)}}}";
 
             default:
                 throw new McpToolException($"unknown format: {format}");

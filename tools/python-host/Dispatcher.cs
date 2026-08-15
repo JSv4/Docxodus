@@ -249,6 +249,9 @@ internal static class Dispatcher
         "get_block_metadatas" => DocxSessionOps.GetBlockMetadatas(Handle(args), ParseAnchorIdArray(args)),
         "get_list_membership" => DocxSessionOps.GetListMembership(Handle(args), Str(args, "anchorId")),
         "get_section_info" => DocxSessionOps.GetSectionInfo(Handle(args), Str(args, "anchorId")),
+        "list_styles" => DocxSessionOps.ListStyles(Handle(args)),
+        "get_formatting" => DocxSessionOps.GetFormatting(Handle(args), Str(args, "anchorId")),
+        "list_inline_spans" => DocxSessionOps.ListInlineSpans(Handle(args), Str(args, "anchorId")),
         "find_by_text" => DocxSessionOps.FindByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
         "find_all_by_text" => DocxSessionOps.FindAllByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
         "find_by_regex" => DocxSessionOps.FindByRegex(

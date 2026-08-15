@@ -1702,7 +1702,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
-| Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |
+| Re-query `ListStyles()` for a current style id, or `GetListMembership()` for the valid numbering level | `UnknownStyle`, `InvalidListLevel` |
 | Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling`, `InvalidTableMerge` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
@@ -1718,6 +1718,26 @@ over the AnchorIndex instead of one walk per id. Returns
 ## Recipes
 
 These are worked examples drawn from the end-to-end smoke test (`DocxSessionSmokeTest.cs::DS999`) and the per-tier tests, lightly genericized. They use the .NET API; the TypeScript API is shape-identical (camelCase method names, `string` anchors, `Promise`-free synchronous returns from the npm wrapper since everything runs on the WASM worker).
+
+### Inspect before editing
+
+Do not guess style ids, re-create inherited formatting as direct XML, or infer run boundaries from
+markdown. Query the live document, then feed the returned identifiers and coordinates back into the
+matching mutation API unchanged:
+
+```csharp
+var style = session.ListStyles().Single(s => s.Name == "Strong Custom");
+var formatting = session.GetFormatting(paragraphAnchor)!;
+var word = session.ListInlineSpans(paragraphAnchor).Single(s => s.Text == "Defined Term");
+
+// style.Id is the document's real w:styleId; word.AnchorId + word.Span is ApplyFormat-ready.
+session.ApplyFormat(word.AnchorId, word.Span, new FormatOp { RunStyle = style.Id });
+```
+
+`DirectParagraph`/`InlineSpan.Direct` say what is written on the target itself. Their
+`EffectiveParagraph`/`Effective` counterparts say what Word renders after document defaults and
+the complete style chain are applied by `FormattingAssembler`. Keeping those two layers separate
+is essential: an absent direct value means “inherit,” not false or zero.
 
 ### Replace a clause's text while preserving its style and numbering
 
@@ -1853,7 +1873,6 @@ that diffs a view against the session.
 
 - **`MarkdownPatch.Markdown` is currently the full re-projection.** The `ScopeAnchorId` field correctly identifies the smallest enclosing block, but the payload is the whole document re-projected. A future optimization (per the spec's open questions) is to emit only the markdown for the named scope. Cheap mitigation: callers that care can splice using their cached projection.
 - **Snapshot granularity is per-part XML clone.** For documents with very large embedded images or huge tables, per-element diffs would be more memory-efficient. Deferred until measured to be a problem.
-- **No `ListStyles()` query API in v1.** Agents must guess `styleId` values for `SetParagraphStyle` from what they see in the projection. `Heading1`–`Heading6`, `Quote`, and `Code` are reliable defaults across most documents.
 - **Closing a session mid-flight from JS.** The WASM bridge holds sessions in a static dictionary keyed by handle; if a JS caller drops a `DocxSession` without calling `close()`, the .NET-side session is not eligible for GC. The npm wrapper exposes `Symbol.dispose` for TypeScript 5.2+ `using` blocks; older runtimes need explicit `.close()`.
 - **`Save()` strips internal `PtOpenXml:Unid` attributes by default.** The projector assigns a Unid to every descendant of every projected scope; persisting them grows large documents by hundreds of KB of attribute noise (a 148 KB NVCA Model COI round-tripped at 588 KB before this default flipped). Anchor ids therefore do **not** survive `Save` → re-open by default — a fresh session re-assigns Unids and gets new ids. Set `DocxSessionSettings.PersistAnchorIds = true` to keep the ids (which keeps the bloat). This resolves Open Question #1 in `markdown_projection.md` in favor of "clean OOXML out by default, opt in to anchor stability."
 
@@ -1864,12 +1883,71 @@ that diffs a view against the session.
 - [`tracked_changes.md`](tracked_changes.md) — informs the `TrackedChangeMode` setting
 - [`incremental_annotation_overlay.md`](incremental_annotation_overlay.md) — anchor-based overlay pattern; the read-side analog of this write-side API
 
-## Inspection: block metadata
+## Inspection: document structure and formatting
 
 `GetBlockMetadata` / `GetBlockMetadatas` / `GetListMembership` /
-`GetSectionInfo` are pure reads — no mutation, no undo snapshot, no
-projection invalidation. Each returns an immutable record (or null when
-the anchor doesn't exist).
+`GetSectionInfo` / `ListStyles` / `GetFormatting` / `ListInlineSpans` are pure reads — no
+mutation, no undo snapshot, no projection invalidation. Each returns immutable records (or null
+for an unknown/inapplicable single-anchor query).
+
+### Styles and direct/effective formatting
+
+`ListStyles()` enumerates the document's explicit paragraph, character, table, and numbering style
+definitions. Each `StyleInfo` includes `Id`, `Name`, `Type`, `BasedOn`, `Next`, default/custom
+flags, resolved latent-style gallery metadata, and the high-signal resolved paragraph/run/table
+properties appropriate to its type. Resolution reuses `FormattingAssembler`'s style rollups — but
+see **What "effective" includes** below: it is a *shorter cascade* than the renderer applies, not
+the same one. A returned paragraph style `Id` is accepted unchanged by `SetParagraphStyle`; a
+returned character style `Id` is accepted as `FormatOp.RunStyle`.
+
+`GetFormatting(anchor)` is paragraph-only and explicitly separates:
+
+- `DirectParagraph`: only properties present in that paragraph's `w:pPr`; absent values stay null.
+- `EffectiveParagraph`: document defaults + full paragraph style chain + direct properties, with
+  ordinary schema defaults filled for alignment, spacing, indentation, line spacing, and toggles.
+- `Runs`: the same entries returned by `ListInlineSpans(anchor)`.
+
+#### What "effective" includes — and what it does not
+
+This is the resolver's exact contract. **It is not the render oracle's cascade**, and where the two
+differ the render (`WmlToHtmlConverter`) is what Word actually shows.
+
+`EffectiveParagraph` = `w:docDefaults/w:pPrDefault` + the `w:pStyle` `basedOn` chain + the
+paragraph's direct `w:pPr`. It does **not** include:
+
+- the **numbering level's** `w:pPr` (`w:abstractNum/w:lvl/w:pPr`, and a `w:lvlOverride/w:lvl`
+  form of it), which the render path applies in `AssembleParagraphProperties` with its own
+  `FromParagraph`/`FromStyle` priority;
+- the **table style / `w:tblStylePr`** `w:pPr` layer for a paragraph inside a table.
+
+`InlineSpan.Effective` = `w:docDefaults/w:rPrDefault` + the character/paragraph style chain +
+the run's direct `w:rPr` + theme-font resolution. It does **not** toggle-merge the **table
+style's** conditional `w:rPr` the way `AnnotateRunProperties` does.
+
+Concretely, and pinned by `BM021`/`BM022`:
+
+| Document | Renders as | `GetFormatting` reports |
+|---|---|---|
+| List item whose indent lives only in `w:abstractNum/w:lvl/w:pPr/w:ind` (the normal case) | indented | `LeftIndentTwips = 0` |
+| Run in a `firstRow`-styled table whose bold comes from `w:tblStylePr` | bold | `Bold = false` |
+
+`GetListMembership` surfaces the numbering level's real `Start`, `LevelText`, and indentation
+separately, so the list case is recoverable by the caller today.
+
+The exclusions are deliberate rather than accidental. The numbering layer is only applied by
+`ParagraphStyleRollup` when the paragraph carries `ListItemRetriever`'s `ListItemInfo` annotation,
+and that annotation is a lazily built **cache** — present or absent depending only on whether
+something rendered, projected, or resolved a list label earlier in the session. Reading it would
+make a pure read API answer the same unmutated document two different ways depending on call
+order, so the resolver deliberately resolves against an annotation-free probe. That determinism
+costs the numbering layer even for a projected session, which before this was the one case that
+happened to get the fuller answer. Unifying the two cascades means changing the render oracle's
+formatting path and is tracked separately.
+
+Each `InlineSpan` reports the containing mutation-ready `AnchorId`, stable run `RunUnid`, flat-text
+`Span`, text, `Direct` run properties, and `Effective` run properties. `AnchorId` + `Span` can be
+passed directly to `ApplyFormat`. These are run/format spans only; hyperlink, bookmark, revision,
+content-control, and other inline memberships are separate follow-ons (#451/#452/#455).
 
 ### `BlockMetadata`
 
@@ -1893,6 +1971,10 @@ For list-item paragraphs (and also surfaced as `BlockMetadata.List`):
 
 - `NumId` / `AbstractNumId` / `Level` / `Format` — the standard
   numbering identity quadruple.
+- `AnchorId` — the queried paragraph anchor, accepted unchanged by list mutations.
+- `Start` / `LevelText` — the abstract level definition's start and marker template.
+- `LeftIndentTwips` / `RightIndentTwips` / `FirstLineIndentTwips` /
+  `HangingIndentTwips` — the effective level indentation (including a `w:lvlOverride/w:lvl`).
 - `StartOverride` — non-null when the paragraph's `w:num` has a
   `w:lvlOverride/w:startOverride` at this level. Useful for predicting
   what `RestartNumberedList` will produce.
@@ -1909,7 +1991,8 @@ For list-item paragraphs (and also surfaced as `BlockMetadata.List`):
 
 For anchors in the body part:
 
-- `SectionUnid` — stable id for the governing `w:sectPr`.
+- `AnchorId` — the queried body anchor, accepted unchanged by section mutations.
+- `SectionUnid` — stable, stored Unid for the governing `w:sectPr` (never a positional fallback).
 - `PageWidthTwips` / `PageHeightTwips` — raw twips (1 inch = 1440 twips).
 - `Landscape` — true when `pgSz/@orient = "landscape"`.
 - `MarginTopTwips` / `MarginBottomTwips` / `MarginLeftTwips` /
@@ -1919,6 +2002,8 @@ For anchors in the body part:
 - `HeaderPartUris` / `FooterPartUris` — package-part URIs of the
   header/footer parts referenced via `headerReference` / `footerReference`,
   in declaration order. Empty when no headers/footers are referenced.
+- `HeaderRefs` / `FooterRefs` — effective per-kind stories, including inherited references.
+- `PageNumberStart` / `PageNumberFormat` — the section's explicit page-number settings.
 
 Returns `null` for anchors in non-body parts (footnotes, endnotes,
 headers, footers, comments) — sectPr is body-only.

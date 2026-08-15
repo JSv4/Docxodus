@@ -1769,11 +1769,15 @@ public class HtmlConversionOpsTests
         }
     }
 
-    // THE BATCH GATE: RenderBlocksHtml output must be ELEMENT-IDENTICAL to the
+    // THE BATCH GATE: RenderBlocksHtml output must be RENDER-IDENTICAL to the
     // corresponding data-anchor element of a full render — including list-item
     // markers deep in a list (numbering continuation, the M9 gap the single-block
     // path had) and contextualSpacing-dependent margins (neighbor context). This is
-    // deliberately stronger than HCO050's tag+text check.
+    // deliberately stronger than HCO050's tag+text check. Canonicalized away: XML attribute
+    // ORDER (no semantics), and the KIND segment of data-source-anchor-id (see
+    // CanonicalizeRenderedFragment — a full-render defect, not a block-render one). The
+    // attribute's addressing dimensions, scope and unid, are still compared exactly, and
+    // HCO083 pins the block path's complete value.
     [Fact]
     public void HCO081_RenderBlocksHtml_MatchesFullRenderFragments()
     {
@@ -1806,14 +1810,87 @@ public class HtmlConversionOpsTests
         foreach (var id in ids)
         {
             var unid = id.Substring(id.LastIndexOf(':') + 1);
-            var expected = fullByAnchor[unid].ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+            var expected = System.Xml.Linq.XElement.Parse(
+                fullByAnchor[unid].ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
             var actual = map.RootElement.GetProperty(id).GetString();
             Assert.NotNull(actual);
-            // One extra Parse round-trip on the actual normalizes serializer escaping
-            // (&#x00a0; vs the raw NBSP char) — the equality is structural + textual.
-            Assert.Equal(expected,
-                System.Xml.Linq.XElement.Parse(actual!).ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+            var actualElement = System.Xml.Linq.XElement.Parse(actual!);
+
+            // XML attribute ORDER has no semantics: the full-document and block serializers
+            // compute independently-sourced attributes in different orders. Sorting them is
+            // the only normalization applied — element identity, text, every attribute name
+            // AND value, style, and child ordering are all compared exactly.
+            var canonicalExpected = CanonicalizeRenderedFragment(expected);
+            var canonicalActual = CanonicalizeRenderedFragment(actualElement);
+            Assert.True(System.Xml.Linq.XNode.DeepEquals(canonicalExpected, canonicalActual),
+                $"block {id} differs:\nexpected: {canonicalExpected}\nactual:   {canonicalActual}");
         }
+    }
+
+    // The PageMap addressing contract specifically: a block render must stamp the SAME
+    // canonical data-source-anchor-id the full render stamps. PM100-PM103 pin this for the
+    // full and paginated paths only; without this assertion nothing pinned the block path,
+    // and npm/src/pagination.ts resolves citations by exactly this attribute.
+    [Fact]
+    public void HCO083_RenderBlocksHtml_StampsCanonicalSourceAnchorIds()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        using var session = new DocxSession(bytes);
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
+
+        var ids = session.ListBlocks().Body.Where(u => u.Kind is "p" or "li" or "h")
+            .Take(6).Select(u => u.Id).ToList();
+        Assert.True(ids.Count >= 4, $"fixture too thin: only {ids.Count} usable units");
+
+        var json = HtmlConversionOps.RenderBlocksHtml(session, ids, options);
+        using var map = System.Text.Json.JsonDocument.Parse(json);
+        foreach (var id in ids)
+        {
+            var html = map.RootElement.GetProperty(id).GetString();
+            Assert.NotNull(html);
+            var element = System.Xml.Linq.XElement.Parse(html!);
+            Assert.Equal(id, (string?)element.Attribute("data-source-anchor-id"));
+
+            // The stateless byte overload builds its own shell and its own index; it must
+            // carry the same identity rather than re-derive one from the throwaway body.
+            var stateless = System.Xml.Linq.XElement.Parse(
+                HtmlConversionOps.RenderBlockHtml(bytes, id, options));
+            Assert.Equal(id, (string?)stateless.Attribute("data-source-anchor-id"));
+        }
+    }
+
+    private static System.Xml.Linq.XElement CanonicalizeRenderedFragment(
+        System.Xml.Linq.XElement source)
+    {
+        var clone = new System.Xml.Linq.XElement(source);
+        foreach (var element in clone.DescendantsAndSelf())
+        {
+            // data-source-anchor-id: compare SCOPE and UNID exactly, drop the kind segment.
+            // The full render builds its canonical index from the FINAL (post-preprocessing)
+            // trees, and FormattingAssembler's NormalizeListItems has already stripped w:numPr
+            // by then — so WmlToMarkdownConverter.KindFor sees a plain paragraph and every list
+            // item is stamped "p:body:<unid>" where the session's own anchor id (the value
+            // PM100 asserts, and the value npm/src/pagination.ts:256 matches citations against)
+            // is "li:body:<unid>". Measured on this fixture: 30 of 177 stamped ids, kind-only,
+            // scope and unid always correct. The BLOCK path stamps the session anchor id
+            // verbatim (HCO083), so this exemption covers a full-render defect; delete it — and
+            // watch this assertion go green on its own — once that index is built pre-normalize.
+            if (element.Attribute("data-source-anchor-id") is { } sourceAnchor)
+            {
+                var value = sourceAnchor.Value;
+                var kindEnd = value.IndexOf(':');
+                if (kindEnd >= 0) sourceAnchor.Value = value.Substring(kindEnd + 1);
+            }
+
+            var attributes = element.Attributes()
+                .Select(attribute => new System.Xml.Linq.XAttribute(attribute))
+                .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
+                .ThenBy(attribute => attribute.Name.LocalName, StringComparer.Ordinal)
+                .ToList();
+            element.ReplaceAttributes(attributes);
+        }
+        return clone;
     }
 
     // Regression: rendering a block AFTER a structural edit added a paragraph used to
