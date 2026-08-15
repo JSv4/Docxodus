@@ -174,15 +174,37 @@ test.describe('DocxEditor — block-move latency benchmark', () => {
       const trackedUnits: HTMLElement[] = tracked['bodyUnitNodes']().filter(
         (el: HTMLElement) => tracked['isMovableBlockUnit'](el),
       );
-      // Pick the pair from the engine's own answer: section breaks partition this charter, so a
-      // fixed index pair is not necessarily a legal move.
-      const tSrcId = trackedAnchor(trackedUnits[Math.floor(trackedUnits.length / 2)]);
+      // Pick the pair from the engine's own answer, SOURCE included. Section breaks partition
+      // this charter, and in review mode a block carrying bookmark markers cannot be moved at
+      // all — both revision sides would be live — which on this document is most of them:
+      // Word puts a _Toc bookmark on nearly every heading. A fixed index is therefore not
+      // necessarily a movable block, so scan outward from the middle for one that is.
+      const trackedTargetsFor = (id: string) =>
+        (JSON.parse(
+          D.DocxSessionBridge.ValidMoveTargets(tracked.sessionHandle, id),
+        ) as Array<{ anchorId: string; after: boolean }>).filter((t) => t.after);
+
+      let tSrcId = '';
+      let legal: Array<{ anchorId: string; after: boolean }> = [];
+      const mid = Math.floor(trackedUnits.length / 2);
+      for (let step = 0; step <= trackedUnits.length && legal.length === 0; step++) {
+        for (const index of step === 0 ? [mid] : [mid - step, mid + step]) {
+          if (index < 0 || index >= trackedUnits.length) continue;
+          const id = trackedAnchor(trackedUnits[index]);
+          if (!id) continue;
+          const targets = trackedTargetsFor(id);
+          if (targets.length > 0) { tSrcId = id; legal = targets; break; }
+        }
+      }
+      // Not a budget: if NOTHING on this charter admits a tracked move, the bench has no
+      // subject and the silent pass would be worse than the failure.
+      if (legal.length === 0) {
+        throw new Error('no block on this charter admits a tracked move');
+      }
+
       measure('ValidMoveTargets review (bridge)', 3, () => {
         D.DocxSessionBridge.ValidMoveTargets(tracked.sessionHandle, tSrcId);
       });
-      const legal = (JSON.parse(
-        D.DocxSessionBridge.ValidMoveTargets(tracked.sessionHandle, tSrcId),
-      ) as Array<{ anchorId: string; after: boolean }>).filter((t) => t.after);
       measure('moveBlock tracked', 1, () => {
         trackedOk = tracked.moveBlock(tSrcId, legal[legal.length - 1].anchorId, 'after');
       });
