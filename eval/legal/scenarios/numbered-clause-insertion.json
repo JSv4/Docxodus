@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0",
+  "id": "numbered-clause-insertion",
+  "title": "Insert a styled clause into the agreement numbering stream",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/numbered-clause-insertion.docx",
+    "sourceSha256": "df5abd56abec02131b6a087ea75e8159f11029d109216fb25361f40e77ade207"
+  },
+  "instruction": {
+    "text": "Insert an Assignment clause immediately after Governing Law, using the Agreement Clause style and the existing decimal numbering definition.",
+    "constraints": [
+      "Do not hand-type a visible number as ordinary body text.",
+      "Preserve the existing numbering definition and subsequent Client Information heading.",
+      "Do not alter signature or exhibit content."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "insertNumberedClause", "afterAnchorContains": "governed by the laws", "styleId": "AgreementClause", "text": "Assignment. Neither party may assign this Agreement without the other party's prior written consent, except to a successor in connection with a merger or sale of substantially all assets." }
+    ]
+  },
+  "invariants": [
+    { "id": "assignment-clause-present", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'Assignment. Neither party')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "assignment-style-and-numbering", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[w:pPr/w:pStyle[@w:val='AgreementClause'] and w:pPr/w:numPr][.//w:t[contains(., 'Assignment.')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "numbering-definition-retained", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/numbering.xml", "xpath": "//w:num[@w:numId='42']" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml"],
+    "maximumChangedAnchors": 4
+  }
+}

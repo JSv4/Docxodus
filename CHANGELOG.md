@@ -86,6 +86,26 @@ All notable changes to this project will be documented in this file.
   the exact opening package when `CaptureInitialProjection` is enabled and inspects
   an isolated logical checkpoint. Design and measured 1,000-paragraph guard:
   [`docs/architecture/semantic_diff.md`](docs/architecture/semantic_diff.md).
+- **Deterministic legal-workflow evaluation corpus and runner** (issue #466). Nine
+  synthetic, provenance-checked agreement scenarios cover precise defined-term edits,
+  native tracked amendments, numbered-clause insertion, table economics, content
+  controls, package preservation, review threads/notes/cross-references, N-way
+  consolidation, and pre-existing review state. A scripted public-API baseline is
+  established before optional model planning is scored against an independently pinned
+  expected DOCX across task completion, target precision, unintended change, document
+  validity, interim redline text projection, and sanitized HTML projection. The CLI and
+  focused xUnit suite share one artifact-producing runner: every successful or failed
+  scenario attempt atomically replaces its prior score directory, retains known-good DOCX
+  checkpoints plus operation logs, renders safe failure checkpoints for inspection, preserves
+  diagnostic diff/HTML envelopes when content is unsafe or unavailable, and emits a portable,
+  linked artifact index and deterministic `evaluation-receipt.json` (distinct from issue
+  #458's future delivery receipt). Scheduled/manual full runs add all-page
+  before/candidate/target/redline PDFs, rasters, and visual diffs when isolated renderers
+  are available; untrusted model candidates never invoke external renderers. Fast CI reuses
+  the epic #435 MCP smoke, and all CI uploads run even after failure. Package safety is
+  bounded behind the #456 replacement seam; #457, #458, and #464 outputs remain explicit
+  unavailable gates rather than overclaimed substitutes. See
+  [`eval/legal/README.md`](eval/legal/README.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
   `transactionId` (non-blank, at most 256 Unicode scalar values). The first

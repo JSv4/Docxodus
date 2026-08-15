@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "id": "preexisting-review-state",
+  "title": "Edit a document that already contains revisions and comments",
+  "tier": "full",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/preexisting-review-state.docx",
+    "sourceSha256": "cadbf7dbaad5e050790c05b2a2debc05792433dbcce6e42c1c96a688e78191ac"
+  },
+  "instruction": {
+    "text": "Change the liability lookback from twelve months to eighteen months as Current Counsel while preserving all Prior Counsel revision markup and the Deal Team comment.",
+    "constraints": [
+      "Do not accept, reject, restamp, or normalize the pre-existing revision author.",
+      "Do not resolve, move, or delete the pre-existing comment.",
+      "Record only the new lookback amendment under Current Counsel."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "replaceText", "anchorContains": "aggregate liability", "find": "twelve months", "replace": "eighteen months", "tracked": true, "author": "Current Counsel" }
+    ]
+  },
+  "invariants": [
+    { "id": "new-revision-authored", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Current Counsel']" }, "operator": "atLeast", "expected": 2 },
+    { "id": "prior-revision-authorship-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Prior Counsel']" }, "operator": "atLeast", "expected": 2 },
+    { "id": "preexisting-comment-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/comments.xml", "xpath": "//w:comment[@w:author='Deal Team'][.//w:t[contains(., 'liability cap')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "new-lookback-insertion", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins[@w:author='Current Counsel']//w:t[contains(., 'eighteen months')]" }, "operator": "atLeast", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml", "/word/settings.xml"],
+    "maximumChangedAnchors": 4
+  }
+}

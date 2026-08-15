@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0",
+  "id": "compare-consolidate",
+  "title": "Compare and consolidate two reviewer versions",
+  "tier": "full",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/compare-consolidate.docx",
+    "sourceSha256": "f9ca8db2781fe780a2f64ebce3ecb205022981b5dcd0a62491a7e2f99ab7ea25"
+  },
+  "instruction": {
+    "text": "Consolidate Finance Counsel's fee change and Commercial Counsel's notice-period change against the common base into one attributed redline.",
+    "constraints": [
+      "Use the common accepted base and retain distinct reviewer authorship.",
+      "Rejecting consolidated revisions must recover the selected base view.",
+      "Do not flatten the consolidated output into an untracked final document."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "redline-proof-v1", "mediaType": "application/json", "role": "verification", "required": false }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      {
+        "op": "consolidate",
+        "reviewers": [
+          { "op": "replaceTableCell", "author": "Finance Counsel", "row": 1, "column": 1, "text": "$135,000" },
+          { "op": "replaceText", "author": "Commercial Counsel", "anchorContains": "notice of nonrenewal", "find": "thirty (30)", "replace": "sixty (60)", "tracked": false }
+        ]
+      }
+    ]
+  },
+  "invariants": [
+    { "id": "finance-authorship", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Finance Counsel']" }, "operator": "atLeast", "expected": 1 },
+    { "id": "commercial-authorship", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Commercial Counsel']" }, "operator": "atLeast", "expected": 1 },
+    { "id": "consolidated-markup-present", "metric": "redline_reversibility", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins | //w:del" }, "operator": "atLeast", "expected": 4 },
+    { "id": "single-economics-table", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/[Content_Types].xml", "/word/_rels/document.xml.rels", "/word/document.xml", "/word/fontTable.xml", "/word/numbering.xml", "/word/settings.xml", "/word/styles.xml", "/word/theme/theme1.xml"],
+    "maximumChangedAnchors": 10
+  }
+}

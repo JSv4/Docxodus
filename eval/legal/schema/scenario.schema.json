@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/legal-eval/scenario-1.0.json",
+  "title": "Docxodus deterministic legal workflow scenario",
+  "$defs": {
+    "replaceTextOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "anchorContains", "find", "replace"],
+      "properties": {
+        "op": { "const": "replaceText" },
+        "anchorContains": { "type": "string", "minLength": 1 },
+        "find": { "type": "string", "minLength": 1 },
+        "replace": { "type": "string", "minLength": 1 },
+        "tracked": { "type": "boolean" },
+        "author": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "tracked": { "const": true } }, "required": ["tracked"] },
+          "then": { "required": ["author"] }
+        }
+      ]
+    },
+    "replaceTableCellOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "row", "column", "text"],
+      "properties": {
+        "op": { "const": "replaceTableCell" },
+        "author": { "type": "string", "minLength": 1 },
+        "row": { "type": "integer", "minimum": 0 },
+        "column": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "reviewerOperation": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/replaceTextOperation" },
+            { "required": ["author"] }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/replaceTableCellOperation" },
+            { "required": ["author"] }
+          ]
+        }
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        { "$ref": "#/$defs/replaceTextOperation" },
+        { "$ref": "#/$defs/replaceTableCellOperation" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "afterAnchorContains", "styleId", "text"],
+          "properties": {
+            "op": { "const": "insertNumberedClause" },
+            "afterAnchorContains": { "type": "string", "minLength": 1 },
+            "styleId": { "type": "string", "minLength": 1 },
+            "text": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "anchorContains", "spanText", "author", "comment", "initials", "replyAuthor", "reply", "replyInitials", "footnote", "bookmark", "linkText"],
+          "properties": {
+            "op": { "const": "addReviewBundle" },
+            "anchorContains": { "type": "string", "minLength": 1 },
+            "spanText": { "type": "string", "minLength": 1 },
+            "author": { "type": "string", "minLength": 1 },
+            "comment": { "type": "string", "minLength": 1 },
+            "initials": { "type": "string", "minLength": 1 },
+            "replyAuthor": { "type": "string", "minLength": 1 },
+            "reply": { "type": "string", "minLength": 1 },
+            "replyInitials": { "type": "string", "minLength": 1 },
+            "footnote": { "type": "string", "minLength": 1 },
+            "bookmark": { "type": "string", "minLength": 1 },
+            "linkText": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "tag", "text"],
+          "properties": {
+            "op": { "const": "fillContentControl" },
+            "tag": { "type": "string", "minLength": 1 },
+            "text": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "reviewers"],
+          "properties": {
+            "op": { "const": "consolidate" },
+            "reviewers": {
+              "type": "array",
+              "minItems": 2,
+              "items": { "$ref": "#/$defs/reviewerOperation" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "message"],
+          "properties": {
+            "op": { "const": "failForTest" },
+            "message": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "numericInvariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "metric", "deterministic", "probe", "operator", "expected"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "metric": { "enum": ["task_completion", "target_precision", "unintended_change", "document_validity", "redline_reversibility", "rendering_regression"] },
+        "deterministic": { "const": true },
+        "probe": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "part", "xpath"],
+              "properties": {
+                "kind": { "const": "xmlCount" },
+                "part": { "type": "string", "pattern": "^/" },
+                "xpath": { "type": "string", "minLength": 1 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "text"],
+              "properties": {
+                "kind": { "const": "textCount" },
+                "text": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "operator": { "enum": ["equals", "atLeast"] },
+        "expected": { "type": "number" }
+      }
+    },
+    "partExistsInvariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "metric", "deterministic", "probe", "operator", "expected"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "metric": { "enum": ["task_completion", "target_precision", "unintended_change", "document_validity", "redline_reversibility", "rendering_regression"] },
+        "deterministic": { "const": true },
+        "probe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "part"],
+          "properties": {
+            "kind": { "const": "partExists" },
+            "part": { "type": "string", "pattern": "^/" }
+          }
+        },
+        "operator": { "const": "equals" },
+        "expected": { "type": "boolean" }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "title",
+    "tier",
+    "fixture",
+    "expectedDocument",
+    "instruction",
+    "expectedOutputs",
+    "baseline",
+    "invariants",
+    "changeBudget"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" },
+    "title": { "type": "string", "minLength": 1 },
+    "tier": { "enum": ["fast", "full"] },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "provenanceId", "sourceSha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "provenanceId": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "expectedDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sourceSha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "instruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "constraints"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "constraints": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "expectedOutputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "mediaType", "role", "required"],
+        "properties": {
+          "id": {
+            "enum": [
+              "candidate-docx",
+              "semantic-diff",
+              "after-html",
+              "redline-docx",
+              "candidate-pdf",
+              "redline-proof-v1"
+            ]
+          },
+          "mediaType": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executor", "operations"],
+      "properties": {
+        "executor": { "const": "scripted-session-v1" },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/operation" }
+        }
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/numericInvariant" },
+          { "$ref": "#/$defs/partExistsInvariant" }
+        ]
+      }
+    },
+    "changeBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedChangedParts", "maximumChangedAnchors"],
+      "properties": {
+        "allowedChangedParts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^/(?!.*\\.\\.)" }
+        },
+        "maximumChangedAnchors": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

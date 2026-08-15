@@ -272,6 +272,7 @@ reading first:
 | [`docx_converter.md`](docs/architecture/docx_converter.md) | `WmlToHtmlConverter` internals |
 | [`editor_ui_surface.md`](docs/architecture/editor_ui_surface.md) | The browser editor, control by control |
 | [`ooxml_corner_cases.md`](docs/ooxml_corner_cases.md) | Where Word disagrees with the spec — and what we do about it |
+| [`eval/legal/README.md`](eval/legal/README.md) | Deterministic legal-workflow corpus, scoring contract, and inspectable evidence |
 
 ---
 

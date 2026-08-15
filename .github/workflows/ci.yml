@@ -47,7 +47,9 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: Docxodus.Tests/TestResults/*.trx
+          path: |
+            Docxodus.Tests/TestResults/*.trx
+            TestResults/legal-eval/**
 
   build-npm:
     runs-on: ubuntu-latest

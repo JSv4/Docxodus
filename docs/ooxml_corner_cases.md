@@ -1188,6 +1188,11 @@ normalizer builds a fresh archive in one streaming pass and:
 5. assigns sane Unix permissions to zero-attribute entries, subsuming the issue #302 output pass
    so the archive is rewritten only once.
 
+Generated outputs that explicitly require byte reproducibility use the same normalizer's
+deterministic mode. That mode retains the compression and metadata policy above while sorting entry
+names ordinally and pinning ZIP timestamps to `2000-01-01T00:00:00Z`, the diff engine's established
+deterministic epoch. Caller-owned packages continue to use the preservation behavior in item 4.
+
 This is deliberately an output-boundary policy, not a byte-header patch or reflection workaround.
 Changing ZIP flags on a live package would put its archive bookkeeping out of sync, while setting
 `OpenXmlPackage.CompressionOption` controls only newly created parts and cannot repair existing

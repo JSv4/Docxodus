@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "fixtures": [
+    {
+      "id": "docxodus-authored-northstar-csa-v1",
+      "title": "Northstar / Acme Cloud Services Agreement",
+      "origin": "Synthetic legal-services agreement authored specifically for the Docxodus evaluation corpus; no third-party form text was copied.",
+      "author": "Docxodus project contributors",
+      "created": "2026-08-15",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "The fixture was authored for this repository and may be copied, modified, and redistributed under the repository MIT license.",
+      "sourcePath": "fixtures/northstar-cloud-services-agreement.docx",
+      "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539",
+      "recipePath": "fixtures/northstar-cloud-services-agreement.fixture.json",
+      "recipeSha256": "ddef9723c64e128cb683a00e2ebb2abedacd506fe572a0522703b4f141f5d837"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "id": "defined-term-targeting",
+  "title": "Replace a defined commercial term only where it has defined-term meaning",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/defined-term-targeting.docx",
+    "sourceSha256": "7b147c24c3056fc34ac41d232008447afcc8efeaf8d6912f8fe9598436d370c4"
+  },
+  "instruction": {
+    "text": "Rename the defined term “Service Credit” to “Availability Credit” in its definition and operative defined-term use.",
+    "constraints": [
+      "Do not alter the lower-case phrase “service credit review” in the operations-ticket sentence.",
+      "Do not alter Exhibit A's descriptive Service Credit tier label.",
+      "Preserve all unrelated document parts and existing review state."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "replaceText", "anchorContains": "means the credit stated in Exhibit A", "find": "Service Credit", "replace": "Availability Credit", "tracked": false },
+      { "op": "replaceText", "anchorContains": "sole monetary remedy", "find": "Service Credit", "replace": "Availability Credit", "tracked": false }
+    ]
+  },
+  "invariants": [
+    { "id": "defined-term-two-targets", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:t[contains(., 'Availability Credit')]" }, "operator": "equals", "expected": 2 },
+    { "id": "operations-ticket-decoy-unchanged", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'operations ticket')]]//w:t[contains(., 'service credit review')]" }, "operator": "equals", "expected": 1 },
+    { "id": "exhibit-label-unchanged", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'Monthly Availability Target')]]//w:t[contains(., 'Service Credit tiers')]" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml"],
+    "maximumChangedAnchors": 4
+  }
+}

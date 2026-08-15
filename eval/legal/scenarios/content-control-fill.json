@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0",
+  "id": "content-control-fill",
+  "title": "Fill a tagged legal-template content control",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/content-control-fill.docx",
+    "sourceSha256": "3a8173280c1d23a0b81a903d5d782b9eb5e1d7556c50c20bb6e8cde946f9b8ea"
+  },
+  "instruction": {
+    "text": "Fill the content control tagged ClientLegalName with Acme Manufacturing LLC.",
+    "constraints": [
+      "Address the content control by its native tag, not by replacing every occurrence of the party name.",
+      "Preserve the control wrapper, native id, alias, and tag.",
+      "Remove the placeholder-display state and placeholder text only for that control."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "fillContentControl", "tag": "ClientLegalName", "text": "Acme Manufacturing LLC" }
+    ]
+  },
+  "invariants": [
+    { "id": "control-filled", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']][.//w:t='Acme Manufacturing LLC']" }, "operator": "equals", "expected": 1 },
+    { "id": "placeholder-removed", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']]//w:t[contains(., '[CLIENT LEGAL NAME]')]" }, "operator": "equals", "expected": 0 },
+    { "id": "control-identity-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdtPr[w:id[@w:val='9001'] and w:alias[@w:val='Client legal name'] and w:tag[@w:val='ClientLegalName']]" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml"],
+    "maximumChangedAnchors": 2
+  }
+}

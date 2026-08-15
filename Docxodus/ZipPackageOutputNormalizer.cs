@@ -31,13 +31,26 @@ internal static class ZipPackageOutputNormalizer
 {
     private const int RegularFilePermissions = 0x1A4 << 16; // -rw-r--r-- (0644)
     private const int DirectoryPermissions = 0x1ED << 16;   // drwxr-xr-x (0755)
+    private static readonly DateTimeOffset DeterministicTimestamp =
+        new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
     /// <summary>
     /// Returns a normalized copy of <paramref name="packageBytes"/>. Invalid/non-ZIP input passes
     /// through unchanged; callers at this boundary ordinarily supply an already-validated OPC
     /// package.
     /// </summary>
-    internal static byte[] Normalize(byte[] packageBytes)
+    internal static byte[] Normalize(byte[] packageBytes) =>
+        Normalize(packageBytes, deterministicContainer: false);
+
+    /// <summary>
+    /// Applies the same final ZIP policy while also sorting entries and fixing their container
+    /// timestamp. Use this for deterministic generated outputs, never as a semantic-equivalence
+    /// substitute for caller-owned packages.
+    /// </summary>
+    internal static byte[] NormalizeDeterministic(byte[] packageBytes) =>
+        Normalize(packageBytes, deterministicContainer: true);
+
+    private static byte[] Normalize(byte[] packageBytes, bool deterministicContainer)
     {
         ArgumentNullException.ThrowIfNull(packageBytes);
 
@@ -51,11 +64,16 @@ internal static class ZipPackageOutputNormalizer
             {
                 target.Comment = source.Comment;
 
-                foreach (var sourceEntry in source.Entries)
+                IEnumerable<ZipArchiveEntry> sourceEntries = deterministicContainer
+                    ? source.Entries.OrderBy(value => value.FullName, StringComparer.Ordinal)
+                    : source.Entries;
+                foreach (var sourceEntry in sourceEntries)
                 {
                     var level = GetCompressionLevel(sourceEntry);
                     var targetEntry = target.CreateEntry(sourceEntry.FullName, level);
-                    targetEntry.LastWriteTime = sourceEntry.LastWriteTime;
+                    targetEntry.LastWriteTime = deterministicContainer
+                        ? DeterministicTimestamp
+                        : sourceEntry.LastWriteTime;
                     targetEntry.Comment = sourceEntry.Comment;
                     targetEntry.ExternalAttributes = NormalizedExternalAttributes(sourceEntry);
 

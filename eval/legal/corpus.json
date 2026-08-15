@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "provenance": "provenance.json",
+  "scenarios": [
+    "scenarios/defined-term-targeting.json",
+    "scenarios/tracked-notice-amendment.json",
+    "scenarios/numbered-clause-insertion.json",
+    "scenarios/table-economics.json",
+    "scenarios/review-thread-note-cross-reference.json",
+    "scenarios/preserve-package-structures.json",
+    "scenarios/content-control-fill.json",
+    "scenarios/compare-consolidate.json",
+    "scenarios/preexisting-review-state.json"
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "id": "table-economics",
+  "title": "Modify negotiated economics in a styled table",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/table-economics.docx",
+    "sourceSha256": "956ef0e1d7438c819860b811fdd2ab8128dff08e3942e3486c0310a6b6e5302e"
+  },
+  "instruction": {
+    "text": "Change the Annual Subscription Fee in the economics schedule from $125,000 to $140,000.",
+    "constraints": [
+      "Modify only the amount cell in the Annual Subscription Fee row.",
+      "Preserve table dimensions, header styling, widths, and the two percentage rows.",
+      "Do not alter the fee-payment prose outside the table."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "replaceTableCell", "row": 1, "column": 1, "text": "$140,000" }
+    ]
+  },
+  "invariants": [
+    { "id": "annual-fee-cell", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl[1]/w:tr[2]/w:tc[2][.//w:t='$140,000']" }, "operator": "equals", "expected": 1 },
+    { "id": "renewal-cap-unchanged", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl[1]/w:tr[3]/w:tc[2][.//w:t='10%']" }, "operator": "equals", "expected": 1 },
+    { "id": "service-credit-cap-unchanged", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl[1]/w:tr[4]/w:tc[2][.//w:t='15%']" }, "operator": "equals", "expected": 1 },
+    { "id": "table-shape-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl[1]/w:tr" }, "operator": "equals", "expected": 4 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml"],
+    "maximumChangedAnchors": 4
+  }
+}

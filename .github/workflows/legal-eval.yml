@@ -1,0 +1,147 @@
+name: Legal workflow evaluation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      subset:
+        description: Evaluation subset to run
+        required: true
+        default: full
+        type: choice
+        options:
+          - fast
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.subset == 'fast')
+    runs-on: ubuntu-latest
+    env:
+      DOCXODUS_STORAGE_ROOT: ${{ runner.temp }}/epic435-storage
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Restore evaluation and test projects
+        run: |
+          dotnet restore tools/legal-eval/legal-eval.csproj
+          dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
+
+      - name: Build evaluation and MCP hosts
+        run: |
+          dotnet build tools/legal-eval/legal-eval.csproj -c Release --no-restore
+          dotnet build tools/mcp-server/mcpserver.csproj -c Release --no-restore
+
+      - name: Run focused evaluation tests
+        run: >-
+          dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-restore
+          --filter FullyQualifiedName~LegalWorkflowEvaluationTests
+          --logger "trx;LogFileName=legal-eval.trx"
+          --results-directory TestResults/legal-eval/xunit-results
+
+      - name: Run fast legal corpus
+        if: always()
+        run: >-
+          dotnet run --project tools/legal-eval/legal-eval.csproj -c Release --no-build --
+          --subset fast
+          --artifacts TestResults/legal-eval/fast-run
+          --report TestResults/legal-eval/fast-report.json
+
+      - name: Generate epic 435 smoke workflow
+        run: python3 tools/mcp-server/smoke/build_epic_435_workflow.py
+
+      - name: Stage epic 435 smoke fixture
+        run: |
+          mkdir -p "$DOCXODUS_STORAGE_ROOT"
+          cp TestFiles/NVCA-Model-COI.docx "$DOCXODUS_STORAGE_ROOT/local.docx"
+          mkdir -p TestResults/legal-eval/epic435
+          cp TestFiles/NVCA-Model-COI.docx TestResults/legal-eval/epic435/before.docx
+
+      - name: Run epic 435 editing smoke
+        run: >-
+          python3 tools/mcp-server/smoke/mcp_probe.py
+          --calls tools/mcp-server/smoke/epic-435-workflow.json
+          --trace TestResults/legal-eval/epic435/workflow-trace.json
+          --quiet-server -- tools/mcp-server/bin/Release/net10.0/docxodus-mcp
+
+      - name: Reopen and validate epic 435 output
+        run: >-
+          python3 tools/mcp-server/smoke/mcp_probe.py
+          --calls tools/mcp-server/smoke/epic-435-validation.json
+          --trace TestResults/legal-eval/epic435/validation-trace.json
+          --quiet-server -- tools/mcp-server/bin/Release/net10.0/docxodus-mcp
+
+      - name: Preserve epic 435 edited document
+        if: always()
+        run: |
+          if [ -f "$DOCXODUS_STORAGE_ROOT/local.docx" ]; then
+            cp "$DOCXODUS_STORAGE_ROOT/local.docx" TestResults/legal-eval/epic435/after.docx
+          fi
+
+      - name: Upload fast evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: legal-eval-fast-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestResults/legal-eval/**
+          if-no-files-found: warn
+
+  full:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.subset == 'full')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install document renderers
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes imagemagick libreoffice-writer poppler-utils
+
+      - name: Restore evaluation project
+        run: dotnet restore tools/legal-eval/legal-eval.csproj
+
+      - name: Build evaluation project
+        run: dotnet build tools/legal-eval/legal-eval.csproj -c Release --no-restore
+
+      - name: Run full legal corpus
+        run: >-
+          dotnet run --project tools/legal-eval/legal-eval.csproj -c Release --no-build --
+          --subset full
+          --render
+          --artifacts TestResults/legal-eval/full-run
+          --report TestResults/legal-eval/full-report.json
+
+      - name: Upload full evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: legal-eval-full-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestResults/legal-eval/**
+          if-no-files-found: warn

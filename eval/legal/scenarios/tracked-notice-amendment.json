@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "id": "tracked-notice-amendment",
+  "title": "Amend a notice period with native tracked changes",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/tracked-notice-amendment.docx",
+    "sourceSha256": "ef1a61d0d01e5d6d3936557a03eaa754319f72f43cf5fb2648bb6495c61737cc"
+  },
+  "instruction": {
+    "text": "Change only the nonrenewal notice period from thirty (30) days to forty-five (45) days and record the amendment as native Word tracked changes by Amendment Counsel.",
+    "constraints": [
+      "The operational-incident thirty-day period must remain unchanged.",
+      "The output must retain both deletion and insertion markup.",
+      "Preserve the fixture's pre-existing Prior Counsel revision."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "redline-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "review", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "replaceText", "anchorContains": "notice of nonrenewal", "find": "thirty (30)", "replace": "forty-five (45)", "tracked": true, "author": "Amendment Counsel" }
+    ]
+  },
+  "invariants": [
+    { "id": "tracked-insertion-authored", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins[@w:author='Amendment Counsel']" }, "operator": "atLeast", "expected": 1 },
+    { "id": "tracked-deletion-authored", "metric": "redline_reversibility", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:del[@w:author='Amendment Counsel']" }, "operator": "atLeast", "expected": 1 },
+    { "id": "incident-period-unchanged", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'Operational incident')]]//w:t[contains(., 'thirty (30)')]" }, "operator": "equals", "expected": 1 },
+    { "id": "prior-revision-retained", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Prior Counsel']" }, "operator": "atLeast", "expected": 2 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml", "/word/settings.xml"],
+    "maximumChangedAnchors": 4
+  }
+}

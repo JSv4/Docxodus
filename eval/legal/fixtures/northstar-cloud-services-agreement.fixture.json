@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0",
+  "fixtureType": "legal-services-agreement-v1",
+  "fixtureId": "northstar-cloud-services-agreement",
+  "document": {
+    "title": "CLOUD SERVICES AGREEMENT",
+    "intro": "This Cloud Services Agreement is entered into as of January 15, 2026 by and between Northstar Analytics, Inc. (Provider) and Acme Manufacturing LLC (Client).",
+    "headerText": "Northstar / Acme — Cloud Services Agreement",
+    "footerText": "CONFIDENTIAL — EXECUTION COPY",
+    "definedTermClause": "“Service Credit” means the credit stated in Exhibit A that is applied against a future invoice after a verified service-level failure.",
+    "definedTermUse": "Client's sole monetary remedy for a service-level failure is the applicable Service Credit.",
+    "definedTermDecoy": "For avoidance of doubt, the phrase “service credit review” in an operations ticket is not a defined term and must remain lower case.",
+    "servicesClause": "Provider shall use commercially reasonable efforts to make the hosted service available in accordance with Exhibit A.",
+    "feesClause": "Client shall pay the fees in the following economics schedule within thirty (30) days after receipt of an undisputed invoice.",
+    "economicsTable": [
+      ["Economic Term", "Current Amount", "Notes"],
+      ["Annual Subscription Fee", "$125,000", "Paid quarterly in advance"],
+      ["Renewal Uplift Cap", "10%", "Applied at renewal"],
+      ["Service Credit Cap", "15%", "Percentage of monthly fee"]
+    ],
+    "confidentialityClause": "Provider shall keep Client Confidential Information confidential and use it only to perform this Agreement.",
+    "crossReferenceClause": "See Section 4 for confidentiality obligations that survive termination.",
+    "noticeClause": "A notice of nonrenewal is effective only if received at least thirty (30) days before the renewal date.",
+    "noticeDecoy": "Operational incident notices are due within thirty (30) days after discovery and are not renewal notices.",
+    "liabilityClause": "Except for excluded claims, each party's aggregate liability will not exceed the fees paid or payable during the twelve months preceding the event giving rise to liability.",
+    "governingLawClause": "This Agreement is governed by the laws of the State of New York, without regard to conflicts-of-law rules.",
+    "contentControl": {
+      "id": 9001,
+      "tag": "ClientLegalName",
+      "alias": "Client legal name",
+      "placeholder": "[CLIENT LEGAL NAME]"
+    },
+    "signatureLines": [
+      "NORTHSTAR ANALYTICS, INC.",
+      "By: ______________________________",
+      "Name: Jordan Rivera | Title: Chief Executive Officer",
+      "ACME MANUFACTURING LLC",
+      "By: ______________________________",
+      "Name: Morgan Lee | Title: General Counsel"
+    ],
+    "exhibitText": "Monthly Availability Target: 99.95%. Service Credit tiers are calculated from the monthly subscription fee."
+  }
+}

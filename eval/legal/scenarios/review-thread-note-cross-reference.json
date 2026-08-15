@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0",
+  "id": "review-thread-note-cross-reference",
+  "title": "Add a comment thread, footnote, and internal cross-reference",
+  "tier": "full",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/review-thread-note-cross-reference.docx",
+    "sourceSha256": "c93aa625608f172a7cf1d80fd4b98b24242e945b6bff6f79dbd5b0523dcb00ec"
+  },
+  "instruction": {
+    "text": "On the liability-cap phrase, add a counsel comment and finance reply, add a supporting footnote, and insert an internal Section 6 link to a new LiabilityCap bookmark.",
+    "constraints": [
+      "Use native Word comment, reply, footnote, bookmark, and internal-hyperlink structures.",
+      "Do not resolve or remove the pre-existing Deal Team comment.",
+      "Use fixed evaluation authorship metadata from the scripted expectation."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "addReviewBundle", "anchorContains": "aggregate liability", "spanText": "aggregate liability", "author": "Evaluation Counsel", "initials": "EC", "comment": "Confirm that the liability cap matches the approved term sheet.", "replyAuthor": "Finance Reviewer", "replyInitials": "FR", "reply": "Finance confirms the twelve-month fee measure.", "footnote": "The approved term sheet is dated January 10, 2026.", "bookmark": "LiabilityCap", "linkText": "Section 6" }
+    ]
+  },
+  "invariants": [
+    { "id": "root-comment-created", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/comments.xml", "xpath": "//w:comment[@w:author='Evaluation Counsel']" }, "operator": "equals", "expected": 1 },
+    { "id": "reply-created", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/comments.xml", "xpath": "//w:comment[@w:author='Finance Reviewer']" }, "operator": "equals", "expected": 1 },
+    { "id": "reply-parent-link-created", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/commentsExtended.xml", "xpath": "//w15:commentEx[@w15:paraIdParent]" }, "operator": "atLeast", "expected": 1 },
+    { "id": "footnote-created", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/footnotes.xml", "xpath": "//w:footnote[.//w:t[contains(., 'approved term sheet')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "bookmark-and-link-created", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:bookmarkStart[@w:name='LiabilityCap'] | //w:hyperlink[@w:anchor='LiabilityCap']" }, "operator": "equals", "expected": 2 },
+    { "id": "existing-comment-retained", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/comments.xml", "xpath": "//w:comment[@w:author='Deal Team']" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/[Content_Types].xml", "/word/_rels/document.xml.rels", "/word/comments.xml", "/word/commentsExtended.xml", "/word/commentsIds.xml", "/word/document.xml", "/word/footnotes.xml", "/word/settings.xml", "/word/styles.xml"],
+    "maximumChangedAnchors": 12
+  }
+}

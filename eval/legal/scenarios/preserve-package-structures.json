@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0",
+  "id": "preserve-package-structures",
+  "title": "Preserve signatures, running content, fields, and sections during a narrow edit",
+  "tier": "fast",
+  "fixture": {
+    "path": "fixtures/northstar-cloud-services-agreement.docx",
+    "provenanceId": "docxodus-authored-northstar-csa-v1",
+    "sourceSha256": "4f2316e822f8a293e188f51c43a125b8c68eda1d2a1694c1463a34a681485539"
+  },
+  "expectedDocument": {
+    "path": "expected/preserve-package-structures.docx",
+    "sourceSha256": "3239bacbeec8f3e1921dcebc19941f3cd6b771d7593752f7af039bca28becd0d"
+  },
+  "instruction": {
+    "text": "Change the governing-law state from New York to Delaware without disturbing document structures outside that clause.",
+    "constraints": [
+      "Preserve both signature blocks byte-for-semantic-content.",
+      "Preserve the default header, footer PAGE field, and two-section layout.",
+      "Preserve the economics table, content control, notes, comments, and revisions."
+    ]
+  },
+  "expectedOutputs": [
+    { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
+    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+  ],
+  "baseline": {
+    "executor": "scripted-session-v1",
+    "operations": [
+      { "op": "replaceText", "anchorContains": "governed by the laws", "find": "New York", "replace": "Delaware", "tracked": false }
+    ]
+  },
+  "invariants": [
+    { "id": "governing-law-complete", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'governed by the laws of the State of Delaware')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "signature-parties-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t='NORTHSTAR ANALYTICS, INC.'] | //w:p[.//w:t='ACME MANUFACTURING LLC']" }, "operator": "equals", "expected": 2 },
+    { "id": "header-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/header1.xml", "xpath": "//w:t[contains(., 'Northstar / Acme')]" }, "operator": "equals", "expected": 1 },
+    { "id": "footer-and-page-field-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/footer1.xml", "xpath": "//w:t[contains(., 'EXECUTION COPY')] | //w:fldSimple[contains(@w:instr, 'PAGE')]" }, "operator": "equals", "expected": 2 },
+    { "id": "two-sections-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sectPr" }, "operator": "equals", "expected": 2 },
+    { "id": "control-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']]" }, "operator": "equals", "expected": 1 }
+  ],
+  "changeBudget": {
+    "allowedChangedParts": ["/word/document.xml"],
+    "maximumChangedAnchors": 2
+  }
+}
