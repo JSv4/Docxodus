@@ -580,9 +580,121 @@ public class DocxSessionAtomicBatchTests
         Assert.Equal(2, session.UndoCount);
     }
 
+    [Fact]
+    public void DS461_AtomicRollback_RestoresPartsASelfRolledBackOpLeavesBehind()
+    {
+        using var session = Open();
+        var anchor = BodyParagraphs(session)[0];
+        var before = session.Save(persistAnchorIds: true);
+        Assert.Null(session.LiveDocument.MainDocumentPart!.NumberingDefinitionsPart);
+
+        var result = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep("docx_list", "apply_list_format", s =>
+            {
+                // ApplyListFormat records its pre-op snapshot BEFORE NumberingFactory writes the
+                // numbering part, and the numbering part is deliberately outside the SELECTIVE
+                // snapshot. Failing after that write is what the ~40 ops sharing the private
+                // RollbackFailedOp catch-block helper do, so drive that real helper: it pops the
+                // op's own history entry, returning the transaction's pending-mutation count to
+                // its baseline while the orphan w:num/w:abstractNum survives.
+                var applied = s.ApplyListFormat(anchor, ListFormat.Decimal);
+                Assert.True(applied.Success);
+                Assert.NotNull(s.LiveDocument.MainDocumentPart!.NumberingDefinitionsPart);
+                InvokePrivate(s, "RollbackFailedOp");
+                return EditResult.Fail(
+                    EditErrorCode.InternalError, "op failed after writing the numbering part");
+            }),
+        });
+
+        Assert.False(result.Success);
+        Assert.True(result.RolledBack);
+        Assert.Equal(EditErrorCode.InternalError, result.Failure?.Error.Code);
+
+        // The claim under test is the rollback itself, not the reported flag: RolledBack is
+        // hardcoded true, so only the package can say whether the restore actually ran.
+        Assert.Null(session.LiveDocument.MainDocumentPart!.NumberingDefinitionsPart);
+        AssertSamePackage(before, session.Save(persistAnchorIds: true));
+        Assert.Equal(0, session.Version);
+        Assert.Equal(0, session.UndoCount);
+    }
+
+    [Fact]
+    public void DS462_EditResultWireShape_RoundTripsTheTableAnchorMapping()
+    {
+        // Batch adapters re-serialize every step through Serialize(EditResult) and read it back
+        // with DeserializeEditResults, so any field the parser skips vanishes from the receipt.
+        var mapping = new TableAnchorMapping
+        {
+            Retained = new[]
+            {
+                new RetainedTableAnchor(
+                    new TableAnchorLocation
+                    {
+                        Anchor = new Anchor("tc:body:aaa", "tc", "body", "aaa"),
+                        EntityKind = TableAnchorEntityKind.Cell,
+                        RowIndex = 0,
+                        ColumnIndex = 1,
+                        RowSpan = 2,
+                        ColumnSpan = 3,
+                    },
+                    new TableAnchorLocation
+                    {
+                        Anchor = new Anchor("tc:body:aaa", "tc", "body", "aaa"),
+                        EntityKind = TableAnchorEntityKind.Cell,
+                        RowIndex = 1,
+                        ColumnIndex = 1,
+                    }),
+            },
+            Added = new[]
+            {
+                // Every optional coordinate omitted: the serializer skips nulls, so the parser
+                // must yield null rather than defaulting to zero.
+                new TableAnchorLocation
+                {
+                    Anchor = new Anchor("tr:body:bbb", "tr", "body", "bbb"),
+                    EntityKind = TableAnchorEntityKind.Row,
+                },
+            },
+            Invalidated = new[]
+            {
+                new TableAnchorLocation
+                {
+                    Anchor = new Anchor("gc:body:ccc", "gc", "body", "ccc"),
+                    EntityKind = TableAnchorEntityKind.Column,
+                    ColumnIndex = 4,
+                    IsVirtual = true,
+                },
+            },
+        };
+
+        var json = Docxodus.Internal.DocxSessionJson.Serialize(new EditResult
+        {
+            Success = true,
+            TableAnchors = mapping,
+        });
+        var parsed = Assert.Single(Docxodus.Internal.DocxSessionJson.DeserializeEditResults(json));
+
+        // TableAnchorMapping's record equality compares its list members by reference, so assert
+        // element by element — that is also what catches a coordinate silently defaulting to 0.
+        var actual = Assert.IsType<TableAnchorMapping>(parsed.TableAnchors);
+        Assert.Equal(mapping.Retained.Count, actual.Retained.Count);
+        for (int i = 0; i < mapping.Retained.Count; i++)
+        {
+            Assert.Equal(mapping.Retained[i].Before, actual.Retained[i].Before);
+            Assert.Equal(mapping.Retained[i].After, actual.Retained[i].After);
+        }
+        Assert.Equal(mapping.Added, actual.Added);
+        Assert.Equal(mapping.Invalidated, actual.Invalidated);
+    }
+
     private static T PrivateField<T>(DocxSession session, string name) =>
         (T)typeof(DocxSession).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(session)!;
+
+    private static void InvokePrivate(DocxSession session, string name) =>
+        typeof(DocxSession).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(session, null);
 
     private static void AssertSamePackage(byte[] expected, byte[] actual) =>
         PackageEquivalence.AssertSamePackage(

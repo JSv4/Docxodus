@@ -374,9 +374,10 @@ external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
 `list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
-the first-class session API. Hyperlink targets use `targetKind: "external"|"internal"`; bookmark
+the first-class session API. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
-same numeric `ProjectionScopes` flag mask as the core API.
+same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
+paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.
 
 The result is structured enough for an agent to round-trip unchanged: hyperlink ids feed update
 or remove, while bookmark names feed move/rename/remove. Missing targets, duplicate/invalid names,
@@ -483,12 +484,26 @@ state, version, caches, settings, and both history cursors were never mutation t
 
 Preview receipts use the same typed result as apply: `baseVersion`, predicted `resultVersion`, each
 step's `created`/`removed`/`modified` anchors and markdown patch, revision/comment/annotation
-`{ added, removed, modified }` deltas, warnings, and a `packageHash`. `previewHtml` may be `scoped`
-(with `previewAnchorId`) or `full`; rendering occurs only from the final shadow package, and an
-optional rendering failure is a warning rather than turning a committed/predicted mutation into an
-apparent failure. The content hash is SHA-256 over sorted OPC entry names plus their uncompressed
-payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but not XML
-timestamps or generated OOXML ids.
+`{ added, removed, modified }` deltas, warnings, and a `packageHash`. Delta membership is decided on
+each entry's serialized wire projection, never on CLR object equality, so a pre-existing revision or
+comment a batch never touched is reported in no bucket at all. `packageHash` is `null` — never an
+empty string — when it could not be computed, so an unavailable hash cannot compare equal to another
+unavailable hash. `previewHtml` may be `scoped` (with `previewAnchorId`) or `full`; rendering occurs
+only from the final shadow package, and an optional rendering failure is a warning rather than
+turning a committed/predicted mutation into an apparent failure. The render profile is owned once, by
+`HtmlConversionOps.PreviewDocumentOptions()`/`PreviewBlockOptions()`, and every surface (typed core,
+handle façade, WASM bridge, npm, stdio/Python, this server) consumes it — a preview shows tracked
+changes, comments, annotations, notes and headers/footers, which is deliberately NOT the editor's
+authoring render profile. The content hash is SHA-256 over sorted OPC entry names plus their
+uncompressed payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but
+not XML timestamps or generated OOXML ids.
+
+Receipt enrichment is unconditional and is not free. Every batch — applied or previewed — inspects
+revisions, comments and annotations twice (before and after, each forcing an anchor index) and
+computes `packageHash`, which serializes a full package checkpoint and hashes it. A preview adds a
+package clone and a second open `WordprocessingDocument` on top, roughly doubling peak memory for its
+duration. On a large document this is the dominant cost of a small batch. There is currently no
+opt-out; whether to gate it behind a setting is an open public-API decision.
 
 Equivalence is exact for deterministic batches: replaying at the same base state produces the same
 step outcomes, semantic deltas, and package hash. For create/comment/note/image operations that
@@ -503,7 +518,12 @@ camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
 failure is the standard structured `precondition_failed` result. Atomic mode
 evaluates all step guards at the common batch-start boundary; best-effort mode
-evaluates them sequentially. `docxodus_get_content` with `format: "version"` reads the current
+evaluates them sequentially. `expectedMatchCount` is the single exception in both
+modes: only the replacement itself can count live matches, so that guard is carried
+into the step and enforced at the step's own turn against the state the step sees.
+A batched step's receipt is the ordinary `EditResult` envelope in full — a table
+step keeps its `tableAnchors` mapping, so an agent can address the cells the same
+batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.

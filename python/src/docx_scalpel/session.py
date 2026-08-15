@@ -35,6 +35,7 @@ from .enums import (
     HyperlinkKind,
     ListFormat,
     MutationBatchMode,
+    MutationPreviewHtmlMode,
     PageNumberField,
     PlaceholderKinds,
     Position,
@@ -540,23 +541,26 @@ class DocxSession:
         steps: Iterable[MutationBatchStep],
         mode: MutationBatchMode = MutationBatchMode.ATOMIC,
         *,
-        html_mode: str = "none",
+        html_mode: MutationPreviewHtmlMode | str = MutationPreviewHtmlMode.NONE,
         html_anchor_id: str | None = None,
     ) -> MutationBatchResult:
         """Predict a batch on a complete clone without touching this live session.
 
         ``atomic`` is the safe default; choose ``best_effort`` explicitly to inspect
         partial-success semantics. Optional ``scoped``/``full`` HTML is rendered only
-        from the predicted shadow package.
+        from the predicted shadow package. ``html_mode`` accepts a
+        :class:`MutationPreviewHtmlMode` or its wire string.
         """
-        if html_mode not in ("none", "scoped", "full"):
-            raise ValueError(f"unknown preview html mode: {html_mode}")
+        try:
+            html = MutationPreviewHtmlMode(html_mode)
+        except ValueError:
+            raise ValueError(f"unknown preview html mode: {html_mode}") from None
         result = self._call(
             "preview_batch",
             {
                 "mode": mode.value,
                 "steps": [step.to_wire() for step in steps],
-                "htmlMode": html_mode,
+                "htmlMode": html.value,
                 "htmlAnchorId": html_anchor_id,
             },
         )

@@ -250,7 +250,11 @@ export class DocxSession {
           .some(comment => comment.date !== undefined && comment.date !== null)) {
           warnings.push("Comment date attributes may be generated from the execution clock; supply dates explicitly when byte-identical replay is required.");
         }
-        if (annotationChanges.added.length > 0) {
+        // Same predicate as the .NET receipt (`annotation.Created.HasValue`): the warning is
+        // about an execution CLOCK, so an annotation added with no created timestamp is
+        // deterministic and must not raise it on one surface and not the other.
+        if (annotationChanges.added
+          .some(annotation => annotation.created !== undefined && annotation.created !== null)) {
           warnings.push("Auto-generated annotation ids or creation timestamps are execution metadata; supply id and created explicitly when byte-identical replay is required.");
         }
         if (result.steps.some(step => step.results.some(edit => edit.created.length > 0))) {
@@ -259,7 +263,9 @@ export class DocxSession {
         if (mode === "best_effort" && !result.success) {
           warnings.push("Best-effort execution retains every successful step despite later failures.");
         }
-        let packageHash = "";
+        // null, never "": an absent hash must not compare equal to another absent hash, or a
+        // naive `preview.packageHash === applied.packageHash` replay assertion passes vacuously.
+        let packageHash: string | null = null;
         if (!this.wasm.GetPackageContentHash) {
           warnings.push("This WASM bundle predates package equivalence hashes; packageHash is unavailable.");
         } else {
@@ -285,7 +291,7 @@ export class DocxSession {
           preview: false,
           baseVersion,
           resultVersion: inspect("Result version inspection", () => this.getVersion(), baseVersion),
-          packageHash: "",
+          packageHash: null,
           revisionChanges: { added: [], removed: [], modified: [] },
           commentChanges: { added: [], removed: [], modified: [] },
           annotationChanges: { added: [], removed: [], modified: [] },
@@ -428,26 +434,43 @@ export class DocxSession {
       );
       const warnings = [...result.warnings];
       let html: string | null = null;
+      // A rendered document always starts with '<'; a leading '{' is the bridge's error object.
+      const unwrapRendered = (rendered: string): string | null => {
+        if (rendered.trimStart().startsWith("{")) {
+          const envelope = JSON.parse(rendered) as { error?: string };
+          if (envelope.error) {
+            warnings.push(`Preview HTML could not be generated: ${envelope.error}`);
+            return null;
+          }
+        }
+        return rendered;
+      };
+      // Preview HTML MUST come from the façade's preview profile (DocxSessionOps.RenderPreview*),
+      // not the editor's authoring profile: the editor render hides comments, annotations and
+      // headers/footers, so routing a preview through it would show this surface a materially
+      // different document than the stdio/Python/MCP surfaces show for the identical batch.
+      const legacyProfileWarning =
+        "This WASM bundle predates the shared preview HTML profile; preview HTML omits comments, " +
+        "annotations and headers/footers and may differ from other surfaces.";
       try {
         if (htmlMode === "scoped") {
           if (!options?.htmlAnchorId) {
             warnings.push("Scoped HTML was requested without htmlAnchorId; no HTML was generated.");
+          } else if (this.wasm.RenderPreviewBlockHtml) {
+            html = unwrapRendered(
+              this.wasm.RenderPreviewBlockHtml(shadow.handle, options.htmlAnchorId));
           } else {
+            warnings.push(legacyProfileWarning);
             html = shadow.renderBlock(options.htmlAnchorId);
           }
         } else if (htmlMode === "full") {
-          const rendered = this.wasm.RenderHtmlForReview
-            ? this.wasm.RenderHtmlForReview(shadow.handle, "docx-", false, false, 1, true)
-            : this.wasm.RenderHtml(shadow.handle, "docx-", false, false, 1);
-          if (rendered.trimStart().startsWith("{")) {
-            const envelope = JSON.parse(rendered) as { error?: string };
-            if (envelope.error) {
-              warnings.push(`Preview HTML could not be generated: ${envelope.error}`);
-            } else {
-              html = rendered;
-            }
+          if (this.wasm.RenderPreviewHtml) {
+            html = unwrapRendered(this.wasm.RenderPreviewHtml(shadow.handle));
           } else {
-            html = rendered;
+            warnings.push(legacyProfileWarning);
+            html = unwrapRendered(this.wasm.RenderHtmlForReview
+              ? this.wasm.RenderHtmlForReview(shadow.handle, "docx-", false, false, 1, true)
+              : this.wasm.RenderHtml(shadow.handle, "docx-", false, false, 1));
           }
         }
       } catch (error) {

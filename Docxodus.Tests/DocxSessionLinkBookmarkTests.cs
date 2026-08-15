@@ -543,6 +543,325 @@ public class DocxSessionLinkBookmarkTests
         }
     }
 
+    // A bookmark's OTHER consumer family: REF/PAGEREF/NOTEREF/HYPERLINK \l cross-reference fields.
+    // Word writes every TOC entry that way, so a rename that retargets only w:hyperlink/@w:anchor
+    // leaves "Error! Bookmark not defined." behind and a removal that only counts anchors reports
+    // success while dangling the field. Both instruction carriers are covered, and the fldChar one
+    // deliberately SPLITS its instruction across two w:instrText runs (Word does this constantly).
+    [Fact]
+    public void LB021_CrossReferenceFields_AreRetargetedByRename_AndBlockRemoval()
+    {
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var seedAnchors = Paragraphs(seed);
+        Assert.True(seed.AddBookmark("ClauseOne",
+            DocumentRange.In(seedAnchors[0], new CharSpan(0, 5))).Success);
+        var bytes = AppendBodyParagraphs(seed.Save(),
+            SplitInstructionField(" PAGEREF Clause", "One \\h ", "3"),
+            new XElement(W + "p",
+                new XElement(W + "fldSimple", new XAttribute(W + "instr", " REF ClauseOne \\h "),
+                    new XElement(W + "r", new XElement(W + "t", "First")))),
+            SplitInstructionField(" HYPERLINK \\l \"ClauseOne", "\" ", "jump"));
+
+        using var session = new DocxSession(bytes);
+        var blocked = session.RemoveBookmark("ClauseOne");
+        Assert.False(blocked.Success);
+        Assert.Equal(EditErrorCode.BookmarkInUse, blocked.Error!.Code);
+
+        Assert.True(session.RenameBookmark("ClauseOne", "ClauseTwo").Success);
+        Assert.Equal(new[] { " PAGEREF ClauseTwo \\h ", " REF ClauseTwo \\h ", " HYPERLINK \\l \"ClauseTwo\" " },
+            Instructions(session.Save()));
+        // Retargeting is what keeps removal blocked: the fields now point at the NEW name.
+        Assert.Equal(EditErrorCode.BookmarkInUse, session.RemoveBookmark("ClauseTwo").Error!.Code);
+        Assert.Equal("ClauseTwo", Assert.Single(session.ListBookmarks()).Name);
+        AssertBookmarkPairsAndPackageValidity(session.Save(),
+            new System.Collections.Generic.Dictionary<string, string>
+            {
+                ["ClauseTwo"] = Assert.Single(session.ListBookmarks()).BookmarkId,
+            });
+    }
+
+    // Word owns the _GoBack/_Toc*/_Ref*/_Hlt*/_Hlk* namespace and reallocates it whenever a TOC or
+    // cross-reference is refreshed, so creating a name inside it is refused. Names Word already put
+    // there stay fully mutable — with their cross-reference fields retargeted like any other.
+    [Theory]
+    [InlineData("_GoBack")]
+    [InlineData("_Toc12345")]
+    [InlineData("_Ref99")]
+    [InlineData("_Hlt7")]
+    [InlineData("_Hlk7")]
+    public void LB022_ReservedWordBookmarkNames_CannotBeCreated(string reserved)
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = Paragraphs(session)[0];
+
+        var created = session.AddBookmark(reserved, DocumentRange.In(anchor, new CharSpan(0, 5)));
+        Assert.False(created.Success);
+        Assert.Equal(EditErrorCode.InvalidBookmarkName, created.Error!.Code);
+        Assert.Empty(session.ListBookmarks());
+
+        Assert.True(session.AddBookmark("Ordinary", DocumentRange.In(anchor, new CharSpan(0, 5))).Success);
+        var renamed = session.RenameBookmark("Ordinary", reserved);
+        Assert.False(renamed.Success);
+        Assert.Equal(EditErrorCode.InvalidBookmarkName, renamed.Error!.Code);
+        Assert.Equal("Ordinary", Assert.Single(session.ListBookmarks()).Name);
+    }
+
+    [Fact]
+    public void LB023_ExistingReservedTocBookmark_StaysRenamableWithItsPageRefField()
+    {
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var seedAnchors = Paragraphs(seed);
+        Assert.True(seed.AddBookmark("Heading", DocumentRange.In(seedAnchors[0], new CharSpan(0, 5))).Success);
+        var bytes = AppendBodyParagraphs(seed.Save(), SplitInstructionField(" PAGEREF _Toc", "1 \\h ", "1"));
+        bytes = MutatePackage(bytes, document =>
+        {
+            document.MainDocumentPart!.GetXDocument().Descendants(W + "bookmarkStart").Single()
+                .SetAttributeValue(W + "name", "_Toc1");
+            document.MainDocumentPart.PutXDocument();
+        });
+
+        using var session = new DocxSession(bytes);
+        Assert.Equal(EditErrorCode.BookmarkInUse, session.RemoveBookmark("_Toc1").Error!.Code);
+        var renamed = session.RenameBookmark("_Toc1", "Intro");
+        Assert.True(renamed.Success, renamed.Error?.Message);
+        Assert.Equal(new[] { " PAGEREF Intro \\h " }, Instructions(session.Save()));
+        // The retargeted field keeps protecting the bookmark under its NEW name; deleting the field
+        // is what releases it.
+        Assert.Equal(EditErrorCode.BookmarkInUse, session.RemoveBookmark("Intro").Error!.Code);
+        Assert.True(session.DeleteBlock(Paragraphs(session).Last()).Success);
+        Assert.True(session.RemoveBookmark("Intro").Success);
+    }
+
+    // AddHyperlink used to move only the selected w:r elements, stranding every zero-width marker
+    // that sat BETWEEN them after the finished w:hyperlink. For a bookmark whose start is inside the
+    // span that puts the start after its own end: the pair stops resolving and the bookmark becomes
+    // permanently unmutatable and untargetable. Comment ranges break by the same mechanism.
+    [Fact]
+    public void LB024_HyperlinkOverARangeMarker_RelocatesItInsteadOfStrandingIt()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = Paragraphs(session)[0];
+        Assert.True(session.AddBookmark("Inner", DocumentRange.In(anchor, new CharSpan(5, 3))).Success);
+        Assert.True(session.AddComment(anchor, new CharSpan(9, 4), "Reviewer", "note").Success);
+
+        var wrap = session.AddHyperlink(anchor, new CharSpan(0, 15),
+            HyperlinkTarget.External("https://example.test/wrap"));
+        Assert.True(wrap.Success, wrap.Error?.Message);
+
+        var bookmark = Assert.Single(session.ListBookmarks());
+        Assert.True(bookmark.IsValid, bookmark.ValidationError);
+        Assert.Equal(new CharSpan(5, 3), Assert.Single(bookmark.Segments).Span);
+        Assert.Equal(" pa", bookmark.Text);
+        var saved = session.Save();
+        using (var document = WordprocessingDocument.Open(new MemoryStream(saved), false))
+        {
+            var link = document.MainDocumentPart!.GetXDocument().Descendants(W + "hyperlink").Single();
+            // Relocated INTO the link, in their original order, so document order still has each
+            // start ahead of its end.
+            Assert.Single(link.Descendants(W + "bookmarkStart"));
+            Assert.Single(link.Descendants(W + "bookmarkEnd"));
+            Assert.Single(link.Descendants(W + "commentRangeStart"));
+            Assert.Single(link.Descendants(W + "commentRangeEnd"));
+        }
+        AssertBookmarkPairsAndPackageValidity(saved,
+            new System.Collections.Generic.Dictionary<string, string> { ["Inner"] = bookmark.BookmarkId });
+
+        // Still fully mutable: the pair resolves, so rename/move/remove all reach it.
+        Assert.True(session.RenameBookmark("Inner", "Renamed").Success);
+        Assert.True(session.RemoveBookmark("Renamed").Success);
+    }
+
+    // Bookmark w:id is story-part scoped and Word reuses the same decimal in several parts, so a
+    // cross-part move that carries its id can collide with a bookmark already living there. Because
+    // pairing demands exactly one start and one end per id, the collision breaks BOTH bookmarks.
+    [Fact]
+    public void LB025_CrossPartMove_TakesAFreshId_InsteadOfCollidingWithTheDestinationPart()
+    {
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var bodyAnchors = Paragraphs(seed);
+        Assert.True(seed.AddBookmark("BodyMark", DocumentRange.In(bodyAnchors[0], new CharSpan(0, 1))).Success);
+        Assert.True(seed.SetHeaderText(bodyAnchors[0], HeaderFooterKind.Default, "header text").Success);
+        var headerAnchor = Assert.Single(Paragraphs(seed, "hdr1"));
+        Assert.True(seed.AddBookmark("HeaderMark", DocumentRange.In(headerAnchor, new CharSpan(0, 1))).Success);
+
+        var bytes = MutatePackage(seed.Save(), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var bodyId = (string)main.GetXDocument()
+                .Descendants(W + "bookmarkStart").Single().Attribute(W + "id")!;
+            var header = main.HeaderParts.Single();
+            foreach (var marker in header.GetXDocument().Descendants()
+                .Where(e => e.Name == W + "bookmarkStart" || e.Name == W + "bookmarkEnd"))
+                marker.SetAttributeValue(W + "id", bodyId);
+            header.PutXDocument();
+        });
+
+        using var session = new DocxSession(bytes);
+        var header2 = Assert.Single(Paragraphs(session, "hdr1"));
+        var before = session.ListBookmarks().Single(b => b.Name == "BodyMark").BookmarkId;
+
+        Assert.True(session.MoveBookmark("BodyMark",
+            DocumentRange.In(header2, new CharSpan(2, 3))).Success);
+
+        var after = session.ListBookmarks();
+        Assert.Equal(2, after.Count);
+        Assert.All(after, bookmark => Assert.True(bookmark.IsValid, bookmark.ValidationError));
+        Assert.Equal(2, after.Select(bookmark => bookmark.BookmarkId).Distinct().Count());
+        Assert.NotEqual(before, after.Single(b => b.Name == "BodyMark").BookmarkId);
+        // Both survivors stay individually addressable, which the id collision used to prevent.
+        Assert.True(session.RenameBookmark("BodyMark", "MovedMark").Success);
+        Assert.True(session.RemoveBookmark("HeaderMark").Success);
+        AssertPackageValidity(session.Save());
+    }
+
+    // Splitting a paragraph inside a hyperlink cuts the w:hyperlink in two. The halves used to copy
+    // the SAME PtOpenXml.Unid, so both projected to one hl:body:<unid> id and only the first was
+    // ever found — Update/RemoveHyperlink then silently affected half the link.
+    [Fact]
+    public void LB026_SplitInsideAHyperlink_GivesEachHalfItsOwnAddressableId()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = Paragraphs(session)[0];
+        var add = session.AddHyperlink(anchor, new CharSpan(0, 15),
+            HyperlinkTarget.External("https://example.test/whole"));
+        Assert.True(add.Success, add.Error?.Message);
+
+        var split = session.SplitParagraph(anchor, 6);
+        Assert.True(split.Success, split.Error?.Message);
+
+        var halves = session.ListHyperlinks();
+        Assert.Equal(2, halves.Count);
+        Assert.Equal(2, halves.Select(link => link.Id).Distinct().Count());
+        Assert.Equal(add.HyperlinkId, halves[0].Id);
+
+        // The SECOND half is independently addressable — distinct ids alone would not prove that.
+        Assert.True(session.UpdateHyperlink(halves[1].Id,
+            HyperlinkTarget.External("https://example.test/second")).Success);
+        var retargeted = session.ListHyperlinks();
+        Assert.Equal("https://example.test/whole", retargeted[0].Target);
+        Assert.Equal("https://example.test/second", retargeted[1].Target);
+
+        Assert.True(session.RemoveHyperlink(halves[1].Id).Success);
+        Assert.Equal(add.HyperlinkId, Assert.Single(session.ListHyperlinks()).Id);
+        AssertPackageValidity(session.Save());
+    }
+
+    // Widening BookmarkInUse to cross-reference fields also widens the structural-deletion guard,
+    // and the population that reaches is large: Word puts a _Toc bookmark on every heading and the
+    // matching PAGEREF lives in a DIFFERENT paragraph, so deleting a heading of a TOC'd document is
+    // refused in DEFAULT (untracked) mode with no force/opt-out. That is the PR's existing
+    // no-dangling-reference policy (LB011/LB012 pin the same rule for w:anchor links), but it is
+    // broad enough that it must be an explicit, pinned decision rather than an emergent one.
+    // Deleting the citing field WITH the heading is still allowed — the guard is reference-scoped,
+    // not marker-scoped.
+    [Fact]
+    public void LB028_DeletingABookmarkedHeading_IsRefusedWhileACrossReferenceFieldSurvives()
+    {
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var seedAnchors = Paragraphs(seed);
+        Assert.True(seed.AddBookmark("Heading", DocumentRange.In(seedAnchors[0], new CharSpan(0, 5))).Success);
+        var bytes = AppendBodyParagraphs(seed.Save(), SplitInstructionField(" PAGEREF Head", "ing \\h ", "1"));
+
+        using var session = new DocxSession(bytes);
+        var anchors = Paragraphs(session);
+        var blocked = session.DeleteBlock(anchors[0]);
+        Assert.False(blocked.Success);
+        Assert.Equal(EditErrorCode.BookmarkInUse, blocked.Error!.Code);
+        Assert.Equal("Heading", Assert.Single(session.ListBookmarks()).Name);
+
+        // Removing the citing field first releases the heading; there is no force flag.
+        Assert.True(session.DeleteBlock(anchors.Last()).Success);
+        Assert.True(session.DeleteBlock(anchors[0]).Success);
+        Assert.Empty(session.ListBookmarks());
+    }
+
+    // The comments part is a story like any other: its paragraphs are anchor-addressable
+    // (p:cmt:<unid>) and editable, so it owns its own hyperlink relationships and can hold bookmark
+    // markers. Leaving it out of the story-part list did not narrow the answer, it broke it —
+    // ProjectionScopes.Comments returned silently empty and FindOwner returned null, which is what
+    // made ReplaceText on a comment paragraph carrying a link throw (DS364).
+    [Fact]
+    public void LB027_CommentStory_IsAFirstClassScopeForLinksAndBookmarks()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var body = Paragraphs(session)[0];
+        var comment = session.AddComment(body, new CharSpan(0, 5), "Alice", "Review this clause.");
+        Assert.True(comment.Success, comment.Error?.Message);
+        var commentParagraph = comment.Created.First(a => a.Kind == "p" && a.Scope == "cmt").Id;
+
+        var link = session.AddHyperlink(commentParagraph, new CharSpan(0, 6),
+            HyperlinkTarget.External("https://example.test/cmt"));
+        Assert.True(link.Success, link.Error?.Message);
+        var listed = Assert.Single(session.ListHyperlinks(ProjectionScopes.Comments));
+        Assert.Equal("cmt", listed.Scope);
+        Assert.Equal(link.HyperlinkId, listed.Id);
+        Assert.Equal("Review", listed.Text);
+        Assert.Empty(session.ListHyperlinks(ProjectionScopes.Body));
+        // The relationship belongs to the comments part, not the main document part.
+        Assert.Empty(HyperlinkRelationships(session.Save(true), m => m));
+        Assert.Single(HyperlinkRelationships(session.Save(true), m => m.WordprocessingCommentsPart!));
+
+        Assert.True(session.AddBookmark("InComment",
+            DocumentRange.In(commentParagraph, new CharSpan(0, 6))).Success);
+        var bookmark = Assert.Single(session.ListBookmarks(ProjectionScopes.Comments));
+        Assert.Equal("cmt", bookmark.StartScope);
+        Assert.True(bookmark.IsValid, bookmark.ValidationError);
+        Assert.Equal("Review", bookmark.Text);
+        Assert.Empty(session.ListBookmarks(ProjectionScopes.Body));
+
+        Assert.True(session.RemoveHyperlink(link.HyperlinkId!).Success);
+        Assert.Empty(HyperlinkRelationships(session.Save(true), m => m.WordprocessingCommentsPart!));
+        AssertPackageValidity(session.Save());
+    }
+
+    /// <summary>A fldChar field whose instruction is deliberately split across two w:instrText runs.</summary>
+    private static XElement SplitInstructionField(string head, string tail, string cachedResult) =>
+        new(W + "p",
+            new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "begin"))),
+            new XElement(W + "r", new XElement(W + "instrText",
+                new XAttribute(XNamespace.Xml + "space", "preserve"), head)),
+            new XElement(W + "r", new XElement(W + "instrText",
+                new XAttribute(XNamespace.Xml + "space", "preserve"), tail)),
+            new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "separate"))),
+            new XElement(W + "r", new XElement(W + "t", cachedResult)),
+            new XElement(W + "r", new XElement(W + "fldChar", new XAttribute(W + "fldCharType", "end"))));
+
+    /// <summary>Every field instruction in the saved body, fldSimple and fldChar alike, in document order.</summary>
+    private static string[] Instructions(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var body = document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!;
+        return body.Elements(W + "p")
+            .Select(paragraph => paragraph.Descendants(W + "fldSimple").FirstOrDefault() is { } simple
+                ? (string?)simple.Attribute(W + "instr")
+                : paragraph.Descendants(W + "instrText").Any()
+                    ? string.Concat(paragraph.Descendants(W + "instrText").Select(i => i.Value))
+                    : null)
+            .Where(instruction => instruction is not null)
+            .ToArray()!;
+    }
+
+    private static byte[] AppendBodyParagraphs(byte[] bytes, params XElement[] paragraphs) =>
+        MutatePackage(bytes, document =>
+        {
+            var body = document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!;
+            if (body.Element(W + "sectPr") is { } sectPr) sectPr.AddBeforeSelf(paragraphs);
+            else body.Add(paragraphs);
+            document.MainDocumentPart.PutXDocument();
+        });
+
+    private static void AssertPackageValidity(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var realErrors = new OpenXmlValidator().Validate(document)
+            .Where(error => !(error.Description ?? string.Empty)
+                .Contains("powertools.codeplex.com", StringComparison.Ordinal))
+            .ToList();
+        Assert.Empty(realErrors);
+    }
+
     private static void AssertBookmarkPairsAndPackageValidity(byte[] bytes,
         System.Collections.Generic.IReadOnlyDictionary<string, string> expectedIds)
     {

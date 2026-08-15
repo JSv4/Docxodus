@@ -863,9 +863,9 @@ internal static class Dispatcher
                 throw new McpToolException(actionError.Message);
             // Step preconditions are evaluated by the core batch preflight: all against the
             // batch-start state for atomic mode, immediately before each step for best-effort.
-            // Remove them from the actual dispatch so a valid atomic preflight is not evaluated
-            // a second time against state changed by an earlier step in the same batch.
-            var mutationArgs = WithoutProperty(stepArgs, "preconditions");
+            // Strip the decided ones from the actual dispatch so a valid atomic preflight is not
+            // evaluated a second time against state changed by an earlier step in the same batch.
+            var mutationArgs = WithDeferredPreconditionsOnly(stepArgs);
             result.Add(DocxSessionOps.SerializedBatchStep(
                 stepTool,
                 action,
@@ -1327,10 +1327,41 @@ internal static class Dispatcher
                 $"unknown {name}: {value}; expected one of {string.Join(", ", values)}");
     }
 
-    private static JsonElement WithoutProperty(JsonElement source, string propertyName)
+    /// <summary>
+    /// Reduce a step's <c>preconditions</c> to the guards the batch preflight cannot decide.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every guard the preflight can evaluate read-only (version, kind, scope, content hash,
+    /// text, text range) is dropped from the dispatched args: re-evaluating it inside the step
+    /// would compare against state an earlier step in the same batch legitimately changed.</para>
+    /// <para><c>expectedMatchCount</c> is the exception — it can only be evaluated by an op that
+    /// has enumerated the live matches, and <c>DocxSession.ReplaceTextRange</c> is the sole
+    /// supplier of that count. Stripping the whole object made the guard a silent no-op on every
+    /// batched step, which for the legacy <c>apply</c> mode was a regression against the
+    /// pre-batch executor. It is carried through action-agnostically: no other action supplies a
+    /// count, so it is inert everywhere else and cannot drift as actions are added.</para>
+    /// </remarks>
+    private static JsonElement WithDeferredPreconditionsOnly(JsonElement source)
     {
         var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(source.GetRawText())!;
-        values.Remove(propertyName);
+        if (!values.TryGetValue("preconditions", out var preconditions)
+            || preconditions.ValueKind != JsonValueKind.Object
+            || !preconditions.TryGetProperty("expectedMatchCount", out var expectedMatchCount))
+        {
+            values.Remove("preconditions");
+            return JsonSerializer.SerializeToElement(values);
+        }
+
+        var deferred = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["expectedMatchCount"] = expectedMatchCount,
+        };
+        // Preserve an explicitly-targeted anchor so the count is asserted against the anchor the
+        // caller named rather than the one inferred from the step's own arguments.
+        if (preconditions.TryGetProperty("anchorId", out var anchorId)
+            && anchorId.ValueKind == JsonValueKind.String)
+            deferred["anchorId"] = anchorId;
+        values["preconditions"] = JsonSerializer.SerializeToElement(deferred);
         return JsonSerializer.SerializeToElement(values);
     }
 

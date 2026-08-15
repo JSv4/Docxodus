@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -17,6 +18,22 @@ public sealed partial class DocxSession
 {
     private static readonly XNamespace LinkR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly Regex BookmarkNamePattern = new("^[A-Za-z_][A-Za-z0-9_]{0,39}$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Names Word allocates and rewrites for itself: <c>_GoBack</c> (last edit position), <c>_Toc*</c>
+    /// (regenerated wholesale every time a TOC field refreshes), <c>_Ref*</c> (allocated when a
+    /// cross-reference is inserted), and <c>_Hlt*</c>/<c>_Hlk*</c> (hyperlink bookkeeping).
+    /// <para>Policy: this namespace is closed to <em>creation</em> — <see cref="AddBookmark"/> and the
+    /// destination name of <see cref="RenameBookmark"/> refuse it, because a name Word owns will be
+    /// silently reallocated or clobbered under the caller's feet. Bookmarks that Word already put there
+    /// stay fully readable and mutable: renaming, moving, or removing one is a legitimate edit, and its
+    /// inbound <c>REF</c>/<c>PAGEREF</c>/<c>NOTEREF</c>/<c>HYPERLINK \l</c> fields are retargeted (rename)
+    /// or block the removal (remove) like any other. Note that renaming a <c>_Toc*</c> bookmark is not
+    /// durable — the next TOC refresh in Word regenerates the whole family.</para>
+    /// </summary>
+    private static readonly Regex ReservedBookmarkNamePattern = new(
+        @"^_(GoBack|Toc\d*|Ref\d*|Hlt\d*|Hlk\d*)$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     /// <summary>Enumerate native hyperlinks in body, headers, footers, footnotes, and endnotes.</summary>
     public IReadOnlyList<HyperlinkInfo> ListHyperlinks(ProjectionScopes scopes = ProjectionScopes.All)
@@ -171,8 +188,22 @@ public sealed partial class DocxSession
             var link = new XElement(W.hyperlink,
                 new XAttribute(PtOpenXml.Unid, UnidHelper.GenerateUnid()));
             ApplyHyperlinkTarget(owner.Value.Part, link, target);
+            // Relocate the whole CONTIGUOUS SIBLING RANGE, not just the selected w:r elements. A
+            // zero-width marker sitting between two selected runs (w:bookmarkStart/End,
+            // w:commentRangeStart/End, w:proofErr) is a legal w:hyperlink child (EG_PContent covers
+            // EG_RunLevelElts), and moving only the runs would strand it AFTER the finished
+            // w:hyperlink — which for a bookmark whose start lies inside the span puts the start
+            // after its own end and permanently unresolvable. Everything outside the range keeps its
+            // side of the link because the link is inserted where the first selected run stood, so
+            // document order is preserved for every marker, inside the span or not.
+            var siblings = paragraph.Elements().ToList();
+            int firstIndex = siblings.FindIndex(e => ReferenceEquals(e, selected[0]));
+            int lastIndex = siblings.FindIndex(e => ReferenceEquals(e, selected[^1]));
+            if (firstIndex < 0 || lastIndex < firstIndex)
+                throw new InvalidOperationException("selection did not resolve to a contiguous sibling range");
+            var relocated = siblings.GetRange(firstIndex, lastIndex - firstIndex + 1);
             selected[0].AddBeforeSelf(link);
-            foreach (var run in selected) { run.Remove(); link.Add(run); }
+            foreach (var child in relocated) { child.Remove(); link.Add(child); }
             var id = HyperlinkPublicId(owner.Value, link);
             InvalidateProjectionCache();
             return new EditResult { Success = true, HyperlinkId = id, Modified = new[] { anchor.Anchor } };
@@ -286,10 +317,11 @@ public sealed partial class DocxSession
         try
         {
             start.SetAttributeValue(W.name, newName);
-            foreach (var owner in OwnedPartRelationships.StoryParts(_doc!))
-                foreach (var link in owner.Part.GetXDocument().Descendants(W.hyperlink)
-                    .Where(h => string.Equals((string?)h.Attribute(W.anchor), name, StringComparison.Ordinal)))
-                    link.SetAttributeValue(W.anchor, newName);
+            // Retarget BOTH consumer families atomically: w:anchor links and REF/PAGEREF/NOTEREF/
+            // HYPERLINK \l field instructions. Missing the fields is what turns every TOC entry over a
+            // renamed _Toc bookmark into "Error! Bookmark not defined." the next time Word repaints.
+            foreach (var reference in BookmarkReferences(name))
+                RetargetBookmarkReference(reference, newName);
             InvalidateProjectionCache();
             return new EditResult { Success = true, BookmarkName = newName };
         }
@@ -311,6 +343,17 @@ public sealed partial class DocxSession
         var id = (string?)start.Attribute(W.id);
         var endpoints = ValidateDocumentRange(range);
         if (endpoints.Error is not null) return endpoints.Error;
+        // w:id is story-part scoped and Word reuses the same decimal across parts, so carrying the
+        // source id into a DIFFERENT part can collide with a bookmark already living there — and since
+        // ResolveBookmarkPair demands exactly one start and one end per id, the collision makes BOTH
+        // bookmarks unresolvable. Only a same-part move keeps the id (LB004 pins that); a cross-part
+        // move takes a fresh document-global one, allocated before the old markers are unlinked so it
+        // can never be the id just freed.
+        var sourceOwner = OwnedPartRelationships.FindOwner(_doc!, start);
+        var destinationOwner = OwnedPartRelationships.FindOwner(_doc!, endpoints.StartParagraph);
+        if (sourceOwner is null || destinationOwner is null || !string.Equals(
+                sourceOwner.Value.PartUri, destinationOwner.Value.PartUri, StringComparison.Ordinal))
+            id = NextGlobalBookmarkId();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -336,10 +379,9 @@ public sealed partial class DocxSession
         if (common is not null) return common;
         if (ResolveBookmarkPair(name, hyperlinkTarget: false, null,
             out var start, out var end) is { } pairError) return pairError;
-        if (OwnedPartRelationships.StoryParts(_doc!).Any(o => o.Part.GetXDocument().Descendants(W.hyperlink)
-            .Any(h => string.Equals((string?)h.Attribute(W.anchor), name, StringComparison.Ordinal))))
+        if (BookmarkReferences(name).Count != 0)
             return EditResult.Fail(EditErrorCode.BookmarkInUse,
-                $"bookmark is targeted by one or more internal hyperlinks: {name}");
+                $"bookmark is targeted by one or more internal hyperlinks or cross-reference fields: {name}");
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -403,6 +445,12 @@ public sealed partial class DocxSession
         if (requireValidName && !BookmarkNamePattern.IsMatch(name))
             return EditResult.Fail(EditErrorCode.InvalidBookmarkName,
                 "bookmark names must be 1-40 characters, start with a letter or underscore, and contain only letters, digits, or underscores");
+        // requireValidName is exactly the creation side (AddBookmark's name, RenameBookmark's newName),
+        // which is where the reserved-namespace policy on ReservedBookmarkNamePattern applies.
+        if (requireValidName && ReservedBookmarkNamePattern.IsMatch(name))
+            return EditResult.Fail(EditErrorCode.InvalidBookmarkName,
+                "bookmark name is reserved for Word's own TOC/cross-reference/hyperlink bookkeeping "
+                + $"and would be reallocated or clobbered by Word: {name}");
         return null;
     }
 
@@ -454,6 +502,179 @@ public sealed partial class DocxSession
     private List<XElement> BookmarkStarts(string name) => OwnedPartRelationships.StoryParts(_doc!)
         .SelectMany(o => o.Part.GetXDocument().Descendants(W.bookmarkStart))
         .Where(b => string.Equals((string?)b.Attribute(W.name), name, StringComparison.Ordinal)).ToList();
+
+    // ─── Inbound bookmark references ────────────────────────────────────────────────────────────
+    //
+    // A bookmark has TWO kinds of consumer, and a rename or removal that sees only the first one
+    // silently produces "Error! Bookmark not defined." in Word:
+    //   1. w:hyperlink/@w:anchor            — the relationship-free internal link this API authors.
+    //   2. field cross-references           — REF / PAGEREF / NOTEREF / HYPERLINK \l, carried either
+    //      in w:fldSimple/@w:instr or in the w:instrText runs between a w:fldChar begin and its
+    //      matching separate/end. Every Word TOC entry is a PAGEREF over a _Toc bookmark.
+    // Both are enumerated by BookmarkReferences so rename retargets them and removal is blocked by
+    // them, with one scan and one definition of "referenced".
+
+    /// <summary>One field instruction plus the XML that stores it: either a <c>w:fldSimple</c>
+    /// (instruction in <c>@w:instr</c>) or the ordered <c>w:instrText</c> elements of one
+    /// <c>w:fldChar</c>-delimited field.</summary>
+    private sealed record FieldInstruction(XElement? Simple, IReadOnlyList<XElement> InstrTexts, string Text);
+
+    /// <summary>A whitespace- or quote-delimited field-instruction token and where it sits in the
+    /// concatenated instruction, so a reference can be spliced without disturbing switches.</summary>
+    private readonly record struct FieldInstrToken(string Value, int Start, int Length);
+
+    /// <summary>One inbound reference to a bookmark name. <see cref="Element"/> is the XML a
+    /// structural deletion would have to contain for the reference to disappear with it (the
+    /// <c>w:hyperlink</c>, the <c>w:fldSimple</c>, or the field's first <c>w:instrText</c>).</summary>
+    private sealed record BookmarkReference(XElement Element, FieldInstruction? Field, FieldInstrToken Token);
+
+    /// <summary>Every field instruction in one story part, in document order. Nested fields are
+    /// tracked with a stack so an inner <c>{ PAGE }</c> never swallows its host's instruction.</summary>
+    private static List<FieldInstruction> FieldInstructionsIn(XElement root)
+    {
+        var result = new List<FieldInstruction>();
+        foreach (var simple in root.DescendantsAndSelf(W.fldSimple))
+            if ((string?)simple.Attribute(W.instr) is { } instr)
+                result.Add(new FieldInstruction(simple, Array.Empty<XElement>(), instr));
+
+        var open = new Stack<(List<XElement> Parts, bool InInstruction)>();
+        foreach (var element in root.DescendantsAndSelf()
+            .Where(e => e.Name == W.fldChar || e.Name == W.instrText))
+        {
+            if (element.Name == W.instrText)
+            {
+                if (open.Count > 0 && open.Peek().InInstruction) open.Peek().Parts.Add(element);
+                continue;
+            }
+            switch ((string?)element.Attribute(W.fldCharType))
+            {
+                case "begin":
+                    open.Push((new List<XElement>(), true));
+                    break;
+                case "separate" when open.Count > 0:
+                    // The instruction is complete at the separator; the field stays open for its result.
+                    var separated = open.Pop();
+                    Emit(separated.Parts);
+                    open.Push((separated.Parts, false));
+                    break;
+                case "end" when open.Count > 0:
+                    var ended = open.Pop();
+                    if (ended.InInstruction) Emit(ended.Parts);
+                    break;
+            }
+        }
+        return result;
+
+        void Emit(List<XElement> parts)
+        {
+            if (parts.Count > 0)
+                result.Add(new FieldInstruction(null, parts, string.Concat(parts.Select(p => p.Value))));
+        }
+    }
+
+    private static List<FieldInstrToken> TokenizeInstruction(string text)
+    {
+        var tokens = new List<FieldInstrToken>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            while (i < text.Length && char.IsWhiteSpace(text[i])) i++;
+            if (i >= text.Length) break;
+            int start = i;
+            if (text[i] == '"')
+            {
+                i++;
+                var value = new StringBuilder();
+                while (i < text.Length && text[i] != '"')
+                {
+                    if (text[i] == '\\' && i + 1 < text.Length) i++;
+                    value.Append(text[i]);
+                    i++;
+                }
+                if (i < text.Length) i++;
+                tokens.Add(new FieldInstrToken(value.ToString(), start, i - start));
+            }
+            else
+            {
+                while (i < text.Length && !char.IsWhiteSpace(text[i])) i++;
+                tokens.Add(new FieldInstrToken(text.Substring(start, i - start), start, i - start));
+            }
+        }
+        return tokens;
+    }
+
+    /// <summary>The token naming a bookmark in a field instruction, or null when the field does not
+    /// cross-reference one. <c>REF</c>/<c>PAGEREF</c>/<c>NOTEREF</c> name it as their first argument;
+    /// <c>HYPERLINK</c> names it as the argument of the <c>\l</c> switch.</summary>
+    private static FieldInstrToken? BookmarkReferenceToken(IReadOnlyList<FieldInstrToken> tokens)
+    {
+        if (tokens.Count < 2) return null;
+        bool IsSwitch(FieldInstrToken t) => t.Value.StartsWith("\\", StringComparison.Ordinal);
+        switch (tokens[0].Value.ToUpperInvariant())
+        {
+            case "REF":
+            case "PAGEREF":
+            case "NOTEREF":
+                foreach (var token in tokens.Skip(1))
+                    if (!IsSwitch(token)) return token;
+                return null;
+            case "HYPERLINK":
+                for (int i = 1; i < tokens.Count - 1; i++)
+                    if (string.Equals(tokens[i].Value, "\\l", StringComparison.OrdinalIgnoreCase))
+                        return tokens[i + 1];
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Every inbound reference to <paramref name="name"/> across every story part.</summary>
+    private List<BookmarkReference> BookmarkReferences(string name)
+    {
+        var result = new List<BookmarkReference>();
+        foreach (var owner in OwnedPartRelationships.StoryParts(_doc!))
+        {
+            var root = owner.Part.GetXDocument().Root;
+            if (root is null) continue;
+            foreach (var link in root.Descendants(W.hyperlink))
+                if (string.Equals((string?)link.Attribute(W.anchor), name, StringComparison.Ordinal))
+                    result.Add(new BookmarkReference(link, null, default));
+            foreach (var field in FieldInstructionsIn(root))
+                if (BookmarkReferenceToken(TokenizeInstruction(field.Text)) is { } token
+                    && string.Equals(token.Value, name, StringComparison.Ordinal))
+                    result.Add(new BookmarkReference(field.Simple ?? field.InstrTexts[0], field, token));
+        }
+        return result;
+    }
+
+    private static void RetargetBookmarkReference(BookmarkReference reference, string newName)
+    {
+        if (reference.Field is not { } field)
+        {
+            reference.Element.SetAttributeValue(W.anchor, newName);
+            return;
+        }
+        // Splice only the name token so switches (\h, \* MERGEFORMAT, …) survive verbatim, and keep
+        // the quoting style the field already used.
+        bool quote = field.Text[reference.Token.Start] == '"'
+            || TokenizeInstruction(newName).Count != 1;
+        string replacement = quote ? "\"" + newName.Replace("\"", "\\\"") + "\"" : newName;
+        string updated = field.Text.Remove(reference.Token.Start, reference.Token.Length)
+            .Insert(reference.Token.Start, replacement);
+        if (field.Simple is not null)
+        {
+            field.Simple.SetAttributeValue(W.instr, updated);
+            return;
+        }
+        // A split instruction is coalesced onto its first w:instrText: the run count, their order and
+        // the surrounding fldChar plumbing are untouched, so the field stays a well-formed field, and
+        // xml:space="preserve" keeps the leading/trailing spaces that separate the switches.
+        for (int i = 0; i < field.InstrTexts.Count; i++)
+        {
+            field.InstrTexts[i].SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            field.InstrTexts[i].Value = i == 0 ? updated : string.Empty;
+        }
+    }
 
     private List<XElement> BookmarkEndsForStart(XElement start, string? id)
     {
@@ -532,12 +753,10 @@ public sealed partial class DocxSession
             if (name.StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal))
                 return EditResult.Fail(EditErrorCode.ManagedBookmark,
                     $"structural deletion includes an annotation-managed bookmark: {name}", anchorId);
-            if (OwnedPartRelationships.StoryParts(_doc!).Any(owner =>
-                owner.Part.GetXDocument().Descendants(W.hyperlink).Any(link =>
-                    string.Equals((string?)link.Attribute(W.anchor), name, StringComparison.Ordinal)
-                    && !IsRemoved(link))))
+            if (BookmarkReferences(name).Any(reference => !IsRemoved(reference.Element)))
                 return EditResult.Fail(EditErrorCode.BookmarkInUse,
-                    $"structural deletion would remove a bookmark still targeted by an internal hyperlink: {name}", anchorId);
+                    "structural deletion would remove a bookmark still targeted by an internal hyperlink "
+                    + $"or cross-reference field: {name}", anchorId);
         }
 
         foreach (var end in markers.Where(e => e.Name == W.bookmarkEnd))

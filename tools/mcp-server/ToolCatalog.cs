@@ -413,7 +413,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark"] },
-                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "all"], "description": "Listing only; default all." },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
                 "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
                 "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
                 "length": { "type": "integer", "minimum": 1, "description": "add_hyperlink: selected text length." },

@@ -1359,10 +1359,76 @@ internal static class DocxSessionJson
             Created = Anchors(root, "created"),
             Removed = Anchors(root, "removed"),
             Modified = Anchors(root, "modified"),
+            TableAnchors = root.TryGetProperty("tableAnchors", out var tableAnchors)
+                && tableAnchors.ValueKind == JsonValueKind.Object
+                ? ParseTableAnchorMapping(tableAnchors)
+                : null,
             AnnotationId = TryGetString(root, "annotationId", null),
             Patch = patch,
         };
     }
+
+    /// <summary>
+    /// Inverse of <see cref="AppendTableAnchorMapping"/>. Structural table ops report the
+    /// before/after identity of every row, column and cell they touched; a batch adapter that
+    /// dropped this left an agent unable to address the cells its own step had just created.
+    /// </summary>
+    private static TableAnchorMapping ParseTableAnchorMapping(JsonElement root) => new()
+    {
+        Retained = root.TryGetProperty("retained", out var retained)
+            && retained.ValueKind == JsonValueKind.Array
+            ? retained.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.Object)
+                .Select(x => new RetainedTableAnchor(
+                    ParseTableAnchorLocation(x, "before"),
+                    ParseTableAnchorLocation(x, "after")))
+                .ToArray()
+            : Array.Empty<RetainedTableAnchor>(),
+        Added = ParseTableAnchorLocations(root, "added"),
+        Invalidated = ParseTableAnchorLocations(root, "invalidated"),
+    };
+
+    private static IReadOnlyList<TableAnchorLocation> ParseTableAnchorLocations(
+        JsonElement root, string name) =>
+        root.TryGetProperty(name, out var locations) && locations.ValueKind == JsonValueKind.Array
+            ? locations.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.Object)
+                .Select(ParseTableAnchorLocation)
+                .ToArray()
+            : Array.Empty<TableAnchorLocation>();
+
+    private static TableAnchorLocation ParseTableAnchorLocation(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var location) && location.ValueKind == JsonValueKind.Object
+            ? ParseTableAnchorLocation(location)
+            : ParseTableAnchorLocation(default);
+
+    private static TableAnchorLocation ParseTableAnchorLocation(JsonElement root) => new()
+    {
+        Anchor = ParseAnchorValue(root, "anchor"),
+        // The serializer writes the member name lowercased, NOT snake_case — do not route this
+        // through EnumToSnake, which would mis-map any future multi-word member.
+        EntityKind = Enum.TryParse<TableAnchorEntityKind>(
+            TryGetString(root, "entityKind", null), ignoreCase: true, out var entityKind)
+            ? entityKind
+            : TableAnchorEntityKind.Table,
+        // Coordinates and spans are omitted when null, and isVirtual when false.
+        RowIndex = TryGetIntNullable(root, "rowIndex"),
+        ColumnIndex = TryGetIntNullable(root, "columnIndex"),
+        RowSpan = TryGetIntNullable(root, "rowSpan"),
+        ColumnSpan = TryGetIntNullable(root, "columnSpan"),
+        IsVirtual = TryGetBoolNullable(root, "isVirtual") ?? false,
+    };
+
+    private static Anchor ParseAnchorValue(JsonElement root, string name) =>
+        root.ValueKind == JsonValueKind.Object
+        && root.TryGetProperty(name, out var anchor)
+        && anchor.ValueKind == JsonValueKind.Object
+            ? new Anchor(
+                TryGetString(anchor, "id", "") ?? "",
+                TryGetString(anchor, "kind", "") ?? "",
+                TryGetString(anchor, "scope", "") ?? "",
+                TryGetString(anchor, "unid", "") ?? "")
+            : new Anchor(string.Empty, string.Empty, string.Empty, string.Empty);
 
     /// <summary>Common structured wire shape for core and transport mutation batches.</summary>
     public static string SerializeMutationBatchResult(MutationBatchResult result)
@@ -1379,7 +1445,8 @@ internal static class DocxSessionJson
           .Append(",\"rolledBack\":").Append(result.RolledBack ? "true" : "false")
           .Append(",\"baseVersion\":").Append(result.BaseVersion)
           .Append(",\"resultVersion\":").Append(result.ResultVersion)
-          .Append(",\"packageHash\":").Append(JsonString(result.PackageHash))
+          .Append(",\"packageHash\":")
+          .Append(result.PackageHash is null ? "null" : JsonString(result.PackageHash))
           .Append(",\"steps\":[");
         for (int i = 0; i < result.Steps.Count; i++)
         {

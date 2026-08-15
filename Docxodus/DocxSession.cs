@@ -1497,8 +1497,13 @@ public sealed record MutationBatchResult
     /// A deterministic replay at <see cref="BaseVersion"/> should produce this hash. Generated
     /// anchors/OOXML ids and execution timestamps make other batches only semantically equivalent;
     /// callers must consult <see cref="Warnings"/> before using the hash as a replay assertion.
+    ///
+    /// <c>null</c> — never an empty string — when the hash could not be computed (the reason is
+    /// in <see cref="Warnings"/>). An absent hash must not compare equal to another absent hash:
+    /// a sentinel that does turns <c>preview.PackageHash == applied.PackageHash</c> into an
+    /// assertion that passes precisely when it has nothing to assert.
     /// </summary>
-    public string PackageHash { get; init; } = string.Empty;
+    public string? PackageHash { get; init; }
     public IReadOnlyList<MutationBatchStepResult> Steps { get; init; } =
         Array.Empty<MutationBatchStepResult>();
     public MutationBatchFailure? Failure { get; init; }
@@ -1833,6 +1838,14 @@ public sealed partial class DocxSession : IDisposable
     private readonly Stack<TransactionState> _transactions = new();
     private long _nextTransactionId;
     private int _transactionPendingMutations;
+    // Monotonic within a transaction: incremented on every recorded op and NEVER decremented.
+    // _transactionPendingMutations tracks the live history depth and so falls back to its
+    // baseline when an op self-rolls-back (RollbackFailedOp pops its own pre-op entry) — it
+    // cannot answer "did this scope ever touch the package?". Ops write parts that the
+    // selective per-op snapshot deliberately excludes (the numbering part), so a scope whose
+    // pending count nets back to baseline can still have left the package dirty. That question
+    // is what decides whether a rollback must reopen the checkpoint, so it gets its own witness.
+    private long _transactionMutationEpoch;
     private int _revisionCounter = 1000;
     /// <summary>False until <see cref="NextRevisionId"/> has raised
     /// <see cref="_revisionCounter"/> past every <c>w:id</c> already live in the document.
@@ -1856,6 +1869,7 @@ public sealed partial class DocxSession : IDisposable
         DocumentSnapshot PackageSnapshot,
         Internal.UndoRing<DocumentSnapshot>.State History,
         int PendingMutations,
+        long MutationEpoch,
         TrackedChangeMode TrackedChanges,
         string? RevisionAuthor,
         Exception? LastInternalError,
@@ -3256,6 +3270,7 @@ public sealed partial class DocxSession : IDisposable
                 TakePackageSnapshot(),
                 _history.CaptureState(),
                 _transactionPendingMutations,
+                _transactionMutationEpoch,
                 _trackedChanges,
                 _revisionAuthor,
                 LastInternalError,
@@ -3290,7 +3305,11 @@ public sealed partial class DocxSession : IDisposable
                 // An inner commit stays represented by its ordinary speculative history entries.
                 // The outermost commit is the only boundary that squashes them into one
                 // full-package pre-batch snapshot and advances caller-visible version once.
-                bool mutated = _transactionPendingMutations > state.PendingMutations;
+                // The epoch, not the pending count, decides: a scope whose ops all self-rolled
+                // back nets the pending count to baseline yet may still have left the package
+                // dirty, and squashing that into "nothing happened" would strand it with no
+                // undo entry and no version bump.
+                bool mutated = _transactionMutationEpoch > state.MutationEpoch;
                 _history.RestoreState(state.History);
                 _transactionPendingMutations = state.PendingMutations;
                 _version = state.PackageSnapshot.Version;
@@ -3303,6 +3322,12 @@ public sealed partial class DocxSession : IDisposable
                     _transactionPendingMutations = state.PendingMutations;
                     _version = checked(state.PackageSnapshot.Version + 1);
                 }
+                // Only the pending count is rewound here. It is a live history depth that must
+                // agree with the history state just restored; the epoch is deliberately left
+                // monotonic because it is only ever read against a baseline captured at some
+                // enclosing begin — and after this pop there is no enclosing scope left. An
+                // inner commit rewinds neither: the outer scope must still see that its nested
+                // work touched the package.
             }
 
             // Do not orphan the transaction if validation or restoration failed. The caller may
@@ -3321,15 +3346,21 @@ public sealed partial class DocxSession : IDisposable
     {
         try
         {
-            // Every session mutation records before touching package state. If the pending count
-            // is unchanged, the scope performed only reads/configuration work (or an operation
-            // already restored its own failed-op snapshot). Reopening the checkpoint in that case
-            // is observably worse: OPC rewrites ZIP timestamps even for a no-op rollback. Keep the
-            // live package byte-pure while still restoring history/configuration below.
-            if (_transactionPendingMutations > state.PendingMutations)
+            // Every session mutation records before touching package state, so an unchanged
+            // epoch means the scope performed only reads/configuration work and the live package
+            // is still byte-identical to the checkpoint. Reopening it in that case is observably
+            // worse: OPC rewrites ZIP timestamps even for a no-op rollback. Keep the live package
+            // byte-pure while still restoring history/configuration below.
+            //
+            // The epoch, not the pending count, is the witness. RollbackFailedOp pops the op's own
+            // pre-op entry, so ~40 ops return the pending count to baseline on their failure path
+            // while their selective restore leaves parts the snapshot excludes (the numbering part)
+            // dirty. Skipping the package restore there reported a rollback that never happened.
+            if (_transactionMutationEpoch > state.MutationEpoch)
                 RestoreSnapshot(state.PackageSnapshot);
             _history.RestoreState(state.History);
             _transactionPendingMutations = state.PendingMutations;
+            _transactionMutationEpoch = state.MutationEpoch;
             _trackedChanges = state.TrackedChanges;
             _revisionAuthor = state.RevisionAuthor;
             LastInternalError = state.LastInternalError;
@@ -3369,6 +3400,20 @@ public sealed partial class DocxSession : IDisposable
     /// and optional HTML rendering all target the shadow. Abandoning or disposing the shadow can
     /// therefore never require live rollback.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Caller contract.</b> Each step's callbacks receive the shadow session as their
+    /// <c>DocxSession</c> argument — <em>address that argument</em>. A callback written as
+    /// <c>s =&gt; liveSession.ReplaceText(...)</c>, closing over the live session instead of using
+    /// <c>s</c>, mutates the LIVE document, and this overload cannot prevent it: a delegate may
+    /// call anything it can reach.</para>
+    /// <para>The handle-shaped seams are intrinsically safe by construction, because a step
+    /// factory there is handed only the temporary shadow handle and never sees the live one:
+    /// <c>DocxSessionOps.PreviewBatch</c> for stdio/MCP, and the <c>OpenPreviewSession</c> bridge
+    /// export for the browser client. Prefer those when the steps are not written by the same
+    /// author as the call.</para>
+    /// <para>Enrichment cost is not free and has no opt-out: see the receipt cost note in
+    /// <c>docs/architecture/docx_mutation_api.md</c>.</para>
+    /// </remarks>
     public MutationBatchResult PreviewBatch(
         IEnumerable<MutationBatchStep> steps,
         MutationBatchMode mode = MutationBatchMode.Atomic,
@@ -3489,7 +3534,7 @@ public sealed partial class DocxSession : IDisposable
         if (result.Mode == MutationBatchMode.BestEffort && !result.Success)
             warnings.Add("Best-effort execution retains every successful step despite later failures.");
 
-        var packageHash = string.Empty;
+        string? packageHash = null;
         try { packageHash = GetPackageContentHash(); }
         catch (Exception ex) { warnings.Add($"Package equivalence hash unavailable: {ex.Message}"); }
 
@@ -3684,25 +3729,12 @@ public sealed partial class DocxSession : IDisposable
                     html = Internal.HtmlConversionOps.RenderBlockHtml(
                         this,
                         options!.HtmlAnchorId!,
-                        new Internal.HtmlConversionOptions
-                        {
-                            RenderTrackedChanges = true,
-                            RenderFootnotesAndEndnotes = true,
-                            StampAnchors = true,
-                        });
+                        Internal.HtmlConversionOps.PreviewBlockOptions());
                     break;
                 case MutationPreviewHtmlMode.Full:
                     html = Internal.HtmlConversionOps.ConvertToHtml(
                         this,
-                        new Internal.HtmlConversionOptions
-                        {
-                            CommentRenderMode = 0,
-                            RenderAnnotations = true,
-                            RenderFootnotesAndEndnotes = true,
-                            RenderHeadersAndFooters = true,
-                            RenderTrackedChanges = true,
-                            StampAnchors = true,
-                        });
+                        Internal.HtmlConversionOps.PreviewDocumentOptions());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(options), "unknown preview HTML mode");
@@ -6677,15 +6709,8 @@ public sealed partial class DocxSession : IDisposable
             (pos == Position.After && ReferenceEquals(target.NextNode, source)))
             return new EditResult { Success = true };
 
-        // A native tracked move keeps source and destination copies live simultaneously.
-        // Duplicating bookmark names violates global bookmark identity; moving the markers to
-        // only one side would lose them on either accept or reject. Reject explicitly instead
-        // of emitting an ambiguous pending document.
-        if (_trackedChanges == TrackedChangeMode.RenderInline
-            && source.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
-            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                "tracked block moves containing bookmark markers are unsupported because both revision sides are live",
-                sourceAnchorId);
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary, bookmarkRejection, sourceAnchorId);
 
         if (MoveSourceRejection(source) is { } sourceRejection)
             return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
@@ -6760,6 +6785,16 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    /// <summary>A native tracked move keeps source and destination copies live simultaneously.
+    /// Duplicating bookmark names violates global bookmark identity; moving the markers to only one
+    /// side would lose them on either accept or reject. Reject explicitly instead of emitting an
+    /// ambiguous pending document.</summary>
+    private string? TrackedBookmarkMoveRejection(XElement source) =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+        && source.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
+            ? "tracked block moves containing bookmark markers are unsupported because both revision sides are live"
+            : null;
+
     /// <summary>Reject reasons that depend only on the SOURCE block — if one applies, the block
     /// cannot be moved anywhere, so <see cref="ValidMoveTargets"/> can answer with an empty set
     /// without testing a single target. Shared with <see cref="MoveBlock"/> so the drag UI and the
@@ -6768,6 +6803,12 @@ public sealed partial class DocxSession : IDisposable
     {
         if (source.Name == W.p && source.Element(W.pPr)?.Element(W.sectPr) is not null)
             return "cannot move a paragraph that owns a section break";
+
+        // MoveBlock tests this first and reports it as UnsupportedInlineBoundary; repeating the
+        // PREDICATE (not the check) here is what keeps ValidMoveTargets from advertising a drop the
+        // engine will refuse. One owner, two callers, two error codes.
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return bookmarkRejection;
 
         // Re-wrapping an existing revision can create illegal nested move markup. Direct
         // mode can carry ordinary ins/del content safely, but an existing named move range
@@ -11791,9 +11832,14 @@ public sealed partial class DocxSession : IDisposable
     private void OnHistoryRecordPreOp()
     {
         if (_transactions.Count > 0)
+        {
             _transactionPendingMutations = checked(_transactionPendingMutations + 1);
+            _transactionMutationEpoch = checked(_transactionMutationEpoch + 1);
+        }
         else
+        {
             AdvanceVersion();
+        }
     }
 
     private void OnHistoryPopUndo(DocumentSnapshot snapshot)
@@ -11832,6 +11878,7 @@ public sealed partial class DocxSession : IDisposable
             _raw = null;
             _transactions.Clear();
             _transactionPendingMutations = 0;
+            _transactionMutationEpoch = 0;
         }
         finally
         {
@@ -13347,7 +13394,13 @@ public sealed partial class DocxSession : IDisposable
         if (movedChildren.Count == 0) return;
 
         var newLink = new XElement(W.hyperlink);
-        foreach (var a in hyperlink.Attributes()) newLink.SetAttributeValue(a.Name, a.Value);
+        // Every attribute EXCEPT the Unid: that one is this hyperlink's identity, and the public
+        // hl:<scope>:<unid> id is derived from it. Cloning it would give the two halves the same id,
+        // so FindHyperlinkElement would match only the first and Update/RemoveHyperlink would
+        // silently act on half the link.
+        foreach (var a in hyperlink.Attributes())
+            if (a.Name != PtOpenXml.Unid) newLink.SetAttributeValue(a.Name, a.Value);
+        newLink.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
         foreach (var child in movedChildren) { child.Remove(); newLink.Add(child); }
         hyperlink.AddAfterSelf(newLink);
     }

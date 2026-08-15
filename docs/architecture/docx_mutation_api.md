@@ -117,7 +117,79 @@ the owner thread abandons all scopes and releases their mutation-gate entries.
 
 The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
-(`docxodus_mutations`). Preview isolation is intentionally separate work in #446.
+(`docxodus_mutations`).
+
+### Isolated previews
+
+`PreviewBatch(steps, mode, options)` runs the identical step delegates against a complete
+clone of the live package (`CreateShadowSession`). Guards, mutations, history writes,
+semantic inspection, package hashing, and any HTML render all target the shadow, which is
+disposed on every return and throw path. Abandoning a preview therefore cannot require a
+live rollback — the live session's bytes, caches, version, configuration and undo/redo
+cursors were never mutation targets.
+
+```csharp
+var preview = session.PreviewBatch(
+    new[]
+    {
+        new MutationBatchStep("docx_edit", "replace_text",
+            s => s.ReplaceText(firstAnchor, "Proposed replacement")),
+    },
+    options: new MutationBatchPreviewOptions
+    {
+        HtmlMode = MutationPreviewHtmlMode.Full,
+    });
+```
+
+**Caller contract for the typed overload.** The `s` argument each callback receives IS the
+shadow. Isolation comes from addressing that argument; a callback that closes over the live
+session and calls `liveSession.ReplaceText(...)` instead mutates the live document, and
+nothing in the typed API can prevent it. The handle-shaped seams — `DocxSessionOps.PreviewBatch`
+and the `OpenPreviewSession` bridge — are intrinsically safe because a step factory there is
+handed only the temporary shadow handle and never sees the live one.
+
+`MutationBatchPreviewOptions.HtmlMode` (`MutationPreviewHtmlMode`: `None`, `Scoped`, `Full`;
+`Scoped` additionally requires `HtmlAnchorId`) renders the predicted document from the shadow.
+The option profile lives in exactly one place — `HtmlConversionOps.PreviewDocumentOptions()`
+and `PreviewBlockOptions()` — and every surface consumes it, so a browser preview and an
+MCP preview of the same batch describe the same document. A preview shows tracked changes,
+comments, annotations, notes and headers/footers: it answers "what would this document
+become", which is not the editor's authoring view (`DocxSessionOps.RenderHtml`, where
+comments and annotations are off).
+
+Both preview and apply return the same enriched receipt: `baseVersion`/`resultVersion`,
+`packageHash`, `{added, removed, modified}` change sets for revisions, comments and
+annotations, and `warnings`. Change-set membership is decided on each entry's SERIALIZED
+projection — the shape the transports actually publish, and the same comparison npm makes —
+never on CLR equality. `packageHash` is `null`, never `""`, when it could not be computed;
+an absent hash must not compare equal to another absent hash.
+
+**Cost.** Enrichment is unconditional on BOTH paths. Every batch — applied or previewed —
+runs `ListRevisions` + `ListComments` + `ListAnnotations` twice (before and after, each
+forcing an anchor index) plus one `GetPackageContentHash()`, which serializes a full package
+checkpoint and SHA-256s it. A preview additionally pays a package clone and a second open
+`WordprocessingDocument`, roughly doubling peak memory for the duration. That is material on
+a constrained heap (a browser WASM session holding a large DOCX). There is deliberately no
+opt-out today; gating it behind a setting is a public-API decision that has not been taken.
+
+npm exposes this as `session.previewBatch(steps, mode, { html, htmlAnchorId })` with callbacks
+that receive the shadow session, stdio/Python as `session.preview_batch(steps, mode,
+html_mode=…, html_anchor_id=…)`, and MCP as `docxodus_mutations` with `"mode": "preview"`.
+
+Two properties of the wire-serialized transports (MCP and stdio, which round-trip
+each step's `EditResult` through `DocxSessionJson`) are worth stating explicitly:
+
+- **Step receipts are lossless.** A batched structural table op keeps its
+  `tableAnchors` mapping, so a caller can address the rows/columns/cells the same
+  batch just created. `DocxSessionJson.ParseEditResult` is the inverse of
+  `Serialize(EditResult)`; adding a field to one without the other silently deletes
+  it from every batch receipt.
+- **`expectedMatchCount` is evaluated late.** Every other guard is decided by the
+  read-only preflight — at the batch-start boundary in atomic mode. A match count
+  can only be evaluated by an op that has enumerated the live matches, and
+  `ReplaceTextRange` is the sole supplier, so that one guard is carried into the
+  step and enforced at the step's own turn. A batch mixing an `expectedText` and an
+  `expectedMatchCount` guard therefore compares them against two different states.
 
 ## Architecture
 
@@ -377,7 +449,10 @@ the whole table instead).
 
 Returns the blocks `sourceAnchorId` may legally move next to, in document order; empty when the
 block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a listed
-`(target, side)` pair is one `MoveBlock` accepts.
+`(target, side)` pair is one `MoveBlock` accepts. That sharing has to reach the **mode-dependent**
+rejections too: in `RenderInline` mode a bookmark-bearing source cannot move at all, and since
+Word puts a `_Toc` bookmark on every heading, a rejection this gate did not know about would draw
+drop indicators over most of a TOC'd contract before every drop hard-failed.
 
 **The two sides are reported separately, and that distinction is load-bearing.** Landing *into* a
 cross-block bookmark/comment/permission range changes its membership while landing outside it does
@@ -503,23 +578,64 @@ attribute so part-backed content such as images can reuse the same ownership/orp
 `HyperlinkInfo` reports the owner part/scope, enclosing anchor, exact half-open `CharSpan`, visible
 text, target, relationship metadata, and broken-target state. A hyperlink id follows the anchor
 identity contract: stable for the live session and across `Save(true)` / `PersistAnchorIds`, but
-not promised across a default save that strips Docxodus Unids.
+not promised across a default save that strips Docxodus Unids. Splitting a paragraph inside a link
+cuts the `w:hyperlink` in two and gives each half its own identity, so both stay individually
+addressable by `UpdateHyperlink`/`RemoveHyperlink`.
+
+`AddHyperlink` relocates the whole contiguous sibling range it covers, not just the `w:r` elements.
+A zero-width marker sitting between two selected runs — `w:bookmarkStart`/`End`,
+`w:commentRangeStart`/`End`, `w:proofErr` — is a legal `w:hyperlink` child and moves *inside* the
+new link at its original position. Stranding it after the link would, for a bookmark whose start
+lies inside the span, put the start after its own end and break the pair permanently. Content
+outside the span keeps its side, so document order is preserved for every marker.
+
+Story scope covers body, headers, footers, footnotes, endnotes, **and comments**: a comment
+paragraph is anchor-addressable (`p:cmt:…`) and editable, so it owns its own hyperlink
+relationships and can host bookmark markers like any other story.
 
 Bookmark names follow Word's UI-safe form: 1–40 characters, starting with a letter or underscore,
-then letters, digits, or underscores. Names are globally unique; numeric `w:id` pairing is scoped
+then letters, digits, or underscores. **Word's own namespace is closed to creation.** `AddBookmark`
+and `RenameBookmark`'s destination name refuse `_GoBack`, `_Toc*`, `_Ref*`, `_Hlt*`, and `_Hlk*`
+with `InvalidBookmarkName`: Word allocates and rewrites those for itself (a TOC refresh regenerates
+the whole `_Toc*` family), so a name placed there is reallocated or clobbered under the caller.
+Bookmarks Word already put there are *not* frozen — they list, rename, move, and remove like any
+other, with their cross-reference fields retargeted or blocking removal as usual. Renaming a `_Toc*`
+bookmark is simply not durable, because the next TOC refresh regenerates it.
+
+Names are globally unique; numeric `w:id` pairing is scoped
 to the owning story part because real Word files reuse numeric ids across parts. A
 `DocumentRange` may cross paragraphs but both endpoints must belong to the same body, individual
-header/footer, footnote, or endnote part. `BookmarkInfo.Range` carries the two endpoint anchors and
+header/footer, footnote, endnote, or comments part. `BookmarkInfo.Range` carries the two endpoint anchors and
 offsets; `Segments` supplies exact per-paragraph spans and text. Unmatched starts and ambiguous
 same-story numeric ids or duplicate names remain visible as invalid diagnostics. Orphan end markers
 have no name/start coordinate and are not returned as rows, but still participate in fresh numeric
 id allocation. `_Docxodus_Ann_*` bookmarks are owned by the annotation subsystem and reject generic
 bookmark mutation.
 
-Rename first requires one coherent same-story pair, then changes the start marker and every inbound
-`w:hyperlink/@w:anchor` across all stories in one undo step. Remove refuses `BookmarkInUse`; move
-validates the destination before detaching the old
-pair and retains its numeric id. Structural edits likewise reject a pair crossing the deletion
+**A bookmark has two consumer families, and both count as "referenced."** Beyond
+`w:hyperlink/@w:anchor`, Word cross-references a bookmark through `REF`, `PAGEREF`, `NOTEREF`, and
+`HYPERLINK \l` field instructions — carried either in `w:fldSimple/@w:instr` or in the
+`w:instrText` runs between a `w:fldChar` begin and its matching separate/end, and split across
+several runs as often as not. Every entry in a Word table of contents is a `PAGEREF` over a `_Toc`
+bookmark. Rename first requires one coherent same-story pair, then changes the start marker and
+retargets **both** families across all stories in one undo step, splicing only the name token so
+switches (`\h`, `\* MERGEFORMAT`) survive verbatim; a split instruction is coalesced onto its first
+`w:instrText`. Seeing only the anchor links would leave "Error! Bookmark not defined." behind.
+`BookmarkInUse` is judged against both families too, so removing a bookmark a TOC still cites is
+refused rather than silently dangling it.
+
+**Know the reach of that guard before you rely on it.** It also gates structural deletion, and it is
+reference-scoped: a deletion is refused only while a reference *survives outside* the deleted
+region. Word puts a `_Toc` bookmark on every heading and keeps the matching `PAGEREF` in a different
+paragraph, so on a TOC'd document `DeleteBlock(heading)` is refused — in **default, untracked** mode,
+with no force/opt-out. Delete the citing field (or the whole TOC) first, or rename rather than
+remove. This is the same no-dangling-reference policy that has always covered `w:anchor` links; what
+changed is how much of a real contract it reaches.
+
+Move validates the destination before detaching the old pair. It retains its numeric id for a
+same-part move; a **cross-part** move takes a fresh document-global id, because `w:id` is
+part-scoped and carrying it into a part that already uses that decimal makes *both* bookmarks
+unresolvable. Structural edits likewise reject a pair crossing the deletion
 boundary, a targeted pair, or a managed pair before snapshotting. Whole-paragraph replacement keeps
 endpoint character coordinates and clamps them to the new end; surgical replacement, split, merge,
 and direct block moves preserve marker order. First-class hyperlink/bookmark metadata mutations are
@@ -1928,9 +2044,10 @@ for an unknown/inapplicable single-anchor query).
 `ListStyles()` enumerates the document's explicit paragraph, character, table, and numbering style
 definitions. Each `StyleInfo` includes `Id`, `Name`, `Type`, `BasedOn`, `Next`, default/custom
 flags, resolved latent-style gallery metadata, and the high-signal resolved paragraph/run/table
-properties appropriate to its type. Resolution uses `FormattingAssembler`'s existing rollups; it
-is not a second inheritance engine. A returned paragraph style `Id` is accepted unchanged by
-`SetParagraphStyle`; a returned character style `Id` is accepted as `FormatOp.RunStyle`.
+properties appropriate to its type. Resolution reuses `FormattingAssembler`'s style rollups — but
+see **What "effective" includes** below: it is a *shorter cascade* than the renderer applies, not
+the same one. A returned paragraph style `Id` is accepted unchanged by `SetParagraphStyle`; a
+returned character style `Id` is accepted as `FormatOp.RunStyle`.
 
 `GetFormatting(anchor)` is paragraph-only and explicitly separates:
 
@@ -1938,6 +2055,43 @@ is not a second inheritance engine. A returned paragraph style `Id` is accepted 
 - `EffectiveParagraph`: document defaults + full paragraph style chain + direct properties, with
   ordinary schema defaults filled for alignment, spacing, indentation, line spacing, and toggles.
 - `Runs`: the same entries returned by `ListInlineSpans(anchor)`.
+
+#### What "effective" includes — and what it does not
+
+This is the resolver's exact contract. **It is not the render oracle's cascade**, and where the two
+differ the render (`WmlToHtmlConverter`) is what Word actually shows.
+
+`EffectiveParagraph` = `w:docDefaults/w:pPrDefault` + the `w:pStyle` `basedOn` chain + the
+paragraph's direct `w:pPr`. It does **not** include:
+
+- the **numbering level's** `w:pPr` (`w:abstractNum/w:lvl/w:pPr`, and a `w:lvlOverride/w:lvl`
+  form of it), which the render path applies in `AssembleParagraphProperties` with its own
+  `FromParagraph`/`FromStyle` priority;
+- the **table style / `w:tblStylePr`** `w:pPr` layer for a paragraph inside a table.
+
+`InlineSpan.Effective` = `w:docDefaults/w:rPrDefault` + the character/paragraph style chain +
+the run's direct `w:rPr` + theme-font resolution. It does **not** toggle-merge the **table
+style's** conditional `w:rPr` the way `AnnotateRunProperties` does.
+
+Concretely, and pinned by `BM021`/`BM022`:
+
+| Document | Renders as | `GetFormatting` reports |
+|---|---|---|
+| List item whose indent lives only in `w:abstractNum/w:lvl/w:pPr/w:ind` (the normal case) | indented | `LeftIndentTwips = 0` |
+| Run in a `firstRow`-styled table whose bold comes from `w:tblStylePr` | bold | `Bold = false` |
+
+`GetListMembership` surfaces the numbering level's real `Start`, `LevelText`, and indentation
+separately, so the list case is recoverable by the caller today.
+
+The exclusions are deliberate rather than accidental. The numbering layer is only applied by
+`ParagraphStyleRollup` when the paragraph carries `ListItemRetriever`'s `ListItemInfo` annotation,
+and that annotation is a lazily built **cache** — present or absent depending only on whether
+something rendered, projected, or resolved a list label earlier in the session. Reading it would
+make a pure read API answer the same unmutated document two different ways depending on call
+order, so the resolver deliberately resolves against an annotation-free probe. That determinism
+costs the numbering layer even for a projected session, which before this was the one case that
+happened to get the fuller answer. Unifying the two cascades means changing the render oracle's
+formatting path and is tracked separately.
 
 Each `InlineSpan` reports the containing mutation-ready `AnchorId`, stable run `RunUnid`, flat-text
 `Span`, text, `Direct` run properties, and `Effective` run properties. `AnchorId` + `Span` can be
