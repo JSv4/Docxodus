@@ -587,10 +587,18 @@ Capabilities a full-featured document-editing agent surface might have, that Doc
 doesn't yet support — called out explicitly rather than faked, per this server's design goal of
 never claiming a capability it doesn't have:
 
-- **Unsafe revision topology fails closed.** The live registry resolves the supported content,
-  property, table-cell, content-control, and numbering families. A recognized family with no
-  safe resolver, or malformed/ambiguous native topology, remains visible with a diagnostic and
-  blocks both selective and bulk resolution until the source document is repaired.
+- **Unsafe revision topology fails closed — including for `accept_all`/`reject_all`.** The live
+  registry resolves the supported content, property, table-cell, content-control, and numbering
+  families. A recognized family with no safe resolver, or malformed/ambiguous native topology,
+  remains visible with a diagnostic and blocks both selective and bulk resolution until the
+  source document is repaired. This is a capability change: before #455, `accept_all`/
+  `reject_all` were a whole-document `RevisionProcessor` transform that always succeeded, and
+  there is deliberately no `force` mode. The refusing shapes are a missing or non-numeric
+  `w:id`, one `w:id` shared by two live groups in one part, `w:customXmlMoveFromRange*`/
+  `w:customXmlMoveToRange*` ranges, `w:ins`/`w:del` under `m:ctrlPr`, `w:del` on a run's
+  `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
+  two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
+  `docx_mutation_api.md`.
 - **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
   block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
   `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by

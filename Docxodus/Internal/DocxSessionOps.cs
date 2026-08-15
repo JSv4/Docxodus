@@ -858,11 +858,13 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
 
-    public static string AcceptAllRevisions(int handle) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AcceptAllRevisions());
+    public static string AcceptAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptAllRevisions());
 
-    public static string RejectAllRevisions(int handle) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectAllRevisions());
+    public static string RejectAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectAllRevisions());
 
     // ─── Undo / Redo ────────────────────────────────────────────────────
 

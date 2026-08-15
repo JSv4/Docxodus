@@ -108,6 +108,41 @@ internal static class RevisionOps
 
     private static readonly XName[] RevWrapperNames = { W.ins, W.del, W.moveFrom, W.moveTo };
 
+    /// <summary>
+    /// Every element name whose <c>w:id</c> can end up in a group's constituent ids — the
+    /// exact set the duplicate-id ambiguity check reads. A session minting new revision ids
+    /// must not collide with any of them, so this is also the set
+    /// <see cref="MaxRevisionId"/> scans.
+    /// </summary>
+    internal static readonly HashSet<XName> RevisionIdBearingNames = new()
+    {
+        W.ins, W.del, W.moveFrom, W.moveTo,
+        W.cellIns, W.cellDel, W.cellMerge,
+        W.numberingChange,
+        W.rPrChange, W.pPrChange, W.sectPrChange, W.tblPrChange,
+        W.trPrChange, W.tcPrChange, W.tblGridChange, W.tblPrExChange,
+        W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd,
+        W.customXmlInsRangeStart, W.customXmlInsRangeEnd,
+        W.customXmlDelRangeStart, W.customXmlDelRangeEnd,
+        W.customXmlMoveFromRangeStart, W.customXmlMoveFromRangeEnd,
+        W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd,
+    };
+
+    /// <summary>The largest numeric <c>w:id</c> already used by revision markup under
+    /// <paramref name="root"/>, or 0 when there is none. Non-numeric ids (which the registry
+    /// reports as malformed) contribute nothing.</summary>
+    internal static long MaxRevisionId(XElement root)
+    {
+        long max = 0;
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            if (!RevisionIdBearingNames.Contains(element.Name)) continue;
+            if (long.TryParse((string?)element.Attribute(W.id), out var value) && value > max)
+                max = value;
+        }
+        return max;
+    }
+
     private static readonly HashSet<XName> StructuredRangeNames = new()
     {
         W.customXmlDelRangeStart, W.customXmlDelRangeEnd,
@@ -1403,8 +1438,12 @@ internal static class RevisionOps
                     // A wholly inserted/deleted final paragraph has no successor whose mark can
                     // survive. Once its revised content is gone, remove the empty block itself;
                     // a paragraph with unrelated surviving content keeps its unavoidable mark.
+                    // Never the LAST block-level child of its container, though: a w:tc, note,
+                    // comment, header/footer or body left with no w:p/w:tbl violates the content
+                    // model and sends Word into repair. There the mark is stripped instead.
                     if (!u.Paragraph.Elements().Any(element => element.Name != W.pPr
-                        && !IsIgnorableBetween(element)))
+                        && !IsIgnorableBetween(element))
+                        && HasSurvivingBlockSibling(u.Paragraph))
                     {
                         var paragraph = u.Paragraph;
                         paragraph.Remove();
@@ -1674,6 +1713,16 @@ internal static class RevisionOps
 
     private static bool Detached(XElement e) => e.Document is null;
 
+    /// <summary>Whether <paramref name="paragraph"/>'s container would still hold a
+    /// block-level child (<c>w:p</c> or <c>w:tbl</c>) after removing it. Every OOXML
+    /// paragraph container requires at least one, so the check is deliberately
+    /// container-agnostic rather than a list of parent names: removing the last block-level
+    /// child is a content-model violation wherever it happens.</summary>
+    private static bool HasSurvivingBlockSibling(XElement paragraph) =>
+        paragraph.Parent is { } container
+        && container.Elements().Any(sibling => !ReferenceEquals(sibling, paragraph)
+            && (sibling.Name == W.p || sibling.Name == W.tbl));
+
     private static void UnwrapWrapper(XElement wrapper, bool restoreDeleted)
     {
         if (restoreDeleted)
@@ -1769,14 +1818,22 @@ internal static class RevisionOps
 
     // ─── Format-change resolution ───────────────────────────────────────
 
+    /// <summary>Property containers an empty husk may be REMOVED from, mirroring what Word
+    /// writes. Every name here is <c>minOccurs="0"</c> in its parent's complex type.
+    /// <c>w:tblPr</c> and <c>w:tblGrid</c> are deliberately absent: both are REQUIRED children
+    /// of <c>CT_Tbl</c>, so an empty one must stay (a table missing either sends Word into
+    /// repair). An empty <c>&lt;w:tblPr/&gt;</c> is itself valid.</summary>
+    private static readonly HashSet<XName> RemovableEmptyPropertyContainers = new()
+    {
+        W.rPr, W.pPr, W.trPr, W.tcPr, W.tblPrEx,
+    };
+
     private static void AcceptProps(XElement change)
     {
         var parent = change.Parent;
         change.Remove();
         if (parent is not null && !parent.HasElements && HasNoSemanticAttributes(parent)
-            && (parent.Name == W.rPr || parent.Name == W.pPr || parent.Name == W.trPr
-                || parent.Name == W.tblPr || parent.Name == W.tcPr
-                || parent.Name == W.tblGrid || parent.Name == W.tblPrEx))
+            && RemovableEmptyPropertyContainers.Contains(parent.Name))
         {
             parent.Remove();
         }
@@ -1836,10 +1893,10 @@ internal static class RevisionOps
         }
 
         // A change whose stored old property set was empty leaves an empty husk —
-        // remove it (Word writes no empty rPr/pPr), mirroring AcceptProps.
+        // remove it (Word writes no empty rPr/pPr), mirroring AcceptProps. tblPr/tblGrid
+        // are excluded: see RemovableEmptyPropertyContainers.
         if (!parent.HasElements && HasNoSemanticAttributes(parent)
-            && (pn == W.rPr || pn == W.pPr || pn == W.trPr
-                || pn == W.tblPr || pn == W.tcPr || pn == W.tblGrid || pn == W.tblPrEx))
+            && RemovableEmptyPropertyContainers.Contains(pn))
         {
             parent.Remove();
         }

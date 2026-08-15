@@ -757,6 +757,7 @@ internal static class Dispatcher
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"
         or "accept_revision" or "reject_revision"
+        or "accept_all_revisions" or "reject_all_revisions"
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"

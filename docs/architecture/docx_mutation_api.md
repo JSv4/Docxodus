@@ -1172,6 +1172,34 @@ every surface: WASM/npm, the stdio host + docx-scalpel, and MCP `docxodus_track_
 The same ids can be passed to `AddCommentToRevision` (or `docxodus_comment add` with
 `revisionId`) to anchor review discussion to the exact live change before it is resolved.
 
+### Bulk resolution now fails closed — and that is a capability change
+
+Before #455, `AcceptAllRevisions`/`RejectAllRevisions` were a whole-document
+`RevisionProcessor` byte transform that always succeeded. They are now the selective resolver
+run over every registry entry, and the resolver **refuses the whole operation** on the first
+entry it cannot resolve safely. There is deliberately **no `force` mode**: a document whose
+revision markup the registry does not understand cannot be bulk-resolved through any surface.
+
+Concretely, these shapes were resolvable before and are refused now:
+
+| Shape | Status | Diagnostic |
+|-------|--------|-----------|
+| A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
+| A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
+| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
+| `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges | `Unsupported` | `unsupported_custom_xml_move_range` |
+| `w:ins`/`w:del` inside an `m:ctrlPr` (math control properties) | `Unsupported` | `unsupported_revision_family` |
+| `w:del` on a run's `w:rPr` or on a paragraph's `w:numPr` | `Unsupported` | `unsupported_revision_family` |
+| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Unsupported` | `unsupported_revision_family` |
+| `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
+| A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
+
+`RevisionProcessor.AcceptRevisions`/`RejectRevisions` still handle all of them and remain
+public, so a caller that needs the old always-succeeding behaviour can run the transform over
+saved bytes and reopen the session. Whether the session surface should grow an explicit
+opt-in escape hatch is an open public-API decision, not something the resolver should decide
+silently.
+
 ## ApplyFormat — substring and TextMatch overloads
 
 Three entry points for character-formatting (bold/italic/underline/strike/code/color/runStyle):

@@ -1834,6 +1834,11 @@ public sealed partial class DocxSession : IDisposable
     private long _nextTransactionId;
     private int _transactionPendingMutations;
     private int _revisionCounter = 1000;
+    /// <summary>False until <see cref="NextRevisionId"/> has raised
+    /// <see cref="_revisionCounter"/> past every <c>w:id</c> already live in the document.
+    /// Seeding is lazy so a session that never records a tracked change never pays the
+    /// story-part walk.</summary>
+    private bool _revisionCounterSeeded;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
 
@@ -2875,12 +2880,11 @@ public sealed partial class DocxSession : IDisposable
         var root = part?.GetXDocument().Root;
         if (main is null || part is null || root is null) return;
 
+        // EnumerateProjectedParts already yields StyleDefinitionsPart, so numbering
+        // referenced only from a style definition is covered without a special case.
         var referenced = new HashSet<int>();
-        IEnumerable<OpenXmlPart> referenceParts = EnumerateProjectedParts()
+        var referenceParts = EnumerateProjectedParts()
             .Where(projected => !ReferenceEquals(projected, part));
-        if (main.StyleDefinitionsPart is { } styles
-            && !referenceParts.Any(projected => ReferenceEquals(projected, styles)))
-            referenceParts = referenceParts.Append(styles);
         foreach (var referencePart in referenceParts)
         {
             foreach (var numId in referencePart.GetXDocument().Descendants(W.numId))
@@ -3424,12 +3428,26 @@ public sealed partial class DocxSession : IDisposable
     {
         var after = ObserveBatchSemantics();
         var warnings = before.Warnings.Concat(after.Warnings).ToList();
+        // Equivalence is decided on the SERIALIZED projection of each entry, never on CLR
+        // equality. That is the shape every transport actually publishes, it is exactly what
+        // npm's `mutationBatchChangeSet` compares (JSON.stringify of the same wire objects), and
+        // it stays correct if an entry type ever grows a collection member — record `==` would
+        // then fall back to reference equality per element and report every surviving object as
+        // modified.
         var revisionChanges = SafeChangeSet(
             before.Revisions, after.Revisions, revision => revision.Id,
-            static (left, right) => left == right, "revision", warnings);
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { left }),
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { right }),
+                StringComparison.Ordinal),
+            "revision", warnings);
         var commentChanges = SafeChangeSet(
             before.Comments, after.Comments, comment => comment.DefAnchorId,
-            static (left, right) => left == right, "comment", warnings);
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeCommentList(new[] { left }),
+                Internal.DocxSessionJson.SerializeCommentList(new[] { right }),
+                StringComparison.Ordinal),
+            "comment", warnings);
         var annotationChanges = SafeChangeSet(
             before.Annotations, after.Annotations, annotation => annotation.Id,
             static (left, right) => string.Equals(
@@ -3583,6 +3601,9 @@ public sealed partial class DocxSession : IDisposable
             {
                 _version = _version,
                 _revisionCounter = snapshot.RevisionCounter ?? _revisionCounter,
+                // _revisionCounterSeeded is deliberately NOT copied: the shadow re-seeds from
+                // its own clone on first use, which can only raise the counter it inherited.
+                _revisionCounterSeeded = false,
                 _lastFormatRevisionTicks = snapshot.LastFormatRevisionTicks ?? _lastFormatRevisionTicks,
                 _nextTransactionId = _nextTransactionId,
                 _initialProjection = CloneProjection(_initialProjection),
@@ -9946,7 +9967,10 @@ public sealed partial class DocxSession : IDisposable
             trPr = new XElement(W.trPr);
             row.AddFirst(trPr);
         }
-        trPr.Add(CreateRevisionEnvelope(wrapperName, author, date));
+        // Schema position, not append: CT_TrPr orders base properties → ins → del →
+        // trPrChange, so a row that already carries a trPrChange from a tracked
+        // SetTableRowOptions would otherwise get an out-of-order w:del after it.
+        SetChildInOrder(trPr, CreateRevisionEnvelope(wrapperName, author, date), TrPrChildOrder);
         foreach (var paragraph in row.Descendants(W.p).ToList())
             MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
     }
@@ -10171,9 +10195,16 @@ public sealed partial class DocxSession : IDisposable
             return err;
         var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, tbl!);
         var removalRoot = tbl!.Elements(W.tr).Count() <= 1 ? tbl : tr!;
-        if (ValidateBookmarkRemoval(new[] { removalRoot }, cellAnchorId) is { } bookmarkError)
+        // Tracked mode marks the row deleted instead of removing it, so nothing that lives
+        // inside it is actually going away — validating a removal that does not happen is a
+        // false refusal.
+        if (_trackedChanges != TrackedChangeMode.RenderInline
+            && ValidateBookmarkRemoval(new[] { removalRoot }, cellAnchorId) is { } bookmarkError)
             return bookmarkError;
         if (RefuseUnresolvedTableStructure(tbl!, cellAnchorId) is { } pending) return pending;
+        if (RefuseNestedTrackedPropertyChange(
+                new[] { (tr!.Element(W.trPr), W.trPrChange) }, cellAnchorId) is { } pendingRowFormat)
+            return pendingRowFormat;
         if (_trackedChanges == TrackedChangeMode.RenderInline
             && tr!.ElementsAfterSelf(W.tr).FirstOrDefault() is { } trackedNext
             && RowGrid(tr).Any(g => VMergeRestart(g.Tc) == true
@@ -10565,10 +10596,16 @@ public sealed partial class DocxSession : IDisposable
         "tcMar", "textDirection", "tcFitText", "vAlign", "hideMark", "headers",
     };
 
+    /// <summary>CT_TrPr child order: the CT_TrPrBase property set first, then the row
+    /// revision marks and finally <c>w:trPrChange</c>. The revision names belong here —
+    /// a row that already carries a <c>w:trPrChange</c> (tracked SetTableRowOptions) and is
+    /// then deleted in tracked mode must receive its <c>w:del</c> BEFORE that change, not
+    /// appended after it.</summary>
     private static readonly string[] TrPrChildOrder =
     {
         "cnfStyle", "divId", "gridBefore", "gridAfter", "wBefore", "wAfter", "cantSplit",
         "trHeight", "tblHeader", "tblCellSpacing", "jc", "hidden",
+        "ins", "del", "trPrChange",
     };
 
     private static readonly string[] TblBordersEdgeOrder =
@@ -12053,6 +12090,10 @@ public sealed partial class DocxSession : IDisposable
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
+        // The restored markup is different markup: re-seed the revision counter from it on
+        // next use. Seeding only ever raises the counter, so this can never hand out an id
+        // that is already live.
+        _revisionCounterSeeded = false;
         if (snapshot.PackageBytes is { } packageBytes)
         {
             RestorePackage(packageBytes);
@@ -12384,7 +12425,32 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    internal int NextRevisionId() => System.Threading.Interlocked.Increment(ref _revisionCounter);
+    /// <summary>
+    /// Mint the next <c>w:id</c> for revision markup this session writes. The counter is
+    /// seeded from the document's own markup on first use: a fixed starting point collides
+    /// with the four-digit ids Word and DocxDiff already emit, and two live groups sharing a
+    /// <c>w:id</c> in one part are permanently <see cref="RevisionResolutionStatus.Ambiguous"/>
+    /// — neither individually resolvable nor bulk-resolvable, with no recovery short of
+    /// hand-editing the XML.
+    /// </summary>
+    internal int NextRevisionId()
+    {
+        // Monitor is re-entrant, so this is safe whether or not the caller already holds
+        // the gate. Raising the counter is always safe: ids only have to be unique.
+        lock (_mutationGate)
+        {
+            if (!_revisionCounterSeeded)
+            {
+                _revisionCounterSeeded = true;
+                long highest = 0;
+                foreach (var story in RevisionStoryParts())
+                    highest = Math.Max(highest, Internal.RevisionOps.MaxRevisionId(story.Root));
+                if (highest > _revisionCounter)
+                    _revisionCounter = (int)Math.Min(highest, int.MaxValue - 1);
+            }
+        }
+        return System.Threading.Interlocked.Increment(ref _revisionCounter);
+    }
 
     private void ThrowIfDisposed()
     {

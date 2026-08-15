@@ -1081,12 +1081,20 @@ export class DocxSession {
     return JSON.parse(this.wasm.RejectRevision(this.handle, revisionId)) as EditResult;
   }
 
-  /** Accept every supported live revision as one undoable session mutation. */
+  /**
+   * Accept every live revision as one undoable session mutation.
+   *
+   * Fails closed: an unsupported, malformed, or ambiguous registry entry aborts the whole
+   * operation (`revisionUnsupported`/`revisionMalformed`/`revisionAmbiguous`) and nothing is
+   * mutated. There is no force mode — call {@link listRevisions} and read each entry's
+   * `diagnostic` to see what blocks it.
+   */
   acceptAllRevisions(): EditResult {
     return JSON.parse(this.wasm.AcceptAllRevisions(this.handle)) as EditResult;
   }
 
-  /** Reject every supported live revision as one undoable session mutation. */
+  /** Reject every live revision as one undoable session mutation. Fails closed exactly like
+   * {@link acceptAllRevisions}. */
   rejectAllRevisions(): EditResult {
     return JSON.parse(this.wasm.RejectAllRevisions(this.handle)) as EditResult;
   }
