@@ -1420,9 +1420,30 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]
-    public void MCP100_ToolCatalog_HasSixteenDistinctNamedToolsWithValidSchemas()
+    public void MCP100_ToolCatalog_HasExpectedDistinctNamedToolsWithValidSchemas()
     {
-        Assert.Equal(16, ToolCatalog.Tools.Count);
+        string[] expectedNames =
+        {
+            "docxodus_annotate",
+            "docxodus_close",
+            "docxodus_comment",
+            "docxodus_create",
+            "docxodus_edit",
+            "docxodus_format",
+            "docxodus_get_content",
+            "docxodus_links",
+            "docxodus_list",
+            "docxodus_mutations",
+            "docxodus_open",
+            "docxodus_pagination",
+            "docxodus_preview",
+            "docxodus_save",
+            "docxodus_search",
+            "docxodus_table",
+            "docxodus_track_changes",
+        };
+
+        Assert.Equal(expectedNames.Length, ToolCatalog.Tools.Count);
         var names = new System.Collections.Generic.HashSet<string>();
         foreach (var tool in ToolCatalog.Tools)
         {
@@ -1432,6 +1453,7 @@ public class McpServerDispatcherTests : IDisposable
             using var schema = JsonDocument.Parse(tool.InputSchemaJson); // must be valid JSON
             Assert.Equal("object", schema.RootElement.GetProperty("type").GetString());
         }
+        Assert.Equal(expectedNames, names.OrderBy(name => name, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -2008,5 +2030,49 @@ public class McpServerDispatcherTests : IDisposable
         var savedPath = Path.Combine(_root, "tracked-comment.docx");
         Save(sessionId, savedPath);
         Assert.Contains("trackRevisions", SavedSettingsXml(savedPath));
+    }
+
+    [Fact]
+    public void MCP141_NativeLinkAndBookmarkCrud_RoundTripsIdsAndTypedFailures()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "alpha beta")
+            .GetProperty("success").GetBoolean());
+
+        var bookmark = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add_bookmark","name":"Clause","startAnchorId":"{{anchor}}","startOffset":0,"endAnchorId":"{{anchor}}","endOffset":5}""")));
+        Assert.True(bookmark.GetProperty("success").GetBoolean());
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add_hyperlink","anchorId":"{{anchor}}","startOffset":6,"length":4,"kind":"external","target":"https://example.test/mcp"}""")));
+        Assert.True(added.GetProperty("success").GetBoolean());
+        var hyperlinkId = added.GetProperty("hyperlinkId").GetString()!;
+
+        var updated = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"update_hyperlink","hyperlinkId":{{JsonSerializer.Serialize(hyperlinkId)}},"kind":"internal","target":"Clause"}""")));
+        Assert.True(updated.GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"rename_bookmark","name":"Clause","newName":"ClauseTwo"}""")))
+            .GetProperty("success").GetBoolean());
+
+        var links = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list_hyperlinks","scope":"body"}""")));
+        var listed = Assert.Single(links.GetProperty("hyperlinks").EnumerateArray());
+        Assert.Equal(hyperlinkId, listed.GetProperty("id").GetString());
+        Assert.Equal("ClauseTwo", listed.GetProperty("target").GetString());
+
+        var blocked = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"remove_bookmark","name":"ClauseTwo"}""")));
+        Assert.False(blocked.GetProperty("success").GetBoolean());
+        Assert.Equal("bookmark_in_use", blocked.GetProperty("error").GetProperty("code").GetString());
+
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"remove_hyperlink","hyperlinkId":{{JsonSerializer.Serialize(hyperlinkId)}}}""")))
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"remove_bookmark","name":"ClauseTwo"}""")))
+            .GetProperty("success").GetBoolean());
     }
 }

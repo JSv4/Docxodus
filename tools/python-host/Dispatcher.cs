@@ -138,6 +138,26 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId")),
         "list_comments" => DocxSessionOps.ListComments(Handle(args)),
 
+        "list_hyperlinks" => DocxSessionOps.ListHyperlinks(
+            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+        "add_hyperlink" => DocxSessionOps.AddHyperlink(
+            Handle(args), Str(args, "anchorId"), Int(args, "start"), Int(args, "length"),
+            Str(args, "kind"), Str(args, "target")),
+        "update_hyperlink" => DocxSessionOps.UpdateHyperlink(
+            Handle(args), Str(args, "hyperlinkId"), Str(args, "kind"), Str(args, "target")),
+        "remove_hyperlink" => DocxSessionOps.RemoveHyperlink(Handle(args), Str(args, "hyperlinkId")),
+        "list_bookmarks" => DocxSessionOps.ListBookmarks(
+            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+        "add_bookmark" => DocxSessionOps.AddBookmark(
+            Handle(args), Str(args, "name"), Str(args, "startAnchorId"), Int(args, "startOffset"),
+            Str(args, "endAnchorId"), Int(args, "endOffset")),
+        "rename_bookmark" => DocxSessionOps.RenameBookmark(
+            Handle(args), Str(args, "name"), Str(args, "newName")),
+        "move_bookmark" => DocxSessionOps.MoveBookmark(
+            Handle(args), Str(args, "name"), Str(args, "startAnchorId"), Int(args, "startOffset"),
+            Str(args, "endAnchorId"), Int(args, "endOffset")),
+        "remove_bookmark" => DocxSessionOps.RemoveBookmark(Handle(args), Str(args, "name")),
+
         "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
         "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
         "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),

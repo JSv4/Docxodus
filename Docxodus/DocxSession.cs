@@ -66,6 +66,49 @@ public enum ContextBoundary
 
 public readonly record struct CharSpan(int Start, int Length);
 
+/// <summary>The kind of target carried by a native Word hyperlink.</summary>
+public enum HyperlinkKind { External, Internal }
+
+/// <summary>A hyperlink destination. External targets are URI strings; internal targets are
+/// bookmark names (without a leading <c>#</c>).</summary>
+public sealed record HyperlinkTarget(HyperlinkKind Kind, string Target)
+{
+    public static HyperlinkTarget External(string uri) => new(HyperlinkKind.External, uri);
+    public static HyperlinkTarget Internal(string bookmarkName) => new(HyperlinkKind.Internal, bookmarkName);
+}
+
+/// <summary>An unambiguous two-ended document range. Offsets are character boundaries and the
+/// end is exclusive. Endpoints may be in different paragraphs but writable bookmark ranges must
+/// remain in the same owning XML story part.</summary>
+public sealed record DocumentRange(
+    string StartAnchorId, int StartOffset, string EndAnchorId, int EndOffset)
+{
+    public static DocumentRange In(string anchorId, CharSpan span) =>
+        new(anchorId, span.Start, anchorId, checked(span.Start + span.Length));
+}
+
+/// <summary>One paragraph-local slice of a bookmark's range.</summary>
+public sealed record BookmarkRangeSegment(
+    string OwningPartUri, string Scope, string AnchorId, CharSpan Span, string Text);
+
+/// <summary>A first-class native Word hyperlink. <see cref="HyperlinkInfo.Id"/> follows the
+/// session anchor identity contract: stable in-session and across <c>Save(true)</c> (or a session
+/// configured with <c>PersistAnchorIds=true</c>), but not promised across the default stripped save.</summary>
+public sealed record HyperlinkInfo(
+    string Id, HyperlinkKind Kind, string OwningPartUri, string Scope,
+    string AnchorId, CharSpan Span, string Text, string? Target,
+    string? RelationshipId, bool? RelationshipIsExternal, bool IsBroken);
+
+/// <summary>A native Word bookmark pair. <see cref="Range"/> identifies both endpoints even
+/// when Word places them in different paragraphs; <see cref="Segments"/> provides the
+/// paragraph-local text slices. Malformed or unmatched start markers are reported through
+/// <see cref="BookmarkInfo.IsValid"/> and <see cref="BookmarkInfo.ValidationError"/>.</summary>
+public sealed record BookmarkInfo(
+    string Name, string BookmarkId, string StartPartUri, string StartScope,
+    string? EndPartUri, string? EndScope, DocumentRange? Range,
+    IReadOnlyList<BookmarkRangeSegment> Segments, string Text,
+    bool IsPaired, bool IsManaged, bool IsValid, string? ValidationError);
+
 public sealed record FormatOp
 {
     public bool? Bold { get; init; }
@@ -1571,6 +1614,18 @@ public enum EditErrorCode
     AnnotationNotFound,
     EmptyAnnotationSpan,
 
+    HyperlinkNotFound,
+    BookmarkNotFound,
+    DuplicateBookmarkName,
+    InvalidBookmarkName,
+    InvalidHyperlinkTarget,
+    MissingBookmarkTarget,
+    BookmarkInUse,
+    ManagedBookmark,
+    EmptyHyperlinkSpan,
+    UnsupportedInlineBoundary,
+    TrackedOperationUnsupported,
+
     /// <summary>A zero-length span passed to <see cref="DocxSession.AddComment"/>, or a
     /// whole-block comment requested on a paragraph with no text — a comment range must
     /// cover at least one character.</summary>
@@ -1608,6 +1663,10 @@ public sealed class EditResult
     /// with the affected annotation id. Null for every other op.
     /// </summary>
     public string? AnnotationId { get; init; }
+
+    /// <summary>The affected native hyperlink/bookmark identity, when applicable.</summary>
+    public string? HyperlinkId { get; init; }
+    public string? BookmarkName { get; init; }
 
     internal static EditResult Fail(EditErrorCode code, string message, string? anchorId = null) =>
         new() { Success = false, Error = new EditError(code, message, anchorId) };
@@ -1702,7 +1761,7 @@ public sealed class DocxSessionSettings
 
 // ─── Session ───────────────────────────────────────────────────────────────
 
-public sealed class DocxSession : IDisposable
+public sealed partial class DocxSession : IDisposable
 {
     private readonly DocxSessionSettings _settings;
     private readonly Internal.UndoRing<DocumentSnapshot> _history;
@@ -2616,7 +2675,8 @@ public sealed class DocxSession : IDisposable
         if (group is null)
             return EditResult.Fail(EditErrorCode.RevisionNotFound, $"revision not found: {revisionId}");
 
-        var partUri = parts[group.PartIndex].Part.Uri.ToString();
+        var owningPart = parts[group.PartIndex].Part;
+        var partUri = owningPart.Uri.ToString();
 
         // Capture the block anchors the resolution touches BEFORE applying — elements
         // detach during Apply and can no longer be resolved to a part afterwards.
@@ -2626,6 +2686,7 @@ public sealed class DocxSession : IDisposable
         try
         {
             var removedElements = Internal.RevisionOps.Apply(group, accept);
+            Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owningPart, R.id);
 
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -4163,7 +4224,7 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Resolves any bookmark in the main document part (Docxodus-managed or user-authored)
+    /// Resolves any bookmark in body/header/footer/footnote/endnote parts (Docxodus-managed or user-authored)
     /// to the block-level anchors covering its range, in document order. Empty when the
     /// bookmark name is unknown or its end marker is missing. Use this for raw bookmark
     /// names that didn't come from <see cref="AnnotationManager"/>.
@@ -4204,21 +4265,20 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Walks the main document part once: locates the bookmark by name, then collects
+    /// Walks the bookmark's owning story part once: locates the bookmark by name, then collects
     /// every block-level anchor whose subtree overlaps the bookmark range, deduplicated
     /// and sorted in document order. Pre-order positions are recomputed per call rather
     /// than cached — callers in agentic loops should resolve once and reuse the result.
     /// </summary>
     private IReadOnlyList<AnchorTarget> ResolveBookmarkAnchors(string bookmarkName)
     {
-        var main = _doc!.MainDocumentPart;
-        if (main is null) return Array.Empty<AnchorTarget>();
-        var root = main.GetXDocument().Root;
-        if (root is null) return Array.Empty<AnchorTarget>();
-
-        var start = root.Descendants(W.bookmarkStart)
-            .FirstOrDefault(b => (string?)b.Attribute(W.name) == bookmarkName);
-        if (start is null) return Array.Empty<AnchorTarget>();
+        var matches = Internal.OwnedPartRelationships.StoryParts(_doc!)
+            .SelectMany(o => o.Part.GetXDocument().Descendants(W.bookmarkStart).Select(start => (Owner: o, Start: start)))
+            .Where(x => (string?)x.Start.Attribute(W.name) == bookmarkName).ToList();
+        if (matches.Count != 1) return Array.Empty<AnchorTarget>();
+        var owner = matches[0].Owner;
+        var start = matches[0].Start;
+        var root = owner.Part.GetXDocument().Root!;
         var bookmarkId = (string?)start.Attribute(W.id);
         if (bookmarkId is null) return Array.Empty<AnchorTarget>();
         var end = root.Descendants(W.bookmarkEnd)
@@ -4230,7 +4290,8 @@ public sealed class DocxSession : IDisposable
         // candidate block without re-running the converter's KindFor classifier here.
         var index = Project().AnchorIndex;
         var byUnid = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
-        foreach (var t in index.Values) byUnid[t.Unid] = t;
+        foreach (var t in index.Values)
+            if (t.PartUri == owner.PartUri) byUnid[t.Unid] = t;
 
         // Pre-order positions support two operations: (a) deciding whether a block's
         // subtree overlaps the bookmark range, (b) sorting the collected hits back into
@@ -4251,11 +4312,7 @@ public sealed class DocxSession : IDisposable
             var unid = (string?)el.Attribute(PtOpenXml.Unid);
             if (unid is null) continue;
             if (!byUnid.TryGetValue(unid, out var target)) continue;
-            // The bookmark we found lives in the body part, so only body-scope anchors
-            // can possibly intersect it. The guard cheaply rejects same-Unid collisions
-            // with header/footer/footnote anchors (rare, but possible if the projector's
-            // index ever surfaces them).
-            if (!string.Equals(target.Anchor.Scope, "body", StringComparison.Ordinal)) continue;
+            if (!string.Equals(target.PartUri, owner.PartUri, StringComparison.Ordinal)) continue;
 
             var elStart = pos[el];
             var lastDesc = el.DescendantsAndSelf().Last();
@@ -5849,7 +5906,11 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
-
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && element.Descendants().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
+                "tracked whole-paragraph replacement containing bookmark markers is unsupported; use a surgical span replacement or switch recording mode",
+                anchorId);
         // Strip a leading auto-number prefix from the payload before parsing. The
         // projector emits "## Fourth The total number…" — auto-number from numPr
         // plus a space separator plus the run text — so an agent that echoes the
@@ -5862,6 +5923,12 @@ public sealed class DocxSession : IDisposable
         var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+        if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), anchorId) is { } linkError)
+            return linkError;
+
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
+        var oldHyperlinkIds = element.Descendants(W.hyperlink)
+            .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -5875,6 +5942,9 @@ public sealed class DocxSession : IDisposable
                 ApplyReplaceTextAccept(element, parsed.Blocks);
             }
             PromoteHyperlinkRelationships(element);
+            if (hyperlinkOwner is { } owner)
+                foreach (var relationshipId in oldHyperlinkIds)
+                    Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
 
             InvalidateProjectionCache();
             return new EditResult
@@ -5905,6 +5975,7 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
 
         // Word reserves the TYPED footnote/endnote definitions (separator, continuationSeparator,
         // continuationNotice) for page-rendering scaffolding; they carry no user content and
@@ -5914,6 +5985,11 @@ public sealed class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorWrongKind,
                 $"cannot delete a Word-reserved {target.Anchor.Kind} of type='{(string?)element.Attribute(W.type)}'",
                 anchorId);
+
+        bool structurallyDeletes = _trackedChanges != TrackedChangeMode.RenderInline
+            || target.Anchor.Kind is not ("p" or "h" or "li");
+        if (structurallyDeletes && ValidateBookmarkRemoval(new[] { element }, anchorId) is { } bookmarkError)
+            return bookmarkError;
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -5974,6 +6050,8 @@ public sealed class DocxSession : IDisposable
                 }
             }
             element.Remove();
+            if (hyperlinkOwner is { } owner)
+                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -6132,6 +6210,13 @@ public sealed class DocxSession : IDisposable
                 anchorForPatchScope.Anchor.Id);
         }
 
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, fromElement);
+        var structuralRoots = _trackedChanges == TrackedChangeMode.RenderInline
+            ? toRemove.Where(el => el.Name != W.p && el.Name != W.tbl).ToList()
+            : toRemove;
+        if (ValidateBookmarkRemoval(structuralRoots, anchorForPatchScope.Anchor.Id) is { } bookmarkError)
+            return bookmarkError;
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -6179,6 +6264,8 @@ public sealed class DocxSession : IDisposable
                         el.Remove();
                     }
                 }
+                if (hyperlinkOwner is { } trackedOwner)
+                    Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(trackedOwner.Part, R.id);
                 InvalidateProjectionCache();
                 return new EditResult
                 {
@@ -6197,6 +6284,8 @@ public sealed class DocxSession : IDisposable
                 CollectAnchors(el, includeDescendants: true, index, removed, removedIds);
                 el.Remove();
             }
+            if (hyperlinkOwner is { } owner)
+                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -6349,6 +6438,9 @@ public sealed class DocxSession : IDisposable
             (pos == Position.After && ReferenceEquals(target.NextNode, source)))
             return new EditResult { Success = true };
 
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary, bookmarkRejection, sourceAnchorId);
+
         if (MoveSourceRejection(source) is { } sourceRejection)
             return EditResult.Fail(EditErrorCode.InvalidPosition, sourceRejection, sourceAnchorId);
         if (BlockMoveSafetyError(BuildBlockMoveContext(parent), source, target, pos) is { } safetyError)
@@ -6375,7 +6467,6 @@ public sealed class DocxSession : IDisposable
             var destination = new XElement(source);
             foreach (var el in destination.DescendantsAndSelf())
                 el.Attributes(PtOpenXml.Unid).Remove();
-            RenumberClonedBookmarks(destination);
 
             // Both copies are live while the revision is pending, so the shared comment ids have to
             // be split. The move SOURCE takes the clones (see CloneCommentsForMoveSource), leaving
@@ -6423,6 +6514,16 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    /// <summary>A native tracked move keeps source and destination copies live simultaneously.
+    /// Duplicating bookmark names violates global bookmark identity; moving the markers to only one
+    /// side would lose them on either accept or reject. Reject explicitly instead of emitting an
+    /// ambiguous pending document.</summary>
+    private string? TrackedBookmarkMoveRejection(XElement source) =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+        && source.DescendantsAndSelf().Any(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
+            ? "tracked block moves containing bookmark markers are unsupported because both revision sides are live"
+            : null;
+
     /// <summary>Reject reasons that depend only on the SOURCE block — if one applies, the block
     /// cannot be moved anywhere, so <see cref="ValidMoveTargets"/> can answer with an empty set
     /// without testing a single target. Shared with <see cref="MoveBlock"/> so the drag UI and the
@@ -6431,6 +6532,12 @@ public sealed class DocxSession : IDisposable
     {
         if (source.Name == W.p && source.Element(W.pPr)?.Element(W.sectPr) is not null)
             return "cannot move a paragraph that owns a section break";
+
+        // MoveBlock tests this first and reports it as UnsupportedInlineBoundary; repeating the
+        // PREDICATE (not the check) here is what keeps ValidMoveTargets from advertising a drop the
+        // engine will refuse. One owner, two callers, two error codes.
+        if (TrackedBookmarkMoveRejection(source) is { } bookmarkRejection)
+            return bookmarkRejection;
 
         // Re-wrapping an existing revision can create illegal nested move markup. Direct
         // mode can carry ordinary ins/del content safely, but an existing named move range
@@ -6679,69 +6786,6 @@ public sealed class DocxSession : IDisposable
             (e.Name == W.p || e.Name == W.tbl));
 
     /// <summary>
-    /// Give a tracked-move destination clone's bookmarks fresh, document-unique ids, preserving
-    /// each start↔end pairing and both copies' NAME.
-    /// </summary>
-    /// <remarks>
-    /// A tracked move keeps the source and the destination live at the same time, so every
-    /// id-bearing marker in the clone is a second copy. <c>w:bookmarkStart/@w:id</c> is
-    /// uniqueness-constrained, so leaving the clone's ids alone makes the document schema-invalid
-    /// for as long as the revision is pending — the state a redline is sent out in.
-    /// <para>
-    /// The NAME is deliberately duplicated: this mirrors
-    /// <c>IrMarkupRenderer.NormalizeBookmarks</c> step (B), whose rule for a whole-block-revised
-    /// paragraph is that the del copy and the ins copy each carry the name into their own
-    /// resolution. Accepting keeps the destination's bookmark, rejecting keeps the source's, so
-    /// every <c>REF</c>/<c>PAGEREF</c>/<c>HYPERLINK \l</c> still resolves either way.
-    /// </para>
-    /// </remarks>
-    private void RenumberClonedBookmarks(XElement destination)
-    {
-        var starts = destination.DescendantsAndSelf(W.bookmarkStart).ToList();
-        var ends = destination.DescendantsAndSelf(W.bookmarkEnd).ToList();
-        if (starts.Count == 0 && ends.Count == 0)
-            return;
-
-        int next = GlobalMaxBookmarkId() + 1;
-        foreach (var start in starts)
-        {
-            var oldId = (string?)start.Attribute(W.id);
-            var fresh = (next++).ToString();
-            start.SetAttributeValue(W.id, fresh);
-            // Re-pair: the matching end is the clone's own end with the same original id.
-            foreach (var end in ends.Where(e => (string?)e.Attribute(W.id) == oldId).Take(1))
-                end.SetAttributeValue(W.id, fresh);
-        }
-    }
-
-    /// <summary>Highest <c>w:bookmarkStart</c>/<c>w:bookmarkEnd</c> id across every story in the
-    /// package, so a fresh id collides with nothing. Mirrors
-    /// <c>IrMarkupRenderer.GlobalMaxBookmarkId</c>.</summary>
-    private int GlobalMaxBookmarkId()
-    {
-        int max = 0;
-        var main = _doc!.MainDocumentPart;
-        if (main is null)
-            return max;
-
-        void Scan(XElement? root)
-        {
-            if (root is null) return;
-            foreach (var m in root.DescendantsAndSelf()
-                         .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
-                if (int.TryParse((string?)m.Attribute(W.id), out var v) && v > max)
-                    max = v;
-        }
-
-        Scan(main.GetXDocument().Root);
-        foreach (var header in main.HeaderParts) Scan(header.GetXDocument().Root);
-        foreach (var footer in main.FooterParts) Scan(footer.GetXDocument().Root);
-        if (main.FootnotesPart is not null) Scan(main.FootnotesPart.GetXDocument().Root);
-        if (main.EndnotesPart is not null) Scan(main.EndnotesPart.GetXDocument().Root);
-        return max;
-    }
-
-    /// <summary>
     /// Wrap every not-already-revised run of <paramref name="paragraph"/> in a
     /// <paramref name="wrapperName"/> revision envelope and mark the paragraph mark to match.
     /// </summary>
@@ -6858,6 +6902,8 @@ public sealed class DocxSession : IDisposable
         var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+        if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), anchorId) is { } linkError)
+            return linkError;
         if (parsed.Blocks.Count == 0)
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "empty payload", anchorId);
 
@@ -7349,6 +7395,16 @@ public sealed class DocxSession : IDisposable
         var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, cellAnchorId);
+        if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), cellAnchorId) is { } linkError)
+            return linkError;
+
+        // Replacing cell content removes every block in the cell, including nested tables and
+        // structured wrappers; validate the whole cell subtree rather than only direct paragraphs.
+        if (ValidateBookmarkRemoval(new[] { cell! }, cellAnchorId) is { } bookmarkError)
+            return bookmarkError;
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, cell);
+        var oldHyperlinkIds = cell.Descendants(W.hyperlink)
+            .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -7362,6 +7418,9 @@ public sealed class DocxSession : IDisposable
                 cell.Add(p);
                 PromoteHyperlinkRelationships(p);
             }
+            if (hyperlinkOwner is { } owner)
+                foreach (var relationshipId in oldHyperlinkIds)
+                    Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
             // A table cell must contain at least one paragraph per OOXML schema.
             if (!cell.Elements(W.p).Any())
                 cell.Add(new XElement(W.p));
@@ -7983,7 +8042,28 @@ public sealed class DocxSession : IDisposable
                 paras.Add(BuildParagraphFromParsedBlock(block));
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
+        if (ValidatePendingHyperlinks(paras, anchorId) is { } linkError)
+            return linkError;
         ApplyHeaderFooterStyle(paras, isHeader);
+
+        // Resolve an existing same-kind story before snapshotting so replacing its root cannot
+        // silently remove one end of a cross-boundary bookmark or a still-targeted bookmark.
+        var currentSectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+        if (currentSectPr is not null)
+        {
+            var currentRefName = isHeader ? W.headerReference : W.footerReference;
+            var currentType = HeaderFooterTypeValue(kind);
+            var currentRef = currentSectPr.Elements(currentRefName)
+                .FirstOrDefault(r => (string?)r.Attribute(W.type) == currentType);
+            OpenXmlPart? currentPart = null;
+            if ((string?)currentRef?.Attribute(R.id) is { } currentRid)
+                foreach (var pp in main.Parts)
+                    if (pp.RelationshipId == currentRid) { currentPart = pp.OpenXmlPart; break; }
+            bool currentTypeMatches = isHeader ? currentPart is HeaderPart : currentPart is FooterPart;
+            if (currentTypeMatches && currentPart?.GetXDocument().Root is { } oldRoot
+                && ValidateBookmarkRemoval(new[] { oldRoot }, anchorId) is { } bookmarkError)
+                return bookmarkError;
+        }
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -8010,9 +8090,12 @@ public sealed class DocxSession : IDisposable
             bool typeMatches = isHeader ? reuse is HeaderPart : reuse is FooterPart;
 
             OpenXmlPart part;
+            var oldHyperlinkIds = new List<string>();
             if (reuse is not null && typeMatches)
             {
                 part = reuse;
+                oldHyperlinkIds.AddRange(part.GetXDocument().Descendants(W.hyperlink)
+                    .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>());
             }
             else
             {
@@ -8032,6 +8115,9 @@ public sealed class DocxSession : IDisposable
                 new XAttribute(XNamespace.Xmlns + "r", R.r),
                 paras);
             part.PutXDocument(new XDocument(newRoot));
+            foreach (var p in paras) PromoteHyperlinkRelationships(p);
+            foreach (var relationshipId in oldHyperlinkIds)
+                Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(part, relationshipId, R.id);
 
             // Visibility flags so Word actually shows the First/Even stories.
             if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
@@ -8390,6 +8476,8 @@ public sealed class DocxSession : IDisposable
                 paras.Add(BuildParagraphFromParsedBlock(block));
         }
         if (paras.Count == 0) paras.Add(new XElement(W.p));
+        if (ValidatePendingHyperlinks(paras, anchorId) is { } linkError)
+            return linkError;
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -8420,6 +8508,7 @@ public sealed class DocxSession : IDisposable
                 paras);
             root.Add(note);
             UnidHelper.AssignToSelfAndDescendants(note);
+            foreach (var p in paras) PromoteHyperlinkRelationships(p);
             part.PutXDocument();
 
             InvalidateProjectionCache();
@@ -9231,6 +9320,17 @@ public sealed class DocxSession : IDisposable
         var opts = options ?? new TableInsertOptions();
         var contents = opts.CellContents;
 
+        if (contents is not null)
+        {
+            foreach (var markdown in contents.Where(s => !string.IsNullOrEmpty(s)))
+            {
+                var parsedCell = Internal.MarkdownPayloadParser.Parse(markdown!);
+                if (parsedCell.Success
+                    && ValidatePendingHyperlinks(parsedCell.Blocks.SelectMany(b => b.RunElements), anchorId) is { } linkError)
+                    return linkError;
+            }
+        }
+
         // Explicit per-column widths: one per column, all positive. A mismatched count is a
         // caller error — reject rather than silently equalize (no silent caps).
         var colWidths = opts.ColumnWidths;
@@ -9712,6 +9812,10 @@ public sealed class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out _, out var tr, out var tbl, out var target) is { } err)
             return err;
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, tbl!);
+        var removalRoot = tbl!.Elements(W.tr).Count() <= 1 ? tbl : tr!;
+        if (ValidateBookmarkRemoval(new[] { removalRoot }, cellAnchorId) is { } bookmarkError)
+            return bookmarkError;
 
         var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
@@ -9726,6 +9830,9 @@ public sealed class DocxSession : IDisposable
                             SetVMerge(heir, restart: true);
                 tr.Remove();
             }
+
+            if (hyperlinkOwner is { } owner)
+                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -9753,8 +9860,17 @@ public sealed class DocxSession : IDisposable
     {
         if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out var tbl, out var target) is { } err)
             return err;
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, tbl!);
 
         int doomed = RowGrid(tr!).First(g => g.Tc == tc).Start;
+        int existingColumns = GridColumnCount(tbl!);
+        var removalRoots = existingColumns <= 1
+            ? new List<XElement> { tbl! }
+            : tbl!.Elements(W.tr).Select(row => CellCovering(RowGrid(row), doomed))
+                .Where(cell => cell.HasValue && cell.Value.Span == 1)
+                .Select(cell => cell!.Value.Tc).ToList();
+        if (ValidateBookmarkRemoval(removalRoots, cellAnchorId) is { } bookmarkError)
+            return bookmarkError;
 
         var before = CaptureTableMetadata(tbl!);
         _history.RecordPreOp(TakeSnapshot());
@@ -9762,7 +9878,7 @@ public sealed class DocxSession : IDisposable
         {
             EnsureGridColumnsForMutation(tbl!);
             var grid = tbl!.Element(W.tblGrid);
-            int colCount = GridColumnCount(tbl);
+            int colCount = existingColumns;
             int lostWidth = GridColWidths(tbl) is { } widths && doomed < widths.Count ? widths[doomed] : 0;
 
             if (colCount <= 1) tbl.Remove();
@@ -9796,6 +9912,9 @@ public sealed class DocxSession : IDisposable
                 var cols = grid?.Elements(W.gridCol).ToList();
                 if (cols is not null && doomed < cols.Count) cols[doomed].Remove();
             }
+
+            if (hyperlinkOwner is { } owner)
+                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -9843,7 +9962,7 @@ public sealed class DocxSession : IDisposable
     private static XElement? EmptyCellBody(XElement tc)
     {
         var blocks = CellBlocks(tc);
-        if (blocks is [var only] && IsEmptyBlock(only)) return null;
+        if (blocks.Count == 1 && IsEmptyBlock(blocks[0])) return null;
         foreach (var b in blocks) b.Remove();
         var p = new XElement(W.p);
         UnidHelper.AssignToSelfAndDescendants(p);
@@ -9915,6 +10034,13 @@ public sealed class DocxSession : IDisposable
                 cellAnchorId);
 
         var before = CaptureTableMetadata(tbl);
+        var discardedBlocks = opts.Content == TableMergeContent.Append
+            ? absorbed.SelectMany(CellBlocks).Where(IsEmptyBlock).ToList()
+            : absorbed.SelectMany(CellBlocks).ToList();
+        if (ValidateBookmarkRemoval(discardedBlocks, cellAnchorId) is { } bookmarkError)
+            return bookmarkError;
+
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, tbl);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -9940,6 +10066,9 @@ public sealed class DocxSession : IDisposable
                 SetVMerge(keep, restart: i == 0);
                 if (i > 0) _ = EmptyCellBody(keep);
             }
+
+            if (hyperlinkOwner is { } owner)
+                Internal.OwnedPartRelationships.SweepOrphanedHyperlinks(owner.Part, R.id);
 
             InvalidateProjectionCache();
             var mapping = CompleteTableMapping(before, tbl);
@@ -11208,7 +11337,8 @@ public sealed class DocxSession : IDisposable
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts)
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts,
+        System.Collections.Generic.IReadOnlyList<(string PartUri, string RelId, string Uri, bool IsExternal)> HyperlinkRelationships)
     {
         /// <summary>
         /// Optional exact package checkpoint used by transaction boundaries. Unlike the selective
@@ -11244,6 +11374,7 @@ public sealed class DocxSession : IDisposable
         var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
         var commentParts = new System.Collections.Generic.List<(string, string)>();
         var commentThreadingParts = new System.Collections.Generic.List<(string, bool, string)>();
+        var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
@@ -11262,7 +11393,12 @@ public sealed class DocxSession : IDisposable
                 commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsIdsPart), false,
                     main.WordprocessingCommentsIdsPart.Uri.ToString()));
         }
-        return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts, commentThreadingParts);
+        foreach (var owner in Internal.OwnedPartRelationships.StoryParts(_doc!))
+            foreach (var relationship in owner.Part.HyperlinkRelationships)
+                hyperlinkRelationships.Add((owner.PartUri, relationship.Id,
+                    relationship.Uri.ToString(), relationship.IsExternal));
+        return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts,
+            commentThreadingParts, hyperlinkRelationships);
     }
 
     /// <summary>
@@ -11279,7 +11415,8 @@ public sealed class DocxSession : IDisposable
             Array.Empty<(string RelId, bool IsHeader, string PartUri)>(),
             Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
             Array.Empty<(string RelId, string PartUri)>(),
-            Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>())
+            Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>(),
+            Array.Empty<(string PartUri, string RelId, string Uri, bool IsExternal)>())
         {
             PackageBytes = bytes,
             RevisionCounter = _revisionCounter,
@@ -11434,6 +11571,8 @@ public sealed class DocxSession : IDisposable
             ReconcileCommentThreadingParts(main, snapshot, byUri);
         }
 
+        RestoreHyperlinkRelationships(snapshot);
+
         // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
         // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml) is unsafe for
         // non-annotation custom-xml parts (wrong content type, no CustomXmlPropertiesPart partner).
@@ -11479,6 +11618,36 @@ public sealed class DocxSession : IDisposable
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
         _raw = null;
         InvalidateProjectionCache();
+    }
+
+    /// <summary>Restore reference-relationship topology as well as XML. Without this, undoing a
+    /// hyperlink create/delete restores <c>r:id</c> attributes but leaves the corresponding
+    /// package relationship in the wrong state.</summary>
+    private void RestoreHyperlinkRelationships(DocumentSnapshot snapshot)
+    {
+        var expectedByPart = snapshot.HyperlinkRelationships
+            .GroupBy(r => r.PartUri, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(r => r.RelId, StringComparer.Ordinal), StringComparer.Ordinal);
+        foreach (var owner in Internal.OwnedPartRelationships.StoryParts(_doc!))
+        {
+            expectedByPart.TryGetValue(owner.PartUri, out var expected);
+            expected ??= new System.Collections.Generic.Dictionary<string, (string PartUri, string RelId, string Uri, bool IsExternal)>(StringComparer.Ordinal);
+            var live = owner.Part.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
+            foreach (var relationship in live.Values)
+                if (!expected.ContainsKey(relationship.Id))
+                    owner.Part.DeleteReferenceRelationship(relationship.Id);
+            foreach (var relationship in expected.Values)
+            {
+                if (live.TryGetValue(relationship.RelId, out var existing)
+                    && existing.Uri.ToString() == relationship.Uri
+                    && existing.IsExternal == relationship.IsExternal) continue;
+                if (live.ContainsKey(relationship.RelId))
+                    owner.Part.DeleteReferenceRelationship(relationship.RelId);
+                owner.Part.AddHyperlinkRelationship(
+                    new Uri(relationship.Uri, UriKind.RelativeOrAbsolute),
+                    relationship.IsExternal, relationship.RelId);
+            }
+        }
     }
 
     /// <summary>
@@ -11709,6 +11878,38 @@ public sealed class DocxSession : IDisposable
         return (pre, post);
     }
 
+    private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
+
+    /// <summary>
+    /// Capture zero-width markers before a whole-paragraph replacement. Bookmark endpoints retain
+    /// their old character coordinate when the replacement is long enough and clamp to its end
+    /// otherwise. This is deterministic and, unlike the old leading-marker fallback, cannot invert
+    /// or collapse a range merely because its end marker originally sat between two runs.
+    /// </summary>
+    private static List<PreservedMarkerPosition> CapturePreservedMarkerPositions(XElement paragraph)
+    {
+        var candidates = paragraph.Elements()
+            .Where(e => PreservedMarkerNames.Contains(e.Name) || IsNoteRefOnlyRun(e))
+            .Concat(paragraph.Descendants()
+                .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+            .Distinct()
+            .OrderBy(e => e, Comparer<XElement>.Create(XNode.DocumentOrderComparer.Compare))
+            .ToList();
+        var result = candidates.Select((element, order) =>
+            new PreservedMarkerPosition(element, MarkerOffset(paragraph, element), order)).ToList();
+        foreach (var marker in candidates) marker.Remove();
+        return result;
+    }
+
+    private static void RestorePreservedMarkerPositions(
+        XElement paragraph, IReadOnlyList<PreservedMarkerPosition> markers)
+    {
+        int length = ParagraphText(paragraph).Length;
+        foreach (var group in markers.GroupBy(m => Math.Clamp(m.Offset, 0, length)).OrderBy(g => g.Key))
+            InsertMarkersAtOffset(paragraph, group.Key,
+                group.OrderBy(m => m.Order).Select(m => m.Element).ToList());
+    }
+
     /// <summary>
     /// If <paramref name="paragraph"/> carries a resolvable <c>w:numPr</c> auto-number
     /// (e.g. <c>"1."</c>, <c>"Fourth"</c>), strip a matching leading prefix from
@@ -11734,14 +11935,13 @@ public sealed class DocxSession : IDisposable
     private static void ApplyReplaceTextAccept(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
     {
         var pPr = paragraph.Element(W.pPr);
-        var (preMarkers, postMarkers) = ExtractWrappingMarkers(paragraph);
+        var markers = CapturePreservedMarkerPositions(paragraph);
         paragraph.RemoveNodes();
         if (pPr is not null) paragraph.Add(pPr);
-        foreach (var m in preMarkers) paragraph.Add(m);
         if (blocks.Count > 0)
             foreach (var run in blocks[0].RunElements)
                 paragraph.Add(new XElement(run));
-        foreach (var m in postMarkers) paragraph.Add(m);
+        RestorePreservedMarkerPositions(paragraph, markers);
     }
 
     private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
@@ -11930,28 +12130,27 @@ public sealed class DocxSession : IDisposable
 
     private void PromoteHyperlinkRelationships(XElement paragraph)
     {
-        var main = _doc!.MainDocumentPart!;
-        // Reuse an existing relationship when the same URL has already been registered.
-        // Without dedup, every ReplaceText with a link adds a fresh rId; an agent loop
-        // that edits the same paragraph N times grows the .rels file unboundedly.
-        var existing = main.HyperlinkRelationships
-            .GroupBy(rl => rl.Uri.ToString())
-            .ToDictionary(g => g.Key, g => g.First().Id);
+        var owner = Internal.OwnedPartRelationships.FindOwner(_doc!, paragraph)
+            ?? throw new InvalidOperationException("hyperlink paragraph has no owning package part");
         foreach (var link in paragraph.Descendants(W.hyperlink).ToList())
         {
             var hrefAttr = link.Attribute(Internal.MarkdownPayloadParser.HrefAttr);
             if (hrefAttr is null) continue;
             var url = hrefAttr.Value;
-            string relId;
-            if (existing.TryGetValue(url, out var foundId)) relId = foundId;
+            if (url.StartsWith("#", StringComparison.Ordinal))
+            {
+                // Internal jumps are relationship-free OOXML. Writing r:id to an external
+                // relationship whose URI is literally "#name" is invalid Word semantics (#469).
+                link.SetAttributeValue(W.anchor, url.Substring(1));
+                link.Attribute(R.id)?.Remove();
+            }
             else
             {
-                var rel = main.AddHyperlinkRelationship(
-                    new Uri(url, UriKind.RelativeOrAbsolute), true);
-                relId = rel.Id;
-                existing[url] = relId;
+                var relationship = Internal.OwnedPartRelationships.FindOrAddExternalHyperlink(
+                    owner.Part, new Uri(url, UriKind.RelativeOrAbsolute));
+                link.SetAttributeValue(R.id, relationship.Id);
+                link.Attribute(W.anchor)?.Remove();
             }
-            link.SetAttributeValue(R.id, relId);
             hrefAttr.Remove();
         }
     }
@@ -12476,18 +12675,24 @@ public sealed class DocxSession : IDisposable
         SplitRunsAtOffset(hyperlink, localOffset);
 
         int consumed = 0;
-        var movedRuns = new List<XElement>();
-        foreach (var run in hyperlink.Elements(W.r).ToList())
+        var movedChildren = new List<XElement>();
+        foreach (var child in hyperlink.Elements().ToList())
         {
-            int len = RunText(run).Length;
-            if (consumed >= localOffset) movedRuns.Add(run);
+            int len = IsInlineChild(child) ? InlineChildTextLength(child) : 0;
+            if (consumed >= localOffset) movedChildren.Add(child);
             consumed += len;
         }
-        if (movedRuns.Count == 0) return;
+        if (movedChildren.Count == 0) return;
 
         var newLink = new XElement(W.hyperlink);
-        foreach (var a in hyperlink.Attributes()) newLink.SetAttributeValue(a.Name, a.Value);
-        foreach (var run in movedRuns) { run.Remove(); newLink.Add(run); }
+        // Every attribute EXCEPT the Unid: that one is this hyperlink's identity, and the public
+        // hl:<scope>:<unid> id is derived from it. Cloning it would give the two halves the same id,
+        // so FindHyperlinkElement would match only the first and Update/RemoveHyperlink would
+        // silently act on half the link.
+        foreach (var a in hyperlink.Attributes())
+            if (a.Name != PtOpenXml.Unid) newLink.SetAttributeValue(a.Name, a.Value);
+        newLink.SetAttributeValue(PtOpenXml.Unid, UnidHelper.GenerateUnid());
+        foreach (var child in movedChildren) { child.Remove(); newLink.Add(child); }
         hyperlink.AddAfterSelf(newLink);
     }
 

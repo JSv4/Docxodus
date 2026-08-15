@@ -137,6 +137,25 @@ without checking for it.
 
 ![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
 
+Native links and bookmarks use the same stable anchors and exact character spans:
+
+```ts
+const session = openDocxSession(docxBytes, { persistAnchorIds: true });
+const paragraph = Object.keys(session.project().anchorIndex)
+  .find(id => id.startsWith('p:body:'))!;
+session.addBookmark('Definitions', {
+  startAnchorId: paragraph, startOffset: 0,
+  endAnchorId: paragraph, endOffset: 11,
+});
+session.addHyperlink(paragraph, { start: 0, length: 11 }, 'internal', 'Definitions');
+const links = session.listHyperlinks(); // ids feed updateHyperlink/removeHyperlink
+const bookmarks = session.listBookmarks(); // exact endpoint range + per-paragraph segments
+```
+
+External links own their relationship in the actual body/header/footer/footnote/endnote part;
+internal links are relationship-free bookmark targets. Bookmark rename retargets inbound links
+atomically, and unsafe removal or cross-part ranges return typed `EditResult` errors.
+
 ---
 
 ## Everything else

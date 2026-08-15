@@ -416,11 +416,11 @@ is succeeds as a no-op **and records no undo snapshot**.
 
 `accept ≡ the requested order` and `reject ≡ the original order` hold for both shapes.
 
-**Two live copies, so ids must be split.** A tracked move duplicates the block, and the clone's
-id-bearing markers would otherwise collide:
+**Two live copies, so identities must stay unambiguous.** A tracked move duplicates the block:
 
-- bookmarks — the destination clone takes fresh document-unique ids; **both copies keep the
-  NAME**, so each survives its own resolution and cross-references resolve either way;
+- bookmarks — rejected with `UnsupportedInlineBoundary` when the source contains bookmark
+  markers. Both revision sides are live, so duplicating the name violates the first-class global
+  name contract while keeping the markers on only one side loses them on accept or reject;
 - comments — the move SOURCE takes a fresh comment id and a cloned definition (fresh
   `w14:paraId`, entries in both threading parts, cloned replies re-pointed at cloned parents),
   leaving the destination on the original comment and its thread;
@@ -434,6 +434,7 @@ id-bearing markers would otherwise collide:
 cross-block comment, bookmark, permission or native-move range; a move whose span crosses a
 section-break paragraph; a source already inside a native move range; and — in tracked mode
 only — a source that already contains revision markup a move would have to re-wrap.
+Tracked moves containing bookmark markers are also refused with `UnsupportedInlineBoundary`.
 `AnchorWrongKind` for a non-block kind or a non-top-level block (a table cell paragraph: move
 the whole table instead).
 
@@ -441,7 +442,10 @@ the whole table instead).
 
 Returns the blocks `sourceAnchorId` may legally move next to, in document order; empty when the
 block cannot move at all. It shares `MoveBlock`'s guards rather than restating them, so a listed
-`(target, side)` pair is one `MoveBlock` accepts.
+`(target, side)` pair is one `MoveBlock` accepts. That sharing has to reach the **mode-dependent**
+rejections too: in `RenderInline` mode a bookmark-bearing source cannot move at all, and since
+Word puts a `_Toc` bookmark on every heading, a rejection this gate did not know about would draw
+drop indicators over most of a TOC'd contract before every drop hard-failed.
 
 **The two sides are reported separately, and that distinction is load-bearing.** Landing *into* a
 cross-block bookmark/comment/permission range changes its membership while landing outside it does
@@ -536,6 +540,107 @@ same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
 recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
 same reported structural fall-through.
 
+## Native hyperlinks and bookmarks
+
+Hyperlinks and bookmarks are addressable document objects, not projection-only formatting:
+
+```csharp
+IReadOnlyList<HyperlinkInfo> ListHyperlinks(ProjectionScopes scopes = ProjectionScopes.All);
+EditResult AddHyperlink(string anchorId, CharSpan span, HyperlinkTarget target);
+EditResult UpdateHyperlink(string hyperlinkId, HyperlinkTarget target);
+EditResult RemoveHyperlink(string hyperlinkId);
+
+IReadOnlyList<BookmarkInfo> ListBookmarks(ProjectionScopes scopes = ProjectionScopes.All);
+EditResult AddBookmark(string name, DocumentRange range);
+EditResult RenameBookmark(string name, string newName);
+EditResult MoveBookmark(string name, DocumentRange range);
+EditResult RemoveBookmark(string name);
+```
+
+`HyperlinkTarget.External(uri)` creates or reuses a hyperlink relationship on the XML part that
+owns the link. A header link is related from its `HeaderPart`, a footnote link from its
+`FootnotesPart`, and so on; the main document never acts as a relationship proxy for another
+story. `HyperlinkTarget.Internal(bookmarkName)` writes only `w:anchor` and requires exactly one
+coherent, ordered start/end pair with that globally unique name in one story part; a lone or
+ambiguous marker is `MissingBookmarkTarget`, not a targetable bookmark. Wire callers must pass
+target kind `internal` or `external`; unknown strings are `InvalidHyperlinkTarget` rather than
+silently becoming external. Orphaned external relationships are removed only after their last markup
+reference disappears. The owner-aware relationship helper is generic over the referencing
+attribute so part-backed content such as images can reuse the same ownership/orphan rules.
+
+`HyperlinkInfo` reports the owner part/scope, enclosing anchor, exact half-open `CharSpan`, visible
+text, target, relationship metadata, and broken-target state. A hyperlink id follows the anchor
+identity contract: stable for the live session and across `Save(true)` / `PersistAnchorIds`, but
+not promised across a default save that strips Docxodus Unids. Splitting a paragraph inside a link
+cuts the `w:hyperlink` in two and gives each half its own identity, so both stay individually
+addressable by `UpdateHyperlink`/`RemoveHyperlink`.
+
+`AddHyperlink` relocates the whole contiguous sibling range it covers, not just the `w:r` elements.
+A zero-width marker sitting between two selected runs — `w:bookmarkStart`/`End`,
+`w:commentRangeStart`/`End`, `w:proofErr` — is a legal `w:hyperlink` child and moves *inside* the
+new link at its original position. Stranding it after the link would, for a bookmark whose start
+lies inside the span, put the start after its own end and break the pair permanently. Content
+outside the span keeps its side, so document order is preserved for every marker.
+
+Story scope covers body, headers, footers, footnotes, endnotes, **and comments**: a comment
+paragraph is anchor-addressable (`p:cmt:…`) and editable, so it owns its own hyperlink
+relationships and can host bookmark markers like any other story.
+
+Bookmark names follow Word's UI-safe form: 1–40 characters, starting with a letter or underscore,
+then letters, digits, or underscores. **Word's own namespace is closed to creation.** `AddBookmark`
+and `RenameBookmark`'s destination name refuse `_GoBack`, `_Toc*`, `_Ref*`, `_Hlt*`, and `_Hlk*`
+with `InvalidBookmarkName`: Word allocates and rewrites those for itself (a TOC refresh regenerates
+the whole `_Toc*` family), so a name placed there is reallocated or clobbered under the caller.
+Bookmarks Word already put there are *not* frozen — they list, rename, move, and remove like any
+other, with their cross-reference fields retargeted or blocking removal as usual. Renaming a `_Toc*`
+bookmark is simply not durable, because the next TOC refresh regenerates it.
+
+Names are globally unique; numeric `w:id` pairing is scoped
+to the owning story part because real Word files reuse numeric ids across parts. A
+`DocumentRange` may cross paragraphs but both endpoints must belong to the same body, individual
+header/footer, footnote, endnote, or comments part. `BookmarkInfo.Range` carries the two endpoint anchors and
+offsets; `Segments` supplies exact per-paragraph spans and text. Unmatched starts and ambiguous
+same-story numeric ids or duplicate names remain visible as invalid diagnostics. Orphan end markers
+have no name/start coordinate and are not returned as rows, but still participate in fresh numeric
+id allocation. `_Docxodus_Ann_*` bookmarks are owned by the annotation subsystem and reject generic
+bookmark mutation.
+
+**A bookmark has two consumer families, and both count as "referenced."** Beyond
+`w:hyperlink/@w:anchor`, Word cross-references a bookmark through `REF`, `PAGEREF`, `NOTEREF`, and
+`HYPERLINK \l` field instructions — carried either in `w:fldSimple/@w:instr` or in the
+`w:instrText` runs between a `w:fldChar` begin and its matching separate/end, and split across
+several runs as often as not. Every entry in a Word table of contents is a `PAGEREF` over a `_Toc`
+bookmark. Rename first requires one coherent same-story pair, then changes the start marker and
+retargets **both** families across all stories in one undo step, splicing only the name token so
+switches (`\h`, `\* MERGEFORMAT`) survive verbatim; a split instruction is coalesced onto its first
+`w:instrText`. Seeing only the anchor links would leave "Error! Bookmark not defined." behind.
+`BookmarkInUse` is judged against both families too, so removing a bookmark a TOC still cites is
+refused rather than silently dangling it.
+
+**Know the reach of that guard before you rely on it.** It also gates structural deletion, and it is
+reference-scoped: a deletion is refused only while a reference *survives outside* the deleted
+region. Word puts a `_Toc` bookmark on every heading and keeps the matching `PAGEREF` in a different
+paragraph, so on a TOC'd document `DeleteBlock(heading)` is refused — in **default, untracked** mode,
+with no force/opt-out. Delete the citing field (or the whole TOC) first, or rename rather than
+remove. This is the same no-dangling-reference policy that has always covered `w:anchor` links; what
+changed is how much of a real contract it reaches.
+
+Move validates the destination before detaching the old pair. It retains its numeric id for a
+same-part move; a **cross-part** move takes a fresh document-global id, because `w:id` is
+part-scoped and carrying it into a part that already uses that decimal makes *both* bookmarks
+unresolvable. Structural edits likewise reject a pair crossing the deletion
+boundary, a targeted pair, or a managed pair before snapshotting. Whole-paragraph replacement keeps
+endpoint character coordinates and clamps them to the new end; surgical replacement, split, merge,
+and direct block moves preserve marker order. First-class hyperlink/bookmark metadata mutations are
+explicitly unavailable in `RenderInline` mode (`TrackedOperationUnsupported`), because Word has no
+faithful native revision shape for them. For the same reason, tracked whole-paragraph replacement
+rejects a paragraph containing bookmark markers before snapshotting; tracked surgical span
+replacement remains supported because it keeps zero-width markers in place.
+
+All methods route through `DocxSessionOps` and are surfaced by WASM/npm, stdio/`docx-scalpel`, and
+MCP's `docxodus_links`. Markdown `[text](uri)` and `[text](#bookmark)` use the same target validation,
+part ownership, relationship reuse, and cleanup rules.
+
 ## Finding anchors via tagged annotations
 
 The session addresses content by anchor id, but real workflows don't start with anchor ids — they start with intent ("edit the indemnification provision," "tighten the termination clause"). The clean way to bridge intent to anchors is to **annotate the regions ahead of time**, then resolve the annotation to its anchor(s) at edit time.
@@ -563,12 +668,18 @@ What `FindByAnnotation` / `FindByLabel` / `FindByBookmark` return in v1:
 
 - **All block-level anchors whose subtree overlaps the bookmark range, in document order, deduplicated.** That includes the immediate paragraph plus any enclosing table / row / cell, so an agent sees "this annotation lives in a table" without re-walking the tree. Filter by `Anchor.Kind in {"p","h","li"}` when you want only the text-bearing blocks suitable for `ReplaceText`.
 - **Empty list when the id/label/bookmark is unknown** or the bookmark's end marker is missing. No exceptions for not-found.
-- **Body scope only.** Bookmarks in headers/footers/footnotes aren't part of the v1 surface — `AnnotationManager` only writes to the main document part today. If header/footer annotation support lands, the helpers will return those anchors too.
+- **All story scopes for generic bookmarks.** `FindByBookmark` resolves body, header, footer,
+  footnote, and endnote bookmarks. `AnnotationManager` itself still authors managed annotation
+  bookmarks in the main document part.
 
-Two caveats that are explicitly out of scope for v1 (tracked in [#132](https://github.com/JSv4/Docxodus/issues/132)):
+Two addressing details matter:
 
-- **Bookmarks that span partial paragraphs return the enclosing block's anchor**, not a character span. A character-range surgical edit needs `ApplyFormat(anchor, CharSpan, op)` after computing the offset within the bookmark range yourself.
-- **Mutations don't auto-update bookmarks.** A `ReplaceText` / `SplitParagraph` / `MergeParagraphs` call can invalidate the bookmark covering the affected region. Bookmark preservation across mutations is a separate follow-up.
+- **`FindByBookmark` returns enclosing block anchors**, for compatibility with annotation-driven
+  workflows. Use `ListBookmarks` when exact endpoint ranges and per-paragraph character spans are
+  required.
+- **Marker-preserving edits are deterministic.** Whole replacements retain/clamp endpoint offsets;
+  surgical replacements, paragraph split/merge, and direct block moves preserve marker order.
+  Structural edits that would orphan a marker fail rather than silently corrupting the range.
 
 The agent's prompt should also be aware: it can call `session.ListAnnotations()` once at session start to enumerate available labels (e.g., "you can target: INDEMNIFICATION, TERMINATION, GOVERNING_LAW") and present those as tools rather than asking the LLM to discover them from text.
 
@@ -1699,7 +1810,10 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Re-read the current version/target metadata in `error.precondition`, rebase or abandon the stale edit, then retry with fresh guards | `PreconditionFailed` |
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
 | Re-list revisions (`ListRevisions`) and reissue with a current id | `RevisionNotFound` |
-| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
+| Re-list native objects and reissue with a current id/name | `HyperlinkNotFound`, `BookmarkNotFound` |
+| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `TableAnchorMigrationRequired`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan`, `EmptyHyperlinkSpan` |
+| Fix the target/name or resolve the existing reference first | `DuplicateBookmarkName`, `InvalidBookmarkName`, `InvalidHyperlinkTarget`, `MissingBookmarkTarget`, `BookmarkInUse`, `ManagedBookmark` |
+| Choose a safe run/range boundary or switch subsequent edits out of tracked mode | `UnsupportedInlineBoundary`, `TrackedOperationUnsupported` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query `ListStyles()` for a current style id, or `GetListMembership()` for the valid numbering level | `UnknownStyle`, `InvalidListLevel` |

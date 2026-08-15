@@ -1196,6 +1196,15 @@ export interface DocxodusWasmExports {
     SetCommentResolved: (handle: number, commentAnchor: string, resolved: boolean) => string;
     RemoveComment: (handle: number, commentAnchor: string) => string;
     ListComments: (handle: number) => string;
+    ListHyperlinks: (handle: number, scopes: number) => string;
+    AddHyperlink: (handle: number, anchor: string, start: number, length: number, kind: string, target: string) => string;
+    UpdateHyperlink: (handle: number, hyperlinkId: string, kind: string, target: string) => string;
+    RemoveHyperlink: (handle: number, hyperlinkId: string) => string;
+    ListBookmarks: (handle: number, scopes: number) => string;
+    AddBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
+    RenameBookmark: (handle: number, name: string, newName: string) => string;
+    MoveBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
+    RemoveBookmark: (handle: number, name: string) => string;
     ListRevisions: (handle: number) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
     RejectRevision: (handle: number, revisionId: string) => string;
@@ -1328,6 +1337,17 @@ export type EditErrorCode =
   | "revision_not_found"
   | "precondition_failed"
   | "invalid_batch_step"
+  | "hyperlink_not_found"
+  | "bookmark_not_found"
+  | "duplicate_bookmark_name"
+  | "invalid_bookmark_name"
+  | "invalid_hyperlink_target"
+  | "missing_bookmark_target"
+  | "bookmark_in_use"
+  | "managed_bookmark"
+  | "empty_hyperlink_span"
+  | "unsupported_inline_boundary"
+  | "tracked_operation_unsupported"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1471,6 +1491,55 @@ export interface EditResult {
   /** Set by the annotation ops (addAnnotation/removeAnnotation/updateAnnotation/
    * moveAnnotation) with the affected annotation id; absent for every other op. */
   annotationId?: string;
+  hyperlinkId?: string;
+  bookmarkName?: string;
+}
+
+export type HyperlinkKind = "external" | "internal";
+
+export interface HyperlinkInfo {
+  id: string;
+  kind: HyperlinkKind;
+  owningPartUri: string;
+  scope: string;
+  anchorId: string;
+  span: CharSpan;
+  text: string;
+  target?: string;
+  relationshipId?: string;
+  relationshipIsExternal?: boolean;
+  isBroken: boolean;
+}
+
+export interface DocumentRange {
+  startAnchorId: string;
+  startOffset: number;
+  endAnchorId: string;
+  endOffset: number;
+}
+
+export interface BookmarkRangeSegment {
+  owningPartUri: string;
+  scope: string;
+  anchorId: string;
+  span: CharSpan;
+  text: string;
+}
+
+export interface BookmarkInfo {
+  name: string;
+  bookmarkId: string;
+  startPartUri: string;
+  startScope: string;
+  endPartUri?: string;
+  endScope?: string;
+  range?: DocumentRange;
+  segments: BookmarkRangeSegment[];
+  text: string;
+  isPaired: boolean;
+  isManaged: boolean;
+  isValid: boolean;
+  validationError?: string;
 }
 
 /**

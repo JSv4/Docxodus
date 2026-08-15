@@ -473,13 +473,14 @@ id-bearing marker the clone copies is a second live copy:
 
 | Marker | Policy | Owner |
 |---|---|---|
-| `w:bookmarkStart`/`w:bookmarkEnd` | Destination clone gets fresh document-unique ids; **both copies keep the NAME**, so each survives its own resolution and every `REF`/`PAGEREF`/`HYPERLINK \l` still resolves | `DocxSession.RenumberClonedBookmarks`, mirroring `IrMarkupRenderer.NormalizeBookmarks` (B) |
+| `w:bookmarkStart`/`w:bookmarkEnd` | The tracked move is rejected before snapshot. Fresh numeric ids cannot make two simultaneously-live copies of a globally unique bookmark NAME unambiguous, while placing the pair on only one side loses it on accept or reject. Direct-mode moves still relocate the one existing element safely. | `DocxSession.MoveBlock` |
 | `w:commentRangeStart`/`End`/`Reference` | The **move source** takes a fresh comment id + a cloned definition (fresh `w14:paraId`, threading entries in both metadata parts, cloned replies re-pointed at cloned parents), leaving the destination on the original comment and its thread | `CommentOps.CloneCommentsForMoveSource`, mirroring `IrMarkupRenderer.NormalizeComments` (B) |
 | `w:footnoteReference`/`w:endnoteReference` | **Deliberately duplicated.** A note cited at both the old and the new position is a faithful depiction of a pending move, it is not uniqueness-constrained, and exactly one citation survives either resolution | — |
 
-Without the first two the pending redline is schema-invalid (`Sem_UniqueAttributeValue`)
-and the comment shows twice in Word's Reviewing pane. Both resolve to a valid single-copy
-document on accept and on reject. One residue is accepted: the resolved-away copy's comment
+Without the comment split the pending redline is schema-invalid (`Sem_UniqueAttributeValue`)
+and the comment shows twice in Word's Reviewing pane. The bookmark case is refused because
+numeric-id splitting cannot also preserve unique name identity. Comments resolve to a valid
+single-copy document on accept and on reject. One residue is accepted: the resolved-away copy's comment
 *definition* stays in `comments.xml` unreferenced — `RevisionProcessor` prunes no orphaned
 definition, for any resolved comment, and Word ignores an unanchored one.
 

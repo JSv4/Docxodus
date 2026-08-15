@@ -22,6 +22,7 @@ __all__ = [
     "PlaceholderKind",
     "PlaceholderKinds",
     "ProjectionScopes",
+    "HyperlinkKind",
     "ProjectionDepth",
     "ContextBoundary",
     "DiffFormat",
@@ -179,6 +180,17 @@ class EditErrorCode(str, Enum):
     EMPTY_COMMENT_SPAN = "empty_comment_span"
     REVISION_NOT_FOUND = "revision_not_found"
     INVALID_BATCH_STEP = "invalid_batch_step"
+    HYPERLINK_NOT_FOUND = "hyperlink_not_found"
+    BOOKMARK_NOT_FOUND = "bookmark_not_found"
+    DUPLICATE_BOOKMARK_NAME = "duplicate_bookmark_name"
+    INVALID_BOOKMARK_NAME = "invalid_bookmark_name"
+    INVALID_HYPERLINK_TARGET = "invalid_hyperlink_target"
+    MISSING_BOOKMARK_TARGET = "missing_bookmark_target"
+    BOOKMARK_IN_USE = "bookmark_in_use"
+    MANAGED_BOOKMARK = "managed_bookmark"
+    EMPTY_HYPERLINK_SPAN = "empty_hyperlink_span"
+    UNSUPPORTED_INLINE_BOUNDARY = "unsupported_inline_boundary"
+    TRACKED_OPERATION_UNSUPPORTED = "tracked_operation_unsupported"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod
@@ -237,6 +249,13 @@ class ProjectionScopes(IntFlag):
     ENDNOTES = 16
     COMMENTS = 32
     ALL = BODY | HEADERS | FOOTERS | FOOTNOTES | ENDNOTES | COMMENTS
+
+
+class HyperlinkKind(str, Enum):
+    """Native Word hyperlink target representation."""
+
+    EXTERNAL = "external"
+    INTERNAL = "internal"
 
 
 class ProjectionDepth(IntEnum):

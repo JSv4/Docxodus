@@ -405,6 +405,31 @@ internal static class ToolCatalog
             }
             """),
         new ToolDefinition(
+            "docxodus_links",
+            "Enumerate and safely mutate native Word hyperlinks and bookmarks across body, headers, footers, footnotes, and endnotes. Internal hyperlinks target an existing bookmark with relationship-free w:anchor markup; external links use the containing story part's relationship. Bookmark ranges may cross paragraphs in one story part but not package parts. Tracked render-inline mode rejects these metadata mutations explicitly.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
+                "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
+                "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
+                "length": { "type": "integer", "minimum": 1, "description": "add_hyperlink: selected text length." },
+                "kind": { "type": "string", "enum": ["external", "internal"], "description": "add/update_hyperlink target representation." },
+                "target": { "type": "string", "description": "External URI or existing bookmark name (without '#')." },
+                "hyperlinkId": { "type": "string", "description": "update/remove_hyperlink: id returned by list/add." },
+                "name": { "type": "string", "description": "Bookmark name for add/rename/move/remove." },
+                "newName": { "type": "string", "description": "rename_bookmark destination name; inbound internal links are retargeted atomically." },
+                "startAnchorId": { "type": "string", "description": "add/move_bookmark range start paragraph." },
+                "endAnchorId": { "type": "string", "description": "add/move_bookmark range end paragraph in the same story part." },
+                "endOffset": { "type": "integer", "description": "add/move_bookmark exclusive end boundary." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
             "docxodus_track_changes",
             "List, selectively accept/reject (by revisionId), or bulk-resolve tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:*PrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
             """
@@ -425,7 +450,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions. Preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link actions. Atomic mode commits as one unit; preview executes the identical batch path against an isolated complete package clone and never mutates the live session or its undo/redo history.",
             """
             {
               "type": "object",
@@ -442,7 +467,7 @@ internal static class ToolCatalog
                   "items": {
                     "type": "object",
                     "properties": {
-                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment"] },
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links"] },
                       "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
                     },
                     "required": ["tool", "args"]

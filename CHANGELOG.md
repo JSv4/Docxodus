@@ -103,6 +103,36 @@ All notable changes to this project will be documented in this file.
   evaluation, counting, and the whole multi-match rewrite share one mutation gate
   and one undo snapshot, so duplicate text cannot turn a stale plan into a partial
   replacement.
+- **First-class hyperlinks and bookmarks across every editing surface (#448/#451/#469/#470).**
+  `DocxSession` can enumerate and mutate external or bookmark-target hyperlinks and paired,
+  multi-paragraph bookmarks with exact character spans. External relationships are owned and
+  reused by the containing body/header/footer/footnote/endnote part; internal links use
+  `w:anchor` without a package relationship. Rename retargets inbound links atomically, removal
+  refuses live targets, malformed/cross-part ranges return structured errors, destructive edits
+  cannot orphan markers, and undo/redo restores relationship topology. "Inbound reference" covers
+  both consumer families: `w:hyperlink/@w:anchor` **and** `REF`/`PAGEREF`/`NOTEREF`/`HYPERLINK \l`
+  cross-reference fields in `w:instrText` and `w:fldSimple/@w:instr` — so renaming a bookmark a
+  table of contents points at retargets those fields instead of leaving "Error! Bookmark not
+  defined." behind, and removing one is refused while a field still cites it. That guard also gates
+  structural deletion, so on a document with a table of contents deleting a heading is refused
+  (in default, untracked mode) until the citing field goes with it. Word's own
+  `_GoBack`/`_Toc*`/`_Ref*`/`_Hlt*`/`_Hlk*` namespace is closed to *creation* (Word reallocates
+  it); bookmarks Word already placed there stay fully readable and mutable. Adding a hyperlink
+  over a span relocates the zero-width `w:bookmarkStart`/`End` and `w:commentRangeStart`/`End`
+  markers inside it into the new `w:hyperlink` rather than stranding them after it, and a
+  cross-part `MoveBookmark` takes a fresh document-global `w:id` instead of carrying a
+  part-scoped one into a part that may already use it. Splitting a paragraph inside a hyperlink
+  gives each half its own identity, so both remain individually addressable. The same contract is
+  exposed through JSON ops, WASM/npm, stdio/Python, and MCP (`docxodus_links`); Markdown links now
+  use the same owner-aware promotion and orphan cleanup. Listing and mutation reach the comments
+  story part as well, so `ProjectionScopes.Comments` is a real scope rather than a silent empty
+  result. Coverage includes Open XML validation, save/reopen identity, exact run-format
+  boundaries, repeated story-scoped bookmark ids, tracked limitations, and relationship cleanup,
+  plus peer suites in `python/tests/test_links_bookmarks.py` and
+  `npm/tests/docx-session-links.spec.ts`. This supersedes the earlier tracked-move clone policy:
+  a tracked block move containing bookmark markers now fails before snapshot instead of creating
+  two simultaneously-live copies of a globally unique bookmark name — and `ValidMoveTargets`
+  mirrors that rejection, so a drag UI never advertises a drop the engine will refuse.
 - **Complete inspect-before-edit formatting surface (#448).** `DocxSession` now exposes an explicit
   style catalog (`ListStyles`), direct-versus-effective paragraph/run formatting
   (`GetFormatting`), and enumerable mutation-compatible run spans (`ListInlineSpans`). Effective

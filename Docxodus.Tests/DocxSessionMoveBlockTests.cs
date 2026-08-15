@@ -196,13 +196,11 @@ public class DocxSessionMoveBlockTests
         Assert.Contains("cross-block comment range", result.Error.Message);
     }
 
-    // A tracked move clones the source paragraph. Every id-bearing marker in the clone is a
-    // SECOND live copy, so the ids must be made unique or the document violates the schema's
-    // id-uniqueness constraint while the revision is pending — the exact state a redline is
-    // sent out in. Mirrors IrMarkupRenderer.NormalizeBookmarks step (B): both copies keep the
-    // NAME (each survives its own resolution); only the ids are renumbered.
+    // A tracked move keeps source and destination copies live simultaneously. A bookmark has
+    // document-global name identity, so it cannot be duplicated faithfully across both sides;
+    // moving it to only one side would lose it on either accept or reject. Reject explicitly.
     [Fact]
-    public void MoveBlock_TrackedParagraph_GivesClonedBookmarksFreshIds()
+    public void MoveBlock_TrackedParagraph_WithBookmark_IsExplicitlyUnsupported()
     {
         using var session = new DocxSession(
             Document(
@@ -217,23 +215,11 @@ public class DocxSessionMoveBlockTests
             });
         var anchors = ParagraphAnchors(session);
 
-        Assert.True(session.MoveBlock(anchors[0], anchors[2], Position.After).Success);
+        var result = session.MoveBlock(anchors[0], anchors[2], Position.After);
 
-        var saved = session.Save();
-        AssertValid(saved);
-        using var stream = new MemoryStream(saved);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var main = document.MainDocumentPart!.GetXDocument();
-        var starts = main.Descendants(W.bookmarkStart).ToList();
-        var ends = main.Descendants(W.bookmarkEnd).ToList();
-
-        Assert.Equal(2, starts.Count);
-        Assert.Equal(2, ends.Count);
-        // Both copies keep the name; the ids are distinct and each start still pairs with an end.
-        Assert.All(starts, s => Assert.Equal("_Ref1", (string?)s.Attribute(W.name)));
-        var startIds = starts.Select(s => (string?)s.Attribute(W.id)).ToList();
-        Assert.Equal(2, startIds.Distinct().Count());
-        Assert.Equal(startIds.OrderBy(x => x), ends.Select(e => (string?)e.Attribute(W.id)).OrderBy(x => x));
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, result.Error!.Code);
+        Assert.Single(session.ListBookmarks());
     }
 
     // The drag UI gates its drop indicators on this, so it has to agree with MoveBlock exactly:
@@ -265,6 +251,41 @@ public class DocxSessionMoveBlockTests
             }
         }
         Assert.False(session.MoveBlock(anchors[0], anchors[3], Position.After).Success);
+    }
+
+    // The round-trip contract has to hold in RenderInline mode too — that is where MoveBlock carries
+    // rejections the direct path does not, and a rejection the shared source-level predicate does not
+    // know about is one the drag UI draws a drop indicator over before the drop hard-fails.
+    [Fact]
+    public void ValidMoveTargets_TrackedMode_RoundTripsWithMoveBlock()
+    {
+        var settings = new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline };
+        using var session = new DocxSession(
+            Document(
+                P("A",
+                    new XElement(W.bookmarkStart, new XAttribute(W.id, 3), new XAttribute(W.name, "_Toc1")),
+                    new XElement(W.bookmarkEnd, new XAttribute(W.id, 3))),
+                P("B"),
+                P("C")),
+            settings);
+        var anchors = ParagraphAnchors(session);
+
+        // Word puts a _Toc bookmark on every heading, so this is the ordinary case, not a corner one.
+        Assert.Empty(session.ValidMoveTargets(anchors[0]));
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary,
+            session.MoveBlock(anchors[0], anchors[1], Position.After).Error!.Code);
+
+        var valid = session.ValidMoveTargets(anchors[1]);
+        Assert.NotEmpty(valid);
+        foreach (var target in valid)
+        {
+            foreach (var (allowed, pos) in new[] { (target.Before, Position.Before), (target.After, Position.After) })
+            {
+                using var probe = new DocxSession(session.Save(), settings);
+                var probeAnchors = ParagraphAnchors(probe);
+                Assert.Equal(allowed, probe.MoveBlock(probeAnchors[1], target.AnchorId, pos).Success);
+            }
+        }
     }
 
     // A target can be legal on one side and refused on the other: moving a block INTO a

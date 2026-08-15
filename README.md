@@ -113,7 +113,8 @@ document. That gives an agent something a raw text dump can't: a way to *point*.
 - Read the markdown, decide "rewrite the indemnification clause", write back to that anchor.
 - Anchors are shared across the whole stack — the same id addresses a projection block, a rendered
   DOM node (`data-anchor`), a diff revision, and an edit target.
-- Resolve intent to anchors by text, regex, kind, bookmark, or annotation id — no re-walking the
+- Resolve intent to anchors by text, regex, kind, bookmark, or annotation id; enumerate and safely
+  mutate native hyperlinks and multi-paragraph bookmarks — no re-walking the
   document.
 - Also exports to [OpenContracts](docs/architecture/opencontracts_export.md) format with PAWLS page
   layout and token positions, for NLP and document-analysis pipelines.
