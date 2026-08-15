@@ -93,6 +93,7 @@ from .types import (
     PageMap,
     PageMapRegistrationResult,
     PageMapStatus,
+    PackageManifest,
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
@@ -111,6 +112,7 @@ __all__ = [
     "open_session",
     "ping",
     "convert_docx_to_html",
+    "generate_package_manifest",
     "docx_diff_compare",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
@@ -164,6 +166,21 @@ def convert_docx_to_html(
     if not isinstance(html, str):
         raise TypeError(f"convert_to_html: expected str, got {type(html).__name__}")
     return html
+
+
+def generate_package_manifest(data: bytes) -> PackageManifest:
+    """Generate a deterministic verification manifest directly from DOCX bytes.
+
+    The operation is non-mutating. Invalid, malformed, and encrypted inputs return
+    structured findings instead of raising an editable-package error.
+    """
+    result = _call(
+        "generate_package_manifest",
+        {"docxB64": base64.b64encode(data).decode("ascii")},
+    )
+    if not isinstance(result, Mapping):
+        raise TypeError(f"generate_package_manifest: expected object, got {result!r}")
+    return PackageManifest._from_wire(result)
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +509,13 @@ class DocxSession:
         if not isinstance(result, dict) or not isinstance(result.get("version"), int):
             raise TypeError(f"get_version: expected {{version: int}}, got {result!r}")
         return int(result["version"])
+
+    def get_package_manifest(self) -> PackageManifest:
+        """Inspect the current logical checkpoint without mutating the session."""
+        result = self._call("get_package_manifest", {})
+        if not isinstance(result, Mapping):
+            raise TypeError(f"get_package_manifest: expected object, got {result!r}")
+        return PackageManifest._from_wire(result)
 
     def register_page_map(
         self, page_map: PageMap, expected_renderer_fingerprint: str | None = None

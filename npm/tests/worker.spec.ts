@@ -77,6 +77,35 @@ test.describe("Docxodus Web Worker Tests", () => {
 
       console.log("Worker terminated successfully");
     }, { timeout: 60000 });
+
+    test("Uint8Array subviews are cloned exactly before transfer", async ({ page }) => {
+      const bytes = Array.from(readTestFile("HC006-Test-01.docx"));
+      const result = await page.evaluate(async (documentBytes) => {
+        await (window as any).createDocxodusWorker();
+        const backing = new Uint8Array(documentBytes.length + 8);
+        backing.fill(0xa5);
+        const view = backing.subarray(3, 3 + documentBytes.length);
+        view.set(documentBytes);
+        const expected = Array.from(view);
+
+        const manifest = await (window as any).DocxodusWorker
+          .generatePackageManifest(view);
+        let unchanged = false;
+        try {
+          unchanged = view.byteLength === documentBytes.length
+            && backing.byteLength === documentBytes.length + 8
+            && Array.from(view).every((value, index) => value === expected[index])
+            && backing[0] === 0xa5
+            && backing[backing.length - 1] === 0xa5;
+        } catch {
+          unchanged = false;
+        }
+        return { packageKind: manifest.packageKind, unchanged };
+      }, bytes);
+
+      expect(result.packageKind).toBe("opc");
+      expect(result.unchanged).toBe(true);
+    }, { timeout: 60000 });
   });
 
   test.describe("Non-blocking Behavior", () => {

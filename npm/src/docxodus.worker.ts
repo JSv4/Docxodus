@@ -13,6 +13,7 @@ import type {
   WorkerResponse,
   WorkerInitRequest,
   WorkerConvertRequest,
+  WorkerGeneratePackageManifestRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetRevisionsRequest,
@@ -33,6 +34,7 @@ import type {
   SectionMetadata,
   CommentRenderMode,
   EditResult,
+  PackageManifest,
 } from "./types.js";
 import { ComparisonEngine } from "./types.js";
 
@@ -107,6 +109,19 @@ function ensureInitialized(): DocxodusWasmExports {
  */
 function isErrorResponse(result: string): boolean {
   return result.startsWith("{") && result.includes('"Error"');
+}
+
+function handleGeneratePackageManifest(
+  request: WorkerGeneratePackageManifestRequest
+): { manifest?: PackageManifest; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.GeneratePackageManifest(
+      request.documentBytes
+    );
+    return { manifest: JSON.parse(json) as PackageManifest };
+  } catch (error) {
+    return { error: String(error) };
+  }
 }
 
 /**
@@ -596,6 +611,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
             error: String(error),
           };
         }
+        break;
+      }
+
+      case "generatePackageManifest": {
+        const result = handleGeneratePackageManifest(
+          request as WorkerGeneratePackageManifestRequest
+        );
+        response = {
+          id: request.id,
+          type: "generatePackageManifest",
+          success: !result.error,
+          manifest: result.manifest,
+          error: result.error,
+        };
         break;
       }
 

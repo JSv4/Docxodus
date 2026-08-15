@@ -139,6 +139,12 @@ internal static class Dispatcher
 
         switch (format)
         {
+            case "manifest":
+                if (anchorId is not null)
+                    throw new FormatException(
+                        "anchorId is not supported when format is manifest; manifests describe the complete package");
+                return VerificationOps.GetPackageManifest(session.Handle);
+
             case "markdown":
                 return anchorId is null
                     ? DocxSessionOps.Project(session.Handle)

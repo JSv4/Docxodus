@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic, non-mutating DOCX package manifests (#456).** Added a versioned
+  verification artifact that inventories every OPC entry and content type, preserves duplicate
+  occurrences, resolves every package/part relationship, reports dangling references and
+  malformed/encrypted packages, extracts renderer-relevant facts, and separates exact package,
+  ordered OPC-content, and normalized-semantic SHA-256 identities. XML normalization ignores only
+  documented serialization choices through an explicit known-content-type allowlist, preserves
+  unknown vendor-extension/custom XML whitespace and `xml:space`, and
+  keeps Strict and Transitional namespaces distinct. Available from .NET, live sessions,
+  WASM/npm (including workers), the stdio Python host/client, and MCP
+  `docxodus_get_content(format: "manifest")`. See
+  [`docs/architecture/package_manifests.md`](docs/architecture/package_manifests.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
   `transactionId` (non-blank, at most 256 Unicode scalar values). The first

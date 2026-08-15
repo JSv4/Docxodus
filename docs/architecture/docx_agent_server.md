@@ -235,8 +235,11 @@ anything that needs to survive a write-back), `blocks` (every addressable block'
 `BlockMetadata` — style id/name, outline level, list facts), `styles` (the document's style catalog
 with resolved high-signal properties), `formatting` (explicit direct/effective paragraph and run
 formatting for `anchorId`), `spans` (enumerable mutation-compatible inline spans for `anchorId`),
+`manifest` (the full deterministic OPC inventory, three package identities, relationships, facts,
+and validation findings described in [`package_manifests.md`](package_manifests.md)),
 and `info` (`GetEditSummary` plus the `SectionInfo` governing `anchorId`, or the first body block
-when it is omitted). `anchorId` is required for `formatting`/`spans`; otherwise it optionally scopes
+when it is omitted). `anchorId` is required for `formatting`/`spans` and forbidden for `manifest`,
+which always covers the complete logical package; otherwise it optionally scopes
 `markdown`/`text`/`html` to one block's subtree via
 `ProjectionDepth.SubtreeAndFollowingSiblings`. The full markdown/text/blocks
 reads include every projected package story, including `hdr*`/`ftr*`; an `anchorId` returned by

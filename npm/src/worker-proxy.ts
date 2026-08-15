@@ -23,6 +23,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
   WorkerConvertResponse,
+  WorkerGeneratePackageManifestResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
@@ -43,6 +44,7 @@ import type {
   AnnotationUpdate,
   CharSpan,
   EditResult,
+  PackageManifest,
 } from "./types.js";
 
 /**
@@ -57,7 +59,9 @@ function generateId(): string {
  */
 async function toBytes(document: File | Uint8Array): Promise<Uint8Array> {
   if (document instanceof Uint8Array) {
-    return document;
+    // Transfer only an exact-view clone. Transferring the caller's buffer would detach it,
+    // and transferring a subarray's backing buffer would also send unrelated prefix/suffix bytes.
+    return new Uint8Array(document);
   }
   const buffer = await document.arrayBuffer();
   return new Uint8Array(buffer);
@@ -149,6 +153,9 @@ export interface WorkerDocxSession {
  * in a Web Worker for non-blocking UI.
  */
 export interface WorkerDocxodus {
+  /** Generate a deterministic, non-mutating verification manifest. */
+  generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+
   /**
    * Convert a DOCX document to HTML.
    * @param document - DOCX file as File object or Uint8Array
@@ -388,6 +395,21 @@ export async function createWorkerDocxodus(
 
   // Return the WorkerDocxodus instance
   return {
+    async generatePackageManifest(
+      document: File | Uint8Array
+    ): Promise<PackageManifest> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
+        {
+          id: generateId(),
+          type: "generatePackageManifest",
+          documentBytes: bytes,
+        },
+        [bytes.buffer]
+      );
+      return response.manifest!;
+    },
+
     async convertDocxToHtml(
       document: File | Uint8Array,
       options?: ConversionOptions
