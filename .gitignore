@@ -58,3 +58,4 @@ Docxodus.Tests/Ir/Diff/FuzzArtifacts/
 
 # macOS
 .DS_Store
+tools/mcp-server/smoke/__pycache__/

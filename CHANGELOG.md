@@ -394,6 +394,19 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Tracked insertions are part of a paragraph's visible text, so an agent can re-find
+  the edit it just made.** Under `TrackedChangeMode.RenderInline`, text a mutation
+  inserted landed inside `w:ins`, and `InlineRuns` — the shared walk behind the flat
+  string that every offset-addressed op works over — did not descend into it. The result
+  was a split brain on a document the caller had just edited: `Project().Markdown` and the
+  anchor's `TextPreview` showed the new text while `Grep`/`docxodus_search` returned
+  nothing, `ReplaceTextRange` could not address it, and `apply_format_by_substring`
+  reported `offset_out_of_range`. Insertions arriving from Word were skipped the same way,
+  so a search over an incoming redline silently missed every inserted span.
+  `w:ins`/`w:moveTo` now join the transparent inline containers; `w:del`/`w:moveFrom`
+  deliberately do not, because their content is `w:delText` and deleted text is not
+  visible text. Coverage: `DocxSessionSurgicalTrackedChangesTests` DS409-DS410. Found by
+  the issue #435 acceptance smoke (`tools/mcp-server/smoke/epic-435-workflow.json`).
 - **An ordinary Word picture is no longer reported read-only because of a rendering
   hint.** The blip-extension guard that refuses to replace a picture holding a second
   image payload (an SVG `asvg:svgBlip` beside its raster fallback, or an artistic-effects

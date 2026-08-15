@@ -1,0 +1,124 @@
+[
+  {
+    "id": "reopen_saved_output",
+    "name": "docxodus_open",
+    "arguments": { "path": "smoke-output.docx", "trackedChanges": "accept" },
+    "capture": { "session_id": "sessionId" }
+  },
+  {
+    "id": "package_reopens_with_intact_structure",
+    "name": "docxodus_get_content",
+    "arguments": { "sessionId": "$session_id", "format": "info" },
+    "capture": { "reopened_anchors": "editSummary.totalAnchors" },
+    "expect": {
+      "version": 0,
+      "sectionInfo.pageNumberFormat": "lowerRoman",
+      "sectionInfo.headerRefs.0.kind": "first",
+      "sectionInfo.footerRefs.0.kind": "even"
+    }
+  },
+  {
+    "id": "tracked_edits_persisted_as_revisions",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": {
+      "revisions.length": 4,
+      "revisions.0.type": "insert",
+      "revisions.0.text": "The undersigned further certifies that this Restated Certificate has been duly adopted in accordance with Sections 242 and 245 of the DGCL.\u00b6",
+      "revisions.1.type": "delete",
+      "revisions.1.text": "[_______________]",
+      "revisions.2.type": "insert",
+      "revisions.2.text": "Northstar Robotics, Inc.",
+      "revisions.2.author": "Smoke Counsel",
+      "revisions.3.type": "format",
+      "revisions.3.text": "Northstar Robotics, Inc."
+    }
+  },
+  {
+    "id": "comment_persisted",
+    "name": "docxodus_comment",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": { "comments.length": 1, "comments.0.author": "Smoke Counsel" }
+  },
+  {
+    "id": "bookmark_persisted",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "bookmark",
+      "query": "SmokeDelawareRationale"
+    },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "hyperlink_persisted_as_external_relationship",
+    "name": "docxodus_links",
+    "arguments": { "sessionId": "$session_id", "action": "list_hyperlinks", "scope": "body" },
+    "expect": {
+      "hyperlinks.length": 1,
+      "hyperlinks.0.kind": "external",
+      "hyperlinks.0.target": "https://delcode.delaware.gov/title8/c001/"
+    }
+  },
+  {
+    "id": "table_persisted",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "kind", "query": "tbl" },
+    "expect": { "matches.length": 1 },
+    "capture": { "table_anchor": "matches.0.id" }
+  },
+  {
+    "id": "table_grid_is_addressable",
+    "name": "docxodus_table",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "get_metadata",
+      "tableAnchorId": "$table_anchor"
+    },
+    "expect": { "metadata.rows.length": 2, "metadata.columns.length": 2 }
+  },
+  {
+    "id": "footnote_persisted",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "Adopted by written consent", "scope": "all" },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "inserted_paragraph_persisted_and_findable",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "The undersigned further certifies",
+      "scope": "body"
+    },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "rolled_back_text_never_persisted",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "must be rolled back",
+      "scope": "all"
+    },
+    "expect": { "matches.length": 0 }
+  },
+  {
+    "id": "refused_text_never_persisted",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "must never reach the document",
+      "scope": "all"
+    },
+    "expect": { "matches.length": 0 }
+  },
+  {
+    "id": "close",
+    "name": "docxodus_close",
+    "arguments": { "sessionId": "$session_id" }
+  }
+]
