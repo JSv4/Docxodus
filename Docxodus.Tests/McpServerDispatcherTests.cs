@@ -1576,6 +1576,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_annotate",
             "docxodus_close",
             "docxodus_comment",
+            "docxodus_content_controls",
             "docxodus_create",
             "docxodus_edit",
             "docxodus_format",
@@ -2348,5 +2349,265 @@ public class McpServerDispatcherTests : IDisposable
         Assert.False(invalid.GetProperty("success").GetBoolean());
         Assert.Equal("invalid_batch_step",
             invalid.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void MCP147_ContentControls_ListFillDetachAndBatchPreview_AreFirstClass()
+    {
+        File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list","scope":"body"}""")))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        Assert.Equal(15, listed.Length);
+        var plain = listed.Single(control => control.TryGetProperty("nativeId", out var id)
+            && id.GetString() == "101");
+        var plainAnchor = plain.GetProperty("anchorId").GetString()!;
+        var filled = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(plainAnchor)}},"text":"MCP value"}""")));
+        Assert.True(filled.GetProperty("success").GetBoolean());
+
+        var bound = listed.Single(control => control.TryGetProperty("nativeId", out var id)
+            && id.GetString() == "106");
+        var boundAnchor = bound.GetProperty("anchorId").GetString()!;
+        var refused = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(boundAnchor)}},"text":"no"}""")));
+        Assert.Equal("content_control_bound",
+            refused.GetProperty("error").GetProperty("code").GetString());
+        var detached = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(boundAnchor)}},"text":"yes","bindingPolicy":"detach_target"}""")));
+        Assert.True(detached.GetProperty("success").GetBoolean());
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(
+            _store, "docxodus_content_controls", J(JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "fill_text",
+                anchorId = plainAnchor,
+                text = "ignored",
+                bindingPolicy = false,
+            }))));
+
+        var previewArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            mode = "preview",
+            steps = new[] { new { tool = "docxodus_content_controls",
+                args = new { action = "fill_text", anchorId = plainAnchor, text = "preview" } } },
+        });
+        Assert.Equal("ok", Parse(Dispatcher.Call(_store, "docxodus_mutations", J(previewArgs)))
+            .GetProperty("status").GetString());
+        var after = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("contentControls").EnumerateArray().Single(control =>
+                control.TryGetProperty("nativeId", out var id) && id.GetString() == "101");
+        Assert.Equal("MCP value", after.GetProperty("text").GetString());
+
+        var tool = Assert.Single(ToolCatalog.Tools,
+            definition => definition.Name == "docxodus_content_controls");
+        using var schema = JsonDocument.Parse(tool.InputSchemaJson);
+        Assert.True(schema.RootElement.GetProperty("properties").TryGetProperty("preconditions", out _));
+        Assert.Contains("detach_target", schema.RootElement.GetProperty("properties")
+            .GetProperty("bindingPolicy").GetProperty("enum").EnumerateArray()
+            .Select(value => value.GetString()));
+    }
+
+    [Fact]
+    public void MCP148_ContentControlPreview_RefusalsNeverConsumePreexistingUndoHistory()
+    {
+        File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        string Anchor(string nativeId) => listed.Single(control =>
+            control.TryGetProperty("nativeId", out var id) && id.GetString() == nativeId)
+            .GetProperty("anchorId").GetString()!;
+        var plainAnchor = Anchor("101");
+        var boundAnchor = Anchor("106");
+
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"fill_text","anchorId":{{JsonSerializer.Serialize(plainAnchor)}},"text":"kept edit"}""")))
+            .GetProperty("success").GetBoolean());
+        var guarded = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "fill_text",
+                anchorId = plainAnchor,
+                text = "stale",
+                preconditions = new { expectedVersion = 0 },
+            }))));
+        Assert.Equal("precondition_failed",
+            guarded.GetProperty("error").GetProperty("code").GetString());
+
+        string Preview(params object[] steps) => Dispatcher.Call(_store, "docxodus_mutations", J(
+            JsonSerializer.Serialize(new { sessionId, mode = "preview", steps })));
+        var blocks = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"blocks"}"""))).GetProperty("blocks");
+        var bodyBlock = blocks.EnumerateObject().First(property => property.Value.ValueKind
+            == JsonValueKind.Object && property.Value.GetProperty("scope").GetString() == "body"
+            && property.Value.GetProperty("kind").GetString() is "p" or "h" or "li" or "tbl").Name;
+        var successfulNoOp = Parse(Preview(new
+        {
+            tool = "docxodus_edit",
+            args = new
+            {
+                action = "move_block",
+                sourceAnchorId = bodyBlock,
+                targetAnchorId = bodyBlock,
+                position = "before",
+            },
+        }));
+        Assert.Equal("ok", successfulNoOp.GetProperty("status").GetString());
+
+        var failedOnly = Parse(Preview(new
+        {
+            tool = "docxodus_content_controls",
+            args = new { action = "fill_text", anchorId = boundAnchor, text = "refused" },
+        }));
+        Assert.Equal("failed", failedOnly.GetProperty("status").GetString());
+
+        var readOnly = Parse(Preview(new
+        {
+            tool = "docxodus_content_controls",
+            args = new { action = "list" },
+        }));
+        Assert.Equal("invalid_batch_step",
+            readOnly.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+
+        var mixed = Parse(Preview(
+            new
+            {
+                tool = "docxodus_content_controls",
+                args = new { action = "fill_text", anchorId = plainAnchor, text = "preview" },
+            },
+            new
+            {
+                tool = "docxodus_content_controls",
+                args = new { action = "fill_text", anchorId = boundAnchor, text = "refused" },
+            }));
+        Assert.Equal("failed", mixed.GetProperty("status").GetString());
+        Assert.Equal(0, mixed.GetProperty("editsApplied").GetInt32());
+
+        var invalidArguments = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                mode = "atomic",
+                steps = new object[]
+                {
+                    new { tool = "docxodus_content_controls",
+                        args = new { action = "fill_text", anchorId = plainAnchor, text = "not applied" } },
+                    new { tool = "docxodus_content_controls",
+                        args = new { action = "set_checked", anchorId = plainAnchor } },
+                },
+            }))));
+        Assert.Equal("invalid_batch_step", invalidArguments.GetProperty("failure")
+            .GetProperty("error").GetProperty("code").GetString());
+        var after = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("contentControls").EnumerateArray().Single(control =>
+                control.TryGetProperty("nativeId", out var id) && id.GetString() == "101");
+        Assert.Equal("kept edit", after.GetProperty("text").GetString());
+
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")))
+            .GetProperty("success").GetBoolean());
+        var undone = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("contentControls").EnumerateArray().Single(control =>
+                control.TryGetProperty("nativeId", out var id) && id.GetString() == "101");
+        Assert.Equal("inner", undone.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void MCP149_ContentControlReceiptsAndBestEffortBatch_PreserveSdtIdentities()
+    {
+        File.WriteAllBytes(_tempPath, DocxSessionContentControlTests.BuildFixture());
+        var sessionId = OpenSession();
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new { sessionId, action = "list" }))))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        string Anchor(string nativeId) => listed.Single(control =>
+            control.TryGetProperty("nativeId", out var id) && id.GetString() == nativeId)
+            .GetProperty("anchorId").GetString()!;
+        var plainAnchor = Anchor("101");
+        var boundAnchor = Anchor("106");
+        var sectionAnchor = Anchor("108");
+
+        var fill = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "fill_text",
+                anchorId = plainAnchor,
+                text = "receipt",
+            }))));
+        Assert.Equal(plainAnchor, Assert.Single(fill.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+        Assert.Empty(fill.GetProperty("created").EnumerateArray());
+        Assert.Empty(fill.GetProperty("removed").EnumerateArray());
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "add_repeating_item",
+                sectionAnchorId = sectionAnchor,
+            }))));
+        var createdAnchor = Assert.Single(added.GetProperty("created").EnumerateArray())
+            .GetProperty("id").GetString()!;
+        Assert.StartsWith("sdt:body:", createdAnchor, StringComparison.Ordinal);
+        Assert.Equal(sectionAnchor, Assert.Single(added.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+
+        var removed = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                action = "remove_repeating_item",
+                itemAnchorId = createdAnchor,
+            }))));
+        Assert.Equal(createdAnchor, Assert.Single(removed.GetProperty("removed").EnumerateArray())
+            .GetProperty("id").GetString());
+        Assert.Equal(sectionAnchor, Assert.Single(removed.GetProperty("modified").EnumerateArray())
+            .GetProperty("id").GetString());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            JsonSerializer.Serialize(new
+            {
+                sessionId,
+                mode = "best_effort",
+                steps = new object[]
+                {
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "fill_text", anchorId = plainAnchor, text = "best effort" } },
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "fill_text", anchorId = boundAnchor, text = "refused" } },
+                    new { tool = "docxodus_content_controls", args = new
+                        { action = "add_repeating_item", sectionAnchorId = sectionAnchor } },
+                },
+            }))));
+        Assert.Equal("partial", batch.GetProperty("status").GetString());
+        Assert.Equal(2, batch.GetProperty("editsApplied").GetInt32());
+        var steps = batch.GetProperty("steps").EnumerateArray().ToArray();
+        Assert.True(steps[0].GetProperty("success").GetBoolean());
+        Assert.False(steps[1].GetProperty("success").GetBoolean());
+        Assert.True(steps[2].GetProperty("success").GetBoolean());
+        Assert.Equal(plainAnchor, Assert.Single(steps[0].GetProperty("results")[0]
+            .GetProperty("modified").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Equal(sectionAnchor, Assert.Single(steps[2].GetProperty("results")[0]
+            .GetProperty("modified").EnumerateArray()).GetProperty("id").GetString());
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_content_controls", J(
+            JsonSerializer.Serialize(new { sessionId, action = "list" }))))
+            .GetProperty("contentControls").EnumerateArray().ToArray();
+        Assert.Equal("best effort", after.Single(control =>
+            control.TryGetProperty("nativeId", out var id) && id.GetString() == "101")
+            .GetProperty("text").GetString());
+        Assert.Equal(2, after.Count(control =>
+            control.GetProperty("type").GetString() == "repeating_section_item"));
     }
 }

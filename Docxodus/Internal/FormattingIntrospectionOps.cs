@@ -142,6 +142,11 @@ internal static class FormattingIntrospectionOps
                     FormattingAssembler.ResolveEffectiveRunProperties(doc, run),
                     effective: true,
                     effectiveStyleId: directStyleId),
+                ContentControlAnchorIds = run.Ancestors(W.sdt).Reverse()
+                    .Select(control => (string?)control.Attribute(PtOpenXml.Unid))
+                    .Where(unid => !string.IsNullOrEmpty(unid))
+                    .Select(unid => $"sdt:{target.Anchor.Scope}:{unid}")
+                    .ToArray(),
             });
         }
         return result;

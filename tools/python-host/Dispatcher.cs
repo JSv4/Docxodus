@@ -161,6 +161,32 @@ internal static class Dispatcher
         "set_image_floating_layout" => DocxSessionOps.SetImageFloatingLayout(
             Handle(args), Str(args, "imageId"), JsonObject(args, "layout")),
         "remove_image" => DocxSessionOps.RemoveImage(Handle(args), Str(args, "imageId")),
+        "list_content_controls" => DocxSessionOps.ListContentControls(
+            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+        "fill_content_control_text" => DocxSessionOps.FillContentControlText(
+            Handle(args), Str(args, "anchorId"), Str(args, "text"),
+            JsonObjectOrEmpty(args, "options")),
+        "fill_content_control_rich_text" => DocxSessionOps.FillContentControlRichText(
+            Handle(args), Str(args, "anchorId"), Str(args, "markdown"),
+            JsonObjectOrEmpty(args, "options")),
+        "set_content_control_checked" => DocxSessionOps.SetContentControlChecked(
+            Handle(args), Str(args, "anchorId"),
+            OptBool(args, "checked") ?? throw new FormatException("args missing boolean \"checked\""),
+            JsonObjectOrEmpty(args, "options")),
+        "set_content_control_date" => DocxSessionOps.SetContentControlDate(
+            Handle(args), Str(args, "anchorId"), Str(args, "value"),
+            OptStr(args, "displayText"), JsonObjectOrEmpty(args, "options")),
+        "select_content_control_item" => DocxSessionOps.SelectContentControlItem(
+            Handle(args), Str(args, "anchorId"), Str(args, "value"),
+            JsonObjectOrEmpty(args, "options")),
+        "fill_content_control_picture" => DocxSessionOps.FillContentControlPicture(
+            Handle(args), Str(args, "anchorId"), Str(args, "imageBase64"),
+            JsonObjectOrEmpty(args, "options")),
+        "add_repeating_section_item" => DocxSessionOps.AddRepeatingSectionItem(
+            Handle(args), Str(args, "sectionAnchorId"), OptStr(args, "afterItemAnchorId"),
+            JsonObjectOrEmpty(args, "options")),
+        "remove_repeating_section_item" => DocxSessionOps.RemoveRepeatingSectionItem(
+            Handle(args), Str(args, "itemAnchorId")),
         "list_bookmarks" => DocxSessionOps.ListBookmarks(
             Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
         "add_bookmark" => DocxSessionOps.AddBookmark(

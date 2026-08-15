@@ -115,6 +115,12 @@ __all__ = [
     "ImageFormatCapability",
     "ImageOccurrence",
     "ImageCapabilities",
+    "ContentControlType",
+    "ContentControlPlacement",
+    "ContentControlBindingPolicy",
+    "ContentControlFillOptions",
+    "ContentControlBindingInfo",
+    "ContentControlInfo",
     "BookmarkRangeSegment",
     "BookmarkInfo",
     "EditSummary",
@@ -1004,6 +1010,96 @@ class ImageCapabilities:
         )
 
 
+class ContentControlType(str, Enum):
+    PLAIN_TEXT = "plain_text"
+    RICH_TEXT = "rich_text"
+    CHECKBOX = "checkbox"
+    DATE = "date"
+    DROP_DOWN_LIST = "drop_down_list"
+    COMBO_BOX = "combo_box"
+    PICTURE = "picture"
+    REPEATING_SECTION = "repeating_section"
+    REPEATING_SECTION_ITEM = "repeating_section_item"
+    UNSUPPORTED = "unsupported"
+
+
+class ContentControlPlacement(str, Enum):
+    INLINE = "inline"
+    BLOCK = "block"
+    ROW = "row"
+    CELL = "cell"
+    UNKNOWN = "unknown"
+
+
+class ContentControlBindingPolicy(str, Enum):
+    PRESERVE = "preserve"
+    DETACH_TARGET = "detach_target"
+
+
+@dataclass(frozen=True, slots=True)
+class ContentControlFillOptions:
+    binding_policy: ContentControlBindingPolicy = ContentControlBindingPolicy.PRESERVE
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"bindingPolicy": self.binding_policy.value}
+
+
+@dataclass(frozen=True, slots=True)
+class ContentControlBindingInfo:
+    store_item_id: str | None = None
+    xpath: str | None = None
+    prefix_mappings: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlBindingInfo":
+        return cls(d.get("storeItemId"), d.get("xpath"), d.get("prefixMappings"))
+
+
+@dataclass(frozen=True, slots=True)
+class ContentControlInfo:
+    anchor_id: str
+    type: ContentControlType
+    placement: ContentControlPlacement
+    native_id: str | None
+    tag: str | None
+    alias: str | None
+    lock: str | None
+    is_showing_placeholder: bool
+    is_bound: bool
+    binding: ContentControlBindingInfo | None
+    owning_part_uri: str
+    scope: str
+    parent_anchor_id: str | None
+    depth: int
+    has_valid_native_id: bool
+    has_duplicate_native_id: bool
+    can_mutate: bool
+    can_detach_target_binding: bool
+    unsupported_reason: str | None
+    text: str
+    item_values: tuple[str, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlInfo":
+        return cls(
+            anchor_id=d["anchorId"], type=ContentControlType(d["type"]),
+            placement=ContentControlPlacement(d["placement"]), native_id=d.get("nativeId"),
+            tag=d.get("tag"), alias=d.get("alias"), lock=d.get("lock"),
+            is_showing_placeholder=bool(d.get("isShowingPlaceholder", False)),
+            is_bound=bool(d.get("isBound", False)),
+            binding=(ContentControlBindingInfo._from_wire(d["binding"])
+                     if "binding" in d and d["binding"] is not None else None),
+            owning_part_uri=d["owningPartUri"], scope=d["scope"],
+            parent_anchor_id=d.get("parentAnchorId"), depth=int(d.get("depth", 0)),
+            has_valid_native_id=bool(d.get("hasValidNativeId", False)),
+            has_duplicate_native_id=bool(d.get("hasDuplicateNativeId", False)),
+            can_mutate=bool(d.get("canMutate", False)),
+            can_detach_target_binding=bool(d.get("canDetachTargetBinding", False)),
+            unsupported_reason=d.get("unsupportedReason"), text=d.get("text", ""),
+            item_values=tuple(d.get("itemValues", ())),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BookmarkRangeSegment:
     owning_part_uri: str
@@ -1299,6 +1395,7 @@ class InlineSpan:
     text: str
     direct: RunFormattingInfo
     effective: RunFormattingInfo
+    content_control_anchor_ids: tuple[str, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "InlineSpan":
@@ -1307,6 +1404,7 @@ class InlineSpan:
             span=CharSpan._from_wire(d["span"]), text=d["text"],
             direct=RunFormattingInfo._from_wire(d["direct"]),
             effective=RunFormattingInfo._from_wire(d["effective"]),
+            content_control_anchor_ids=tuple(d.get("contentControlAnchorIds", ())),
         )
 
 

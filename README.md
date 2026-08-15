@@ -257,6 +257,7 @@ reading first:
 |---|---|
 | [`ir_diff_engine.md`](docs/architecture/ir_diff_engine.md) | `DocxDiff` — pipeline, edit script, settings, parity with Word |
 | [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
+| [`native_content_controls.md`](docs/architecture/native_content_controls.md) | Native Word content-control registry, fills, binding/lock safety, and transports |
 | [`markdown_projection.md`](docs/architecture/markdown_projection.md) | The projection spec and anchor format |
 | [`docx_converter.md`](docs/architecture/docx_converter.md) | `WmlToHtmlConverter` internals |
 | [`editor_ui_surface.md`](docs/architecture/editor_ui_surface.md) | The browser editor, control by control |

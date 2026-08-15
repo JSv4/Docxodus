@@ -1,0 +1,146 @@
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Xml.Linq;
+
+namespace Docxodus.Internal;
+
+/// <summary>
+/// Native identity for Word structured-document tags. A valid, unique <c>w:sdtPr/w:id</c>
+/// is the durable identity Word itself persists; the projector's <c>pt:Unid</c> is only a
+/// cache. This helper makes the cache a deterministic function of the native id so an
+/// <c>sdt:</c> anchor survives the default <c>Save(false)</c> / reopen path.
+/// </summary>
+internal static class ContentControlIdentity
+{
+    internal sealed record Entry(
+        XElement Element,
+        string Unid,
+        string? NativeId,
+        bool HasValidNativeId,
+        bool IsDuplicateNativeId,
+        int DocumentOrdinal,
+        int DuplicateOrdinal)
+    {
+        internal bool HasMutableIdentity => HasValidNativeId && !IsDuplicateNativeId;
+    }
+
+    /// <summary>
+    /// Assign native-derived Unids to every SDT below one story root and return the same
+    /// outer-before-inner registry order used by the public content-control listing.
+    /// Malformed controls still receive deterministic inspection identities, but callers
+    /// must gate mutation on <see cref="Entry.HasMutableIdentity"/>.
+    /// </summary>
+    internal static IReadOnlyList<Entry> AssignStableUnids(XElement storyRoot) =>
+        AssignStableUnids(storyRoot, out _);
+
+    internal static IReadOnlyList<Entry> AssignStableUnids(XElement storyRoot, out bool changed)
+    {
+        var byRoot = AssignStableUnids(new[] { storyRoot }, out changed);
+        return byRoot[storyRoot];
+    }
+
+    /// <summary>
+    /// Assign identities across every story in one package. Native <c>w:id</c> uniqueness is a
+    /// document-wide invariant, so callers that decide mutability must use this overload rather
+    /// than validating each part in isolation. Diagnostic Unids for duplicates remain scoped to
+    /// their owning story: cross-story duplicates can therefore be marked non-writable without
+    /// changing otherwise stable <c>sdt:{scope}:...</c> anchors, while duplicates inside one story
+    /// retain distinct local ordinals and cannot collide in that story's anchor index.
+    /// </summary>
+    internal static IReadOnlyDictionary<XElement, IReadOnlyList<Entry>> AssignStableUnids(
+        IReadOnlyList<XElement> storyRoots, out bool changed)
+    {
+        ArgumentNullException.ThrowIfNull(storyRoots);
+        changed = false;
+        foreach (var root in storyRoots) ArgumentNullException.ThrowIfNull(root);
+
+        var parsedByRoot = storyRoots.ToDictionary(root => root, root =>
+            root.DescendantsAndSelf(W.sdt).Select((element, ordinal) =>
+            {
+                var properties = element.Elements(W.sdtPr).ToList();
+                var ids = properties.Count == 1
+                    ? properties[0].Elements(W.id).ToList()
+                    : new List<XElement>();
+                var raw = ids.Count == 0
+                    ? null
+                    : string.Join("|", ids.Select(id => (string?)id.Attribute(W.val) ?? "<missing>"));
+                string? canonical = null;
+                var valid = properties.Count == 1 && ids.Count == 1
+                    && TryCanonicalizeNativeId(raw, out canonical);
+                return (element, ordinal, raw, valid, canonical);
+            }).ToList());
+        var globalCounts = parsedByRoot.Values.SelectMany(values => values)
+            .Where(value => value.valid)
+            .GroupBy(value => value.canonical!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var result = new Dictionary<XElement, IReadOnlyList<Entry>>();
+        int documentOrdinal = 0;
+        foreach (var root in storyRoots)
+        {
+            var parsed = parsedByRoot[root];
+            var localCounts = parsed.Where(value => value.valid)
+                .GroupBy(value => value.canonical!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            var localOrdinals = new Dictionary<string, int>(StringComparer.Ordinal);
+            var entries = new List<Entry>(parsed.Count);
+            foreach (var value in parsed)
+            {
+                int duplicateOrdinal = 0;
+                bool localDuplicate = value.valid && localCounts[value.canonical!] > 1;
+                bool packageDuplicate = value.valid && globalCounts[value.canonical!] > 1;
+                if (localDuplicate)
+                {
+                    localOrdinals.TryGetValue(value.canonical!, out duplicateOrdinal);
+                    localOrdinals[value.canonical!] = duplicateOrdinal + 1;
+                }
+
+                // Unique, valid native ids are location- and content-independent. Duplicate
+                // ordinals are local to a story because scope is already part of the public
+                // anchor; this keeps a package-wide duplicate diagnostic idempotent with the
+                // legacy single-story assignment performed by projection helpers.
+                var seed = value.valid
+                    ? localDuplicate
+                        ? $"duplicate\0{value.canonical}\0{duplicateOrdinal}"
+                        : $"native\0{value.canonical}"
+                    : $"malformed\0{value.ordinal}\0{value.raw ?? "<missing>"}";
+                var unid = HashToUnid(seed);
+                if (!string.Equals((string?)value.element.Attribute(PtOpenXml.Unid), unid,
+                    StringComparison.Ordinal))
+                {
+                    value.element.SetAttributeValue(PtOpenXml.Unid, unid);
+                    changed = true;
+                }
+                entries.Add(new Entry(value.element, unid,
+                    value.valid ? value.canonical : value.raw,
+                    value.valid, packageDuplicate, documentOrdinal++, duplicateOrdinal));
+            }
+            result[root] = entries;
+        }
+        return result;
+    }
+
+    internal static bool TryCanonicalizeNativeId(string? raw, out string? canonical)
+    {
+        canonical = null;
+        if (string.IsNullOrWhiteSpace(raw)
+            || !int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var id))
+            return false;
+        canonical = id.ToString(CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    internal static string HashToUnid(string seed)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes("docxodus-content-control\0" + seed));
+        return Convert.ToHexString(bytes.AsSpan(0, 16)).ToLowerInvariant();
+    }
+}

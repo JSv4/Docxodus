@@ -685,8 +685,32 @@ internal static class DocxSessionJson
             StrictDoubleNullable(root, "heightPoints"), StrictBool(root, "preserveAspect", true));
     }
 
+    public static ContentControlFillOptions ParseContentControlFillOptions(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new ContentControlFillOptions();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        RequireObject(root, "content-control fill options");
+        RequireOnlyProperties(root, "bindingPolicy");
+        var policy = StrictString(root, "bindingPolicy", "preserve") switch
+        {
+            "preserve" => ContentControlBindingPolicy.Preserve,
+            "detach_target" => ContentControlBindingPolicy.DetachTarget,
+            var token => throw new System.ArgumentException(
+                $"unknown bindingPolicy '{token}'; expected preserve or detach_target"),
+        };
+        return new ContentControlFillOptions { BindingPolicy = policy };
+    }
+
     private static void RequireObject(JsonElement root, string description)
     { if (root.ValueKind != JsonValueKind.Object) throw new System.ArgumentException($"{description} must be a JSON object"); }
+    private static void RequireOnlyProperties(JsonElement root, params string[] names)
+    {
+        var allowed = new HashSet<string>(names, System.StringComparer.Ordinal);
+        foreach (var property in root.EnumerateObject())
+            if (!allowed.Contains(property.Name))
+                throw new System.ArgumentException($"unknown option property '{property.Name}'");
+    }
     private static string? StrictString(JsonElement root, string name, string? fallback)
     {
         if (!root.TryGetProperty(name, out var value)) return fallback;
@@ -1118,6 +1142,55 @@ internal static class DocxSessionJson
             }
             sb.Append(",\"floatingLayoutSupported\":")
               .Append(image.FloatingLayoutSupported ? "true" : "false").Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
+    public static string SerializeContentControls(IReadOnlyList<ContentControlInfo> controls)
+    {
+        var sb = new StringBuilder(controls.Count * 600 + 2).Append('[');
+        for (int i = 0; i < controls.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var control = controls[i];
+            sb.Append("{\"anchorId\":").Append(JsonString(control.AnchorId))
+              .Append(",\"type\":").Append(JsonString(ToSnake(control.Type.ToString())))
+              .Append(",\"placement\":").Append(JsonString(ToSnake(control.Placement.ToString())));
+            AppendString(sb, "nativeId", control.NativeId);
+            AppendString(sb, "tag", control.Tag);
+            AppendString(sb, "alias", control.Alias);
+            AppendString(sb, "lock", control.Lock);
+            sb.Append(",\"isShowingPlaceholder\":").Append(control.IsShowingPlaceholder ? "true" : "false")
+              .Append(",\"isBound\":").Append(control.IsBound ? "true" : "false");
+            if (control.Binding is not null)
+            {
+                sb.Append(",\"binding\":{");
+                bool first = true;
+                void BindingValue(string name, string? value)
+                {
+                    if (value is null) return;
+                    if (!first) sb.Append(',');
+                    first = false;
+                    sb.Append(JsonString(name)).Append(':').Append(JsonString(value));
+                }
+                BindingValue("storeItemId", control.Binding.StoreItemId);
+                BindingValue("xpath", control.Binding.XPath);
+                BindingValue("prefixMappings", control.Binding.PrefixMappings);
+                sb.Append('}');
+            }
+            sb.Append(",\"owningPartUri\":").Append(JsonString(control.OwningPartUri))
+              .Append(",\"scope\":").Append(JsonString(control.Scope));
+            AppendString(sb, "parentAnchorId", control.ParentAnchorId);
+            sb.Append(",\"depth\":").Append(control.Depth)
+              .Append(",\"hasValidNativeId\":").Append(control.HasValidNativeId ? "true" : "false")
+              .Append(",\"hasDuplicateNativeId\":").Append(control.HasDuplicateNativeId ? "true" : "false")
+              .Append(",\"canMutate\":").Append(control.CanMutate ? "true" : "false")
+              .Append(",\"canDetachTargetBinding\":").Append(control.CanDetachTargetBinding ? "true" : "false");
+            AppendString(sb, "unsupportedReason", control.UnsupportedReason);
+            sb.Append(",\"text\":").Append(JsonString(control.Text))
+              .Append(",\"itemValues\":");
+            AppendStringArray(sb, control.ItemValues);
+            sb.Append('}');
         }
         return sb.Append(']').ToString();
     }
@@ -2302,6 +2375,8 @@ internal static class DocxSessionJson
             AppendRunFormattingInfo(sb, span.Direct);
             sb.Append(",\"effective\":");
             AppendRunFormattingInfo(sb, span.Effective);
+            sb.Append(",\"contentControlAnchorIds\":");
+            AppendStringArray(sb, span.ContentControlAnchorIds);
             sb.Append('}');
         }
         sb.Append(']');

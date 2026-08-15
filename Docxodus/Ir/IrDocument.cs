@@ -44,6 +44,13 @@ internal sealed record IrHeaderFooter(string ScopeName, IrHeaderFooterKind Kind,
     public IrNodeList<IrHeaderFooterRef> References { get; init; } = IrNodeList.Empty<IrHeaderFooterRef>();
 }
 
+/// <summary>Exact projector-order anchor fact captured while the IR reader's private package is
+/// open. It keeps the IR markdown index in parity for transparent carriers such as inline,
+/// row-level, and cell-level content controls that are deliberately not separate IR blocks.</summary>
+internal sealed record IrProjectionAnchor(
+    IrAnchor Anchor, string PartUri, string TextPreview, string? AutoNumberPrefix,
+    bool IsEmptyParagraph);
+
 /// <summary>
 /// The immutable root of a Document IR snapshot.
 /// </summary>
@@ -76,6 +83,10 @@ internal sealed record IrDocument
 
     /// <summary>Provenance pin from part URI to its source document; reference-equal (not part of value equality).</summary>
     public required IReadOnlyDictionary<Uri, XDocument> Sources { get; init; }
+
+    /// <summary>All addressable elements in the oracle projector's exact scope/document order.</summary>
+    public IrNodeList<IrProjectionAnchor> ProjectionAnchors { get; init; } =
+        IrNodeList.Empty<IrProjectionAnchor>();
 
     /// <summary>Look up a block by anchor; returns null if no block carries that anchor.</summary>
     public IrBlock? FindByAnchor(IrAnchor anchor) =>

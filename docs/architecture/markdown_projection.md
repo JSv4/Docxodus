@@ -80,7 +80,7 @@ Anchors appear at the start of the line they refer to (block-level) or as inline
 | `w:footnoteReference` | `[^fn-xxxx]` GFM footnote ref | Definitions collected at end |
 | `w:endnoteReference` | `[^en-xxxx]` | Same |
 | `w:drawing` / `w:pict` (image) | `![alt](docxodus://img/…){#img:…}` | URL is a scheme the caller resolves; metadata accessible via anchor |
-| `w:sdt` (content control) | Rendered content, anchor on outer SDT | The SDT itself is an anchor target so callers can address "this content control" |
+| `w:sdt` (content control) | Anchor on the outer SDT; the current Markdown oracle omits inline/block SDT-delivered content | The SDT remains addressable without changing historical Markdown bytes; HTML and `ListBlocks` flatten/render its content |
 | `w:ins` / `w:del` (tracked changes) | Configurable: accept, show as `{+ins+}`/`{-del-}`, or omit | Mirrors `WmlToHtmlConverter.RenderTrackedChanges` |
 | `w:sectPr` | `---` thematic break preceded by `{#sec:scope:unid}` | Section breaks are addressable as `sec` kind — useful for "find the next section break" tooling. Today no mutation op accepts a `sec` anchor (only block-level `p`/`h`/`li`/`tbl` kinds are mutable); treat `sec` as a passive read-side marker. |
 

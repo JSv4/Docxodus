@@ -10,6 +10,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
+using Docxodus.Internal;
 
 namespace Docxodus;
 
@@ -92,6 +93,10 @@ internal static class UnidHelper
     /// index rebuilds.</returns>
     internal static bool AssignToAllElementsDeterministic(XElement contentParent)
     {
+        // Run the legacy deterministic walk first. Descendant block/run identities below an
+        // SDT must keep using the same structural seed they used before SDTs became public
+        // anchors; otherwise merely exposing the wrapper would rename every child anchor.
+        // The wrapper's own Unid is replaced from native w:id only after that walk completes.
         bool assignedRoot = false;
         if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
         {
@@ -124,10 +129,15 @@ internal static class UnidHelper
                 if (!live.Add(a)) break; // ancestors above are already marked
             }
         }
-        if (live is null) return assignedRoot; // fully assigned — nothing to do
+        if (live is null)
+        {
+            ContentControlIdentity.AssignStableUnids(contentParent, out bool changedControls);
+            return assignedRoot || changedControls;
+        }
 
         var parentUnid = (string?)contentParent.Attribute(PtOpenXml.Unid) ?? contentParent.Name.LocalName;
         AssignDescendantsDeterministic(contentParent, parentUnid, live);
+        ContentControlIdentity.AssignStableUnids(contentParent);
         return true;
     }
 

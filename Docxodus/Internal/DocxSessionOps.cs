@@ -662,6 +662,75 @@ internal static class DocxSessionOps
     public static string RemoveImage(int handle, string imageId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveImage(imageId));
 
+    // ─── Native content controls (issue #452) ─────────────────────────
+
+    public static string ListContentControls(int handle,
+        ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeContentControls(
+            SessionRegistry.Get(handle).ListContentControls(scopes));
+
+    public static string FillContentControlText(int handle, string anchorId, string text,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlText(anchorId, text, options));
+
+    public static string FillContentControlRichText(int handle, string anchorId, string markdown,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlRichText(anchorId, markdown, options));
+
+    public static string SetContentControlChecked(int handle, string anchorId, bool isChecked,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SetContentControlChecked(anchorId, isChecked, options));
+
+    public static string SetContentControlDate(int handle, string anchorId, string value,
+        string? displayText, string optionsJson)
+    {
+        if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidContentControlValue,
+                "date value must be an ISO-8601 timestamp", anchorId));
+        return ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SetContentControlDate(anchorId, parsed, displayText, options));
+    }
+
+    public static string SelectContentControlItem(int handle, string anchorId, string value,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SelectContentControlItem(anchorId, value, options));
+
+    public static string FillContentControlPicture(int handle, string anchorId,
+        string imageBase64, string optionsJson)
+    {
+        if (!TryDecodeImageBase64(imageBase64, anchorId, out var bytes, out var error)) return error!;
+        return ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlPicture(anchorId, bytes!, options));
+    }
+
+    public static string AddRepeatingSectionItem(int handle, string sectionAnchorId,
+        string? afterItemAnchorId, string optionsJson) =>
+        ContentControlOptions(sectionAnchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).AddRepeatingSectionItem(
+                sectionAnchorId, afterItemAnchorId, options));
+
+    public static string RemoveRepeatingSectionItem(int handle, string itemAnchorId) =>
+        DocxSessionJson.Serialize(
+            SessionRegistry.Get(handle).RemoveRepeatingSectionItem(itemAnchorId));
+
+    private static string ContentControlOptions(string anchorId, string optionsJson,
+        System.Func<ContentControlFillOptions, EditResult> action)
+    {
+        try
+        {
+            return DocxSessionJson.Serialize(action(
+                DocxSessionJson.ParseContentControlFillOptions(optionsJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException
+            or System.ArgumentException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(
+                EditErrorCode.InvalidContentControlValue,
+                $"invalid content-control options JSON: {ex.Message}", anchorId));
+        }
+    }
+
     private static bool TryDecodeImageBase64(string? base64, string? anchorId,
         out byte[]? bytes, out string? error)
     {

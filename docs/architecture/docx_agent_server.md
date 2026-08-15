@@ -28,7 +28,7 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
 grouped-intent tools (read / preview / pagination / search / edit / format / create / list /
-comment / annotate / links / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+comment / annotate / links / images / content-controls / track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -81,7 +81,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 17 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 19 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -214,7 +214,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, four read/preview tools, and eleven grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, four read/preview tools, and twelve grouped-intent tools. Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -410,6 +410,44 @@ false capability claim. Image mutations are also rejected under `render_inline` 
 because OOXML cannot represent them faithfully as this API's tracked revisions. The full core and
 cross-language contract is in `docs/architecture/native_images.md`.
 
+### `docxodus_content_controls` — native Word content controls (issue #452)
+
+`list` accepts `scope: body|headers|footers|footnotes|endnotes|comments|all` and returns every
+structured-document tag in outer-before-inner story order: the stable `sdt:` anchor, family
+(`plain_text`, `rich_text`, `checkbox`, `date`, `drop_down_list`, `combo_box`, `picture`,
+`repeating_section`, `repeating_section_item`, `unsupported`), placement
+(`inline`/`block`/`row`/`cell`/`unknown`), owning part and scope, parent anchor and depth, the
+native `w:sdtPr` metadata (`nativeId`, `tag`, `alias`, `lock`, `showingPlcHdr`), any
+data-binding, current text, list item values, and an explicit `canMutate`/`unsupportedReason`
+decision.
+
+That decision is the whole point of `list`: it evaluates the *same* gates a mutation would, in
+the same order, so a plan built from the registry does not turn into a batch of guaranteed
+failures. It accounts for malformed or duplicate native ids, malformed ancestors, unsupported
+families and placements, nested targets, repeating-section topology, picture topology, bookmark
+ranges the fill would orphan or that an internal hyperlink still targets, locks (own or
+inherited), data bindings (own or inherited), **and the session's tracked-change mode** — under
+`render_inline` every control reports `canMutate: false` with the tracked reason, because a
+whole-control fill has no faithful tracked representation.
+
+`fill_text`, `fill_rich_text`, `set_checked`, `set_date`, and `select_item` replace the target's
+complete `w:sdtContent` payload while preserving the wrapper and its `w:sdtPr` metadata (the
+placeholder definition survives; only `w:showingPlcHdr` is cleared). They are refused for
+row/cell placements, for targets containing nested controls, and when the replacement would
+orphan a bookmark range or dangle an internal hyperlink. `fill_picture` retargets the blip
+relationship of the single canonical embedded image a picture control owns — it does not rebuild
+the payload. `add_repeating_item`/`remove_repeating_item` clone or drop one direct
+`w15:repeatingSectionItem`; the clone gets fresh `w:sdtPr/w:id`, `wp:docPr` and `w14:paraId`
+identities, and a section whose item carries markup whose identity is semantic (bookmarks,
+comment or note references, permissions, custom-XML or tracked-revision ranges) is refused
+rather than duplicated.
+
+`bindingPolicy` defaults to `preserve`: a data-bound control fails closed with
+`content_control_bound`. `detach_target` removes only the selected control's own
+`w:dataBinding`/`w15:dataBinding` element; a binding on any ancestor still fails closed, and the
+custom-XML part itself is never touched. The full core and cross-language contract is in
+`docs/architecture/native_content_controls.md`.
+
 ### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode
 
 `set_mode` (issue #304) switches how the session records its *own subsequent* edits —
@@ -455,7 +493,7 @@ rebuilding the live registry after each entry; the complete operation is atomic 
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
 `docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links`/
-`docxodus_images` (their `undo`/`redo` and
+`docxodus_images`/`docxodus_content_controls`/`docxodus_track_changes` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
 sequence of *mutations*).
 

@@ -298,7 +298,36 @@ internal static class CommentOps
     internal static bool ParseDone(string? value) =>
         value is "1" or "true" or "on";
 
-    private static string NextParaId(MainDocumentPart main)
+    private static string NextParaId(MainDocumentPart main) => new ParaIdAllocator(main).Next();
+
+    /// <summary>
+    /// The single owner of package-unique <c>w14:paraId</c> minting. Word keys comment
+    /// threading, coauthoring and revision identity off a paraId, so a value must be unique
+    /// across every part that can carry one — including the two paraId-keyed comment metadata
+    /// parts, whose entries outlive the paragraph they name.
+    /// </summary>
+    /// <remarks>
+    /// A caller minting several ids for a subtree that is still <em>detached</em> from the
+    /// package (a clone not yet inserted) must share one allocator instance: each minted value
+    /// is retained here, so a later call cannot alias an earlier one. Calling
+    /// <see cref="NextParaId"/> repeatedly would return the same value until each is written
+    /// back into a live part.
+    /// </remarks>
+    internal sealed class ParaIdAllocator
+    {
+        private readonly List<string> _used;
+
+        internal ParaIdAllocator(MainDocumentPart main) => _used = CollectParaIds(main);
+
+        internal string Next()
+        {
+            var value = NextEightHex(_used);
+            _used.Add(value);
+            return value;
+        }
+    }
+
+    private static List<string> CollectParaIds(MainDocumentPart main)
     {
         var values = new List<string>();
         foreach (var part in ReferenceHostParts(main).Append<OpenXmlPart?>(main.WordprocessingCommentsPart))
@@ -326,7 +355,7 @@ internal static class CommentOps
                 .Select(e => (string?)e.Attribute(W16Cid + "paraId"))
                 .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));
 
-        return NextEightHex(values);
+        return values;
     }
 
     private static string NextDurableId(XElement idsRoot) =>
