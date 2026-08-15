@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
+using Docxodus.Verification;
 
 namespace Docxodus;
 
@@ -160,6 +161,27 @@ public static class DocxDiff
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
         return IrEditScriptJson.Write(script);
     }
+
+    /// <summary>
+    /// Compare two documents and return the stable, versioned semantic change schema. Unlike
+    /// <see cref="GetEditScriptJson"/>, which exposes the renderer's internal block script, this
+    /// projection classifies document meaning (text, formatting, lists, tables, sections, notes,
+    /// relationships, media, annotations, and opaque package parts) for audit and verification.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        WmlDocument left, WmlDocument right, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(left, right, options);
+
+    /// <summary>
+    /// JSON counterpart of <see cref="GetSemanticChanges"/>. Field order, change order, and generated
+    /// change ids are deterministic for semantically identical inputs.
+    /// </summary>
+    public static string GetSemanticChangesJson(
+        WmlDocument left,
+        WmlDocument right,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(left, right, options, indented);
 
     /// <summary>
     /// Consolidate the edits of N reviewers — each an independently revised copy of the SAME

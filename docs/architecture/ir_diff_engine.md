@@ -43,8 +43,15 @@ It is a sibling to `WmlComparer` in the comparison family. The differences that 
 | `Compare(left, right, settings?)` | `WmlDocument` | Tracked-changes document with native `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange` markup. Satisfies the WmlComparer contract: `AcceptRevisions(result) ≡ right`, `RejectRevisions(result) ≡ left` at the per-block text level. |
 | `GetRevisions(left, right, settings?)` | `IReadOnlyList<DocxDiffRevision>` | The consumer revision list, rendered directly off the edit script (no produce-then-reparse round-trip). |
 | `GetEditScriptJson(left, right, settings?)` | `string` | The edit script as indented JSON — the diff-as-data differentiator. |
+| `GetSemanticChanges(left, right, options?)` | `SemanticChangeSet` | Stable, versioned verification schema covering content, formatting, structure, relationships, review data, media, and opaque package changes. |
+| `GetSemanticChangesJson(left, right, options?)` | `string` | Deterministic `docxodus.semantic-changes` JSON; use the returned change set's `ToCanonicalJson()` when compact bytes are required for hashing/signing. |
 
 Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
+
+`SemanticDiff` is the audit-oriented sibling of these renderer surfaces. It keeps the edit script as
+its alignment authority, projects all modeled families into a durable schema, and supplements them
+with bounded package facts so relationship-only or unknown-part edits cannot disappear. See
+[`semantic_diff.md`](semantic_diff.md) for its schema, suppression, transport, and performance contract.
 
 ### Anchor grammar and DocxSession interop
 
@@ -63,7 +70,8 @@ A left anchor resolves against the `left` document's IR; a right anchor against 
 left  ─ IrReader.Read ──▶ IrDocument ─┐
                                       ├─▶ IrEditScriptBuilder.Build ─▶ IrEditScript ─┬─▶ IrMarkupRenderer.Render   ─▶ WmlDocument
 right ─ IrReader.Read ──▶ IrDocument ─┘                                              ├─▶ IrRevisionRenderer.Render ─▶ revisions
-                                                                                     └─▶ IrEditScriptJson.Write    ─▶ JSON
+                                                                                     ├─▶ IrEditScriptJson.Write    ─▶ JSON
+                                                                                     └─▶ SemanticDiff projector   ─▶ versioned semantic JSON
 ```
 
 Internal stages (all `internal`, under `Docxodus/Ir/Diff/`):

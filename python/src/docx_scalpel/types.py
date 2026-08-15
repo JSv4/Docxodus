@@ -143,6 +143,12 @@ __all__ = [
     "DocxDiffSettings",
     "DocxDiffRevision",
     "DocxDiffFormatChange",
+    "SemanticChangeOperation",
+    "SemanticChangeFamily",
+    "SemanticValueKind",
+    "SemanticValue",
+    "SemanticChange",
+    "SemanticChangeSet",
     "DocxDiffReviewer",
     "DocxDiffConsolidateSettings",
     "DocxDiffConflictCompetitor",
@@ -2817,6 +2823,155 @@ class DocxDiffRevision:
         )
 
 
+class SemanticChangeOperation(str, Enum):
+    """Stable v1 operation names in a :class:`SemanticChangeSet`."""
+
+    INSERT = "insert"
+    DELETE = "delete"
+    MOVE = "move"
+    MODIFY = "modify"
+
+
+class SemanticChangeFamily(str, Enum):
+    """Stable v1 semantic-change families."""
+
+    TEXT = "text"
+    BLOCK_STRUCTURE = "block_structure"
+    RUN_FORMATTING = "run_formatting"
+    PARAGRAPH_FORMATTING = "paragraph_formatting"
+    STYLE = "style"
+    NUMBERING = "numbering"
+    LIST = "list"
+    TABLE = "table"
+    TABLE_ROW = "table_row"
+    TABLE_CELL = "table_cell"
+    TABLE_SPAN = "table_span"
+    TABLE_WIDTH = "table_width"
+    TABLE_STYLE = "table_style"
+    SECTION = "section"
+    PAGE_SETUP = "page_setup"
+    HEADER = "header"
+    FOOTER = "footer"
+    FIELD = "field"
+    FOOTNOTE = "footnote"
+    ENDNOTE = "endnote"
+    COMMENT = "comment"
+    HYPERLINK = "hyperlink"
+    BOOKMARK = "bookmark"
+    CONTENT_CONTROL = "content_control"
+    IMAGE = "image"
+    MEDIA = "media"
+    RELATIONSHIP = "relationship"
+    REVISION = "revision"
+    ANNOTATION = "annotation"
+    OPAQUE_PACKAGE_PART = "opaque_package_part"
+
+
+class SemanticValueKind(str, Enum):
+    """Discriminator for the closed semantic value union."""
+
+    ABSENT = "absent"
+    STRING = "string"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    DIGEST = "digest"
+    OBJECT = "object"
+    ARRAY = "array"
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticValue:
+    """Closed typed value used for one semantic change's before/after state."""
+
+    kind: SemanticValueKind
+    value: str | bool | int | Mapping[str, "SemanticValue"] | tuple["SemanticValue", ...] | None = None
+    algorithm: str | None = None
+    profile: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticValue":
+        kind = SemanticValueKind(str(d["kind"]))
+        raw = d.get("value")
+        if kind is SemanticValueKind.OBJECT:
+            value: Any = {
+                str(name): cls._from_wire(member)
+                for name, member in (raw or {}).items()
+            }
+        elif kind is SemanticValueKind.ARRAY:
+            value = tuple(cls._from_wire(member) for member in (raw or ()))
+        elif kind is SemanticValueKind.ABSENT:
+            value = None
+        else:
+            value = raw
+        return cls(
+            kind=kind,
+            value=value,
+            algorithm=d.get("algorithm"),
+            profile=d.get("profile"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticChange:
+    """One deterministic, part- and anchor-addressed semantic change."""
+
+    id: str
+    operation: SemanticChangeOperation
+    family: SemanticChangeFamily
+    part_uri: str
+    path: str
+    before: SemanticValue
+    after: SemanticValue
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+    left_scope: str | None = None
+    right_scope: str | None = None
+    move_id: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticChange":
+        return cls(
+            id=str(d["id"]),
+            operation=SemanticChangeOperation(str(d["operation"])),
+            family=SemanticChangeFamily(str(d["family"])),
+            part_uri=str(d["partUri"]),
+            path=str(d["path"]),
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+            left_scope=d.get("leftScope"),
+            right_scope=d.get("rightScope"),
+            move_id=d.get("moveId"),
+            before=SemanticValue._from_wire(d["before"]),
+            after=SemanticValue._from_wire(d["after"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticChangeSet:
+    """Version 1 of the public ``docxodus.semantic-changes`` schema."""
+
+    schema: str
+    schema_version: int
+    change_count: int
+    changes: tuple[SemanticChange, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticChangeSet":
+        schema = str(d.get("schema", ""))
+        schema_version = int(d.get("schemaVersion", 0))
+        if schema != "docxodus.semantic-changes" or schema_version != 1:
+            raise ValueError(
+                f"unsupported semantic-change schema {schema!r} version {schema_version}"
+            )
+        changes = tuple(SemanticChange._from_wire(change) for change in d.get("changes", ()))
+        change_count = int(d.get("changeCount", len(changes)))
+        if change_count != len(changes):
+            raise ValueError(
+                f"semantic-change count {change_count} does not match {len(changes)} entries"
+            )
+        return cls(schema, schema_version, change_count, changes)
+
+
 # ---------------------------------------------------------------------------
 # DocxDiff consolidate — multi-reviewer composite diff
 # ---------------------------------------------------------------------------
@@ -3045,6 +3200,8 @@ class DocxSessionSettings:
     revision_author: str | None = None
     persist_anchor_ids: bool = False
     smart_quotes: bool = False
+    #: Capture the initial projection for ``get_diff`` and retain exact opening
+    #: package bytes for ``get_semantic_changes``. Disable to avoid both costs.
     capture_initial_projection: bool = True
     projection_settings: WmlToMarkdownConverterSettings | None = None
 

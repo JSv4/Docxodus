@@ -97,6 +97,7 @@ from .types import (
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
+    SemanticChangeSet,
     StyleInfo,
     TemplatePlaceholder,
     TextMatch,
@@ -116,6 +117,7 @@ __all__ = [
     "docx_diff_compare",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
+    "docx_diff_get_semantic_changes",
     "docx_diff_accept_revisions",
     "docx_diff_reject_revisions",
     "docx_diff_consolidate",
@@ -251,6 +253,25 @@ def docx_diff_get_edit_script(
             f"docx_diff_get_edit_script: expected str, got {type(result).__name__}"
         )
     return result
+
+
+def docx_diff_get_semantic_changes(
+    left: bytes, right: bytes, settings: DocxDiffSettings | None = None
+) -> SemanticChangeSet:
+    """Compare two DOCX blobs using the stable semantic-change schema.
+
+    The result is versioned and deterministic, classifies modeled document
+    meaning, and retains changes to unknown package parts as opaque facts.
+    """
+    result = _call(
+        "docx_diff_get_semantic_changes", _diff_args(left, right, settings)
+    )
+    if not isinstance(result, Mapping):
+        raise TypeError(
+            "docx_diff_get_semantic_changes: expected object, "
+            f"got {type(result).__name__}"
+        )
+    return SemanticChangeSet._from_wire(result)
 
 
 def docx_diff_accept_revisions(redline: bytes) -> bytes:
@@ -1172,6 +1193,15 @@ class DocxSession:
 
     def get_diff(self, format: DiffFormat = DiffFormat.JSON) -> str:
         return str(self._call("get_diff", {"format": int(format)}))
+
+    def get_semantic_changes(self) -> SemanticChangeSet:
+        """Return stable semantic changes from the opening package to current state."""
+        result = self._call("get_semantic_changes", {})
+        if not isinstance(result, Mapping):
+            raise TypeError(
+                f"get_semantic_changes: expected object, got {type(result).__name__}"
+            )
+        return SemanticChangeSet._from_wire(result)
 
     # -- Tier A: text mutations -------------------------------------------
 

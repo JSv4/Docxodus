@@ -1843,8 +1843,10 @@ public sealed class DocxSessionSettings
     /// <summary>
     /// When <c>true</c> (default), the session projects the document at construction
     /// time and stashes the result so <see cref="DocxSession.GetDiff"/> can compare
-    /// initial vs. current. Costs ~200ms at construction for a 100-page doc; turn
-    /// off to skip the upfront cost when you don't plan to call <c>GetDiff</c>.
+    /// initial vs. current. It also retains an exact copy of the opening package for
+    /// <see cref="DocxSession.GetSemanticChanges"/>. Costs ~200ms plus one package copy
+    /// at construction for a 100-page doc; turn off to skip the upfront time/memory when
+    /// you don't plan to call either comparison API.
     /// </summary>
     public bool CaptureInitialProjection { get; init; } = true;
 }
@@ -1859,6 +1861,7 @@ public sealed partial class DocxSession : IDisposable
     private WordprocessingDocument? _doc;
     private MarkdownProjection? _cachedProjection;
     private MarkdownProjection? _initialProjection;
+    private byte[]? _initialPackageBytes;
     private bool _disposed;
     private long _version;
     private PageMap? _registeredPageMap;
@@ -1929,7 +1932,10 @@ public sealed partial class DocxSession : IDisposable
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
 
         if (_settings.CaptureInitialProjection && !skipInitialProjectionCapture)
+        {
+            _initialPackageBytes = docxBytes.ToArray();
             _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        }
     }
 
     public Exception? LastInternalError { get; private set; }
@@ -3680,6 +3686,7 @@ public sealed partial class DocxSession : IDisposable
                 _lastFormatRevisionTicks = snapshot.LastFormatRevisionTicks ?? _lastFormatRevisionTicks,
                 _nextTransactionId = _nextTransactionId,
                 _initialProjection = CloneProjection(_initialProjection),
+                _initialPackageBytes = _initialPackageBytes?.ToArray(),
                 _trackedChanges = _trackedChanges,
                 _revisionAuthor = _revisionAuthor,
             };
@@ -5079,6 +5086,38 @@ public sealed partial class DocxSession : IDisposable
                 $"DiffFormat.{format} is not a recognized value."),
         };
     }
+
+    /// <summary>
+    /// Compare the exact package supplied at session construction with the session's current logical
+    /// package and return the stable semantic-change schema. The current checkpoint includes dirty
+    /// in-memory part caches without mutating or saving the live session.
+    /// </summary>
+    /// <remarks>
+    /// Requires <see cref="DocxSessionSettings.CaptureInitialProjection"/> to have been enabled at
+    /// construction time. The same switch owns both initial projection and initial package capture so
+    /// existing callers can disable all baseline memory/cost with one setting.
+    /// </remarks>
+    public Verification.SemanticChangeSet GetSemanticChanges(
+        Verification.SemanticDiffOptions? options = null)
+    {
+        lock (_mutationGate)
+        {
+            ThrowIfDisposed();
+            if (_initialPackageBytes is null)
+                throw new InvalidOperationException(
+                    "GetSemanticChanges requires CaptureInitialProjection = true in DocxSessionSettings.");
+
+            var currentPackageBytes = SerializePackageCheckpoint();
+            return Verification.SemanticDiff.Compare(
+                new WmlDocument("initial.docx", _initialPackageBytes),
+                new WmlDocument("current.docx", currentPackageBytes),
+                options);
+        }
+    }
+
+    /// <summary>Compact canonical JSON counterpart of <see cref="GetSemanticChanges"/>.</summary>
+    public string GetSemanticChangesJson(Verification.SemanticDiffOptions? options = null) =>
+        GetSemanticChanges(options).ToCanonicalJson();
 
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
     {

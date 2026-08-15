@@ -124,6 +124,13 @@ internal static class DocxSessionOps
         SessionRegistry.Get(handle).GetPackageContentHash();
 
     /// <summary>
+    /// Return the stable semantic changes between the package opened for this session and its current
+    /// logical state. Requires baseline capture at open time (enabled by default).
+    /// </summary>
+    public static string GetSemanticChanges(int handle) =>
+        SessionRegistry.Get(handle).GetSemanticChangesJson();
+
+    /// <summary>
     /// Render a preview shadow to the SAME complete-document profile
     /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
     /// Exists so the callback-shaped npm preview — which drives its shadow from JS and therefore

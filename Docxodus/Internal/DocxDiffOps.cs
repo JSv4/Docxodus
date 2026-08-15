@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Verification;
 
 namespace Docxodus.Internal;
 
@@ -44,6 +45,21 @@ internal static class DocxDiffOps
     {
         var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
         return DocxDiff.GetEditScriptJson(left, right, settings);
+    }
+
+    /// <summary>
+    /// Compare two DOCX byte arrays and return the public semantic-change schema as compact JSON.
+    /// Compact output is the canonical wire form shared by WASM, npm, Python, and MCP.
+    /// </summary>
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes, byte[] rightBytes, string? settingsJson)
+    {
+        var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
+        return DocxDiff.GetSemanticChangesJson(
+            left,
+            right,
+            new SemanticDiffOptions { DiffSettings = settings },
+            indented: false);
     }
 
     /// <summary>

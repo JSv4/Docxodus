@@ -237,6 +237,8 @@ with resolved high-signal properties), `formatting` (explicit direct/effective p
 formatting for `anchorId`), `spans` (enumerable mutation-compatible inline spans for `anchorId`),
 `manifest` (the full deterministic OPC inventory, three package identities, relationships, facts,
 and validation findings described in [`package_manifests.md`](package_manifests.md)),
+`semantic_changes` (the document-wide, versioned semantic change set from the opening package to
+the current logical checkpoint),
 and `info` (`GetEditSummary` plus the `SectionInfo` governing `anchorId`, or the first body block
 when it is omitted). `anchorId` is required for `formatting`/`spans` and forbidden for `manifest`,
 which always covers the complete logical package; otherwise it optionally scopes
@@ -246,6 +248,10 @@ reads include every projected package story, including `hdr*`/`ftr*`; an `anchor
 `set_header_text` or `set_footer_text` can also be handed straight back to markdown, text, or HTML
 read-back. (The unscoped continuous HTML render is body-oriented; use the story anchor for
 header/footer HTML.)
+
+`semantic_changes` requires the opening baseline captured by the default
+`captureInitialProjection: true` setting and rejects `anchorId`; a partial subtree would violate the
+schema's package-wide completeness contract. See [`semantic_diff.md`](semantic_diff.md).
 
 The read surface is designed for inspect-before-edit workflows: style ids returned by `styles`,
 anchors returned by list/section/formatting records, and `(anchorId, span)` pairs returned by
