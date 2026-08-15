@@ -11,7 +11,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus fifteen
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus sixteen
 /// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
 /// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -414,7 +414,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark"] },
-                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "all"], "description": "Listing only; default all." },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
                 "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
                 "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
                 "length": { "type": "integer", "minimum": 1, "description": "add_hyperlink: selected text length." },
@@ -488,7 +488,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
-                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and refuses unsupported/malformed/ambiguous entries." },
+                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and REFUSES the whole document (revision_unsupported/revision_malformed/revision_ambiguous, nothing mutated) on the first entry it cannot resolve safely — a missing or non-numeric w:id, one w:id shared by two live revisions in a part, customXml move ranges, revisions under m:ctrlPr, w:del on a run's w:rPr or a paragraph's w:numPr, a w:sdt envelope whose range topology is not Word's two-pair shape, an unattached w:numberingChange, or a malformed cell marker. There is no force mode; run 'list' and read each entry's diagnostic to see what blocks it." },
                 "revisionId": { "type": "string", "description": "accept/reject: the opaque stable id from 'list' (e.g. 'rev2-a1b2c3d4e5f60718293a'). Legacy revNNN ids remain accepted only when uniquely resolvable. Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
                 "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format", "structure"], "description": "list: only return revisions of this coarse type." },

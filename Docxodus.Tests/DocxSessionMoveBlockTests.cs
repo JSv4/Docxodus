@@ -253,6 +253,41 @@ public class DocxSessionMoveBlockTests
         Assert.False(session.MoveBlock(anchors[0], anchors[3], Position.After).Success);
     }
 
+    // The round-trip contract has to hold in RenderInline mode too — that is where MoveBlock carries
+    // rejections the direct path does not, and a rejection the shared source-level predicate does not
+    // know about is one the drag UI draws a drop indicator over before the drop hard-fails.
+    [Fact]
+    public void ValidMoveTargets_TrackedMode_RoundTripsWithMoveBlock()
+    {
+        var settings = new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline };
+        using var session = new DocxSession(
+            Document(
+                P("A",
+                    new XElement(W.bookmarkStart, new XAttribute(W.id, 3), new XAttribute(W.name, "_Toc1")),
+                    new XElement(W.bookmarkEnd, new XAttribute(W.id, 3))),
+                P("B"),
+                P("C")),
+            settings);
+        var anchors = ParagraphAnchors(session);
+
+        // Word puts a _Toc bookmark on every heading, so this is the ordinary case, not a corner one.
+        Assert.Empty(session.ValidMoveTargets(anchors[0]));
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary,
+            session.MoveBlock(anchors[0], anchors[1], Position.After).Error!.Code);
+
+        var valid = session.ValidMoveTargets(anchors[1]);
+        Assert.NotEmpty(valid);
+        foreach (var target in valid)
+        {
+            foreach (var (allowed, pos) in new[] { (target.Before, Position.Before), (target.After, Position.After) })
+            {
+                using var probe = new DocxSession(session.Save(), settings);
+                var probeAnchors = ParagraphAnchors(probe);
+                Assert.Equal(allowed, probe.MoveBlock(probeAnchors[1], target.AnchorId, pos).Success);
+            }
+        }
+    }
+
     // A target can be legal on one side and refused on the other: moving a block INTO a
     // cross-block range changes that range's membership, while landing outside it does not. A
     // caller told only "this target is reachable" would still pick the refused side.

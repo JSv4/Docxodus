@@ -123,6 +123,25 @@ internal static class DocxSessionOps
     public static string GetPackageContentHash(int handle) =>
         SessionRegistry.Get(handle).GetPackageContentHash();
 
+    /// <summary>
+    /// Render a preview shadow to the SAME complete-document profile
+    /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
+    /// Exists so the callback-shaped npm preview — which drives its shadow from JS and therefore
+    /// cannot reuse the typed core's render call — does not have to restate the profile and drift
+    /// from it. Use this, never <see cref="RenderHtml"/>, for preview HTML: RenderHtml is the
+    /// EDITOR's authoring view (comments and annotations off, headers/footers tied to pagination),
+    /// which answers a different question.
+    /// </summary>
+    public static string RenderPreviewHtml(int handle) =>
+        HtmlConversionOps.ConvertToHtml(
+            SessionRegistry.Get(handle), HtmlConversionOps.PreviewDocumentOptions());
+
+    /// <summary>Scoped counterpart of <see cref="RenderPreviewHtml"/>; see
+    /// <see cref="HtmlConversionOps.PreviewBlockOptions"/>.</summary>
+    public static string RenderPreviewBlockHtml(int handle, string anchorId) =>
+        HtmlConversionOps.RenderBlockHtml(
+            SessionRegistry.Get(handle), anchorId, HtmlConversionOps.PreviewBlockOptions());
+
     public static DocxSessionTransaction BeginTransaction(int handle) =>
         SessionRegistry.Get(handle).BeginTransaction();
 
@@ -927,11 +946,13 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
 
-    public static string AcceptAllRevisions(int handle) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AcceptAllRevisions());
+    public static string AcceptAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptAllRevisions());
 
-    public static string RejectAllRevisions(int handle) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectAllRevisions());
+    public static string RejectAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectAllRevisions());
 
     // ─── Undo / Redo ────────────────────────────────────────────────────
 

@@ -304,6 +304,7 @@ public sealed partial class DocxSession
             AssignFreshContentControlIds(clone);
             UnidHelper.AssignToSelfAndDescendants(clone);
             AssignFreshDocumentPropertyIds(clone);
+            AssignFreshParagraphIds(clone);
             template.AddAfterSelf(clone);
             ContentControlIdentity.AssignStableUnids(section.Owner.Part.GetXDocument().Root!);
             InvalidateProjectionCache();
@@ -431,11 +432,9 @@ public sealed partial class DocxSession
             error = EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
             return false;
         }
-        if (_trackedChanges == TrackedChangeMode.RenderInline)
+        if (TrackedContentControlBlocker() is { } trackedReason)
         {
-            error = EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
-                "whole content-control fills cannot be represented faithfully as tracked revisions; use surgical text operations inside the control or switch modes",
-                anchorId);
+            error = EditResult.Fail(EditErrorCode.TrackedOperationUnsupported, trackedReason, anchorId);
             return false;
         }
         candidate = BuildContentControlRegistry(ProjectionScopes.All).FirstOrDefault(value =>
@@ -492,6 +491,38 @@ public sealed partial class DocxSession
             return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// The session-mode gate every content-control mutation shares: a whole-control fill and a
+    /// repeating-item add/remove both rewrite a payload wholesale, which has no faithful tracked
+    /// representation. Discovery and mutation both read it, so the registry cannot advertise
+    /// <c>canMutate</c> for an operation that is guaranteed to be refused.
+    /// </summary>
+    private string? TrackedContentControlBlocker() =>
+        _trackedChanges == TrackedChangeMode.RenderInline
+            ? "content-control mutations cannot be represented faithfully as tracked revisions; use surgical text operations inside the control or switch modes"
+            : null;
+
+    /// <summary>
+    /// The bookmark consequences of an operation that discards the target's complete payload —
+    /// the same gate <see cref="ValidateWholeContentReplacement"/> applies to a whole-control
+    /// fill and <see cref="RemoveRepeatingSectionItem"/> applies to the item it removes.
+    /// Evaluated once for discovery so a control whose fill is certain to fail is not reported
+    /// mutable. Picture fill is excluded because it rewrites only the blip relationship and
+    /// therefore takes no bookmark gate at mutation time.
+    /// </summary>
+    private string? WholeContentBookmarkBlocker(XElement element, ContentControlType type)
+    {
+        var removalRoot = type switch
+        {
+            ContentControlType.RepeatingSectionItem => element,
+            _ when IsWholeContentReplacementType(type) => element.Element(W.sdtContent),
+            _ => null,
+        };
+        return removalRoot is null
+            ? null
+            : ValidateBookmarkRemoval(new[] { removalRoot }, string.Empty)?.Error?.Message;
     }
 
     private EditResult? ValidateEffectiveLocks(ContentControlCandidate candidate, bool removingWrapper)
@@ -583,8 +614,11 @@ public sealed partial class DocxSession
             var fonts = runProperties.Element(W.rFonts);
             if (fonts is null)
             {
+                // CT_RPr is a strict sequence and the cloned rPr can already carry earlier
+                // members (w:ins, w:del, w:rStyle, the move markers). Insert at the schema slot
+                // rather than at position 0.
                 fonts = new XElement(W.rFonts);
-                runProperties.AddFirst(fonts);
+                WordprocessingMLUtil.InsertRPrChildInOrder(runProperties, fonts);
             }
             fonts.SetAttributeValue(W.ascii, stateFont);
             fonts.SetAttributeValue(W.hAnsi, stateFont);
@@ -640,6 +674,7 @@ public sealed partial class DocxSession
     {
         var result = new List<ContentControlCandidate>();
         IReadOnlyList<ImageCandidate>? imageCandidates = null;
+        var trackedBlocker = TrackedContentControlBlocker();
         var owners = OwnedPartRelationships.StoryParts(_doc!);
         var roots = owners.Select(owner => owner.Part.GetXDocument().Root)
             .Where(root => root is not null).Cast<XElement>().ToList();
@@ -667,8 +702,12 @@ public sealed partial class DocxSession
                 var binding = FindDataBinding(props);
                 var parent = element.Ancestors(W.sdt).FirstOrDefault();
                 var lockToken = (string?)props?.Element(ContentControlW + "lock")?.Attribute(W.val);
+                // Discovery evaluates the mutation-time gates in the order
+                // ResolveContentControlForMutation applies them, so the first reason an agent
+                // reads here is the reason the mutation would actually return.
                 string? unsupported = null;
-                if (malformed is not null) unsupported = malformed;
+                if (trackedBlocker is not null) unsupported = trackedBlocker;
+                else if (malformed is not null) unsupported = malformed;
                 else if (malformedAncestor is not null)
                     unsupported = $"ancestor content control is malformed: {malformedAncestor}";
                 else if (!identity.HasValidNativeId) unsupported = "missing or invalid native w:sdtPr/w:id";
@@ -699,6 +738,8 @@ public sealed partial class DocxSession
                     if (pictureTarget.ErrorCode is not null)
                         unsupported = pictureTarget.Diagnostic;
                 }
+                if (unsupported is null)
+                    unsupported = WholeContentBookmarkBlocker(element, type);
                 bool defaultMutable = unsupported is null && !locked && !wrapperLocked
                     && !targetBound && !ancestorBound;
 
@@ -915,6 +956,27 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>
+    /// Freshen the identity half of Word's paragraph identity pair on a clone. Word 2013+ writes
+    /// <c>w14:paraId</c> on essentially every <c>w:p</c>, so refusing to clone a paragraph that
+    /// carries one would make repeating sections inert on real templates; a paraId is
+    /// package-unique, so the clone gets fresh values from the shared allocator instead.
+    /// </summary>
+    /// <remarks>
+    /// <c>w14:textId</c> is deliberately left verbatim: it is a hash of the paragraph's text
+    /// rather than an identity, and Word itself emits the same value for two paragraphs with the
+    /// same content — which is exactly what a clone is. The clone gate still refuses items
+    /// carrying markup whose identity <em>is</em> semantic (bookmarks, comment and note
+    /// references, permissions, custom-XML and tracked-revision ranges).
+    /// </remarks>
+    private void AssignFreshParagraphIds(XElement root)
+    {
+        var carriers = root.DescendantsAndSelf().Attributes(W14.paraId).ToList();
+        if (carriers.Count == 0) return;
+        var allocator = new CommentOps.ParaIdAllocator(_doc!.MainDocumentPart!);
+        foreach (var attribute in carriers) attribute.SetValue(allocator.Next());
+    }
+
     private void AssignFreshDocumentPropertyIds(XElement root)
     {
         var used = OwnedPartRelationships.StoryParts(_doc!)
@@ -955,11 +1017,7 @@ public sealed partial class DocxSession
             ContentControlW + "moveFrom", ContentControlW + "moveTo",
         };
         var unsafeElement = item.Descendants().FirstOrDefault(element => unsafeNames.Contains(element.Name));
-        if (unsafeElement is not null) return unsafeElement.Name.LocalName;
-        var unsafeIdentity = item.DescendantsAndSelf().Attributes().FirstOrDefault(attribute =>
-            attribute.Name == ContentControlW14 + "paraId"
-            || attribute.Name == ContentControlW14 + "textId");
-        return unsafeIdentity?.Name.LocalName;
+        return unsafeElement?.Name.LocalName;
     }
 
     private static IEnumerable<XElement> FindDataBindings(XElement? properties) =>
@@ -980,11 +1038,17 @@ public sealed partial class DocxSession
         _ => placement != ContentControlPlacement.Unknown,
     };
 
-    private static bool IsWholeControlFillType(ContentControlType type) => type is
+    /// <summary>The families whose fill discards and rebuilds the whole <c>w:sdtContent</c>
+    /// payload, and therefore takes the bookmark-removal gate.</summary>
+    private static bool IsWholeContentReplacementType(ContentControlType type) => type is
         ContentControlType.PlainText or ContentControlType.RichText
         or ContentControlType.Checkbox or ContentControlType.Date
-        or ContentControlType.DropDownList or ContentControlType.ComboBox
-        or ContentControlType.Picture;
+        or ContentControlType.DropDownList or ContentControlType.ComboBox;
+
+    /// <summary>Every family filled as a unit, adding picture — whose fill retargets only the
+    /// blip relationship and so leaves existing payload markup in place.</summary>
+    private static bool IsWholeControlFillType(ContentControlType type) =>
+        IsWholeContentReplacementType(type) || type == ContentControlType.Picture;
 
     private static bool TryParseHexScalar(string? value, out int scalar)
     {

@@ -195,9 +195,16 @@ test.describe('DocxSession atomic batches (#445)', () => {
           invalidError = error instanceof Error ? error.message : String(error);
         }
 
+        // Intercept EVERY export the full-preview path may reach: the client prefers the
+        // shared preview profile (RenderPreviewHtml) and falls back to the editor-profile
+        // exports only on a bundle that predates it. Naming just one leaves this test green
+        // for the wrong reason on whichever bundle the fallback does not apply to.
+        const renderFailure = new Set([
+          'RenderPreviewHtml', 'RenderHtmlForReview', 'RenderHtml',
+        ]);
         const bridge = new Proxy(api.DocxSessionBridge, {
           get(target, property, receiver) {
-            if (property === 'RenderHtmlForReview') {
+            if (typeof property === 'string' && renderFailure.has(property)) {
               return () => JSON.stringify({ error: 'simulated renderer failure' });
             }
             return Reflect.get(target, property, receiver);

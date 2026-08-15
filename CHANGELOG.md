@@ -31,6 +31,41 @@ All notable changes to this project will be documented in this file.
   document. Coverage: `McpMutationTransactionTests` MCP449,
   `python/tests/test_transaction_error_codes.py`, and
   `npm/tests/transaction-error-codes.spec.ts`.
+- **Structural tracked revisions and one live revision registry (#455).** *(Breaking — see
+  the Breaking changes section below.)* `DocxSession` now enumerates and resolves the
+  structural revision families it previously ignored —
+  table-cell insert/delete/merge (`w:cellIns`/`w:cellDel`/`w:cellMerge`), content-control
+  (`w:sdt`) insert/delete envelopes, and numbering revisions (`w:numPr/w:ins`,
+  `w:numberingChange`) — through the same part-aware registry that already owned
+  content, paragraph-mark, row, move, and `*PrChange` revisions. `RevisionListEntry`
+  gains `Family`, `ConstituentIds`, `PartUri`, `Scope`, `AffectedAnchors`,
+  `ResolutionStatus`, and `Diagnostic`; `AcceptAllRevisions`/`RejectAllRevisions` become
+  ordinary undoable session mutations built on the selective resolver instead of a
+  whole-document `RevisionProcessor` byte transform plus a session rebind. Structural
+  editing in `TrackedChangeMode.RenderInline` emits native markup for table row
+  insert/delete and column insert, and for single-paragraph list application, removal,
+  and level changes; shapes with no safely reversible encoding return
+  `TrackedOperationUnsupported` without mutating or recording history, and a table with
+  an unresolved cell revision returns `UnresolvedStructuralRevision`. Rippled through
+  `DocxSessionOps`/JSON, WASM/npm, the stdio host + `docx-scalpel`, and MCP
+  `docxodus_track_changes` (now also usable as a `docxodus_mutations` batch step). See
+  `docs/architecture/docx_mutation_api.md` and `docx_agent_server.md`.
+- **Native content-control operations (#452).** `DocxSession` now enumerates and fills
+  Word structured-document tags as first-class objects. `ListContentControls` /
+  `GetContentControl` return every `w:sdt` in outer-before-inner story order under a
+  stable `sdt:{scope}:{unid}` anchor derived from the native `w:sdtPr/w:id`, with family,
+  placement, owning part, parent/depth, native metadata, data binding, current text, list
+  item values, and an explicit `CanMutate`/`UnsupportedReason` decision.
+  `FillContentControlText`, `FillContentControlRichText`, `SetContentControlChecked`,
+  `SetContentControlDate`, `SelectContentControlItem`, `FillContentControlPicture`,
+  `AddRepeatingSectionItem`, and `RemoveRepeatingSectionItem` mutate through the wrapper
+  without rebuilding it, preserving `w:sdtPr` metadata and the placeholder definition.
+  Data-bound controls fail closed unless `bindingPolicy: detach_target` removes the
+  target's own binding; a bound or locked ancestor always fails closed, and no Custom XML
+  part is ever edited. `sdt` becomes an AnchorIndex kind in both the WML projector and the
+  IR emitter, and `ListInlineSpans` reports outer-to-inner `ContentControlAnchorIds`.
+  Rippled through the JSON facade, WASM/npm, the stdio host and `docx-scalpel`, and the
+  new `docxodus_content_controls` MCP tool. Design: `docs/architecture/native_content_controls.md`.
 - **Canonical table addressing and complete table-operation ripple (#450, absorbing
   #471).** Tables now expose explicit stable identities for the `w:tbl`, every
   `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus
@@ -81,6 +116,25 @@ All notable changes to this project will be documented in this file.
   explicitly semantic-equivalence-only (same outcomes and structure/content/relationship
   effects modulo generated metadata) and emit warnings. This supersedes the undo-depth,
   redo-destruction, and crash window described in #468.
+
+  The preview HTML profile has a single owner (`HtmlConversionOps.PreviewDocumentOptions`
+  / `PreviewBlockOptions`), reached from the browser through the new
+  `RenderPreviewHtml` / `RenderPreviewBlockHtml` bridge exports, so every surface's
+  preview of the same batch describes the same document (tracked changes, comments,
+  annotations, notes, and headers/footers shown) rather than the editor's authoring
+  render. Receipt change-set membership is compared on each entry's serialized wire
+  projection rather than CLR equality, matching what the browser client compares.
+  `packageHash` is `null`, never `""`, when it could not be computed, so an absent hash
+  cannot satisfy a replay-equality assertion. `MutationPreviewHtmlMode` is exposed to
+  Python as an enum (`docx_scalpel.MutationPreviewHtmlMode`).
+
+  **Cost note.** Receipt enrichment is unconditional on both the apply and the preview
+  path: each batch inspects revisions, comments, and annotations twice (each forcing an
+  anchor index) and computes a package-content hash, which serializes and hashes a full
+  package checkpoint. A preview additionally clones the package and opens a second
+  `WordprocessingDocument`, roughly doubling peak memory for its duration — material for a
+  large document on a browser WASM heap. There is deliberately no opt-out in this release;
+  whether to gate enrichment behind a setting remains an open public-API decision.
 - **Atomic multi-step mutation batches** (issue #445). `DocxSession.ExecuteBatch`
   and the reusable nested-safe `BeginTransaction` primitive checkpoint the complete
   OPC package, relationship topology, anchor/revision generators, mutable session
@@ -91,6 +145,11 @@ All notable changes to this project will be documented in this file.
   Explicit `best_effort` retains sequential partial-success behavior. The contract
   is available through .NET/Ops/JSON, WASM/npm, stdio/Python, and MCP;
   MCP's legacy `apply` spelling is now a deprecated alias for `best_effort`.
+  Structural table operations are batchable on every surface, and a batched step's
+  receipt keeps its full `tableAnchors` mapping so a caller can address the cells the
+  same batch just created. Guards a preflight can decide read-only are evaluated at
+  the batch-start state and not re-evaluated per step; `expectedMatchCount` is the
+  one exception and is enforced by the replacement itself, at that step's turn.
 - **Optimistic mutation preconditions and a monotonic document version** (issue
   #447). Every `DocxSession` starts at version `0` and advances exactly once for
   each committed mutation, undo, or redo; failures and successful no-ops leave it
@@ -122,13 +181,30 @@ All notable changes to this project will be documented in this file.
   reused by the containing body/header/footer/footnote/endnote part; internal links use
   `w:anchor` without a package relationship. Rename retargets inbound links atomically, removal
   refuses live targets, malformed/cross-part ranges return structured errors, destructive edits
-  cannot orphan markers, and undo/redo restores relationship topology. The same contract is
+  cannot orphan markers, and undo/redo restores relationship topology. "Inbound reference" covers
+  both consumer families: `w:hyperlink/@w:anchor` **and** `REF`/`PAGEREF`/`NOTEREF`/`HYPERLINK \l`
+  cross-reference fields in `w:instrText` and `w:fldSimple/@w:instr` — so renaming a bookmark a
+  table of contents points at retargets those fields instead of leaving "Error! Bookmark not
+  defined." behind, and removing one is refused while a field still cites it. That guard also gates
+  structural deletion, so on a document with a table of contents deleting a heading is refused
+  (in default, untracked mode) until the citing field goes with it. Word's own
+  `_GoBack`/`_Toc*`/`_Ref*`/`_Hlt*`/`_Hlk*` namespace is closed to *creation* (Word reallocates
+  it); bookmarks Word already placed there stay fully readable and mutable. Adding a hyperlink
+  over a span relocates the zero-width `w:bookmarkStart`/`End` and `w:commentRangeStart`/`End`
+  markers inside it into the new `w:hyperlink` rather than stranding them after it, and a
+  cross-part `MoveBookmark` takes a fresh document-global `w:id` instead of carrying a
+  part-scoped one into a part that may already use it. Splitting a paragraph inside a hyperlink
+  gives each half its own identity, so both remain individually addressable. The same contract is
   exposed through JSON ops, WASM/npm, stdio/Python, and MCP (`docxodus_links`); Markdown links now
-  use the same owner-aware promotion and orphan cleanup. Coverage includes Open XML validation,
-  save/reopen identity, exact run-format boundaries, repeated story-scoped bookmark ids, tracked
-  limitations, and relationship cleanup. This supersedes the earlier tracked-move clone policy:
+  use the same owner-aware promotion and orphan cleanup. Listing and mutation reach the comments
+  story part as well, so `ProjectionScopes.Comments` is a real scope rather than a silent empty
+  result. Coverage includes Open XML validation, save/reopen identity, exact run-format
+  boundaries, repeated story-scoped bookmark ids, tracked limitations, and relationship cleanup,
+  plus peer suites in `python/tests/test_links_bookmarks.py` and
+  `npm/tests/docx-session-links.spec.ts`. This supersedes the earlier tracked-move clone policy:
   a tracked block move containing bookmark markers now fails before snapshot instead of creating
-  two simultaneously-live copies of a globally unique bookmark name.
+  two simultaneously-live copies of a globally unique bookmark name — and `ValidMoveTargets`
+  mirrors that rejection, so a drag UI never advertises a drop the engine will refuse.
 - **Complete inspect-before-edit formatting surface (#448).** `DocxSession` now exposes an explicit
   style catalog (`ListStyles`), direct-versus-effective paragraph/run formatting
   (`GetFormatting`), and enumerable mutation-compatible run spans (`ListInlineSpans`). Effective
@@ -139,6 +215,34 @@ All notable changes to this project will be documented in this file.
   WASM/npm, stdio/Python, and MCP surfaces (`get_content` formats `styles`, `formatting`, `spans`;
   `info` is per-anchor). Returned style ids, anchors, and spans are tested by feeding them unchanged
   into their matching mutation APIs. Table geometry and inline memberships remain separate work.
+
+  **Breaking (source):** `ListMembership` and `SectionInfo` gained a `required` `AnchorId`
+  property. External code that constructs either record with an object initializer must now set
+  it; consumers that only read the records are unaffected.
+
+  **Known limitation.** "Effective" is a shorter cascade than the render oracle: it excludes the
+  numbering-level `w:pPr` and the table-style/`w:tblStylePr` layers, so a list item whose indent
+  lives only in `w:abstractNum/w:lvl/w:pPr/w:ind` reports `LeftIndentTwips = 0`, and a run bolded
+  by a `firstRow` table style reports `Bold = false`. Both are pinned by tests and stated in
+  `docs/architecture/docx_mutation_api.md`; `GetListMembership` exposes the real numbering
+  indentation in the meantime.
+- **Style/formatting introspection is annotation-independent and cycle-safe.** Three fixes to the
+  new read surface: effective paragraph properties no longer vary with whether
+  `ListItemRetriever`'s (lazily cached) list annotations happen to be present, so `GetFormatting`
+  answers the same for a projected and an unprojected session and cannot be changed by an
+  intervening `GetListMembership`; `ST_OnOff` values now parse through `PtUtil.ToBoolean` — the
+  parser the renderer uses — so `w:val="False"` reads as false instead of true, and a value outside
+  `ST_OnOff` reads as unknown instead of true (this also aligns `IsDefault`/`SemiHidden`/
+  `QuickFormat` and the default-paragraph-style lookup with the resolver that consumes `w:default`);
+  and `FormattingAssembler`'s four `w:basedOn` walkers gained cycle guards, so a document declaring
+  `A basedOn A` (or `A → B → A`) no longer hangs `ListStyles`, which rolls up every style in the
+  catalog including ones no content references.
+- **Block renders stamp `data-source-anchor-id`.** `RenderBlocksHtml` / `RenderBlockHtml` now carry
+  the canonical source anchor id from the original package onto the rendered block, matching the
+  full render. Previously only the full and paginated renders emitted it, so an incrementally
+  re-rendered block silently dropped the addressing attribute `npm/src/pagination.ts` resolves page
+  citations by. The id is carried, never re-derived from the throwaway shell — a shell hoists note
+  paragraphs into its body and would otherwise stamp a `body`-scoped id onto footnote content.
 - **`DocxSessionSettings.UndoMemoryBudgetBytes`** (wire `undoMemoryBudgetBytes`,
   Python `undo_memory_budget_bytes`) — an approximate ceiling on the memory held
   by undo/redo snapshots, default **128 MiB**. `UndoDepth` never bounded memory:
@@ -153,6 +257,37 @@ All notable changes to this project will be documented in this file.
   `UndoHistoryTrimmedForMemory`** — makes the bound observable. The last is sticky
   and reports that the *budget*, not the depth, discarded history, so an editor can
   explain why undo stops short of the configured depth instead of appearing broken.
+
+### Breaking changes
+- **`RevisionListEntry` is a required-init record, not a positional one (#455).** It was
+  `RevisionListEntry(string Id, string Type, string Author, string? Date, string Text,
+  string? AnchorId)`; it is now an init-only record with the members above. Positional
+  construction and deconstruction no longer compile in .NET, and in Python the fourth
+  positional argument of `docx_scalpel.types.RevisionListEntry` is now `family`, not
+  `date` — a positional caller silently rebinds. Construct by name on both surfaces.
+- **Revision ids changed format from `revNNN` to opaque `rev2-<hex>` (#455).** Ids are
+  emitted in the new format only. A legacy `revNNN` id is still accepted as *input* to
+  `AcceptRevision`/`RejectRevision` when it identifies exactly one live revision, and fails
+  with `RevisionNotFound` otherwise. Do not pattern-match, sort, or derive `w:id` values
+  from an id — re-list and use the value verbatim.
+- **MCP `docxodus_track_changes` `accept_all`/`reject_all` return a full `EditResult`,
+  not `{"success": true}` (#455).** Callers now get `modified`/`removed` anchors and, on
+  failure, a typed `error`. The old shape had no failure representation at all.
+- **Bulk revision resolution fails closed and has no `force` mode (#455).** Accepting or
+  rejecting everything used to be a whole-document `RevisionProcessor` transform that
+  always succeeded. It is now the selective resolver over every registry entry and
+  refuses the entire operation — mutating nothing — on the first entry it cannot resolve
+  safely: a missing or non-numeric `w:id`, one `w:id` shared by two live revisions in one
+  part, `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges, `w:ins`/`w:del`
+  under `m:ctrlPr`, `w:del` on a run's `w:rPr` or a paragraph's `w:numPr`, a `w:sdt`
+  envelope whose range topology is not Word's two-pair shape, an unattached
+  `w:numberingChange`, or a malformed cell marker. `RevisionProcessor.AcceptRevisions`/
+  `RejectRevisions` still handle all of these and stay public, so the previous behaviour
+  is reachable over saved bytes. Full table in `docs/architecture/docx_mutation_api.md`.
+- **`EditErrorCode.TrackedOperationUnsupported` moved down the enum (#455),** shifting the
+  numeric values of about ten members. The wire is unaffected (every transport serializes
+  the name), but a .NET consumer that persisted or compared the integer values must
+  recompile.
 
 ### Changed
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
