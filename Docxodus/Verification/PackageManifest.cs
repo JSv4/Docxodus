@@ -79,6 +79,12 @@ public sealed record PackageManifestOptions
     /// <summary>Maximum number of central-directory entries to inspect.</summary>
     public int MaxEntryCount { get; init; } = 10_000;
 
+    /// <summary>
+    /// Maximum uncompressed bytes read from one entry. The default preserves the original
+    /// manifest behavior by matching the default whole-package budget.
+    /// </summary>
+    public long MaxEntryUncompressedBytes { get; init; } = 1024L * 1024 * 1024;
+
     /// <summary>Maximum total declared uncompressed bytes (default 1 GiB).</summary>
     public long MaxTotalUncompressedBytes { get; init; } = 1024L * 1024 * 1024;
 
@@ -95,6 +101,8 @@ public sealed record PackageManifestOptions
     {
         if (MaxEntryCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxEntryCount));
+        if (MaxEntryUncompressedBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxEntryUncompressedBytes));
         if (MaxTotalUncompressedBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTotalUncompressedBytes));
         if (MaxXmlPartBytes <= 0)

@@ -6,19 +6,15 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
-using System.Xml;
 using System.Xml.Linq;
 
 namespace Docxodus.Verification;
 
 /// <summary>
-/// Narrow package fallback for semantic facts not represented by the IR. It is intentionally hidden
-/// behind <see cref="ISemanticPackageChangeDetector"/> so the package manifest/delta from #456 can
-/// replace entry reading, limits, normalized hashes, and relationship enumeration during rebase.
+/// Projects bounded, same-pass package-manifest inspection into semantic facts not represented by
+/// the IR. It is intentionally hidden behind <see cref="ISemanticPackageChangeDetector"/> so the
+/// public semantic-change schema remains independent of package inspection details.
 /// </summary>
 internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeDetector
 {
@@ -35,8 +31,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
 
     private const string WordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWordNamespace = "http://purl.oclc.org/ooxml/wordprocessingml/main";
-    private const string RelationshipNamespace = "http://schemas.openxmlformats.org/package/2006/relationships";
-    private const string StrictRelationshipNamespace = "http://purl.oclc.org/ooxml/package/relationships";
     private const string OfficeRelationshipNamespace =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private const string StrictOfficeRelationshipNamespace =
@@ -48,8 +42,22 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         byte[] rightBytes,
         SemanticDiffOptions options)
     {
-        var left = Read(leftBytes, options);
-        var right = Read(rightBytes, options);
+        ArgumentNullException.ThrowIfNull(options.PackageOptions);
+        if (!options.IncludePackageChanges)
+        {
+            var leftManifest = PackageManifestGenerator.Generate(leftBytes, options.PackageOptions);
+            var rightManifest = PackageManifestGenerator.Generate(rightBytes, options.PackageOptions);
+            EnsureValid(leftManifest, "left");
+            EnsureValid(rightManifest, "right");
+            return Array.Empty<SemanticChangeDraft>();
+        }
+
+        var leftInspection = PackageManifestGenerator.Inspect(leftBytes, options.PackageOptions);
+        var rightInspection = PackageManifestGenerator.Inspect(rightBytes, options.PackageOptions);
+        EnsureValid(leftInspection.Manifest, "left");
+        EnsureValid(rightInspection.Manifest, "right");
+        var left = Read(leftInspection);
+        var right = Read(rightInspection);
         var result = new List<SemanticChangeDraft>();
         CompareEntities(left.Relationships, right.Relationships, result);
         CompareEntities(left.RelationshipBindings, right.RelationshipBindings, result);
@@ -62,49 +70,47 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         return result;
     }
 
-    private static PackageSnapshot Read(byte[] bytes, SemanticDiffOptions options)
+    private static void EnsureValid(PackageManifest manifest, string side)
     {
-        using var stream = new MemoryStream(bytes, writable: false);
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
-        if (archive.Entries.Count > options.MaximumPackageEntries)
-            throw new InvalidDataException(
-                $"Package contains {archive.Entries.Count} entries; limit is {options.MaximumPackageEntries}.");
+        if (manifest.IsValid) return;
+        var errors = manifest.Findings
+            .Where(finding => finding.Severity == VerificationFindingSeverity.Error)
+            .Select(finding => finding.Code + FormatLocation(finding.Location))
+            .ToArray();
+        throw new InvalidDataException(
+            $"The {side} package failed manifest preflight: {string.Join(", ", errors)}.");
+    }
 
+    private static string FormatLocation(ChangeLocation? location)
+    {
+        if (location is null) return string.Empty;
+        var value = location.EntryUri
+            ?? location.OwnerUri
+            ?? location.TargetUri
+            ?? location.PropertyPath;
+        return value is null ? string.Empty : $" ({value})";
+    }
+
+    private static PackageSnapshot Read(PackageManifestInspection inspection)
+    {
         var parts = new Dictionary<string, Part>(StringComparer.Ordinal);
-        var partNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var budget = new ReadBudget(options.MaximumTotalUncompressedBytes);
-        long declaredTotal = 0;
-        foreach (var entry in archive.Entries.OrderBy(item => item.FullName, StringComparer.Ordinal))
+        foreach (var inspected in inspection.Entries)
         {
-            var decodedName = ValidateEntryName(entry.FullName, options.MaximumPartUriLength);
-            if (string.IsNullOrEmpty(entry.Name)) continue;
-            if (!partNames.Add(decodedName))
+            var entry = inspected.ManifestEntry;
+            if (entry.Uri.EndsWith("/", StringComparison.Ordinal)) continue;
+            if (entry.Occurrence != 0 || !inspected.PayloadWasRead)
                 throw new InvalidDataException(
-                    $"Package contains duplicate part name '{entry.FullName}'.");
-            if (entry.Length > options.MaximumPartBytes)
-                throw new InvalidDataException(
-                    $"Package entry '{entry.FullName}' is {entry.Length} bytes; limit is {options.MaximumPartBytes}.");
-            if (entry.CompressedLength == 0 && entry.Length > 0
-                || entry.CompressedLength > 0
-                    && entry.Length / (double)entry.CompressedLength > options.MaximumCompressionRatio)
-                throw new InvalidDataException(
-                    $"Package entry '{entry.FullName}' exceeds the {options.MaximumCompressionRatio:R}:1 compression-ratio limit.");
-            if (declaredTotal > options.MaximumTotalUncompressedBytes - entry.Length)
-                throw new InvalidDataException(
-                    $"Package declared uncompressed size exceeds the {options.MaximumTotalUncompressedBytes}-byte aggregate limit.");
-            declaredTotal += entry.Length;
-            using var entryStream = entry.Open();
-            var payload = ReadEntryBytes(
-                entryStream,
-                entry.FullName,
-                options.MaximumPartBytes,
-                entry.Length,
-                budget);
-            parts.Add(entry.FullName, new Part(entry.FullName, payload, TryReadXml(payload)));
+                    $"Valid manifest inspection is incomplete for '{entry.Uri}'.");
+            var name = entry.Uri.TrimStart('/');
+            parts.Add(name, new Part(
+                name,
+                inspected.Xml,
+                entry.ContentType,
+                entry.Size,
+                entry.RawBytesDigest));
         }
 
-        var contentTypes = ReadContentTypes(parts);
-        var relationshipData = ReadRelationships(parts);
+        var relationshipData = ReadRelationships(inspection.Manifest.Relationships);
         var relationshipBindings = ReadRelationshipBindings(parts, relationshipData.ByOwnerAndId);
         var bookmarks = new List<Entity>();
         var revisions = new List<Entity>();
@@ -130,15 +136,20 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             .Select(part =>
             {
                 var value = ValueObj(
-                    ("contentType", SemanticValue.String(ContentTypeFor(part.Name, contentTypes))),
-                    ("size", SemanticValue.Integer(part.Bytes.LongLength)),
+                    ("contentType", SemanticValue.String(ContentTypeFor(part))),
+                    ("size", SemanticValue.Integer(part.Size)),
                     ("digest", SemanticValue.Digest(
-                        "SHA-256", Sha256(part.Bytes), "raw-media-bytes")));
+                        part.RawBytesDigest!.Algorithm,
+                        part.RawBytesDigest.Value,
+                        "raw-media-bytes")));
                 return new Entity(
                     "media:" + PartUri(part.Name),
                     SemanticChangeFamily.Media,
-                    PartUri(part.Name),
-                    "media",
+                    new ChangeLocation
+                    {
+                        EntryUri = PartUri(part.Name),
+                        PropertyPath = "media",
+                    },
                     null,
                     null,
                     value,
@@ -159,31 +170,40 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             {
                 var preserveWhitespace = PreserveWhitespaceInOpaqueXml(part.Name);
                 var fingerprint = part.Xml is null
-                    ? Sha256(part.Bytes)
-                    : Sha256(Encoding.UTF8.GetBytes(CanonicalXml(
+                    ? part.RawBytesDigest!.Value
+                    : XmlSemanticNormalizer.Digest(
                         part.Xml,
-                        preserveWhitespace,
-                        RelationshipAttributeNormalizer(
-                            PartUri(part.Name), relationshipData.ByOwnerAndId))));
-                var contentType = ContentTypeFor(part.Name, contentTypes);
+                        PartUri(part.Name),
+                        ignoreFormattingWhitespace: !preserveWhitespace,
+                        includeAttribute: ExcludeGeneratedUnid,
+                        attributeValueNormalizer: RelationshipAttributeNormalizer(
+                            PartUri(part.Name), relationshipData.ByOwnerAndId)).Value;
+                var contentType = ContentTypeFor(part);
                 var digest = SemanticValue.Digest(
                     "SHA-256",
                     fingerprint,
                     part.Xml is null ? "raw-part-bytes"
                         : preserveWhitespace ? "xml-expanded-names-whitespace-v1"
                         : "xml-expanded-names-v1");
-                var value = ValueObj(
-                    ("contentType", SemanticValue.String(contentType)),
-                    ("size", SemanticValue.Integer(part.Bytes.LongLength)),
-                    ("normalizedDigest", digest));
+                var value = part.Xml is null
+                    ? ValueObj(
+                        ("contentType", SemanticValue.String(contentType)),
+                        ("size", SemanticValue.Integer(part.Size)),
+                        ("normalizedDigest", digest))
+                    : ValueObj(
+                        ("contentType", SemanticValue.String(contentType)),
+                        ("normalizedDigest", digest));
                 var identity = ValueObj(
                     ("contentType", SemanticValue.String(contentType)),
                     ("normalizedDigest", digest));
                 return new Entity(
                     "opaque:" + PartUri(part.Name),
                     SemanticChangeFamily.OpaquePackagePart,
-                    PartUri(part.Name),
-                    "package.part",
+                    new ChangeLocation
+                    {
+                        EntryUri = PartUri(part.Name),
+                        PropertyPath = "package.part",
+                    },
                     null,
                     null,
                     value,
@@ -192,7 +212,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             .ToArray();
 
         return new PackageSnapshot(
-            relationshipData.Inventory.Cast<Entity>().ToArray(),
+            relationshipData.Inventory.ToArray(),
             relationshipBindings,
             media,
             bookmarks,
@@ -202,170 +222,46 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             opaque);
     }
 
-    internal static byte[] ReadEntryBytes(
-        Stream input,
-        string entryName,
-        long maximumBytes,
-        long declaredLength) => ReadEntryBytes(
-            input,
-            entryName,
-            maximumBytes,
-            declaredLength,
-            aggregateBudget: null);
-
-    private static byte[] ReadEntryBytes(
-        Stream input,
-        string entryName,
-        long maximumBytes,
-        long declaredLength,
-        ReadBudget? aggregateBudget)
-    {
-        // entry.Length is controlled by the ZIP central directory. Treat it as an early rejection
-        // hint only; a forged value must not turn CopyTo into an unbounded decompression/allocation.
-        using var copy = new MemoryStream((int)Math.Min(Math.Max(declaredLength, 0), 81920));
-        var buffer = new byte[81920];
-        long total = 0;
-        int read;
-        while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
-        {
-            if (total > maximumBytes - read)
-                throw new InvalidDataException(
-                    $"Package entry '{entryName}' exceeds the {maximumBytes}-byte decompressed limit.");
-            aggregateBudget?.Consume(read, entryName);
-            copy.Write(buffer, 0, read);
-            total += read;
-        }
-        return copy.ToArray();
-    }
-
-    private static string ValidateEntryName(string name, int maximumUriLength)
-    {
-        if (string.IsNullOrEmpty(name))
-            throw new InvalidDataException("Package contains an empty ZIP entry name.");
-        if (name.StartsWith("/", StringComparison.Ordinal)
-            || name.Contains('\\', StringComparison.Ordinal)
-            || name.Split('/').Any(segment => segment is "." or ".."))
-            throw new InvalidDataException($"Package entry name '{name}' is not a safe OPC part name.");
-
-        for (int index = 0; index < name.Length; index++)
-        {
-            if (name[index] != '%') continue;
-            if (index + 2 >= name.Length || !IsHex(name[index + 1]) || !IsHex(name[index + 2]))
-                throw new InvalidDataException($"Package entry name '{name}' has invalid percent encoding.");
-            index += 2;
-        }
-
-        string decoded;
-        try
-        {
-            decoded = Uri.UnescapeDataString(name);
-        }
-        catch (UriFormatException exception)
-        {
-            throw new InvalidDataException($"Package entry name '{name}' is not a valid URI.", exception);
-        }
-        if (decoded.Length > maximumUriLength)
-            throw new InvalidDataException(
-                $"Decoded package entry name '{name}' is {decoded.Length} characters; limit is {maximumUriLength}.");
-        var decodedSegments = decoded.Split('/');
-        bool isDirectory = decoded.EndsWith("/", StringComparison.Ordinal);
-        if (decoded.StartsWith("/", StringComparison.Ordinal)
-            || decoded.Contains('\\', StringComparison.Ordinal)
-            || decoded.Any(char.IsControl)
-            || decodedSegments.Where((segment, index) =>
-                segment is "." or ".."
-                || segment.Length == 0 && index != decodedSegments.Length - 1).Any()
-            || !isDirectory && decodedSegments[^1].Length == 0)
-            throw new InvalidDataException(
-                $"Decoded package entry name '{name}' is not a safe OPC part name.");
-        return decoded;
-    }
-
-    private static bool IsHex(char value) =>
-        value is >= '0' and <= '9'
-        || value is >= 'a' and <= 'f'
-        || value is >= 'A' and <= 'F';
-
-    private static ContentTypeMap ReadContentTypes(IReadOnlyDictionary<string, Part> parts)
-    {
-        var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var overrides = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (!parts.TryGetValue("[Content_Types].xml", out var contentTypes)
-            || contentTypes.Xml?.Root is null)
-            return new ContentTypeMap(defaults, overrides);
-
-        foreach (var element in contentTypes.Xml.Root.Elements())
-        {
-            var contentType = Attr(element, "ContentType");
-            if (string.IsNullOrWhiteSpace(contentType)) continue;
-            if (element.Name.LocalName == "Default" && Attr(element, "Extension") is { } extension)
-                defaults[extension.TrimStart('.')] = contentType;
-            else if (element.Name.LocalName == "Override" && Attr(element, "PartName") is { } partName)
-                overrides[PartUri(partName)] = contentType;
-        }
-        return new ContentTypeMap(defaults, overrides);
-    }
-
     private static RelationshipReadResult ReadRelationships(
-        IReadOnlyDictionary<string, Part> parts)
+        IReadOnlyList<PackageRelationship> relationships)
     {
-        var entities = new List<RelationshipEntity>();
+        var entities = new List<Entity>();
         var definitions = new Dictionary<(string Owner, string Id), RelationshipInfo>();
-        foreach (var part in parts.Values
-            .Where(item => item.Name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(item => item.Name, StringComparer.Ordinal))
+        foreach (var relationship in relationships
+            .OrderBy(item => item.OwnerUri, StringComparer.Ordinal)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .ThenBy(item => item.Type, StringComparer.Ordinal)
+            .ThenBy(item => item.Target, StringComparer.Ordinal))
         {
-            if (part.Xml?.Root is null) continue;
-            var owner = RelationshipOwner(part.Name);
-            var grouped = part.Xml.Root.Elements()
-                .Where(element => element.Name.LocalName == "Relationship"
-                    && (element.Name.NamespaceName == RelationshipNamespace
-                        || element.Name.NamespaceName == StrictRelationshipNamespace
-                        || string.IsNullOrEmpty(element.Name.NamespaceName)))
-                .Select(element => new
+            var target = relationship.TargetMode == "Internal"
+                ? relationship.ResolvedTargetUri ?? relationship.Target
+                : relationship.Target;
+            var info = new RelationshipInfo(
+                relationship.OwnerUri,
+                relationship.Id,
+                relationship.Type,
+                target,
+                relationship.TargetMode);
+            if (!definitions.TryAdd((relationship.OwnerUri, relationship.Id), info))
+                throw new InvalidDataException(
+                    $"Valid manifest repeats relationship '{relationship.Id}' for " +
+                    $"'{relationship.OwnerUri}'.");
+            var fingerprint = RelationshipFingerprint(info);
+            entities.Add(new Entity(
+                $"relationship:{relationship.OwnerUri}:{relationship.Id}",
+                SemanticChangeFamily.Relationship,
+                new ChangeLocation
                 {
-                    Id = Attr(element, "Id"),
-                    Type = Attr(element, "Type") ?? string.Empty,
-                    Target = Attr(element, "Target") ?? string.Empty,
-                    Mode = Attr(element, "TargetMode") ?? "Internal",
-                })
-                .Select(item => new
-                {
-                    item.Id,
-                    item.Type,
-                    Target = NormalizeRelationshipTarget(owner, item.Target, item.Mode),
-                    item.Mode,
-                })
-                .OrderBy(item => item.Id, StringComparer.Ordinal)
-                .ThenBy(item => item.Type, StringComparer.Ordinal)
-                .ThenBy(item => item.Target, StringComparer.Ordinal)
-                .ThenBy(item => item.Mode, StringComparer.Ordinal);
-            foreach (var relationship in grouped)
-            {
-                if (string.IsNullOrEmpty(relationship.Id))
-                    throw new InvalidDataException(
-                        $"Relationship part '{part.Name}' contains a relationship without an Id.");
-                var info = new RelationshipInfo(
-                    owner,
-                    relationship.Id,
-                    relationship.Type,
-                    relationship.Target,
-                    relationship.Mode);
-                if (!definitions.TryAdd((owner, relationship.Id), info))
-                    throw new InvalidDataException(
-                        $"Relationship part '{part.Name}' contains duplicate Id '{relationship.Id}'.");
-                var fingerprint = RelationshipFingerprint(info);
-                entities.Add(new RelationshipEntity(
-                    $"relationship:{owner}:{relationship.Id}",
-                    SemanticChangeFamily.Relationship,
-                    owner,
-                    "relationship",
-                    null,
-                    ScopeForPart(owner),
-                    RelationshipValue(info),
-                    fingerprint,
-                    relationship.Id));
-            }
+                    EntryUri = relationship.OwnerUri,
+                    OwnerUri = relationship.OwnerUri,
+                    RelationshipId = relationship.Id,
+                    TargetUri = target,
+                    PropertyPath = "relationship",
+                },
+                null,
+                ScopeForPart(relationship.OwnerUri),
+                RelationshipValue(info),
+                fingerprint));
         }
         return new RelationshipReadResult(entities, definitions);
     }
@@ -407,8 +303,14 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 entities.Add(new Entity(
                     key,
                     SemanticChangeFamily.Relationship,
-                    owner,
-                    $"relationship.binding[{elementPath}]",
+                    new ChangeLocation
+                    {
+                        EntryUri = owner,
+                        OwnerUri = owner,
+                        RelationshipId = attribute.Value,
+                        TargetUri = relationship?.Target,
+                        PropertyPath = $"relationship.binding[{elementPath}]",
+                    },
                     anchor,
                     ScopeForPart(owner),
                     value,
@@ -434,31 +336,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         relationship.Type,
         relationship.Target,
         relationship.Mode);
-
-    internal static string NormalizeRelationshipTarget(string owner, string target, string mode)
-    {
-        // Open XML SDK package cloning commonly rewrites internal targets from owner-relative
-        // ("styles.xml") to package-absolute ("/word/styles.xml"). They identify the same OPC
-        // part and therefore must not become delete+insert relationship noise. External targets
-        // remain byte-for-byte meaningful (apart from relationship-id churn handled above).
-        if (string.Equals(mode, "External", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrEmpty(target))
-            return target;
-
-        try
-        {
-            var baseUri = new Uri("http://docxodus.invalid" +
-                (owner == "/" ? "/" : owner), UriKind.Absolute);
-            var resolved = new Uri(baseUri, target);
-            return resolved.PathAndQuery + resolved.Fragment;
-        }
-        catch (UriFormatException)
-        {
-            // #456 owns package-validity findings. This fallback remains deterministic and
-            // preserves a malformed target verbatim so it is never silently discarded.
-            return target;
-        }
-    }
 
     private static IEnumerable<Entity> ReadBookmarks(Part part, string partUri)
     {
@@ -508,8 +385,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 yield return new Entity(
                     $"bookmark:{partUri}:{name}:{ordinal++}",
                     SemanticChangeFamily.Bookmark,
-                    partUri,
-                    "bookmark",
+                    new ChangeLocation
+                    {
+                        EntryUri = partUri,
+                        PropertyPath = "bookmark",
+                    },
                     anchor,
                     ScopeForPart(partUri),
                     value,
@@ -536,12 +416,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             ordinals[identity] = ordinal + 1;
             var anchor = NearestAnchor(revision, part.Name);
             var structuralPath = ElementPath(root, revision);
-            var normalizedRevision = new XElement(revision);
-            normalizedRevision.DescendantsAndSelf()
-                .Attributes()
-                .Where(attribute => attribute.Name.LocalName == "id"
-                    && IsWordNamespace(attribute.Name.NamespaceName))
-                .Remove();
+            var normalizedRevision = XmlSemanticNormalizer.Digest(
+                revision,
+                partUri,
+                ignoreFormattingWhitespace: true,
+                includeAttribute: IncludeRevisionAttribute);
             var value = ValueObj(
                 ("kind", SemanticValue.String(kind)),
                 ("author", SemanticValue.String(Attr(revision, "author"))),
@@ -550,14 +429,17 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     .Where(element => element.Name.LocalName is "t" or "delText" or "instrText" or "delInstrText")
                     .Select(element => element.Value)))),
                 ("normalizedDigest", SemanticValue.Digest(
-                    "SHA-256",
-                    Sha256(Encoding.UTF8.GetBytes(CanonicalXml(normalizedRevision))),
+                    normalizedRevision.Algorithm,
+                    normalizedRevision.Value,
                     "xml-expanded-names-comments-pi-v1")));
             yield return new Entity(
                 $"revision:{partUri}:{identity}:{ordinal}",
                 SemanticChangeFamily.Revision,
-                partUri,
-                "revision",
+                new ChangeLocation
+                {
+                    EntryUri = partUri,
+                    PropertyPath = "revision",
+                },
                 anchor,
                 ScopeForPart(partUri),
                 value,
@@ -578,7 +460,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 .FirstOrDefault(element => element.Name.NamespaceName == AnnotationNamespace
                     && element.Name.LocalName == "range")?
                 .Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "bookmarkName")?.Value;
-            var canonical = CanonicalXml(annotation);
+            var normalized = XmlSemanticNormalizer.Digest(
+                annotation,
+                partUri,
+                ignoreFormattingWhitespace: false,
+                includeAttribute: ExcludeGeneratedUnid);
             var value = ValueObj(
                 ("id", SemanticValue.String(id)),
                 ("labelId", SemanticValue.String(Attr(annotation, "labelId"))),
@@ -588,18 +474,21 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 ("created", SemanticValue.String(Attr(annotation, "created"))),
                 ("bookmarkName", SemanticValue.String(bookmarkName)),
                 ("normalizedDigest", SemanticValue.Digest(
-                    "SHA-256",
-                    Sha256(Encoding.UTF8.GetBytes(canonical)),
+                    normalized.Algorithm,
+                    normalized.Value,
                     "docxodus-annotation-v1")));
             yield return new Entity(
                 $"annotation:{partUri}:{id}",
                 SemanticChangeFamily.Annotation,
-                partUri,
-                "annotation",
+                new ChangeLocation
+                {
+                    EntryUri = partUri,
+                    PropertyPath = "annotation",
+                },
                 null,
                 null,
                 value,
-                canonical,
+                normalized.Value,
                 $"{partUri}\u001f{id}");
         }
     }
@@ -726,8 +615,8 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         result.Add(new SemanticChangeDraft(
             operation,
             exemplar.Family,
-            exemplar.PartUri,
-            exemplar.Path,
+            exemplar.Location.EntryUri ?? exemplar.Location.OwnerUri ?? "/",
+            exemplar.Location.PropertyPath ?? "package",
             before?.Anchor,
             after?.Anchor,
             before?.Scope,
@@ -753,109 +642,16 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
     private static string EntityGroupKey(Entity entity) => string.Join(
         "\u001f",
         ((int)entity.Family).ToString(System.Globalization.CultureInfo.InvariantCulture),
-        entity.PartUri,
-        entity.Path);
+        entity.Location.EntryUri ?? entity.Location.OwnerUri ?? string.Empty,
+        entity.Location.PropertyPath ?? string.Empty);
 
-    private static XDocument? TryReadXml(byte[] bytes)
-    {
-        if (bytes.Length == 0) return null;
-        try
-        {
-            using var stream = new MemoryStream(bytes, writable: false);
-            using var reader = XmlReader.Create(stream, new XmlReaderSettings
-            {
-                DtdProcessing = DtdProcessing.Prohibit,
-                XmlResolver = null,
-                MaxCharactersInDocument = Math.Max(bytes.LongLength * 4, 1024),
-            });
-            return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
-        }
-        catch (XmlException)
-        {
-            return null;
-        }
-    }
+    private static bool ExcludeGeneratedUnid(XAttribute attribute) =>
+        attribute.Name != PtOpenXml.Unid;
 
-    private static string CanonicalXml(
-        XElement element,
-        bool preserveWhitespace = false,
-        Func<XAttribute, string>? attributeNormalizer = null)
-    {
-        var builder = new StringBuilder();
-        WriteCanonical(element, builder, preserveWhitespace, attributeNormalizer);
-        return builder.ToString();
-    }
-
-    private static string CanonicalXml(
-        XDocument document,
-        bool preserveWhitespace,
-        Func<XAttribute, string>? attributeNormalizer = null)
-    {
-        var builder = new StringBuilder();
-        foreach (var node in document.Nodes())
-            WriteCanonicalNode(node, builder, preserveWhitespace, attributeNormalizer, parent: null);
-        return builder.ToString();
-    }
-
-    private static void WriteCanonical(
-        XElement element,
-        StringBuilder builder,
-        bool preserveWhitespace,
-        Func<XAttribute, string>? attributeNormalizer)
-    {
-        builder.Append('<').Append('{').Append(element.Name.NamespaceName).Append('}')
-            .Append(element.Name.LocalName);
-        foreach (var attribute in element.Attributes()
-            .Where(attribute => !attribute.IsNamespaceDeclaration && attribute.Name != PtOpenXml.Unid)
-            .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
-            .ThenBy(attribute => attribute.Name.LocalName, StringComparer.Ordinal))
-        {
-            var value = attributeNormalizer?.Invoke(attribute) ?? attribute.Value;
-            builder.Append(" a{").Append(attribute.Name.NamespaceName).Append('}')
-                .Append(attribute.Name.LocalName).Append('=')
-                .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)));
-        }
-        builder.Append('>');
-        foreach (var node in element.Nodes())
-            WriteCanonicalNode(node, builder, preserveWhitespace, attributeNormalizer, element);
-        builder.Append("</>");
-    }
-
-    private static void WriteCanonicalNode(
-        XNode node,
-        StringBuilder builder,
-        bool preserveWhitespace,
-        Func<XAttribute, string>? attributeNormalizer,
-        XElement? parent)
-    {
-        switch (node)
-        {
-            case XElement child:
-                WriteCanonical(child, builder, preserveWhitespace, attributeNormalizer);
-                break;
-            case XCData cdata:
-                builder.Append(" c=").Append(
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(cdata.Value)));
-                break;
-            case XText text when parent is not null && (preserveWhitespace
-                || !string.IsNullOrWhiteSpace(text.Value)
-                || parent.AncestorsAndSelf().Any(ancestor =>
-                    (string?)ancestor.Attribute(XNamespace.Xml + "space") == "preserve")):
-                builder.Append(" t=").Append(
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(text.Value)));
-                break;
-            case XComment comment:
-                builder.Append(" m=").Append(
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(comment.Value)));
-                break;
-            case XProcessingInstruction instruction:
-                builder.Append(" i=")
-                    .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(instruction.Target)))
-                    .Append(':')
-                    .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(instruction.Data)));
-                break;
-        }
-    }
+    private static bool IncludeRevisionAttribute(XAttribute attribute) =>
+        ExcludeGeneratedUnid(attribute)
+        && !(attribute.Name.LocalName == "id"
+            && IsWordNamespace(attribute.Name.NamespaceName));
 
     private static Func<XAttribute, string> RelationshipAttributeNormalizer(
         string owner,
@@ -880,27 +676,44 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             : part.Name.StartsWith("word/theme/", StringComparison.Ordinal)
                 ? "theme.registry.package"
                 : "style.registry.package";
-        string fingerprint = part.Xml is null
-            ? Sha256(part.Bytes)
-            : Sha256(Encoding.UTF8.GetBytes(CanonicalXml(
+        var normalized = part.Xml is null
+            ? part.RawBytesDigest!
+            : XmlSemanticNormalizer.Digest(
                 part.Xml,
-                preserveWhitespace: false,
-                RelationshipAttributeNormalizer(partUri, relationships))));
-        var value = ValueObj(
-            ("size", SemanticValue.Integer(part.Bytes.LongLength)),
-            ("normalizedDigest", SemanticValue.Digest(
-                "SHA-256",
-                fingerprint,
-                part.Xml is null ? "raw-part-bytes" : "xml-expanded-names-comments-pi-v1")));
+                partUri,
+                ignoreFormattingWhitespace: true,
+                includeAttribute: ExcludeGeneratedUnid,
+                attributeValueNormalizer: RelationshipAttributeNormalizer(
+                    partUri, relationships));
+        string fingerprint = normalized.Value;
+        var contentType = ContentTypeFor(part);
+        var digest = SemanticValue.Digest(
+            normalized.Algorithm,
+            fingerprint,
+            part.Xml is null ? "raw-part-bytes" : "xml-expanded-names-comments-pi-v1");
+        var value = part.Xml is null
+            ? ValueObj(
+                ("contentType", SemanticValue.String(contentType)),
+                ("size", SemanticValue.Integer(part.Size)),
+                ("normalizedDigest", digest))
+            : ValueObj(
+                ("contentType", SemanticValue.String(contentType)),
+                ("normalizedDigest", digest));
+        var identity = ValueObj(
+            ("contentType", SemanticValue.String(contentType)),
+            ("normalizedDigest", digest));
         return new Entity(
             "registry:" + partUri,
             family,
-            partUri,
-            path,
+            new ChangeLocation
+            {
+                EntryUri = partUri,
+                PropertyPath = path,
+            },
             null,
             null,
             value,
-            ValueFingerprint(value));
+            ValueFingerprint(identity));
     }
 
     private static bool PreserveWhitespaceInOpaqueXml(string name) =>
@@ -941,18 +754,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
 
     private static bool IsWordNamespace(string value) =>
         value == WordNamespace || value == StrictWordNamespace;
-
-    private static string RelationshipOwner(string relationshipPart)
-    {
-        if (relationshipPart == "_rels/.rels") return "/";
-        int marker = relationshipPart.LastIndexOf("/_rels/", StringComparison.Ordinal);
-        if (marker < 0) return PartUri(relationshipPart);
-        var prefix = relationshipPart.Substring(0, marker + 1);
-        var file = relationshipPart.Substring(marker + "/_rels/".Length);
-        if (file.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
-            file = file.Substring(0, file.Length - ".rels".Length);
-        return PartUri(prefix + file);
-    }
 
     private static string ElementPath(XElement root, XElement element)
     {
@@ -1016,9 +817,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
     private static string PartUri(string entryName) =>
         entryName.StartsWith("/", StringComparison.Ordinal) ? entryName : "/" + entryName;
 
-    private static string Sha256(byte[] bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-
     private static long? ParseLong(string? value) =>
         long.TryParse(value, System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
@@ -1045,13 +843,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         return wrapper.ToJson(indented: false);
     }
 
-    private static string ContentTypeFor(string name, ContentTypeMap contentTypes)
+    private static string ContentTypeFor(Part part)
     {
-        if (contentTypes.Overrides.TryGetValue(PartUri(name), out var overridden))
-            return overridden;
-        var extension = Path.GetExtension(name).ToLowerInvariant();
-        if (contentTypes.Defaults.TryGetValue(extension.TrimStart('.'), out var declared))
-            return declared;
+        if (part.ContentType is not null)
+            return part.ContentType;
+        var extension = Path.GetExtension(part.Name).ToLowerInvariant();
         return extension switch
         {
             ".xml" => "application/xml",
@@ -1066,26 +862,12 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         };
     }
 
-    private sealed record Part(string Name, byte[] Bytes, XDocument? Xml);
-
-    private sealed record ContentTypeMap(
-        IReadOnlyDictionary<string, string> Defaults,
-        IReadOnlyDictionary<string, string> Overrides);
-
-    private sealed class ReadBudget
-    {
-        private long _remaining;
-
-        public ReadBudget(long maximumBytes) => _remaining = maximumBytes;
-
-        public void Consume(int count, string entryName)
-        {
-            if (_remaining < count)
-                throw new InvalidDataException(
-                    $"Package exceeds the aggregate decompressed-byte limit while reading '{entryName}'.");
-            _remaining -= count;
-        }
-    }
+    private sealed record Part(
+        string Name,
+        XDocument? Xml,
+        string? ContentType,
+        long Size,
+        VerificationDigest? RawBytesDigest);
 
     private sealed record RelationshipInfo(
         string Owner,
@@ -1095,32 +877,18 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         string Mode);
 
     private sealed record RelationshipReadResult(
-        IReadOnlyList<RelationshipEntity> Inventory,
+        IReadOnlyList<Entity> Inventory,
         IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> ByOwnerAndId);
 
     private record Entity(
         string Key,
         SemanticChangeFamily Family,
-        string PartUri,
-        string Path,
+        ChangeLocation Location,
         string? Anchor,
         string? Scope,
         SemanticValue Value,
         string Fingerprint,
         string? LocationKey = null);
-
-    private sealed record RelationshipEntity(
-        string Key,
-        SemanticChangeFamily Family,
-        string PartUri,
-        string Path,
-        string? Anchor,
-        string? Scope,
-        SemanticValue Value,
-        string Fingerprint,
-        string? RelationshipId,
-        string? LocationKey = null)
-        : Entity(Key, Family, PartUri, Path, Anchor, Scope, Value, Fingerprint, LocationKey);
 
     private sealed record PackageSnapshot(
         IReadOnlyList<Entity> Relationships,

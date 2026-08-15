@@ -242,32 +242,28 @@ public class SemanticDiffTests
     }
 
     [Fact]
-    public void Package_entry_read_enforces_actual_stream_limit_not_declared_length()
+    public void Manifest_preflight_applies_when_package_supplement_is_disabled()
     {
-        using var input = new MemoryStream(new byte[64], writable: false);
+        var document = IrTestDocuments.Create("Same");
+        var invalid = new WmlDocument(document);
+        Array.Clear(invalid.DocumentByteArray);
 
-        var error = Assert.Throws<InvalidDataException>(() =>
-            OpcSemanticPackageChangeDetector.ReadEntryBytes(
-                input, "customXml/forged.bin", maximumBytes: 8, declaredLength: 1));
-
-        Assert.Contains("decompressed limit", error.Message, StringComparison.Ordinal);
+        Assert.Throws<InvalidDataException>(() => SemanticDiff.Compare(
+            invalid,
+            document,
+            new SemanticDiffOptions { IncludePackageChanges = false }));
     }
 
     [Fact]
-    public void Internal_relationship_targets_are_owner_resolved_before_comparison()
+    public void Internal_relationship_target_spellings_are_owner_resolved_before_comparison()
     {
-        Assert.Equal("/word/styles.xml",
-            OpcSemanticPackageChangeDetector.NormalizeRelationshipTarget(
-                "/word/document.xml", "styles.xml", "Internal"));
-        Assert.Equal("/word/styles.xml",
-            OpcSemanticPackageChangeDetector.NormalizeRelationshipTarget(
-                "/word/document.xml", "/word/styles.xml", "Internal"));
-        Assert.Equal("/docProps/core.xml",
-            OpcSemanticPackageChangeDetector.NormalizeRelationshipTarget(
-                "/", "docProps/core.xml", "Internal"));
-        Assert.Equal("https://example.test/relative/../target",
-            OpcSemanticPackageChangeDetector.NormalizeRelationshipTarget(
-                "/word/document.xml", "https://example.test/relative/../target", "External"));
+        var basis = IrTestDocuments.Create("Same");
+        var relative = WithCustomInternalRelationship(
+            basis, "itemProps1.xml");
+        var absolute = WithCustomInternalRelationship(
+            basis, "/customXml/itemProps1.xml");
+
+        Assert.Empty(SemanticDiff.Compare(relative, absolute).Changes);
     }
 
     [Fact]
@@ -554,11 +550,29 @@ public class SemanticDiffTests
         var document = IrTestDocuments.Create("Same");
 
         Assert.Throws<InvalidDataException>(() => SemanticDiff.Compare(document, document,
-            new SemanticDiffOptions { MaximumTotalUncompressedBytes = 1 }));
+            new SemanticDiffOptions
+            {
+                PackageOptions = new PackageManifestOptions
+                {
+                    MaxTotalUncompressedBytes = 1,
+                },
+            }));
         Assert.Throws<InvalidDataException>(() => SemanticDiff.Compare(document, document,
-            new SemanticDiffOptions { MaximumPartUriLength = 4 }));
+            new SemanticDiffOptions
+            {
+                PackageOptions = new PackageManifestOptions
+                {
+                    MaxUriLength = 4,
+                },
+            }));
         Assert.Throws<InvalidDataException>(() => SemanticDiff.Compare(document, document,
-            new SemanticDiffOptions { MaximumCompressionRatio = 1 }));
+            new SemanticDiffOptions
+            {
+                PackageOptions = new PackageManifestOptions
+                {
+                    MaxCompressionRatio = 1,
+                },
+            }));
 
         var duplicate = WithDuplicateEntry(document, "word/settings.xml", "<settings/>");
         Assert.Throws<InvalidDataException>(() => new OpcSemanticPackageChangeDetector().Compare(
@@ -640,6 +654,14 @@ public class SemanticDiffTests
         using var noBaseline = new DocxSession(document.DocumentByteArray,
             new DocxSessionSettings { CaptureInitialProjection = false });
         Assert.Throws<InvalidOperationException>(() => noBaseline.GetSemanticChanges());
+    }
+
+    [Fact]
+    public void Untouched_blank_session_suppresses_checkpoint_xml_reserialization()
+    {
+        using var session = new DocxSession(DocxSession.CreateBlankDocxBytes());
+
+        Assert.Empty(session.GetSemanticChanges().Changes);
     }
 
     [Fact]
@@ -845,11 +867,48 @@ public class SemanticDiffTests
     private static WmlDocument WithCustomRelationshipGraph(
         WmlDocument source,
         string referencedId,
-        params (string Id, string Target)[] relationships)
+        params (string Id, string Target)[] relationships) =>
+        WithCustomRelationshipGraph(
+            source,
+            referencedId,
+            "External",
+            "urn:docxodus:test-binding",
+            relationships);
+
+    private static WmlDocument WithCustomInternalRelationship(
+        WmlDocument source,
+        string target) => WithCustomRelationshipGraph(
+            source,
+            "rIdInternal",
+            "Internal",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
+            new[] { ("rIdInternal", target) });
+
+    private static WmlDocument WithCustomRelationshipGraph(
+        WmlDocument source,
+        string referencedId,
+        string targetMode,
+        string relationshipType,
+        IReadOnlyList<(string Id, string Target)> relationships)
     {
         const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
         var document = WithCustomXmlPayload(source,
             $"<vendorData xmlns=\"urn:example:vendor\" xmlns:r=\"{R}\" r:ref=\"{referencedId}\"/>");
+        if (relationshipType.EndsWith("/customXmlProps", StringComparison.Ordinal))
+        {
+            using var package = new MemoryStream();
+            package.Write(document.DocumentByteArray);
+            using (var wordDocument = WordprocessingDocument.Open(package, true))
+            {
+                var ownerPart = wordDocument.MainDocumentPart!.CustomXmlParts.Single();
+                var propertiesPart = ownerPart.AddNewPart<CustomXmlPropertiesPart>("rIdInternal");
+                using var properties = propertiesPart.GetStream(FileMode.Create, FileAccess.Write);
+                var payload = Encoding.UTF8.GetBytes(
+                    "<ds:datastoreItem xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\" ds:itemID=\"{00000000-0000-0000-0000-000000000001}\"><ds:schemaRefs/></ds:datastoreItem>");
+                properties.Write(payload);
+            }
+            document = new WmlDocument(source.FileName, package.ToArray());
+        }
         using var stream = new MemoryStream();
         stream.Write(document.DocumentByteArray);
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Update, leaveOpen: true))
@@ -868,9 +927,9 @@ public class SemanticDiffTests
                 relationships.Select(relationship => new XElement(
                     XName.Get("Relationship", "http://schemas.openxmlformats.org/package/2006/relationships"),
                     new XAttribute("Id", relationship.Id),
-                    new XAttribute("Type", "urn:docxodus:test-binding"),
+                    new XAttribute("Type", relationshipType),
                     new XAttribute("Target", relationship.Target),
-                    new XAttribute("TargetMode", "External"))));
+                    new XAttribute("TargetMode", targetMode))));
             var bytes = Encoding.UTF8.GetBytes(xml.ToString(SaveOptions.DisableFormatting));
             target.Write(bytes);
         }

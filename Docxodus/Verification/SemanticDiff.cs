@@ -24,23 +24,19 @@ public sealed record SemanticDiffOptions
     /// </summary>
     public bool IncludePackageChanges { get; init; } = true;
 
-    /// <summary>Maximum number of ZIP entries inspected by the package fallback.</summary>
-    public int MaximumPackageEntries { get; init; } = 10_000;
-
-    /// <summary>Maximum uncompressed bytes inspected for one package entry.</summary>
-    public long MaximumPartBytes { get; init; } = 64L * 1024 * 1024;
-
     /// <summary>
-    /// Maximum aggregate uncompressed bytes inspected across one package. This is an actual-read
-    /// budget, not only a trust in ZIP central-directory lengths.
+    /// Shared package-manifest safety policy used for the mandatory preflight and, when enabled,
+    /// the package-level semantic supplement.
     /// </summary>
-    public long MaximumTotalUncompressedBytes { get; init; } = 256L * 1024 * 1024;
-
-    /// <summary>Maximum allowed uncompressed-to-compressed ratio for one ZIP entry.</summary>
-    public double MaximumCompressionRatio { get; init; } = 1_000;
-
-    /// <summary>Maximum decoded package-part URI length.</summary>
-    public int MaximumPartUriLength { get; init; } = 2_048;
+    public PackageManifestOptions PackageOptions { get; init; } = new()
+    {
+        MaxEntryCount = 10_000,
+        MaxEntryUncompressedBytes = 64L * 1024 * 1024,
+        MaxTotalUncompressedBytes = 256L * 1024 * 1024,
+        MaxXmlPartBytes = 64L * 1024 * 1024,
+        MaxCompressionRatio = 1_000,
+        MaxUriLength = 2_048,
+    };
 }
 
 /// <summary>
@@ -81,9 +77,8 @@ internal sealed record SemanticChangeDraft(
     SemanticValue After);
 
 /// <summary>
-/// Rebase seam for #456: its manifest/delta implementation can replace this detector without changing
-/// the semantic schema or IR projection. The local implementation intentionally owns no public manifest,
-/// digest, finding, or shared-location type.
+/// Keeps projection from the shared package-manifest inspection separate from the public semantic
+/// schema and the IR projection.
 /// </summary>
 internal interface ISemanticPackageChangeDetector
 {
@@ -109,17 +104,14 @@ internal static class SemanticDiffEngine
         WmlDocument originalRight,
         SemanticDiffOptions options)
     {
-        Validate(options);
         var settings = options.DiffSettings ?? new DocxDiffSettings();
         // Inspect the raw package before the Open XML SDK/IR path. This makes the declared package
         // limits an actual boundary for the default public operation instead of a late supplement
         // reached only after an untrusted archive has already been expanded.
-        var packageChanges = options.IncludePackageChanges
-            ? PackageDetector.Compare(
-                originalLeft.DocumentByteArray,
-                originalRight.DocumentByteArray,
-                options)
-            : Array.Empty<SemanticChangeDraft>();
+        var packageChanges = PackageDetector.Compare(
+            originalLeft.DocumentByteArray,
+            originalRight.DocumentByteArray,
+            options);
         var left = PreAccept(originalLeft, settings);
         var right = PreAccept(originalRight, settings);
         var diffSettings = settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
@@ -151,21 +143,6 @@ internal static class SemanticDiffEngine
             After = draft.After,
         }).ToArray();
         return new SemanticChangeSet(changes);
-    }
-
-    private static void Validate(SemanticDiffOptions options)
-    {
-        if (options.MaximumPackageEntries <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options.MaximumPackageEntries));
-        if (options.MaximumPartBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options.MaximumPartBytes));
-        if (options.MaximumTotalUncompressedBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options.MaximumTotalUncompressedBytes));
-        if (!double.IsFinite(options.MaximumCompressionRatio)
-            || options.MaximumCompressionRatio <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options.MaximumCompressionRatio));
-        if (options.MaximumPartUriLength <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options.MaximumPartUriLength));
     }
 
     private static WmlDocument PreAccept(WmlDocument document, DocxDiffSettings settings) =>
