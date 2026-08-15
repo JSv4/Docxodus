@@ -13347,9 +13347,16 @@ public sealed partial class DocxSession : IDisposable
     // Hyperlinks, sdts, fldSimple and smartTag are transparent containers — their
     // descendant runs contribute to the paragraph's visible text. Bookmark/comment
     // markers (zero-width) are tracked separately and not enumerated here.
+    //
+    // w:ins and w:moveTo are transparent for the same reason: an insertion's text is
+    // present in the document as ordinary w:t and is exactly what a reader sees, so it
+    // belongs in the flat text every offset-addressed op works over. Their deleting
+    // counterparts w:del and w:moveFrom deliberately are NOT here — that content is
+    // w:delText, which RunText does not read, so deleted text stays out of the visible
+    // string and offsets keep addressing what the document actually shows.
     private static readonly HashSet<XName> InlineContainerNames = new()
     {
-        W.hyperlink, W.sdt, W.fldSimple, W.smartTag,
+        W.hyperlink, W.sdt, W.fldSimple, W.smartTag, W.ins, W.moveTo,
     };
 
     private static bool IsInlineChild(XElement e) =>
@@ -13358,8 +13365,10 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// All <c>&lt;w:r&gt;</c> elements that contribute to the paragraph's visible text,
     /// in document order — including runs nested inside hyperlinks, sdts, fldSimple,
-    /// smartTags. Iterating only <c>Elements(W.r)</c> silently skips hyperlink-internal
-    /// runs, which produced the bugs documented in DS080-DS090.
+    /// smartTags, and tracked insertions (<c>w:ins</c>/<c>w:moveTo</c>). Iterating only
+    /// <c>Elements(W.r)</c> silently skips hyperlink-internal runs, which produced the
+    /// bugs documented in DS080-DS090; skipping insertion-internal runs made an agent
+    /// unable to re-find its own tracked edit (DS409-DS410).
     /// </summary>
     internal static IEnumerable<XElement> InlineRuns(XElement paragraph)
     {
