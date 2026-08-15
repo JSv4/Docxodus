@@ -23,6 +23,13 @@ linked as one operation instead of reported as an unrelated delete and insert.*
 `getRevisions()` gives you the same changes as structured data — typed, with move pairing and stable
 `kind:scope:unid` anchors — so you can drive a review UI without parsing OOXML.
 
+For audit and verification workflows, `docxDiffGetSemanticChanges(left, right)` returns the stable
+`docxodus.semantic-changes` v1 object. It distinguishes content, formatting, structure, table,
+story/review, relationship/media, and opaque-package families, with typed before/after values and
+deterministic ids. An open session exposes the same opening-to-current comparison through
+`session.getSemanticChanges()`; it requires the default `captureInitialProjection: true` setting.
+See the [semantic diff contract](../docs/architecture/semantic_diff.md).
+
 ## Render a document faithfully
 
 `convertDocxToHtml()` keeps what naive converters drop: justification, style inheritance, legal

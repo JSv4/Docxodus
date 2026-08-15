@@ -55,6 +55,7 @@ internal static class Dispatcher
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
         "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
+        "docx_diff_get_semantic_changes" => DocxDiffGetSemanticChanges(args),
         "docx_diff_accept_revisions" => DocxDiffAcceptRevisions(args),
         "docx_diff_reject_revisions" => DocxDiffRejectRevisions(args),
         "docx_diff_consolidate" => DocxDiffConsolidate(args),
@@ -286,6 +287,7 @@ internal static class Dispatcher
             Handle(args), (PlaceholderKinds)IntOptional(args, "kinds", 7)),
         "get_diff" => DocxSessionOps.GetDiff(
             Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
+        "get_semantic_changes" => DocxSessionOps.GetSemanticChanges(Handle(args)),
         "find_by_annotation" => DocxSessionOps.FindByAnnotation(
             Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args)),
         "find_by_label" => DocxSessionOps.FindByLabel(
@@ -434,6 +436,14 @@ internal static class Dispatcher
         var left = Convert.FromBase64String(Str(args, "leftB64"));
         var right = Convert.FromBase64String(Str(args, "rightB64"));
         return DocxDiffOps.GetEditScriptJson(left, right, DiffSettingsJson(args));
+    }
+
+    private static string DocxDiffGetSemanticChanges(JsonElement args)
+    {
+        var left = Convert.FromBase64String(Str(args, "leftB64"));
+        var right = Convert.FromBase64String(Str(args, "rightB64"));
+        // Already the public semantic-change JSON object — embed verbatim in the host result.
+        return DocxDiffOps.GetSemanticChangesJson(left, right, DiffSettingsJson(args));
     }
 
     private static string DocxDiffAcceptRevisions(JsonElement args)

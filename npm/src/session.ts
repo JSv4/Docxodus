@@ -68,6 +68,7 @@ import type {
   ReplaceOptions,
   RevisionListEntry,
   SectionInfo,
+  SemanticChangeSet,
   StyleInfo,
   TemplatePlaceholder,
   TextMatch,
@@ -1577,6 +1578,14 @@ export class DocxSession {
       return JSON.parse(raw) as DiffEntry[];
     }
     return raw;
+  }
+
+  /**
+   * Return stable semantic changes from the package opened for this session to
+   * its current state. Requires `captureInitialProjection` (enabled by default).
+   */
+  getSemanticChanges(): SemanticChangeSet {
+    return JSON.parse(this.wasm.GetSemanticChanges(this.handle)) as SemanticChangeSet;
   }
 
   // ─── Annotation-based anchor discovery (#132) ────────────────────────

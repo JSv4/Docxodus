@@ -933,6 +933,14 @@ public static partial class DocxSessionBridge
         DocxSessionOps.GetDiff(h, (DiffFormat)format);
 
     /// <summary>
+    /// Return canonical semantic-change JSON between the package opened for this session and
+    /// its current state. Baseline capture must have been enabled when the session was opened.
+    /// </summary>
+    [JSExport]
+    public static string GetSemanticChanges(int h) =>
+        DocxSessionOps.GetSemanticChanges(h);
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
     /// <see cref="AnchorTarget"/> records (each <c>{id, kind, scope, unid, partUri}</c>);
     /// empty array when the id is unknown.

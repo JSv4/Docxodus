@@ -9,7 +9,8 @@ namespace DocxodusWasm;
 
 /// <summary>
 /// JSExport bridge for the <c>Docxodus.DocxDiff</c> facade — the IR diff engine's
-/// three public entry points (Compare, GetRevisions, GetEditScriptJson). Like
+/// public comparison entry points (Compare, GetRevisions, GetEditScriptJson, and
+/// GetSemanticChangesJson). Like
 /// <see cref="DocxSessionBridge"/>, this is a thin JSExport-attributed shell over
 /// the shared <see cref="DocxDiffOps"/> facade so the WASM and stdio NDJSON
 /// transports stay byte-for-byte identical.
@@ -71,6 +72,24 @@ public static partial class DocxDiffBridge
         try
         {
             return DocxDiffOps.GetEditScriptJson(leftBytes, rightBytes, settingsJson);
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Compare two DOCX byte arrays and return the stable, versioned semantic-change
+    /// schema as canonical compact JSON, or a JSON error object.
+    /// </summary>
+    [JSExport]
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes, byte[] rightBytes, string settingsJson)
+    {
+        try
+        {
+            return DocxDiffOps.GetSemanticChangesJson(leftBytes, rightBytes, settingsJson);
         }
         catch (Exception ex)
         {

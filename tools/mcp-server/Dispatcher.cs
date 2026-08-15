@@ -210,6 +210,11 @@ internal static class Dispatcher
             case "version":
                 return DocxSessionOps.GetVersionJson(session.Handle);
 
+            case "semantic_changes":
+                if (anchorId is not null)
+                    throw new McpToolException("semantic_changes is document-wide and does not accept anchorId");
+                return DocxSessionOps.GetSemanticChanges(session.Handle);
+
             case "check_preconditions":
                 return DocxSessionOps.CheckPreconditions(
                     session.Handle, ParsePreconditions(args, OptStr(args, "anchorId")));

@@ -568,6 +568,76 @@ export interface DocxDiffRevision {
   rightAnchor?: string;
 }
 
+/** Stable v1 operation names emitted by the semantic-change schema. */
+export type SemanticChangeOperation = "insert" | "delete" | "move" | "modify";
+
+/** Stable v1 semantic families. New schema versions may append families. */
+export type SemanticChangeFamily =
+  | "text"
+  | "block_structure"
+  | "run_formatting"
+  | "paragraph_formatting"
+  | "style"
+  | "numbering"
+  | "list"
+  | "table"
+  | "table_row"
+  | "table_cell"
+  | "table_span"
+  | "table_width"
+  | "table_style"
+  | "section"
+  | "page_setup"
+  | "header"
+  | "footer"
+  | "field"
+  | "footnote"
+  | "endnote"
+  | "comment"
+  | "hyperlink"
+  | "bookmark"
+  | "content_control"
+  | "image"
+  | "media"
+  | "relationship"
+  | "revision"
+  | "annotation"
+  | "opaque_package_part";
+
+/** Closed typed value used in {@link SemanticChange.before} and `after`. */
+export type SemanticValue =
+  | { kind: "absent" }
+  | { kind: "string"; value: string }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "integer"; value: number }
+  | { kind: "digest"; algorithm: string; profile: string | null; value: string }
+  | { kind: "object"; value: Record<string, SemanticValue> }
+  | { kind: "array"; value: SemanticValue[] };
+
+/** One deterministic, anchor-addressed semantic change. */
+export interface SemanticChange {
+  id: string;
+  operation: SemanticChangeOperation;
+  family: SemanticChangeFamily;
+  partUri: string;
+  path: string;
+  leftAnchor: string | null;
+  rightAnchor: string | null;
+  leftScope: string | null;
+  rightScope: string | null;
+  moveId: string | null;
+  before: SemanticValue;
+  after: SemanticValue;
+}
+
+/** Public `docxodus.semantic-changes` schema returned by semantic comparison APIs. */
+export interface SemanticChangeSet {
+  schema: "docxodus.semantic-changes";
+  schemaVersion: 1;
+  changeCount: number;
+  changes: SemanticChange[];
+}
+
 // ─── DocxDiff consolidate (composite N-way) ─────────────────────────────────
 //
 // The composite layer over the IR diff engine: merge several reviewers' edits
@@ -1138,6 +1208,12 @@ export interface DocxodusWasmExports {
       rightBytes: Uint8Array,
       settingsJson: string
     ) => string;
+    /** Canonical `docxodus.semantic-changes` JSON, or a JSON error object. */
+    GetSemanticChangesJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => string;
     /** Accept all tracked revisions in a redlined DOCX → "right"-side bytes, or empty array on error. */
     AcceptRevisions: (bytes: Uint8Array) => Uint8Array;
     /** Reject all tracked revisions in a redlined DOCX → "left"-side bytes, or empty array on error. */
@@ -1389,6 +1465,7 @@ export interface DocxodusWasmExports {
     GetEditSummary: (handle: number) => string;
     RemainingPlaceholders: (handle: number, kinds: number) => string;
     GetDiff: (handle: number, format: number) => string;
+    GetSemanticChanges: (handle: number) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
@@ -2182,8 +2259,10 @@ export interface DocxSessionSettings {
   emitMarkdownPatch?: boolean;
   /**
    * When `true` (default), the session projects the document at construction
-   * time so {@link DocxSession.getDiff} can compare initial vs. current.
-   * Set to `false` to skip the ~200ms upfront cost if you don't plan to diff.
+   * time so {@link DocxSession.getDiff} can compare initial vs. current, and
+   * retains the exact opening package for `getSemanticChanges()`.
+   * Set to `false` to skip the upfront projection plus package-copy cost if you
+   * do not plan to call either comparison API.
    */
   captureInitialProjection?: boolean;
 }

@@ -228,6 +228,7 @@ Alongside the session API, the package exposes stateless one-shot functions at t
 | `docx_diff_compare` | `(left, right, settings=None)` | redlined DOCX `bytes` (native `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange` markup) |
 | `docx_diff_get_revisions` | `(left, right, settings=None)` | `tuple[DocxDiffRevision, ...]` |
 | `docx_diff_get_edit_script` | `(left, right, settings=None)` | edit-script JSON `str` |
+| `docx_diff_get_semantic_changes` | `(left, right, settings=None)` | versioned `SemanticChangeSet` with typed operations, families, locations, and before/after values |
 | `docx_diff_accept_revisions` | `(redline)` | `bytes` — accept every tracked change (≡ the right side of the diff) |
 | `docx_diff_reject_revisions` | `(redline)` | `bytes` — reject every tracked change (≡ the left side) |
 | `docx_diff_consolidate` | `(base, reviewers, settings=None)` | multi-author redlined DOCX `bytes` — merge N `DocxDiffReviewer` diffs against one shared base |
@@ -236,6 +237,11 @@ Alongside the session API, the package exposes stateless one-shot functions at t
 | `docx_diff_get_consolidated_edit_script` | `(base, reviewers, settings=None)` | edit-script JSON `str` |
 
 The `docx_diff_*` family is a thin client over Docxodus' `DocxDiff` IR diff engine. Tune pairwise comparisons with `DocxDiffSettings` and N-way consolidation with `DocxDiffConsolidateSettings` (whose `conflict_resolution` takes a `ConflictResolution` value). `DetectMoves`/format-change tracking, header/footer comparison, and per-reviewer attribution all round-trip through these calls.
+
+For an open session, `session.get_semantic_changes()` compares the exact opening package with the
+current logical checkpoint. It requires the default
+`DocxSessionSettings(capture_initial_projection=True)`. The schema and package-suppression rules are
+documented in [`semantic_diff.md`](../docs/architecture/semantic_diff.md).
 
 ```python
 from docx_scalpel import docx_diff_compare, docx_diff_get_revisions, DocxDiffSettings

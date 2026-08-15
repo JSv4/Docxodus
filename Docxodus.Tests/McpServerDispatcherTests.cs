@@ -226,14 +226,26 @@ public class McpServerDispatcherTests : IDisposable
         var sessionId = OpenSession();
         var sessionArg = JsonSerializer.Serialize(sessionId);
 
-        foreach (var format in new[] { "markdown", "html", "text", "blocks", "info" })
+        foreach (var format in new[]
+            { "markdown", "html", "text", "blocks", "info", "semantic_changes" })
         {
             var result = Dispatcher.Call(_store, "docxodus_get_content",
                 J($$"""{"sessionId":{{sessionArg}},"format":"{{format}}"}"""));
             Assert.False(string.IsNullOrEmpty(result));
             using var doc = JsonDocument.Parse(result); // must be valid JSON
             Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+            if (format == "semantic_changes")
+            {
+                Assert.Equal("docxodus.semantic-changes",
+                    doc.RootElement.GetProperty("schema").GetString());
+                Assert.Equal(1, doc.RootElement.GetProperty("schemaVersion").GetInt32());
+                Assert.Equal(0, doc.RootElement.GetProperty("changeCount").GetInt32());
+            }
         }
+
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store,
+            "docxodus_get_content",
+            J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes","anchorId":"ignored"}""")));
     }
 
     [Fact]

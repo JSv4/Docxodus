@@ -39,6 +39,30 @@ All notable changes to this project will be documented in this file.
   options. See
   [`docs/architecture/package_manifests.md`](docs/architecture/package_manifests.md), including
   its **Known limits of schema v1** section.
+- **Stable, comprehensive semantic DOCX diff (#457).** `SemanticDiff.Compare` and
+  `DocxDiff.GetSemanticChanges` return the versioned, deterministic
+  `docxodus.semantic-changes` schema with owning part/path, side-specific anchors
+  and scopes, `insert`/`delete`/`move`/`modify`, and closed typed before/after
+  values. Coverage spans text/structure/formatting/styles/numbering, tables,
+  sections and page setup, all story/note/comment families, links/bookmarks/SDTs,
+  images/media/relationships, revisions/annotations, and opaque package parts.
+  Serialization-only XML, coordinated relationship-id rewrites, and
+  relative-versus-absolute internal relationship targets are suppressed, while
+  target swaps at relationship-reference locations remain visible. Unknown XML
+  remains visible with whitespace-, comment-, and processing-instruction-preserving
+  normalized digests; full-part style/numbering/theme residuals cover values outside
+  the typed IR registries. Package inspection runs before SDK parsing and has
+  configurable entry-count, part-URI, per-entry, aggregate-decompressed-byte, and
+  compression-ratio bounds, with duplicate part names and relationship ids rejected.
+  The formal v1 JSON Schema is published at
+  [`docs/schemas/semantic-changes-v1.schema.json`](docs/schemas/semantic-changes-v1.schema.json).
+  The existing redline, revision,
+  edit-script JSON, and `DocxSession.GetDiff` APIs are unchanged. Available through
+  .NET, WASM/npm, the Python host/client, and MCP
+  (`docxodus_get_content format:"semantic_changes"`). Session comparison retains
+  the exact opening package when `CaptureInitialProjection` is enabled and inspects
+  an isolated logical checkpoint. Design and measured 1,000-paragraph guard:
+  [`docs/architecture/semantic_diff.md`](docs/architecture/semantic_diff.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
   `transactionId` (non-blank, at most 256 Unicode scalar values). The first
