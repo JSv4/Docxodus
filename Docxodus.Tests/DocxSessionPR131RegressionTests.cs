@@ -205,6 +205,89 @@ public class DocxSessionPR131RegressionTests
         Assert.Equal("DEF", secondText);
     }
 
+    /// <summary>Single body paragraph: text "AA" + <c>w:ins</c>("BBBB") + text "CC".
+    /// Visible text is "AABBBBCC" (8 chars); offsets 3-5 are strictly inside the
+    /// tracked insertion, and 2 and 6 are its edges.</summary>
+    internal static byte[] BuildParagraphWithTrackedInsertion()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = DocxSessionTests.BuildHeadingStyles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            XElement Run(string text) => new(W + "r",
+                new XElement(W + "t",
+                    new XAttribute(System.Xml.Linq.XNamespace.Xml + "space", "preserve"), text));
+
+            var paraXml = new XElement(W + "p",
+                Run("AA"),
+                new XElement(W + "ins",
+                    new XAttribute(W + "id", 10),
+                    new XAttribute(W + "author", "Reviewer"),
+                    new XAttribute(W + "date", "2026-01-01T00:00:00Z"),
+                    Run("BBBB")),
+                Run("CC"));
+
+            main.Document = new Document(new Body());
+            main.Document.Save();
+            var xDoc = main.GetXDocument();
+            xDoc.Root!.Element(W + "body")!.ReplaceNodes(paraXml);
+            main.PutXDocument();
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Companion to the note-citation guard (DS339/DS340). Once tracked insertions joined the
+    /// visible-text walk, a split offset could land strictly inside <c>w:ins</c>. The run
+    /// splitter cut the nested run, but <c>MoveInlineChildrenAfter</c> only relocates children
+    /// whose START is at or past the offset — so the whole revision wrapper stayed with the
+    /// first half and the paragraph silently split at the wrapper's far edge while reporting
+    /// success. Splitting a revision wrapper needs revision semantics this op does not own, so
+    /// it refuses instead.
+    /// </summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void DS095_SplitParagraph_InsideTrackedInsertion_FailsClosedWithoutMutation(int offset)
+    {
+        using var session = new DocxSession(BuildParagraphWithTrackedInsertion());
+        var anchor = FirstBodyParagraph(session).Anchor.Id;
+        Assert.Equal("AABBBBCC", session.GetAnchorInfo(anchor)?.TextPreview);
+        var before = session.GetPackageContentHash();
+        var version = session.Version;
+        var undoCount = session.UndoCount;
+
+        var result = session.SplitParagraph(anchor, offset);
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, result.Error!.Code);
+        Assert.Equal(before, session.GetPackageContentHash());
+        Assert.Equal(version, session.Version);
+        Assert.Equal(undoCount, session.UndoCount);
+        Assert.Single(BodyParagraphs(session));
+        Assert.Equal("AABBBBCC", session.GetAnchorInfo(anchor)?.TextPreview);
+    }
+
+    [Theory]
+    [InlineData(2, "AA", "BBBBCC")]
+    [InlineData(6, "AABBBB", "CC")]
+    public void DS096_SplitParagraph_AtTrackedInsertionEdge_SplitsExactly(
+        int offset, string expectedFirst, string expectedSecond)
+    {
+        using var session = new DocxSession(BuildParagraphWithTrackedInsertion());
+        var anchor = FirstBodyParagraph(session).Anchor.Id;
+
+        var result = session.SplitParagraph(anchor, offset);
+
+        Assert.True(result.Success, $"{result.Error?.Code}/{result.Error?.Message}");
+        Assert.Equal(expectedFirst, session.GetAnchorInfo(anchor)?.TextPreview);
+        Assert.Equal(expectedSecond, session.GetAnchorInfo(result.Created[0].Id)?.TextPreview);
+    }
+
     // ─── B2: MergeParagraphs preserves hyperlinks ────────────────────────
 
     [Fact]

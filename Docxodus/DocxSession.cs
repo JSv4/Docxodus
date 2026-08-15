@@ -7273,6 +7273,13 @@ public sealed partial class DocxSession : IDisposable
         if (characterOffset < 0 || characterOffset > totalText.Length)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+        // MoveInlineChildrenAfter relocates whole top-level children, so an offset strictly
+        // inside an atomic container would silently split at that container's far edge and
+        // still report success. Refuse instead — same boundary contract as note citations.
+        if (HasUnsupportedInlineInsertionBoundary(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "SplitParagraph offset falls inside a revision or unsupported inline container; " +
+                "choose a boundary before or after that container", anchorId);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported("SplitParagraph", anchorId);
 

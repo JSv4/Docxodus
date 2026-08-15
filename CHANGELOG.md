@@ -405,13 +405,16 @@ All notable changes to this project will be documented in this file.
   so a search over an incoming redline silently missed every inserted span.
   `w:ins`/`w:moveTo` now join the transparent inline containers; `w:del`/`w:moveFrom`
   deliberately do not, because their content is `w:delText` and deleted text is not
-  visible text. A note/endnote insertion whose requested offset is strictly inside one of
-  those revision wrappers now fails closed with `unsupported_inline_boundary`; the citation
-  inserter cannot split revision semantics and previously reported success after silently
-  placing the reference at the wrapper's far edge. Revision-edge offsets remain exact.
-  Coverage: `DocxSessionSurgicalTrackedChangesTests` DS409-DS410 and
-  `DocxSessionNoteAuthoringTests` DS339-DS340. Found by the issue #435 acceptance smoke and
-  its PR #491 adversarial review (`tools/mcp-server/smoke/epic-435-workflow.json`).
+  visible text. Making that text addressable also made it a valid target for ops that insert
+  or partition a paragraph's top-level children, and those cannot split a revision wrapper —
+  so a note/endnote citation and `SplitParagraph` whose requested offset is strictly inside
+  `w:ins`/`w:moveTo` now fail closed with `unsupported_inline_boundary`. Both previously
+  reported success after silently landing at the wrapper's far edge. Offsets exactly at a
+  wrapper's edge remain exact, and image insertion already refused this case.
+  Coverage: `DocxSessionSurgicalTrackedChangesTests` DS409-DS410,
+  `DocxSessionNoteAuthoringTests` DS339-DS340, and `DocxSessionPR131RegressionTests`
+  DS095-DS096. Found by the issue #435 acceptance smoke and its PR #491 adversarial review
+  (`tools/mcp-server/smoke/epic-435-workflow.json`).
 - **An ordinary Word picture is no longer reported read-only because of a rendering
   hint.** The blip-extension guard that refuses to replace a picture holding a second
   image payload (an SVG `asvg:svgBlip` beside its raster fallback, or an artistic-effects
