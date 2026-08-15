@@ -445,15 +445,28 @@ public sealed partial class DocxSession
                 || (!string.IsNullOrEmpty(linkId) && linked is null)
                 || (string.IsNullOrEmpty(embedId) && string.IsNullOrEmpty(linkId))
                 || media.IsMalformed || media.ContentTypeMatchesBytes == false;
-            // An SVG picture keeps its raster fallback in a:blip/@r:embed and the real art in an
-            // a:extLst/asvg:svgBlip extension. Descendants(A.blip) counts one blip either way, so
-            // without this check the occurrence would claim canMutate and ReplaceImage would swap
-            // only the fallback: an SVG-aware renderer keeps showing the OLD picture while the API
-            // reports success, and RemoveImage's sweep can strip the fallback part while the SVG
-            // part survives. Refuse instead — replacing both blips atomically is a feature, not a
-            // review fix. Namespace-agnostic on LocalName so any extLst dialect is caught.
+            // A blip extension that names its OWN image relationship is a SECOND payload behind the
+            // same a:blip: an SVG keeps the vector art in a:extLst/asvg:svgBlip while a:blip/@r:embed
+            // holds only the raster fallback, and Word's artistic effects keep the untouched original
+            // in a14:imgProps/a14:imgLayer (see the A14.imgLayer → R.embed mapping in
+            // PresentationBuilder). Descendants(A.blip) counts one blip either way, so without this
+            // check the occurrence would claim canMutate and ReplaceImage would swap only the
+            // fallback: an SVG-aware renderer keeps showing the OLD picture while the API reports
+            // success, and RemoveImage's sweep can strip the fallback part while the second payload
+            // survives. Refuse instead — replacing both payloads atomically is a feature, not a
+            // review fix.
+            //
+            // The test is STRUCTURAL rather than a name list, mirroring what the relationship sweep
+            // does: carrying a relationship attribute is the property that makes an extension a
+            // second payload. Extensions that only hint at rendering carry no relationship and stay
+            // mutable — notably a14:useLocalDpi, which Word writes on most inserted pictures, so
+            // testing for the mere PRESENCE of an a:extLst would refuse ordinary Word images.
             bool blipExtension = blip is not null
-                && blip.Elements().Any(element => element.Name.LocalName == "extLst");
+                && blip.Elements()
+                    .Where(element => element.Name.LocalName == "extLst")
+                    .Descendants()
+                    .Any(element => element.Attributes()
+                        .Any(attribute => attribute.Name.Namespace == ImageR));
             string? unsupported = picturePayload ? null
                 : blip is null
                     ? "drawing contains no identifiable image blip"

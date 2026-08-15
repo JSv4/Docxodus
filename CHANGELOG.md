@@ -357,6 +357,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **An ordinary Word picture is no longer reported read-only because of a rendering
+  hint.** The blip-extension guard that refuses to replace a picture holding a second
+  image payload (an SVG `asvg:svgBlip` beside its raster fallback, or an artistic-effects
+  `a14:imgProps/a14:imgLayer` original) tested for the mere presence of an `a:extLst`. Word
+  writes `a14:useLocalDpi` on most inserted pictures, so `ListImages` reported
+  `canMutate: false` and `ReplaceImage`/`RemoveImage`/`SetImageDimensions` refused with
+  `UnsupportedImageMarkup` on a large share of real documents. The test is now structural —
+  an extension is a second payload only when it names its own image relationship — which
+  keeps every genuine dual-payload picture refused.
 - **Tracked `DeleteRange` / `DeleteSection` no longer hard-remove block content
   controls.** Block `w:sdt` envelopes now use Word-native paired custom-XML
   deletion ranges while paragraphs, tables, and nested controls are marked

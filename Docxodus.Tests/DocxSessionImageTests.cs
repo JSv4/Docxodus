@@ -738,6 +738,46 @@ public class DocxSessionImageTests
     }
 
     [Fact]
+    public void IM028_BlipExtensionWithoutItsOwnRelationship_StaysMutable()
+    {
+        // The negative direction of IM021, and the reason the check is structural rather than
+        // "does an a:extLst exist". Word writes a14:useLocalDpi on most inserted pictures: it is a
+        // rendering hint that names no relationship, so it is NOT a second payload and a raster
+        // swap is complete. Refusing on the mere presence of an extension list would make ordinary
+        // Word-authored images read-only.
+        XNamespace a14 = "http://schemas.microsoft.com/office/drawing/2010/main";
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var hinted = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var root = main.GetXDocument();
+            root.Descendants(A + "blip").Single().Add(new XElement(A + "extLst",
+                new XElement(A + "ext",
+                    new XAttribute("uri", "{28A0092B-C50C-407E-A947-70E740481C1C}"),
+                    new XElement(a14 + "useLocalDpi", new XAttribute("val", "0")))));
+            main.PutXDocument();
+        });
+
+        using var session = new DocxSession(hinted);
+        var image = Assert.Single(session.ListImages());
+        Assert.True(image.CanMutate, image.UnsupportedReason);
+        Assert.True(session.ReplaceImage(image.Id, Png(9, 9)).Success);
+
+        // The swap is real, the hint survives it, and no second media part is left behind.
+        var saved = session.Save(true);
+        var relationship = Assert.Single(FlatImageRelationships(saved));
+        using var reopened = new DocxSession(saved);
+        var swapped = Assert.Single(reopened.ListImages());
+        Assert.True(swapped.CanMutate, swapped.UnsupportedReason);
+        Assert.Equal(9, swapped.IntrinsicWidthPixels);
+        Assert.Equal(relationship.RelId, swapped.RelationshipId);
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        Assert.Single(document.MainDocumentPart!.GetXDocument()
+            .Descendants(a14 + "useLocalDpi"));
+    }
+
+    [Fact]
     public void IM022_ReplaceImageIsDimensionPreserving_AndTheReFitRecipeWorks()
     {
         // ReplaceImage deliberately rewrites only r:embed: the rendered box is a layout decision
