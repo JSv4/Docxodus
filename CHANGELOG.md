@@ -28,8 +28,11 @@ All notable changes to this project will be documented in this file.
   Breaching the entry-count limit now suppresses both content digests, because an inspection that
   stopped early cannot distinguish two packages that differ only past the cut, and declared
   expansion is summed over the whole central directory so the two limits cannot be played against
-  each other. A part that declares an XML content type but does not parse now contributes its
-  exact bytes to `normalizedSemanticDigest` rather than voiding the package's identity. See
+  each other. A part that declares an XML content type but whose bytes are not XML now
+  contributes those bytes to `normalizedSemanticDigest` rather than voiding the package's
+  identity; a part merely *skipped* by `MaxXmlPartBytes` still leaves the digest `null`, because
+  a larger budget would have normalized it and the identity must not depend on the caller's
+  options. See
   [`docs/architecture/package_manifests.md`](docs/architecture/package_manifests.md), including
   its **Known limits of schema v1** section.
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).

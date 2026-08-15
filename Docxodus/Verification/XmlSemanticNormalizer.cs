@@ -119,9 +119,10 @@ internal static class XmlSemanticNormalizer
         WriteName(hash, element.Name);
         var attributes = element.Attributes()
             .Where(attribute => !attribute.IsNamespaceDeclaration)
+            // An element cannot carry two attributes with the same expanded name, so namespace
+            // plus local name is already a total order.
             .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
             .ThenBy(attribute => attribute.Name.LocalName, StringComparer.Ordinal)
-            .ThenBy(attribute => attribute.Value, StringComparer.Ordinal)
             .ToList();
         WriteInt32(hash, attributes.Count);
         foreach (var attribute in attributes)

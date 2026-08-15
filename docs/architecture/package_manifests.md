@@ -105,7 +105,8 @@ The generator distinguishes:
   its owning part;
 - `relationship_part_unreadable`: the `.rels` part exists but was never parsed, so its
   relationships are unknown. `dangling_relationship` is suppressed for that owner — every
-  reference would otherwise look dangling because of one unread file;
+  reference would otherwise look dangling because of one unread file. When a package-wide limit
+  stopped every payload read, that breach is reported once and this per-part finding is omitted;
 - duplicate or conflicting Relationship IDs within one owner;
 - a relationship part whose owner is absent or whose URI cannot identify an owner.
 
@@ -140,10 +141,16 @@ does not perturb otherwise distinguishable duplicates. Directory-only entries co
 neither digest.
 
 Each semantic-digest entry is tagged with the identity it contributed: `X` a normalized XML
-digest, `B` opaque binary bytes, `U` an entry whose declared content type says XML but which
-could not be parsed. A `U` entry falls back to its exact bytes, so one unparsable part costs that
-part its serialization independence rather than costing the whole package its identity. The tag is
-part of the hashed stream, so a part cannot silently move between the three states.
+digest, `B` opaque binary bytes, `U` an entry whose declared content type says XML but whose bytes
+are not XML. A `U` entry falls back to its exact bytes, so one unparsable part costs that part its
+serialization independence rather than costing the whole package its identity. The tag is part of
+the hashed stream, so a part cannot silently move between the three states.
+
+`U` is reserved for bytes that no budget would ever parse. An XML part *skipped* by
+`MaxXmlPartBytes` is different: a larger budget would have produced an `X`, so substituting its
+raw bytes would make the package identity a function of the caller's options. Such a package
+reports `xml_size_limit_exceeded` and a `null` `normalizedSemanticDigest` — unavailable, not
+different.
 
 Interpret a comparison as follows:
 

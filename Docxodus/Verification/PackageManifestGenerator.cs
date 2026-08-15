@@ -274,7 +274,8 @@ public static class PackageManifestGenerator
         }
         ValidateContentTypeTargets(contentTypeMap, works, findings);
 
-        if (!totalLimitExceeded && !readBudget.Exceeded)
+        var payloadsInspected = !totalLimitExceeded && !readBudget.Exceeded;
+        if (payloadsInspected)
         {
             foreach (var work in works)
             {
@@ -285,7 +286,8 @@ public static class PackageManifestGenerator
 
         FindConflictingEntries(works, findings);
         AssignStableOccurrences(works);
-        var relationships = ReadRelationships(works, options, findings, out var unreadableOwners);
+        var relationships = ReadRelationships(
+            works, options, payloadsInspected, findings, out var unreadableOwners);
         ValidateRelationshipReferences(works, relationships, unreadableOwners, findings);
         var facts = BuildFacts(works, relationships);
 
@@ -299,7 +301,16 @@ public static class PackageManifestGenerator
             orderedContentDigest = ComputeOrderedContentDigest(works);
         }
 
-        var semanticDigest = orderedContentDigest is null ? null : ComputeSemanticDigest(works);
+        // An XML part skipped for budget reasons might have normalized under a larger budget, so
+        // substituting its raw bytes would make the package identity a function of the caller's
+        // options. Only bytes that are provably not XML get the raw-byte fallback.
+        VerificationDigest? semanticDigest = null;
+        if (orderedContentDigest is not null
+            && works.All(work => !work.IsXml
+                || work.NormalizedXmlDigest is not null || work.XmlUnparsable))
+        {
+            semanticDigest = ComputeSemanticDigest(works);
+        }
 
         var entryModels = works
             .OrderBy(work => work.Uri, StringComparer.Ordinal)
@@ -575,6 +586,9 @@ public static class PackageManifestGenerator
         }
         catch (Exception ex) when (ex is XmlException or InvalidOperationException)
         {
+            // The bytes themselves are not XML, so no budget would ever normalize them. That is
+            // a stable fact about the package, unlike an entry we merely declined to read.
+            work.XmlUnparsable = true;
             AddFinding(findings, "malformed_xml", VerificationFindingSeverity.Error,
                 $"XML entry could not be normalized ({ex.GetType().Name}).",
                 new ChangeLocation { EntryUri = work.Uri });
@@ -584,6 +598,7 @@ public static class PackageManifestGenerator
     private static IReadOnlyList<PackageRelationship> ReadRelationships(
         IReadOnlyList<EntryWork> works,
         PackageManifestOptions options,
+        bool payloadsInspected,
         List<VerificationFinding> findings,
         out HashSet<string> unreadableOwners)
     {
@@ -596,15 +611,19 @@ public static class PackageManifestGenerator
         {
             if (work.Xml?.Root is null)
             {
-                // The part exists but was never parsed (size limit, encryption, unreadable
-                // payload). Say so, rather than emitting an empty relationship set that reads
-                // as "this part declares nothing".
+                // The part exists but was never parsed. Say so, rather than emitting an empty
+                // relationship set that reads as "this part declares nothing" — but only when
+                // payloads were inspected at all. If a package-wide limit stopped every read,
+                // that breach is already reported once and blaming each .rels part repeats it.
                 var skippedOwner = RelationshipOwner(work.Uri);
                 if (skippedOwner is not null)
                     unreadableOwners.Add(skippedOwner);
-                AddFinding(findings, "relationship_part_unreadable", VerificationFindingSeverity.Error,
-                    "Relationship part could not be parsed, so its relationships are unknown.",
-                    new ChangeLocation { EntryUri = work.Uri, OwnerUri = skippedOwner });
+                if (payloadsInspected)
+                {
+                    AddFinding(findings, "relationship_part_unreadable", VerificationFindingSeverity.Error,
+                        "Relationship part could not be parsed, so its relationships are unknown.",
+                        new ChangeLocation { EntryUri = work.Uri, OwnerUri = skippedOwner });
+                }
                 continue;
             }
             if (work.Xml.Root.Name.LocalName != "Relationships"
@@ -1638,6 +1657,7 @@ public static class PackageManifestGenerator
         public bool? IsEncrypted { get; init; }
         required public bool RatioExceeded { get; init; }
         public bool XmlLimitReported { get; set; }
+        public bool XmlUnparsable { get; set; }
         public int Occurrence { get; set; }
         public long ActualSize { get; set; }
         public string? ContentType { get; set; }
@@ -1761,7 +1781,10 @@ public static class PackageManifestGenerator
                 string key;
                 if (kind == "default")
                 {
-                    key = rawKey.ToLowerInvariant();
+                    // Reported as declared: extension matching is case-insensitive through the
+                    // dictionaries below, so lower-casing here would only lose the package's own
+                    // spelling from `contentTypes`.
+                    key = rawKey;
                     if (!IsValidContentTypeExtension(rawKey, maximumUriLength))
                     {
                         validKey = false;

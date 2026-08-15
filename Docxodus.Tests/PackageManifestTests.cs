@@ -801,29 +801,89 @@ public class PackageManifestTests
     public void PM038_EveryCommittedDocxFixture_ProducesAValidManifest()
     {
         // The manifest is a verification artifact: a real Word-authored package that Word opens
-        // must not be reported invalid. Fixtures listed here are genuinely malformed, and each
-        // one names its defect so a regression cannot hide behind the allowlist.
+        // must not be reported invalid. Fixtures listed here are genuinely malformed. The listing
+        // pins the exact error codes rather than skipping the file, so a fixture that gets
+        // corrected — or one that starts failing differently — fails this test instead of hiding.
         var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["CA009-altChunk.docx"] =
-                "declares /word/afchunk2.dat as wordprocessingml.document.main+xml while the payload is a ZIP",
+            // Its Override declares /word/afchunk2.dat as wordprocessingml.document.main+xml
+            // while the payload is a ZIP, so the part cannot be parsed as the XML it claims.
+            ["CA009-altChunk.docx"] = "malformed_xml",
         };
         var directory = new DirectoryInfo("../../../../TestFiles/");
         Assert.True(directory.Exists);
 
-        var invalid = new List<string>();
+        var unexpected = new List<string>();
         foreach (var file in directory.EnumerateFiles("*.docx", SearchOption.AllDirectories)
                      .OrderBy(file => file.Name, StringComparer.Ordinal))
         {
             var manifest = PackageManifestGenerator.Generate(File.ReadAllBytes(file.FullName));
-            if (manifest.IsValid || known.ContainsKey(file.Name))
-                continue;
-            invalid.Add($"{file.Name}: " + string.Join(",", manifest.Findings
+            var codes = string.Join(",", manifest.Findings
                 .Where(finding => finding.Severity == VerificationFindingSeverity.Error)
-                .Select(finding => finding.Code).Distinct()));
+                .Select(finding => finding.Code).Distinct().OrderBy(code => code, StringComparer.Ordinal));
+            var expected = known.GetValueOrDefault(file.Name, string.Empty);
+            if (codes != expected)
+                unexpected.Add($"{file.Name}: expected [{expected}] got [{codes}]");
         }
 
-        Assert.Empty(invalid);
+        Assert.Empty(unexpected);
+    }
+
+    [Fact]
+    public void PM040_XmlSkippedByASizeLimit_LeavesTheSemanticIdentityUnavailable()
+    {
+        // A part skipped for budget reasons could still have normalized under a larger budget.
+        // Substituting its raw bytes would make the package identity a function of the caller's
+        // options, so the digest is unavailable rather than different.
+        var entries = MinimalEntries().ToList();
+        entries.Add(("word/big.xml", Utf8("<big>" + new string('q', 3000) + "</big>")));
+        var package = BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp);
+
+        var limited = PackageManifestGenerator.Generate(package,
+            new PackageManifestOptions { MaxXmlPartBytes = 1500 });
+        var full = PackageManifestGenerator.Generate(package);
+
+        Assert.Contains(limited.Findings, finding => finding.Code == "xml_size_limit_exceeded");
+        Assert.Null(limited.NormalizedSemanticDigest);
+        Assert.NotNull(full.NormalizedSemanticDigest);
+    }
+
+    [Fact]
+    public void PM041_TotalExpansionBreach_DoesNotBlameEachRelationshipPart()
+    {
+        var entries = MinimalEntries().ToList();
+        entries.Add(("word/_rels/document.xml.rels", Utf8(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>")));
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp),
+            new PackageManifestOptions { MaxTotalUncompressedBytes = 32 });
+
+        Assert.Contains(manifest.Findings,
+            finding => finding.Code == "total_expansion_limit_exceeded");
+        Assert.DoesNotContain(manifest.Findings,
+            finding => finding.Code == "relationship_part_unreadable");
+        Assert.DoesNotContain(manifest.Findings,
+            finding => finding.Code == "dangling_relationship");
+    }
+
+    [Fact]
+    public void PM042_ContentTypeDeclarations_PreserveTheirDeclaredExtensionSpelling()
+    {
+        var entries = MinimalEntries("""
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="XML" ContentType="application/xml"/>
+              <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+            </Types>
+            """).ToList();
+
+        var manifest = PackageManifestGenerator.Generate(
+            BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp));
+
+        Assert.Contains(manifest.ContentTypes,
+            declaration => declaration.Kind == "default" && declaration.Key == "XML");
+        Assert.Equal("application/vnd.openxmlformats-package.relationships+xml",
+            manifest.Entries.Single(entry => entry.Uri == "/_rels/.rels").ContentType);
     }
 
     [Fact]
