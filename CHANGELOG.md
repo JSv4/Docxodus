@@ -90,15 +90,22 @@ All notable changes to this project will be documented in this file.
   capabilities, points-versus-EMU units, 96-DPI default sizing, size caps, and base64-only JSON
   transports are exposed through .NET, JSON ops, WASM/npm, stdio/Python, and MCP
   (`docxodus_images`). Three behaviours worth knowing before you adopt it:
-  - **Orphan cleanup deletes only provably unreferenced relationships.** The sweep asks whether
-    the relationship id appears in *any* attribute of the owning part, not whether it appears in
-    a whitelist of `r:embed`/`r:link`/`r:id`. OOXML names image relationships through more
-    attributes than the DrawingML pair (VML/OLE spellings such as `o:relid` and `r:href`), and a
-    whitelist would silently and irrecoverably drop media referenced any other way.
-  - **`ConvertToHtml(session)` mutates the package.** It is implemented as
-    `session.Save(persistAnchorIds: true)`, so save-time normalization — including that sweep —
-    runs on a caller who only asked to render. Nothing is lost, but a rendered session is not
-    byte-for-byte the session that was opened. A public setting to gate the sweep is deferred.
+  - **Orphan cleanup deletes only provably unreferenced relationships, and only on the mutation
+    path.** The sweep asks whether the relationship id appears in *any* attribute of the owning
+    part, not whether it appears in a whitelist of `r:embed`/`r:link`/`r:id`. OOXML names image
+    relationships through more attributes than the DrawingML pair (VML/OLE spellings such as
+    `o:relid` and `r:href`), and a whitelist would silently and irrecoverably drop media
+    referenced any other way. Because orphaning is something a *mutation* does, the sweep runs
+    when an op's edit lands rather than when the document is serialized — covering the transforms
+    that drop a `w:drawing` without any image API involved, including one whose edit lands in a
+    story part other than the one it resolved.
+  - **`Save` and `ConvertToHtml(session)` are read-only with respect to relationships.**
+    `ConvertToHtml(session)` is implemented as `session.Save(persistAnchorIds: true)`, so
+    save-time normalization would otherwise run on a caller who only asked to render. Neither
+    now changes relationship topology or media: an orphan already present in the opened bytes
+    survives any number of renders and saves and is cleaned up only by the next mutation, so
+    opening and saving a document back unchanged no longer silently deletes media the session
+    never touched.
   - **`ReplaceImage` is dimension-preserving.** It rewrites `r:embed` only; `wp:extent` and
     `a:xfrm/a:ext` keep their EMUs, so the new media renders into the old box. `ListImages()`
     reports the new intrinsic pixels immediately, and

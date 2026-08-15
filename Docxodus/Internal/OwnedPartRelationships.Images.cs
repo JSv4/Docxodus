@@ -119,14 +119,13 @@ internal static partial class OwnedPartRelationships
     }
 
     /// <summary>
-    /// True when ANY attribute anywhere in the owner's XML carries this relationship id.
+    /// The subset of <paramref name="candidates"/> that ANY attribute anywhere in the owner's XML
+    /// carries as its value.
     /// </summary>
     /// <remarks>
-    /// Deliberately name-blind. Deletion is irreversible and the sweep runs on every
-    /// <see cref="DocxSession.Save(bool)"/> — including the one behind
-    /// <c>HtmlConversionOps.ConvertToHtml(session)</c>, i.e. on a pure render — so a whitelist of
-    /// known reference attributes ("is it <c>r:embed</c> or <c>r:link</c>?") is the wrong shape:
-    /// it silently destroys media named by anything outside the list (VML/OLE variants such as
+    /// Deliberately name-blind. Deletion is irreversible, so a whitelist of known reference
+    /// attributes ("is it <c>r:embed</c> or <c>r:link</c>?") is the wrong shape: it silently
+    /// destroys media named by anything outside the list (VML/OLE variants such as
     /// <c>o:relid</c> or <c>r:href</c>, and any attribute a future Word version invents). The
     /// question a sweep must answer is "is this provably unreferenced?", not "is it referenced in
     /// one of the two ways I know about".
@@ -135,32 +134,64 @@ internal static partial class OwnedPartRelationships
     /// part: an attribute whose value equals the id is either a real reference or a coincidence,
     /// and a coincidence errs toward KEEPING media, which is the recoverable direction.
     /// </para>
+    /// <para>
+    /// Answering for the whole candidate set in ONE walk — rather than re-walking per
+    /// relationship — is what lets the sweep sit on the mutation path: the cost is a single
+    /// attribute pass per owner regardless of how many images the document holds, and the
+    /// returned set is bounded by the relationship count rather than by document size.
+    /// </para>
     /// </remarks>
-    internal static bool IsReferencedByAnyAttribute(OpenXmlPart owner, string relationshipId)
+    internal static HashSet<string> ReferencedRelationshipIds(
+        OpenXmlPart owner, IReadOnlyCollection<string> candidates)
     {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        if (candidates.Count == 0) return referenced;
+        var wanted = candidates as HashSet<string> ?? new HashSet<string>(candidates, StringComparer.Ordinal);
         var root = owner.GetXDocument().Root;
-        if (root is null || string.IsNullOrEmpty(relationshipId)) return false;
-        return root.DescendantsAndSelf().Attributes().Any(attribute =>
-            !attribute.IsNamespaceDeclaration
-            && string.Equals(attribute.Value, relationshipId, StringComparison.Ordinal));
+        if (root is null) return referenced;
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            foreach (var attribute in element.Attributes())
+            {
+                if (attribute.IsNamespaceDeclaration) continue;
+                if (wanted.Contains(attribute.Value)) referenced.Add(attribute.Value);
+            }
+            if (referenced.Count == wanted.Count) break;
+        }
+        return referenced;
     }
 
     /// <summary>Remove unreferenced embedded-image part relationships and external linked-image
     /// relationships from one owner. Shared package parts remain alive while any other owner still
     /// relates to them; the SDK removes the media part only after its last relationship is gone.</summary>
+    /// <remarks>
+    /// Returns before reading any XML when the owner holds no image relationship at all. That
+    /// short-circuit is load-bearing on the mutation path: it keeps the sweep free for the
+    /// overwhelming majority of stories (and of documents), and it guarantees the sweep is never
+    /// the thing that materializes a part's <c>XDocument</c>.
+    /// </remarks>
     internal static int SweepOrphanedImages(OpenXmlPart owner)
     {
+        var embedded = ImageRelationships(owner).ToList();
+        var external = owner.ExternalRelationships
+            .Where(r => r.RelationshipType == ImageRelationshipType).ToList();
+        if (embedded.Count == 0 && external.Count == 0) return 0;
+
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relationship in embedded) candidates.Add(relationship.RelationshipId);
+        foreach (var relationship in external) candidates.Add(relationship.Id);
+        var referenced = ReferencedRelationshipIds(owner, candidates);
+
         int removed = 0;
-        foreach (var relationship in ImageRelationships(owner).ToList())
+        foreach (var relationship in embedded)
         {
-            if (IsReferencedByAnyAttribute(owner, relationship.RelationshipId)) continue;
+            if (referenced.Contains(relationship.RelationshipId)) continue;
             owner.DeletePart(relationship.RelationshipId);
             removed++;
         }
-        foreach (var relationship in owner.ExternalRelationships
-            .Where(r => r.RelationshipType == ImageRelationshipType).ToList())
+        foreach (var relationship in external)
         {
-            if (IsReferencedByAnyAttribute(owner, relationship.Id)) continue;
+            if (referenced.Contains(relationship.Id)) continue;
             owner.DeleteExternalRelationship(relationship.Id);
             removed++;
         }

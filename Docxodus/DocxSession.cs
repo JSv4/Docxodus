@@ -5688,10 +5688,11 @@ public sealed partial class DocxSession : IDisposable
     {
         ThrowIfDisposed();
 
-        // A save is the package-wide normalization boundary. Some higher-level transforms can
-        // remove image markup without passing through the native image operations, so sweep every
-        // story owner here as a final defense against dangling media relationships.
-        SweepOrphanedStoryImageRelationships();
+        // Serialization is READ-ONLY with respect to package relationships. The orphaned-media
+        // sweep that used to run here now runs on the mutation path (see
+        // InvalidateProjectionCache), because only a mutation can orphan a relationship and
+        // because ConvertToHtml(session) is implemented as Save(persistAnchorIds: true) — a pure
+        // render must not be able to delete anything. IM027 pins that invariant.
 
         if (persistAnchorIds)
         {
@@ -11275,7 +11276,41 @@ public sealed partial class DocxSession : IDisposable
 
     // ─── Internal mutation helpers (used by tier methods landing in later phases) ───
 
+    /// <summary>
+    /// The single point every op reaches once its mutation has landed in the live XML. It drops
+    /// the stale projection/anchor caches AND runs the package-wide orphaned-media sweep.
+    /// </summary>
+    /// <remarks>
+    /// Orphaning is a property of MUTATION, not of serialization, so this — not
+    /// <see cref="Save(bool)"/> — is the sweep's boundary. Higher-level transforms
+    /// (<c>DeleteBlock</c>, <c>DeleteRange</c>, table row/column deletes, <c>ReplaceText</c>, the
+    /// raw XML ops) can drop a <c>w:drawing</c> without any native image op running; most of them
+    /// already sweep their own resolved owner, but an op that removes markup from a part other
+    /// than the one it resolved — or a future op that simply forgets — would leak. Sweeping the
+    /// whole story set here makes the invariant structural instead of a per-op checklist.
+    /// <para>
+    /// The cost is bounded and strictly below what each op already pays: every mutating op runs
+    /// <c>_history.RecordPreOp(TakeSnapshot())</c>, which SERIALIZES every projected part, and
+    /// <see cref="Internal.OwnedPartRelationships.SweepOrphanedImages"/> returns without reading
+    /// XML at all for a story owning no image relationship — so an image-free document pays only
+    /// a handful of in-memory relationship enumerations, and an image-bearing one pays one
+    /// attribute walk of the trees it was already about to serialize.
+    /// </para>
+    /// <para>
+    /// The undo/redo restore paths deliberately call <see cref="ResetProjectionCache"/> instead:
+    /// a snapshot is authoritative over relationship topology (see
+    /// <see cref="RestoreImageRelationships"/>), and a document opened with a pre-existing orphan
+    /// must not have it swept out from under a restore.
+    /// </para>
+    /// </remarks>
     internal void InvalidateProjectionCache()
+    {
+        SweepOrphanedStoryImageRelationships();
+        ResetProjectionCache();
+    }
+
+    /// <summary>Drop the projection/anchor caches without touching package relationships.</summary>
+    private void ResetProjectionCache()
     {
         _cachedProjection = null;
         _cachedAnchorIndex = null;
@@ -11598,7 +11633,9 @@ public sealed partial class DocxSession : IDisposable
         RestoreImageRelationships(snapshot);
 
         _version = snapshot.Version;
-        InvalidateProjectionCache();
+        // Pure cache reset: the snapshot is authoritative over relationship topology, so a sweep
+        // here would either be redundant or would delete a relationship the snapshot preserved.
+        ResetProjectionCache();
     }
 
     private void RestorePackage(byte[] packageBytes)
@@ -11612,7 +11649,8 @@ public sealed partial class DocxSession : IDisposable
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
         _raw = null;
-        InvalidateProjectionCache();
+        // As in RestoreSnapshot: restored package bytes ARE the intended topology.
+        ResetProjectionCache();
     }
 
     /// <summary>Restore reference-relationship topology as well as XML. Without this, undoing a

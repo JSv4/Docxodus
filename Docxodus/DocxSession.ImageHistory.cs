@@ -21,9 +21,14 @@ public sealed partial class DocxSession
         OwnedPartRelationships.SweepOrphanedImages(owner);
     }
 
+    /// <summary>Drop every image relationship that no attribute in its owning story part names.
+    /// Runs on the mutation boundary (<see cref="InvalidateProjectionCache"/>), not on save: only
+    /// a mutation can orphan a relationship, and serialization must stay read-only with respect
+    /// to package topology.</summary>
     private void SweepOrphanedStoryImageRelationships()
     {
-        foreach (var owner in OwnedPartRelationships.StoryParts(_doc!))
+        if (_disposed || _doc is null) return;
+        foreach (var owner in OwnedPartRelationships.StoryParts(_doc))
             OwnedPartRelationships.SweepOrphanedImages(owner.Part);
     }
 

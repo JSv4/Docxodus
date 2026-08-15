@@ -525,31 +525,83 @@ public class DocxSessionImageTests
     }
 
     [Fact]
-    public void IM018_SaveSweepsPreExistingOrphanImageRelationships()
+    public void IM018_MutationIsTheOrphanSweepBoundary_NotSave()
     {
+        // Orphaning is a property of MUTATION, not of serialization, so the sweep sits on the
+        // mutation path. Both halves of that boundary are asserted here:
+        //   * a save (either flavour) leaves a pre-existing orphan exactly where it found it, and
+        //   * the next mutation removes it — including a mutation whose own resolved owner is a
+        //     DIFFERENT story part, which is exactly what a per-op owner-scoped sweep cannot
+        //     cover and why the sweep is package-wide rather than a per-op checklist.
         using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
-        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var body = Paragraphs(seed);
+        Assert.True(seed.SetHeaderText(body[0], HeaderFooterKind.Default, "header").Success);
+        Assert.True(seed.InsertImage(body[0], 0, Png(2, 3)).Success);
         var orphaned = MutatePackage(seed.Save(true), document =>
         {
+            // A higher-level transform that drops image markup without an image op running.
             var main = document.MainDocumentPart!;
             main.GetXDocument().Descendants(W + "drawing").Remove();
             main.PutXDocument();
         });
-        Assert.Single(FlatImageRelationships(orphaned));
+        var orphan = Assert.Single(FlatImageRelationships(orphaned));
+        Assert.Equal("/word/document.xml", orphan.OwnerUri);
 
         using var session = new DocxSession(orphaned);
         Assert.Empty(session.ListImages());
+        Assert.Equal(orphan, Assert.Single(FlatImageRelationships(session.Save(true))));
+        Assert.Equal(orphan, Assert.Single(FlatImageRelationships(session.Save(false))));
+
+        // The mutation is owned by the HEADER part; the dangling relationship is in the body.
+        var header = Assert.Single(Paragraphs(session, "hdr1"));
+        Assert.True(session.ReplaceText(header, "edited header").Success);
         Assert.Empty(FlatImageRelationships(session.Save(true)));
         Assert.Empty(FlatImageRelationships(session.Save(false)));
     }
 
     [Fact]
+    public void IM027_RenderAndSaveLeaveRelationshipTopologyUntouched()
+    {
+        // ConvertToHtml(session) is implemented as Save(persistAnchorIds: true), so anything Save
+        // normalizes runs on a caller who only asked to look at the document. Rendering — and
+        // saving — must therefore be read-only with respect to package relationships and media,
+        // including for a relationship a renderer has no way to judge (the orphan below).
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var body = Paragraphs(seed);
+        Assert.True(seed.InsertImage(body[0], 0, Png(2, 3)).Success);
+        Assert.True(seed.InsertImage(body[1], 0, Png(4, 5)).Success);
+        var withOrphan = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            main.GetXDocument().Descendants(W + "drawing").First().Remove();
+            main.PutXDocument();
+        });
+
+        using var session = new DocxSession(withOrphan);
+        var topology = FlatImageRelationships(session.Save(true));
+        var payloads = ImagePartPayloads(session.Save(true));
+        Assert.Equal(2, topology.Length);
+        Assert.Single(session.ListImages());
+
+        for (int i = 0; i < 3; i++)
+        {
+            _ = Docxodus.Internal.HtmlConversionOps.ConvertToHtml(
+                session, new Docxodus.Internal.HtmlConversionOptions());
+            _ = session.Save(false);
+            Assert.Equal(topology, FlatImageRelationships(session.Save(true)));
+            Assert.Equal(payloads, ImagePartPayloads(session.Save(true)));
+        }
+        Assert.Equal(topology, FlatImageRelationships(session.Save(false)));
+    }
+
+    [Fact]
     public void IM019_LiveRelationshipNamedByAnUnmodeledAttribute_SurvivesSaveAndRender()
     {
-        // The negative direction of IM018. The sweep runs on EVERY Save — including the one
-        // inside ConvertToHtml(session), i.e. on a pure RENDER — so a whitelist of known
+        // The negative direction of IM018. Deletion is irreversible, so a whitelist of known
         // reference attributes would silently and irrecoverably delete media named any other
         // way. o:relid is a real OLE/VML spelling and is outside {r:embed, r:link, r:id}.
+        // Pinned across both save flavours and a render because all three used to be able to
+        // reach the sweep.
         using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
         Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
         var oleReferenced = MutatePackage(seed.Save(true), document =>
@@ -573,6 +625,12 @@ public class DocxSessionImageTests
 
         // A render must not be a mutation of last resort either.
         _ = Docxodus.Internal.HtmlConversionOps.ConvertToHtml(session, new Docxodus.Internal.HtmlConversionOptions());
+        Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(true))));
+
+        // And the boundary the sweep actually runs on: an unrelated mutation. This is where the
+        // name-blind test earns its keep now — a whitelist would drop the OLE-named media on the
+        // first edit anywhere in the document.
+        Assert.True(session.ReplaceText(Paragraphs(session)[1], "unrelated edit").Success);
         Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(true))));
     }
 

@@ -104,9 +104,25 @@ type and bytes. Drawing property ids are allocated document-wide, including head
 After image removal and generic destructive operations, owner-local image relationships are swept
 only when the relationship id appears in **no attribute anywhere** in the owning part's XML.
 Shared media remains until its final owning relationship is gone. Raw XML replacement performs
-cleanup only after the replacement has validated successfully. `Save` repeats this safe sweep
-over every story owner as the centralized package-normalization boundary, covering transforms
-that do not use an image API; normalization does not create an undo entry.
+cleanup only after the replacement has validated successfully.
+
+**The sweep's boundary is mutation, not serialization.** Orphaning is something a mutation does;
+`DocxSession.InvalidateProjectionCache` — the single point every op reaches once its edit has
+landed in the live XML — runs the package-wide sweep over every story owner. That covers the
+transforms which drop a `w:drawing` without any image API involved (`DeleteBlock`, `DeleteRange`,
+table row/column deletes, `ReplaceText`, the raw XML ops). Most of those additionally sweep their
+own resolved owner; the package-wide pass is what makes the invariant structural rather than a
+per-op checklist, and it is the only thing that covers an op whose edit lands in a part other
+than the one it resolved. Normalization does not create an undo entry. The undo/redo restore
+paths deliberately skip the sweep: a snapshot is authoritative over relationship topology.
+
+The cost is bounded below what every op already pays. `SweepOrphanedImages` returns before
+reading any XML when the owner holds no image relationship, so an image-free story is free and
+the sweep is never what materializes a part's `XDocument`; when there are relationships it
+resolves the whole candidate set in **one** attribute walk rather than one walk per relationship,
+so the per-mutation cost does not grow with the image count. That walk is strictly cheaper than
+the `TakeSnapshot` each mutating op already runs, which *serializes* the very trees the sweep
+merely reads.
 
 The reference test is deliberately name-blind rather than a whitelist of `r:embed`/`r:link`/
 `r:id`. Deletion is irreversible, and OOXML names image relationships through more attributes
@@ -114,15 +130,20 @@ than the DrawingML pair — VML and OLE spellings such as `o:relid` and `r:href`
 enumerating the known ones destroys media referenced any other way. Matching on value alone is
 safe because relationship ids are unique within a part: a non-reference attribute that happens
 to hold the id keeps media alive, which is the recoverable direction. (`IM019` pins this
-negative direction; `IM018` pins that a genuine orphan is still swept.)
+negative direction, across a save, a render, and a mutation; `IM018` pins that a genuine orphan
+is still swept — by a mutation whose own owner is a different story part.)
 
-**A render mutates the package.** `HtmlConversionOps.ConvertToHtml(session)` is implemented as
-`session.Save(persistAnchorIds: true)`, so the sweep — and the rest of save-time normalization —
-runs on a caller who only asked to look at the document. Nothing is lost today, because the sweep
-now removes only provably unreferenced relationships, but the coupling is real: a session that
-has been rendered is not byte-for-byte the session that was opened. Gating the sweep behind a
-public setting was considered and deliberately deferred; it is a public-API decision, not a
-defect fix.
+**A render does not mutate the package.** `HtmlConversionOps.ConvertToHtml(session)` is
+implemented as `session.Save(persistAnchorIds: true)`, so anything `Save` normalized would run on
+a caller who only asked to look at the document. `Save` — and therefore every render — is now
+read-only with respect to relationships and media: an orphan present in the opened bytes is still
+there after any number of renders and saves, and disappears only when the session is next
+mutated. `IM027` pins that topology and the media payloads are unchanged across repeated
+`ConvertToHtml` and both save flavours.
+
+One consequence worth stating: a pre-existing orphan in an input document is no longer cleaned up
+by saving it back unchanged. That is deliberate — open/save is lossless, and the session does not
+silently delete media it never touched.
 
 Undo snapshots include image bytes/content types, exact media part URIs, every owner-local
 embedded relationship id/target, and external `r:link` ids/targets. Restore rebuilds that layer at
