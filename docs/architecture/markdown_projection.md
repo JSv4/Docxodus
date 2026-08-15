@@ -41,7 +41,7 @@ Anchors derive from the `Unid` system Docxodus already maintains on paragraphs a
 
 | Field | Values | Meaning |
 |---|---|---|
-| `kind` | `p`, `h`, `li`, `tbl`, `tr`, `tc`, `cmt`, `fn`, `en`, `img`, `drw`, `sec`, `unk` | Element type |
+| `kind` | Assigned: `p`, `h`, `li`, `tbl`, `tr`, `tc`, `col`, `cmt`, `fn`, `en`, `sdt`, `sec`, `unk`. Reserved (parse, but never assigned to any element): `img`, `drw` | Element type |
 | `scope` | `body`, `hdr1`…`hdrN`, `ftr1`…`ftrN`, `fn`, `en`, `cmt` | Which part of the package |
 | `unid` | 8–16 hex chars | Stable element identifier |
 
@@ -79,7 +79,7 @@ Anchors appear at the start of the line they refer to (block-level) or as inline
 | `w:commentRangeStart`…`End` | Inline `{#cmt:cmt:…}` markers wrapping the commented span | Comment text appears in a Comments section at end |
 | `w:footnoteReference` | `[^fn-xxxx]` GFM footnote ref | Definitions collected at end |
 | `w:endnoteReference` | `[^en-xxxx]` | Same |
-| `w:drawing` / `w:pict` (image) | `![alt](docxodus://img/…){#img:…}` | URL is a scheme the caller resolves; metadata accessible via anchor |
+| `w:drawing` / `w:pict` (image) | Nothing — the Markdown oracle emits no image syntax and assigns no anchor | Images are **not** projected and there is no `img`/`drw` anchor kind. Address them through the native image surface instead (`ListImages`/`imageId`, `docxodus_images` — issue #453), which carries dimensions, alt text and floating layout that Markdown could not express anyway |
 | `w:sdt` (content control) | Anchor on the outer SDT; the current Markdown oracle omits inline/block SDT-delivered content | The SDT remains addressable without changing historical Markdown bytes; HTML and `ListBlocks` flatten/render its content |
 | `w:ins` / `w:del` (tracked changes) | Configurable: accept, show as `{+ins+}`/`{-del-}`, or omit | Mirrors `WmlToHtmlConverter.RenderTrackedChanges` |
 | `w:sectPr` | `---` thematic break preceded by `{#sec:scope:unid}` | Section breaks are addressable as `sec` kind — useful for "find the next section break" tooling. Today no mutation op accepts a `sec` anchor (only block-level `p`/`h`/`li`/`tbl` kinds are mutable); treat `sec` as a passive read-side marker. |
@@ -323,7 +323,9 @@ public class WmlToMarkdownConverterSettings
     // Resolve list numbering to literal markers (default true).
     public bool ResolveNumbering = true;
 
-    // Custom image URI scheme. Default: "docxodus://img/{unid}"
+    // Declared but INERT: the converter has no w:drawing/w:pict branch, so this
+    // callback is threaded through settings and never invoked. It documents an
+    // intended image-URI scheme, not a behavior. See the Images open question.
     public Func<ImageInfo, string>? ImageUriBuilder;
 }
 
@@ -440,7 +442,7 @@ If Phase 1 measurements are >2× these numbers, surface in the PR and discuss be
 
 - **Anchor stability across re-serialization.** Today Unids are assigned when needed; we should verify they survive `OpenXmlMemoryStreamDocument` round trips and document the lifecycle. If they don't, the converter must persist them back to the document.
 - **Comment-on-span granularity.** Word comments can anchor to a span that crosses runs and paragraphs. Inline `{#cmt:…}` markers handle intra-paragraph; cross-paragraph spans probably need a start/end pair.
-- **Images.** The placeholder `docxodus://img/{unid}` URI scheme assumes the caller provides resolution. Should we instead emit data URIs? Configurable via `ImageUriBuilder`, default TBD.
+- **Images.** Still entirely unbuilt on this surface: there is no `w:drawing`/`w:pict` emit path, no `img`/`drw` anchor kind, and `ImageUriBuilder` is a declared-but-never-invoked setting. Since #453 shipped a native image surface with real identity (`imageId`), the open question is no longer "which URI scheme" but whether Markdown should project images *at all* — and if so, whether the anchor space or `imageId` is the addressing authority.
 - **Bidirectional editing.** This converter is one-way, but the eventual `MarkdownToWml` story (or, more likely, an `ApplyEdit(anchor, op)` API) needs to be designed alongside its callers — not in isolation here.
 
 ## Related

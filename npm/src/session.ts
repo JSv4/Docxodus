@@ -1668,8 +1668,13 @@ export class DocxSession {
   }
 
   /**
-   * Return every anchor of the given `kind` (`"p"`, `"h"`, `"li"`, `"tbl"`,
-   * `"row"`, `"cell"`, …), in document order. Reads the projection's anchor
+   * Return every anchor of the given `kind` — one of `"p"`, `"h"`, `"li"`,
+   * `"tbl"`, `"tr"`, `"tc"`, `"col"`, `"sdt"`, `"sec"`, `"fn"`, `"en"`,
+   * `"cmt"`, `"unk"` — in document order. The token set is exact and anything
+   * outside it throws; in particular the row and cell tokens are `"tr"` and
+   * `"tc"`, never `"row"`/`"cell"`. `"img"` and `"drw"` parse but are reserved:
+   * the projection never assigns them, so they always return empty — address
+   * images through the image surface instead. Reads the projection's anchor
    * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
    * a single part; omit it to span all scopes.
    */

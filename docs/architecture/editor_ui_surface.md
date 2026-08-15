@@ -154,7 +154,9 @@ to Home.
 This replaced a **floating** table toolbar, whose absolute positioning had to be corrected twice — it
 covered the first row, and then it covered the content below the table. A docked tab cannot overlap
 the cell being edited, so the whole class of bug is gone by construction. Deleting the last row or
-column removes the table. v1 assumes a rectangular grid (no `w:gridSpan`).
+column removes the table. The underlying session ops are grid-aware, not rectangular-only:
+`w:gridSpan`, `w:gridBefore`/`w:gridAfter` and `w:vMerge` runs are all handled — see the CRUD
+behavior table in [`docx_mutation_api.md`](docx_mutation_api.md).
 
 ---
 

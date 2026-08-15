@@ -2610,4 +2610,88 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal(2, after.Count(control =>
             control.GetProperty("type").GetString() == "repeating_section_item"));
     }
+
+    /// <summary>
+    /// Issue #468, at the surface it was filed against. The apply-and-undo preview issued one
+    /// <c>Undo()</c> per non-throwing step, but a step that returned <c>success: false</c> recorded
+    /// no undo entry — so a preview batch carrying one bad anchor popped a pre-batch snapshot and
+    /// silently reverted an edit the caller had already committed. #446 replaced that path with an
+    /// isolated shadow clone, which removes the whole class; this pins the three live-history
+    /// observables the old implementation corrupted, none of which any MCP test asserted together:
+    /// a committed edit, the redo cursor, and a batch longer than <c>undoDepth</c>.
+    /// </summary>
+    [Fact]
+    public void MCP150_PreviewBatchWithFailingStep_LeavesCommittedEditsUndoAndRedoIntact()
+    {
+        // undoDepth 1 is the tight ring from #468's third claim: a preview longer than the ring
+        // used to evict the caller's own entry and leave steps permanently applied.
+        var sessionId = Parse(Dispatcher.Call(_store, "docxodus_open", J(
+            $$"""{"path":{{JsonSerializer.Serialize(_tempPath)}},"undoDepth":1}""")))
+            .GetProperty("sessionId").GetString()!;
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        // Seed a redo cursor: RecordPreOp used to clear redo on every preview step and never
+        // restore it, so this is only observable across a preview.
+        Assert.True(ReplaceText(_store, sessionId, anchor, "redo target")
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
+
+        // The edit the caller has committed and must still have after every preview below.
+        Assert.True(ReplaceText(_store, sessionId, anchor, "committed edit")
+            .GetProperty("success").GetBoolean());
+        var committedVersion = Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle);
+        string Markdown() => Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!;
+        var committedMarkdown = Markdown();
+        Assert.Contains("committed edit", committedMarkdown);
+
+        // Four mutating steps against a one-deep ring, the last of which fails on a bad anchor.
+        object[] StepsEndingInFailure() => new object[]
+        {
+            new { tool = "docxodus_edit", args = new { action = "replace_text", anchorId = anchor, markdown = "shadow one" } },
+            new { tool = "docxodus_create", args = new { action = "set_header_text", bodyAnchorId = anchor, kind = "default", markdown = "shadow header" } },
+            new { tool = "docxodus_comment", args = new { action = "add", anchorId = anchor, author = "Preview", markdown = "shadow comment" } },
+            new { tool = "docxodus_edit", args = new { action = "replace_text", anchorId = "p:body:missing", markdown = "fails" } },
+        };
+
+        var atomic = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(JsonSerializer.Serialize(
+            new { sessionId, mode = "preview", steps = StepsEndingInFailure() }))));
+        Assert.True(atomic.GetProperty("preview").GetBoolean());
+        Assert.Equal("failed", atomic.GetProperty("status").GetString());
+        Assert.True(atomic.GetProperty("rolledBack").GetBoolean());
+        Assert.Equal(3, atomic.GetProperty("failure").GetProperty("index").GetInt32());
+        Assert.Equal(committedMarkdown, Markdown());
+        Assert.Equal(committedVersion, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+
+        // best_effort keeps the three successes in the shadow — the live document still must not
+        // move, and the failing step still must not consume a live undo entry.
+        var partial = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(JsonSerializer.Serialize(
+            new { sessionId, mode = "best_effort", preview = true, steps = StepsEndingInFailure() }))));
+        Assert.True(partial.GetProperty("preview").GetBoolean());
+        Assert.Equal("partial", partial.GetProperty("status").GetString());
+        Assert.False(partial.GetProperty("rolledBack").GetBoolean());
+        Assert.Equal(3, partial.GetProperty("editsApplied").GetInt32());
+        Assert.Equal(committedMarkdown, Markdown());
+        Assert.Equal(committedVersion, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+
+        // The live ring is untouched: exactly the caller's own entry undoes, and the redo cursor
+        // seeded before the previews is still reachable.
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
+        Assert.DoesNotContain("committed edit", Markdown());
+        Assert.False(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"redo"}"""))).GetProperty("success").GetBoolean());
+        Assert.Contains("committed edit", Markdown());
+
+        // Nothing the shadow authored ever reached the live package.
+        var live = Markdown();
+        Assert.DoesNotContain("shadow one", live);
+        Assert.DoesNotContain("shadow header", live);
+        Assert.Empty(Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}"""))).GetProperty("comments").EnumerateArray());
+    }
 }
