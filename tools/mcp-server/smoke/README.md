@@ -35,7 +35,7 @@ python3 tools/mcp-server/smoke/mcp_probe.py \
   --quiet-server -- tools/mcp-server/bin/Debug/net10.0/docxodus-mcp
 ```
 
-Expected: 45 calls / 68 assertions and 13 calls / 27 assertions, both with zero failures,
+Expected: 45 calls / 81 assertions and 13 calls / 27 assertions, both with zero failures,
 four expected failures in the first, and `replayMismatches: 0`.
 
 Four calls are *supposed* to fail, and the runner treats a success there as the defect

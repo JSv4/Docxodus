@@ -15,7 +15,8 @@ namespace Docxodus.Tests;
 
 /// <summary>
 /// Surgical text replacements in <see cref="TrackedChangeMode.RenderInline"/>
-/// (issue #330). Test IDs DS400-DS407.
+/// (issue #330), and the visible-text contract those offsets are computed over
+/// (DS409-DS410, found by the issue #435 acceptance smoke). Test IDs DS400-DS410.
 /// </summary>
 public class DocxSessionSurgicalTrackedChangesTests
 {
@@ -396,11 +397,13 @@ public class DocxSessionSurgicalTrackedChangesTests
     }
 
     /// <summary>
-    /// The same blindness applied to insertions already present in the input, so a redline
-    /// arriving from Word had its inserted spans silently skipped by every text search.
+    /// The same blindness applied to revisions already present in the input, so a redline
+    /// arriving from Word had its inserted and move-destination spans silently skipped by
+    /// every text search. Pins the whole split in one fixture: w:ins and w:moveTo are visible
+    /// text, w:del and w:moveFrom are not.
     /// </summary>
     [Fact]
-    public void DS410_PreExistingTrackedInsertion_IsPartOfTheParagraphsVisibleText()
+    public void DS410_PreExistingInsertionsAndMoveDestinations_ArePartOfTheVisibleText()
     {
         var source = BuildDocument(new XElement(W.p,
             Run("Stage "),
@@ -416,18 +419,38 @@ public class DocxSessionSurgicalTrackedChangesTests
                 new XElement(W.r,
                     new XElement(W.delText,
                         new XAttribute(Xml + "space", "preserve"), "III"))),
+            new XElement(W.moveToRangeStart,
+                new XAttribute(W.id, 3), new XAttribute(W.name, "move1")),
+            new XElement(W.moveTo,
+                new XAttribute(W.id, 4),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                Run(" per the addendum")),
+            new XElement(W.moveToRangeEnd, new XAttribute(W.id, 3)),
+            new XElement(W.moveFrom,
+                new XAttribute(W.id, 5),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                new XElement(W.r,
+                    new XElement(W.delText,
+                        new XAttribute(Xml + "space", "preserve"), " per the schedule"))),
             Run(" is final.")));
         using var session = new DocxSession(source);
         var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
 
-        Assert.Equal("Stage IV in the chromatogram is final.",
+        Assert.Equal("Stage IV in the chromatogram per the addendum is final.",
             session.Project().AnchorIndex[anchor].TextPreview);
-        var match = Assert.Single(session.Grep("chromatogram"));
-        Assert.Equal(anchor, match.EnclosingAnchor?.Anchor.Id);
 
-        // Deleted text is NOT visible text: w:del holds w:delText, which never joins the flat
-        // string, so a search cannot match content the document says was removed.
+        foreach (var needle in new[] { "chromatogram", "per the addendum" })
+        {
+            var match = Assert.Single(session.Grep(needle));
+            Assert.Equal(anchor, match.EnclosingAnchor?.Anchor.Id);
+        }
+
+        // Deleted text is NOT visible text: w:del and w:moveFrom hold w:delText, which never
+        // joins the flat string, so a search cannot match what the document says was removed.
         Assert.Empty(session.Grep("III"));
+        Assert.Empty(session.Grep("per the schedule"));
     }
 
     private static byte[] BuildMarkerDocument()

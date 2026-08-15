@@ -26,7 +26,7 @@ in-repo equivalent of the certificate the round-three smoke used.
 
 | Pass | Calls | Assertions | Failed | Expected failures | Replay mismatches |
 |---|---:|---:|---:|---:|---:|
-| Workflow | 45 | 68 | **0** | 4 | **0** |
+| Workflow | 45 | 81 | **0** | 4 | **0** |
 | Reopen validation | 13 | 27 | **0** | 0 | — |
 
 Unit suite after the fix below: **3793 passed, 0 failed, 3 skipped**.
@@ -54,6 +54,12 @@ footnote, comment, format) previewed under `mode: preview` with a batch-start
 The live session was then re-inspected: version still 0, anchors still 462, footnotes still
 94, zero revisions, zero comments. The isolated dry run of #446 holds — nothing crossed
 from the shadow.
+
+**Affected anchors.** Asserted per step on both the preview and the apply: step 0 and step 4
+modify the name clause, step 2 modifies the certification clause, no step removes an anchor,
+and the created-anchor counts the preview predicted are the counts the apply produced. Counts
+rather than ids for creations — the receipt warns that generated ids differ between the two
+runs, which is the same discipline applied to `packageHash` below.
 
 **Apply.** The same six steps under `mode: atomic` with
 `transactionId: epic435-smoke-restated-certificate`. `resultVersion` was asserted *against
@@ -166,6 +172,18 @@ removed, not plain versus revised runs. Coverage: `DS409`, `DS410`.
 "No match" is an ordinary, expected outcome and deserves a structured, actionable code on
 both paths. Deciding whether the direct call should start reporting it is a public-API
 change, so this is filed rather than fixed here.
+
+## What this run does not cover
+
+- **No third-party render oracle.** `soffice --convert-to pdf` did not finish within 15
+  minutes on the 610 KB tracked-changes output, so there is no independent load check.
+  Integrity was established structurally instead — zip validity, part set, relationship
+  resolution — and by a full reopen through the server. `DS400`'s `AssertSchemaValid` covers
+  the markup shape the fix touches.
+- **Traces are regenerated, not committed.** The workflow trace is ~12 MB, most of it the
+  522 KB preview HTML repeated across receipts, so committing it would dwarf the harness it
+  documents. The committed workflow plus the README command sequence reproduce it exactly;
+  that pair is the durable artifact.
 
 ## Gate status
 

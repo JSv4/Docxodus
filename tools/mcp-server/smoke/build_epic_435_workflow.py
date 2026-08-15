@@ -181,6 +181,11 @@ def workflow() -> list[dict]:
                 "predicted_hash": "packageHash",
                 "predicted_revision_adds": "revisionChanges.added.length",
                 "predicted_comment_adds": "commentChanges.added.length",
+                # Affected anchors, per step. Counts for created anchors, not ids: the
+                # receipt warns that generated ids differ between preview and apply.
+                "predicted_paragraph_creates": "steps.1.results.0.created.length",
+                "predicted_footnote_creates": "steps.2.results.0.created.length",
+                "predicted_comment_creates": "steps.3.results.0.created.length",
             },
             expect={
                 "status": "ok",
@@ -188,6 +193,11 @@ def workflow() -> list[dict]:
                 "rolledBack": False,
                 "baseVersion": "$base_version",
                 "editsApplied": len(TRACKED_STEPS),
+                "steps.0.results.0.modified.0.id": "$name_anchor",
+                "steps.2.results.0.modified.0.id": "$certify_anchor",
+                "steps.4.results.0.modified.0.id": "$name_anchor",
+                "steps.0.results.0.removed.length": 0,
+                "steps.1.results.0.removed.length": 0,
             },
         ),
         {
@@ -231,6 +241,15 @@ def workflow() -> list[dict]:
                 "resultVersion": "$predicted_version",
                 "revisionChanges.added.length": "$predicted_revision_adds",
                 "commentChanges.added.length": "$predicted_comment_adds",
+                # The anchors the preview said would be touched are the ones that were.
+                "steps.0.results.0.modified.0.id": "$name_anchor",
+                "steps.2.results.0.modified.0.id": "$certify_anchor",
+                "steps.4.results.0.modified.0.id": "$name_anchor",
+                "steps.0.results.0.removed.length": 0,
+                "steps.1.results.0.removed.length": 0,
+                "steps.1.results.0.created.length": "$predicted_paragraph_creates",
+                "steps.2.results.0.created.length": "$predicted_footnote_creates",
+                "steps.3.results.0.created.length": "$predicted_comment_creates",
                 "transaction.transactionId": TRANSACTION_ID,
             },
         ),
