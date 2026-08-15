@@ -463,8 +463,6 @@ public sealed class DocxSessionContentControlTests
             item => item.Element(W + "sdtContent")!.AddFirst(
                 new XElement(W + "customXmlMoveFromRangeStart",
                     new XAttribute(W + "id", "7"))),
-            item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "paraId", "12345678"),
-            item => item.Descendants(W + "p").First().SetAttributeValue(W14 + "textId", "87654321"),
             item =>
             {
                 var run = item.Descendants(W + "r").First();
@@ -1208,6 +1206,200 @@ public sealed class DocxSessionContentControlTests
         var redone = session.GetContentControl(target.AnchorId)!;
         Assert.Equal(string.Empty, redone.Text);
         Assert.False(redone.IsShowingPlaceholder);
+    }
+
+    [Fact]
+    public void CC031_RepeatingClone_FreshensWordParagraphIdentityInsteadOfRefusingIt()
+    {
+        // Word 2013+ stamps w14:paraId on essentially every w:p, so a template that carries one
+        // is the normal case rather than an exotic one; the clone must mint fresh identities.
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            ControlByNativeId(document, "109").Descendants(W + "p").Single()
+                .SetAttributeValue(W14 + "paraId", "0000002A");
+            ControlByNativeId(document, "109").Descendants(W + "p").Single()
+                .SetAttributeValue(W14 + "textId", "77777777");
+            ControlByNativeId(document, "100").Descendants(W + "p").First()
+                .SetAttributeValue(W14 + "paraId", "0000002B");
+        });
+
+        using var session = new DocxSession(fixture);
+        var section = session.ListContentControls().Single(control => control.NativeId == "108");
+        Assert.True(section.CanMutate, section.UnsupportedReason);
+        var first = session.AddRepeatingSectionItem(section.AnchorId);
+        Assert.True(first.Success, first.Error?.Message);
+        Assert.True(session.AddRepeatingSectionItem(section.AnchorId).Success);
+        Assert.Equal(3, session.ListContentControls()
+            .Count(control => control.Type == ContentControlType.RepeatingSectionItem));
+
+        var saved = session.Save();
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        var paraIds = document.MainDocumentPart!.GetXDocument().Descendants(W + "p")
+            .Select(paragraph => (string?)paragraph.Attribute(W14 + "paraId"))
+            .Where(value => value is not null).ToList();
+        // Three cloned items plus the untouched outer paragraph, every identity distinct.
+        Assert.Equal(4, paraIds.Count);
+        Assert.Equal(paraIds.Count, paraIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.DoesNotContain("00000000", paraIds);
+
+        // w14:textId is a hash of the paragraph text, not an identity: clones of identical text
+        // legitimately share it, exactly as Word emits it.
+        var textIds = document.MainDocumentPart.GetXDocument().Descendants(W + "sdt")
+            .Where(control => control.Element(W + "sdtPr")?.Element(W15 + "repeatingSectionItem") is not null)
+            .Select(item => (string?)item.Descendants(W + "p").Single().Attribute(W14 + "textId"))
+            .ToList();
+        Assert.Equal(new[] { "77777777", "77777777", "77777777" }, textIds);
+
+        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
+            .Where(IsMaterialValidationError).ToList();
+        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
+            validationErrors.Select(validation =>
+                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+    }
+
+    [Fact]
+    public void CC032_TrackedMode_RegistryAgreesWithWhatEveryMutationActuallyDoes()
+    {
+        using var session = new DocxSession(BuildPictureFixture());
+        Assert.Contains(session.ListContentControls(), control => control.CanMutate);
+        var identifiers = session.ListContentControls()
+            .Where(control => control.NativeId is not null)
+            .GroupBy(control => control.NativeId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().AnchorId,
+                StringComparer.Ordinal);
+
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var tracked = session.ListContentControls();
+        Assert.All(tracked, control =>
+        {
+            Assert.False(control.CanMutate);
+            Assert.False(control.CanDetachTargetBinding);
+            Assert.Contains("tracked revisions", control.UnsupportedReason!, StringComparison.Ordinal);
+        });
+
+        var attempts = new Func<EditResult>[]
+        {
+            () => session.FillContentControlText(identifiers["101"], "x"),
+            () => session.FillContentControlRichText(identifiers["100"], "x"),
+            () => session.SetContentControlChecked(identifiers["102"], true),
+            () => session.SetContentControlDate(identifiers["103"], DateTimeOffset.UnixEpoch),
+            () => session.SelectContentControlItem(identifiers["104"], "a"),
+            () => session.SelectContentControlItem(identifiers["105"], "a"),
+            () => session.FillContentControlPicture(identifiers["113"], Png(4, 5)),
+            () => session.AddRepeatingSectionItem(identifiers["108"]),
+            () => session.RemoveRepeatingSectionItem(identifiers["109"]),
+        };
+        foreach (var attempt in attempts)
+            Assert.Equal(EditErrorCode.TrackedOperationUnsupported, attempt().Error!.Code);
+        Assert.Equal(0, session.UndoCount);
+
+        // Leaving tracked mode restores exactly the pre-tracked registry verdicts.
+        session.SetTrackedChanges(TrackedChangeMode.Accept);
+        Assert.Contains(session.ListContentControls(), control => control.CanMutate);
+    }
+
+    [Fact]
+    public void CC033_BookmarkGate_IsVisibleInDiscoveryNotOnlyAtMutationTime()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var content = ControlByNativeId(document, "101").Element(W + "sdtContent")!;
+            content.AddFirst(new XElement(W + "bookmarkStart",
+                new XAttribute(W + "id", "31"), new XAttribute(W + "name", "InnerTarget")));
+            content.Add(new XElement(W + "bookmarkEnd", new XAttribute(W + "id", "31")));
+            document.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Add(
+                new XElement(W + "p", new XElement(W + "hyperlink",
+                    new XAttribute(W + "anchor", "InnerTarget"),
+                    new XElement(W + "r", new XElement(W + "t", "jump")))));
+        });
+        using var session = new DocxSession(fixture);
+        var target = session.ListContentControls().Single(control => control.NativeId == "101");
+        Assert.False(target.CanMutate);
+        Assert.Contains("InnerTarget", target.UnsupportedReason!, StringComparison.Ordinal);
+        Assert.Equal(EditErrorCode.BookmarkInUse,
+            session.FillContentControlText(target.AnchorId, "replacement").Error!.Code);
+
+        // The same control is mutable again once nothing points at the bookmark.
+        var released = Transform(fixture, document =>
+            document.MainDocumentPart!.GetXDocument().Descendants(W + "hyperlink").Single().Remove());
+        using var releasedSession = new DocxSession(released);
+        var releasedTarget = releasedSession.ListContentControls()
+            .Single(control => control.NativeId == "101");
+        Assert.True(releasedTarget.CanMutate, releasedTarget.UnsupportedReason);
+        Assert.True(releasedSession.FillContentControlText(releasedTarget.AnchorId, "replacement").Success);
+    }
+
+    [Fact]
+    public void CC034_CheckboxStateFont_InsertsRFontsAtItsSchemaSlotNotAtPositionZero()
+    {
+        // CT_RPr is a strict sequence: w:rStyle (30) ranks before w:rFonts (40). A glyph run that
+        // already carries an earlier member must not be given w:rFonts at position 0.
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var control = ControlByNativeId(document, "102");
+            control.Descendants(W14 + "checkedState").Single()
+                .SetAttributeValue(W14 + "font", "Wingdings");
+            control.Descendants(W + "r").Single().AddFirst(new XElement(W + "rPr",
+                new XElement(W + "rStyle", new XAttribute(W + "val", "Strong"))));
+        });
+        using var session = new DocxSession(fixture);
+        var checkbox = session.ListContentControls().Single(control => control.NativeId == "102");
+        Assert.True(session.SetContentControlChecked(checkbox.AnchorId, true).Success);
+
+        var saved = session.Save();
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        var runProperties = ControlByNativeId(document, "102").Descendants(W + "rPr").Single();
+        Assert.Equal(new[] { "rStyle", "rFonts" },
+            runProperties.Elements().Select(element => element.Name.LocalName).ToArray());
+        Assert.Equal("Wingdings", (string?)runProperties.Element(W + "rFonts")!.Attribute(W + "ascii"));
+        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
+            .Where(IsMaterialValidationError).ToList();
+        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
+            validationErrors.Select(validation =>
+                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+    }
+
+    [Fact]
+    public void CC035_HeaderAndFooterControls_HonorProjectionScopes_AndFillInPlace()
+    {
+        var fixture = Transform(BuildFixture(), document =>
+        {
+            var main = document.MainDocumentPart!;
+            main.AddNewPart<HeaderPart>().PutXDocument(new XDocument(new XElement(W + "hdr",
+                BlockSdt("301", new XElement(W + "text"), "header value", tag: "header-tag"))));
+            main.AddNewPart<FooterPart>().PutXDocument(new XDocument(new XElement(W + "ftr",
+                BlockSdt("302", new XElement(W + "text"), "footer value", tag: "footer-tag"))));
+        });
+        using var session = new DocxSession(fixture);
+
+        string[] Ids(ProjectionScopes scopes) => session.ListContentControls(scopes)
+            .Select(control => control.NativeId).Where(value => value is not null).ToArray()!;
+        Assert.DoesNotContain("301", Ids(ProjectionScopes.Body));
+        Assert.DoesNotContain("302", Ids(ProjectionScopes.Body));
+        Assert.Equal(new[] { "301" }, Ids(ProjectionScopes.Headers));
+        Assert.Equal(new[] { "302" }, Ids(ProjectionScopes.Footers));
+        Assert.Contains("301", Ids(ProjectionScopes.All));
+        Assert.Contains("302", Ids(ProjectionScopes.All));
+
+        var header = session.ListContentControls().Single(control => control.NativeId == "301");
+        var footer = session.ListContentControls().Single(control => control.NativeId == "302");
+        Assert.Equal("hdr1", header.Scope);
+        Assert.Equal("ftr1", footer.Scope);
+        Assert.EndsWith("header1.xml", header.OwningPartUri, StringComparison.Ordinal);
+        Assert.EndsWith("footer1.xml", footer.OwningPartUri, StringComparison.Ordinal);
+        Assert.True(header.CanMutate, header.UnsupportedReason);
+        Assert.True(footer.CanMutate, footer.UnsupportedReason);
+
+        Assert.True(session.FillContentControlText(header.AnchorId, "running header value").Success);
+        Assert.True(session.FillContentControlText(footer.AnchorId, "running footer value").Success);
+        using var reopened = new DocxSession(session.Save());
+        Assert.Equal("running header value", reopened.ListContentControls()
+            .Single(control => control.NativeId == "301").Text);
+        Assert.Equal("running footer value", reopened.ListContentControls()
+            .Single(control => control.NativeId == "302").Text);
+        // The body story is untouched by a running-content fill.
+        Assert.Equal("inner", reopened.ListContentControls()
+            .Single(control => control.NativeId == "101").Text);
     }
 
     private static string[] ParagraphAnchors(DocxSession session) => session.Project().AnchorIndex.Values

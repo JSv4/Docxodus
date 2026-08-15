@@ -18,7 +18,11 @@ their anchors are made public.
 
 Mutation also requires an exact SDT envelope: one `w:sdtPr`, one `w:sdtContent`,
 one `w:id`, no more than one mutually exclusive family marker, and at most one
-`w:lock` carrying a native lock value. The same malformed-envelope gate applies through
+`w:lock` carrying a native lock value. This envelope is deliberately **stricter than
+`CT_SdtPr`**, where both `w:sdtPr` and `w:id` are `minOccurs="0"`: a spec-valid control
+from a non-Word generator that omits either is enumerable but not mutable. The gate fails
+closed — it never edits markup it cannot address — at the cost of refusing some
+schema-legal input Word itself never emits. The same malformed-envelope gate applies through
 ancestors, so a valid child cannot bypass a malformed outer lock. Malformed controls stay
 enumerable under diagnostic anchors and fail before an undo snapshot. A repeating template
 is cloneable only when every nested SDT satisfies the same invariant.
@@ -51,9 +55,14 @@ clearing its showing-state marker. Picture fills replace the image relationship 
 rebuilding the wrapper. Discovery and fill share the same picture topology gate: exactly
 one canonical, embedded, mutable image must belong to the control, so `CanMutate` cannot
 advertise zero-image, multi-image, linked, or unsupported picture controls as writable.
-Repeating clones freshen every nested content-control id and
-drawing `docPr` id, and reject clone-sensitive bookmark, comment, permission, custom
-XML container/range, move, note-reference, and `w14:paraId`/`w14:textId` markup. The
+Repeating clones freshen every nested content-control id,
+drawing `docPr` id, and `w14:paraId` — Word 2013+ stamps a paraId on essentially every
+paragraph, so refusing to clone one would make the feature inert on real templates;
+paraId is package-unique, so the clone mints fresh values from the same allocator native
+comment authoring uses. `w14:textId` is deliberately copied verbatim: it is a hash of the
+paragraph's text rather than an identity, and Word emits the same value for two paragraphs
+with the same content. Clones still reject markup whose identity *is* semantic —
+bookmark, comment, permission, custom XML container/range, move, and note-reference. The
 clone gate also rejects every live tracked-revision carrier recognized by the revision
 registry; duplicating such markup would duplicate its native revision ids and make later
 resolution ambiguous. The final item cannot be removed.
@@ -95,9 +104,22 @@ removed appears in `Removed`.
 
 ## Locks, bindings, and nesting
 
-Content locks are effective through ancestors. A locked target or ancestor fails
+Content locks are effective through ancestors **for the content-control operations on
+this page**. `w:lock` is not yet consulted by the generic anchor-addressed surface: an
+op such as `ReplaceTextAtSpan` or `DeleteRange` still edits through a `contentLocked`
+control. Honouring `w:lock` document-wide is a separate change to the generic
+mutation path and is outside issue #452. A locked target or ancestor fails
 without changing history. A whole-content replacement that would discard a nested
 control is also refused; callers address the nested child directly.
+
+`CanMutate` is the single honest answer to "would a mutation succeed?", and discovery
+evaluates the same gates the mutation does, in the same order. That includes the
+session-level ones: under `render_inline` tracked-change mode every control reports
+`CanMutate: false` with the tracked reason, and a whole-content replacement whose
+bookmark ranges the fill would orphan — or that an internal hyperlink still targets —
+is reported unmutable before it is attempted. A registry that advertised a mutation the
+session is guaranteed to refuse is worse than no registry: an agent planning off it
+builds a batch that cannot apply.
 
 For repeating sections, `CanMutate` describes the default operation honestly: a
 section must have a safe final clone template, and an item is removable only when it

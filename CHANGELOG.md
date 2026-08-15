@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Native content-control operations (#452).** `DocxSession` now enumerates and fills
+  Word structured-document tags as first-class objects. `ListContentControls` /
+  `GetContentControl` return every `w:sdt` in outer-before-inner story order under a
+  stable `sdt:{scope}:{unid}` anchor derived from the native `w:sdtPr/w:id`, with family,
+  placement, owning part, parent/depth, native metadata, data binding, current text, list
+  item values, and an explicit `CanMutate`/`UnsupportedReason` decision.
+  `FillContentControlText`, `FillContentControlRichText`, `SetContentControlChecked`,
+  `SetContentControlDate`, `SelectContentControlItem`, `FillContentControlPicture`,
+  `AddRepeatingSectionItem`, and `RemoveRepeatingSectionItem` mutate through the wrapper
+  without rebuilding it, preserving `w:sdtPr` metadata and the placeholder definition.
+  Data-bound controls fail closed unless `bindingPolicy: detach_target` removes the
+  target's own binding; a bound or locked ancestor always fails closed, and no Custom XML
+  part is ever edited. `sdt` becomes an AnchorIndex kind in both the WML projector and the
+  IR emitter, and `ListInlineSpans` reports outer-to-inner `ContentControlAnchorIds`.
+  Rippled through the JSON facade, WASM/npm, the stdio host and `docx-scalpel`, and the
+  new `docxodus_content_controls` MCP tool. Design: `docs/architecture/native_content_controls.md`.
 - **Canonical table addressing and complete table-operation ripple (#450, absorbing
   #471).** Tables now expose explicit stable identities for the `w:tbl`, every
   `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus
