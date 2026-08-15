@@ -438,7 +438,12 @@ camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
 failure is the standard structured `precondition_failed` result. Atomic mode
 evaluates all step guards at the common batch-start boundary; best-effort mode
-evaluates them sequentially. `docxodus_get_content` with `format: "version"` reads the current
+evaluates them sequentially. `expectedMatchCount` is the single exception in both
+modes: only the replacement itself can count live matches, so that guard is carried
+into the step and enforced at the step's own turn against the state the step sees.
+A batched step's receipt is the ordinary `EditResult` envelope in full — a table
+step keeps its `tableAnchors` mapping, so an agent can address the cells the same
+batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview restores its starting version after undoing speculative
 steps, so a dry-run does not make an otherwise-current plan stale.

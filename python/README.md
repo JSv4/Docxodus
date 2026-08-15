@@ -77,6 +77,11 @@ if not result.success:
 Select `MutationBatchMode.BEST_EFFORT` explicitly only when retaining successful
 steps after another step fails is intended.
 
+A step's `operation` is any mutating session operation, including the structural
+table ops (`insert_table`, `insert_table_row`, `merge_cells`, …); read-only
+operations, `undo`/`redo`, and session configuration are rejected as
+`invalid_batch_step`.
+
 The `with` block is the documented lifecycle path — it calls `session.close()` on the way out, which releases the session from the host's `SessionRegistry`. A `__del__` finalizer is a fallback for forgotten sessions but should not be relied on; interpreter shutdown may skip it.
 
 ## Why a subprocess?

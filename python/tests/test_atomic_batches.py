@@ -7,6 +7,8 @@ from docx_scalpel import (
     DocxSession,
     MutationBatchMode,
     MutationBatchStep,
+    Position,
+    TableAnchorEntityKind,
     open_session,
 )
 
@@ -112,3 +114,36 @@ def test_best_effort_is_explicit_and_invalid_steps_are_structured(
         assert invalid.failure is not None
         assert invalid.failure.error.code is EditErrorCode.INVALID_BATCH_STEP
         assert session.get_version() == 0
+
+
+def test_structural_table_steps_are_batchable(tour_plan_bytes: bytes) -> None:
+    """Table edits are in scope for #445, and the batch surface must match the agent one."""
+    with open_session(tour_plan_bytes) as session:
+        target = _body_paragraphs(session)[0]
+
+        result = session.execute_batch(
+            [
+                MutationBatchStep(
+                    "insert_table",
+                    {
+                        "anchorId": target,
+                        "position": Position.AFTER.value,
+                        "rows": 2,
+                        "columns": 2,
+                    },
+                ),
+                MutationBatchStep(
+                    "replace_text",
+                    {"anchorId": target, "markdown": "Table batch anchor."},
+                ),
+            ]
+        )
+
+        assert result.success, result.failure
+        assert len(result.steps) == 2
+        # The receipt must carry the cell-anchor map, or the caller cannot address the
+        # cells the same batch just created.
+        mapping = result.steps[0].results[0].table_anchors
+        assert mapping is not None
+        assert any(loc.entity_kind is TableAnchorEntityKind.CELL for loc in mapping.added)
+        assert session.get_version() == 1
