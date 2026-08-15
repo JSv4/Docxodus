@@ -23,12 +23,28 @@ namespace DocxodusWasm;
 [SupportedOSPlatform("browser")]
 public static partial class DocxSessionBridge
 {
+    private static readonly Dictionary<int, (int SessionHandle, DocxSessionTransaction Transaction)> Transactions = new();
+    private static int _nextTransactionHandle;
+
     [JSExport]
     public static int OpenSession(byte[] bytes, string settingsJson) =>
         DocxSessionOps.OpenSession(bytes, DocxSessionJson.ParseSettings(settingsJson));
 
     [JSExport]
-    public static void CloseSession(int handle) => DocxSessionOps.CloseSession(handle);
+    public static void CloseSession(int handle)
+    {
+        foreach (var txHandle in Transactions
+            .Where(kv => kv.Value.SessionHandle == handle)
+            .Select(kv => kv.Key)
+            .OrderByDescending(x => x)
+            .ToArray())
+        {
+            var transaction = Transactions[txHandle].Transaction;
+            Transactions.Remove(txHandle);
+            transaction.Rollback();
+        }
+        DocxSessionOps.CloseSession(handle);
+    }
 
     /// <summary>Mint a complete blank DOCX (a "New document" seed) as bytes.</summary>
     [JSExport]
@@ -72,6 +88,34 @@ public static partial class DocxSessionBridge
     public static string CheckPreconditions(int handle, string preconditionsJson) =>
         DocxSessionOps.CheckPreconditions(
             handle, DocxSessionJson.ParseMutationPreconditions(preconditionsJson));
+
+    /// <summary>Begin a synchronous nested-safe atomic scope for npm's callback batch API.</summary>
+    [JSExport]
+    public static int BeginTransaction(int handle)
+    {
+        var transaction = DocxSessionOps.BeginTransaction(handle);
+        var transactionHandle = checked(++_nextTransactionHandle);
+        Transactions.Add(transactionHandle, (handle, transaction));
+        return transactionHandle;
+    }
+
+    [JSExport]
+    public static void CommitTransaction(int transactionHandle)
+    {
+        if (!Transactions.TryGetValue(transactionHandle, out var entry))
+            throw new ArgumentException($"unknown transaction handle: {transactionHandle}");
+        entry.Transaction.Commit();
+        Transactions.Remove(transactionHandle);
+    }
+
+    [JSExport]
+    public static void RollbackTransaction(int transactionHandle)
+    {
+        if (!Transactions.TryGetValue(transactionHandle, out var entry))
+            throw new ArgumentException($"unknown transaction handle: {transactionHandle}");
+        entry.Transaction.Rollback();
+        Transactions.Remove(transactionHandle);
+    }
 
     /// <summary>
     /// Ordered top-level render units per scope container (body / footnotes /

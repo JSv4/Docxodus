@@ -425,14 +425,14 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply (or preview) a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions as one atomic-feeling sequence, with a single aggregate result.",
+            "Apply a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions atomically by default, with explicit best-effort and legacy preview modes.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
-                "mode": { "type": "string", "enum": ["apply", "preview"], "description": "preview applies every step, records the result, then undoes them all before returning — nothing is left changed." },
+                "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: legacy apply-then-undo behavior; isolated previews are tracked separately in #446." },
                 "steps": {
                   "type": "array",
                   "items": {
@@ -445,7 +445,7 @@ internal static class ToolCatalog
                   }
                 }
               },
-              "required": ["sessionId", "mode", "steps"]
+              "required": ["sessionId", "steps"]
             }
             """),
         new ToolDefinition(

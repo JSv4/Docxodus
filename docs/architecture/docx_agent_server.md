@@ -411,22 +411,39 @@ whole-document resolution: they transform via `RevisionProcessor` and swap the s
 underlying handle in place (`SessionStore.Rebind`), which also covers the exotic families the
 per-revision listing does not enumerate (see Known gaps).
 
-### `docxodus_mutations` — batch apply or dry-run preview
+### `docxodus_mutations` — atomic batches, explicit partial apply, or legacy preview
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
 `docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
-sequence of *mutations*). `mode:
-apply` runs every step and returns a `{ status, editsApplied, results, errors }` receipt (`status`
-is `ok`/`partial`/`failed`). `mode: preview` runs every step exactly the same way, then calls
+sequence of *mutations*).
+
+`mode: atomic` is the recommended default. The server preflights every supported
+action, required argument/enum, and step precondition against the batch-start state
+before step zero. Success creates one undo entry and advances the version once. Any
+failed or thrown step restores the complete DOCX package, relationships, session
+state, version, and undo/redo cursors; the receipt identifies the failing
+`index`/`tool`/`action`/`error` and reports `rolledBack: true`.
+
+`mode: best_effort` is the explicit partial-success mode. It runs every step in
+order and evaluates a step preflight immediately before that step, returning a
+`{ status, editsApplied, results, errors }`-compatible receipt (`status` is
+`ok`/`partial`/`failed`). `mode: apply` is a deprecated compatibility alias for
+`best_effort`; new clients should use the risk-signaling spelling. `mode: preview` runs every step exactly the same way, then calls
 `DocxSessionOps.Undo` once per step that actually mutated before returning — see Known gaps for
 why this is "apply-then-undo" rather than a true no-op dry run.
 
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
-failure is the standard structured `precondition_failed` result and does not
-mutate that step. `docxodus_get_content` with `format: "version"` reads the current
+failure is the standard structured `precondition_failed` result. Atomic mode
+evaluates all step guards at the common batch-start boundary; best-effort mode
+evaluates them sequentially. `expectedMatchCount` is the single exception in both
+modes: only the replacement itself can count live matches, so that guard is carried
+into the step and enforced at the step's own turn against the state the step sees.
+A batched step's receipt is the ordinary `EditResult` envelope in full — a table
+step keeps its `tableAnchors` mapping, so an agent can address the cells the same
+batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview restores its starting version after undoing speculative
 steps, so a dry-run does not make an otherwise-current plan stale.

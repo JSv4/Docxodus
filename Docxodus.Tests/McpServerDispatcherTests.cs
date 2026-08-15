@@ -1029,6 +1029,275 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Contains("undo", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void MCP094_Mutations_AtomicFailureIsStructuredAndLeavesNoVersionOrHistory()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "speculative" } },
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "p:body:missing", "markdown": "failure" } }
+              ]
+            }
+            """)));
+
+        Assert.Equal("failed", batch.GetProperty("status").GetString());
+        Assert.False(batch.GetProperty("success").GetBoolean());
+        Assert.True(batch.GetProperty("rolledBack").GetBoolean());
+        var failure = batch.GetProperty("failure");
+        Assert.Equal(1, failure.GetProperty("index").GetInt32());
+        Assert.Equal("docxodus_edit", failure.GetProperty("tool").GetString());
+        Assert.Equal("replace_text", failure.GetProperty("action").GetString());
+        Assert.Equal("anchor_not_found", failure.GetProperty("error").GetProperty("code").GetString());
+        Assert.True(failure.GetProperty("rolledBack").GetBoolean());
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Equal(before, after);
+        var version = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"version"}""")))
+            .GetProperty("version").GetInt64();
+        Assert.Equal(0, version);
+        var undo = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")));
+        Assert.False(undo.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP095_Mutations_AtomicSuccessIsOneUndoAndInvalidStepHasCallerErrorCode()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var invalid = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_comment", "args": { "action": "list" } }
+              ]
+            }
+            """)));
+        Assert.Equal("invalid_batch_step",
+            invalid.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "atomic MCP" } },
+                { "tool": "docxodus_format", "args": { "action": "apply_format", "anchorId": "{{anchor}}", "format": { "bold": true } } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", batch.GetProperty("status").GetString());
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+
+        var undo = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")));
+        Assert.True(undo.GetProperty("success").GetBoolean());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.DoesNotContain("atomic MCP", markdown);
+    }
+
+    [Fact]
+    public void MCP096_AtomicPreflightsLaterArgumentErrorsBeforeStepZeroMutates()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var before = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "must never run" } },
+                { "tool": "docxodus_create", "args": { "action": "set_header_text", "bodyAnchorId": "{{anchor}}", "kind": "sideways", "markdown": "invalid header" } }
+              ]
+            }
+            """)));
+
+        Assert.False(batch.GetProperty("success").GetBoolean());
+        Assert.True(batch.GetProperty("rolledBack").GetBoolean());
+        var failure = batch.GetProperty("failure");
+        Assert.Equal(1, failure.GetProperty("index").GetInt32());
+        Assert.Equal("docxodus_create", failure.GetProperty("tool").GetString());
+        Assert.Equal("set_header_text", failure.GetProperty("action").GetString());
+        Assert.Equal("invalid_batch_step", failure.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("kind", failure.GetProperty("error").GetProperty("message").GetString());
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Equal(before, after);
+        Assert.Equal(0, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+        var undo = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}""")));
+        Assert.False(undo.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP097_AtomicStepPreconditionsUseBatchStartState()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var info = Parse(Docxodus.Internal.DocxSessionOps.GetAnchorInfo(
+            _store.Get(sessionId).Handle, anchor));
+        var originalText = JsonSerializer.Serialize(info.GetProperty("visibleText").GetString());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "first atomic state" } },
+                { "tool": "docxodus_edit", "args": { "action": "replace_text", "anchorId": "{{anchor}}", "markdown": "second atomic state", "preconditions": { "expectedText": {{originalText}} } } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        Assert.Equal("atomic", batch.GetProperty("mode").GetString());
+        Assert.Equal(1, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Contains("second atomic state", markdown);
+        Assert.DoesNotContain("first atomic state", markdown);
+    }
+
+    [Theory]
+    [InlineData("atomic")]
+    [InlineData("apply")]
+    public void MCP098_BatchedReplaceTextRange_EnforcesExpectedMatchCount(string mode)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"Company Company Company Company"}""")))
+            .GetProperty("success").GetBoolean());
+
+        // The count guard can only be evaluated by the op that enumerated the live matches, so
+        // stripping it from the dispatched step made it a silent no-op — all four occurrences
+        // were replaced instead of the batch failing. Both the new atomic mode and the legacy
+        // "apply" alias must reject the step and leave the anchor untouched.
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "{{mode}}",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text_range", "anchorId": "{{anchor}}", "find": "Company", "replace": "Acme", "preconditions": { "expectedMatchCount": 1 } } }
+              ]
+            }
+            """)));
+
+        Assert.False(batch.GetProperty("success").GetBoolean());
+        var failure = batch.GetProperty("failure");
+        Assert.Equal(0, failure.GetProperty("index").GetInt32());
+        Assert.Equal("precondition_failed", failure.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("match_count",
+            failure.GetProperty("error").GetProperty("precondition").GetProperty("condition").GetString());
+
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.DoesNotContain("Acme", markdown);
+        Assert.Contains("Company Company Company Company", markdown);
+    }
+
+    [Theory]
+    [InlineData("atomic")]
+    [InlineData("apply")]
+    public void MCP098B_BatchedReplaceTextRange_MatchingExpectedMatchCountStillApplies(string mode)
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"Company Company"}""")))
+            .GetProperty("success").GetBoolean());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "{{mode}}",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text_range", "anchorId": "{{anchor}}", "find": "Company", "replace": "Acme", "preconditions": { "expectedMatchCount": 2 } } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        var markdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString();
+        Assert.Contains("Acme Acme", markdown);
+    }
+
+    [Fact]
+    public void MCP099_BatchedTableStep_KeepsTableAnchorMappingInItsReceipt()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_table", "args": { "action": "insert", "anchorId": "{{anchor}}", "position": "after", "rows": 2, "columns": 2 } }
+              ]
+            }
+            """)));
+
+        Assert.True(batch.GetProperty("success").GetBoolean());
+        // The batch re-serializes every step through the shared EditResult wire shape, so a
+        // parser that dropped tableAnchors left an agent with no cell-anchor map for the cells
+        // its own step had just created.
+        var result = batch.GetProperty("steps")[0].GetProperty("results")[0];
+        var mapping = result.GetProperty("tableAnchors");
+        var added = mapping.GetProperty("added");
+        Assert.NotEmpty(added.EnumerateArray());
+        var cells = added.EnumerateArray()
+            .Where(x => x.GetProperty("entityKind").GetString() == "cell")
+            .ToArray();
+        Assert.Equal(4, cells.Length);
+        Assert.All(cells, cell =>
+        {
+            Assert.StartsWith("tc:", cell.GetProperty("anchor").GetProperty("id").GetString());
+            Assert.True(cell.TryGetProperty("rowIndex", out _));
+            Assert.True(cell.TryGetProperty("columnIndex", out _));
+        });
+    }
+
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]

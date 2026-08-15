@@ -33,6 +33,7 @@ from .enums import (
     DiffFormat,
     HeaderFooterKind,
     ListFormat,
+    MutationBatchMode,
     PageNumberField,
     PlaceholderKinds,
     Position,
@@ -68,6 +69,8 @@ from .types import (
     HtmlOptions,
     ListMembership,
     MarkdownProjection,
+    MutationBatchResult,
+    MutationBatchStep,
     MutationPreconditions,
     NumberFormat,
     ParagraphFormatOp,
@@ -505,6 +508,20 @@ class DocxSession:
                 {"anchorId": anchor_id, "citation": citation.to_wire()},
             )
         )
+
+    def execute_batch(
+        self,
+        steps: Iterable[MutationBatchStep],
+        mode: MutationBatchMode = MutationBatchMode.ATOMIC,
+    ) -> MutationBatchResult:
+        """Execute mutations atomically by default, or explicitly retain partial successes."""
+        result = self._call(
+            "execute_batch",
+            {"mode": mode.value, "steps": [step.to_wire() for step in steps]},
+        )
+        if not isinstance(result, Mapping):
+            raise TypeError(f"execute_batch: expected object, got {result!r}")
+        return MutationBatchResult._from_wire(result)
 
     def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
         """Evaluate guards without mutating the document or advancing its version."""

@@ -30,6 +30,7 @@ from .enums import (
     EmptyParagraphMode,
     HeaderFooterKind,
     LineSpacingRule,
+    MutationBatchMode,
     ParagraphAlignment,
     PlaceholderKind,
     PlaceholderKinds,
@@ -57,6 +58,10 @@ __all__ = [
     "PreconditionFailure",
     "TextRangePrecondition",
     "MutationPreconditions",
+    "MutationBatchStep",
+    "MutationBatchStepResult",
+    "MutationBatchFailure",
+    "MutationBatchResult",
     "BlockMetadata",
     "BulkEditResult",
     "FillOptions",
@@ -1120,6 +1125,79 @@ class EditResult:
             annotation_id=d.get("annotationId"),
             table_anchors=TableAnchorMapping._from_wire(d["tableAnchors"])
             if d.get("tableAnchors") else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MutationBatchStep:
+    """One standardized stdio batch operation and its normal method arguments."""
+
+    operation: str
+    args: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"operation": self.operation, "args": dict(self.args)}
+
+
+@dataclass(frozen=True, slots=True)
+class MutationBatchStepResult:
+    index: int
+    tool: str
+    action: str
+    success: bool
+    rolled_back: bool
+    results: tuple[EditResult, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchStepResult":
+        return cls(
+            index=int(d["index"]),
+            tool=str(d.get("tool", "")),
+            action=str(d.get("action", "")),
+            success=bool(d.get("success", False)),
+            rolled_back=bool(d.get("rolledBack", False)),
+            results=tuple(EditResult._from_wire(r) for r in d.get("results", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MutationBatchFailure:
+    index: int
+    tool: str
+    action: str
+    error: EditError
+    rolled_back: bool
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchFailure":
+        return cls(
+            index=int(d["index"]),
+            tool=str(d.get("tool", "")),
+            action=str(d.get("action", "")),
+            error=EditError._from_wire(d["error"]),
+            rolled_back=bool(d.get("rolledBack", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MutationBatchResult:
+    mode: MutationBatchMode
+    status: str
+    success: bool
+    rolled_back: bool
+    steps: tuple[MutationBatchStepResult, ...]
+    failure: MutationBatchFailure | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchResult":
+        failure = d.get("failure")
+        return cls(
+            mode=MutationBatchMode(d.get("mode", "atomic")),
+            status=str(d.get("status", "failed")),
+            success=bool(d.get("success", False)),
+            rolled_back=bool(d.get("rolledBack", False)),
+            steps=tuple(MutationBatchStepResult._from_wire(s) for s in d.get("steps", ())),
+            failure=MutationBatchFailure._from_wire(failure) if failure else None,
         )
 
 

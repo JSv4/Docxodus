@@ -673,14 +673,29 @@ internal static class Dispatcher
     private static string Mutations(SessionStore store, JsonElement args)
     {
         var session = Session(store, args);
-        var mode = Str(args, "mode");
-        if (mode is not ("apply" or "preview"))
+        var mode = args.TryGetProperty("mode", out _)
+            ? Str(args, "mode")
+            : "atomic";
+        if (mode is not ("atomic" or "best_effort" or "apply" or "preview"))
             throw new McpToolException($"unknown docxodus_mutations mode: {mode}");
         if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
             throw new McpToolException("docxodus_mutations requires an array \"steps\"");
 
         var batchCheck = Check(session, ParsePreconditions(args, MutationTarget(args)));
         if (batchCheck is not null) return batchCheck;
+
+        // #445: committed batch modes run through the core transaction primitive. `apply` is the
+        // backward-compatible alias for the old partial executor and is reported as best_effort;
+        // new callers should spell that risk explicitly. Preview remains the pre-existing
+        // apply-then-undo path until isolated previews land separately in #446.
+        if (mode != "preview")
+        {
+            var steps = BuildMutationBatchSteps(session, stepsEl, legacyApply: mode == "apply");
+            var coreMode = mode == "atomic"
+                ? MutationBatchMode.Atomic
+                : MutationBatchMode.BestEffort;
+            return DocxSessionOps.ExecuteBatch(session.Handle, coreMode, steps);
+        }
 
         var results = new List<string>();
         var errors = new List<string>();
@@ -766,6 +781,455 @@ internal static class Dispatcher
         return "{\"status\":\"" + status + "\",\"editsApplied\":" + applied
             + ",\"results\":[" + string.Join(",", results) + "]"
             + ",\"errors\":[" + string.Join(",", errors) + "]}";
+    }
+
+    private static IReadOnlyList<MutationBatchStep> BuildMutationBatchSteps(
+        DocSession session,
+        JsonElement stepsEl,
+        bool legacyApply)
+    {
+        var result = new List<MutationBatchStep>();
+        foreach (var step in stepsEl.EnumerateArray())
+        {
+            var stepTool = step.TryGetProperty("tool", out var toolEl) && toolEl.ValueKind == JsonValueKind.String
+                ? toolEl.GetString()! : throw new McpToolException("mutation step missing string \"tool\"");
+            var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                ? a : throw new McpToolException("mutation step missing object \"args\"");
+            var action = stepArgs.TryGetProperty("action", out var actEl) && actEl.ValueKind == JsonValueKind.String
+                ? actEl.GetString()! : throw new McpToolException("mutation step args missing string \"action\"");
+
+            var actionError = ValidateMutationBatchAction(stepTool, action);
+            if (legacyApply && actionError is not null)
+                throw new McpToolException(actionError.Message);
+            // Step preconditions are evaluated by the core batch preflight: all against the
+            // batch-start state for atomic mode, immediately before each step for best-effort.
+            // Strip the decided ones from the actual dispatch so a valid atomic preflight is not
+            // evaluated a second time against state changed by an earlier step in the same batch.
+            var mutationArgs = WithDeferredPreconditionsOnly(stepArgs);
+            result.Add(DocxSessionOps.SerializedBatchStep(
+                stepTool,
+                action,
+                () => stepTool switch
+                {
+                    "docxodus_edit" => RunEditAction(session, action, mutationArgs),
+                    "docxodus_format" => RunFormatAction(session, action, mutationArgs),
+                    "docxodus_create" => RunCreateAction(session, action, mutationArgs),
+                    "docxodus_table" => RunTableAction(session, action, mutationArgs),
+                    "docxodus_list" => RunListAction(session, action, mutationArgs),
+                    "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
+                    _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
+                },
+                () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
+        }
+        return result;
+    }
+
+    private static EditError? ValidateMutationBatchAction(string tool, string action)
+    {
+        bool known = tool switch
+        {
+            "docxodus_edit" => action is "insert_paragraph" or "replace_text" or "replace_text_range"
+                or "delete_block" or "move_block" or "delete_range" or "delete_section"
+                or "split_paragraph" or "merge_paragraphs",
+            "docxodus_format" => action is "apply_format" or "apply_format_by_substring"
+                or "set_paragraph_style" or "set_paragraph_format" or "set_list_level"
+                or "remove_list_membership" or "apply_list_format",
+            "docxodus_create" => action is "insert_paragraph" or "insert_heading" or "insert_table"
+                or "insert_horizontal_rule" or "insert_footnote" or "insert_endnote"
+                or "insert_page_number_field" or "set_header_text" or "set_footer_text"
+                or "ensure_header_footer_visible",
+            "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
+                or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
+                or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
+                or "set_repeat_header_row" or "set_row_options",
+            "docxodus_list" => action is "apply_format" or "apply_format_range" or "set_level"
+                or "set_start" or "clear_start" or "remove",
+            "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
+            _ => false,
+        };
+        return known ? null : new EditError(
+            EditErrorCode.InvalidBatchStep,
+            $"unsupported or read-only batch action: {tool}/{action}");
+    }
+
+    private static EditError? ValidateMutationBatchStep(
+        DocSession session,
+        string tool,
+        string action,
+        JsonElement args)
+    {
+        var actionError = ValidateMutationBatchAction(tool, action);
+        if (actionError is not null) return actionError;
+
+        try
+        {
+            ValidateMutationBatchArguments(tool, action, args);
+            var failure = Check(session, ParsePreconditions(args, MutationTarget(args)));
+            if (failure is null) return null;
+            return DocxSessionJson.DeserializeEditResults(failure).FirstOrDefault()?.Error
+                ?? new EditError(EditErrorCode.PreconditionFailed,
+                    "batch step precondition failed");
+        }
+        catch (Exception ex) when (ex is McpToolException
+            or ArgumentException or FormatException or JsonException or OverflowException)
+        {
+            return new EditError(EditErrorCode.InvalidBatchStep, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Parse every syntactic input that a mutation action will consume, without invoking the
+    /// mutation. This keeps caller-attributable schema/enum errors out of InternalError and lets
+    /// atomic mode reject the complete batch before step zero changes the package.
+    /// </summary>
+    private static void ValidateMutationBatchArguments(string tool, string action, JsonElement args)
+    {
+        switch ((tool, action))
+        {
+            case ("docxodus_edit", "insert_paragraph"):
+                RequireStrings(args, "anchorId", "markdown");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_edit", "replace_text"):
+                RequireStrings(args, "anchorId", "markdown");
+                break;
+            case ("docxodus_edit", "replace_text_range"):
+                RequireStrings(args, "anchorId", "find", "replace");
+                ValidateOptionalBool(args, "caseSensitive");
+                break;
+            case ("docxodus_edit", "delete_block"):
+                RequireStrings(args, "anchorId");
+                break;
+            case ("docxodus_edit", "move_block"):
+                RequireStrings(args, "sourceAnchorId", "targetAnchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_edit", "delete_range"):
+                RequireStrings(args, "fromAnchorId", "toAnchorIdExclusive");
+                break;
+            case ("docxodus_edit", "delete_section"):
+                RequireStrings(args, "headingAnchorId");
+                break;
+            case ("docxodus_edit", "split_paragraph"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "characterOffset");
+                break;
+            case ("docxodus_edit", "merge_paragraphs"):
+                RequireStrings(args, "anchorId", "secondAnchorId");
+                break;
+
+            case ("docxodus_format", "apply_format"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalObject(args, "format");
+                ValidateOptionalSpan(args, "span");
+                _ = ParseFormatOp(args);
+                break;
+            case ("docxodus_format", "apply_format_by_substring"):
+                RequireStrings(args, "anchorId", "substring");
+                ValidateOptionalObject(args, "format");
+                _ = ParseFormatOp(args);
+                break;
+            case ("docxodus_format", "set_paragraph_style"):
+                RequireStrings(args, "anchorId", "styleId");
+                break;
+            case ("docxodus_format", "set_paragraph_format"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalObject(args, "paragraphFormat");
+                _ = ParseParagraphFormatOp(args);
+                break;
+            case ("docxodus_format", "set_list_level"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "levelDelta");
+                break;
+            case ("docxodus_format", "remove_list_membership"):
+                RequireStrings(args, "anchorId");
+                break;
+            case ("docxodus_format", "apply_list_format"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalListFormat(args);
+                break;
+
+            case ("docxodus_create", "insert_paragraph"):
+                RequireStrings(args, "anchorId", "markdown");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_create", "insert_heading"):
+                RequireStrings(args, "anchorId", "text");
+                RequireNumbers(args, "level");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_create", "insert_table"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "rows", "columns");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalArray(args, "cellContents");
+                ValidateOptionalArray(args, "columnWidths");
+                ValidateOptionalEnum(args, "cellAlignment", "left", "center", "right", "justify");
+                ValidateOptionalBool(args, "borderless");
+                break;
+            case ("docxodus_create", "insert_horizontal_rule"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalEnum(args, "ruleStyle", "single", "double", "thick");
+                break;
+            case ("docxodus_create", "insert_footnote"):
+            case ("docxodus_create", "insert_endnote"):
+                RequireStrings(args, "anchorId", "markdown");
+                RequireNumbers(args, "characterOffset");
+                break;
+            case ("docxodus_create", "insert_page_number_field"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "field", "current_page", "total_pages");
+                ValidateOptionalEnum(args, "numberFormat", "decimal", "upperLetter",
+                    "lowerLetter", "upperRoman", "lowerRoman");
+                break;
+            case ("docxodus_create", "set_header_text"):
+            case ("docxodus_create", "set_footer_text"):
+                RequireStrings(args, "bodyAnchorId", "kind", "markdown");
+                ValidateRequiredEnum(args, "kind", "default", "first", "even");
+                break;
+            case ("docxodus_create", "ensure_header_footer_visible"):
+                RequireStrings(args, "bodyAnchorId", "kind");
+                ValidateRequiredEnum(args, "kind", "default", "first", "even");
+                break;
+
+            case ("docxodus_table", "insert"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "rows", "columns");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalArray(args, "cellContents");
+                ValidateOptionalArray(args, "columnWidths");
+                ValidateOptionalEnum(args, "cellAlignment", "left", "center", "right", "justify");
+                ValidateOptionalBool(args, "borderless");
+                break;
+            case ("docxodus_table", "insert_row"):
+            case ("docxodus_table", "insert_column"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                break;
+            case ("docxodus_table", "delete_row"):
+            case ("docxodus_table", "delete_column"):
+            case ("docxodus_table", "unmerge_cells"):
+                RequireStrings(args, "cellAnchorId");
+                break;
+            case ("docxodus_table", "replace_cell_content"):
+                RequireStrings(args, "cellAnchorId", "markdown");
+                break;
+            case ("docxodus_table", "merge_cells"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalNumber(args, "rowSpan");
+                ValidateOptionalNumber(args, "colSpan");
+                ValidateOptionalEnum(args, "mergeContent", "append", "discard", "reject");
+                break;
+            case ("docxodus_table", "set_column_widths"):
+                RequireStrings(args, "cellAnchorId");
+                _ = RawArray(args, "widths");
+                break;
+            case ("docxodus_table", "set_borders"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalEnum(args, "borderScope", "all", "outside", "inside");
+                ValidateOptionalString(args, "borderStyle");
+                ValidateOptionalNumber(args, "borderSize");
+                ValidateOptionalString(args, "borderColor");
+                break;
+            case ("docxodus_table", "set_shading"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalString(args, "fill");
+                ValidateOptionalEnum(args, "shadingScope", "cell", "row");
+                break;
+            case ("docxodus_table", "set_repeat_header_row"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalBool(args, "repeat");
+                break;
+            case ("docxodus_table", "set_row_options"):
+                RequireStrings(args, "cellAnchorId");
+                ValidateOptionalBool(args, "repeat");
+                ValidateOptionalBool(args, "allowBreakAcrossPages");
+                ValidateOptionalNumber(args, "heightTwips");
+                ValidateOptionalEnum(args, "heightRule", "auto", "atLeast", "exact");
+                break;
+
+            case ("docxodus_list", "apply_format"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalListFormat(args);
+                break;
+            case ("docxodus_list", "apply_format_range"):
+                RequireStrings(args, "firstAnchorId", "lastAnchorId");
+                ValidateOptionalListFormat(args);
+                break;
+            case ("docxodus_list", "set_level"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "levelDelta");
+                break;
+            case ("docxodus_list", "set_start"):
+                RequireStrings(args, "anchorId");
+                RequireNumbers(args, "startValue");
+                break;
+            case ("docxodus_list", "clear_start"):
+            case ("docxodus_list", "remove"):
+                RequireStrings(args, "anchorId");
+                break;
+
+            case ("docxodus_comment", "add"):
+                ValidateCommentAddArguments(args);
+                break;
+            case ("docxodus_comment", "reply"):
+                RequireStrings(args, "commentAnchorId", "author");
+                ValidateOptionalString(args, "initials");
+                ValidateOptionalString(args, "date");
+                ValidateOptionalString(args, "markdown");
+                break;
+            case ("docxodus_comment", "update"):
+                RequireStrings(args, "commentAnchorId", "markdown");
+                break;
+            case ("docxodus_comment", "resolve"):
+                RequireStrings(args, "commentAnchorId");
+                ValidateOptionalBool(args, "resolved");
+                break;
+            case ("docxodus_comment", "remove"):
+                RequireStrings(args, "commentAnchorId");
+                break;
+        }
+    }
+
+    private static void ValidateCommentAddArguments(JsonElement args)
+    {
+        var anchorId = OptionalStringValue(args, "anchorId");
+        var revisionId = OptionalStringValue(args, "revisionId");
+        if ((anchorId is null) == (revisionId is null))
+            throw new McpToolException(
+                "docxodus_comment add requires exactly one target: anchorId or revisionId");
+        RequireStrings(args, "author");
+        ValidateOptionalString(args, "initials");
+        ValidateOptionalString(args, "date");
+        ValidateOptionalString(args, "markdown");
+        if (revisionId is not null && args.TryGetProperty("span", out _))
+            throw new McpToolException("revisionId comment targets cannot include span");
+        ValidateOptionalSpan(args, "span");
+    }
+
+    private static void RequireStrings(JsonElement args, params string[] names)
+    {
+        foreach (var name in names) _ = Str(args, name);
+    }
+
+    private static void RequireNumbers(JsonElement args, params string[] names)
+    {
+        foreach (var name in names) _ = Int(args, name);
+    }
+
+    private static string? OptionalStringValue(JsonElement args, string name)
+    {
+        if (!args.TryGetProperty(name, out var value)) return null;
+        if (value.ValueKind != JsonValueKind.String)
+            throw new McpToolException($"argument \"{name}\" must be a string");
+        return value.GetString();
+    }
+
+    private static void ValidateOptionalString(JsonElement args, string name) =>
+        _ = OptionalStringValue(args, name);
+
+    private static void ValidateOptionalBool(JsonElement args, string name)
+    {
+        if (args.TryGetProperty(name, out var value)
+            && value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new McpToolException($"argument \"{name}\" must be a boolean");
+    }
+
+    private static void ValidateOptionalNumber(JsonElement args, string name)
+    {
+        if (args.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Number)
+            throw new McpToolException($"argument \"{name}\" must be a number");
+        if (args.TryGetProperty(name, out value)) _ = value.GetInt32();
+    }
+
+    private static void ValidateOptionalObject(JsonElement args, string name)
+    {
+        if (args.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"argument \"{name}\" must be an object");
+    }
+
+    private static void ValidateOptionalArray(JsonElement args, string name)
+    {
+        if (args.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Array)
+            throw new McpToolException($"argument \"{name}\" must be an array");
+    }
+
+    private static void ValidateOptionalSpan(JsonElement args, string name)
+    {
+        if (!args.TryGetProperty(name, out var span)) return;
+        if (span.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"argument \"{name}\" must be an object");
+        if (span.TryGetProperty("start", out var start))
+        {
+            if (start.ValueKind != JsonValueKind.Number)
+                throw new McpToolException($"argument \"{name}.start\" must be a number");
+            _ = start.GetInt32();
+        }
+        if (span.TryGetProperty("length", out var length))
+        {
+            if (length.ValueKind != JsonValueKind.Number)
+                throw new McpToolException($"argument \"{name}.length\" must be a number");
+            _ = length.GetInt32();
+        }
+    }
+
+    private static void ValidateOptionalListFormat(JsonElement args) =>
+        ValidateOptionalEnum(args, "listFormat", "bullet", "decimal", "lowerLetter",
+            "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis",
+            "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis",
+            "upperRomanParenthesis", "none");
+
+    private static void ValidateRequiredEnum(JsonElement args, string name, params string[] values)
+    {
+        _ = Str(args, name);
+        ValidateOptionalEnum(args, name, values);
+    }
+
+    private static void ValidateOptionalEnum(JsonElement args, string name, params string[] values)
+    {
+        var value = OptionalStringValue(args, name);
+        if (value is not null && !values.Contains(value, StringComparer.Ordinal))
+            throw new McpToolException(
+                $"unknown {name}: {value}; expected one of {string.Join(", ", values)}");
+    }
+
+    /// <summary>
+    /// Reduce a step's <c>preconditions</c> to the guards the batch preflight cannot decide.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every guard the preflight can evaluate read-only (version, kind, scope, content hash,
+    /// text, text range) is dropped from the dispatched args: re-evaluating it inside the step
+    /// would compare against state an earlier step in the same batch legitimately changed.</para>
+    /// <para><c>expectedMatchCount</c> is the exception — it can only be evaluated by an op that
+    /// has enumerated the live matches, and <c>DocxSession.ReplaceTextRange</c> is the sole
+    /// supplier of that count. Stripping the whole object made the guard a silent no-op on every
+    /// batched step, which for the legacy <c>apply</c> mode was a regression against the
+    /// pre-batch executor. It is carried through action-agnostically: no other action supplies a
+    /// count, so it is inert everywhere else and cannot drift as actions are added.</para>
+    /// </remarks>
+    private static JsonElement WithDeferredPreconditionsOnly(JsonElement source)
+    {
+        var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(source.GetRawText())!;
+        if (!values.TryGetValue("preconditions", out var preconditions)
+            || preconditions.ValueKind != JsonValueKind.Object
+            || !preconditions.TryGetProperty("expectedMatchCount", out var expectedMatchCount))
+        {
+            values.Remove("preconditions");
+            return JsonSerializer.SerializeToElement(values);
+        }
+
+        var deferred = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["expectedMatchCount"] = expectedMatchCount,
+        };
+        // Preserve an explicitly-targeted anchor so the count is asserted against the anchor the
+        // caller named rather than the one inferred from the step's own arguments.
+        if (preconditions.TryGetProperty("anchorId", out var anchorId)
+            && anchorId.ValueKind == JsonValueKind.String)
+            deferred["anchorId"] = anchorId;
+        values["preconditions"] = JsonSerializer.SerializeToElement(deferred);
+        return JsonSerializer.SerializeToElement(values);
     }
 
     // ─── Table ──────────────────────────────────────────────────────────

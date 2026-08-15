@@ -75,6 +75,7 @@ internal static class Dispatcher
             DocxSessionJson.ParsePageCitationRequest(args)
                 ?? throw new FormatException("args missing object \"citation\"")),
         "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
+        "execute_batch" => ExecuteBatch(args),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -614,6 +615,51 @@ internal static class Dispatcher
         };
     }
 
+    private static string ExecuteBatch(JsonElement args)
+    {
+        var handle = Handle(args);
+        var mode = args.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String
+            ? m.GetString() : "atomic";
+        var batchMode = mode switch
+        {
+            "atomic" => MutationBatchMode.Atomic,
+            "best_effort" => MutationBatchMode.BestEffort,
+            _ => throw new ArgumentException($"unknown batch mode: {mode}"),
+        };
+        if (!args.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("execute_batch requires an array 'steps'");
+
+        var parsed = new List<MutationBatchStep>();
+        foreach (var step in steps.EnumerateArray())
+        {
+            if (step.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("each batch step must be an object");
+            var operation = step.TryGetProperty("operation", out var op) && op.ValueKind == JsonValueKind.String
+                ? op.GetString()! : throw new ArgumentException("batch step missing string 'operation'");
+            var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                ? WithHandle(a, handle) : WithHandle(default, handle);
+            EditError? preflight = IsBatchableMutation(operation)
+                ? null
+                : new EditError(EditErrorCode.InvalidBatchStep,
+                    $"unsupported or non-mutation batch operation: {operation}");
+            parsed.Add(DocxSessionOps.SerializedBatchStep(
+                "docx_scalpel",
+                operation,
+                () => Dispatch(operation, stepArgs),
+                preflight is null ? null : () => preflight));
+        }
+        return DocxSessionOps.ExecuteBatch(handle, batchMode, parsed);
+    }
+
+    private static JsonElement WithHandle(JsonElement args, int handle)
+    {
+        var values = args.ValueKind == JsonValueKind.Object
+            ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(args.GetRawText())!
+            : new Dictionary<string, JsonElement>();
+        values["handle"] = JsonSerializer.SerializeToElement(handle);
+        return JsonSerializer.SerializeToElement(values);
+    }
+
     private static MutationPreconditions? ParsePreconditions(JsonElement args)
     {
         if (args.ValueKind != JsonValueKind.Object
@@ -651,6 +697,23 @@ internal static class Dispatcher
         or "raw_insert_xml" or "raw_replace_xml"
         or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
         or "undo" or "redo";
+
+    /// <summary>
+    /// Operations a batch step may run (issue #445). Deliberately NOT <see cref="IsMutation"/>:
+    /// that predicate also gates the single-call precondition pre-check, and every structural
+    /// table op is absent from it, so reusing it rejected <c>insert_table</c> and friends as
+    /// <c>invalid_batch_step</c> while the identical MCP step was accepted. Undo/redo are
+    /// excluded because a batch step must not move the shared history cursor, and
+    /// <c>set_tracked_changes</c>/<c>set_revision_author</c> because they are session
+    /// configuration rather than document mutations — both matching the MCP batch allowlist.
+    /// </summary>
+    private static bool IsBatchableMutation(string op) =>
+        (IsMutation(op) && op is not ("undo" or "redo"))
+        || op is "insert_table" or "insert_table_row" or "insert_table_column"
+            or "delete_table_row" or "delete_table_column"
+            or "merge_cells" or "unmerge_cells" or "set_column_widths"
+            or "set_table_borders" or "set_cell_shading"
+            or "set_repeat_header_row" or "set_table_row_options";
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
 

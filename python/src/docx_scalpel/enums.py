@@ -17,6 +17,7 @@ __all__ = [
     "ParagraphAlignment",
     "ListFormat",
     "EditErrorCode",
+    "MutationBatchMode",
     "PlaceholderKind",
     "PlaceholderKinds",
     "ProjectionScopes",
@@ -176,6 +177,7 @@ class EditErrorCode(str, Enum):
     EMPTY_ANNOTATION_SPAN = "empty_annotation_span"
     EMPTY_COMMENT_SPAN = "empty_comment_span"
     REVISION_NOT_FOUND = "revision_not_found"
+    INVALID_BATCH_STEP = "invalid_batch_step"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod
@@ -184,6 +186,13 @@ class EditErrorCode(str, Enum):
         # decodes to INTERNAL_ERROR rather than raising. The original wire
         # string is still available on EditError.message.
         return cls.INTERNAL_ERROR
+
+
+class MutationBatchMode(str, Enum):
+    """Atomic is the safe default; best-effort explicitly retains partial successes."""
+
+    ATOMIC = "atomic"
+    BEST_EFFORT = "best_effort"
 
 
 class PlaceholderKind(str, Enum):

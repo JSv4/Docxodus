@@ -1167,6 +1167,141 @@ public sealed record MutationPreconditions
 /// <summary>An exact substring assertion within an anchor's visible text.</summary>
 public sealed record TextRangePrecondition(int Start, int Length, string Text);
 
+/// <summary>Execution policy for a group of synchronous document mutations.</summary>
+public enum MutationBatchMode
+{
+    /// <summary>All steps commit as one undo/version unit, or every step is rolled back.</summary>
+    Atomic,
+
+    /// <summary>Run every step independently and retain successful steps after failures.</summary>
+    BestEffort,
+}
+
+/// <summary>
+/// One core batch step. <see cref="Preflight"/> performs any read-only validation that can be
+/// decided before mutation begins (all steps up front for atomic mode, or immediately before each
+/// step for best-effort mode); <see cref="Mutation"/> returns one or more edit envelopes so
+/// multi-match replacement can remain one step without losing its individual results.
+/// </summary>
+public sealed class MutationBatchStep
+{
+    public MutationBatchStep(
+        string tool,
+        string action,
+        Func<DocxSession, IReadOnlyList<EditResult>> mutation,
+        Func<DocxSession, EditError?>? preflight = null)
+    {
+        Tool = tool ?? throw new ArgumentNullException(nameof(tool));
+        Action = action ?? throw new ArgumentNullException(nameof(action));
+        Mutation = mutation ?? throw new ArgumentNullException(nameof(mutation));
+        Preflight = preflight;
+    }
+
+    public MutationBatchStep(
+        string tool,
+        string action,
+        Func<DocxSession, EditResult> mutation,
+        Func<DocxSession, EditError?>? preflight = null)
+        : this(tool, action, s => new[] { mutation(s) }, preflight)
+    {
+    }
+
+    public string Tool { get; }
+    public string Action { get; }
+    public Func<DocxSession, IReadOnlyList<EditResult>> Mutation { get; }
+    public Func<DocxSession, EditError?>? Preflight { get; }
+}
+
+/// <summary>Result of one batch step, including whether its effects were rolled back.</summary>
+public sealed record MutationBatchStepResult(
+    int Index,
+    string Tool,
+    string Action,
+    IReadOnlyList<EditResult> Results,
+    bool RolledBack)
+{
+    public bool Success => Results.All(r => r.Success);
+}
+
+/// <summary>The first failed step in a batch.</summary>
+public sealed record MutationBatchFailure(
+    int Index,
+    string Tool,
+    string Action,
+    EditError Error,
+    bool RolledBack);
+
+/// <summary>Structured result of an atomic or explicit best-effort mutation batch.</summary>
+public sealed record MutationBatchResult
+{
+    public MutationBatchMode Mode { get; init; }
+    public bool Success { get; init; }
+    public bool RolledBack { get; init; }
+    public IReadOnlyList<MutationBatchStepResult> Steps { get; init; } =
+        Array.Empty<MutationBatchStepResult>();
+    public MutationBatchFailure? Failure { get; init; }
+}
+
+/// <summary>
+/// A synchronous, nested-safe document transaction. Dispose without <see cref="Commit"/> to
+/// restore the complete package and all session/history state captured at begin. The scope owns
+/// the session-wide mutation gate and must be completed on the thread that created it.
+/// </summary>
+public sealed class DocxSessionTransaction : IDisposable
+{
+    private DocxSession? _session;
+    private readonly long _id;
+
+    internal DocxSessionTransaction(DocxSession session, long id)
+    {
+        _session = session;
+        _id = id;
+    }
+
+    public bool IsCompleted => _session is null || _session.IsDisposed;
+
+    public void Commit()
+    {
+        var session = _session ?? throw new InvalidOperationException("transaction already completed");
+        if (session.IsDisposed)
+        {
+            _session = null;
+            throw new ObjectDisposedException(nameof(DocxSession));
+        }
+        session.CompleteTransaction(_id, commit: true);
+        // Keep the scope recoverable if owner-thread/LIFO validation (or completion itself)
+        // throws. CompleteTransaction only removes the state after a valid completion.
+        _session = null;
+    }
+
+    public void Rollback()
+    {
+        var session = _session ?? throw new InvalidOperationException("transaction already completed");
+        if (session.IsDisposed)
+        {
+            _session = null;
+            throw new ObjectDisposedException(nameof(DocxSession));
+        }
+        session.CompleteTransaction(_id, commit: false);
+        _session = null;
+    }
+
+    public void Dispose()
+    {
+        if (_session is null) return;
+        var session = _session;
+        // Disposing the owning session explicitly abandons and invalidates its active scopes.
+        // A later using-scope unwind must be inert rather than reopening the disposed package.
+        if (session.IsDisposed)
+        {
+            _session = null;
+            return;
+        }
+        session.CompleteTransaction(_id, commit: false);
+        _session = null;
+    }
+}
+
 public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null)
 {
     public PreconditionFailure? Precondition { get; init; }
@@ -1253,6 +1388,9 @@ public enum EditErrorCode
 
     /// <summary>An optimistic mutation guard did not match the current session or target state.</summary>
     PreconditionFailed,
+
+    /// <summary>A mutation batch step names an unsupported operation or a read-only action.</summary>
+    InvalidBatchStep,
 
     InternalError,
 }
@@ -1380,15 +1518,40 @@ public sealed class DocxSession : IDisposable
     private long _version;
     private PageMap? _registeredPageMap;
     private readonly object _mutationGate = new();
+    private readonly Stack<TransactionState> _transactions = new();
+    private long _nextTransactionId;
+    private int _transactionPendingMutations;
+    // Monotonic within a transaction: incremented on every recorded op and NEVER decremented.
+    // _transactionPendingMutations tracks the live history depth and so falls back to its
+    // baseline when an op self-rolls-back (RollbackFailedOp pops its own pre-op entry) — it
+    // cannot answer "did this scope ever touch the package?". Ops write parts that the
+    // selective per-op snapshot deliberately excludes (the numbering part), so a scope whose
+    // pending count nets back to baseline can still have left the package dirty. That question
+    // is what decides whether a rollback must reopen the checkpoint, so it gets its own witness.
+    private long _transactionMutationEpoch;
     private int _revisionCounter = 1000;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
+
+    internal bool IsDisposed => _disposed;
 
     // Mutable session configuration (issue #304): seeded from _settings at construction,
     // switchable mid-session via SetTrackedChanges/SetRevisionAuthor. Session config, not
     // document state — never captured in undo snapshots.
     private TrackedChangeMode _trackedChanges;
     private string? _revisionAuthor;
+
+    private sealed record TransactionState(
+        long Id,
+        int OwnerThreadId,
+        DocumentSnapshot PackageSnapshot,
+        Internal.UndoRing<DocumentSnapshot>.State History,
+        int PendingMutations,
+        long MutationEpoch,
+        TrackedChangeMode TrackedChanges,
+        string? RevisionAuthor,
+        Exception? LastInternalError,
+        Exception? LastRollbackError);
 
     public DocxSession(byte[] docxBytes, DocxSessionSettings? settings = null)
     {
@@ -1400,8 +1563,8 @@ public sealed class DocxSession : IDisposable
             _settings.UndoDepth,
             _settings.UndoMemoryBudgetBytes,
             static snapshot => snapshot.ApproximateBytes,
-            onRecordPreOp: _ => AdvanceVersion(),
-            onPopUndo: snapshot => _version = snapshot.Version);
+            onRecordPreOp: _ => OnHistoryRecordPreOp(),
+            onPopUndo: snapshot => OnHistoryPopUndo(snapshot));
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
@@ -2563,6 +2726,271 @@ public sealed class DocxSession : IDisposable
                 : new EditResult { Success = false, Error = error };
         }
     }
+
+    /// <summary>
+    /// Begin a complete-package transaction under the session-wide mutation gate. Transactions
+    /// nest in strict LIFO order: an inner commit remains speculative until its outer transaction
+    /// commits, while an inner rollback restores the state visible at the inner begin boundary.
+    /// </summary>
+    public DocxSessionTransaction BeginTransaction()
+    {
+        ThrowIfDisposed();
+        System.Threading.Monitor.Enter(_mutationGate);
+        try
+        {
+            var id = checked(++_nextTransactionId);
+            var state = new TransactionState(
+                id,
+                Environment.CurrentManagedThreadId,
+                TakePackageSnapshot(),
+                _history.CaptureState(),
+                _transactionPendingMutations,
+                _transactionMutationEpoch,
+                _trackedChanges,
+                _revisionAuthor,
+                LastInternalError,
+                LastRollbackError);
+            _transactions.Push(state);
+            return new DocxSessionTransaction(this, id);
+        }
+        catch
+        {
+            System.Threading.Monitor.Exit(_mutationGate);
+            throw;
+        }
+    }
+
+    internal void CompleteTransaction(long id, bool commit)
+    {
+        if (_transactions.Count == 0 || _transactions.Peek().Id != id)
+            throw new InvalidOperationException("transactions must complete in strict LIFO order");
+        var state = _transactions.Peek();
+        if (state.OwnerThreadId != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("a transaction must complete on the thread that began it");
+
+        bool completed = false;
+        try
+        {
+            if (!commit)
+            {
+                RestoreTransactionState(state);
+            }
+            else if (_transactions.Count == 1)
+            {
+                // An inner commit stays represented by its ordinary speculative history entries.
+                // The outermost commit is the only boundary that squashes them into one
+                // full-package pre-batch snapshot and advances caller-visible version once.
+                // The epoch, not the pending count, decides: a scope whose ops all self-rolled
+                // back nets the pending count to baseline yet may still have left the package
+                // dirty, and squashing that into "nothing happened" would strand it with no
+                // undo entry and no version bump.
+                bool mutated = _transactionMutationEpoch > state.MutationEpoch;
+                _history.RestoreState(state.History);
+                _transactionPendingMutations = state.PendingMutations;
+                _version = state.PackageSnapshot.Version;
+                if (mutated)
+                {
+                    _history.RecordPreOp(state.PackageSnapshot);
+                    // The transaction remains on the stack until every completion operation has
+                    // succeeded, so the history callback records this speculatively. Convert that
+                    // callback effect into the single caller-visible root commit advancement.
+                    _transactionPendingMutations = state.PendingMutations;
+                    _version = checked(state.PackageSnapshot.Version + 1);
+                }
+                // Only the pending count is rewound here. It is a live history depth that must
+                // agree with the history state just restored; the epoch is deliberately left
+                // monotonic because it is only ever read against a baseline captured at some
+                // enclosing begin — and after this pop there is no enclosing scope left. An
+                // inner commit rewinds neither: the outer scope must still see that its nested
+                // work touched the package.
+            }
+
+            // Do not orphan the transaction if validation or restoration failed. The caller may
+            // retry in the correct LIFO/thread context, or roll the still-active scope back.
+            _transactions.Pop();
+            completed = true;
+        }
+        finally
+        {
+            if (completed)
+                System.Threading.Monitor.Exit(_mutationGate);
+        }
+    }
+
+    private void RestoreTransactionState(TransactionState state)
+    {
+        try
+        {
+            // Every session mutation records before touching package state, so an unchanged
+            // epoch means the scope performed only reads/configuration work and the live package
+            // is still byte-identical to the checkpoint. Reopening it in that case is observably
+            // worse: OPC rewrites ZIP timestamps even for a no-op rollback. Keep the live package
+            // byte-pure while still restoring history/configuration below.
+            //
+            // The epoch, not the pending count, is the witness. RollbackFailedOp pops the op's own
+            // pre-op entry, so ~40 ops return the pending count to baseline on their failure path
+            // while their selective restore leaves parts the snapshot excludes (the numbering part)
+            // dirty. Skipping the package restore there reported a rollback that never happened.
+            if (_transactionMutationEpoch > state.MutationEpoch)
+                RestoreSnapshot(state.PackageSnapshot);
+            _history.RestoreState(state.History);
+            _transactionPendingMutations = state.PendingMutations;
+            _transactionMutationEpoch = state.MutationEpoch;
+            _trackedChanges = state.TrackedChanges;
+            _revisionAuthor = state.RevisionAuthor;
+            LastInternalError = state.LastInternalError;
+            LastRollbackError = state.LastRollbackError;
+        }
+        catch (Exception rollbackEx)
+        {
+            LastRollbackError = rollbackEx;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Execute a core mutation batch. Atomic is the default; callers must choose
+    /// <see cref="MutationBatchMode.BestEffort"/> explicitly to retain partial successes.
+    /// </summary>
+    public MutationBatchResult ExecuteBatch(
+        IEnumerable<MutationBatchStep> steps,
+        MutationBatchMode mode = MutationBatchMode.Atomic)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        if (!Enum.IsDefined(mode))
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "unknown mutation batch mode");
+        var materialized = steps.ToArray();
+        if (materialized.Any(s => s is null))
+            throw new ArgumentException("batch steps cannot contain null", nameof(steps));
+
+        return mode == MutationBatchMode.Atomic
+            ? ExecuteAtomicBatch(materialized)
+            : ExecuteBestEffortBatch(materialized);
+    }
+
+    private MutationBatchResult ExecuteAtomicBatch(IReadOnlyList<MutationBatchStep> steps)
+    {
+        using var transaction = BeginTransaction();
+
+        // Run every available read-only preflight before the first mutation.
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var error = RunBatchPreflight(steps[i]);
+            if (error is null) continue;
+            transaction.Rollback();
+            var failed = new MutationBatchStepResult(
+                i, steps[i].Tool, steps[i].Action,
+                new[] { new EditResult { Success = false, Error = error } }, true);
+            return FailedAtomicBatch(new[] { failed }, failed);
+        }
+
+        var results = new List<MutationBatchStepResult>(steps.Count);
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var stepResults = RunBatchMutation(steps[i]);
+            var step = new MutationBatchStepResult(
+                i, steps[i].Tool, steps[i].Action, stepResults, false);
+            results.Add(step);
+            if (step.Success) continue;
+
+            transaction.Rollback();
+            var rolledBack = results.Select(r => r with { RolledBack = true }).ToArray();
+            return FailedAtomicBatch(rolledBack, rolledBack[^1]);
+        }
+
+        transaction.Commit();
+        return new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = true,
+            RolledBack = false,
+            Steps = results,
+        };
+    }
+
+    private MutationBatchResult ExecuteBestEffortBatch(IReadOnlyList<MutationBatchStep> steps)
+    {
+        var results = new List<MutationBatchStepResult>(steps.Count);
+        MutationBatchStepResult? firstFailure = null;
+
+        for (int i = 0; i < steps.Count; i++)
+        {
+            // Best-effort preserves sequential semantics: a later preflight may intentionally
+            // inspect state produced by an earlier successful step. Only atomic mode preflights
+            // the complete batch before its first mutation.
+            var stepResults = RunBatchPreflight(steps[i]) is { } error
+                ? new[] { new EditResult { Success = false, Error = error } }
+                : RunBatchMutation(steps[i]);
+            var step = new MutationBatchStepResult(
+                i, steps[i].Tool, steps[i].Action, stepResults, false);
+            results.Add(step);
+            if (!step.Success && firstFailure is null) firstFailure = step;
+        }
+
+        return new MutationBatchResult
+        {
+            Mode = MutationBatchMode.BestEffort,
+            Success = firstFailure is null,
+            RolledBack = false,
+            Steps = results,
+            Failure = firstFailure is null ? null : BatchFailure(firstFailure, rolledBack: false),
+        };
+    }
+
+    private EditError? RunBatchPreflight(MutationBatchStep step)
+    {
+        if (step.Preflight is null) return null;
+        try
+        {
+            return step.Preflight(this);
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            return new EditError(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    private IReadOnlyList<EditResult> RunBatchMutation(MutationBatchStep step)
+    {
+        try
+        {
+            var results = step.Mutation(this);
+            if (results is not { Count: > 0 } || results.Any(result => result is null))
+                return new[]
+                {
+                    EditResult.Fail(EditErrorCode.InternalError,
+                        "batch mutation returned no valid edit results"),
+                };
+            return results;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            return new[] { EditResult.Fail(EditErrorCode.InternalError, ex.Message) };
+        }
+    }
+
+    private static MutationBatchResult FailedAtomicBatch(
+        IReadOnlyList<MutationBatchStepResult> results,
+        MutationBatchStepResult failed) => new()
+    {
+        Mode = MutationBatchMode.Atomic,
+        Success = false,
+        RolledBack = true,
+        Steps = results,
+        Failure = BatchFailure(failed, rolledBack: true),
+    };
+
+    private static MutationBatchFailure BatchFailure(
+        MutationBatchStepResult failed,
+        bool rolledBack) => new(
+            failed.Index,
+            failed.Tool,
+            failed.Action,
+            failed.Results.FirstOrDefault(r => !r.Success)?.Error
+                ?? new EditError(EditErrorCode.InternalError, "batch step failed without an error"),
+            rolledBack);
 
     /// <summary>
     /// Resolves block-level metadata (style id + name, outline level, list
@@ -4665,13 +5093,50 @@ public sealed class DocxSession : IDisposable
             {
                 var xdoc = part.GetXDocument();
                 if (xdoc.Root is null) continue;
-                bool any = false;
+                // Other Custom XML parts are opaque application data (SharePoint metadata,
+                // SDT bindings, ink, and future extensions). They never contain projector Unids,
+                // and merely reading one must not cause Save(false) to reserialize its payload.
+                if (part is CustomXmlPart
+                    && (xdoc.Root.Name.NamespaceName != Internal.AnnotationsCustomXml.Namespace
+                        || xdoc.Root.Name.LocalName != "annotations"))
+                    continue;
                 foreach (var el in xdoc.Root.DescendantsAndSelf())
                 {
                     var attr = el.Attribute(PtOpenXml.Unid);
-                    if (attr is not null) { attr.Remove(); any = true; }
+                    attr?.Remove();
                 }
-                if (any) part.PutXDocument();
+                // A persisted-anchor checkpoint is reopened during transaction rollback/undo.
+                // Its pt namespace declaration is then an explicit LINQ-to-XML attribute, unlike
+                // the serializer-generated declaration on an in-memory document. Once every Unid
+                // is stripped, remove that now-unused declaration too so normal Save output is
+                // identical before and after a transaction boundary.
+                bool ptNamespaceInUse = xdoc.Root.DescendantsAndSelf().Any(el =>
+                    el.Name.Namespace == PtOpenXml.pt
+                    || el.Attributes().Any(a => !a.IsNamespaceDeclaration
+                        && a.Name.Namespace == PtOpenXml.pt));
+                if (!ptNamespaceInUse)
+                {
+                    var ignorablePrefixes = xdoc.Root.DescendantsAndSelf()
+                        .Attributes(MC.Ignorable)
+                        .SelectMany(a => a.Value.Split(
+                            (char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                        .ToHashSet(StringComparer.Ordinal);
+                    var declarations = xdoc.Root.DescendantsAndSelf()
+                        .Attributes()
+                        .Where(a => a.IsNamespaceDeclaration
+                            && a.Value == PtOpenXml.pt.NamespaceName
+                            // mc:Ignorable contains QNames-as-prefix-tokens. Removing a namespace
+                            // declaration that one of those tokens names produces XML that is
+                            // well-formed but rejected by the Open XML markup-compatibility reader.
+                            && !ignorablePrefixes.Contains(a.Name.LocalName))
+                        .ToList();
+                    if (declarations.Count > 0)
+                        declarations.Remove();
+                }
+                // Serialize every projected part, even one with no Unid. This makes normal saves
+                // deterministic across a package checkpoint reopen (and also guarantees cached
+                // settings/story edits are never skipped merely because that part has no anchor).
+                part.PutXDocument();
             }
             _doc!.Save();
             _stream!.Flush();
@@ -4705,6 +5170,10 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
+        if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
+        if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
+        if (main.DocumentSettingsPart is not null) yield return main.DocumentSettingsPart;
+        if (main.StyleDefinitionsPart is not null) yield return main.StyleDefinitionsPart;
         // Custom XML parts hold annotation metadata; include them so callers that
         // need to look up parts by URI (e.g. ResolvePart) can find them.
         foreach (var cx in main.CustomXmlParts) yield return cx;
@@ -10012,10 +10481,11 @@ public sealed class DocxSession : IDisposable
     public bool Undo()
     {
         if (_disposed) return false;
+        if (_transactions.Count > 0) return false;
         var nextVersion = NextVersion();
         var (preOp, ok) = _history.PopForUndo();
         if (!ok) return false;
-        _history.RecordForRedo(TakeSnapshot());
+        _history.RecordForRedo(preOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(preOp);
         _version = nextVersion;
         return true;
@@ -10024,10 +10494,11 @@ public sealed class DocxSession : IDisposable
     public bool Redo()
     {
         if (_disposed) return false;
+        if (_transactions.Count > 0) return false;
         var nextVersion = NextVersion();
         var (postOp, ok) = _history.PopForRedo();
         if (!ok) return false;
-        _history.PushBackForUndo(TakeSnapshot());
+        _history.PushBackForUndo(postOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(postOp);
         _version = nextVersion;
         return true;
@@ -10037,19 +10508,68 @@ public sealed class DocxSession : IDisposable
 
     private void AdvanceVersion() => _version = NextVersion();
 
+    private void OnHistoryRecordPreOp()
+    {
+        if (_transactions.Count > 0)
+        {
+            _transactionPendingMutations = checked(_transactionPendingMutations + 1);
+            _transactionMutationEpoch = checked(_transactionMutationEpoch + 1);
+        }
+        else
+        {
+            AdvanceVersion();
+        }
+    }
+
+    private void OnHistoryPopUndo(DocumentSnapshot snapshot)
+    {
+        if (_transactions.Count > 0)
+        {
+            _transactionPendingMutations = Math.Max(0, _transactionPendingMutations - 1);
+            return;
+        }
+        _version = snapshot.Version;
+    }
+
     /// <summary>Restore the caller-visible version after rolling back speculative preview work.
     /// Internal by design: committed undo/redo must remain monotonic.</summary>
     internal void RestorePreviewVersion(long version) => _version = version;
 
+    /// <summary>
+    /// Dispose the session and abandon any active transactions. Active scopes may only be
+    /// abandoned by their owner thread; otherwise this throws and leaves the session usable so
+    /// that thread can complete them. Successfully disposing invalidates every scope, releases
+    /// every recursive mutation-gate entry, and makes later scope disposal a no-op.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
+        int activeTransactions = _transactions.Count;
+        if (activeTransactions > 0
+            && _transactions.Any(t => t.OwnerThreadId != Environment.CurrentManagedThreadId))
+            throw new InvalidOperationException(
+                "a session with active transactions must be disposed by their owner thread");
+
         _disposed = true;
-        DisposeRenderShell();
-        _doc?.Dispose();
-        _stream?.Dispose();
-        _doc = null;
-        _stream = null;
+        try
+        {
+            DisposeRenderShell();
+            _doc?.Dispose();
+            _stream?.Dispose();
+            _doc = null;
+            _stream = null;
+            _raw = null;
+            _transactions.Clear();
+            _transactionPendingMutations = 0;
+            _transactionMutationEpoch = 0;
+        }
+        finally
+        {
+            // BeginTransaction enters once for each nested scope. Release every recursion count
+            // even if package disposal itself reports an error.
+            for (int i = 0; i < activeTransactions; i++)
+                System.Threading.Monitor.Exit(_mutationGate);
+        }
     }
 
     // ─── Internal mutation helpers (used by tier methods landing in later phases) ───
@@ -10087,12 +10607,25 @@ public sealed class DocxSession : IDisposable
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts)
     {
         /// <summary>
+        /// Optional exact package checkpoint used by transaction boundaries. Unlike the selective
+        /// XML snapshot, this includes every part payload and relationship (external hyperlinks,
+        /// media, custom XML, and future package topology) and can therefore back an atomic
+        /// batch's undo/redo entry without teaching rollback about each relationship type.
+        /// </summary>
+        internal byte[]? PackageBytes { get; init; }
+
+        internal int? RevisionCounter { get; init; }
+
+        internal long? LastFormatRevisionTicks { get; init; }
+
+        /// <summary>
         /// Approximate retained heap of this snapshot's cloned part trees, for the undo ring's
         /// memory budget. Computed lazily and cached: the ring asks for it at most once per
         /// snapshot, and a session with the budget disabled never asks at all.
         /// </summary>
         internal long ApproximateBytes =>
-            _approximateBytes ??= Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
+            _approximateBytes ??= PackageBytes?.LongLength
+                ?? Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
 
         private long? _approximateBytes;
     }
@@ -10128,8 +10661,91 @@ public sealed class DocxSession : IDisposable
         return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts, commentThreadingParts);
     }
 
+    /// <summary>
+    /// Capture the complete OPC package for an atomic transaction boundary. The ordinary per-op
+    /// snapshots remain selective and DOM-based for speed; only a transaction/its undo counterpart
+    /// pays the package serialization cost.
+    /// </summary>
+    internal DocumentSnapshot TakePackageSnapshot()
+    {
+        var bytes = SerializePackageCheckpoint();
+        return new DocumentSnapshot(
+            _version,
+            Array.Empty<(string PartUri, XDocument Xml)>(),
+            Array.Empty<(string RelId, bool IsHeader, string PartUri)>(),
+            Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
+            Array.Empty<(string RelId, string PartUri)>(),
+            Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>())
+        {
+            PackageBytes = bytes,
+            RevisionCounter = _revisionCounter,
+            LastFormatRevisionTicks = _lastFormatRevisionTicks,
+        };
+    }
+
+    /// <summary>
+    /// Serialize a complete transaction checkpoint without flushing cached XML into the live
+    /// package. <see cref="Save(bool)"/> intentionally writes those caches to the owning stream;
+    /// using it at transaction begin made a no-op batch observable by adding XML declarations,
+    /// namespace declarations, or anchor attributes to later output. Cloning first preserves the
+    /// live package stream/cache exactly while still carrying all current part and relationship
+    /// topology. Every cached XDocument is then overlaid on its clone counterpart so edits that
+    /// have not yet reached a part stream are represented in the checkpoint as well.
+    /// </summary>
+    private byte[] SerializePackageCheckpoint()
+    {
+        using var stream = new MemoryStream();
+        using (var clone = _doc!.Clone(stream, isEditable: true))
+        {
+            var cloneParts = EnumeratePackageParts(clone)
+                .ToDictionary(part => part.Uri.ToString(), StringComparer.Ordinal);
+            foreach (var sourcePart in EnumeratePackageParts(_doc!))
+            {
+                var cached = sourcePart.Annotation<XDocument>();
+                if (cached is null) continue;
+                if (!cloneParts.TryGetValue(sourcePart.Uri.ToString(), out var clonePart))
+                    throw new InvalidOperationException(
+                        $"package clone omitted part {sourcePart.Uri}");
+                // Avoid reserializing an unchanged cached tree: XML declarations, BOMs, and
+                // prefix placement are package payload too. A semantic comparison lets the clone
+                // preserve the original part bytes when the cache is merely a read-through, while
+                // still overlaying every genuinely dirty cached document.
+                var clonedXml = clonePart.GetXDocument();
+                if (XNode.DeepEquals(cached.Root, clonedXml.Root)) continue;
+                clonePart.PutXDocument(new XDocument(cached));
+            }
+            clone.Save();
+        }
+        return ZipPackageOutputNormalizer.Normalize(stream.ToArray());
+    }
+
+    private static IEnumerable<OpenXmlPart> EnumeratePackageParts(OpenXmlPackage package)
+    {
+        var pending = new Stack<OpenXmlPart>(package.Parts.Select(pair => pair.OpenXmlPart));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.Count > 0)
+        {
+            var part = pending.Pop();
+            if (!seen.Add(part.Uri.ToString())) continue;
+            yield return part;
+            foreach (var child in part.Parts)
+                pending.Push(child.OpenXmlPart);
+        }
+    }
+
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
+        if (snapshot.PackageBytes is { } packageBytes)
+        {
+            RestorePackage(packageBytes);
+            _version = snapshot.Version;
+            if (snapshot.RevisionCounter is { } revisionCounter)
+                _revisionCounter = revisionCounter;
+            if (snapshot.LastFormatRevisionTicks is { } formatTicks)
+                _lastFormatRevisionTicks = formatTicks;
+            return;
+        }
+
         var byUri = snapshot.Parts.ToDictionary(p => p.PartUri, p => p.Xml);
 
         // Restore content for all parts that exist in both snapshot and document.
@@ -10206,6 +10822,20 @@ public sealed class DocxSession : IDisposable
         }
 
         _version = snapshot.Version;
+        InvalidateProjectionCache();
+    }
+
+    private void RestorePackage(byte[] packageBytes)
+    {
+        DisposeRenderShell();
+        _doc?.Dispose();
+        _stream?.Dispose();
+
+        _stream = new MemoryStream(packageBytes.Length);
+        _stream.Write(packageBytes, 0, packageBytes.Length);
+        _stream.Position = 0;
+        _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        _raw = null;
         InvalidateProjectionCache();
     }
 

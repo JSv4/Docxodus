@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Docxodus.Internal;
 
@@ -43,6 +44,18 @@ internal sealed class UndoRing<T>
     private long _redoBytes;
 
     private readonly record struct Entry(T Snapshot, long CostBytes);
+
+    /// <summary>
+    /// Opaque copy of both history stacks. Snapshot payloads are intentionally shared rather
+    /// than cloned: they are immutable after insertion, and a transaction checkpoint only needs
+    /// to retain entries that trimming or redo invalidation might otherwise discard.
+    /// </summary>
+    internal sealed record State(
+        IReadOnlyList<(T Snapshot, long CostBytes)> Undo,
+        IReadOnlyList<(T Snapshot, long CostBytes)> Redo,
+        long UndoBytes,
+        long RedoBytes,
+        bool EvictedForMemory);
 
     /// <param name="capacity">Maximum number of undo entries. Values &lt;= 0 clamp to 1.</param>
     /// <param name="budgetBytes">Approximate byte budget for retained snapshots, counting the
@@ -133,6 +146,33 @@ internal sealed class UndoRing<T>
         _undo.Clear();
         ClearRedo();
         _undoBytes = 0;
+    }
+
+    /// <summary>Capture the exact undo/redo topology for an enclosing transaction.</summary>
+    public State CaptureState() => new(
+        _undo.Select(e => (e.Snapshot, e.CostBytes)).ToArray(),
+        _redo.Select(e => (e.Snapshot, e.CostBytes)).ToArray(),
+        _undoBytes,
+        _redoBytes,
+        EvictedForMemory);
+
+    /// <summary>
+    /// Restore a transaction checkpoint without invoking mutation/version callbacks. This also
+    /// resurrects entries trimmed while speculative steps were running and restores the sticky
+    /// memory-eviction flag, so a rolled-back batch is invisible to history diagnostics.
+    /// </summary>
+    public void RestoreState(State state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        _undo.Clear();
+        _redo.Clear();
+        foreach (var (snapshot, costBytes) in state.Undo)
+            _undo.AddLast(new Entry(snapshot, costBytes));
+        foreach (var (snapshot, costBytes) in state.Redo)
+            _redo.AddLast(new Entry(snapshot, costBytes));
+        _undoBytes = state.UndoBytes;
+        _redoBytes = state.RedoBytes;
+        EvictedForMemory = state.EvictedForMemory;
     }
 
     private void ClearRedo()

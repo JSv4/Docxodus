@@ -94,7 +94,7 @@ markdown projection and search tools return:
 | `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
-| `docxodus_mutations` | Apply or dry-run-preview a batch of the above as one call |
+| `docxodus_mutations` | Apply a batch atomically by default; opt into best-effort; legacy apply/preview remain available |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
 
 ## Known gaps

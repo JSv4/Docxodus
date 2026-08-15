@@ -14,7 +14,7 @@ Three design forces, in order of weight:
 
 **The agent must not learn OOXML.** Every public method takes an anchor id (a string) and either a markdown payload (a string) or a small typed value (a `FormatOp`, a `CharSpan`). The agent never sees an `XElement`, never picks an SDK type, never has to know that bold is `w:b` inside `w:rPr`. The Raw escape hatch exists for the cases the markdown subset can't reach, but it's a separate namespace (`session.Raw.*`) so it's syntactically obvious when you've left the safe zone.
 
-**Edits must be reversible.** Agents make mistakes. The session keeps a bounded ring of pre-op snapshots (default 50 deep) so `Undo()` and `Redo()` work without the caller orchestrating anything. Snapshots are per-part XML clones, not full package round-trips, so the cost is proportional to the size of the part the op touched — usually just the body.
+**Edits must be reversible.** Agents make mistakes. The session keeps a bounded ring of pre-op snapshots (default 20 deep) so `Undo()` and `Redo()` work without the caller orchestrating anything. Ordinary single-op snapshots are per-part XML clones; an explicit transaction uses a complete package checkpoint because a batch can change arbitrary parts and relationships.
 
 **Errors must be pattern-matchable, not stringly-typed.** Every mutation returns an `EditResult` envelope; failure carries a typed `EditErrorCode` with a remediation message. The same enum is exposed as a snake-case string union in TypeScript, so JS agents pattern-match the same way C# callers do. No method on the session throws across the boundary (the constructor and `Save()` are the only places that can — and only for fatal conditions like an invalid DOCX or IO failure).
 
@@ -78,6 +78,61 @@ that attaches the guard to each mutation request; stdio accepts top-level
 `preconditions`; MCP mutation tools and individual batch steps accept the same
 property. MCP batches may additionally carry a batch-start guard. Preview mode
 restores the starting version after it undoes its speculative edits.
+
+## Atomic batches and transactions
+
+`ExecuteBatch(steps, mode)` is atomic by default. Each `MutationBatchStep` names a
+tool/action for diagnostics, supplies a synchronous mutation callback, and may
+provide a read-only preflight callback:
+
+```csharp
+var result = session.ExecuteBatch(new[]
+{
+    new MutationBatchStep("docx_edit", "replace_text",
+        s => s.ReplaceText(firstAnchor, "First replacement")),
+    new MutationBatchStep("docx_create", "set_header_text",
+        s => s.SetHeaderText(firstAnchor, HeaderFooterKind.Default, "Confidential")),
+});
+```
+
+Atomic mode evaluates every available preflight against the batch-start state
+before step zero. A successful batch is one caller-visible version advancement and
+one undo/redo unit, regardless of its step count. A failed result or thrown step
+restores document content, all part/relationship topology, annotations/custom XML,
+anchor and revision generators, mutable tracking configuration, version, and both
+history cursors. The structured failure identifies `index`, `tool`, `action`,
+`error`, and `rolledBack`; failure consumes no history and advances no version.
+
+`MutationBatchMode.BestEffort` must be selected explicitly. It preserves partial
+successes and evaluates each step's preflight immediately before that step, so a
+later preflight can observe state made by an earlier successful mutation.
+
+`BeginTransaction()` exposes the same full-package checkpoint for façade code that
+needs callback composition. Transactions are synchronous, same-thread, and strict
+LIFO, but nested scopes are supported: inner commits remain speculative, and the
+outer commit squashes all nested work into one history/version unit. Dispose without
+`Commit()` rolls back. A validation failure from wrong-thread or out-of-order
+completion leaves the scope active and recoverable. Disposing the owning session on
+the owner thread abandons all scopes and releases their mutation-gate entries.
+
+The same semantics reach `DocxSessionOps`/JSON, WASM and npm
+(`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
+(`docxodus_mutations`). Preview isolation is intentionally separate work in #446.
+
+Two properties of the wire-serialized transports (MCP and stdio, which round-trip
+each step's `EditResult` through `DocxSessionJson`) are worth stating explicitly:
+
+- **Step receipts are lossless.** A batched structural table op keeps its
+  `tableAnchors` mapping, so a caller can address the rows/columns/cells the same
+  batch just created. `DocxSessionJson.ParseEditResult` is the inverse of
+  `Serialize(EditResult)`; adding a field to one without the other silently deletes
+  it from every batch receipt.
+- **`expectedMatchCount` is evaluated late.** Every other guard is decided by the
+  read-only preflight — at the batch-start boundary in atomic mode. A match count
+  can only be evaluated by an op that has enumerated the live matches, and
+  `ReplaceTextRange` is the sole supplier, so that one guard is carried into the
+  step and enforced at the step's own turn. A batch mixing an `expectedText` and an
+  `expectedMatchCount` guard therefore compares them against two different states.
 
 ## Architecture
 
