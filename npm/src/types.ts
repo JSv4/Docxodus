@@ -1385,6 +1385,14 @@ export type EditErrorCode =
   | "content_control_placement_unsupported"
   | "content_control_nested_fill_unsupported"
   | "repeating_section_constraint"
+  | "image_not_found"
+  | "invalid_image_data"
+  | "unsupported_image_format"
+  | "image_too_large"
+  | "invalid_image_dimensions"
+  | "unsupported_image_markup"
+  | "linked_image_read_only"
+  | "invalid_image_layout"
   | "internal_error";
 
 export interface AnchorRef {

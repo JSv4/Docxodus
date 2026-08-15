@@ -1240,11 +1240,13 @@ internal static class DocxSessionJson
         AppendEnum(sb, "verticalAlignment", layout.VerticalAlignment);
         sb.Append(",\"wrapMode\":").Append(JsonString(ToSnake(layout.WrapMode.ToString())))
           .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())))
-          .Append(",\"distanceTopEmu\":").Append(layout.DistanceTopEmu)
-          .Append(",\"distanceBottomEmu\":").Append(layout.DistanceBottomEmu)
-          .Append(",\"distanceLeftEmu\":").Append(layout.DistanceLeftEmu)
-          .Append(",\"distanceRightEmu\":").Append(layout.DistanceRightEmu)
-          .Append(",\"relativeHeight\":").Append(layout.RelativeHeight)
+          // A read-only occurrence can carry a negative wrap distance parsed straight out of the
+          // document, so these go through the invariant formatter too.
+          .Append(",\"distanceTopEmu\":").Append(InvariantNumber(layout.DistanceTopEmu))
+          .Append(",\"distanceBottomEmu\":").Append(InvariantNumber(layout.DistanceBottomEmu))
+          .Append(",\"distanceLeftEmu\":").Append(InvariantNumber(layout.DistanceLeftEmu))
+          .Append(",\"distanceRightEmu\":").Append(InvariantNumber(layout.DistanceRightEmu))
+          .Append(",\"relativeHeight\":").Append(InvariantNumber(layout.RelativeHeight))
           .Append(",\"behindDocument\":").Append(layout.BehindDocument ? "true" : "false")
           .Append(",\"locked\":").Append(layout.Locked ? "true" : "false")
           .Append(",\"layoutInCell\":").Append(layout.LayoutInCell ? "true" : "false")
@@ -1284,13 +1286,22 @@ internal static class DocxSessionJson
 
     private static void AppendString(StringBuilder sb, string name, string? value)
     { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(JsonString(value)); }
-    private static void AppendNullableNumber<T>(StringBuilder sb, string name, T? value) where T : struct
-    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(value.Value); }
+    // JSON numbers are culture-invariant by definition. StringBuilder.Append(object) and the
+    // numeric Append overloads both format with the CURRENT culture, so a negative EMU offset
+    // under a culture whose NegativeSign is not "-" would emit text JSON.parse rejects.
+    private static void AppendNullableNumber<T>(StringBuilder sb, string name, T? value)
+        where T : struct, IFormattable
+    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(value.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture)); }
+    private static string InvariantNumber<T>(T value)
+        where T : struct, IFormattable
+        => value.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
     private static void AppendNullableDouble(StringBuilder sb, string name, double? value)
     { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(value.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
-    private static void AppendEnum<T>(StringBuilder sb, string name, T? value) where T : struct, System.Enum
+    private static void AppendEnum<T>(StringBuilder sb, string name, T? value)
+        where T : struct, System.Enum
     { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(JsonString(ToSnake(value.Value.ToString()))); }
-    private static void AppendEnumArray<T>(StringBuilder sb, IReadOnlyList<T> values) where T : struct, System.Enum
+    private static void AppendEnumArray<T>(StringBuilder sb, IReadOnlyList<T> values)
+        where T : struct, System.Enum
     { sb.Append('['); for (int i = 0; i < values.Count; i++) { if (i > 0) sb.Append(','); sb.Append(JsonString(ToSnake(values[i].ToString()))); } sb.Append(']'); }
 
     public static string SerializeBookmarks(IReadOnlyList<BookmarkInfo> bookmarks)

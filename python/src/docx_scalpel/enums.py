@@ -209,6 +209,14 @@ class EditErrorCode(str, Enum):
     CONTENT_CONTROL_PLACEMENT_UNSUPPORTED = "content_control_placement_unsupported"
     CONTENT_CONTROL_NESTED_FILL_UNSUPPORTED = "content_control_nested_fill_unsupported"
     REPEATING_SECTION_CONSTRAINT = "repeating_section_constraint"
+    IMAGE_NOT_FOUND = "image_not_found"
+    INVALID_IMAGE_DATA = "invalid_image_data"
+    UNSUPPORTED_IMAGE_FORMAT = "unsupported_image_format"
+    IMAGE_TOO_LARGE = "image_too_large"
+    INVALID_IMAGE_DIMENSIONS = "invalid_image_dimensions"
+    UNSUPPORTED_IMAGE_MARKUP = "unsupported_image_markup"
+    LINKED_IMAGE_READ_ONLY = "linked_image_read_only"
+    INVALID_IMAGE_LAYOUT = "invalid_image_layout"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod

@@ -285,7 +285,9 @@ internal static class MarkdownPayloadParser
             {
                 throw new MarkdownPayloadException(
                     EditErrorCode.ImageInsertNotSupported,
-                    "Image insertion requires a binary upload. AddImage(anchor, bytes, alt) is planned for v2.");
+                    "An ![alt](url) image cannot be resolved from the markdown subset — a picture " +
+                    "needs binary bytes, and this parser has no way to fetch a URL. Use the dedicated " +
+                    "op instead: DocxSession.InsertImage(anchor, offset, imageBytes, options).");
             }
 
             // Footnote ref or link

@@ -23,6 +23,7 @@ public class DocxSessionImageTests
     private static readonly XNamespace A = "http://schemas.openxmlformats.org/drawingml/2006/main";
     private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly XNamespace V = "urn:schemas-microsoft-com:vml";
+    private static readonly XNamespace O = "urn:schemas-microsoft-com:office:office";
     private static readonly XNamespace MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
     private static readonly XNamespace WP14 = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
 
@@ -524,22 +525,465 @@ public class DocxSessionImageTests
     }
 
     [Fact]
-    public void IM018_SaveSweepsPreExistingOrphanImageRelationships()
+    public void IM018_MutationIsTheOrphanSweepBoundary_NotSave()
     {
+        // Orphaning is a property of MUTATION, not of serialization, so the sweep sits on the
+        // mutation path. Both halves of that boundary are asserted here:
+        //   * a save (either flavour) leaves a pre-existing orphan exactly where it found it, and
+        //   * the next mutation removes it — including a mutation whose own resolved owner is a
+        //     DIFFERENT story part, which is exactly what a per-op owner-scoped sweep cannot
+        //     cover and why the sweep is package-wide rather than a per-op checklist.
         using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
-        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var body = Paragraphs(seed);
+        Assert.True(seed.SetHeaderText(body[0], HeaderFooterKind.Default, "header").Success);
+        Assert.True(seed.InsertImage(body[0], 0, Png(2, 3)).Success);
         var orphaned = MutatePackage(seed.Save(true), document =>
         {
+            // A higher-level transform that drops image markup without an image op running.
             var main = document.MainDocumentPart!;
             main.GetXDocument().Descendants(W + "drawing").Remove();
             main.PutXDocument();
         });
-        Assert.Single(FlatImageRelationships(orphaned));
+        var orphan = Assert.Single(FlatImageRelationships(orphaned));
+        Assert.Equal("/word/document.xml", orphan.OwnerUri);
 
         using var session = new DocxSession(orphaned);
         Assert.Empty(session.ListImages());
+        Assert.Equal(orphan, Assert.Single(FlatImageRelationships(session.Save(true))));
+        Assert.Equal(orphan, Assert.Single(FlatImageRelationships(session.Save(false))));
+
+        // The mutation is owned by the HEADER part; the dangling relationship is in the body.
+        var header = Assert.Single(Paragraphs(session, "hdr1"));
+        Assert.True(session.ReplaceText(header, "edited header").Success);
         Assert.Empty(FlatImageRelationships(session.Save(true)));
         Assert.Empty(FlatImageRelationships(session.Save(false)));
+    }
+
+    [Fact]
+    public void IM027_RenderAndSaveLeaveRelationshipTopologyUntouched()
+    {
+        // ConvertToHtml(session) is implemented as Save(persistAnchorIds: true), so anything Save
+        // normalizes runs on a caller who only asked to look at the document. Rendering — and
+        // saving — must therefore be read-only with respect to package relationships and media,
+        // including for a relationship a renderer has no way to judge (the orphan below).
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var body = Paragraphs(seed);
+        Assert.True(seed.InsertImage(body[0], 0, Png(2, 3)).Success);
+        Assert.True(seed.InsertImage(body[1], 0, Png(4, 5)).Success);
+        var withOrphan = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            main.GetXDocument().Descendants(W + "drawing").First().Remove();
+            main.PutXDocument();
+        });
+
+        using var session = new DocxSession(withOrphan);
+        var topology = FlatImageRelationships(session.Save(true));
+        var payloads = ImagePartPayloads(session.Save(true));
+        Assert.Equal(2, topology.Length);
+        Assert.Single(session.ListImages());
+
+        for (int i = 0; i < 3; i++)
+        {
+            _ = Docxodus.Internal.HtmlConversionOps.ConvertToHtml(
+                session, new Docxodus.Internal.HtmlConversionOptions());
+            _ = session.Save(false);
+            Assert.Equal(topology, FlatImageRelationships(session.Save(true)));
+            Assert.Equal(payloads, ImagePartPayloads(session.Save(true)));
+        }
+        Assert.Equal(topology, FlatImageRelationships(session.Save(false)));
+    }
+
+    [Fact]
+    public void IM019_LiveRelationshipNamedByAnUnmodeledAttribute_SurvivesSaveAndRender()
+    {
+        // The negative direction of IM018. Deletion is irreversible, so a whitelist of known
+        // reference attributes would silently and irrecoverably delete media named any other
+        // way. o:relid is a real OLE/VML spelling and is outside {r:embed, r:link, r:id}.
+        // Pinned across both save flavours and a render because all three used to be able to
+        // reach the sweep.
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var oleReferenced = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var root = main.GetXDocument();
+            var relationshipId = (string)root.Descendants(A + "blip").Single().Attribute(R + "embed")!;
+            // Drop the only modeled reference and re-name the SAME relationship through o:relid.
+            root.Descendants(W + "drawing").Remove();
+            root.Descendants(W + "p").First().Add(new XElement(W + "r",
+                new XElement(W + "object",
+                    new XElement(V + "shape",
+                        new XElement(O + "OLEObject", new XAttribute(O + "relid", relationshipId))))));
+            main.PutXDocument();
+        });
+        var expected = Assert.Single(FlatImageRelationships(oleReferenced));
+
+        using var session = new DocxSession(oleReferenced);
+        Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(true))));
+        Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(false))));
+
+        // A render must not be a mutation of last resort either.
+        _ = Docxodus.Internal.HtmlConversionOps.ConvertToHtml(session, new Docxodus.Internal.HtmlConversionOptions());
+        Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(true))));
+
+        // And the boundary the sweep actually runs on: an unrelated mutation. This is where the
+        // name-blind test earns its keep now — a whitelist would drop the OLE-named media on the
+        // first edit anywhere in the document.
+        Assert.True(session.ReplaceText(Paragraphs(session)[1], "unrelated edit").Success);
+        Assert.Equal(expected, Assert.Single(FlatImageRelationships(session.Save(true))));
+    }
+
+    [Fact]
+    public void IM020_FloatingInsertAndLayoutMutation_ProduceSchemaValidAnchors()
+    {
+        // The whole floating write path — the wp:anchor builder and ApplyFloatingLayout's three
+        // ReplaceWith calls — had no passing-path coverage. CT_Anchor's child sequence is
+        // simplePos, positionH, positionV, extent, effectExtent?, wrap-choice, docPr,
+        // cNvGraphicFramePr?, graphic, and this repo has repeatedly shipped schema-order defects
+        // that surface only as a Word "unreadable content" repair.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var inserted = session.InsertImage(Paragraphs(session)[0], 3, Png(4, 5),
+            new ImageInsertOptions
+            {
+                Placement = ImagePlacement.Floating,
+                AltText = "floater",
+                FloatingLayout = new FloatingImageLayout
+                {
+                    HorizontalRelativeFrom = ImageHorizontalReference.Page,
+                    HorizontalOffsetEmu = 914400,
+                    VerticalRelativeFrom = ImageVerticalReference.Margin,
+                    VerticalOffsetEmu = -457200,
+                    WrapMode = ImageWrapMode.Square,
+                    WrapSide = ImageWrapSide.Left,
+                    DistanceTopEmu = 45720,
+                    BehindDocument = true,
+                },
+            });
+        Assert.True(inserted.Success, inserted.Error?.Message);
+        AssertSchemaValid(session.Save(true));
+        AssertSchemaValid(session.Save(false));
+        AssertAnchorChildOrder(session.Save(false));
+
+        // The passing path of SetImageFloatingLayout: same op, different layout shape
+        // (alignment instead of offset, wrapNone instead of wrapSquare).
+        var replacement = new FloatingImageLayout
+        {
+            HorizontalRelativeFrom = ImageHorizontalReference.Margin,
+            HorizontalOffsetEmu = null,
+            HorizontalAlignment = ImageHorizontalAlignment.Right,
+            VerticalRelativeFrom = ImageVerticalReference.Line,
+            VerticalOffsetEmu = null,
+            VerticalAlignment = ImageVerticalAlignment.Top,
+            WrapMode = ImageWrapMode.None,
+            DistanceLeftEmu = 91440,
+            RelativeHeight = 42,
+            LayoutInCell = false,
+        };
+        var image = Assert.Single(session.ListImages());
+        Assert.True(image.CanMutate, image.UnsupportedReason);
+        var applied = session.SetImageFloatingLayout(image.Id, replacement);
+        Assert.True(applied.Success, applied.Error?.Message);
+
+        image = Assert.Single(session.ListImages());
+        Assert.True(image.FloatingLayoutSupported, image.UnsupportedReason);
+        Assert.Equal(replacement, image.FloatingLayout);
+        AssertSchemaValid(session.Save(true));
+        AssertSchemaValid(session.Save(false));
+        AssertAnchorChildOrder(session.Save(false));
+
+        Assert.True(session.Undo());
+        Assert.Equal(ImageWrapMode.Square, Assert.Single(session.ListImages()).FloatingLayout!.WrapMode);
+    }
+
+    [Fact]
+    public void IM021_SvgBlipExtensionOccurrenceIsEnumeratedButReadOnly()
+    {
+        // An SVG picture stores its raster fallback in a:blip/@r:embed and the real art in an
+        // asvg:svgBlip extension. Descendants(a:blip) still counts one blip, so without an
+        // extension check ReplaceImage would swap only the fallback while reporting success.
+        XNamespace asvg = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var svg = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var root = main.GetXDocument();
+            var blip = root.Descendants(A + "blip").Single();
+            var svgPart = main.AddImagePart("image/svg+xml", "rIdSvgArt");
+            using (var input = new MemoryStream(
+                System.Text.Encoding.UTF8.GetBytes("<svg xmlns=\"http://www.w3.org/2000/svg\"/>")))
+                svgPart.FeedData(input);
+            blip.Add(new XElement(A + "extLst",
+                new XElement(A + "ext",
+                    new XAttribute("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"),
+                    new XElement(asvg + "svgBlip", new XAttribute(R + "embed", "rIdSvgArt")))));
+            main.PutXDocument();
+        });
+
+        using var session = new DocxSession(svg);
+        var image = Assert.Single(session.ListImages());
+        Assert.Equal(ImageMarkupKind.ModernDrawing, image.MarkupKind);
+        Assert.False(image.CanMutate);
+        Assert.Contains("svgBlip", image.UnsupportedReason);
+        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
+            session.ReplaceImage(image.Id, Png(9, 9)).Error!.Code);
+        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
+            session.RemoveImage(image.Id).Error!.Code);
+        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
+            session.SetImageDimensions(image.Id, 36, null).Error!.Code);
+
+        // Refusing must also leave both media parts intact through the normalizing save.
+        Assert.Equal(2, FlatImageRelationships(session.Save(true)).Length);
+    }
+
+    [Fact]
+    public void IM028_BlipExtensionWithoutItsOwnRelationship_StaysMutable()
+    {
+        // The negative direction of IM021, and the reason the check is structural rather than
+        // "does an a:extLst exist". Word writes a14:useLocalDpi on most inserted pictures: it is a
+        // rendering hint that names no relationship, so it is NOT a second payload and a raster
+        // swap is complete. Refusing on the mere presence of an extension list would make ordinary
+        // Word-authored images read-only.
+        XNamespace a14 = "http://schemas.microsoft.com/office/drawing/2010/main";
+        using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
+        var hinted = MutatePackage(seed.Save(true), document =>
+        {
+            var main = document.MainDocumentPart!;
+            var root = main.GetXDocument();
+            root.Descendants(A + "blip").Single().Add(new XElement(A + "extLst",
+                new XElement(A + "ext",
+                    new XAttribute("uri", "{28A0092B-C50C-407E-A947-70E740481C1C}"),
+                    new XElement(a14 + "useLocalDpi", new XAttribute("val", "0")))));
+            main.PutXDocument();
+        });
+
+        using var session = new DocxSession(hinted);
+        var image = Assert.Single(session.ListImages());
+        Assert.True(image.CanMutate, image.UnsupportedReason);
+        Assert.True(session.ReplaceImage(image.Id, Png(9, 9)).Success);
+
+        // The swap is real, the hint survives it, and no second media part is left behind.
+        var saved = session.Save(true);
+        var relationship = Assert.Single(FlatImageRelationships(saved));
+        using var reopened = new DocxSession(saved);
+        var swapped = Assert.Single(reopened.ListImages());
+        Assert.True(swapped.CanMutate, swapped.UnsupportedReason);
+        Assert.Equal(9, swapped.IntrinsicWidthPixels);
+        Assert.Equal(relationship.RelId, swapped.RelationshipId);
+        using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
+        Assert.Single(document.MainDocumentPart!.GetXDocument()
+            .Descendants(a14 + "useLocalDpi"));
+    }
+
+    [Fact]
+    public void IM022_ReplaceImageIsDimensionPreserving_AndTheReFitRecipeWorks()
+    {
+        // ReplaceImage deliberately rewrites only r:embed: the rendered box is a layout decision
+        // the caller made, not a property of the bytes. This pins BOTH halves of that contract —
+        // the box survives, and the caller can re-fit because ListImages reports the NEW
+        // intrinsic pixels and preserveAspect:false writes an exact box.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(session.InsertImage(Paragraphs(session)[0], 0, Png(100, 100),
+            new ImageInsertOptions { WidthPoints = 75 }).Success);
+        var image = Assert.Single(session.ListImages());
+        Assert.Equal(75, image.RenderedWidthPoints!.Value, 6);
+        Assert.Equal(75, image.RenderedHeightPoints!.Value, 6);
+
+        Assert.True(session.ReplaceImage(image.Id, Png(4000, 3000)).Success);
+        image = Assert.Single(session.ListImages());
+        Assert.Equal(75, image.RenderedWidthPoints!.Value, 6);
+        Assert.Equal(75, image.RenderedHeightPoints!.Value, 6);
+        // The recovery input: the new intrinsic ratio is readable immediately after the replace.
+        Assert.Equal(4000, image.IntrinsicWidthPixels);
+        Assert.Equal(3000, image.IntrinsicHeightPixels);
+
+        double ratio = image.IntrinsicHeightPixels!.Value / (double)image.IntrinsicWidthPixels!.Value;
+        Assert.True(session.SetImageDimensions(image.Id, 75, 75 * ratio, preserveAspect: false).Success);
+        image = Assert.Single(session.ListImages());
+        Assert.Equal(75, image.RenderedWidthPoints!.Value, 6);
+        Assert.Equal(56.25, image.RenderedHeightPoints!.Value, 6);
+
+        // preserveAspect keeps scaling from the CURRENT rendered box, which is now the new ratio.
+        Assert.True(session.SetImageDimensions(image.Id, 150, null).Success);
+        image = Assert.Single(session.ListImages());
+        Assert.Equal(150, image.RenderedWidthPoints!.Value, 6);
+        Assert.Equal(112.5, image.RenderedHeightPoints!.Value, 6);
+    }
+
+    [Fact]
+    public void IM023_RenderInlineTrackedModeRejectsEveryImageMutation()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = Paragraphs(session)[0];
+        Assert.True(session.InsertImage(anchor, 0, Png(2, 3)).Success);
+        var image = Assert.Single(session.ListImages());
+
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.InsertImage(anchor, 0, Png(4, 5)).Error!.Code);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.ReplaceImage(image.Id, Png(4, 5)).Error!.Code);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.SetImageDimensions(image.Id, 36, null).Error!.Code);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.SetImageMetadata(image.Id, "alt", null).Error!.Code);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.SetImageFloatingLayout(image.Id, new FloatingImageLayout()).Error!.Code);
+        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+            session.RemoveImage(image.Id).Error!.Code);
+
+        // Rejection is not a mutation: listing and the document are unchanged.
+        Assert.Equal(image, Assert.Single(session.ListImages()));
+
+        // …and the ops come back once tracking is off.
+        session.SetTrackedChanges(TrackedChangeMode.Accept);
+        Assert.True(session.SetImageMetadata(image.Id, "alt", null).Success);
+    }
+
+    [Fact]
+    public void IM024_FootnoteAndEndnoteStoriesOwnTheirImagesAndRoundTrip()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var body = Paragraphs(session);
+        var footnote = session.InsertFootnote(body[0], 0, "see the mark");
+        Assert.True(footnote.Success, footnote.Error?.Message);
+        var endnote = session.InsertEndnote(body[1], 0, "and the other mark");
+        Assert.True(endnote.Success, endnote.Error?.Message);
+
+        var footnoteAnchor = Assert.Single(Paragraphs(session, "fn"));
+        var endnoteAnchor = Assert.Single(Paragraphs(session, "en"));
+        Assert.True(session.InsertImage(footnoteAnchor, 0, Png(6, 7)).Success);
+        Assert.True(session.InsertImage(endnoteAnchor, 0, Png(8, 9)).Success);
+
+        var footnoteImage = Assert.Single(session.ListImages(ProjectionScopes.Footnotes));
+        var endnoteImage = Assert.Single(session.ListImages(ProjectionScopes.Endnotes));
+        Assert.Equal("/word/footnotes.xml", footnoteImage.OwningPartUri);
+        Assert.Equal("/word/endnotes.xml", endnoteImage.OwningPartUri);
+        Assert.Equal(6, footnoteImage.IntrinsicWidthPixels);
+        Assert.Equal(8, endnoteImage.IntrinsicWidthPixels);
+
+        var saved = session.Save(true);
+        AssertSchemaValid(saved);
+        var owners = FlatImageRelationships(saved).Select(value => value.OwnerUri).ToArray();
+        Assert.Contains("/word/footnotes.xml", owners);
+        Assert.Contains("/word/endnotes.xml", owners);
+
+        // Reopening must resolve both to their own story owners, not to the main part.
+        using var reopened = new DocxSession(saved);
+        Assert.Equal("/word/footnotes.xml",
+            Assert.Single(reopened.ListImages(ProjectionScopes.Footnotes)).OwningPartUri);
+        Assert.Equal("/word/endnotes.xml",
+            Assert.Single(reopened.ListImages(ProjectionScopes.Endnotes)).OwningPartUri);
+
+        Assert.True(session.RemoveImage(footnoteImage.Id).Success);
+        Assert.DoesNotContain(FlatImageRelationships(session.Save(true)),
+            relationship => relationship.OwnerUri == "/word/footnotes.xml");
+        Assert.True(session.Undo());
+        Assert.Equal(footnoteImage.TargetPartUri,
+            Assert.Single(session.ListImages(ProjectionScopes.Footnotes)).TargetPartUri);
+    }
+
+    [Fact]
+    public void IM025_RealDecodablePngSurvivesInsertSaveReopenByteIdentically()
+    {
+        // Every other fixture in this file is a synthetic header stub with no pixel data, so
+        // nothing else here proves a genuinely decodable image survives the round trip.
+        var real = File.ReadAllBytes(Path.Combine("../../../../TestFiles/", "img.png"));
+        Assert.True(real.Length > 15000);
+
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        Assert.True(session.InsertImage(Paragraphs(session)[0], 0, real).Success);
+        var image = Assert.Single(session.ListImages());
+        Assert.Equal(ImageBinaryFormat.Png, image.Format);
+        Assert.Equal(180, image.IntrinsicWidthPixels);
+        Assert.Equal(174, image.IntrinsicHeightPixels);
+        Assert.True(image.ContentTypeMatchesBytes);
+        Assert.False(image.IsBroken);
+
+        var saved = session.Save(false);
+        AssertSchemaValid(saved);
+        var payload = Assert.Single(ImagePartPayloads(saved));
+        Assert.Equal("image/png", payload.ContentType);
+        Assert.Equal(Convert.ToBase64String(real), payload.Bytes);
+
+        using var reopened = new DocxSession(saved);
+        var reread = Assert.Single(reopened.ListImages());
+        Assert.Equal(180, reread.IntrinsicWidthPixels);
+        Assert.Equal(174, reread.IntrinsicHeightPixels);
+        Assert.False(reread.IsBroken);
+    }
+
+    [Fact]
+    public void IM026_NegativeFloatingOffsetsSerializeAsInvariantJsonUnderAnyCulture()
+    {
+        // horizontalOffsetEmu/verticalOffsetEmu are legitimately negative, and a culture whose
+        // NegativeSign is not "-" would otherwise emit text JSON.parse rejects.
+        var hostile = (System.Globalization.CultureInfo)
+            System.Globalization.CultureInfo.InvariantCulture.Clone();
+        hostile.NumberFormat.NegativeSign = "−";
+
+        // Run on a DEDICATED thread rather than assigning CultureInfo.CurrentCulture on the
+        // calling one. xUnit runs collections in parallel over a shared pool, and CurrentCulture
+        // rides along on pool-thread reuse, so a bare assignment here would leak "−" into
+        // unrelated tests and flake far away from this file.
+        string json = string.Empty;
+        Exception? failure = null;
+        var worker = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                Assert.Equal("−1", (-1L).ToString());   // the culture really is hostile
+                using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+                Assert.True(session.InsertImage(Paragraphs(session)[0], 0, Png(4, 5),
+                    new ImageInsertOptions
+                    {
+                        Placement = ImagePlacement.Floating,
+                        FloatingLayout = new FloatingImageLayout
+                        {
+                            HorizontalOffsetEmu = -12345, VerticalOffsetEmu = -23456,
+                        },
+                    }).Success);
+                json = Docxodus.Internal.DocxSessionJson.SerializeImages(session.ListImages());
+            }
+            catch (Exception ex) { failure = ex; }
+        });
+        worker.CurrentCulture = hostile;
+        worker.CurrentUICulture = hostile;
+        worker.Start();
+        worker.Join();
+        if (failure is not null) throw new Xunit.Sdk.XunitException(failure.ToString());
+
+        Assert.DoesNotContain("−", json);
+        using var parsed = JsonDocument.Parse(json);
+        var layout = parsed.RootElement[0].GetProperty("floatingLayout");
+        Assert.Equal(-12345, layout.GetProperty("horizontalOffsetEmu").GetInt64());
+        Assert.Equal(-23456, layout.GetProperty("verticalOffsetEmu").GetInt64());
+    }
+
+    private static void AssertSchemaValid(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        Assert.Empty(new OpenXmlValidator().Validate(document).Where(IsRealValidationError));
+    }
+
+    /// <summary>CT_Anchor is a strict sequence. The validator catches order slips, but naming the
+    /// expected sequence makes a failure say WHICH child moved.</summary>
+    private static void AssertAnchorChildOrder(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var anchor = document.MainDocumentPart!.GetXDocument().Descendants(WP + "anchor").Single();
+        var names = anchor.Elements().Select(element => element.Name.LocalName).ToArray();
+        Assert.Equal(new[] { "simplePos", "positionH", "positionV", "extent", "effectExtent" },
+            names.Take(5).ToArray());
+        Assert.StartsWith("wrap", names[5], StringComparison.Ordinal);
+        Assert.Equal(new[] { "docPr", "cNvGraphicFramePr", "graphic" }, names.Skip(6).ToArray());
+        foreach (var required in new[] { "distT", "distB", "distL", "distR", "simplePos",
+            "relativeHeight", "behindDoc", "locked", "layoutInCell", "allowOverlap" })
+            Assert.NotNull(anchor.Attribute(required));
     }
 
     private static bool IsRealValidationError(ValidationErrorInfo error) =>

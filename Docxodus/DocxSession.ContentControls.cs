@@ -255,7 +255,7 @@ public sealed partial class DocxSession
                 imageBytes, binary.ContentType!, binary.Format);
             blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
             candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part, ImageR + "embed", ImageR + "link");
+            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
         });
     }
 

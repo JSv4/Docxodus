@@ -231,8 +231,7 @@ public sealed partial class DocxSession
             var relationship = OwnedPartRelationships.FindOrAddImagePart(
                 _doc!, candidate.Owner.Part, imageBytes, binary.ContentType!, binary.Format);
             candidate.Blip!.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part,
-                ImageR + "embed", ImageR + "link");
+            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
             InvalidateProjectionCache();
             return ImageMutationSuccess(candidate, imageId);
         }
@@ -361,8 +360,7 @@ public sealed partial class DocxSession
             var run = candidate.Outer.Ancestors(W.r).FirstOrDefault();
             candidate.Outer.Remove();
             if (run is not null && !run.Elements().Any(element => element.Name != W.rPr)) run.Remove();
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part,
-                ImageR + "embed", ImageR + "link");
+            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
             InvalidateProjectionCache();
             return new EditResult { Success = true, ImageId = imageId,
                 Modified = anchor is null ? Array.Empty<Anchor>() : new[] { anchor.Value } };
@@ -447,16 +445,42 @@ public sealed partial class DocxSession
                 || (!string.IsNullOrEmpty(linkId) && linked is null)
                 || (string.IsNullOrEmpty(embedId) && string.IsNullOrEmpty(linkId))
                 || media.IsMalformed || media.ContentTypeMatchesBytes == false;
+            // A blip extension that names its OWN image relationship is a SECOND payload behind the
+            // same a:blip: an SVG keeps the vector art in a:extLst/asvg:svgBlip while a:blip/@r:embed
+            // holds only the raster fallback, and Word's artistic effects keep the untouched original
+            // in a14:imgProps/a14:imgLayer (see the A14.imgLayer → R.embed mapping in
+            // PresentationBuilder). Descendants(A.blip) counts one blip either way, so without this
+            // check the occurrence would claim canMutate and ReplaceImage would swap only the
+            // fallback: an SVG-aware renderer keeps showing the OLD picture while the API reports
+            // success, and RemoveImage's sweep can strip the fallback part while the second payload
+            // survives. Refuse instead — replacing both payloads atomically is a feature, not a
+            // review fix.
+            //
+            // The test is STRUCTURAL rather than a name list, mirroring what the relationship sweep
+            // does: carrying a relationship attribute is the property that makes an extension a
+            // second payload. Extensions that only hint at rendering carry no relationship and stay
+            // mutable — notably a14:useLocalDpi, which Word writes on most inserted pictures, so
+            // testing for the mere PRESENCE of an a:extLst would refuse ordinary Word images.
+            bool blipExtension = blip is not null
+                && blip.Elements()
+                    .Where(element => element.Name.LocalName == "extLst")
+                    .Descendants()
+                    .Any(element => element.Attributes()
+                        .Any(attribute => attribute.Name.Namespace == ImageR));
             string? unsupported = picturePayload ? null
                 : blip is null
                     ? "drawing contains no identifiable image blip"
                     : "drawing contains a non-canonical or multi-picture payload";
             if (picturePayload && !hasMutableStructure)
                 unsupported = "drawing lacks required picture properties or extents";
+            if (picturePayload && blipExtension)
+                unsupported = "picture carries a blip extension (such as an SVG asvg:svgBlip) whose "
+                    + "payload cannot be changed together with the raster fallback";
             if (layoutUnsupported is not null) unsupported = layoutUnsupported;
             if (!string.IsNullOrEmpty(linkId)) unsupported = "external linked images are read-only";
             if (boundaryReason is not null) unsupported = boundaryReason;
             bool canMutate = picturePayload && hasMutableStructure && blip is not null
+                && !blipExtension
                 && string.IsNullOrEmpty(linkId) && floatingSupported && boundaryReason is null;
             var info = new ImageOccurrence(
                 ImagePublicId(owner, drawing, occurrences.Length == 1 ? null : index),
