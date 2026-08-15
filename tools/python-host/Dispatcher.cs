@@ -176,6 +176,8 @@ internal static class Dispatcher
         "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
         "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
         "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),
+        "accept_all_revisions" => DocxSessionOps.AcceptAllRevisions(Handle(args)),
+        "reject_all_revisions" => DocxSessionOps.RejectAllRevisions(Handle(args)),
 
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
@@ -679,10 +681,10 @@ internal static class Dispatcher
                     ? op.GetString()! : throw new ArgumentException("batch step missing string 'operation'");
                 var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
                     ? WithHandle(a, targetHandle) : WithHandle(default, targetHandle);
-                EditError? preflight = !IsMutation(operation) || operation is "undo" or "redo"
-                    ? new EditError(EditErrorCode.InvalidBatchStep,
-                        $"unsupported or non-mutation batch operation: {operation}")
-                    : null;
+                EditError? preflight = IsBatchableMutation(operation)
+                    ? null
+                    : new EditError(EditErrorCode.InvalidBatchStep,
+                        $"unsupported or non-mutation batch operation: {operation}");
                 parsed.Add(DocxSessionOps.SerializedBatchStep(
                     "docx_scalpel",
                     operation,
@@ -755,6 +757,7 @@ internal static class Dispatcher
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"
         or "accept_revision" or "reject_revision"
+        or "accept_all_revisions" or "reject_all_revisions"
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
         or "apply_list_format" or "apply_list_format_range" or "set_list_start_override"
@@ -762,6 +765,23 @@ internal static class Dispatcher
         or "raw_insert_xml" or "raw_replace_xml"
         or "add_annotation" or "remove_annotation" or "update_annotation" or "move_annotation"
         or "undo" or "redo";
+
+    /// <summary>
+    /// Operations a batch step may run (issue #445). Deliberately NOT <see cref="IsMutation"/>:
+    /// that predicate also gates the single-call precondition pre-check, and every structural
+    /// table op is absent from it, so reusing it rejected <c>insert_table</c> and friends as
+    /// <c>invalid_batch_step</c> while the identical MCP step was accepted. Undo/redo are
+    /// excluded because a batch step must not move the shared history cursor, and
+    /// <c>set_tracked_changes</c>/<c>set_revision_author</c> because they are session
+    /// configuration rather than document mutations — both matching the MCP batch allowlist.
+    /// </summary>
+    private static bool IsBatchableMutation(string op) =>
+        (IsMutation(op) && op is not ("undo" or "redo"))
+        || op is "insert_table" or "insert_table_row" or "insert_table_column"
+            or "delete_table_row" or "delete_table_column"
+            or "merge_cells" or "unmerge_cells" or "set_column_widths"
+            or "set_table_borders" or "set_cell_shading"
+            or "set_repeat_header_row" or "set_table_row_options";
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
 

@@ -687,6 +687,11 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var action = Str(args, "action");
+        return RunTrackChangesAction(session, action, args);
+    }
+
+    private static string RunTrackChangesAction(DocSession session, string action, JsonElement args)
+    {
         switch (action)
         {
             case "list":
@@ -696,7 +701,8 @@ internal static class Dispatcher
                 // true authors/dates, and none of the ~seconds-long accept-all/reject-all
                 // re-diff the old listing paid on large documents.
                 var revisionsJson = "{\"revisions\":" + DocxSessionOps.ListRevisions(session.Handle) + "}";
-                return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"));
+                return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"),
+                    OptStr(args, "family"), OptStr(args, "resolutionStatus"), OptStr(args, "partUri"));
             }
             case "accept":
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
@@ -705,31 +711,11 @@ internal static class Dispatcher
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
                     DocxSessionOps.RejectRevision(session.Handle, Str(args, "revisionId")));
             case "accept_all":
-            {
-                var preconditions = ParsePreconditions(args, MutationTarget(args));
-                var check = Check(session, preconditions);
-                if (check is not null) return check;
-                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
-                // SaveWithAnchorIds (not Save) so the transformed bytes still carry the
-                // PtOpenXml:Unid attributes Rebind's reopen needs to keep anchor ids stable.
-                var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
-                var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("session.docx", bytes));
-                store.Rebind(session, accepted.DocumentByteArray);
-                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
-                return "{\"success\":true}";
-            }
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.AcceptAllRevisions(session.Handle));
             case "reject_all":
-            {
-                var preconditions = ParsePreconditions(args, MutationTarget(args));
-                var check = Check(session, preconditions);
-                if (check is not null) return check;
-                var nextVersion = checked(DocxSessionOps.GetVersion(session.Handle) + 1);
-                var bytes = DocxSessionOps.SaveWithAnchorIds(session.Handle);
-                var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("session.docx", bytes));
-                store.Rebind(session, rejected.DocumentByteArray);
-                DocxSessionOps.RestoreVersionAfterRebind(session.Handle, nextVersion);
-                return "{\"success\":true}";
-            }
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.RejectAllRevisions(session.Handle));
             case "set_mode":
             {
                 var modeStr = Str(args, "mode");
@@ -751,9 +737,11 @@ internal static class Dispatcher
         }
     }
 
-    private static string FilterRevisions(string revisionsJson, string? author, string? changeType)
+    private static string FilterRevisions(string revisionsJson, string? author, string? changeType,
+        string? family, string? resolutionStatus, string? partUri)
     {
-        if (author is null && changeType is null) return revisionsJson;
+        if (author is null && changeType is null && family is null
+            && resolutionStatus is null && partUri is null) return revisionsJson;
         using var doc = JsonDocument.Parse(revisionsJson);
         if (!doc.RootElement.TryGetProperty("revisions", out var revisions) || revisions.ValueKind != JsonValueKind.Array)
             return revisionsJson;
@@ -766,6 +754,17 @@ internal static class Dispatcher
                 continue;
             if (changeType is not null
                 && (!r.TryGetProperty("type", out var t) || !string.Equals(t.GetString(), changeType, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (family is not null
+                && (!r.TryGetProperty("family", out var f) || !string.Equals(f.GetString(), family, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (resolutionStatus is not null
+                && (!r.TryGetProperty("resolutionStatus", out var status)
+                    || !string.Equals(status.GetString(), resolutionStatus, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (partUri is not null
+                && (!r.TryGetProperty("partUri", out var part)
+                    || !string.Equals(part.GetString(), partUri, StringComparison.Ordinal)))
                 continue;
             kept.Add(r.GetRawText());
         }
@@ -864,9 +863,9 @@ internal static class Dispatcher
                 throw new McpToolException(actionError.Message);
             // Step preconditions are evaluated by the core batch preflight: all against the
             // batch-start state for atomic mode, immediately before each step for best-effort.
-            // Remove them from the actual dispatch so a valid atomic preflight is not evaluated
-            // a second time against state changed by an earlier step in the same batch.
-            var mutationArgs = WithoutProperty(stepArgs, "preconditions");
+            // Strip the decided ones from the actual dispatch so a valid atomic preflight is not
+            // evaluated a second time against state changed by an earlier step in the same batch.
+            var mutationArgs = WithDeferredPreconditionsOnly(stepArgs);
             result.Add(DocxSessionOps.SerializedBatchStep(
                 stepTool,
                 action,
@@ -880,6 +879,7 @@ internal static class Dispatcher
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
                     "docxodus_links" => RunLinksAction(session, action, mutationArgs),
                     "docxodus_images" => RunImagesAction(session, action, mutationArgs),
+                    "docxodus_track_changes" => RunTrackChangesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
@@ -912,6 +912,8 @@ internal static class Dispatcher
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
             "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
+            "docxodus_track_changes" => action is "accept" or "reject"
+                or "accept_all" or "reject_all",
             _ => false,
         };
         return known ? null : new EditError(
@@ -1205,6 +1207,14 @@ internal static class Dispatcher
             case ("docxodus_images", "remove"):
                 RequireStrings(args, "imageId");
                 break;
+
+            case ("docxodus_track_changes", "accept"):
+            case ("docxodus_track_changes", "reject"):
+                RequireStrings(args, "revisionId");
+                break;
+            case ("docxodus_track_changes", "accept_all"):
+            case ("docxodus_track_changes", "reject_all"):
+                break;
         }
     }
 
@@ -1317,10 +1327,41 @@ internal static class Dispatcher
                 $"unknown {name}: {value}; expected one of {string.Join(", ", values)}");
     }
 
-    private static JsonElement WithoutProperty(JsonElement source, string propertyName)
+    /// <summary>
+    /// Reduce a step's <c>preconditions</c> to the guards the batch preflight cannot decide.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every guard the preflight can evaluate read-only (version, kind, scope, content hash,
+    /// text, text range) is dropped from the dispatched args: re-evaluating it inside the step
+    /// would compare against state an earlier step in the same batch legitimately changed.</para>
+    /// <para><c>expectedMatchCount</c> is the exception — it can only be evaluated by an op that
+    /// has enumerated the live matches, and <c>DocxSession.ReplaceTextRange</c> is the sole
+    /// supplier of that count. Stripping the whole object made the guard a silent no-op on every
+    /// batched step, which for the legacy <c>apply</c> mode was a regression against the
+    /// pre-batch executor. It is carried through action-agnostically: no other action supplies a
+    /// count, so it is inert everywhere else and cannot drift as actions are added.</para>
+    /// </remarks>
+    private static JsonElement WithDeferredPreconditionsOnly(JsonElement source)
     {
         var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(source.GetRawText())!;
-        values.Remove(propertyName);
+        if (!values.TryGetValue("preconditions", out var preconditions)
+            || preconditions.ValueKind != JsonValueKind.Object
+            || !preconditions.TryGetProperty("expectedMatchCount", out var expectedMatchCount))
+        {
+            values.Remove("preconditions");
+            return JsonSerializer.SerializeToElement(values);
+        }
+
+        var deferred = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["expectedMatchCount"] = expectedMatchCount,
+        };
+        // Preserve an explicitly-targeted anchor so the count is asserted against the anchor the
+        // caller named rather than the one inferred from the step's own arguments.
+        if (preconditions.TryGetProperty("anchorId", out var anchorId)
+            && anchorId.ValueKind == JsonValueKind.String)
+            deferred["anchorId"] = anchorId;
+        values["preconditions"] = JsonSerializer.SerializeToElement(deferred);
         return JsonSerializer.SerializeToElement(values);
     }
 

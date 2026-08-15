@@ -18,6 +18,7 @@ __all__ = [
     "ListFormat",
     "EditErrorCode",
     "MutationBatchMode",
+    "MutationPreviewHtmlMode",
     "PlaceholderKind",
     "PlaceholderKinds",
     "ProjectionScopes",
@@ -189,7 +190,11 @@ class EditErrorCode(str, Enum):
     MANAGED_BOOKMARK = "managed_bookmark"
     EMPTY_HYPERLINK_SPAN = "empty_hyperlink_span"
     UNSUPPORTED_INLINE_BOUNDARY = "unsupported_inline_boundary"
+    REVISION_UNSUPPORTED = "revision_unsupported"
+    REVISION_MALFORMED = "revision_malformed"
+    REVISION_AMBIGUOUS = "revision_ambiguous"
     TRACKED_OPERATION_UNSUPPORTED = "tracked_operation_unsupported"
+    UNRESOLVED_STRUCTURAL_REVISION = "unresolved_structural_revision"
     IMAGE_NOT_FOUND = "image_not_found"
     INVALID_IMAGE_DATA = "invalid_image_data"
     UNSUPPORTED_IMAGE_FORMAT = "unsupported_image_format"
@@ -213,6 +218,20 @@ class MutationBatchMode(str, Enum):
 
     ATOMIC = "atomic"
     BEST_EFFORT = "best_effort"
+
+
+class MutationPreviewHtmlMode(str, Enum):
+    """Optional HTML a ``preview_batch`` renders from its isolated shadow package.
+
+    ``SCOPED`` requires ``html_anchor_id`` and renders that one block; ``FULL``
+    renders the whole predicted document. Both render with tracked changes,
+    comments, annotations and notes shown — a preview describes the document the
+    batch would produce, not an authoring view of it.
+    """
+
+    NONE = "none"
+    SCOPED = "scoped"
+    FULL = "full"
 
 
 class PlaceholderKind(str, Enum):

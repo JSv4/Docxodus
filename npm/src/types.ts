@@ -1055,6 +1055,8 @@ export interface DocxodusWasmExports {
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     GetPackageContentHash?: (handle: number) => string;
+    RenderPreviewHtml?: (handle: number) => string;
+    RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     BeginTransaction: (handle: number) => number;
     CommitTransaction: (transactionHandle: number) => void;
@@ -1214,6 +1216,8 @@ export interface DocxodusWasmExports {
     ListRevisions: (handle: number) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
     RejectRevision: (handle: number, revisionId: string) => string;
+    AcceptAllRevisions: (handle: number) => string;
+    RejectAllRevisions: (handle: number) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
@@ -1353,7 +1357,11 @@ export type EditErrorCode =
   | "managed_bookmark"
   | "empty_hyperlink_span"
   | "unsupported_inline_boundary"
+  | "revision_unsupported"
+  | "revision_malformed"
+  | "revision_ambiguous"
   | "tracked_operation_unsupported"
+  | "unresolved_structural_revision"
   | "image_not_found"
   | "invalid_image_data"
   | "unsupported_image_format"
@@ -1470,8 +1478,14 @@ export interface MutationBatchResult {
   rolledBack: boolean;
   baseVersion: number;
   resultVersion: number;
-  /** Canonical SHA-256 of this result package; exact replay equality is guaranteed only for deterministic batches. */
-  packageHash: string;
+  /**
+   * Canonical SHA-256 of this result package, or `null` when it could not be computed.
+   * Exact replay equality is guaranteed only for deterministic batches, so consult
+   * {@link MutationBatchResult.warnings} before asserting on it — and note that `null`
+   * never equals `null` for the purposes of a replay assertion: an absent hash proves
+   * nothing and must be handled explicitly rather than compared.
+   */
+  packageHash: string | null;
   steps: readonly MutationBatchStepResult[];
   failure?: MutationBatchFailure;
   revisionChanges: MutationBatchChangeSet<RevisionListEntry>;
@@ -1650,24 +1664,40 @@ export interface CommentListEntry {
 
 /** Revision kind in a markup-native revision listing. A `move` entry is a linked
  * move pair — both sides resolve together. */
-export type SessionRevisionType = "insert" | "delete" | "move" | "format";
+export type SessionRevisionType = "insert" | "delete" | "move" | "format" | "structure";
+export type RevisionFamily =
+  | "content_insert" | "content_delete" | "move" | "paragraph_mark"
+  | "row_insert" | "row_delete" | "cell_insert" | "cell_delete" | "cell_merge"
+  | "content_control_insert" | "content_control_delete"
+  | "numbering_properties_insert" | "numbering_change" | "properties_change"
+  | "unsupported";
+export type RevisionResolutionStatus = "supported" | "unsupported" | "malformed" | "ambiguous";
+
+export interface RevisionDiagnostic {
+  code: string;
+  message: string;
+}
 
 /**
- * One tracked revision read directly off the live markup, in document order — see
- * {@link DocxSession.listRevisions}. `id` is stable while the underlying markup exists
- * (derived from the markup's own `w:id` attributes — resolving OTHER revisions never
- * renames it) and is what acceptRevision/rejectRevision address. `author`/`date` are
- * the markup's true `w:author`/`w:date`. `text` is the revision's visible text (deleted
- * text for deletions, `¶` for a revised paragraph mark, the affected text for format
- * changes). `anchorId` is the containing block's anchor when addressable.
+ * One part-qualified atomic revision from the live registry. `id` is an opaque,
+ * deterministic `rev2-…` identity; `constituentIds` exposes the native Word ids.
+ * `family` identifies the exact operation, while `type` is its coarse display class.
+ * Unsafe native topology remains listed through `resolutionStatus` and `diagnostic`.
  */
 export interface RevisionListEntry {
   id: string;
   type: SessionRevisionType;
+  family: RevisionFamily;
+  constituentIds: string[];
   author: string;
   date?: string;
   text: string;
+  partUri: string;
+  scope: string;
   anchorId?: string;
+  affectedAnchors: AnchorRef[];
+  resolutionStatus: RevisionResolutionStatus;
+  diagnostic?: RevisionDiagnostic;
 }
 
 export interface CharSpan {

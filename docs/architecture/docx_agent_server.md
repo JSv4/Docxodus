@@ -47,7 +47,7 @@ tools/mcp-server/Program.cs        — JSON-RPC transport: initialize, tools/lis
      ▼
 tools/mcp-server/Dispatcher.cs     — (tool, action) → Docxodus API call; arg parsing only
      │                                also: tools/mcp-server/SessionStore.cs (external session_id
-     │                                → DocxSessionOps handle + opened-from location + settings)
+     │                                → DocxSessionOps handle + opened-from location)
      │
      ├──▶ IDocumentStore  ─────────  where bytes come from and go to (see Document storage)
      │      LocalFileDocumentStore    scope-rooted local filesystem — the only backend today
@@ -59,14 +59,10 @@ Docxodus.DocxSession   (the real work — see docs/architecture/docx_mutation_ap
 ```
 
 `SessionStore` is the one piece of state this server owns that `DocxSessionOps` doesn't: a
-string `session_id` → `{ handle, location, settings }` map. It exists for two reasons:
-
-1. `docxodus_save` needs to remember the location a session was opened from so "save" can mean
-   "write back to the same document" without the caller repeating it.
-2. `docxodus_track_changes`'s `accept_all`/`reject_all` need to swap a session's entire
-   underlying document for a whole-document byte transform (`RevisionProcessor.AcceptRevisions`/
-   `RejectRevisions`, which operate on bytes, not a live session) while the caller keeps
-   addressing the same `session_id` — see `SessionStore.Rebind`.
+string `session_id` → `{ handle, location }` map. The external protocol uses that
+unguessable id as its document capability, while `docxodus_save` uses the remembered location
+to write back without requiring the caller to repeat the path. Tracked-revision resolution now
+mutates the live session through `DocxSessionOps`; it does not rebind a whole-document transform.
 
 Session ids are 16 random bytes, not a counter. The id **is** the capability — holding one is
 what lets a caller act on that document — so a guessable id would let anything able to make tool
@@ -378,9 +374,10 @@ external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
 `list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
-the first-class session API. Hyperlink targets use `targetKind: "external"|"internal"`; bookmark
+the first-class session API. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
-same numeric `ProjectionScopes` flag mask as the core API.
+same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
+paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.
 
 The result is structured enough for an agent to round-trip unchanged: hyperlink ids feed update
 or remove, while bookmark names feed move/rename/remove. Missing targets, duplicate/invalid names,
@@ -434,28 +431,25 @@ interactive edits. This setting is distinct from display: `docxodus_get_content(
 always renders pending markup as `<ins>`/`<del>`; accepting or rejecting it requires an explicit
 track-changes action.
 
-`list` (issue #318) reads the revision set directly off the live session's markup —
-`DocxSession.ListRevisions` enumerates `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`, paragraph-mark
-and table-row markers, and the `*PrChange` format-change family across body, headers, footers,
-footnotes, and endnotes, grouping physically contiguous same-kind/same-author markup into one
-entry per user-visible change. Each entry carries a stable `id` (derived from the markup's own
-`w:id` attributes, so resolving other revisions never renames it), `type`
-(`insert`/`delete`/`move`/`format` — a `move` is a linked pair covering both sides), the
-markup's true `author`/`date`, its visible `text`, and the containing block's `anchorId`.
+`list` (issues #318 and #455) reads the live, part-aware revision registry. It includes
+content, paragraph/row/property changes, named moves, cell insert/delete/merge operations,
+content-control envelopes, and numbering-property revisions across body, headers, footers,
+footnotes, and endnotes. Each entry carries an opaque stable `rev2-…` id, coarse `type`, exact
+`family`, native `constituentIds`, author/date/text, owning `partUri` and canonical `scope`, all
+affected anchors, and a fail-closed `resolutionStatus` plus diagnostic when needed.
 This replaced the original listing, which re-diffed `RevisionProcessor.RejectRevisions` vs
 `.AcceptRevisions` output through `DocxDiffOps.GetRevisionsJson` — that shape had no stable
 identity to address, substituted engine-default authors/dates for the markup's real ones, and
-cost ~3s on a 49-page document. `author`/`changeType` are display-only filters applied after
-the fact.
+cost ~3s on a 49-page document. `author`, `changeType`, `family`, `resolutionStatus`, and
+`partUri` are display-only filters applied after the fact.
 
 `accept`/`reject` resolve ONE revision by `revisionId` as an ordinary undoable session
 mutation (`DocxSession.AcceptRevision`/`RejectRevision` — no whole-document
 `RevisionProcessor` round-trip, no session rebind, anchors stay live), returning the standard
 EditResult envelope with the affected blocks in `modified`/`removed`. An unknown or
-already-resolved id fails with `revision_not_found`. `accept_all`/`reject_all` remain for
-whole-document resolution: they transform via `RevisionProcessor` and swap the session's
-underlying handle in place (`SessionStore.Rebind`), which also covers the exotic families the
-per-revision listing does not enumerate (see Known gaps).
+already-resolved id fails with `revision_not_found`. Unsafe registry entries fail with a typed
+unsupported/malformed/ambiguous error. `accept_all`/`reject_all` use that same resolver,
+rebuilding the live registry after each entry; the complete operation is atomic and undoable.
 
 ### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
@@ -490,12 +484,26 @@ state, version, caches, settings, and both history cursors were never mutation t
 
 Preview receipts use the same typed result as apply: `baseVersion`, predicted `resultVersion`, each
 step's `created`/`removed`/`modified` anchors and markdown patch, revision/comment/annotation
-`{ added, removed, modified }` deltas, warnings, and a `packageHash`. `previewHtml` may be `scoped`
-(with `previewAnchorId`) or `full`; rendering occurs only from the final shadow package, and an
-optional rendering failure is a warning rather than turning a committed/predicted mutation into an
-apparent failure. The content hash is SHA-256 over sorted OPC entry names plus their uncompressed
-payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but not XML
-timestamps or generated OOXML ids.
+`{ added, removed, modified }` deltas, warnings, and a `packageHash`. Delta membership is decided on
+each entry's serialized wire projection, never on CLR object equality, so a pre-existing revision or
+comment a batch never touched is reported in no bucket at all. `packageHash` is `null` — never an
+empty string — when it could not be computed, so an unavailable hash cannot compare equal to another
+unavailable hash. `previewHtml` may be `scoped` (with `previewAnchorId`) or `full`; rendering occurs
+only from the final shadow package, and an optional rendering failure is a warning rather than
+turning a committed/predicted mutation into an apparent failure. The render profile is owned once, by
+`HtmlConversionOps.PreviewDocumentOptions()`/`PreviewBlockOptions()`, and every surface (typed core,
+handle façade, WASM bridge, npm, stdio/Python, this server) consumes it — a preview shows tracked
+changes, comments, annotations, notes and headers/footers, which is deliberately NOT the editor's
+authoring render profile. The content hash is SHA-256 over sorted OPC entry names plus their
+uncompressed payload bytes with fixed little-endian framing, excluding ZIP timestamps/compression but
+not XML timestamps or generated OOXML ids.
+
+Receipt enrichment is unconditional and is not free. Every batch — applied or previewed — inspects
+revisions, comments and annotations twice (before and after, each forcing an anchor index) and
+computes `packageHash`, which serializes a full package checkpoint and hashes it. A preview adds a
+package clone and a second open `WordprocessingDocument` on top, roughly doubling peak memory for its
+duration. On a large document this is the dominant cost of a small batch. There is currently no
+opt-out; whether to gate it behind a setting is an open public-API decision.
 
 Equivalence is exact for deterministic batches: replaying at the same base state produces the same
 step outcomes, semantic deltas, and package hash. For create/comment/note/image operations that
@@ -510,7 +518,12 @@ camel-case guard object as the core API (`expectedVersion`, `anchorId`,
 `expectedContentHash`, exact text/range/kind/scope, and `expectedMatchCount`). A
 failure is the standard structured `precondition_failed` result. Atomic mode
 evaluates all step guards at the common batch-start boundary; best-effort mode
-evaluates them sequentially. `docxodus_get_content` with `format: "version"` reads the current
+evaluates them sequentially. `expectedMatchCount` is the single exception in both
+modes: only the replacement itself can count live matches, so that guard is carried
+into the step and enforced at the step's own turn against the state the step sees.
+A batched step's receipt is the ordinary `EditResult` envelope in full — a table
+step keeps its `tableAnchors` mapping, so an agent can address the cells the same
+batch just created. `docxodus_get_content` with `format: "version"` reads the current
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.
@@ -594,12 +607,18 @@ Capabilities a full-featured document-editing agent surface might have, that Doc
 doesn't yet support — called out explicitly rather than faked, per this server's design goal of
 never claiming a capability it doesn't have:
 
-- **Exotic revision families aren't individually resolvable.** Issue #318 closed the
-  selective-resolution gap for the common families — `docxodus_track_changes` `accept`/`reject`
-  resolve one insert/delete/move/format revision by `revisionId` — but
-  `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del ranges, and `w:numPr`
-  numbering-ins markers are not enumerated by `list` and have no per-revision resolution;
-  `accept_all`/`reject_all` (whole-document `RevisionProcessor`) still handle them.
+- **Unsafe revision topology fails closed — including for `accept_all`/`reject_all`.** The live
+  registry resolves the supported content, property, table-cell, content-control, and numbering
+  families. A recognized family with no safe resolver, or malformed/ambiguous native topology,
+  remains visible with a diagnostic and blocks both selective and bulk resolution until the
+  source document is repaired. This is a capability change: before #455, `accept_all`/
+  `reject_all` were a whole-document `RevisionProcessor` transform that always succeeded, and
+  there is deliberately no `force` mode. The refusing shapes are a missing or non-numeric
+  `w:id`, one `w:id` shared by two live groups in one part, `w:customXmlMoveFromRange*`/
+  `w:customXmlMoveToRange*` ranges, `w:ins`/`w:del` under `m:ctrlPr`, `w:del` on a run's
+  `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
+  two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
+  `docx_mutation_api.md`.
 - **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
   block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
   `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by

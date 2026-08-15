@@ -356,7 +356,7 @@ public class DocxSessionTableAddressingTests
     }
 
     [Fact]
-    public void DT257_TableInsideRevisionWrapper_HasCanonicalAnchorsWithoutRevisionEmission()
+    public void DT257_TableInsideRevisionWrapper_HasCanonicalAnchorsAndNativeRowRevision()
     {
         var revisedRow =
             "<w:tr><w:trPr><w:ins w:id=\"7\" w:author=\"A\" " +
@@ -377,9 +377,12 @@ public class DocxSessionTableAddressingTests
         AssertSchemaValid(saved);
         var xml = MainXml(saved);
         var tableElement = xml.Descendants(W + "tbl").Single();
-        Assert.Equal(2, tableElement.Elements(W + "tr").Count());
-        Assert.Single(tableElement.Elements(W + "tr").First().Element(W + "trPr")!.Elements(W + "ins"));
-        Assert.DoesNotContain(tableElement.Elements(W + "tr").Skip(1).DescendantsAndSelf(),
-            element => element.Name == W + "ins");
+        var rows = tableElement.Elements(W + "tr").ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("7", (string?)Assert.Single(rows[0].Element(W + "trPr")!.Elements(W + "ins"))
+            .Attribute(W + "id"));
+        var inserted = Assert.Single(rows[1].Element(W + "trPr")!.Elements(W + "ins"));
+        Assert.NotEqual("7", (string?)inserted.Attribute(W + "id"));
+        Assert.Single(rows[1].Descendants(W + "rPr").Elements(W + "ins"));
     }
 }

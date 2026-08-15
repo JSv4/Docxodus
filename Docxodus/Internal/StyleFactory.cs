@@ -204,19 +204,26 @@ internal static class StyleFactory
         var main = doc.MainDocumentPart;
         if (main is null) return false;
 
-        var part = EnsureStylesPart(main);
-
-        var root = part.GetXDocument().Root!;
-        bool exists = root.Elements(W + "style")
-            .Any(st => (string?)st.Attribute(W + "styleId") == styleId);
-        if (exists) return true;
+        if (HasParagraphStyle(doc, styleId)) return true;
 
         var def = BuiltInParagraphStyle(styleId);
         if (def is null) return false; // unknown custom id — leave it; caller reports UnknownStyle
 
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
         root.Add(def);
         part.PutXDocument();
         return true;
+    }
+
+    /// <summary>Read-only existence check used before a tracked paragraph-style edit.
+    /// A <c>w:pPrChange</c> can restore the paragraph's style reference, but it cannot
+    /// remove a style definition or styles part synthesized by the edit.</summary>
+    internal static bool HasParagraphStyle(WordprocessingDocument doc, string styleId)
+    {
+        var root = doc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        return root is not null && root.Elements(W + "style")
+            .Any(style => (string?)style.Attribute(W + "styleId") == styleId);
     }
 
     /// <summary>Canonical definition for a well-known built-in paragraph style, or null if unknown.</summary>
