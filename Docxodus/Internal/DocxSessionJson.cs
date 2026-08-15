@@ -609,6 +609,149 @@ internal static class DocxSessionJson
     public static double? TryGetDoubleNullable(JsonElement root, string name) =>
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : (double?)null;
 
+    public static ImageInsertOptions ParseImageInsertOptions(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new ImageInsertOptions();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        RequireObject(root, "image options");
+        return new ImageInsertOptions
+        {
+            Placement = ParseImagePlacement(StrictString(root, "placement", "inline")),
+            WidthPoints = StrictDoubleNullable(root, "widthPoints"),
+            HeightPoints = StrictDoubleNullable(root, "heightPoints"),
+            PreserveAspect = StrictBool(root, "preserveAspect", true),
+            AltText = StrictString(root, "altText", null),
+            Title = StrictString(root, "title", null),
+            FloatingLayout = ParseOptionalFloatingImageLayout(root),
+        };
+    }
+
+    private static FloatingImageLayout? ParseOptionalFloatingImageLayout(JsonElement root)
+    {
+        if (!root.TryGetProperty("floatingLayout", out var layout)) return null;
+        if (layout.ValueKind != JsonValueKind.Object)
+            throw new System.ArgumentException("floatingLayout must be a JSON object");
+        return ParseFloatingImageLayout(layout);
+    }
+
+    public static FloatingImageLayout ParseFloatingImageLayout(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return ParseFloatingImageLayout(document.RootElement);
+    }
+
+    public static FloatingImageLayout ParseFloatingImageLayout(JsonElement root)
+    {
+        RequireObject(root, "floating layout");
+        long? horizontalOffset = StrictInt64Nullable(root, "horizontalOffsetEmu");
+        long? verticalOffset = StrictInt64Nullable(root, "verticalOffsetEmu");
+        var horizontalAlignment = ParseHorizontalAlignment(StrictString(root, "horizontalAlignment", null));
+        var verticalAlignment = ParseVerticalAlignment(StrictString(root, "verticalAlignment", null));
+        if (horizontalAlignment is not null && !root.TryGetProperty("horizontalOffsetEmu", out _))
+            horizontalOffset = null;
+        if (verticalAlignment is not null && !root.TryGetProperty("verticalOffsetEmu", out _))
+            verticalOffset = null;
+        return new FloatingImageLayout
+        {
+            HorizontalRelativeFrom = ParseHorizontalReference(
+                StrictString(root, "horizontalRelativeFrom", "column")),
+            HorizontalOffsetEmu = horizontalOffset ?? (horizontalAlignment is null ? 0 : null),
+            HorizontalAlignment = horizontalAlignment,
+            VerticalRelativeFrom = ParseVerticalReference(
+                StrictString(root, "verticalRelativeFrom", "paragraph")),
+            VerticalOffsetEmu = verticalOffset ?? (verticalAlignment is null ? 0 : null),
+            VerticalAlignment = verticalAlignment,
+            WrapMode = ParseWrapMode(StrictString(root, "wrapMode", "square")),
+            WrapSide = ParseWrapSide(StrictString(root, "wrapSide", "both_sides")),
+            DistanceTopEmu = StrictInt64(root, "distanceTopEmu", 0),
+            DistanceBottomEmu = StrictInt64(root, "distanceBottomEmu", 0),
+            DistanceLeftEmu = StrictInt64(root, "distanceLeftEmu", 0),
+            DistanceRightEmu = StrictInt64(root, "distanceRightEmu", 0),
+            RelativeHeight = StrictUInt32(root, "relativeHeight", 251658240),
+            BehindDocument = StrictBool(root, "behindDocument", false),
+            Locked = StrictBool(root, "locked", false),
+            LayoutInCell = StrictBool(root, "layoutInCell", true),
+            AllowOverlap = StrictBool(root, "allowOverlap", true),
+        };
+    }
+
+    public static (double? Width, double? Height, bool PreserveAspect) ParseImageDimensions(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        RequireObject(root, "image dimensions");
+        return (StrictDoubleNullable(root, "widthPoints"),
+            StrictDoubleNullable(root, "heightPoints"), StrictBool(root, "preserveAspect", true));
+    }
+
+    private static void RequireObject(JsonElement root, string description)
+    { if (root.ValueKind != JsonValueKind.Object) throw new System.ArgumentException($"{description} must be a JSON object"); }
+    private static string? StrictString(JsonElement root, string name, string? fallback)
+    {
+        if (!root.TryGetProperty(name, out var value)) return fallback;
+        if (value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.String) throw new System.ArgumentException($"{name} must be a string or null");
+        return value.GetString();
+    }
+    private static double? StrictDoubleNullable(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var parsed))
+            throw new System.ArgumentException($"{name} must be a number or null");
+        return parsed;
+    }
+    private static bool StrictBool(JsonElement root, string name, bool fallback)
+    {
+        if (!root.TryGetProperty(name, out var value)) return fallback;
+        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new System.ArgumentException($"{name} must be a boolean");
+        return value.GetBoolean();
+    }
+    private static long StrictInt64(JsonElement root, string name, long fallback) =>
+        StrictInt64Nullable(root, name) ?? fallback;
+    private static long? StrictInt64Nullable(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var parsed))
+            throw new System.ArgumentException($"{name} must be a 64-bit integer or null");
+        return parsed;
+    }
+    private static uint StrictUInt32(JsonElement root, string name, uint fallback)
+    {
+        if (!root.TryGetProperty(name, out var value)) return fallback;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetUInt32(out var parsed))
+            throw new System.ArgumentException($"{name} must be an integer from 0 through {uint.MaxValue}");
+        return parsed;
+    }
+
+    private static ImagePlacement ParseImagePlacement(string? token) => token switch
+    { "inline" => ImagePlacement.Inline, "floating" => ImagePlacement.Floating, _ => (ImagePlacement)(-1) };
+    private static ImageHorizontalReference ParseHorizontalReference(string? token) => token switch
+    { "page" => ImageHorizontalReference.Page, "margin" => ImageHorizontalReference.Margin,
+      "column" => ImageHorizontalReference.Column, "character" => ImageHorizontalReference.Character,
+      _ => ImageHorizontalReference.Unknown };
+    private static ImageVerticalReference ParseVerticalReference(string? token) => token switch
+    { "page" => ImageVerticalReference.Page, "margin" => ImageVerticalReference.Margin,
+      "paragraph" => ImageVerticalReference.Paragraph, "line" => ImageVerticalReference.Line,
+      _ => ImageVerticalReference.Unknown };
+    private static ImageHorizontalAlignment? ParseHorizontalAlignment(string? token) => token switch
+    { null => null, "left" => ImageHorizontalAlignment.Left, "center" => ImageHorizontalAlignment.Center,
+      "right" => ImageHorizontalAlignment.Right, "inside" => ImageHorizontalAlignment.Inside,
+      "outside" => ImageHorizontalAlignment.Outside, _ => ImageHorizontalAlignment.Unknown };
+    private static ImageVerticalAlignment? ParseVerticalAlignment(string? token) => token switch
+    { null => null, "top" => ImageVerticalAlignment.Top, "center" => ImageVerticalAlignment.Center,
+      "bottom" => ImageVerticalAlignment.Bottom, "inside" => ImageVerticalAlignment.Inside,
+      "outside" => ImageVerticalAlignment.Outside, _ => ImageVerticalAlignment.Unknown };
+    private static ImageWrapMode ParseWrapMode(string? token) => token switch
+    { "none" => ImageWrapMode.None, "square" => ImageWrapMode.Square, "tight" => ImageWrapMode.Tight,
+      "through" => ImageWrapMode.Through, "top_and_bottom" => ImageWrapMode.TopAndBottom,
+      _ => ImageWrapMode.Unknown };
+    private static ImageWrapSide ParseWrapSide(string? token) => token switch
+    { "both_sides" => ImageWrapSide.BothSides, "left" => ImageWrapSide.Left,
+      "right" => ImageWrapSide.Right, "largest" => ImageWrapSide.Largest,
+      _ => ImageWrapSide.Unknown };
+
     // ─── Serializers ────────────────────────────────────────────────────
 
     public static string Serialize(EditResult r)
@@ -665,6 +808,8 @@ internal static class DocxSessionJson
             sb.Append(",\"hyperlinkId\":").Append(JsonString(r.HyperlinkId));
         if (r.BookmarkName is not null)
             sb.Append(",\"bookmarkName\":").Append(JsonString(r.BookmarkName));
+        if (r.ImageId is not null)
+            sb.Append(",\"imageId\":").Append(JsonString(r.ImageId));
         if (r.Patch is not null)
         {
             sb.Append(",\"patch\":{")
@@ -931,6 +1076,149 @@ internal static class DocxSessionJson
         }
         return sb.Append(']').ToString();
     }
+
+    public static string SerializeImages(IReadOnlyList<ImageOccurrence> images)
+    {
+        var sb = new StringBuilder(images.Count * 700 + 2).Append('[');
+        for (int i = 0; i < images.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var image = images[i];
+            sb.Append("{\"id\":").Append(JsonString(image.Id))
+              .Append(",\"markupKind\":").Append(JsonString(ToSnake(image.MarkupKind.ToString())));
+            AppendEnum(sb, "placement", image.Placement);
+            sb.Append(",\"canMutate\":").Append(image.CanMutate ? "true" : "false");
+            AppendString(sb, "unsupportedReason", image.UnsupportedReason);
+            sb.Append(",\"owningPartUri\":").Append(JsonString(image.OwningPartUri))
+              .Append(",\"scope\":").Append(JsonString(image.Scope))
+              .Append(",\"anchorId\":").Append(JsonString(image.AnchorId))
+              .Append(",\"span\":{\"start\":").Append(image.Span.Start)
+              .Append(",\"length\":").Append(image.Span.Length).Append('}');
+            AppendString(sb, "relationshipId", image.RelationshipId);
+            AppendString(sb, "targetPartUri", image.TargetPartUri);
+            AppendString(sb, "linkedRelationshipId", image.LinkedRelationshipId);
+            AppendString(sb, "linkedTarget", image.LinkedTarget);
+            sb.Append(",\"isEmbedded\":").Append(image.IsEmbedded ? "true" : "false")
+              .Append(",\"isLinked\":").Append(image.IsLinked ? "true" : "false")
+              .Append(",\"isBroken\":").Append(image.IsBroken ? "true" : "false");
+            AppendString(sb, "mediaFileName", image.MediaFileName);
+            AppendString(sb, "contentType", image.ContentType);
+            sb.Append(",\"format\":").Append(JsonString(ToSnake(image.Format.ToString())));
+            AppendNullableBool(sb, "contentTypeMatchesBytes", image.ContentTypeMatchesBytes);
+            AppendNullableNumber(sb, "intrinsicWidthPixels", image.IntrinsicWidthPixels);
+            AppendNullableNumber(sb, "intrinsicHeightPixels", image.IntrinsicHeightPixels);
+            AppendNullableDouble(sb, "renderedWidthPoints", image.RenderedWidthPoints);
+            AppendNullableDouble(sb, "renderedHeightPoints", image.RenderedHeightPoints);
+            AppendString(sb, "altText", image.AltText);
+            AppendString(sb, "title", image.Title);
+            if (image.FloatingLayout is not null)
+            {
+                sb.Append(",\"floatingLayout\":");
+                AppendFloatingLayout(sb, image.FloatingLayout);
+            }
+            sb.Append(",\"floatingLayoutSupported\":")
+              .Append(image.FloatingLayoutSupported ? "true" : "false").Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
+    public static string SerializeImageCapabilities(ImageCapabilities capabilities)
+    {
+        var sb = new StringBuilder(1200).Append("{\"schemaVersion\":")
+            .Append(capabilities.SchemaVersion).Append(",\"runtime\":")
+            .Append(JsonString(capabilities.Runtime)).Append(",\"formats\":[");
+        for (int i = 0; i < capabilities.Formats.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var format = capabilities.Formats[i];
+            sb.Append("{\"format\":").Append(JsonString(ToSnake(format.Format.ToString())))
+              .Append(",\"contentType\":").Append(JsonString(format.ContentType))
+              .Append(",\"canInspect\":").Append(format.CanInspect ? "true" : "false")
+              .Append(",\"canInsert\":").Append(format.CanInsert ? "true" : "false")
+              .Append(",\"canReplace\":").Append(format.CanReplace ? "true" : "false");
+            AppendString(sb, "limitation", format.Limitation);
+            sb.Append('}');
+        }
+        sb.Append("],\"operations\":"); AppendStringArray(sb, capabilities.Operations);
+        sb.Append(",\"mutableWrapModes\":");
+        AppendEnumArray(sb, capabilities.MutableWrapModes);
+        sb.Append(",\"horizontalReferences\":");
+        AppendEnumArray(sb, capabilities.HorizontalReferences.Where(value => value != ImageHorizontalReference.Unknown).ToArray());
+        sb.Append(",\"verticalReferences\":");
+        AppendEnumArray(sb, capabilities.VerticalReferences.Where(value => value != ImageVerticalReference.Unknown).ToArray());
+        sb.Append(",\"maxInputBytes\":").Append(capabilities.MaxInputBytes)
+          .Append(",\"maxRenderedPoints\":").Append(capabilities.MaxRenderedPoints.ToString(System.Globalization.CultureInfo.InvariantCulture))
+          .Append(",\"defaultDpi\":").Append(capabilities.DefaultDpi.ToString(System.Globalization.CultureInfo.InvariantCulture))
+          .Append(",\"usesHeaderParsingOnly\":").Append(capabilities.UsesHeaderParsingOnly ? "true" : "false")
+          .Append(",\"acceptsBinaryBytes\":").Append(capabilities.AcceptsBinaryBytes ? "true" : "false")
+          .Append(",\"supportsNetworkFetch\":").Append(capabilities.SupportsNetworkFetch ? "true" : "false")
+          .Append(",\"supportsFileIo\":").Append(capabilities.SupportsFileIo ? "true" : "false")
+          .Append('}');
+        return sb.ToString();
+    }
+
+    private static void AppendFloatingLayout(StringBuilder sb, FloatingImageLayout layout)
+    {
+        sb.Append("{\"horizontalRelativeFrom\":").Append(JsonString(ToSnake(layout.HorizontalRelativeFrom.ToString())));
+        AppendNullableNumber(sb, "horizontalOffsetEmu", layout.HorizontalOffsetEmu);
+        AppendEnum(sb, "horizontalAlignment", layout.HorizontalAlignment);
+        sb.Append(",\"verticalRelativeFrom\":").Append(JsonString(ToSnake(layout.VerticalRelativeFrom.ToString())));
+        AppendNullableNumber(sb, "verticalOffsetEmu", layout.VerticalOffsetEmu);
+        AppendEnum(sb, "verticalAlignment", layout.VerticalAlignment);
+        sb.Append(",\"wrapMode\":").Append(JsonString(ToSnake(layout.WrapMode.ToString())))
+          .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())))
+          .Append(",\"distanceTopEmu\":").Append(layout.DistanceTopEmu)
+          .Append(",\"distanceBottomEmu\":").Append(layout.DistanceBottomEmu)
+          .Append(",\"distanceLeftEmu\":").Append(layout.DistanceLeftEmu)
+          .Append(",\"distanceRightEmu\":").Append(layout.DistanceRightEmu)
+          .Append(",\"relativeHeight\":").Append(layout.RelativeHeight)
+          .Append(",\"behindDocument\":").Append(layout.BehindDocument ? "true" : "false")
+          .Append(",\"locked\":").Append(layout.Locked ? "true" : "false")
+          .Append(",\"layoutInCell\":").Append(layout.LayoutInCell ? "true" : "false")
+          .Append(",\"allowOverlap\":").Append(layout.AllowOverlap ? "true" : "false");
+        AppendString(sb, "rawHorizontalReference", layout.RawHorizontalReference);
+        AppendString(sb, "rawVerticalReference", layout.RawVerticalReference);
+        AppendString(sb, "rawHorizontalPosition", layout.RawHorizontalPosition);
+        AppendString(sb, "rawVerticalPosition", layout.RawVerticalPosition);
+        AppendString(sb, "rawWrapMode", layout.RawWrapMode);
+        AppendString(sb, "rawWrapSide", layout.RawWrapSide);
+        AppendString(sb, "rawRelativeSizeHorizontal", layout.RawRelativeSizeHorizontal);
+        AppendString(sb, "rawRelativeSizeVertical", layout.RawRelativeSizeVertical);
+        if (layout.RawFlagTokens is not null)
+        {
+            sb.Append(",\"rawFlagTokens\":{");
+            int i = 0;
+            foreach (var pair in layout.RawFlagTokens)
+            {
+                if (i++ > 0) sb.Append(',');
+                sb.Append(JsonString(pair.Key)).Append(':').Append(JsonString(pair.Value));
+            }
+            sb.Append('}');
+        }
+        sb.Append('}');
+    }
+
+    private static string ToSnake(string value)
+    {
+        var sb = new StringBuilder(value.Length + 4);
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(value[i])) sb.Append('_');
+            sb.Append(char.ToLowerInvariant(value[i]));
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendString(StringBuilder sb, string name, string? value)
+    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(JsonString(value)); }
+    private static void AppendNullableNumber<T>(StringBuilder sb, string name, T? value) where T : struct
+    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(value.Value); }
+    private static void AppendNullableDouble(StringBuilder sb, string name, double? value)
+    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(value.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+    private static void AppendEnum<T>(StringBuilder sb, string name, T? value) where T : struct, System.Enum
+    { if (value is not null) sb.Append(',').Append(JsonString(name)).Append(':').Append(JsonString(ToSnake(value.Value.ToString()))); }
+    private static void AppendEnumArray<T>(StringBuilder sb, IReadOnlyList<T> values) where T : struct, System.Enum
+    { sb.Append('['); for (int i = 0; i < values.Count; i++) { if (i > 0) sb.Append(','); sb.Append(JsonString(ToSnake(values[i].ToString()))); } sb.Append(']'); }
 
     public static string SerializeBookmarks(IReadOnlyList<BookmarkInfo> bookmarks)
     {

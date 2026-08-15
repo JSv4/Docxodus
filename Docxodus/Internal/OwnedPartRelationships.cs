@@ -16,7 +16,7 @@ namespace Docxodus.Internal;
 /// Hyperlinks use this today; image authoring can reuse the same owner lookup/reference-counted
 /// cleanup without learning anything about hyperlink markup.
 /// </summary>
-internal static class OwnedPartRelationships
+internal static partial class OwnedPartRelationships
 {
     internal readonly record struct Owner(OpenXmlPart Part, string Scope)
     {

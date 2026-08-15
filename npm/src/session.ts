@@ -28,6 +28,11 @@ import type {
   HeaderFooterKind,
   HyperlinkInfo,
   HyperlinkKind,
+  ImageCapabilities,
+  ImageDimensions,
+  ImageInsertOptions,
+  ImageOccurrence,
+  FloatingImageLayout,
   InlineSpan,
   NumberFormat,
   PageNumberField,
@@ -1014,6 +1019,45 @@ export class DocxSession {
     return JSON.parse(this.wasm.RemoveHyperlink(this.handle, hyperlinkId)) as EditResult;
   }
 
+  /** Versioned operational facts for native image inspection/mutation in this runtime. */
+  getImageCapabilities(): ImageCapabilities {
+    return JSON.parse(this.wasm.GetImageCapabilities()) as ImageCapabilities;
+  }
+
+  listImages(scopes: ProjectionScopes = ProjectionScopes.All): ImageOccurrence[] {
+    return JSON.parse(this.wasm.ListImages(this.handle, scopes)) as ImageOccurrence[];
+  }
+
+  insertImage(anchorId: string, characterOffset: number, bytes: Uint8Array,
+    options: ImageInsertOptions = {}): EditResult {
+    return JSON.parse(this.wasm.InsertImage(this.handle, anchorId, characterOffset,
+      imageBytesToBase64(bytes), JSON.stringify(options))) as EditResult;
+  }
+
+  replaceImage(imageId: string, bytes: Uint8Array): EditResult {
+    return JSON.parse(this.wasm.ReplaceImage(
+      this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
+  }
+
+  setImageDimensions(imageId: string, dimensions: ImageDimensions): EditResult {
+    return JSON.parse(this.wasm.SetImageDimensions(
+      this.handle, imageId, JSON.stringify(dimensions))) as EditResult;
+  }
+
+  setImageMetadata(imageId: string, altText: string | null, title: string | null): EditResult {
+    return JSON.parse(this.wasm.SetImageMetadata(
+      this.handle, imageId, altText, title)) as EditResult;
+  }
+
+  setImageFloatingLayout(imageId: string, layout: FloatingImageLayout): EditResult {
+    return JSON.parse(this.wasm.SetImageFloatingLayout(
+      this.handle, imageId, JSON.stringify(layout))) as EditResult;
+  }
+
+  removeImage(imageId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveImage(this.handle, imageId)) as EditResult;
+  }
+
   listBookmarks(scopes: ProjectionScopes = ProjectionScopes.All): BookmarkInfo[] {
     return JSON.parse(this.wasm.ListBookmarks(this.handle, scopes)) as BookmarkInfo[];
   }
@@ -1722,6 +1766,14 @@ export class DocxSession {
   [Symbol.dispose]?(): void {
     this.close();
   }
+}
+
+function imageBytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return globalThis.btoa(binary);
 }
 
 /**

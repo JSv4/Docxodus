@@ -73,6 +73,11 @@ from .types import (
     FormattingInspection,
     HtmlOptions,
     HyperlinkInfo,
+    FloatingImageLayout,
+    ImageCapabilities,
+    ImageDimensions,
+    ImageInsertOptions,
+    ImageOccurrence,
     InlineSpan,
     ListMembership,
     MarkdownProjection,
@@ -885,6 +890,47 @@ class DocxSession:
     def remove_hyperlink(self, hyperlink_id: str) -> EditResult:
         return EditResult._from_wire(
             self._call("remove_hyperlink", {"hyperlinkId": hyperlink_id}))
+
+    def get_image_capabilities(self) -> ImageCapabilities:
+        """Return versioned runtime facts; this does not claim decoding, file, or network support."""
+        return ImageCapabilities._from_wire(self._call("get_image_capabilities", {}))
+
+    def list_images(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[ImageOccurrence, ...]:
+        result = self._call("list_images", {"scopes": int(scopes)})
+        return tuple(ImageOccurrence._from_wire(item) for item in result)
+
+    def insert_image(self, anchor_id: str, character_offset: int, image_bytes: bytes,
+                     options: ImageInsertOptions | None = None) -> EditResult:
+        return EditResult._from_wire(self._call("insert_image", {
+            "anchorId": anchor_id, "characterOffset": character_offset,
+            "imageBase64": base64.b64encode(image_bytes).decode("ascii"),
+            "options": (options or ImageInsertOptions()).to_wire(),
+        }))
+
+    def replace_image(self, image_id: str, image_bytes: bytes) -> EditResult:
+        return EditResult._from_wire(self._call("replace_image", {
+            "imageId": image_id, "imageBase64": base64.b64encode(image_bytes).decode("ascii"),
+        }))
+
+    def set_image_dimensions(self, image_id: str, dimensions: ImageDimensions) -> EditResult:
+        return EditResult._from_wire(self._call("set_image_dimensions", {
+            "imageId": image_id, "dimensions": dimensions.to_wire(),
+        }))
+
+    def set_image_metadata(self, image_id: str, alt_text: str | None,
+                           title: str | None) -> EditResult:
+        return EditResult._from_wire(self._call("set_image_metadata", {
+            "imageId": image_id, "altText": alt_text, "title": title,
+        }))
+
+    def set_image_floating_layout(self, image_id: str,
+                                  layout: FloatingImageLayout) -> EditResult:
+        return EditResult._from_wire(self._call("set_image_floating_layout", {
+            "imageId": image_id, "layout": layout.to_wire(),
+        }))
+
+    def remove_image(self, image_id: str) -> EditResult:
+        return EditResult._from_wire(self._call("remove_image", {"imageId": image_id}))
 
     def list_bookmarks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[BookmarkInfo, ...]:
         result = self._call("list_bookmarks", {"scopes": int(scopes)})

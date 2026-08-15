@@ -100,6 +100,21 @@ __all__ = [
     "AnnotationUpdate",
     "DocumentRange",
     "HyperlinkInfo",
+    "ImageBinaryFormat",
+    "ImageMarkupKind",
+    "ImagePlacement",
+    "ImageWrapMode",
+    "ImageWrapSide",
+    "ImageHorizontalReference",
+    "ImageVerticalReference",
+    "ImageHorizontalAlignment",
+    "ImageVerticalAlignment",
+    "FloatingImageLayout",
+    "ImageInsertOptions",
+    "ImageDimensions",
+    "ImageFormatCapability",
+    "ImageOccurrence",
+    "ImageCapabilities",
     "BookmarkRangeSegment",
     "BookmarkInfo",
     "EditSummary",
@@ -676,6 +691,317 @@ class HyperlinkInfo:
                    d["anchorId"], CharSpan._from_wire(d["span"]), d.get("text", ""),
                    d.get("target"), d.get("relationshipId"), d.get("relationshipIsExternal"),
                    bool(d.get("isBroken", False)))
+
+
+class ImageBinaryFormat(str, Enum):
+    UNKNOWN = "unknown"
+    PNG = "png"
+    JPEG = "jpeg"
+    GIF = "gif"
+    BMP = "bmp"
+    TIFF = "tiff"
+    WEBP = "webp"
+
+
+class ImageMarkupKind(str, Enum):
+    MODERN_DRAWING = "modern_drawing"
+    LEGACY_VML = "legacy_vml"
+    UNSUPPORTED_DRAWING = "unsupported_drawing"
+
+
+class ImagePlacement(str, Enum):
+    INLINE = "inline"
+    FLOATING = "floating"
+
+
+class ImageWrapMode(str, Enum):
+    NONE = "none"
+    SQUARE = "square"
+    TIGHT = "tight"
+    THROUGH = "through"
+    TOP_AND_BOTTOM = "top_and_bottom"
+    UNKNOWN = "unknown"
+
+
+class ImageWrapSide(str, Enum):
+    BOTH_SIDES = "both_sides"
+    LEFT = "left"
+    RIGHT = "right"
+    LARGEST = "largest"
+    UNKNOWN = "unknown"
+
+
+class ImageHorizontalReference(str, Enum):
+    PAGE = "page"
+    MARGIN = "margin"
+    COLUMN = "column"
+    CHARACTER = "character"
+    UNKNOWN = "unknown"
+
+
+class ImageVerticalReference(str, Enum):
+    PAGE = "page"
+    MARGIN = "margin"
+    PARAGRAPH = "paragraph"
+    LINE = "line"
+    UNKNOWN = "unknown"
+
+
+class ImageHorizontalAlignment(str, Enum):
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+    INSIDE = "inside"
+    OUTSIDE = "outside"
+    UNKNOWN = "unknown"
+
+
+class ImageVerticalAlignment(str, Enum):
+    TOP = "top"
+    CENTER = "center"
+    BOTTOM = "bottom"
+    INSIDE = "inside"
+    OUTSIDE = "outside"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class FloatingImageLayout:
+    horizontal_relative_from: ImageHorizontalReference = ImageHorizontalReference.COLUMN
+    horizontal_offset_emu: int | None = 0
+    horizontal_alignment: ImageHorizontalAlignment | None = None
+    vertical_relative_from: ImageVerticalReference = ImageVerticalReference.PARAGRAPH
+    vertical_offset_emu: int | None = 0
+    vertical_alignment: ImageVerticalAlignment | None = None
+    wrap_mode: ImageWrapMode = ImageWrapMode.SQUARE
+    wrap_side: ImageWrapSide = ImageWrapSide.BOTH_SIDES
+    distance_top_emu: int = 0
+    distance_bottom_emu: int = 0
+    distance_left_emu: int = 0
+    distance_right_emu: int = 0
+    relative_height: int = 251658240
+    behind_document: bool = False
+    locked: bool = False
+    layout_in_cell: bool = True
+    allow_overlap: bool = True
+    raw_horizontal_reference: str | None = None
+    raw_vertical_reference: str | None = None
+    raw_horizontal_position: str | None = None
+    raw_vertical_position: str | None = None
+    raw_wrap_mode: str | None = None
+    raw_wrap_side: str | None = None
+    raw_relative_size_horizontal: str | None = None
+    raw_relative_size_vertical: str | None = None
+    raw_flag_tokens: Mapping[str, str] | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"horizontalRelativeFrom": self.horizontal_relative_from.value,
+                "horizontalOffsetEmu": self.horizontal_offset_emu,
+                "horizontalAlignment": (self.horizontal_alignment.value
+                                         if self.horizontal_alignment is not None else None),
+                "verticalRelativeFrom": self.vertical_relative_from.value,
+                "verticalOffsetEmu": self.vertical_offset_emu,
+                "verticalAlignment": (self.vertical_alignment.value
+                                       if self.vertical_alignment is not None else None),
+                "wrapMode": self.wrap_mode.value, "wrapSide": self.wrap_side.value,
+                "distanceTopEmu": self.distance_top_emu, "distanceBottomEmu": self.distance_bottom_emu,
+                "distanceLeftEmu": self.distance_left_emu, "distanceRightEmu": self.distance_right_emu,
+                "relativeHeight": self.relative_height, "behindDocument": self.behind_document,
+                "locked": self.locked, "layoutInCell": self.layout_in_cell,
+                "allowOverlap": self.allow_overlap}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "FloatingImageLayout":
+        horizontal_alignment = d.get("horizontalAlignment")
+        vertical_alignment = d.get("verticalAlignment")
+        return cls(
+            horizontal_relative_from=ImageHorizontalReference(
+                d.get("horizontalRelativeFrom", "unknown")),
+            horizontal_offset_emu=d.get("horizontalOffsetEmu"),
+            horizontal_alignment=(ImageHorizontalAlignment(horizontal_alignment)
+                                  if horizontal_alignment is not None else None),
+            vertical_relative_from=ImageVerticalReference(
+                d.get("verticalRelativeFrom", "unknown")),
+            vertical_offset_emu=d.get("verticalOffsetEmu"),
+            vertical_alignment=(ImageVerticalAlignment(vertical_alignment)
+                                if vertical_alignment is not None else None),
+            wrap_mode=ImageWrapMode(d.get("wrapMode", "unknown")),
+            wrap_side=ImageWrapSide(d.get("wrapSide", "unknown")),
+            distance_top_emu=int(d.get("distanceTopEmu", 0)),
+            distance_bottom_emu=int(d.get("distanceBottomEmu", 0)),
+            distance_left_emu=int(d.get("distanceLeftEmu", 0)),
+            distance_right_emu=int(d.get("distanceRightEmu", 0)),
+            relative_height=int(d.get("relativeHeight", 0)),
+            behind_document=bool(d.get("behindDocument", False)),
+            locked=bool(d.get("locked", False)),
+            layout_in_cell=bool(d.get("layoutInCell", True)),
+            allow_overlap=bool(d.get("allowOverlap", True)),
+            raw_horizontal_reference=d.get("rawHorizontalReference"),
+            raw_vertical_reference=d.get("rawVerticalReference"),
+            raw_horizontal_position=d.get("rawHorizontalPosition"),
+            raw_vertical_position=d.get("rawVerticalPosition"),
+            raw_wrap_mode=d.get("rawWrapMode"),
+            raw_wrap_side=d.get("rawWrapSide"),
+            raw_relative_size_horizontal=d.get("rawRelativeSizeHorizontal"),
+            raw_relative_size_vertical=d.get("rawRelativeSizeVertical"),
+            raw_flag_tokens=d.get("rawFlagTokens"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageInsertOptions:
+    placement: ImagePlacement = ImagePlacement.INLINE
+    width_points: float | None = None
+    height_points: float | None = None
+    preserve_aspect: bool = True
+    alt_text: str | None = None
+    title: str | None = None
+    floating_layout: FloatingImageLayout | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"placement": self.placement.value, "preserveAspect": self.preserve_aspect}
+        if self.width_points is not None: result["widthPoints"] = self.width_points
+        if self.height_points is not None: result["heightPoints"] = self.height_points
+        if self.alt_text is not None: result["altText"] = self.alt_text
+        if self.title is not None: result["title"] = self.title
+        if self.floating_layout is not None: result["floatingLayout"] = self.floating_layout.to_wire()
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class ImageDimensions:
+    width_points: float | None = None
+    height_points: float | None = None
+    preserve_aspect: bool = True
+
+    def to_wire(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"preserveAspect": self.preserve_aspect}
+        if self.width_points is not None: result["widthPoints"] = self.width_points
+        if self.height_points is not None: result["heightPoints"] = self.height_points
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class ImageOccurrence:
+    id: str
+    markup_kind: ImageMarkupKind
+    placement: ImagePlacement | None
+    can_mutate: bool
+    unsupported_reason: str | None
+    owning_part_uri: str
+    scope: str
+    anchor_id: str
+    span: CharSpan
+    relationship_id: str | None
+    target_part_uri: str | None
+    linked_relationship_id: str | None
+    linked_target: str | None
+    is_embedded: bool
+    is_linked: bool
+    is_broken: bool
+    media_file_name: str | None
+    content_type: str | None
+    format: ImageBinaryFormat
+    content_type_matches_bytes: bool | None
+    intrinsic_width_pixels: int | None
+    intrinsic_height_pixels: int | None
+    rendered_width_points: float | None
+    rendered_height_points: float | None
+    alt_text: str | None
+    title: str | None
+    floating_layout: FloatingImageLayout | None
+    floating_layout_supported: bool
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageOccurrence":
+        return cls(
+            id=d["id"],
+            markup_kind=ImageMarkupKind(d["markupKind"]),
+            placement=(ImagePlacement(d["placement"]) if d.get("placement") else None),
+            can_mutate=bool(d["canMutate"]),
+            unsupported_reason=d.get("unsupportedReason"),
+            owning_part_uri=d["owningPartUri"],
+            scope=d["scope"],
+            anchor_id=d["anchorId"],
+            span=CharSpan._from_wire(d["span"]),
+            relationship_id=d.get("relationshipId"),
+            target_part_uri=d.get("targetPartUri"),
+            linked_relationship_id=d.get("linkedRelationshipId"),
+            linked_target=d.get("linkedTarget"),
+            is_embedded=bool(d.get("isEmbedded", False)),
+            is_linked=bool(d.get("isLinked", False)),
+            is_broken=bool(d.get("isBroken", False)),
+            media_file_name=d.get("mediaFileName"),
+            content_type=d.get("contentType"),
+            format=ImageBinaryFormat(d.get("format", "unknown")),
+            content_type_matches_bytes=d.get("contentTypeMatchesBytes"),
+            intrinsic_width_pixels=d.get("intrinsicWidthPixels"),
+            intrinsic_height_pixels=d.get("intrinsicHeightPixels"),
+            rendered_width_points=d.get("renderedWidthPoints"),
+            rendered_height_points=d.get("renderedHeightPoints"),
+            alt_text=d.get("altText"),
+            title=d.get("title"),
+            floating_layout=(FloatingImageLayout._from_wire(d["floatingLayout"])
+                             if "floatingLayout" in d else None),
+            floating_layout_supported=bool(d.get("floatingLayoutSupported", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageFormatCapability:
+    format: ImageBinaryFormat
+    content_type: str
+    can_inspect: bool
+    can_insert: bool
+    can_replace: bool
+    limitation: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageFormatCapability":
+        return cls(ImageBinaryFormat(d["format"]), d["contentType"],
+                   bool(d["canInspect"]), bool(d["canInsert"]),
+                   bool(d["canReplace"]), d.get("limitation"))
+
+
+@dataclass(frozen=True, slots=True)
+class ImageCapabilities:
+    schema_version: int
+    runtime: str
+    formats: tuple[ImageFormatCapability, ...]
+    operations: tuple[str, ...]
+    mutable_wrap_modes: tuple[ImageWrapMode, ...]
+    horizontal_references: tuple[ImageHorizontalReference, ...]
+    vertical_references: tuple[ImageVerticalReference, ...]
+    max_input_bytes: int
+    max_rendered_points: float
+    default_dpi: float
+    uses_header_parsing_only: bool
+    accepts_binary_bytes: bool
+    supports_network_fetch: bool
+    supports_file_io: bool
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageCapabilities":
+        return cls(
+            schema_version=int(d["schemaVersion"]),
+            runtime=d["runtime"],
+            formats=tuple(ImageFormatCapability._from_wire(value)
+                          for value in d.get("formats", ())),
+            operations=tuple(d.get("operations", ())),
+            mutable_wrap_modes=tuple(ImageWrapMode(value)
+                                     for value in d.get("mutableWrapModes", ())),
+            horizontal_references=tuple(ImageHorizontalReference(value)
+                                        for value in d.get("horizontalReferences", ())),
+            vertical_references=tuple(ImageVerticalReference(value)
+                                      for value in d.get("verticalReferences", ())),
+            max_input_bytes=int(d["maxInputBytes"]),
+            max_rendered_points=float(d["maxRenderedPoints"]),
+            default_dpi=float(d["defaultDpi"]),
+            uses_header_parsing_only=bool(d["usesHeaderParsingOnly"]),
+            accepts_binary_bytes=bool(d["acceptsBinaryBytes"]),
+            supports_network_fetch=bool(d["supportsNetworkFetch"]),
+            supports_file_io=bool(d["supportsFileIo"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1409,6 +1735,7 @@ class EditResult:
     table_anchors: TableAnchorMapping | None = None
     hyperlink_id: str | None = None
     bookmark_name: str | None = None
+    image_id: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
@@ -1426,6 +1753,7 @@ class EditResult:
             if d.get("tableAnchors") else None,
             hyperlink_id=d.get("hyperlinkId"),
             bookmark_name=d.get("bookmarkName"),
+            image_id=d.get("imageId"),
         )
 
 

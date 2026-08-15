@@ -21,7 +21,7 @@ namespace Docxodus
         /// <returns>Tuple of (Width, Height) or null if parsing fails</returns>
         public static (int Width, int Height)? GetDimensions(byte[] bytes)
         {
-            if (bytes == null || bytes.Length < 10)
+            if (bytes == null)
                 return null;
 
             // PNG: 89 50 4E 47 0D 0A 1A 0A
@@ -33,19 +33,19 @@ namespace Docxodus
             }
 
             // JPEG: FF D8 FF
-            if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
             {
                 return GetJpegDimensions(bytes);
             }
 
             // GIF: 47 49 46 38 (GIF8)
-            if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38)
+            if (HasGifSignature(bytes))
             {
                 return GetGifDimensions(bytes);
             }
 
             // BMP: 42 4D (BM)
-            if (bytes[0] == 0x42 && bytes[1] == 0x4D && bytes.Length >= 26)
+            if (bytes.Length >= 26 && bytes[0] == 0x42 && bytes[1] == 0x4D)
             {
                 return GetBmpDimensions(bytes);
             }
@@ -77,16 +77,18 @@ namespace Docxodus
             if (bytes == null || bytes.Length < 4)
                 return null;
 
-            if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47)
+            if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50
+                && bytes[2] == 0x4E && bytes[3] == 0x47 && bytes[4] == 0x0D
+                && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A)
                 return "png";
 
-            if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
                 return "jpeg";
 
-            if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38)
+            if (HasGifSignature(bytes))
                 return "gif";
 
-            if (bytes[0] == 0x42 && bytes[1] == 0x4D)
+            if (bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D)
                 return "bmp";
 
             if (bytes.Length > 11 &&
@@ -94,8 +96,8 @@ namespace Docxodus
                 bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50)
                 return "webp";
 
-            if ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
-                (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A))
+            if (bytes.Length >= 4 && ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
+                (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A)))
                 return "tiff";
 
             return null;
@@ -106,11 +108,14 @@ namespace Docxodus
             // IHDR chunk: offset 8 (chunk length) + 4 (type) = 12
             // Dimensions at bytes 16-23 (big-endian)
             if (bytes.Length < 24) return null;
+            if (bytes[8] != 0 || bytes[9] != 0 || bytes[10] != 0 || bytes[11] != 13
+                || bytes[12] != (byte)'I' || bytes[13] != (byte)'H'
+                || bytes[14] != (byte)'D' || bytes[15] != (byte)'R') return null;
 
             int width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
             int height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
 
-            if (width <= 0 || height <= 0 || width > 65535 || height > 65535)
+            if (width <= 0 || height <= 0)
                 return null;
 
             return (width, height);
@@ -118,56 +123,29 @@ namespace Docxodus
 
         private static (int, int)? GetJpegDimensions(byte[] bytes)
         {
-            // Scan for SOF0 (0xFFC0), SOF1 (0xFFC1), SOF2 (0xFFC2), or SOF3 (0xFFC3) markers
             int i = 2;
-            while (i < bytes.Length - 9)
+            while (i < bytes.Length)
             {
-                if (bytes[i] != 0xFF)
+                while (i < bytes.Length && bytes[i] != 0xFF) i++;
+                while (i < bytes.Length && bytes[i] == 0xFF) i++;
+                if (i >= bytes.Length) return null;
+                byte marker = bytes[i++];
+                if (marker == 0x00) continue;
+                if (marker == 0xD9 || marker == 0xDA) return null;
+                if (marker == 0xD8 || marker == 0x01 || marker is >= 0xD0 and <= 0xD7) continue;
+                if (i + 2 > bytes.Length) return null;
+                int length = (bytes[i] << 8) | bytes[i + 1];
+                if (length < 2 || length > bytes.Length - i) return null;
+                bool isStartOfFrame = marker is >= 0xC0 and <= 0xCF
+                    && marker is not (0xC4 or 0xC8 or 0xCC);
+                if (isStartOfFrame)
                 {
-                    i++;
-                    continue;
+                    if (length < 8 || i + 7 >= bytes.Length) return null;
+                    int height = (bytes[i + 3] << 8) | bytes[i + 4];
+                    int width = (bytes[i + 5] << 8) | bytes[i + 6];
+                    return width > 0 && height > 0 ? (width, height) : null;
                 }
-
-                byte marker = bytes[i + 1];
-
-                // SOF0, SOF1, SOF2, SOF3 markers contain dimensions
-                if (marker >= 0xC0 && marker <= 0xC3)
-                {
-                    int height = (bytes[i + 5] << 8) | bytes[i + 6];
-                    int width = (bytes[i + 7] << 8) | bytes[i + 8];
-
-                    if (width > 0 && height > 0)
-                        return (width, height);
-                }
-
-                // Skip marker
-                if (marker == 0xD8 || marker == 0xD9 || marker == 0x01)
-                {
-                    // Standalone markers
-                    i += 2;
-                }
-                else if (marker >= 0xD0 && marker <= 0xD7)
-                {
-                    // RST markers (no length)
-                    i += 2;
-                }
-                else if (marker == 0x00)
-                {
-                    // Stuffed byte, skip
-                    i += 1;
-                }
-                else if (i + 3 < bytes.Length)
-                {
-                    // Read segment length and skip
-                    int length = (bytes[i + 2] << 8) | bytes[i + 3];
-                    if (length < 2)
-                        break; // Invalid length
-                    i += 2 + length;
-                }
-                else
-                {
-                    break;
-                }
+                i += length;
             }
             return null;
         }
@@ -186,16 +164,25 @@ namespace Docxodus
             return (width, height);
         }
 
+        private static bool HasGifSignature(byte[] bytes) => bytes.Length >= 6
+            && bytes[0] == (byte)'G' && bytes[1] == (byte)'I' && bytes[2] == (byte)'F'
+            && bytes[3] == (byte)'8' && (bytes[4] == (byte)'7' || bytes[4] == (byte)'9')
+            && bytes[5] == (byte)'a';
+
         private static (int, int)? GetBmpDimensions(byte[] bytes)
         {
             // DIB header starts at offset 14
             // Dimensions at bytes 18-25 (little-endian, signed for height)
             if (bytes.Length < 26) return null;
 
+            uint dibSize = (uint)(bytes[14] | (bytes[15] << 8) | (bytes[16] << 16) | (bytes[17] << 24));
+            if (dibSize < 40 || dibSize > bytes.Length - 14) return null;
+
             int width = bytes[18] | (bytes[19] << 8) | (bytes[20] << 16) | (bytes[21] << 24);
             int height = bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24);
 
             // Height can be negative (top-down bitmap)
+            if (height == int.MinValue) return null;
             height = Math.Abs(height);
 
             if (width <= 0 || height <= 0)
@@ -273,12 +260,11 @@ namespace Docxodus
             bool isLittleEndian = bytes[0] == 0x49; // 'I' = little-endian, 'M' = big-endian
 
             // Read IFD offset (bytes 4-7)
-            int ifdOffset = isLittleEndian
-                ? bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)
-                : (bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7];
+            uint ifdOffsetValue = ReadUInt32(bytes, 4, isLittleEndian);
 
-            if (ifdOffset < 0 || ifdOffset + 2 >= bytes.Length)
+            if (ifdOffsetValue > int.MaxValue || ifdOffsetValue > (uint)(bytes.Length - 2))
                 return null;
+            int ifdOffset = (int)ifdOffsetValue;
 
             // Read number of directory entries
             int numEntries = isLittleEndian
@@ -288,7 +274,9 @@ namespace Docxodus
             int width = 0, height = 0;
 
             // Each entry is 12 bytes
-            for (int i = 0; i < numEntries && ifdOffset + 2 + (i + 1) * 12 <= bytes.Length; i++)
+            long entriesEnd = (long)ifdOffset + 2L + (long)numEntries * 12L;
+            if (entriesEnd > bytes.Length) return null;
+            for (int i = 0; i < numEntries; i++)
             {
                 int entryOffset = ifdOffset + 2 + i * 12;
 
@@ -302,22 +290,19 @@ namespace Docxodus
                     int type = isLittleEndian
                         ? bytes[entryOffset + 2] | (bytes[entryOffset + 3] << 8)
                         : (bytes[entryOffset + 2] << 8) | bytes[entryOffset + 3];
+                    uint count = ReadUInt32(bytes, entryOffset + 4, isLittleEndian);
+                    if (count != 1 || type is not (3 or 4)) continue;
 
-                    int value;
+                    uint rawValue;
                     if (type == 3) // SHORT (2 bytes)
                     {
-                        value = isLittleEndian
+                        rawValue = (uint)(isLittleEndian
                             ? bytes[entryOffset + 8] | (bytes[entryOffset + 9] << 8)
-                            : (bytes[entryOffset + 8] << 8) | bytes[entryOffset + 9];
+                            : (bytes[entryOffset + 8] << 8) | bytes[entryOffset + 9]);
                     }
-                    else // LONG (4 bytes)
-                    {
-                        value = isLittleEndian
-                            ? bytes[entryOffset + 8] | (bytes[entryOffset + 9] << 8) |
-                              (bytes[entryOffset + 10] << 16) | (bytes[entryOffset + 11] << 24)
-                            : (bytes[entryOffset + 8] << 24) | (bytes[entryOffset + 9] << 16) |
-                              (bytes[entryOffset + 10] << 8) | bytes[entryOffset + 11];
-                    }
+                    else rawValue = ReadUInt32(bytes, entryOffset + 8, isLittleEndian);
+                    if (rawValue == 0 || rawValue > int.MaxValue) return null;
+                    int value = (int)rawValue;
 
                     if (tag == 256) width = value;
                     else height = value;
@@ -332,5 +317,11 @@ namespace Docxodus
 
             return null;
         }
+
+        private static uint ReadUInt32(byte[] bytes, int offset, bool littleEndian) => littleEndian
+            ? (uint)(bytes[offset] | (bytes[offset + 1] << 8)
+                | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24))
+            : (uint)((bytes[offset] << 24) | (bytes[offset + 1] << 16)
+                | (bytes[offset + 2] << 8) | bytes[offset + 3]);
     }
 }

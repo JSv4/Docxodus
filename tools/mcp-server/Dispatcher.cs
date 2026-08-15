@@ -41,6 +41,7 @@ internal static class Dispatcher
         "docxodus_list" => ListTool(store, args),
         "docxodus_comment" => Comment(store, args),
         "docxodus_links" => Links(store, args),
+        "docxodus_images" => Images(store, args),
         "docxodus_annotate" => Annotate(store, args),
         "docxodus_track_changes" => TrackChanges(store, args),
         "docxodus_mutations" => Mutations(store, args),
@@ -582,6 +583,48 @@ internal static class Dispatcher
     private static bool IsMutatingLinksAction(string action) =>
         action is not ("list_hyperlinks" or "list_bookmarks");
 
+    // ─── Native images (issue #453) ───────────────────────────────────
+
+    private static string Images(SessionStore store, JsonElement args)
+    {
+        var action = Str(args, "action");
+        if (action == "capabilities")
+            return $"{{\"capabilities\":{DocxSessionOps.GetImageCapabilities()}}}";
+        var session = Session(store, args);
+        return RunImagesAction(session, action, args);
+    }
+
+    private static string RunImagesAction(DocSession session, string action, JsonElement args) =>
+        action switch
+        {
+            "list" => $"{{\"images\":{DocxSessionOps.ListImages(session.Handle,
+                ParseLinkScopes(OptStr(args, "scope")))}}}",
+            "insert" => DocxSessionOps.InsertImage(session.Handle, Str(args, "anchorId"),
+                Int(args, "characterOffset"), Str(args, "imageBase64"), RawObjectOrEmpty(args, "options")),
+            "replace" => DocxSessionOps.ReplaceImage(session.Handle,
+                Str(args, "imageId"), Str(args, "imageBase64")),
+            "set_dimensions" => DocxSessionOps.SetImageDimensions(session.Handle,
+                Str(args, "imageId"), RawObject(args, "dimensions")),
+            "set_metadata" => SetImageMetadata(session, args),
+            "set_floating_layout" => DocxSessionOps.SetImageFloatingLayout(session.Handle,
+                Str(args, "imageId"), RawObject(args, "layout")),
+            "remove" => DocxSessionOps.RemoveImage(session.Handle, Str(args, "imageId")),
+            _ => throw new McpToolException($"unknown docxodus_images action: {action}"),
+        };
+
+    private static bool IsMutatingImagesAction(string action) =>
+        action is not ("capabilities" or "list");
+
+    private static string SetImageMetadata(DocSession session, JsonElement args)
+    {
+        if (!args.TryGetProperty("altText", out var alt) || alt.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)
+            || !args.TryGetProperty("title", out var title) || title.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            throw new McpToolException("docxodus_images set_metadata requires altText and title as string or null");
+        return DocxSessionOps.SetImageMetadata(session.Handle, Str(args, "imageId"),
+            alt.ValueKind == JsonValueKind.Null ? null : alt.GetString(),
+            title.ValueKind == JsonValueKind.Null ? null : title.GetString());
+    }
+
     private static string AddComment(DocSession session, JsonElement args)
     {
         var anchorId = OptStr(args, "anchorId");
@@ -836,6 +879,7 @@ internal static class Dispatcher
                     "docxodus_list" => RunListAction(session, action, mutationArgs),
                     "docxodus_comment" => RunCommentAction(session, action, mutationArgs),
                     "docxodus_links" => RunLinksAction(session, action, mutationArgs),
+                    "docxodus_images" => RunImagesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
@@ -866,6 +910,8 @@ internal static class Dispatcher
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
+            "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
+                or "set_metadata" or "set_floating_layout" or "remove",
             _ => false,
         };
         return known ? null : new EditError(
@@ -1134,7 +1180,39 @@ internal static class Dispatcher
             case ("docxodus_links", "remove_bookmark"):
                 RequireStrings(args, "name");
                 break;
+
+            case ("docxodus_images", "insert"):
+                RequireStrings(args, "anchorId", "imageBase64");
+                RequireNumbers(args, "characterOffset");
+                _ = RawObjectOrEmpty(args, "options");
+                break;
+            case ("docxodus_images", "replace"):
+                RequireStrings(args, "imageId", "imageBase64");
+                break;
+            case ("docxodus_images", "set_dimensions"):
+                RequireStrings(args, "imageId");
+                _ = RawObject(args, "dimensions");
+                break;
+            case ("docxodus_images", "set_metadata"):
+                RequireStrings(args, "imageId");
+                ValidateNullableString(args, "altText");
+                ValidateNullableString(args, "title");
+                break;
+            case ("docxodus_images", "set_floating_layout"):
+                RequireStrings(args, "imageId");
+                _ = RawObject(args, "layout");
+                break;
+            case ("docxodus_images", "remove"):
+                RequireStrings(args, "imageId");
+                break;
         }
+    }
+
+    private static void ValidateNullableString(JsonElement args, string name)
+    {
+        if (!args.TryGetProperty(name, out var value)
+            || value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            throw new McpToolException($"argument \"{name}\" must be a string or null");
     }
 
     private static void ValidateCommentAddArguments(JsonElement args)
@@ -1332,6 +1410,23 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
             throw new McpToolException($"missing required array argument \"{name}\"");
         return v.GetRawText();
+    }
+
+    private static string RawObject(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var value)
+            || value.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"missing required object argument \"{name}\"");
+        return value.GetRawText();
+    }
+
+    private static string RawObjectOrEmpty(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var value))
+            return "{}";
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"optional argument \"{name}\" must be an object when present");
+        return value.GetRawText();
     }
 
     private static string BuildTableBorderSpecJson(JsonElement args)

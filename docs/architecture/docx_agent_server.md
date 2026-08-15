@@ -85,7 +85,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 16 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 17 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -103,7 +103,7 @@ unknown methods, which a well-behaved client should never produce.
 ```
 docxodus_open(path) → session_id
    ↓ (any number of docxodus_edit / docxodus_format / docxodus_create / docxodus_table /
-   ↓  docxodus_list / docxodus_comment / docxodus_annotate / docxodus_links / docxodus_track_changes /
+   ↓  docxodus_list / docxodus_comment / docxodus_annotate / docxodus_links / docxodus_images / docxodus_track_changes /
    ↓  docxodus_mutations calls)
 docxodus_save(session_id, path?)
    ↓
@@ -218,7 +218,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, thirteen grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, four read/preview tools, and eleven grouped-intent tools. Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -389,6 +389,31 @@ cross-part ranges, active inbound links, unsupported inline boundaries, and trac
 edits are ordinary typed `EditResult` failures. External relationships are owned by the actual
 body/header/footer/note part; internal targets are relationship-free `w:anchor` links.
 
+### `docxodus_images` — native Word images
+
+`capabilities` needs no session and reports the runtime's exact formats, operations, writable
+wrap/reference vocabulary, limits, units, and lack of network/file I/O. `list` accepts
+`scope: body|headers|footers|footnotes|endnotes|comments|all` and returns one occurrence per DrawingML
+`a:blip` or VML `v:imagedata`, including owner part, anchor/span, relationship topology, detected
+binary format and dimensions, rendered size, metadata, floating layout, and an explicit
+`canMutate`/`unsupportedReason` decision.
+
+`insert` takes a paragraph `anchorId`, `characterOffset`, `imageBase64`, and optional placement,
+size, metadata, and floating-layout options. `replace`, `set_dimensions`, `set_metadata`,
+`set_floating_layout`, and `remove` consume the `imageId` returned by insert/list. This JSON tool
+accepts bytes only as base64: it never interprets a URL or local path, and malformed base64 is a
+typed `invalid_image_data` result. Rendered width/height are points; floating offsets and wrap
+distances are exact EMUs. Omitted insert size uses intrinsic pixels at 96 DPI (0.75 point/pixel).
+
+The writable subset is deliberately strict: embedded canonical DrawingML pictures, inline or
+floating with `none`/`square` wrap. PNG, JPEG, GIF, BMP, and TIFF are writable. External linked
+images, legacy VML, WebP, multi-picture/non-canonical DrawingML, unsupported wrap geometry, and
+malformed or content-type-mismatched media stay enumerable but read-only. The Open XML SDK
+version used here has no Word `ImagePartType` for WebP, so advertising WebP insertion would be a
+false capability claim. Image mutations are also rejected under `render_inline` tracked mode
+because OOXML cannot represent them faithfully as this API's tracked revisions. The full core and
+cross-language contract is in `docs/architecture/native_images.md`.
+
 ### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode
 
 `set_mode` (issue #304) switches how the session records its *own subsequent* edits —
@@ -436,7 +461,8 @@ per-revision listing does not enumerate (see Known gaps).
 ### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
-`docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links` (their `undo`/`redo` and
+`docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links`/
+`docxodus_images` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
 sequence of *mutations*).
 
@@ -508,6 +534,9 @@ batch just created. `docxodus_get_content` with `format: "version"` reads the cu
 monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.
+
+Image `insert`/`replace`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` actions
+are batchable; image `capabilities` and `list` are rejected as read-only steps.
 
 ### `docxodus_table` — tables
 

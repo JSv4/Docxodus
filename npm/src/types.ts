@@ -1200,6 +1200,14 @@ export interface DocxodusWasmExports {
     AddHyperlink: (handle: number, anchor: string, start: number, length: number, kind: string, target: string) => string;
     UpdateHyperlink: (handle: number, hyperlinkId: string, kind: string, target: string) => string;
     RemoveHyperlink: (handle: number, hyperlinkId: string) => string;
+    GetImageCapabilities: () => string;
+    ListImages: (handle: number, scopes: number) => string;
+    InsertImage: (handle: number, anchor: string, characterOffset: number, imageBase64: string, optionsJson: string) => string;
+    ReplaceImage: (handle: number, imageId: string, imageBase64: string) => string;
+    SetImageDimensions: (handle: number, imageId: string, dimensionsJson: string) => string;
+    SetImageMetadata: (handle: number, imageId: string, altText: string | null, title: string | null) => string;
+    SetImageFloatingLayout: (handle: number, imageId: string, layoutJson: string) => string;
+    RemoveImage: (handle: number, imageId: string) => string;
     ListBookmarks: (handle: number, scopes: number) => string;
     AddBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RenameBookmark: (handle: number, name: string, newName: string) => string;
@@ -1493,6 +1501,7 @@ export interface EditResult {
   annotationId?: string;
   hyperlinkId?: string;
   bookmarkName?: string;
+  imageId?: string;
 }
 
 export type HyperlinkKind = "external" | "internal";
@@ -1509,6 +1518,84 @@ export interface HyperlinkInfo {
   relationshipId?: string;
   relationshipIsExternal?: boolean;
   isBroken: boolean;
+}
+
+export type ImageBinaryFormat = "unknown" | "png" | "jpeg" | "gif" | "bmp" | "tiff" | "webp";
+export type ImageMarkupKind = "modern_drawing" | "legacy_vml" | "unsupported_drawing";
+export type ImagePlacement = "inline" | "floating";
+export type ImageWrapMode = "none" | "square" | "tight" | "through" | "top_and_bottom" | "unknown";
+export type ImageWrapSide = "both_sides" | "left" | "right" | "largest" | "unknown";
+export type ImageHorizontalReference = "page" | "margin" | "column" | "character" | "unknown";
+export type ImageVerticalReference = "page" | "margin" | "paragraph" | "line" | "unknown";
+export type ImageHorizontalAlignment = "left" | "center" | "right" | "inside" | "outside" | "unknown";
+export type ImageVerticalAlignment = "top" | "center" | "bottom" | "inside" | "outside" | "unknown";
+
+export interface FloatingImageLayout {
+  horizontalRelativeFrom?: ImageHorizontalReference;
+  horizontalOffsetEmu?: number | null;
+  horizontalAlignment?: ImageHorizontalAlignment | null;
+  verticalRelativeFrom?: ImageVerticalReference;
+  verticalOffsetEmu?: number | null;
+  verticalAlignment?: ImageVerticalAlignment | null;
+  wrapMode?: ImageWrapMode;
+  wrapSide?: ImageWrapSide;
+  distanceTopEmu?: number;
+  distanceBottomEmu?: number;
+  distanceLeftEmu?: number;
+  distanceRightEmu?: number;
+  relativeHeight?: number;
+  behindDocument?: boolean;
+  locked?: boolean;
+  layoutInCell?: boolean;
+  allowOverlap?: boolean;
+  rawHorizontalReference?: string;
+  rawVerticalReference?: string;
+  rawHorizontalPosition?: string;
+  rawVerticalPosition?: string;
+  rawWrapMode?: string;
+  rawWrapSide?: string;
+  rawRelativeSizeHorizontal?: string;
+  rawRelativeSizeVertical?: string;
+  rawFlagTokens?: Record<string, string>;
+}
+
+export interface ImageInsertOptions {
+  placement?: ImagePlacement;
+  widthPoints?: number;
+  heightPoints?: number;
+  preserveAspect?: boolean;
+  altText?: string | null;
+  title?: string | null;
+  floatingLayout?: FloatingImageLayout;
+}
+
+export interface ImageDimensions {
+  widthPoints?: number;
+  heightPoints?: number;
+  preserveAspect?: boolean;
+}
+
+export interface ImageOccurrence {
+  id: string; markupKind: ImageMarkupKind; placement?: ImagePlacement; canMutate: boolean;
+  unsupportedReason?: string; owningPartUri: string; scope: string; anchorId: string; span: CharSpan;
+  relationshipId?: string; targetPartUri?: string; linkedRelationshipId?: string; linkedTarget?: string;
+  isEmbedded: boolean; isLinked: boolean; isBroken: boolean; mediaFileName?: string; contentType?: string;
+  format: ImageBinaryFormat; contentTypeMatchesBytes?: boolean; intrinsicWidthPixels?: number;
+  intrinsicHeightPixels?: number; renderedWidthPoints?: number; renderedHeightPoints?: number;
+  altText?: string; title?: string; floatingLayout?: FloatingImageLayout; floatingLayoutSupported: boolean;
+}
+
+export interface ImageFormatCapability {
+  format: ImageBinaryFormat; contentType: string; canInspect: boolean; canInsert: boolean;
+  canReplace: boolean; limitation?: string;
+}
+
+export interface ImageCapabilities {
+  schemaVersion: number; runtime: string; formats: ImageFormatCapability[]; operations: string[];
+  mutableWrapModes: ImageWrapMode[]; horizontalReferences: ImageHorizontalReference[];
+  verticalReferences: ImageVerticalReference[]; maxInputBytes: number; maxRenderedPoints: number;
+  defaultDpi: number; usesHeaderParsingOnly: boolean; acceptsBinaryBytes: boolean;
+  supportsNetworkFetch: boolean; supportsFileIo: boolean;
 }
 
 export interface DocumentRange {

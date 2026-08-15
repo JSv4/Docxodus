@@ -597,6 +597,101 @@ internal static class DocxSessionOps
         DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidHyperlinkTarget,
             $"unknown hyperlink target kind '{kind}'; expected 'internal' or 'external'", anchorId));
 
+    // ─── Native images (issue #453) ────────────────────────────────────
+
+    public static string GetImageCapabilities() =>
+        DocxSessionJson.SerializeImageCapabilities(DocxSession.GetImageCapabilities());
+
+    public static string ListImages(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeImages(SessionRegistry.Get(handle).ListImages(scopes));
+
+    public static string InsertImage(int handle, string anchorId, int characterOffset,
+        string imageBase64, string optionsJson)
+    {
+        if (!TryDecodeImageBase64(imageBase64, anchorId, out var bytes, out var error)) return error!;
+        try
+        {
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertImage(
+                anchorId, characterOffset, bytes!, DocxSessionJson.ParseImageInsertOptions(optionsJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                $"invalid image options JSON: {ex.Message}", anchorId));
+        }
+    }
+
+    public static string ReplaceImage(int handle, string imageId, string imageBase64)
+    {
+        if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceImage(imageId, bytes!));
+    }
+
+    public static string SetImageDimensions(int handle, string imageId, string dimensionsJson)
+    {
+        try
+        {
+            var dimensions = DocxSessionJson.ParseImageDimensions(dimensionsJson);
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageDimensions(imageId,
+                dimensions.Width, dimensions.Height, dimensions.PreserveAspect));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageDimensions,
+                $"invalid image dimensions JSON: {ex.Message}"));
+        }
+    }
+
+    public static string SetImageMetadata(int handle, string imageId, string? altText, string? title) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageMetadata(imageId, altText, title));
+
+    public static string SetImageFloatingLayout(int handle, string imageId, string layoutJson)
+    {
+        try
+        {
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageFloatingLayout(
+                imageId, DocxSessionJson.ParseFloatingImageLayout(layoutJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                $"invalid floating layout JSON: {ex.Message}"));
+        }
+    }
+
+    public static string RemoveImage(int handle, string imageId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveImage(imageId));
+
+    private static bool TryDecodeImageBase64(string? base64, string? anchorId,
+        out byte[]? bytes, out string? error)
+    {
+        bytes = null;
+        error = null;
+        if (string.IsNullOrEmpty(base64))
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageData,
+                "image base64 is empty", anchorId));
+            return false;
+        }
+        long maxEncodedLength = ((DocxSession.MaxImageInputBytes + 2) / 3) * 4;
+        if (base64.Length > maxEncodedLength)
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.ImageTooLarge,
+                $"encoded image exceeds the {DocxSession.MaxImageInputBytes}-byte runtime limit", anchorId));
+            return false;
+        }
+        try { bytes = System.Convert.FromBase64String(base64); return true; }
+        catch (System.FormatException)
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageData,
+                "imageBase64 is not valid base64", anchorId));
+            return false;
+        }
+    }
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op,

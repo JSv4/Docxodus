@@ -1431,6 +1431,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_edit",
             "docxodus_format",
             "docxodus_get_content",
+            "docxodus_images",
             "docxodus_links",
             "docxodus_list",
             "docxodus_mutations",
@@ -2074,5 +2075,123 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
             $$"""{"sessionId":{{sessionArg}},"action":"remove_bookmark","name":"ClauseTwo"}""")))
             .GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP144_NativeImageCapabilitiesAndCrud_UseExplicitBase64Boundary()
+    {
+        var capabilities = Parse(Dispatcher.Call(_store, "docxodus_images",
+            J("""{"action":"capabilities"}"""))).GetProperty("capabilities");
+        Assert.Equal(96, capabilities.GetProperty("defaultDpi").GetDouble());
+        Assert.False(capabilities.GetProperty("supportsNetworkFetch").GetBoolean());
+        Assert.DoesNotContain(capabilities.GetProperty("horizontalReferences").EnumerateArray(),
+            value => value.GetString() == "unknown");
+        var imageTool = Assert.Single(ToolCatalog.Tools, tool => tool.Name == "docxodus_images");
+        using (var schema = JsonDocument.Parse(imageTool.InputSchemaJson))
+            Assert.Contains("comments", schema.RootElement.GetProperty("properties")
+                .GetProperty("scope").GetProperty("enum").EnumerateArray()
+                .Select(value => value.GetString()));
+
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var png = new byte[24];
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R' }.CopyTo(png, 0);
+        png[19] = 2;
+        png[23] = 3;
+        var imageBase64 = JsonSerializer.Serialize(Convert.ToBase64String(png));
+
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"insert","anchorId":"{{{anchor}}}","characterOffset":0,"imageBase64":{{{imageBase64}}},"options":{"altText":"diagram","widthPoints":72}}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean());
+        var imageId = inserted.GetProperty("imageId").GetString()!;
+
+        var images = Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list","scope":"body"}""")));
+        var image = Assert.Single(images.GetProperty("images").EnumerateArray());
+        Assert.Equal(imageId, image.GetProperty("id").GetString());
+        Assert.Equal("png", image.GetProperty("format").GetString());
+
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$$"""{"sessionId":{{{sessionArg}}},"action":"set_dimensions","imageId":{{{JsonSerializer.Serialize(imageId)}}},"dimensions":{"widthPoints":36}}""")))
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_metadata","imageId":{{JsonSerializer.Serialize(imageId)}},"altText":"updated","title":null}""")))
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"remove","imageId":{{JsonSerializer.Serialize(imageId)}}}""")))
+            .GetProperty("success").GetBoolean());
+        Assert.Empty(Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("images").EnumerateArray());
+
+        var urlRejected = Parse(Dispatcher.Call(_store, "docxodus_images", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert","anchorId":"{{anchor}}","characterOffset":0,"imageBase64":"https://example.test/image.png"}""")));
+        Assert.False(urlRejected.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_image_data",
+            urlRejected.GetProperty("error").GetProperty("code").GetString());
+        var wrongOptions = "{\"sessionId\":" + sessionArg
+            + ",\"action\":\"insert\",\"anchorId\":" + JsonSerializer.Serialize(anchor)
+            + ",\"characterOffset\":0,\"imageBase64\":" + imageBase64
+            + ",\"options\":false}";
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(
+            _store, "docxodus_images", J(wrongOptions)));
+    }
+
+    [Fact]
+    public void MCP145_NativeImageBatchPreviewRollsBackParts_AndRejectsReadOnlyActions()
+    {
+        var sessionId = OpenSession();
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var png = new byte[24];
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R' }.CopyTo(png, 0);
+        png[19] = 2;
+        png[23] = 3;
+        var imageBase64 = Convert.ToBase64String(png);
+        var previewArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            mode = "preview",
+            steps = new[]
+            {
+                new
+                {
+                    tool = "docxodus_images",
+                    args = new
+                    {
+                        action = "insert", anchorId = anchor, characterOffset = 0,
+                        imageBase64, options = new { altText = "preview only" },
+                    },
+                },
+            },
+        });
+        var preview = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(previewArgs)));
+        Assert.Equal("ok", preview.GetProperty("status").GetString());
+        Assert.Equal(1, preview.GetProperty("editsApplied").GetInt32());
+
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_images", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            action = "list",
+        }))));
+        Assert.Empty(listed.GetProperty("images").EnumerateArray());
+        var savedPath = Path.Combine(_root, "image-preview-rollback.docx");
+        Save(sessionId, savedPath);
+        using (var stream = new MemoryStream(File.ReadAllBytes(savedPath)))
+        using (var document = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false))
+            Assert.Empty(document.MainDocumentPart!.ImageParts);
+
+        var readOnlyArgs = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            mode = "preview",
+            steps = new[] { new { tool = "docxodus_images", args = new { action = "list" } } },
+        });
+        var invalid = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(readOnlyArgs)));
+        Assert.False(invalid.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_batch_step",
+            invalid.GetProperty("failure").GetProperty("error").GetProperty("code").GetString());
     }
 }

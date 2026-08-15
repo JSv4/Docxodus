@@ -146,6 +146,21 @@ internal static class Dispatcher
         "update_hyperlink" => DocxSessionOps.UpdateHyperlink(
             Handle(args), Str(args, "hyperlinkId"), Str(args, "kind"), Str(args, "target")),
         "remove_hyperlink" => DocxSessionOps.RemoveHyperlink(Handle(args), Str(args, "hyperlinkId")),
+        "get_image_capabilities" => DocxSessionOps.GetImageCapabilities(),
+        "list_images" => DocxSessionOps.ListImages(
+            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+        "insert_image" => DocxSessionOps.InsertImage(
+            Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"),
+            Str(args, "imageBase64"), JsonObjectOrEmpty(args, "options")),
+        "replace_image" => DocxSessionOps.ReplaceImage(
+            Handle(args), Str(args, "imageId"), Str(args, "imageBase64")),
+        "set_image_dimensions" => DocxSessionOps.SetImageDimensions(
+            Handle(args), Str(args, "imageId"), JsonObjectOrEmpty(args, "dimensions")),
+        "set_image_metadata" => DocxSessionOps.SetImageMetadata(
+            Handle(args), Str(args, "imageId"), OptStr(args, "altText"), OptStr(args, "title")),
+        "set_image_floating_layout" => DocxSessionOps.SetImageFloatingLayout(
+            Handle(args), Str(args, "imageId"), JsonObject(args, "layout")),
+        "remove_image" => DocxSessionOps.RemoveImage(Handle(args), Str(args, "imageId")),
         "list_bookmarks" => DocxSessionOps.ListBookmarks(
             Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
         "add_bookmark" => DocxSessionOps.AddBookmark(
@@ -780,5 +795,14 @@ internal static class Dispatcher
             || v.ValueKind != JsonValueKind.Object)
             throw new FormatException($"args missing object \"{name}\"");
         return v;
+    }
+
+    private static string JsonObjectOrEmpty(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var value))
+            return "{}";
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"optional argument \"{name}\" must be an object when present");
+        return value.GetRawText();
     }
 }
