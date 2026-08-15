@@ -1706,6 +1706,9 @@ public enum EditErrorCode
     /// <summary>The exact response for a known transaction was evicted from bounded retention.</summary>
     TransactionResultEvicted,
 
+    /// <summary>A known transaction never recorded a terminal response, so its outcome is unknown.</summary>
+    TransactionIncomplete,
+
     /// <summary>The revision family is visible but has no safe selective resolver.</summary>
     RevisionUnsupported,
 

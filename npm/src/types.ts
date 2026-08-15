@@ -1357,6 +1357,7 @@ export type EditErrorCode =
   | "invalid_transaction"
   | "transaction_conflict"
   | "transaction_result_evicted"
+  | "transaction_incomplete"
   | "hyperlink_not_found"
   | "bookmark_not_found"
   | "duplicate_bookmark_name"

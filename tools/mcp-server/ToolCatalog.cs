@@ -509,7 +509,7 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "transactionId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdNonBlankPattern)}}, "description": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdSchemaDescription)}} },
+                "transactionId": { "type": "string", "minLength": 1, "maxLength": {{MutationTransactions.MaxTransactionIdLength}}, "pattern": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdNonBlankPattern)}}, "description": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdSchemaDescription)}} },
                 "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
                 "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: isolated dry-run shorthand using atomic policy unless previewPolicy says best_effort." },
                 "preview": { "type": "boolean", "default": false, "description": "Dry-run mode for mode=atomic or mode=best_effort. The complete package is cloned and the live document, version, caches, configuration, and undo/redo history are never touched." },

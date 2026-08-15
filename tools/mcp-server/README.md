@@ -103,11 +103,45 @@ returns the exact original serialized batch result without applying again or rec
 different request with that id fails with
 `transaction_conflict`. Results expose
 `transaction: { schemaVersion: 1, transactionId, requestFingerprint }`. Preview/dry-run batches and
-direct or nested step calls reject transaction ids. Retention is bounded per session (128 complete
-responses followed by 1,024 response-less tombstones). Save preserves this journal; close clears
-it, and reopen starts a new identity namespace. Replay after undo/redo returns the historical
-response without changing the document or either history cursor; use ordinary redo to restore an
-undone mutation.
+direct or nested step calls reject transaction ids — a client that blanket-attaches an idempotency
+key to *every* tool call gets a hard error on the other tools, so attach it only to applying
+`docxodus_mutations` batches. Save preserves this journal; close clears it, and reopen starts a new
+identity namespace. Replay after undo/redo returns the historical response without changing the
+document or either history cursor; use ordinary redo to restore an undone mutation.
+
+### Retention bound and its memory cost
+
+Retention is bounded per session by **both** a count and a byte budget: at most 128 complete
+responses, at most 32 MiB of retained response text, whichever binds first, followed by 1,024
+response-less FIFO tombstones that keep an id bound without holding its payload. A single response
+larger than the whole budget evicts itself rather than raising the ceiling.
+
+The byte budget exists because a count is not a memory bound. A retained entry is the complete
+serialized `MutationBatchResult`, which carries every step's `results` **twice** (once under
+`steps[].results` and once in the duplicate top-level `results`) plus `patch.markdown` and the
+revision/comment/annotation delta sets. Measured: a single-step `insert_paragraph` batch against a
+blank document already retains **~3.2 KB**, so 128 of those is ~400 KB — and a large scoped batch
+over a real document is orders of magnitude bigger, which is what the 32 MiB cap is there for. The
+worst case is therefore **~32 MiB per open session**; the number of open sessions is *not* bounded,
+and there is no TTL or idle-session eviction, so a long-lived server that is never sent
+`docxodus_close` still grows with the number of sessions.
+
+### Lifecycle hazards
+
+- **A validation failure burns the id.** A structured rejection (say `mode: "sideways"`) is itself
+  a terminal response and is cached. Fixing the typo and resending under the same `transactionId`
+  gets `transaction_conflict`, not a retry. Always use a **fresh** id after any failure you intend
+  to correct; reuse an id only for a byte-identical resend of the same request.
+- **Tombstone expiry lets a stale retry re-apply.** After roughly 128 further transactions plus
+  1,024 more tombstones, an id is genuinely forgotten and a retry that arrives after that becomes a
+  **fresh mutation that applies again**. Idempotency is a bounded-window guarantee, not a permanent
+  one; a client holding a request for a long time must not assume the window is still open.
+- **`transaction_incomplete`** means the id is bound to this exact request but no terminal response
+  was ever recorded, so whether the mutation applied is *unknown*. Inspect the document and retry
+  under a new id.
+- **Idempotency is MCP-only.** `execute_batch` through WASM/npm and through the stdio host /
+  `docx-scalpel` has no transaction identity and no replay: a retry there re-applies. Do not
+  assume the MCP guarantee from another transport.
 
 ## Known gaps
 

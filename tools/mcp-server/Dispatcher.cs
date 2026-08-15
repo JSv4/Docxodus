@@ -897,6 +897,19 @@ internal static class Dispatcher
                     "transaction");
                 return MutationTransactions.AttachIdentity(expired, identity);
             }
+            case MutationTransactionDecisionKind.Incomplete:
+            {
+                var incomplete = MutationTransactions.SerializeFailure(
+                    RequestedCoreMode(args),
+                    preview: false,
+                    SafeVersion(liveSession),
+                    EditErrorCode.TransactionIncomplete,
+                    "this transactionId is bound to this exact request but never recorded a "
+                    + "terminal response, so whether the mutation applied is unknown; inspect the "
+                    + "document and retry under a new transactionId",
+                    "transaction");
+                return MutationTransactions.AttachIdentity(incomplete, identity);
+            }
             case MutationTransactionDecisionKind.Reserved:
                 break;
             default:
@@ -904,28 +917,40 @@ internal static class Dispatcher
         }
 
         var reservation = decision.Record!;
-        string terminalResponse;
+        var completed = false;
         try
         {
-            terminalResponse = MutationTransactions.AttachIdentity(
-                ExecuteMutationRequest(liveSession, args, transactional: true), identity);
+            string terminalResponse;
+            try
+            {
+                terminalResponse = MutationTransactions.AttachIdentity(
+                    ExecuteMutationRequest(liveSession, args, transactional: true), identity);
+            }
+            catch (Exception ex)
+            {
+                var callerError = ex is McpToolException
+                    or FormatException or JsonException or OverflowException;
+                terminalResponse = MutationTransactions.AttachIdentity(
+                    MutationTransactions.SerializeFailure(
+                        RequestedCoreMode(args),
+                        preview: false,
+                        SafeVersion(liveSession),
+                        callerError ? EditErrorCode.InvalidBatchStep : EditErrorCode.InternalError,
+                        ex.Message,
+                        callerError ? "validation" : "dispatch"),
+                    identity);
+            }
+            liveSession.MutationTransactions.Complete(reservation, terminalResponse);
+            completed = true;
+            return terminalResponse;
         }
-        catch (Exception ex)
+        finally
         {
-            var callerError = ex is McpToolException
-                or FormatException or JsonException or OverflowException;
-            terminalResponse = MutationTransactions.AttachIdentity(
-                MutationTransactions.SerializeFailure(
-                    RequestedCoreMode(args),
-                    preview: false,
-                    SafeVersion(liveSession),
-                    callerError ? EditErrorCode.InvalidBatchStep : EditErrorCode.InternalError,
-                    ex.Message,
-                    callerError ? "validation" : "dispatch"),
-                identity);
+            // If serializing the failure or retaining the response itself threw, the reservation
+            // would otherwise be stranded in the journal forever. Retire it to an outcome-unknown
+            // tombstone so the identity stays bound, stays truthful, and stays evictable.
+            if (!completed) liveSession.MutationTransactions.Abandon(reservation);
         }
-        liveSession.MutationTransactions.Complete(reservation, terminalResponse);
-        return terminalResponse;
     }
 
     private static string ExecuteMutationRequest(

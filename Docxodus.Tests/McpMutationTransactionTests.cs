@@ -856,6 +856,126 @@ public sealed class McpMutationTransactionTests : IDisposable
             transactionId.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Equal(128, MutationTransactions.DefaultFullRecordCapacity);
         Assert.Equal(1024, MutationTransactions.DefaultTombstoneCapacity);
+        Assert.Equal(32L * 1024 * 1024, MutationTransactions.DefaultResponseByteBudget);
+    }
+
+    [Fact]
+    public void MCP449_RetainedResponsesAreBoundedByBytesNotOnlyByCount()
+    {
+        // The count cap is deliberately generous here so only the byte budget can evict.
+        var journal = new MutationTransactions(
+            fullRecordCapacity: 64, tombstoneCapacity: 8, responseByteBudget: 200);
+        string Response(char fill) => "{\"r\":\"" + new string(fill, 40) + "\"}";
+        Assert.Equal(96, (long)Response('a').Length * sizeof(char));
+
+        journal.Complete(AssertReserved(journal.Begin("a", "sha256:a")), Response('a'));
+        journal.Complete(AssertReserved(journal.Begin("b", "sha256:b")), Response('b'));
+        Assert.Equal(192, journal.RetainedResponseBytes);
+        Assert.Equal(2, journal.FullRecordCount);
+        Assert.Equal(0, journal.TombstoneCount);
+
+        // 288 bytes would exceed the 200-byte budget, so the oldest retained response goes even
+        // though the count cap is nowhere near reached.
+        journal.Complete(AssertReserved(journal.Begin("c", "sha256:c")), Response('c'));
+        Assert.Equal(192, journal.RetainedResponseBytes);
+        Assert.Equal(2, journal.FullRecordCount);
+        Assert.Equal(1, journal.TombstoneCount);
+        Assert.Null(journal.GetRecord("a"));
+        Assert.Equal(MutationTransactionDecisionKind.ResultEvicted,
+            journal.Begin("a", "sha256:a").Kind);
+        Assert.Equal(MutationTransactionDecisionKind.Replay, journal.Begin("c", "sha256:c").Kind);
+
+        // A single response larger than the whole budget evicts itself rather than raising the
+        // ceiling: the identity stays bound and answers "evicted", and the bound stays a bound.
+        journal.Complete(
+            AssertReserved(journal.Begin("huge", "sha256:huge")), new string('x', 200));
+        Assert.Equal(0, journal.RetainedResponseBytes);
+        Assert.Equal(0, journal.FullRecordCount);
+        Assert.Equal(MutationTransactionDecisionKind.ResultEvicted,
+            journal.Begin("huge", "sha256:huge").Kind);
+    }
+
+    [Fact]
+    public void MCP449_RetainedResponseCostIsMeasuredFromRealBatchResults()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var journal = _store.Get(sessionId).MutationTransactions;
+        var response = Dispatcher.Call(_store, "docxodus_mutations", J(MutationArgs(
+            sessionId, "tx-cost", FirstAnchor(_store, sessionId), "one small step")));
+
+        Assert.Equal((long)response.Length * sizeof(char), journal.RetainedResponseBytes);
+        // Anchors the per-session memory cost documented in tools/mcp-server/README.md: even a
+        // one-step batch retains kilobytes, because a MutationBatchResult carries every step's
+        // results twice plus the markdown patch and the semantic delta sets.
+        Assert.InRange(journal.RetainedResponseBytes, 1_024L, 128L * 1024);
+    }
+
+    [Fact]
+    public void MCP449_IncompleteReservationIsReportedTruthfullyAndIsEvictable()
+    {
+        var journal = new MutationTransactions(fullRecordCapacity: 4, tombstoneCapacity: 4);
+        var reservation = AssertReserved(journal.Begin("stranded", "sha256:original"));
+
+        // The fingerprints match, so reporting a conflict would state the opposite of the truth.
+        var identical = journal.Begin("stranded", "sha256:original");
+        Assert.Equal(MutationTransactionDecisionKind.Incomplete, identical.Kind);
+        Assert.Equal("sha256:original", identical.ExistingIdentity!.RequestFingerprint);
+
+        // A genuinely different request still conflicts, against the ORIGINAL fingerprint.
+        var different = journal.Begin("stranded", "sha256:other");
+        Assert.Equal(MutationTransactionDecisionKind.Conflict, different.Kind);
+        Assert.Equal("sha256:original", different.ExistingIdentity!.RequestFingerprint);
+
+        journal.Abandon(reservation);
+        Assert.Null(journal.GetRecord("stranded"));
+        var tombstone = Assert.IsType<MutationTransactionTombstone>(
+            journal.GetTombstone("stranded"));
+        Assert.Null(tombstone.CompletedAt);
+        Assert.Equal(MutationTransactionDecisionKind.Incomplete,
+            journal.Begin("stranded", "sha256:original").Kind);
+        Assert.Equal(MutationTransactionDecisionKind.Conflict,
+            journal.Begin("stranded", "sha256:other").Kind);
+
+        journal.Abandon(reservation); // idempotent — no second tombstone, no resurrection
+        Assert.Equal(1, journal.TombstoneCount);
+        Assert.Throws<InvalidOperationException>(() => journal.Complete(reservation, "{}"));
+    }
+
+    [Fact]
+    public void MCP449_UncompletedReservationsAreBoundedByTheirOwnFifo()
+    {
+        var journal = new MutationTransactions(fullRecordCapacity: 2, tombstoneCapacity: 8);
+        AssertReserved(journal.Begin("r1", "sha256:r1"));
+        AssertReserved(journal.Begin("r2", "sha256:r2"));
+        AssertReserved(journal.Begin("r3", "sha256:r3"));
+
+        Assert.Null(journal.GetRecord("r1"));
+        Assert.Null(Assert.IsType<MutationTransactionTombstone>(
+            journal.GetTombstone("r1")).CompletedAt);
+        Assert.Equal(MutationTransactionDecisionKind.Incomplete,
+            journal.Begin("r1", "sha256:r1").Kind);
+        Assert.NotNull(journal.GetRecord("r2"));
+        Assert.NotNull(journal.GetRecord("r3"));
+    }
+
+    [Fact]
+    public void MCP449_DispatcherReportsAnIncompleteTransactionInsteadOfALyingConflict()
+    {
+        var sessionId = OpenSession(_store, _path);
+        var args = MutationArgs(
+            sessionId, "tx-stranded", FirstAnchor(_store, sessionId), "must not execute");
+
+        // Strand a reservation the way only a direct component caller can, then retry identically.
+        AssertReserved(_store.Get(sessionId).MutationTransactions.Begin(
+            "tx-stranded", MutationTransactions.Fingerprint(J(args))));
+
+        var error = J(Dispatcher.Call(_store, "docxodus_mutations", J(args)))
+            .GetProperty("failure").GetProperty("error");
+        Assert.Equal("transaction_incomplete", error.GetProperty("code").GetString());
+        Assert.DoesNotContain("different request fingerprint",
+            error.GetProperty("message").GetString()!, StringComparison.Ordinal);
+        Assert.Equal(0, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
+        Assert.Equal(0, Occurrences(GetMarkdown(_store, sessionId), "must not execute"));
     }
 
     private static MutationTransactionRecord AssertReserved(MutationTransactionDecision decision)

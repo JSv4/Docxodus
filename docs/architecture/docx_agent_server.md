@@ -521,16 +521,52 @@ normalizes JSON whitespace and equivalent string escapes, preserves array order,
 numeric token spelling, unknown properties, and every omitted/explicit distinction except the root
 default `mode` (`mode` omitted is canonicalized as `"atomic"`). Deprecated `apply` remains distinct
 from `best_effort`. Duplicate keys are rejected at any depth. Reusing an id for a different
-fingerprint returns `transaction_conflict`. The per-session journal retains 128 full responses,
-then 1,024 response-less FIFO tombstones; an identical retry whose response has been evicted returns
-`transaction_result_evicted`, while its tombstone still prevents conflicting reuse. Once the
-tombstone expires—or the session is closed—the identity is no longer known. Transaction ids are
-for mutating batches only: direct tools, step args, `mode: preview`, and `preview: true` reject them.
+fingerprint returns `transaction_conflict`. Transaction ids are for mutating batches only: direct
+tools, step args, `mode: preview`, and `preview: true` reject them.
 Replay after an ordinary undo or redo still returns the historical response: it never reapplies,
 undoes, or redoes the mutation, changes the current document, or moves either history cursor. A
 caller that wants an undone mutation present again must use ordinary `redo` while it remains
 available. Saving preserves the in-session journal. Closing clears it, and reopening the document
 starts a new transaction-identity namespace even when it opens the same saved file.
+
+**Retention is bounded by count *and* bytes.** The per-session journal retains at most 128 full
+responses *and* at most 32 MiB of retained response text (`DefaultFullRecordCapacity` /
+`DefaultResponseByteBudget`), evicting oldest-first until both hold, then keeps 1,024 response-less
+FIFO tombstones. A count alone is not a memory bound: a retained entry is the complete serialized
+`MutationBatchResult`, which emits every step's `results` twice (`steps[].results` plus the
+duplicate top-level `results`, `DocxSessionJson.cs`) alongside `patch.markdown` and the
+revision/comment/annotation deltas. A one-step `insert_paragraph` batch on a blank document already
+measures ~3.2 KB retained; scoped batches over real documents are far larger, so the worst case is
+~32 MiB per open session. A single response exceeding the whole budget evicts itself rather than
+raising the ceiling — the identity stays bound and answers `transaction_result_evicted`, which is a
+safe answer, where an unbounded retained response would not be a bound at all. **Not bounded:**
+the number of open sessions, and elapsed time — there is no TTL and no idle-session eviction, so
+sessions that are never closed accumulate. A TTL / idle-session reaper is deliberately left as a
+separate design question rather than smuggled in here.
+
+An identical retry whose response has been evicted returns `transaction_result_evicted`, while its
+tombstone still prevents conflicting reuse. An id whose reservation never recorded a terminal
+response returns `transaction_incomplete`: the fingerprints match, so reporting a conflict would
+state the opposite of the truth, and the caller's real situation is that the outcome is unknown.
+The Dispatcher cannot strand a reservation — it completes or abandons every one — so this is
+reachable through direct component use; an abandoned reservation becomes an outcome-unknown
+tombstone, and uncompleted reservations are FIFO-bounded like completed ones.
+
+Three lifecycle facts a client must design around:
+
+- **A validation failure burns the id.** `mode: "sideways"` is a terminal structured response and is
+  cached as such, so correcting the typo and resending under the same id yields
+  `transaction_conflict`. Use a fresh id after any failure you intend to correct; reuse an id only
+  to resend a byte-identical request.
+- **HAZARD — tombstone expiry lets a stale retry silently re-apply.** Once ~128 further
+  transactions plus 1,024 further tombstones have passed, the identity is genuinely forgotten and a
+  late retry executes as a *fresh mutation* (`MCP449_DispatcherSerializesEvictedResultAndConflictAndReusesOnlyAfterTombstone`
+  pins exactly this: version 2 → 4). Idempotency here is a bounded-window guarantee, not a
+  permanent one.
+- **The guarantee is MCP-only.** `execute_batch` via WASM/npm and via the stdio host /
+  `docx-scalpel` carries no transaction identity and no replay; a retry on those transports
+  re-applies. This asymmetry is within issue #449's scope, but callers must not generalize the
+  guarantee across transports.
 
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,

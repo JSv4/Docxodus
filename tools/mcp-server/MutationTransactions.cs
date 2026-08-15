@@ -28,11 +28,16 @@ internal sealed record MutationTransactionRecord(
     DateTimeOffset? CompletedAt,
     string? SerializedResponse);
 
+/// <summary>
+/// An identity that is still bound but whose response is gone. <see cref="CompletedAt"/> is the
+/// discriminator: a value means a terminal response existed and was evicted; null means the
+/// reservation never recorded one, so the mutation's outcome is unknown.
+/// </summary>
 internal sealed record MutationTransactionTombstone(
     string RecordId,
     MutationTransactionIdentity Identity,
     DateTimeOffset StartedAt,
-    DateTimeOffset CompletedAt,
+    DateTimeOffset? CompletedAt,
     DateTimeOffset EvictedAt);
 
 internal enum MutationTransactionDecisionKind
@@ -41,6 +46,10 @@ internal enum MutationTransactionDecisionKind
     Replay,
     Conflict,
     ResultEvicted,
+
+    /// <summary>The id is bound to this exact request, but no terminal response was ever
+    /// recorded for it, so whether the mutation applied is unknown.</summary>
+    Incomplete,
 }
 
 internal sealed record MutationTransactionDecision(
@@ -53,6 +62,8 @@ internal sealed record MutationTransactionDecision(
 /// Bounded, per-session transaction-id registry. Full responses and response-less tombstones use
 /// independent FIFO limits. A tombstone keeps an evicted id bound to its original fingerprint for
 /// a further window, preventing a recently forgotten retry from becoming a fresh mutation.
+/// Retained responses are additionally bounded by a byte budget, because a batch result is
+/// unbounded in size while a count is not a memory bound.
 /// </summary>
 internal sealed class MutationTransactions
 {
@@ -60,6 +71,14 @@ internal sealed class MutationTransactions
     public const int DefaultFullRecordCapacity = 128;
     public const int DefaultTombstoneCapacity = 1024;
     public const int MaxTransactionIdLength = 256;
+
+    /// <summary>
+    /// Ceiling on the UTF-16 payload of all retained responses for one session. Chosen so the
+    /// 128-response count cap stays the binding constraint for ordinary batches and this budget
+    /// only bites on unusually large ones; see <c>tools/mcp-server/README.md</c> for the measured
+    /// per-response cost this is sized against.
+    /// </summary>
+    public const long DefaultResponseByteBudget = 32L * 1024 * 1024;
 
     // Stable Unicode White_Space definition for transaction ids. Runtime validation, the schema
     // regex, and its prose are all derived from this one table so their blank-string semantics
@@ -88,7 +107,9 @@ internal sealed class MutationTransactions
                 : "U+" + ScalarHex(range.Start) + "-U+" + ScalarHex(range.End)));
 
     internal static string TransactionIdSchemaDescription { get; } =
-        "Optional non-blank caller identity for an APPLYING batch only, limited to 256 Unicode "
+        "Optional non-blank caller identity for an APPLYING batch only, limited to "
+        + MaxTransactionIdLength.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + " Unicode "
         + "scalar values. Blank means composed only of exactly these Unicode White_Space code "
         + "points: "
         + TransactionIdWhiteSpaceDescription
@@ -99,6 +120,7 @@ internal sealed class MutationTransactions
 
     private readonly int _fullRecordCapacity;
     private readonly int _tombstoneCapacity;
+    private readonly long _responseByteBudget;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string> _recordIdFactory;
     private readonly Dictionary<string, MutationTransactionRecord> _records =
@@ -108,18 +130,27 @@ internal sealed class MutationTransactions
         new(StringComparer.Ordinal);
     private readonly Queue<string> _tombstoneFifo = new();
 
+    // Reservations are tracked by reference, not id: an id can be reserved again after its
+    // tombstone expires, and a stale queue entry must never prune that later live reservation.
+    private readonly Queue<MutationTransactionRecord> _reservationFifo = new();
+    private long _retainedResponseBytes;
+
     public MutationTransactions(
         int fullRecordCapacity = DefaultFullRecordCapacity,
         int tombstoneCapacity = DefaultTombstoneCapacity,
         Func<DateTimeOffset>? utcNow = null,
-        Func<string>? recordIdFactory = null)
+        Func<string>? recordIdFactory = null,
+        long responseByteBudget = DefaultResponseByteBudget)
     {
         if (fullRecordCapacity < 1)
             throw new ArgumentOutOfRangeException(nameof(fullRecordCapacity));
         if (tombstoneCapacity < 0)
             throw new ArgumentOutOfRangeException(nameof(tombstoneCapacity));
+        if (responseByteBudget < 1)
+            throw new ArgumentOutOfRangeException(nameof(responseByteBudget));
         _fullRecordCapacity = fullRecordCapacity;
         _tombstoneCapacity = tombstoneCapacity;
+        _responseByteBudget = responseByteBudget;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _recordIdFactory = recordIdFactory ?? NewRecordId;
     }
@@ -133,6 +164,15 @@ internal sealed class MutationTransactions
     {
         get { lock (_records) return _tombstones.Count; }
     }
+
+    /// <summary>UTF-16 payload of every retained response — the quantity the byte budget caps.</summary>
+    internal long RetainedResponseBytes
+    {
+        get { lock (_records) return _retainedResponseBytes; }
+    }
+
+    private static long ResponseByteCost(string? serializedResponse) =>
+        serializedResponse is null ? 0L : (long)serializedResponse.Length * sizeof(char);
 
     internal MutationTransactionRecord? GetRecord(string transactionId)
     {
@@ -172,7 +212,8 @@ internal sealed class MutationTransactions
     private static string ScalarHex(int value) =>
         value.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
 
-    /// <summary>Reserve a new identity, or resolve it to replay/conflict/expired deterministically.</summary>
+    /// <summary>Reserve a new identity, or resolve it to replay/conflict/expired/incomplete
+    /// deterministically.</summary>
     public MutationTransactionDecision Begin(string transactionId, string requestFingerprint)
     {
         var requested = new MutationTransactionIdentity(
@@ -193,29 +234,61 @@ internal sealed class MutationTransactions
                         record.Identity,
                         record.SerializedResponse);
 
-                // Per-session dispatch serialization means this cannot occur through Dispatcher;
-                // retaining a typed conflict makes the component safe if it is called directly.
+                // The id is bound to this exact request but never recorded a terminal response.
+                // Per-session dispatch serialization plus Abandon mean this cannot occur through
+                // Dispatcher; it is reachable when the component is driven directly. Reporting a
+                // conflict here would be false — the fingerprints match — so it gets its own kind.
                 return new MutationTransactionDecision(
-                    MutationTransactionDecisionKind.Conflict,
+                    MutationTransactionDecisionKind.Incomplete,
                     ExistingIdentity: record.Identity);
             }
 
             if (_tombstones.TryGetValue(transactionId, out var tombstone))
             {
+                if (!string.Equals(tombstone.Identity.RequestFingerprint, requestFingerprint,
+                        StringComparison.Ordinal))
+                    return new MutationTransactionDecision(
+                        MutationTransactionDecisionKind.Conflict,
+                        ExistingIdentity: tombstone.Identity);
                 return new MutationTransactionDecision(
-                    string.Equals(tombstone.Identity.RequestFingerprint, requestFingerprint,
-                        StringComparison.Ordinal)
-                        ? MutationTransactionDecisionKind.ResultEvicted
-                        : MutationTransactionDecisionKind.Conflict,
+                    tombstone.CompletedAt is null
+                        ? MutationTransactionDecisionKind.Incomplete
+                        : MutationTransactionDecisionKind.ResultEvicted,
                     ExistingIdentity: tombstone.Identity);
             }
 
             var reserved = new MutationTransactionRecord(
                 _recordIdFactory(), requested, _utcNow(), null, null);
             _records.Add(transactionId, reserved);
+            _reservationFifo.Enqueue(reserved);
+            EvictStaleReservations();
             return new MutationTransactionDecision(
                 MutationTransactionDecisionKind.Reserved, reserved, requested);
         }
+    }
+
+    /// <summary>
+    /// Release a reservation that will never record a terminal response, keeping the identity
+    /// bound as an outcome-unknown tombstone rather than stranding it in the live record map.
+    /// Idempotent, and a no-op once the reservation has completed.
+    /// </summary>
+    public void Abandon(MutationTransactionRecord reservation)
+    {
+        ArgumentNullException.ThrowIfNull(reservation);
+        lock (_records)
+            RetireReservation(reservation);
+    }
+
+    private bool RetireReservation(MutationTransactionRecord reservation)
+    {
+        var id = reservation.Identity.TransactionId;
+        if (!_records.TryGetValue(id, out var current)
+            || !ReferenceEquals(current, reservation)
+            || current.SerializedResponse is not null)
+            return false;
+        _records.Remove(id);
+        Entomb(current);
+        return true;
     }
 
     /// <summary>Atomically retain the exact response and apply FIFO eviction.</summary>
@@ -242,31 +315,64 @@ internal sealed class MutationTransactions
             };
             _records[completed.Identity.TransactionId] = completed;
             _completedFifo.Enqueue(completed.Identity.TransactionId);
+            _retainedResponseBytes += ResponseByteCost(serializedResponse);
             EvictCompletedRecords();
             return completed;
         }
     }
 
+    /// <summary>
+    /// Bound retained responses by BOTH the count cap and the byte budget, oldest first. A single
+    /// response larger than the whole budget evicts itself rather than raising the ceiling: an
+    /// identical retry then answers <c>transaction_result_evicted</c>, which is a safe answer,
+    /// whereas an unbounded retained response is not a bound at all.
+    /// </summary>
     private void EvictCompletedRecords()
     {
-        while (_completedFifo.Count > _fullRecordCapacity)
+        while (_completedFifo.Count > 0
+            && (_completedFifo.Count > _fullRecordCapacity
+                || _retainedResponseBytes > _responseByteBudget))
         {
             var id = _completedFifo.Dequeue();
-            if (!_records.Remove(id, out var evicted) || evicted.CompletedAt is not { } completedAt)
-                continue;
-            if (_tombstoneCapacity == 0) continue;
-
-            _tombstones[id] = new MutationTransactionTombstone(
-                evicted.RecordId,
-                evicted.Identity,
-                evicted.StartedAt,
-                completedAt,
-                // Eviction must move the identity from a full record to a tombstone as one
-                // logical operation even when an injected diagnostics clock fails.
-                UtcNowOr(completedAt));
-            _tombstoneFifo.Enqueue(id);
+            if (!_records.Remove(id, out var evicted)) continue;
+            // Decrement on every path a retained response leaves _records, or the running total
+            // drifts upward and the budget silently becomes permanent.
+            _retainedResponseBytes -= ResponseByteCost(evicted.SerializedResponse);
+            Entomb(evicted);
         }
 
+        TrimTombstones();
+    }
+
+    /// <summary>
+    /// Bound reservations that were never completed or abandoned. Only reachable through direct
+    /// component use; the Dispatcher always completes or abandons. Identity stays bound as an
+    /// outcome-unknown tombstone so a stale retry cannot silently become a fresh mutation.
+    /// </summary>
+    private void EvictStaleReservations()
+    {
+        while (_reservationFifo.Count > _fullRecordCapacity)
+            RetireReservation(_reservationFifo.Dequeue());
+        TrimTombstones();
+    }
+
+    private void Entomb(MutationTransactionRecord evicted)
+    {
+        if (_tombstoneCapacity == 0) return;
+        var id = evicted.Identity.TransactionId;
+        _tombstones[id] = new MutationTransactionTombstone(
+            evicted.RecordId,
+            evicted.Identity,
+            evicted.StartedAt,
+            evicted.CompletedAt,
+            // Eviction must move the identity from a full record to a tombstone as one
+            // logical operation even when an injected diagnostics clock fails.
+            UtcNowOr(evicted.CompletedAt ?? evicted.StartedAt));
+        _tombstoneFifo.Enqueue(id);
+    }
+
+    private void TrimTombstones()
+    {
         while (_tombstoneFifo.Count > _tombstoneCapacity)
         {
             var id = _tombstoneFifo.Dequeue();

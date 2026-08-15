@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Idempotent mutation transaction identities for the MCP server** (issue #449).
+  An applying `docxodus_mutations` batch may carry a caller-chosen root
+  `transactionId` (non-blank, at most 256 Unicode scalar values). The first
+  terminal response — success, partial, structured failure, precondition failure,
+  or safely-caught exception — is retained for the lifetime of that open session,
+  and an identical retry returns it byte-for-byte without executing anything or
+  re-evaluating preconditions, so generated anchors, timestamps, versions and
+  `packageHash` all survive a lost response. Results gain a top-level
+  `transaction: { schemaVersion, transactionId, requestFingerprint }`; the
+  fingerprint is a SHA-256 over a canonical rendering that excludes only the root
+  `sessionId`/`transactionId`. Reusing an id for a different request returns
+  `transaction_conflict`. Preview/dry-run batches, nested step args, and the other
+  tools reject transaction ids rather than ignoring them. Retention is bounded per
+  session by both a count and a byte budget (128 responses, 32 MiB) followed by
+  1,024 response-less tombstones; there is no TTL and the number of open sessions
+  is not bounded, and once a tombstone expires a late retry applies again — both
+  documented as hazards in
+  [`docs/architecture/docx_agent_server.md`](docs/architecture/docx_agent_server.md).
+  Idempotency is MCP-only: `execute_batch` through WASM/npm and the stdio host has
+  no equivalent. Adds `EditErrorCode.InvalidTransaction`, `TransactionConflict`,
+  `TransactionResultEvicted` and `TransactionIncomplete`, rippled to npm
+  `EditErrorCode` and Python `EditErrorCode`. MCP session dispatch is now
+  serialized per session so a retry cannot race another action on the same
+  document. Coverage: `McpMutationTransactionTests` MCP449,
+  `python/tests/test_transaction_error_codes.py`, and
+  `npm/tests/transaction-error-codes.spec.ts`.
 - **Canonical table addressing and complete table-operation ripple (#450, absorbing
   #471).** Tables now expose explicit stable identities for the `w:tbl`, every
   `w:tr`, every physical `w:tc`, and every `w:tblGrid/w:gridCol`, plus

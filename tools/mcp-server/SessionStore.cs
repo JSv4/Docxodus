@@ -79,6 +79,10 @@ internal sealed class SessionStore
         // Construct fallible per-session collaborators before allocating a core handle. If the
         // factory fails, there is nothing in either registry to clean up.
         var mutationTransactions = _mutationTransactionsFactory();
+        // One lifecycle-to-session lock order means the document parse inside OpenSession runs
+        // under the process-wide lifecycle gate, so opens do not overlap each other. Acceptable
+        // while both shipped transports are serial anyway; revisit if request handling ever moves
+        // off the accept loop, since open is the one genuinely slow operation here.
         lock (_lifecycleGate)
         {
             var handle = DocxSessionOps.OpenSession(bytes, settings);
