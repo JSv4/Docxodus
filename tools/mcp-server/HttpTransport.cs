@@ -13,8 +13,13 @@ namespace Docxodus.McpServer;
 /// streamable-HTTP binding allows a server to choose. No SSE, no session-id handshake, no TLS:
 /// this exists so the stdio server can be put behind a tunnel (e.g. <c>ngrok http PORT</c>) and
 /// pointed at from a ChatGPT Apps / remote-MCP developer setup, which cannot spawn a local
-/// process. Requests are processed one at a time under a lock — <see cref="SessionStore"/> and
-/// the Docxodus session registry assume single-threaded access, exactly as stdio provides.
+/// process. Requests are processed one at a time: <see cref="Run"/> handles each request inline
+/// on the serial accept loop, and the lock below pins that even if handling ever moves off it.
+/// <see cref="SessionStore"/> does now serialize per session rather than requiring a
+/// single-threaded caller, but nothing in the shipped server exercises that: this transport is
+/// serial and stdio is single-threaded, so the per-session dispatch gate is forward-looking.
+/// Making concurrent requests real means dispatching handling off the accept loop AND dropping
+/// this lock — a deliberate behaviour change, not a comment fix.
 /// </summary>
 internal static class HttpTransport
 {

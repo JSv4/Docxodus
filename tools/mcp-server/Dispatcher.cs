@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Docxodus;
@@ -26,29 +27,48 @@ namespace Docxodus.McpServer;
 /// </summary>
 internal static class Dispatcher
 {
-    public static string Call(SessionStore store, string tool, JsonElement args) => tool switch
+    public static string Call(SessionStore store, string tool, JsonElement args)
     {
-        "docxodus_open" => Open(store, args),
-        "docxodus_save" => Save(store, args),
-        "docxodus_close" => Close(store, args),
-        "docxodus_get_content" => GetContent(store, args),
-        "docxodus_preview" => Preview(store, args),
-        "docxodus_pagination" => Pagination(store, args),
-        "docxodus_search" => Search(store, args),
-        "docxodus_edit" => Edit(store, args),
-        "docxodus_format" => Format(store, args),
-        "docxodus_create" => Create(store, args),
-        "docxodus_list" => ListTool(store, args),
-        "docxodus_comment" => Comment(store, args),
-        "docxodus_links" => Links(store, args),
-        "docxodus_images" => Images(store, args),
-        "docxodus_content_controls" => ContentControls(store, args),
-        "docxodus_annotate" => Annotate(store, args),
-        "docxodus_track_changes" => TrackChanges(store, args),
-        "docxodus_mutations" => Mutations(store, args),
-        "docxodus_table" => Table(store, args),
-        _ => throw new McpToolException($"unknown tool: {tool}"),
-    };
+        // Transaction identities belong only to an applying batch. Rejecting the property at
+        // this central seam also covers future direct tools instead of silently ignoring it.
+        if (tool != "docxodus_mutations"
+            && args.ValueKind == JsonValueKind.Object
+            && args.TryGetProperty("transactionId", out _))
+            throw new McpToolException(
+                "transactionId is only valid on a mutating docxodus_mutations batch");
+
+        if (tool == "docxodus_open") return Open(store, args);
+        if (tool == "docxodus_close") return Close(store, args);
+        // Static capability discovery has no document state to serialize against.
+        if (tool == "docxodus_images" && OptStr(args, "action") == "capabilities")
+            return Images(store, args);
+
+        // Session-bound calls are synchronous from lookup through serialized response creation.
+        // This includes reads and saves, because their relative order with a mutation/replay is
+        // observable, and makes HTTP's request-level concurrency safe without transport locks.
+        var sessionId = Str(args, "sessionId");
+        return store.Dispatch(sessionId, () => tool switch
+        {
+            "docxodus_save" => Save(store, args),
+            "docxodus_get_content" => GetContent(store, args),
+            "docxodus_preview" => Preview(store, args),
+            "docxodus_pagination" => Pagination(store, args),
+            "docxodus_search" => Search(store, args),
+            "docxodus_edit" => Edit(store, args),
+            "docxodus_format" => Format(store, args),
+            "docxodus_create" => Create(store, args),
+            "docxodus_list" => ListTool(store, args),
+            "docxodus_comment" => Comment(store, args),
+            "docxodus_links" => Links(store, args),
+            "docxodus_images" => Images(store, args),
+            "docxodus_content_controls" => ContentControls(store, args),
+            "docxodus_annotate" => Annotate(store, args),
+            "docxodus_track_changes" => TrackChanges(store, args),
+            "docxodus_mutations" => Mutations(store, args),
+            "docxodus_table" => Table(store, args),
+            _ => throw new McpToolException($"unknown tool: {tool}"),
+        });
+    }
 
     // ─── Lifecycle ──────────────────────────────────────────────────────
 
@@ -829,6 +849,115 @@ internal static class Dispatcher
     private static string Mutations(SessionStore store, JsonElement args)
     {
         var liveSession = Session(store, args);
+        var transactionId = TransactionId(args);
+        if (transactionId is null)
+            return ExecuteMutationRequest(liveSession, args, transactional: false);
+
+        // Canonicalization also performs the duplicate-key rejection. It deliberately precedes
+        // preview policy validation so an ambiguous request can never acquire a transaction id.
+        var requestFingerprint = MutationTransactions.Fingerprint(args);
+        var identity = new MutationTransactionIdentity(
+            MutationTransactions.SchemaVersion, transactionId, requestFingerprint);
+        if (RequestsPreview(args))
+        {
+            return MutationTransactions.SerializeFailure(
+                RequestedCoreMode(args),
+                preview: true,
+                SafeVersion(liveSession),
+                EditErrorCode.InvalidTransaction,
+                "transactionId is not valid for preview or dry-run mutation batches",
+                "transaction");
+        }
+
+        var decision = liveSession.MutationTransactions.Begin(transactionId, requestFingerprint);
+        switch (decision.Kind)
+        {
+            case MutationTransactionDecisionKind.Replay:
+                return decision.SerializedResponse!;
+            case MutationTransactionDecisionKind.Conflict:
+            {
+                var original = decision.ExistingIdentity?.RequestFingerprint ?? "unknown";
+                var conflict = MutationTransactions.SerializeFailure(
+                    RequestedCoreMode(args),
+                    preview: false,
+                    SafeVersion(liveSession),
+                    EditErrorCode.TransactionConflict,
+                    $"transactionId is already bound to a different request fingerprint ({original})",
+                    "transaction");
+                return MutationTransactions.AttachIdentity(conflict, identity);
+            }
+            case MutationTransactionDecisionKind.ResultEvicted:
+            {
+                var expired = MutationTransactions.SerializeFailure(
+                    RequestedCoreMode(args),
+                    preview: false,
+                    SafeVersion(liveSession),
+                    EditErrorCode.TransactionResultEvicted,
+                    "the transaction is known, but its exact response has expired from bounded retention",
+                    "transaction");
+                return MutationTransactions.AttachIdentity(expired, identity);
+            }
+            case MutationTransactionDecisionKind.Incomplete:
+            {
+                var incomplete = MutationTransactions.SerializeFailure(
+                    RequestedCoreMode(args),
+                    preview: false,
+                    SafeVersion(liveSession),
+                    EditErrorCode.TransactionIncomplete,
+                    "this transactionId is bound to this exact request but never recorded a "
+                    + "terminal response, so whether the mutation applied is unknown; inspect the "
+                    + "document and retry under a new transactionId",
+                    "transaction");
+                return MutationTransactions.AttachIdentity(incomplete, identity);
+            }
+            case MutationTransactionDecisionKind.Reserved:
+                break;
+            default:
+                throw new InvalidOperationException("unknown mutation transaction decision");
+        }
+
+        var reservation = decision.Record!;
+        var completed = false;
+        try
+        {
+            string terminalResponse;
+            try
+            {
+                terminalResponse = MutationTransactions.AttachIdentity(
+                    ExecuteMutationRequest(liveSession, args, transactional: true), identity);
+            }
+            catch (Exception ex)
+            {
+                var callerError = ex is McpToolException
+                    or FormatException or JsonException or OverflowException;
+                terminalResponse = MutationTransactions.AttachIdentity(
+                    MutationTransactions.SerializeFailure(
+                        RequestedCoreMode(args),
+                        preview: false,
+                        SafeVersion(liveSession),
+                        callerError ? EditErrorCode.InvalidBatchStep : EditErrorCode.InternalError,
+                        ex.Message,
+                        callerError ? "validation" : "dispatch"),
+                    identity);
+            }
+            liveSession.MutationTransactions.Complete(reservation, terminalResponse);
+            completed = true;
+            return terminalResponse;
+        }
+        finally
+        {
+            // If serializing the failure or retaining the response itself threw, the reservation
+            // would otherwise be stranded in the journal forever. Retire it to an outcome-unknown
+            // tombstone so the identity stays bound, stays truthful, and stays evictable.
+            if (!completed) liveSession.MutationTransactions.Abandon(reservation);
+        }
+    }
+
+    private static string ExecuteMutationRequest(
+        DocSession liveSession,
+        JsonElement args,
+        bool transactional)
+    {
         var mode = args.TryGetProperty("mode", out _)
             ? Str(args, "mode")
             : "atomic";
@@ -891,9 +1020,63 @@ internal static class Dispatcher
         }
 
         var liveBatchCheck = Check(liveSession, ParsePreconditions(args, MutationTarget(args)));
-        if (liveBatchCheck is not null) return liveBatchCheck;
+        if (liveBatchCheck is not null)
+        {
+            if (!transactional) return liveBatchCheck;
+            var error = DocxSessionJson.DeserializeEditResults(liveBatchCheck)
+                .FirstOrDefault()?.Error
+                ?? new EditError(EditErrorCode.PreconditionFailed,
+                    "batch precondition failed");
+            return MutationTransactions.SerializeFailure(
+                coreMode,
+                preview: false,
+                SafeVersion(liveSession),
+                error,
+                "preconditions",
+                rolledBack: coreMode == MutationBatchMode.Atomic);
+        }
         var liveSteps = BuildMutationBatchSteps(liveSession, stepsEl, legacyApply: mode == "apply");
         return DocxSessionOps.ExecuteBatch(liveSession.Handle, coreMode, liveSteps);
+    }
+
+    private static string? TransactionId(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("transactionId", out var value))
+            return null;
+        if (value.ValueKind != JsonValueKind.String)
+            throw new McpToolException("transactionId must be a string");
+        var id = value.GetString()!;
+        if (MutationTransactions.IsBlankTransactionId(id))
+            throw new McpToolException("transactionId must not be empty or whitespace");
+        var scalarLength = 0;
+        foreach (var _ in id.EnumerateRunes()) scalarLength++;
+        if (scalarLength > MutationTransactions.MaxTransactionIdLength)
+            throw new McpToolException(
+                $"transactionId must not exceed {MutationTransactions.MaxTransactionIdLength} Unicode scalar values");
+        return id;
+    }
+
+    private static bool RequestsPreview(JsonElement args) =>
+        args.ValueKind == JsonValueKind.Object
+        && ((args.TryGetProperty("mode", out var mode)
+                && mode.ValueKind == JsonValueKind.String
+                && mode.GetString() == "preview")
+            || (args.TryGetProperty("preview", out var preview)
+                && preview.ValueKind == JsonValueKind.True));
+
+    private static MutationBatchMode RequestedCoreMode(JsonElement args) =>
+        args.ValueKind == JsonValueKind.Object
+        && args.TryGetProperty("mode", out var mode)
+        && mode.ValueKind == JsonValueKind.String
+        && mode.GetString() is "best_effort" or "apply"
+            ? MutationBatchMode.BestEffort
+            : MutationBatchMode.Atomic;
+
+    private static long SafeVersion(DocSession session)
+    {
+        try { return DocxSessionOps.GetVersion(session.Handle); }
+        catch { return 0; }
     }
 
     private static IReadOnlyList<MutationBatchStep> BuildMutationBatchSteps(
@@ -985,6 +1168,11 @@ internal static class Dispatcher
         string action,
         JsonElement args)
     {
+        if (args.TryGetProperty("transactionId", out _))
+            return new EditError(
+                EditErrorCode.InvalidTransaction,
+                "mutation step args cannot contain transactionId; use the batch root");
+
         var actionError = ValidateMutationBatchAction(tool, action);
         if (actionError is not null) return actionError;
 
