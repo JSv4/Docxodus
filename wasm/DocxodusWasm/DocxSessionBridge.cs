@@ -275,6 +275,33 @@ public static partial class DocxSessionBridge
         }
     }
 
+    /// <summary>
+    /// Render a preview shadow with the façade's own preview profile, so a browser preview and a
+    /// stdio/MCP preview of the same batch describe the same document. The editor's
+    /// <see cref="RenderHtml"/> profile is deliberately NOT reused here — it hides comments and
+    /// annotations. Same error convention: HTML starts with '&lt;', an error object with '{'.
+    /// </summary>
+    [JSExport]
+    public static string RenderPreviewHtml(int h)
+    {
+        try { return DocxSessionOps.RenderPreviewHtml(h); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Scoped counterpart of <see cref="RenderPreviewHtml"/>.</summary>
+    [JSExport]
+    public static string RenderPreviewBlockHtml(int h, string anchorId)
+    {
+        try { return DocxSessionOps.RenderPreviewBlockHtml(h, anchorId); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
     [JSExport]
     public static string ReplaceText(int h, string anchor, string md) =>
         DocxSessionOps.ReplaceText(h, anchor, md);

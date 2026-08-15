@@ -7,7 +7,9 @@ from docx_scalpel import (
     DocxSession,
     DocxSessionSettings,
     MutationBatchMode,
+    MutationBatchResult,
     MutationBatchStep,
+    MutationPreviewHtmlMode,
     open_session,
 )
 
@@ -167,3 +169,20 @@ def test_preview_batch_is_rich_and_preserves_live_bytes_version_and_redo(
         assert not session.undo()
         assert session.redo()
         assert "Python redo target." in session.project().markdown
+
+
+def test_absent_package_hash_decodes_to_none_not_an_empty_sentinel() -> None:
+    """An unavailable hash must never satisfy a replay-equality assertion."""
+    absent = MutationBatchResult._from_wire({"mode": "atomic", "packageHash": None})
+    other_absent = MutationBatchResult._from_wire({"mode": "atomic"})
+    assert absent.package_hash is None
+    assert other_absent.package_hash is None
+
+    present = MutationBatchResult._from_wire({"mode": "atomic", "packageHash": "ab" * 32})
+    assert present.package_hash == "ab" * 32
+
+
+def test_preview_html_mode_is_an_enum_matching_the_wire_strings() -> None:
+    assert MutationPreviewHtmlMode.NONE.value == "none"
+    assert MutationPreviewHtmlMode("scoped") is MutationPreviewHtmlMode.SCOPED
+    assert MutationPreviewHtmlMode("full") is MutationPreviewHtmlMode.FULL

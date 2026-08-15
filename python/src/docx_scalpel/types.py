@@ -1216,7 +1216,9 @@ class MutationBatchResult:
     preview: bool = False
     base_version: int = 0
     result_version: int = 0
-    package_hash: str = ""
+    #: ``None`` — never ``""`` — when the hash could not be computed (the reason is in
+    #: ``warnings``). An absent hash must not compare equal to another absent hash.
+    package_hash: str | None = None
     revision_changes: MutationBatchChangeSet[RevisionListEntry] = field(
         default_factory=MutationBatchChangeSet
     )
@@ -1242,7 +1244,9 @@ class MutationBatchResult:
             preview=bool(d.get("preview", False)),
             base_version=int(d.get("baseVersion", 0)),
             result_version=int(d.get("resultVersion", 0)),
-            package_hash=str(d.get("packageHash", "")),
+            package_hash=(
+                None if d.get("packageHash") is None else str(d["packageHash"])
+            ),
             revision_changes=MutationBatchChangeSet._from_wire(
                 d.get("revisionChanges"), RevisionListEntry._from_wire
             ),

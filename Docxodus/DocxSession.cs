@@ -1275,8 +1275,13 @@ public sealed record MutationBatchResult
     /// A deterministic replay at <see cref="BaseVersion"/> should produce this hash. Generated
     /// anchors/OOXML ids and execution timestamps make other batches only semantically equivalent;
     /// callers must consult <see cref="Warnings"/> before using the hash as a replay assertion.
+    ///
+    /// <c>null</c> — never an empty string — when the hash could not be computed (the reason is
+    /// in <see cref="Warnings"/>). An absent hash must not compare equal to another absent hash:
+    /// a sentinel that does turns <c>preview.PackageHash == applied.PackageHash</c> into an
+    /// assertion that passes precisely when it has nothing to assert.
     /// </summary>
-    public string PackageHash { get; init; } = string.Empty;
+    public string? PackageHash { get; init; }
     public IReadOnlyList<MutationBatchStepResult> Steps { get; init; } =
         Array.Empty<MutationBatchStepResult>();
     public MutationBatchFailure? Failure { get; init; }
@@ -2905,6 +2910,20 @@ public sealed class DocxSession : IDisposable
     /// and optional HTML rendering all target the shadow. Abandoning or disposing the shadow can
     /// therefore never require live rollback.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Caller contract.</b> Each step's callbacks receive the shadow session as their
+    /// <c>DocxSession</c> argument — <em>address that argument</em>. A callback written as
+    /// <c>s =&gt; liveSession.ReplaceText(...)</c>, closing over the live session instead of using
+    /// <c>s</c>, mutates the LIVE document, and this overload cannot prevent it: a delegate may
+    /// call anything it can reach.</para>
+    /// <para>The handle-shaped seams are intrinsically safe by construction, because a step
+    /// factory there is handed only the temporary shadow handle and never sees the live one:
+    /// <c>DocxSessionOps.PreviewBatch</c> for stdio/MCP, and the <c>OpenPreviewSession</c> bridge
+    /// export for the browser client. Prefer those when the steps are not written by the same
+    /// author as the call.</para>
+    /// <para>Enrichment cost is not free and has no opt-out: see the receipt cost note in
+    /// <c>docs/architecture/docx_mutation_api.md</c>.</para>
+    /// </remarks>
     public MutationBatchResult PreviewBatch(
         IEnumerable<MutationBatchStep> steps,
         MutationBatchMode mode = MutationBatchMode.Atomic,
@@ -2964,12 +2983,26 @@ public sealed class DocxSession : IDisposable
     {
         var after = ObserveBatchSemantics();
         var warnings = before.Warnings.Concat(after.Warnings).ToList();
+        // Equivalence is decided on the SERIALIZED projection of each entry, never on CLR
+        // equality. That is the shape every transport actually publishes, it is exactly what
+        // npm's `mutationBatchChangeSet` compares (JSON.stringify of the same wire objects), and
+        // it stays correct if an entry type ever grows a collection member — record `==` would
+        // then fall back to reference equality per element and report every surviving object as
+        // modified.
         var revisionChanges = SafeChangeSet(
             before.Revisions, after.Revisions, revision => revision.Id,
-            static (left, right) => left == right, "revision", warnings);
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { left }),
+                Internal.DocxSessionJson.SerializeRevisionList(new[] { right }),
+                StringComparison.Ordinal),
+            "revision", warnings);
         var commentChanges = SafeChangeSet(
             before.Comments, after.Comments, comment => comment.DefAnchorId,
-            static (left, right) => left == right, "comment", warnings);
+            static (left, right) => string.Equals(
+                Internal.DocxSessionJson.SerializeCommentList(new[] { left }),
+                Internal.DocxSessionJson.SerializeCommentList(new[] { right }),
+                StringComparison.Ordinal),
+            "comment", warnings);
         var annotationChanges = SafeChangeSet(
             before.Annotations, after.Annotations, annotation => annotation.Id,
             static (left, right) => string.Equals(
@@ -3011,7 +3044,7 @@ public sealed class DocxSession : IDisposable
         if (result.Mode == MutationBatchMode.BestEffort && !result.Success)
             warnings.Add("Best-effort execution retains every successful step despite later failures.");
 
-        var packageHash = string.Empty;
+        string? packageHash = null;
         try { packageHash = GetPackageContentHash(); }
         catch (Exception ex) { warnings.Add($"Package equivalence hash unavailable: {ex.Message}"); }
 
@@ -3203,25 +3236,12 @@ public sealed class DocxSession : IDisposable
                     html = Internal.HtmlConversionOps.RenderBlockHtml(
                         this,
                         options!.HtmlAnchorId!,
-                        new Internal.HtmlConversionOptions
-                        {
-                            RenderTrackedChanges = true,
-                            RenderFootnotesAndEndnotes = true,
-                            StampAnchors = true,
-                        });
+                        Internal.HtmlConversionOps.PreviewBlockOptions());
                     break;
                 case MutationPreviewHtmlMode.Full:
                     html = Internal.HtmlConversionOps.ConvertToHtml(
                         this,
-                        new Internal.HtmlConversionOptions
-                        {
-                            CommentRenderMode = 0,
-                            RenderAnnotations = true,
-                            RenderFootnotesAndEndnotes = true,
-                            RenderHeadersAndFooters = true,
-                            RenderTrackedChanges = true,
-                            StampAnchors = true,
-                        });
+                        Internal.HtmlConversionOps.PreviewDocumentOptions());
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(options), "unknown preview HTML mode");

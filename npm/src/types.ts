@@ -1055,6 +1055,8 @@ export interface DocxodusWasmExports {
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     GetPackageContentHash?: (handle: number) => string;
+    RenderPreviewHtml?: (handle: number) => string;
+    RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
     BeginTransaction: (handle: number) => number;
     CommitTransaction: (transactionHandle: number) => void;
@@ -1431,8 +1433,14 @@ export interface MutationBatchResult {
   rolledBack: boolean;
   baseVersion: number;
   resultVersion: number;
-  /** Canonical SHA-256 of this result package; exact replay equality is guaranteed only for deterministic batches. */
-  packageHash: string;
+  /**
+   * Canonical SHA-256 of this result package, or `null` when it could not be computed.
+   * Exact replay equality is guaranteed only for deterministic batches, so consult
+   * {@link MutationBatchResult.warnings} before asserting on it — and note that `null`
+   * never equals `null` for the purposes of a replay assertion: an absent hash proves
+   * nothing and must be handled explicitly rather than compared.
+   */
+  packageHash: string | null;
   steps: readonly MutationBatchStepResult[];
   failure?: MutationBatchFailure;
   revisionChanges: MutationBatchChangeSet<RevisionListEntry>;

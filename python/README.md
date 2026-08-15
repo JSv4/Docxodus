@@ -77,6 +77,34 @@ if not result.success:
 Select `MutationBatchMode.BEST_EFFORT` explicitly only when retaining successful
 steps after another step fails is intended.
 
+### Isolated previews
+
+`preview_batch` takes the same steps and predicts their outcome on a complete clone of the
+package. The live session is never a mutation target, so its bytes, version and undo/redo
+history are untouched whatever the steps do:
+
+```python
+from docx_scalpel import MutationPreviewHtmlMode
+
+preview = session.preview_batch(
+    [
+        MutationBatchStep("replace_text", {
+            "anchorId": first_p.id,
+            "markdown": "Proposed replacement",
+        }),
+    ],
+    html_mode=MutationPreviewHtmlMode.FULL,
+)
+print(preview.html)
+print(preview.revision_changes.added, preview.comment_changes.added, preview.warnings)
+```
+
+Both `preview_batch` and `execute_batch` return the enriched receipt: `base_version`,
+`result_version`, `package_hash`, `{added, removed, modified}` change sets for revisions,
+comments and annotations, and `warnings`. `MutationPreviewHtmlMode.SCOPED` renders one block
+and requires `html_anchor_id`. `package_hash` is `None` — never `""` — when it could not be
+computed, so check it before using it as a replay assertion.
+
 The `with` block is the documented lifecycle path — it calls `session.close()` on the way out, which releases the session from the host's `SessionRegistry`. A `__del__` finalizer is a fallback for forgotten sessions but should not be relied on; interpreter shutdown may skip it.
 
 ## Why a subprocess?
@@ -144,7 +172,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 
 | Tier | Methods |
 |---|---|
-| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `execute_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
+| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `execute_batch`, `preview_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **Inspection** | `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |

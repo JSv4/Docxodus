@@ -55,6 +55,25 @@ All notable changes to this project will be documented in this file.
   explicitly semantic-equivalence-only (same outcomes and structure/content/relationship
   effects modulo generated metadata) and emit warnings. This supersedes the undo-depth,
   redo-destruction, and crash window described in #468.
+
+  The preview HTML profile has a single owner (`HtmlConversionOps.PreviewDocumentOptions`
+  / `PreviewBlockOptions`), reached from the browser through the new
+  `RenderPreviewHtml` / `RenderPreviewBlockHtml` bridge exports, so every surface's
+  preview of the same batch describes the same document (tracked changes, comments,
+  annotations, notes, and headers/footers shown) rather than the editor's authoring
+  render. Receipt change-set membership is compared on each entry's serialized wire
+  projection rather than CLR equality, matching what the browser client compares.
+  `packageHash` is `null`, never `""`, when it could not be computed, so an absent hash
+  cannot satisfy a replay-equality assertion. `MutationPreviewHtmlMode` is exposed to
+  Python as an enum (`docx_scalpel.MutationPreviewHtmlMode`).
+
+  **Cost note.** Receipt enrichment is unconditional on both the apply and the preview
+  path: each batch inspects revisions, comments, and annotations twice (each forcing an
+  anchor index) and computes a package-content hash, which serializes and hashes a full
+  package checkpoint. A preview additionally clones the package and opens a second
+  `WordprocessingDocument`, roughly doubling peak memory for its duration — material for a
+  large document on a browser WASM heap. There is deliberately no opt-out in this release;
+  whether to gate enrichment behind a setting remains an open public-API decision.
 - **Atomic multi-step mutation batches** (issue #445). `DocxSession.ExecuteBatch`
   and the reusable nested-safe `BeginTransaction` primitive checkpoint the complete
   OPC package, relationship topology, anchor/revision generators, mutable session

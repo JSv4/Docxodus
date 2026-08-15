@@ -18,6 +18,7 @@ __all__ = [
     "ListFormat",
     "EditErrorCode",
     "MutationBatchMode",
+    "MutationPreviewHtmlMode",
     "PlaceholderKind",
     "PlaceholderKinds",
     "ProjectionScopes",
@@ -193,6 +194,20 @@ class MutationBatchMode(str, Enum):
 
     ATOMIC = "atomic"
     BEST_EFFORT = "best_effort"
+
+
+class MutationPreviewHtmlMode(str, Enum):
+    """Optional HTML a ``preview_batch`` renders from its isolated shadow package.
+
+    ``SCOPED`` requires ``html_anchor_id`` and renders that one block; ``FULL``
+    renders the whole predicted document. Both render with tracked changes,
+    comments, annotations and notes shown — a preview describes the document the
+    batch would produce, not an authoring view of it.
+    """
+
+    NONE = "none"
+    SCOPED = "scoped"
+    FULL = "full"
 
 
 class PlaceholderKind(str, Enum):

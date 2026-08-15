@@ -117,7 +117,64 @@ the owner thread abandons all scopes and releases their mutation-gate entries.
 
 The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
-(`docxodus_mutations`). Preview isolation is intentionally separate work in #446.
+(`docxodus_mutations`).
+
+### Isolated previews
+
+`PreviewBatch(steps, mode, options)` runs the identical step delegates against a complete
+clone of the live package (`CreateShadowSession`). Guards, mutations, history writes,
+semantic inspection, package hashing, and any HTML render all target the shadow, which is
+disposed on every return and throw path. Abandoning a preview therefore cannot require a
+live rollback — the live session's bytes, caches, version, configuration and undo/redo
+cursors were never mutation targets.
+
+```csharp
+var preview = session.PreviewBatch(
+    new[]
+    {
+        new MutationBatchStep("docx_edit", "replace_text",
+            s => s.ReplaceText(firstAnchor, "Proposed replacement")),
+    },
+    options: new MutationBatchPreviewOptions
+    {
+        HtmlMode = MutationPreviewHtmlMode.Full,
+    });
+```
+
+**Caller contract for the typed overload.** The `s` argument each callback receives IS the
+shadow. Isolation comes from addressing that argument; a callback that closes over the live
+session and calls `liveSession.ReplaceText(...)` instead mutates the live document, and
+nothing in the typed API can prevent it. The handle-shaped seams — `DocxSessionOps.PreviewBatch`
+and the `OpenPreviewSession` bridge — are intrinsically safe because a step factory there is
+handed only the temporary shadow handle and never sees the live one.
+
+`MutationBatchPreviewOptions.HtmlMode` (`MutationPreviewHtmlMode`: `None`, `Scoped`, `Full`;
+`Scoped` additionally requires `HtmlAnchorId`) renders the predicted document from the shadow.
+The option profile lives in exactly one place — `HtmlConversionOps.PreviewDocumentOptions()`
+and `PreviewBlockOptions()` — and every surface consumes it, so a browser preview and an
+MCP preview of the same batch describe the same document. A preview shows tracked changes,
+comments, annotations, notes and headers/footers: it answers "what would this document
+become", which is not the editor's authoring view (`DocxSessionOps.RenderHtml`, where
+comments and annotations are off).
+
+Both preview and apply return the same enriched receipt: `baseVersion`/`resultVersion`,
+`packageHash`, `{added, removed, modified}` change sets for revisions, comments and
+annotations, and `warnings`. Change-set membership is decided on each entry's SERIALIZED
+projection — the shape the transports actually publish, and the same comparison npm makes —
+never on CLR equality. `packageHash` is `null`, never `""`, when it could not be computed;
+an absent hash must not compare equal to another absent hash.
+
+**Cost.** Enrichment is unconditional on BOTH paths. Every batch — applied or previewed —
+runs `ListRevisions` + `ListComments` + `ListAnnotations` twice (before and after, each
+forcing an anchor index) plus one `GetPackageContentHash()`, which serializes a full package
+checkpoint and SHA-256s it. A preview additionally pays a package clone and a second open
+`WordprocessingDocument`, roughly doubling peak memory for the duration. That is material on
+a constrained heap (a browser WASM session holding a large DOCX). There is deliberately no
+opt-out today; gating it behind a setting is a public-API decision that has not been taken.
+
+npm exposes this as `session.previewBatch(steps, mode, { html, htmlAnchorId })` with callbacks
+that receive the shadow session, stdio/Python as `session.preview_batch(steps, mode,
+html_mode=…, html_anchor_id=…)`, and MCP as `docxodus_mutations` with `"mode": "preview"`.
 
 ## Architecture
 

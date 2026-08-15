@@ -74,6 +74,7 @@ public class DocxSessionPreviewBatchTests
                 : $"{success.Failure.Index}:{success.Failure.Action}:{success.Failure.Error.Code}:{success.Failure.Error.Message}");
         Assert.Equal(before.Version, success.BaseVersion);
         Assert.Equal(before.Version + 1, success.ResultVersion);
+        Assert.NotNull(success.PackageHash);
         Assert.NotEmpty(success.PackageHash);
         Assert.Equal(4, success.Steps.Count);
         Assert.NotEmpty(success.RevisionChanges.Added);
@@ -464,6 +465,193 @@ public class DocxSessionPreviewBatchTests
         Assert.Equal(2, session.Version);
         Assert.Contains("Batch mutation.", session.Project().Markdown);
         Assert.Contains("Concurrent mutation.", session.Project().Markdown);
+    }
+
+    /// <summary>
+    /// Revision classification on an ALREADY-REDLINED document. The receipt's change sets are a
+    /// before∩after comparison, so a comparison that is not value-based reports every surviving
+    /// pre-existing revision as modified — and then cascades into the execution-clock warning
+    /// that tells callers not to trust <c>packageHash</c>. Both the apply and the preview path
+    /// run the same enrichment, so both are asserted.
+    /// </summary>
+    [Fact]
+    public void DS469_PreExistingRevisions_AreNeverReclassifiedByAnUnrelatedBatch()
+    {
+        var redlined = RedlinedBytes(out var redlinedAnchors);
+
+        // Untracked batch: nothing about the document's revisions changes, so every change set
+        // must be empty and the revision-date warning must not fire.
+        using (var untracked = new DocxSession(redlined, new DocxSessionSettings
+        {
+            PersistAnchorIds = true,
+            TrackedChanges = TrackedChangeMode.Accept,
+        }))
+        {
+            var existing = untracked.ListRevisions();
+            Assert.NotEmpty(existing);
+
+            var preview = untracked.PreviewBatch(new[]
+            {
+                new MutationBatchStep("docx_edit", "replace_text",
+                    s => s.ReplaceText(redlinedAnchors[1], "Untouched by the redlines.")),
+            });
+
+            Assert.True(preview.Success);
+            Assert.Empty(preview.RevisionChanges.Added);
+            Assert.Empty(preview.RevisionChanges.Removed);
+            Assert.Empty(preview.RevisionChanges.Modified);
+            Assert.DoesNotContain(preview.Warnings,
+                warning => warning.Contains("Tracked-revision date attributes", StringComparison.Ordinal));
+        }
+
+        // Tracked batch: the batch's own revision is added; the pre-existing ones it never
+        // touched stay out of every bucket.
+        using (var tracked = new DocxSession(redlined, new DocxSessionSettings
+        {
+            PersistAnchorIds = true,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Batch Author",
+        }))
+        {
+            var existingIds = tracked.ListRevisions()
+                .Select(revision => revision.Id).ToHashSet(StringComparer.Ordinal);
+            Assert.NotEmpty(existingIds);
+
+            var applied = tracked.ExecuteBatch(new[]
+            {
+                new MutationBatchStep("docx_edit", "replace_text",
+                    s => s.ReplaceText(redlinedAnchors[1], "Tracked batch replacement.")),
+            });
+
+            Assert.True(applied.Success);
+            Assert.NotEmpty(applied.RevisionChanges.Added);
+            Assert.Empty(applied.RevisionChanges.Removed);
+            Assert.Empty(applied.RevisionChanges.Modified);
+            Assert.DoesNotContain(applied.RevisionChanges.Added,
+                revision => existingIds.Contains(revision.Id));
+        }
+    }
+
+    /// <summary>
+    /// Cross-surface preview HTML profile. The typed core renders preview HTML directly; the
+    /// callback-shaped npm client cannot, so it renders its shadow through the handle façade.
+    /// Both must resolve to ONE profile, or the same batch previewed from a browser and from
+    /// stdio/MCP describes two different documents. The editor's own render profile is asserted
+    /// to be the wrong answer here on purpose — that is what npm used to call, and it silently
+    /// drops comments, annotations and headers/footers.
+    /// </summary>
+    [Fact]
+    public void DS470_PreviewHtmlProfile_IsOwnedByTheFacadeAndNotTheEditorRenderProfile()
+    {
+        var commented = CommentedBytes(out var commentedAnchors);
+        var settings = new DocxSessionSettings { PersistAnchorIds = true };
+
+        using var typed = new DocxSession(commented, settings);
+        var typedPreview = typed.PreviewBatch(
+            new[]
+            {
+                new MutationBatchStep("docx_edit", "replace_text",
+                    s => s.ReplaceText(commentedAnchors[1], "Predicted body text.")),
+            },
+            options: new MutationBatchPreviewOptions { HtmlMode = MutationPreviewHtmlMode.Full });
+        Assert.True(typedPreview.Success);
+
+        // The façade path the browser client uses: clone, mutate the clone, render the clone.
+        var liveHandle = SessionRegistry.OpenSession(commented, settings);
+        try
+        {
+            var shadowHandle = SessionRegistry.CloneSessionForPreview(liveHandle);
+            string facadeHtml;
+            string editorHtml;
+            try
+            {
+                Assert.True(SessionRegistry.Get(shadowHandle)
+                    .ReplaceText(commentedAnchors[1], "Predicted body text.").Success);
+                facadeHtml = DocxSessionOps.RenderPreviewHtml(shadowHandle);
+                editorHtml = DocxSessionOps.RenderHtml(shadowHandle, "docx-", false, false, 1);
+            }
+            finally
+            {
+                SessionRegistry.CloseSession(shadowHandle);
+            }
+
+            Assert.Equal(typedPreview.Html, facadeHtml);
+            Assert.Contains("Predicted body text.", facadeHtml, StringComparison.Ordinal);
+
+            // What the profiles disagree about, stated rather than implied.
+            Assert.Contains("Reviewer comment body.", facadeHtml, StringComparison.Ordinal);
+            Assert.Contains("Preview header.", facadeHtml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Reviewer comment body.", editorHtml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Preview header.", editorHtml, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SessionRegistry.CloseSession(liveHandle);
+        }
+    }
+
+    /// <summary>
+    /// An unavailable package hash is <c>null</c> on the wire, never <c>""</c>. Two receipts
+    /// that both failed to hash must NOT satisfy
+    /// <c>preview.packageHash == applied.packageHash</c> — the replay assertion the docs
+    /// describe has to fail loudly when it has nothing to compare.
+    /// </summary>
+    [Fact]
+    public void DS471_UnavailablePackageHash_IsNullOnTheWireNotAnEmptySentinel()
+    {
+        var unavailable = DocxSessionJson.SerializeMutationBatchResult(new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = true,
+            Warnings = new[] { "Package equivalence hash unavailable: simulated." },
+        });
+        Assert.Contains("\"packageHash\":null", unavailable, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"packageHash\":\"\"", unavailable, StringComparison.Ordinal);
+
+        using var session = OpenRich();
+        var applied = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep("docx_edit", "replace_text",
+                s => s.ReplaceText(BodyParagraphs(s)[0], "Hashed.")),
+        });
+        Assert.NotNull(applied.PackageHash);
+        Assert.Contains($"\"packageHash\":\"{applied.PackageHash}\"",
+            DocxSessionJson.SerializeMutationBatchResult(applied), StringComparison.Ordinal);
+    }
+
+    /// <summary>Bytes carrying a comment and a default header — the parts the editor's render
+    /// profile drops and a preview's must keep.</summary>
+    private static byte[] CommentedBytes(out string[] anchors)
+    {
+        using var seed = OpenRich(new DocxSessionSettings { PersistAnchorIds = true });
+        var seedAnchors = BodyParagraphs(seed);
+        Assert.True(seed.AddComment(seedAnchors[0], null, "Reviewer", "Reviewer comment body.",
+            date: new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Utc)).Success);
+        Assert.True(seed.SetHeaderText(
+            seedAnchors[0], HeaderFooterKind.Default, "Preview header.").Success);
+        var bytes = seed.Save(persistAnchorIds: true);
+
+        using var probe = new DocxSession(bytes, new DocxSessionSettings { PersistAnchorIds = true });
+        anchors = BodyParagraphs(probe);
+        return bytes;
+    }
+
+    /// <summary>Bytes carrying tracked revisions authored into the FIRST body paragraph only.</summary>
+    private static byte[] RedlinedBytes(out string[] anchors)
+    {
+        using var seed = OpenRich(new DocxSessionSettings
+        {
+            PersistAnchorIds = true,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Original Reviewer",
+        });
+        var seedAnchors = BodyParagraphs(seed);
+        Assert.True(seed.ReplaceText(seedAnchors[0], "Redlined first paragraph.").Success);
+        var bytes = seed.Save(persistAnchorIds: true);
+
+        using var probe = new DocxSession(bytes, new DocxSessionSettings { PersistAnchorIds = true });
+        anchors = BodyParagraphs(probe);
+        return bytes;
     }
 
     private static string NormalizeGeneratedIds(string value) =>

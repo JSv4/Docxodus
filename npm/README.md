@@ -116,6 +116,25 @@ if (!result.success) console.error(result.failure);
 
 Pass `'best_effort'` explicitly only when partial successes should be retained.
 
+`previewBatch` answers "what would this do?" without touching the live session. It runs the
+same steps against a complete isolated clone — each callback is handed the shadow session to
+mutate — and returns the same receipt plus optional predicted HTML:
+
+```ts
+const preview = session.previewBatch([
+  { tool: 'docx_edit', action: 'replace_text',
+    mutation: shadow => shadow.replaceText(firstAnchor, 'Proposed replacement') },
+], 'atomic', { html: 'full' });
+
+console.log(preview.html, preview.revisionChanges.added, preview.warnings);
+```
+
+The live document's bytes, version and undo/redo history are unchanged either way. Preview
+HTML shows tracked changes, comments, annotations, notes and headers/footers — the document
+the batch would produce, matching what the Python and MCP clients render for the same batch.
+`packageHash` is `null` when it could not be computed, so never assert replay equality
+without checking for it.
+
 ![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
 
 ---

@@ -1020,7 +1020,8 @@ internal static class DocxSessionJson
           .Append(",\"rolledBack\":").Append(result.RolledBack ? "true" : "false")
           .Append(",\"baseVersion\":").Append(result.BaseVersion)
           .Append(",\"resultVersion\":").Append(result.ResultVersion)
-          .Append(",\"packageHash\":").Append(JsonString(result.PackageHash))
+          .Append(",\"packageHash\":")
+          .Append(result.PackageHash is null ? "null" : JsonString(result.PackageHash))
           .Append(",\"steps\":[");
         for (int i = 0; i < result.Steps.Count; i++)
         {
