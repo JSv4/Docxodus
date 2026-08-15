@@ -315,6 +315,17 @@ All notable changes to this project will be documented in this file.
   recompile.
 
 ### Changed
+- **A footnote too long for its page now keeps flowing instead of being clipped.**
+  Browser pagination reserves at most 60% of the body height for the note band; a
+  note whose tail did not fit there used to be handed to the next page whole and
+  drawn past the band's bottom edge, so the overflow was in the DOM but not on the
+  page — and therefore missing from the `PageMap` a citation resolves against. The
+  tail is now partitioned at whole-paragraph boundaries and drained across as many
+  note areas as it needs, opening note-only pages after the last body block when
+  the document runs out of pages first. A note is still never split below one
+  paragraph, so an indivisible oversized paragraph keeps the established clipped
+  fallback. Documents whose notes always fit paginate unchanged; a document with a
+  note longer than one page's band gains pages it previously dropped content on.
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
   navigation, and gives the arcade thumb controls** — three fixes to the same
   problem, that the demo's mobile visit was its worst one:

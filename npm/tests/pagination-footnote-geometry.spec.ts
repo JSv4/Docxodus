@@ -158,9 +158,11 @@ test.describe('Paginated footnote geometry', () => {
     expect(twoNotes.items.length).toBe(2);
     const [first, second] = twoNotes.items;
     expect(second.top - first.bottom, 'inter-note gap').toBeLessThanOrEqual(TOL);
-    // Both notes' text must still be present and distinct.
-    expect(first.text).toContain('Footnote 1 text.');
-    expect(second.text).toContain('Footnote 2 text.');
+    // Both notes' text must still be present and distinct. The fixture numbers every note
+    // paragraph, single-paragraph notes included, so that a note split across pages can be
+    // told apart paragraph by paragraph; a one-paragraph note reads "paragraph 1".
+    expect(first.text).toContain('Footnote 1 paragraph 1 text.');
+    expect(second.text).toContain('Footnote 2 paragraph 1 text.');
     // The area still ends on the margin line with two notes stacked.
     expect(
       twoNotes.boxBottom - twoNotes.notesBottom,
