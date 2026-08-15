@@ -106,6 +106,13 @@ public sealed record RedlinePackageDivergence
     public VerificationDigest? ActualRawDigest { get; init; }
     public VerificationDigest? ExpectedNormalizedDigest { get; init; }
     public VerificationDigest? ActualNormalizedDigest { get; init; }
+    /// <summary>Whether the semantic change set reports a modeled change for this part.</summary>
+    required public bool HasModeledSemanticChange { get; init; }
+    /// <summary>
+    /// Whether the normalized entry difference may contain content outside the modeled semantic
+    /// projection. This is deliberately conservative because a modeled change in one part does
+    /// not prove that every other change in that part was modeled.
+    /// </summary>
     required public bool UnknownOrUnmodeled { get; init; }
 }
 

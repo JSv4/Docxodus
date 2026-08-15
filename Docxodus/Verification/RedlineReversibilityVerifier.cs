@@ -324,28 +324,10 @@ public static class RedlineReversibilityVerifier
         if (!actualManifest.IsValid)
             completed = false;
 
-        var semantic = CompareModeledSemantics(expectedBytes, outputBytes);
-        if (!semantic.Available)
-        {
-            findings.Add(Finding(
-                "modeled_semantic_comparison_unavailable",
-                VerificationFindingSeverity.Error,
-                semantic.Diagnostic ?? "The versioned modeled semantic comparer is unavailable.",
-                revisionIds: requestedIds,
-                remediation: "Run the proof with the semantic-diff component available.",
-                direction: direction));
-        }
-        else if (semantic.Equivalent != true)
-        {
-            findings.Add(Finding(
-                "modeled_semantic_mismatch",
-                VerificationFindingSeverity.Error,
-                $"The {DirectionName(direction)} output has {semantic.ChangeCount ?? 0} modeled semantic change(s).",
-                revisionIds: requestedIds,
-                remediation: "Inspect the semantic change set and applicable generated revisions.",
-                direction: direction));
-        }
-
+        var semantic = CompareModeledSemantics(
+            expectedBytes,
+            outputBytes,
+            options.PackageManifestOptions);
         bool normalizedEquivalent = DigestEquals(
             expectedManifest.NormalizedSemanticDigest,
             actualManifest.NormalizedSemanticDigest);
@@ -359,8 +341,48 @@ public static class RedlineReversibilityVerifier
             expectedManifest,
             actualManifest,
             generated,
-            modeledPartUris: Array.Empty<string>());
+            semantic.ModeledPartUris);
         var firstDivergence = divergences.FirstOrDefault();
+        if (!semantic.Comparison.Available)
+        {
+            findings.Add(Finding(
+                "modeled_semantic_comparison_unavailable",
+                VerificationFindingSeverity.Error,
+                semantic.Comparison.Diagnostic
+                    ?? "The versioned modeled semantic comparer is unavailable.",
+                revisionIds: requestedIds,
+                remediation: "Run the proof with the semantic-diff component available.",
+                direction: direction));
+        }
+        else if (semantic.Comparison.Equivalent != true)
+        {
+            var firstSemanticChange = semantic.FirstModeledChange;
+            var firstSemanticAnchor = firstSemanticChange?.RightAnchor
+                ?? firstSemanticChange?.LeftAnchor;
+            var applicableRevisionIds = firstSemanticChange is null
+                || firstSemanticAnchor is null
+                ? Array.Empty<string>()
+                : generated.Where(revision => RevisionAppliesToSemanticChange(
+                        revision, firstSemanticChange, firstSemanticAnchor))
+                    .Select(revision => revision.Id)
+                    .ToArray();
+            findings.Add(Finding(
+                "modeled_semantic_mismatch",
+                VerificationFindingSeverity.Error,
+                $"The {DirectionName(direction)} output has "
+                    + $"{semantic.Comparison.ChangeCount ?? 0} modeled semantic change(s).",
+                firstSemanticChange is null
+                    ? null
+                    : new ChangeLocation
+                    {
+                        EntryUri = firstSemanticChange.PartUri,
+                        PropertyPath = firstSemanticChange.Path,
+                    },
+                firstSemanticAnchor,
+                applicableRevisionIds,
+                remediation: "Inspect the semantic change set and applicable generated revisions.",
+                direction: direction));
+        }
 
         if (!normalizedEquivalent)
         {
@@ -405,8 +427,8 @@ public static class RedlineReversibilityVerifier
 
         bool equivalent = completed
             && preExistingPreserved
-            && semantic.Available
-            && semantic.Equivalent == true
+            && semantic.Comparison.Available
+            && semantic.Comparison.Equivalent == true
             && normalizedEquivalent
             && (!options.RequireExactPackageBytes || rawEquivalent)
             && findings.All(item => item.Severity != VerificationFindingSeverity.Error);
@@ -421,7 +443,7 @@ public static class RedlineReversibilityVerifier
                 ImplicitlyResolvedRevisionIds = implicitlyResolvedIds,
                 SurvivingPreExistingRevisions = surviving,
                 PreExistingRevisionsPreserved = preExistingPreserved,
-                ModeledSemantic = semantic,
+                ModeledSemantic = semantic.Comparison,
                 NormalizedWholePackageEquivalent = normalizedEquivalent,
                 OrderedOpcContentEquivalent = opcEquivalent,
                 ExactPackageBytesEquivalent = rawEquivalent,
@@ -617,8 +639,11 @@ public static class RedlineReversibilityVerifier
                 ActualRawDigest = actualEntry?.RawBytesDigest,
                 ExpectedNormalizedDigest = expectedEntry?.NormalizedXmlDigest,
                 ActualNormalizedDigest = actualEntry?.NormalizedXmlDigest,
-                UnknownOrUnmodeled = normalizedDifferent
-                    && !modeledPartUris.Contains(key.Uri),
+                HasModeledSemanticChange = modeledPartUris.Contains(key.Uri),
+                // A change set identifies modeled facts, not a complete residual projection for
+                // an arbitrary XML part. Even when that same part has a modeled change, retain the
+                // normalized divergence as potentially unmodeled instead of overclaiming coverage.
+                UnknownOrUnmodeled = normalizedDifferent,
             });
         }
         return divergences;
@@ -635,6 +660,19 @@ public static class RedlineReversibilityVerifier
             partUri,
             $"{ownerDirectory}_rels/{ownerName}.rels",
             StringComparison.Ordinal);
+    }
+
+    private static bool RevisionAppliesToSemanticChange(
+        RedlineRevisionIdentity revision,
+        SemanticChange change,
+        string? changeAnchor)
+    {
+        if (!RevisionAppliesToPart(revision, change.PartUri)) return false;
+        // A part match alone does not prove that a generated revision caused this semantic change.
+        // Only claim a revision when the semantic anchor matches its primary or affected anchors.
+        return changeAnchor is not null
+            && (string.Equals(revision.AnchorId, changeAnchor, StringComparison.Ordinal)
+                || revision.AffectedAnchorIds.Contains(changeAnchor, StringComparer.Ordinal));
     }
 
     private static RedlineRevisionIdentity ToIdentity(RevisionListEntry entry) => new()
@@ -800,21 +838,77 @@ public static class RedlineReversibilityVerifier
         CaptureInitialProjection = false,
     });
 
-    // Replaced by the schema-v1 semantic comparer when #457 is stacked into this branch. Keeping
-    // the dependency unavailable (and therefore proof-failing) is deliberate: normalized package
-    // equality must never be mislabeled as modeled semantic evidence.
-    private static RedlineModeledSemanticComparison CompareModeledSemantics(
+    private static ModeledSemanticEvaluation CompareModeledSemantics(
         byte[] expectedBytes,
-        byte[] actualBytes) => SemanticUnavailable();
+        byte[] actualBytes,
+        PackageManifestOptions packageOptions)
+    {
+        try
+        {
+            var changes = SemanticDiff.Compare(
+                new WmlDocument("expected.docx", expectedBytes),
+                new WmlDocument("actual.docx", actualBytes),
+                new SemanticDiffOptions { PackageOptions = packageOptions });
+            var modeledChanges = changes.Changes
+                .Where(change => change.Family != SemanticChangeFamily.OpaquePackagePart)
+                .ToArray();
+            return new ModeledSemanticEvaluation(
+                new RedlineModeledSemanticComparison
+                {
+                    Available = true,
+                    Equivalent = modeledChanges.Length == 0,
+                    Schema = changes.Schema,
+                    ChangeCount = modeledChanges.Length,
+                    Diagnostic = null,
+                },
+                modeledChanges.SelectMany(ModeledPartUris)
+                    .ToHashSet(StringComparer.Ordinal),
+                modeledChanges.FirstOrDefault(change =>
+                    change.RightAnchor is not null || change.LeftAnchor is not null)
+                    ?? modeledChanges.FirstOrDefault());
+        }
+        catch (Exception ex) when (!IsFatal(ex))
+        {
+            return new ModeledSemanticEvaluation(
+                SemanticUnavailable(
+                    $"The versioned semantic comparison failed ({ex.GetType().Name})."),
+                Array.Empty<string>(),
+                null);
+        }
+    }
 
-    private static RedlineModeledSemanticComparison SemanticUnavailable() => new()
+    private static RedlineModeledSemanticComparison SemanticUnavailable(
+        string diagnostic = "The versioned semantic comparison did not run.") => new()
     {
         Available = false,
         Equivalent = null,
         Schema = null,
         ChangeCount = null,
-        Diagnostic = "The versioned semantic diff dependency is not present on this branch.",
+        Diagnostic = diagnostic,
     };
+
+    private static IEnumerable<string> ModeledPartUris(SemanticChange change)
+    {
+        // Opaque-part digests make a difference visible, but do not claim that Docxodus
+        // understands its semantics. Keep those divergences explicitly marked unmodeled.
+        if (change.Family == SemanticChangeFamily.OpaquePackagePart)
+            yield break;
+
+        yield return change.PartUri;
+        if (change.Family != SemanticChangeFamily.Relationship)
+            yield break;
+
+        if (string.Equals(change.PartUri, "/", StringComparison.Ordinal))
+        {
+            yield return "/_rels/.rels";
+            yield break;
+        }
+
+        int slash = change.PartUri.LastIndexOf('/');
+        string directory = slash <= 0 ? "/" : change.PartUri[..(slash + 1)];
+        string name = slash < 0 ? change.PartUri : change.PartUri[(slash + 1)..];
+        yield return $"{directory}_rels/{name}.rels";
+    }
 
     private static string DirectionName(RedlineProofDirection direction) => direction switch
     {
@@ -826,4 +920,9 @@ public static class RedlineReversibilityVerifier
         OutOfMemoryException or StackOverflowException or AccessViolationException;
 
     private sealed record PathEvaluation(RedlineProofPathResult Result, byte[]? OutputBytes);
+
+    private sealed record ModeledSemanticEvaluation(
+        RedlineModeledSemanticComparison Comparison,
+        IReadOnlyCollection<string> ModeledPartUris,
+        SemanticChange? FirstModeledChange);
 }

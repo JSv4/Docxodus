@@ -79,7 +79,9 @@ separately and is not required unless the caller explicitly requests it.
 The proof reports, and never conflates, four layers:
 
 1. **Modeled semantic equivalence** uses the versioned semantic change set. An empty
-   change set proves equality only for that schema's modeled surface.
+   modeled change projection proves equality only for that schema's understood surface.
+   `OpaquePackagePart` changes remain visible in the underlying change set but are
+   excluded from this layer and reported as unknown/unmodeled package divergences.
 2. **Normalized whole-package equivalence** uses the package manifest's normalized
    XML/binary identity. This covers document text and formatting, lists, tables,
    sections, headers/footers, notes, comments, bookmarks, fields, content controls,
@@ -91,7 +93,10 @@ The proof reports, and never conflates, four layers:
 
 If modeled semantics match but normalized package identity differs, the result is not
 called equivalent. The divergent manifest entries are emitted as unknown/unmodeled
-package differences. This is the guard against silently losing unsupported content.
+package differences. A divergence also states whether the semantic change set has a
+modeled change in that part, but this never claims the modeled projection exhaustively
+explains every XML node in the part. This conservative residual rule is the guard
+against silently losing unsupported content mixed into an otherwise modeled part.
 
 ## Result and receipt embedding
 
