@@ -8792,6 +8792,10 @@ public sealed partial class DocxSession : IDisposable
         if (characterOffset < 0 || characterOffset > totalText.Length)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+        if (HasUnsupportedInlineInsertionBoundary(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                $"{opName} offset falls inside a revision or unsupported inline container; " +
+                "choose a boundary before or after that container", anchorId);
 
         // Parse the note body BEFORE snapshotting so a malformed payload is a clean no-op
         // (no part created, no undo entry pushed).
@@ -13391,6 +13395,42 @@ public sealed partial class DocxSession : IDisposable
         string.Concat(child.DescendantsAndSelf(W.t).Select(t => (string)t)).Length;
 
     /// <summary>
+    /// Whether inserting a new top-level paragraph child at <paramref name="offset"/> would
+    /// silently move it away from the requested visible-text position. Plain runs are split by
+    /// <see cref="SplitRunsAtOffset"/>. A top-level hyperlink containing direct runs is split by
+    /// <see cref="SplitInlineContainersAtOffset"/>. Every other container — including
+    /// <c>w:ins</c>/<c>w:moveTo</c> — is atomic because splitting it requires revision- or
+    /// field-specific semantics.
+    /// </summary>
+    private static bool HasUnsupportedInlineInsertionBoundary(XElement paragraph, int offset)
+    {
+        int consumed = 0;
+        foreach (var child in paragraph.Elements().Where(IsInlineChild))
+        {
+            int length = InlineChildTextLength(child);
+            if (consumed < offset && offset < consumed + length)
+            {
+                if (child.Name == W.r) return false;
+                if (child.Name != W.hyperlink) return true;
+
+                int localOffset = offset - consumed;
+                int hyperlinkConsumed = 0;
+                foreach (var nested in child.Elements().Where(IsInlineChild))
+                {
+                    int nestedLength = InlineChildTextLength(nested);
+                    if (hyperlinkConsumed < localOffset
+                        && localOffset < hyperlinkConsumed + nestedLength)
+                        return nested.Name != W.r;
+                    hyperlinkConsumed += nestedLength;
+                }
+                return false;
+            }
+            consumed += length;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// If a run straddles <paramref name="offset"/>, split it into two adjacent runs
     /// at that offset. Walks runs inside hyperlinks/sdts/etc. too, so the boundary
     /// is clean regardless of which container the run lives in. The new sibling run
@@ -13444,9 +13484,10 @@ public sealed partial class DocxSession : IDisposable
 
             if (child.Name == W.hyperlink)
                 SplitHyperlinkAt(child, local);
-            // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag:
-            // treat as atomic — splitting these requires semantic care; the whole element
-            // stays with whichever side its leading run lands on.
+            // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag and
+            // revision wrappers: treat as atomic — callers that insert a top-level child must
+            // reject an interior boundary with HasUnsupportedInlineInsertionBoundary before
+            // reaching this helper.
             return;
         }
     }

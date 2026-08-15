@@ -19,6 +19,7 @@ TRANSACTION_ID = "epic435-smoke-restated-certificate"
 CORPORATION = "Northstar Robotics, Inc."
 PLACEHOLDER = "[_______________]"
 RENDERER = "epic435-smoke-renderer-1"
+HISTORY_SENTINEL = "History cursor sentinel — this paragraph exists only on redo."
 
 
 def step(tool: str, **args: object) -> dict:
@@ -81,6 +82,53 @@ def mutations(call_id: str, mode: str, **extra: object) -> dict:
     call: dict = {"id": call_id, "name": "docxodus_mutations", "arguments": arguments}
     call.update(extra)
     return call
+
+
+def affected_anchor_expectations() -> dict[str, object]:
+    """Exact semantic affected-anchor shape shared by preview and apply.
+
+    Generated ids intentionally differ between executions, but cardinality, kind, scope, and
+    every caller-known modified id are deterministic and are all part of the receipt contract.
+    """
+    expected: dict[str, object] = {}
+    for index in range(len(TRACKED_STEPS)):
+        expected[f"steps.{index}.success"] = True
+        expected[f"steps.{index}.rolledBack"] = False
+        expected[f"steps.{index}.results.length"] = 1
+        expected[f"steps.{index}.results.0.success"] = True
+        expected[f"steps.{index}.results.0.removed.length"] = 0
+
+    expected.update({
+        "steps.0.results.0.created.length": 0,
+        "steps.0.results.0.modified.length": 1,
+        "steps.0.results.0.modified.0.id": "$name_anchor",
+
+        "steps.1.results.0.created.length": 1,
+        "steps.1.results.0.created.0.kind": "p",
+        "steps.1.results.0.created.0.scope": "body",
+        "steps.1.results.0.modified.length": 0,
+
+        "steps.2.results.0.created.length": 2,
+        "steps.2.results.0.created.0.kind": "fn",
+        "steps.2.results.0.created.0.scope": "fn",
+        "steps.2.results.0.created.1.kind": "p",
+        "steps.2.results.0.created.1.scope": "fn",
+        "steps.2.results.0.modified.length": 1,
+        "steps.2.results.0.modified.0.id": "$certify_anchor",
+
+        "steps.3.results.0.created.length": 2,
+        "steps.3.results.0.created.0.kind": "cmt",
+        "steps.3.results.0.created.0.scope": "cmt",
+        "steps.3.results.0.created.1.kind": "p",
+        "steps.3.results.0.created.1.scope": "cmt",
+        "steps.3.results.0.modified.length": 1,
+        "steps.3.results.0.modified.0.id": "$name_anchor",
+
+        "steps.4.results.0.created.length": 0,
+        "steps.4.results.0.modified.length": 1,
+        "steps.4.results.0.modified.0.id": "$name_anchor",
+    })
+    return expected
 
 
 def workflow() -> list[dict]:
@@ -181,6 +229,7 @@ def workflow() -> list[dict]:
                 "predicted_hash": "packageHash",
                 "predicted_revision_adds": "revisionChanges.added.length",
                 "predicted_comment_adds": "commentChanges.added.length",
+                "preview_html_bytes": "html.length",
                 # Affected anchors, per step. Counts for created anchors, not ids: the
                 # receipt warns that generated ids differ between preview and apply.
                 "predicted_paragraph_creates": "steps.1.results.0.created.length",
@@ -193,12 +242,9 @@ def workflow() -> list[dict]:
                 "rolledBack": False,
                 "baseVersion": "$base_version",
                 "editsApplied": len(TRACKED_STEPS),
-                "steps.0.results.0.modified.0.id": "$name_anchor",
-                "steps.2.results.0.modified.0.id": "$certify_anchor",
-                "steps.4.results.0.modified.0.id": "$name_anchor",
-                "steps.0.results.0.removed.length": 0,
-                "steps.1.results.0.removed.length": 0,
+                **affected_anchor_expectations(),
             },
+            expectNonEmpty=["html", "packageHash"],
         ),
         {
             "id": "preview_left_live_untouched",
@@ -241,12 +287,8 @@ def workflow() -> list[dict]:
                 "resultVersion": "$predicted_version",
                 "revisionChanges.added.length": "$predicted_revision_adds",
                 "commentChanges.added.length": "$predicted_comment_adds",
-                # The anchors the preview said would be touched are the ones that were.
-                "steps.0.results.0.modified.0.id": "$name_anchor",
-                "steps.2.results.0.modified.0.id": "$certify_anchor",
-                "steps.4.results.0.modified.0.id": "$name_anchor",
-                "steps.0.results.0.removed.length": 0,
-                "steps.1.results.0.removed.length": 0,
+                # Generated ids differ, but the complete semantic affected-anchor shape must not.
+                **affected_anchor_expectations(),
                 "steps.1.results.0.created.length": "$predicted_paragraph_creates",
                 "steps.2.results.0.created.length": "$predicted_footnote_creates",
                 "steps.3.results.0.created.length": "$predicted_comment_creates",
@@ -352,6 +394,24 @@ def workflow() -> list[dict]:
             },
         },
         {
+            "id": "bookmark_revision_interior_is_refused",
+            "name": "docxodus_links",
+            "arguments": {
+                "sessionId": "$session_id",
+                "action": "add_bookmark",
+                "name": "SmokeRevisionInteriorShouldFail",
+                # The inserted corporate name begins at visible offset 32. Both endpoints are
+                # strictly inside its w:ins, so direct recording reaches the boundary guard rather
+                # than the tracked-operation guard exercised above.
+                "startAnchorId": "$name_anchor",
+                "startOffset": 33,
+                "endAnchorId": "$name_anchor",
+                "endOffset": 40,
+            },
+            "expectFailure": True,
+            "expect": {"error.code": "unsupported_inline_boundary"},
+        },
+        {
             "id": "link_scaffolding_batch",
             "name": "docxodus_mutations",
             "arguments": {
@@ -450,6 +510,33 @@ def workflow() -> list[dict]:
             },
         },
         {
+            # Seed a known pre-existing redo cursor without changing the guarded package. A failed
+            # atomic batch must preserve the snapshot itself, not merely leave redo callable.
+            "id": "seed_history_redo_target",
+            "name": "docxodus_create",
+            "arguments": {
+                "sessionId": "$session_id",
+                "action": "insert_paragraph",
+                "anchorId": "$certify_anchor",
+                "position": "after",
+                "markdown": HISTORY_SENTINEL,
+            },
+            "capture": {"history_seed_anchor": "created.0.id"},
+            "expect": {
+                "success": True,
+                "created.length": 1,
+                "created.0.kind": "p",
+                "created.0.scope": "body",
+                "removed.length": 0,
+            },
+        },
+        {
+            "id": "seed_history_redo_cursor",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "undo"},
+            "expect": {"success": True},
+        },
+        {
             "id": "state_after_link_scaffolding",
             "name": "docxodus_get_content",
             "arguments": {"sessionId": "$session_id", "format": "info"},
@@ -462,7 +549,39 @@ def workflow() -> list[dict]:
             "id": "revisions_after_link_scaffolding",
             "name": "docxodus_track_changes",
             "arguments": {"sessionId": "$session_id", "action": "list"},
-            "capture": {"guarded_revisions": "revisions.length"},
+            "capture": {
+                "guarded_revisions": "revisions",
+                "guarded_revision_count": "revisions.length",
+            },
+        },
+        {
+            "id": "comments_before_failure",
+            "name": "docxodus_comment",
+            "arguments": {"sessionId": "$session_id", "action": "list"},
+            "capture": {"guarded_comments": "comments"},
+        },
+        {
+            "id": "content_and_anchor_identity_before_failure",
+            "name": "docxodus_get_content",
+            "arguments": {"sessionId": "$session_id", "format": "markdown"},
+            "capture": {
+                "guarded_markdown": "markdown",
+                "guarded_anchor_index": "anchorIndex",
+            },
+        },
+        {
+            "id": "package_checkpoint_before_failure",
+            "name": "docxodus_mutations",
+            "arguments": {"sessionId": "$session_id", "mode": "preview", "steps": []},
+            "capture": {"guarded_hash": "packageHash"},
+            "expect": {
+                "status": "ok",
+                "preview": True,
+                "editsApplied": 0,
+                "baseVersion": "$guarded_version",
+                "resultVersion": "$guarded_version",
+            },
+            "expectNonEmpty": ["packageHash"],
         },
     ]
 
@@ -521,6 +640,18 @@ def workflow() -> list[dict]:
                 "editsApplied": 0,
                 "failure.index": 2,
                 "failure.error.code": "anchor_not_found",
+                "baseVersion": "$guarded_version",
+                "resultVersion": "$guarded_version",
+                "packageHash": "$guarded_hash",
+                "revisionChanges.added.length": 0,
+                "revisionChanges.removed.length": 0,
+                "revisionChanges.modified.length": 0,
+                "commentChanges.added.length": 0,
+                "commentChanges.removed.length": 0,
+                "commentChanges.modified.length": 0,
+                "annotationChanges.added.length": 0,
+                "annotationChanges.removed.length": 0,
+                "annotationChanges.modified.length": 0,
             },
         },
     ]
@@ -537,10 +668,25 @@ def workflow() -> list[dict]:
             },
         },
         {
+            "id": "audit_content_and_anchor_identity_unchanged",
+            "name": "docxodus_get_content",
+            "arguments": {"sessionId": "$session_id", "format": "markdown"},
+            "expect": {
+                "markdown": "$guarded_markdown",
+                "anchorIndex": "$guarded_anchor_index",
+            },
+        },
+        {
             "id": "audit_revisions_unchanged",
             "name": "docxodus_track_changes",
             "arguments": {"sessionId": "$session_id", "action": "list"},
-            "expect": {"revisions.length": "$guarded_revisions"},
+            "expect": {"revisions": "$guarded_revisions"},
+        },
+        {
+            "id": "audit_comments_unchanged",
+            "name": "docxodus_comment",
+            "arguments": {"sessionId": "$session_id", "action": "list"},
+            "expect": {"comments": "$guarded_comments"},
         },
         {
             "id": "audit_rolled_back_text_absent",
@@ -584,19 +730,109 @@ def workflow() -> list[dict]:
             "expect": {"matches.0.enclosingAnchor.id": "$name_anchor"},
         },
         {
-            "id": "audit_undo_redo_still_usable",
-            "name": "docxodus_edit",
-            "arguments": {"sessionId": "$session_id", "action": "undo"},
-            "expect": {"success": True},
-        },
-        {
-            "id": "audit_redo_restores",
+            "id": "audit_preexisting_redo_restores_seed",
             "name": "docxodus_edit",
             "arguments": {"sessionId": "$session_id", "action": "redo"},
             "expect": {"success": True},
         },
         {
-            "id": "audit_state_after_undo_redo",
+            "id": "audit_redo_restored_exact_snapshot",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": HISTORY_SENTINEL,
+                "scope": "body",
+            },
+            "expect": {
+                "matches.length": 1,
+                "matches.0.enclosingAnchor.id": "$history_seed_anchor",
+            },
+        },
+        {
+            "id": "audit_undo_rewinds_seed",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "undo"},
+            "expect": {"success": True},
+        },
+        {
+            "id": "audit_package_after_redo_round_trip",
+            "name": "docxodus_mutations",
+            "arguments": {"sessionId": "$session_id", "mode": "preview", "steps": []},
+            "expect": {"status": "ok", "packageHash": "$guarded_hash"},
+        },
+        {
+            "id": "audit_preexisting_undo_rewinds_link_batch",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "undo"},
+            "expect": {"success": True},
+        },
+        {
+            "id": "audit_undo_removed_link_batch",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "bookmark",
+                "query": "SmokeDelawareRationale",
+            },
+            "expect": {"matches.length": 0},
+        },
+        {
+            "id": "audit_preexisting_undo_can_redo",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "redo"},
+            "expect": {"success": True},
+        },
+        {
+            "id": "audit_package_after_undo_round_trip",
+            "name": "docxodus_mutations",
+            "arguments": {"sessionId": "$session_id", "mode": "preview", "steps": []},
+            "expect": {"status": "ok", "packageHash": "$guarded_hash"},
+        },
+        {
+            "id": "audit_link_batch_restored",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "bookmark",
+                "query": "SmokeDelawareRationale",
+            },
+            "expect": {"matches.0.id": "$list_anchor"},
+        },
+        {
+            "id": "audit_redo_cursor_survived_undo_round_trip",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "redo"},
+            "expect": {"success": True},
+        },
+        {
+            "id": "audit_surviving_redo_restored_exact_snapshot",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": HISTORY_SENTINEL,
+                "scope": "body",
+            },
+            "expect": {
+                "matches.length": 1,
+                "matches.0.enclosingAnchor.id": "$history_seed_anchor",
+            },
+        },
+        {
+            "id": "audit_rewind_surviving_redo",
+            "name": "docxodus_edit",
+            "arguments": {"sessionId": "$session_id", "action": "undo"},
+            "expect": {"success": True},
+        },
+        {
+            "id": "audit_package_after_all_history_round_trips",
+            "name": "docxodus_mutations",
+            "arguments": {"sessionId": "$session_id", "mode": "preview", "steps": []},
+            "expect": {"status": "ok", "packageHash": "$guarded_hash"},
+        },
+        {
+            "id": "audit_state_after_history_round_trips",
             "name": "docxodus_get_content",
             "arguments": {"sessionId": "$session_id", "format": "info"},
             "expect": {"editSummary.totalAnchors": "$guarded_anchors"},

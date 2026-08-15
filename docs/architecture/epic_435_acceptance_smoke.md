@@ -1,6 +1,6 @@
 # Epic #435 acceptance smoke — agent-safe headless document editing
 
-Run 2026-08-15 against `main` at `400af83` plus the three commits this run produced.
+Run 2026-08-15 against `main` at `400af83` plus PR #491 and its review hardening.
 Transport: `docxodus-mcp` over stdio JSON-RPC, driven by
 [`tools/mcp-server/smoke/mcp_probe.py`](../../tools/mcp-server/smoke/mcp_probe.py).
 
@@ -26,10 +26,10 @@ in-repo equivalent of the certificate the round-three smoke used.
 
 | Pass | Calls | Assertions | Failed | Expected failures | Replay mismatches |
 |---|---:|---:|---:|---:|---:|
-| Workflow | 45 | 81 | **0** | 4 | **0** |
+| Workflow | 64 | 212 | **0** | 5 | **0** |
 | Reopen validation | 13 | 27 | **0** | 0 | — |
 
-Unit suite after the fix below: **3793 passed, 0 failed, 3 skipped**.
+Unit suite after the fixes below: **3797 passed, 0 failed, 3 skipped**.
 
 ## The spine: inspect → preview → apply → retry → audit
 
@@ -39,7 +39,7 @@ introspection returned the full `sectPr` rollup including per-kind header/footer
 `docxodus_pagination status` correctly reported `unavailable` / `no_page_map` before any
 map was registered.
 
-**Preview.** A six-step tracked batch (surgical placeholder fill, paragraph insert,
+**Preview.** A five-step tracked batch (surgical placeholder fill, paragraph insert,
 footnote, comment, format) previewed under `mode: preview` with a batch-start
 `expectedVersion` guard and `previewHtml: full`.
 
@@ -48,25 +48,25 @@ footnote, comment, format) previewed under `mode: preview` with a batch-start
 | `baseVersion` → `resultVersion` | 0 → 1 |
 | `revisionChanges.added` | 4 |
 | `commentChanges.added` | 1 |
-| `packageHash` | `ec364b6d…` |
+| `packageHash` | `55a4f660…` |
 | rendered HTML | 522,302 bytes |
 
 The live session was then re-inspected: version still 0, anchors still 462, footnotes still
 94, zero revisions, zero comments. The isolated dry run of #446 holds — nothing crossed
 from the shadow.
 
-**Affected anchors.** Asserted per step on both the preview and the apply: step 0 and step 4
-modify the name clause, step 2 modifies the certification clause, no step removes an anchor,
-and the created-anchor counts the preview predicted are the counts the apply produced. Counts
-rather than ids for creations — the receipt warns that generated ids differ between the two
-runs, which is the same discipline applied to `packageHash` below.
+**Affected anchors.** The complete semantic shape is asserted for every step on both preview
+and apply: created/modified/removed cardinality, every generated anchor's kind and scope, and
+every caller-known modified id. All five removed arrays must be empty. Apply also has to match
+the preview's created counts. Generated creation ids are deliberately not compared because the
+receipt warns that they differ between independent executions.
 
-**Apply.** The same six steps under `mode: atomic` with
+**Apply.** The same five steps under `mode: atomic` with
 `transactionId: epic435-smoke-restated-certificate`. `resultVersion` was asserted *against
 the preview's captured prediction*, not a literal, and matched at 1; `revisionChanges.added`
 and `commentChanges.added` matched the predictions exactly.
 
-`packageHash` differed between preview and apply (`ec364b6d…` vs `64ce4960…`), which is the
+`packageHash` differed between preview and apply (`55a4f660…` vs `0448a0b5…`), which is the
 documented contract, not a defect: this batch generates a comment id, a footnote id and
 revision timestamps, and both receipts carry the warnings that say so —
 
@@ -81,23 +81,33 @@ compared the raw wire text of the two responses: **byte-exact**, `replayMismatch
 Nothing re-applied — version, anchor count, footnote count, revision count and comment
 count were all unchanged after the retry.
 
-**Audit.** Version, anchors and revisions were re-checked after every guarded step; undo
-and redo both remained usable and returned the document to the same anchor count.
+**Audit.** Before the intentional failure, the workflow captured the complete Markdown,
+complete anchor index, complete revision and comment arrays, version, and a deterministic hash
+of every OPC entry. The failed batch receipt and post-failure reads had to match those values
+exactly; count-only comparisons are not used for content, anchor identity, or revisions.
+
+History was tested by content rather than by a boolean: the workflow authored a uniquely named
+paragraph, undid it to seed a pre-existing redo cursor, then ran the failed batch. Redo had to
+restore that exact paragraph and anchor id. After rewinding it, the older undo entry had to
+remove the link/bookmark/table batch and redo had to restore it. Both round trips finished at
+the original `565c0755…` package hash, leaving the seeded redo cursor semantically intact.
 
 ## Failing closed
 
-Four calls are expected to fail, and the harness treats a success there as the defect.
+Five calls are expected to fail, and the harness treats a success there as the defect.
 
 | Probe | Result |
 |---|---|
 | `add_bookmark` while tracking | `tracked_operation_unsupported` — bookmark mutations have no faithful tracked encoding |
 | `insert_table` while tracking | `tracked_operation_unsupported` — no reversible tracked encoding on this document shape |
+| Bookmark endpoints at offsets 33–40 inside the name's `w:ins`, under direct recording | `unsupported_inline_boundary` |
 | Stale `expectedVersion` | `precondition_failed`, reporting the true `currentVersion` |
 | Atomic batch with a bad anchor at index 2 | `status: failed`, `rolledBack: true`, `editsApplied: 0`, `failure.index: 2`, `failure.error.code: anchor_not_found` |
 
-After the rolled-back batch: version, anchor count and revision count all unchanged, and
-neither rolled-back string appears anywhere in the package. A bookmark endpoint aimed
-inside the tracked insertion was separately refused with `unsupported_inline_boundary`.
+After the rolled-back batch, `baseVersion == resultVersion == 4`; its package hash exactly
+matched the pre-failure checkpoint. Full Markdown, anchor identity, revisions, and comments
+also matched, and neither rolled-back string appeared. The revision-interior bookmark refusal
+above is a real executed call, separate from the tracked-operation refusal.
 
 ## Capability coverage
 
@@ -159,6 +169,12 @@ Fixed in `e4b4365` by making `w:ins`/`w:moveTo` transparent containers and leavi
 `w:del`/`w:moveFrom` opaque — the split is visible text versus text the document says was
 removed, not plain versus revised runs. Coverage: `DS409`, `DS410`.
 
+The PR review found a mutation-side consequence: note insertion reused that visible offset
+space but could not split a revision wrapper, so a citation requested inside inserted text was
+silently placed after the whole wrapper. It now fails before snapshotting with
+`unsupported_inline_boundary`; offsets exactly before or after the wrapper remain supported.
+Coverage: `DS339`, `DS340`.
+
 ### 2. A batch step that matches nothing fails as `internal_error` — OPEN
 
 `replace_text_range` with a substring that is genuinely absent behaves inconsistently:
@@ -179,7 +195,8 @@ change, so this is filed rather than fixed here.
   minutes on the 610 KB tracked-changes output, so there is no independent load check.
   Integrity was established structurally instead — zip validity, part set, relationship
   resolution — and by a full reopen through the server. `DS400`'s `AssertSchemaValid` covers
-  the markup shape the fix touches.
+  the tracked replacement shape; `DS339`/`DS340` cover the note boundary and exact edge
+  placement.
 - **Traces are regenerated, not committed.** The workflow trace is ~12 MB, most of it the
   522 KB preview HTML repeated across receipts, so committing it would dwarf the harness it
   documents. The committed workflow plus the README command sequence reproduce it exactly;

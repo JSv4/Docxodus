@@ -220,6 +220,27 @@ def main() -> int:
                 if unresolved:
                     assertion["unresolved"] = unresolved
                 assertions.append(assertion)
+            for path in call.get("expectNonEmpty", []):
+                try:
+                    actual = capture_path(decoded, path)
+                    unresolved = None
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    actual, unresolved = None, f"{type(error).__name__}: {error}"
+                is_sized = isinstance(actual, (str, list, dict))
+                assertion = {
+                    "path": path,
+                    "expected": "non-empty",
+                    "actual": {
+                        "type": type(actual).__name__,
+                        "length": len(actual),
+                    } if is_sized else actual,
+                    "passed": unresolved is None
+                    and is_sized
+                    and len(actual) > 0,
+                }
+                if unresolved:
+                    assertion["unresolved"] = unresolved
+                assertions.append(assertion)
             if assertions:
                 entry["assertions"] = assertions
             responses.append(entry)

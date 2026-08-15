@@ -105,8 +105,9 @@ public class WmlToMarkdownConverterSettings
     public bool ResolveNumbering { get; set; } = true;
 
     /// <summary>
-    /// Builds the URI used for image references in the output. Defaults to
-    /// <c>docxodus://img/{unid}</c>; callers that want data URIs or HTTP URLs can override.
+    /// Compatibility placeholder for a future Markdown image projection. The current converter
+    /// emits no <c>w:drawing</c>/<c>w:pict</c> image syntax and never invokes this callback; use
+    /// <see cref="DocxSession.ListImages"/> and the native image surface to inspect images.
     /// </summary>
     public Func<ImageInfo, string>? ImageUriBuilder { get; set; }
 

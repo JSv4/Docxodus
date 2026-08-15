@@ -405,8 +405,13 @@ All notable changes to this project will be documented in this file.
   so a search over an incoming redline silently missed every inserted span.
   `w:ins`/`w:moveTo` now join the transparent inline containers; `w:del`/`w:moveFrom`
   deliberately do not, because their content is `w:delText` and deleted text is not
-  visible text. Coverage: `DocxSessionSurgicalTrackedChangesTests` DS409-DS410. Found by
-  the issue #435 acceptance smoke (`tools/mcp-server/smoke/epic-435-workflow.json`).
+  visible text. A note/endnote insertion whose requested offset is strictly inside one of
+  those revision wrappers now fails closed with `unsupported_inline_boundary`; the citation
+  inserter cannot split revision semantics and previously reported success after silently
+  placing the reference at the wrapper's far edge. Revision-edge offsets remain exact.
+  Coverage: `DocxSessionSurgicalTrackedChangesTests` DS409-DS410 and
+  `DocxSessionNoteAuthoringTests` DS339-DS340. Found by the issue #435 acceptance smoke and
+  its PR #491 adversarial review (`tools/mcp-server/smoke/epic-435-workflow.json`).
 - **An ordinary Word picture is no longer reported read-only because of a rendering
   hint.** The blip-extension guard that refuses to replace a picture holding a second
   image payload (an SVG `asvg:svgBlip` beside its raster fallback, or an artistic-effects

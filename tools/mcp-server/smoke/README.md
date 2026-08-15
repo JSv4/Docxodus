@@ -35,13 +35,14 @@ python3 tools/mcp-server/smoke/mcp_probe.py \
   --quiet-server -- tools/mcp-server/bin/Debug/net10.0/docxodus-mcp
 ```
 
-Expected: 45 calls / 81 assertions and 13 calls / 27 assertions, both with zero failures,
-four expected failures in the first, and `replayMismatches: 0`.
+Expected: 64 calls / 212 assertions and 13 calls / 27 assertions, both with zero failures,
+five expected failures in the first, and `replayMismatches: 0`.
 
-Four calls are *supposed* to fail, and the runner treats a success there as the defect
+Five calls are *supposed* to fail, and the runner treats a success there as the defect
 (`unexpectedSuccesses`): a bookmark and a table insert refused under tracked recording, a
-stale precondition, and the batch that rolls back. The engine failing those closed is the
-property under test.
+bookmark endpoint refused inside a tracked insertion under direct recording, a stale
+precondition, and the batch that rolls back. The engine failing those closed is the property
+under test.
 
 ### Workflow call fields
 
@@ -51,6 +52,7 @@ Beyond `name`/`arguments`/`capture`/`expect`, honored by `mcp_probe.py`:
 |---|---|
 | `expectFailure` | This call must fail. Its failure stops counting against the run, and a *success* becomes an `unexpectedSuccess`. |
 | `expectSameAs` | Compare this call's raw response text to that of the named earlier call. Byte-exact, before JSON parsing normalizes key order — which is what transaction replay actually promises. |
+| `expectNonEmpty` | List of result paths that must resolve to a non-empty string, array, or object. Used for generated payloads such as preview HTML and package hashes where pinning fixture-specific bytes would be brittle. |
 
 `expect` values substitute `$variables` too, so one call can be asserted against another's
 captured value (the apply's `resultVersion` against the preview's prediction).

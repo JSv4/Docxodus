@@ -2631,16 +2631,16 @@ public class McpServerDispatcherTests : IDisposable
         var sessionArg = JsonSerializer.Serialize(sessionId);
         var anchor = FirstBodyAnchorId(sessionId, _store);
 
-        // Seed a redo cursor: RecordPreOp used to clear redo on every preview step and never
-        // restore it, so this is only observable across a preview.
+        // Commit the state that must remain live, then create and undo a second edit. This leaves
+        // "committed edit" visible with "redo target" already on the redo stack. No live mutation
+        // may occur between this undo and the preview — RecordPreOp would legitimately clear redo.
+        Assert.True(ReplaceText(_store, sessionId, anchor, "committed edit")
+            .GetProperty("success").GetBoolean());
         Assert.True(ReplaceText(_store, sessionId, anchor, "redo target")
             .GetProperty("success").GetBoolean());
         Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
 
-        // The edit the caller has committed and must still have after every preview below.
-        Assert.True(ReplaceText(_store, sessionId, anchor, "committed edit")
-            .GetProperty("success").GetBoolean());
         var committedVersion = Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle);
         string Markdown() => Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
             $$"""{"sessionId":{{sessionArg}},"format":"markdown"}"""))).GetProperty("markdown").GetString()!;
@@ -2676,15 +2676,22 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Equal(committedMarkdown, Markdown());
         Assert.Equal(committedVersion, Docxodus.Internal.DocxSessionOps.GetVersion(_store.Get(sessionId).Handle));
 
-        // The live ring is untouched: exactly the caller's own entry undoes, and the redo cursor
-        // seeded before the previews is still reachable.
+        // Prove the PRE-EXISTING redo cursor directly, before any live undo can manufacture a new
+        // one. Then undo it back to the committed state and prove the one-deep ring has no older
+        // entry. The final redo/undo pair leaves the fixture in the committed state for leak checks.
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"redo"}"""))).GetProperty("success").GetBoolean());
+        Assert.Contains("redo target", Markdown());
         Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
-        Assert.DoesNotContain("committed edit", Markdown());
+        Assert.Contains("committed edit", Markdown());
         Assert.False(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
         Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"redo"}"""))).GetProperty("success").GetBoolean());
+        Assert.Contains("redo target", Markdown());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"undo"}"""))).GetProperty("success").GetBoolean());
         Assert.Contains("committed edit", Markdown());
 
         // Nothing the shadow authored ever reached the live package.
