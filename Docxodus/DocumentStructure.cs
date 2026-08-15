@@ -68,17 +68,21 @@ public class DocumentElement
     public List<DocumentElement> Children { get; init; } = new();
 
     /// <summary>
-    /// For table rows: the row index within the table.
+    /// For table rows and table cells: the zero-based row index within the table.
     /// </summary>
     public int? RowIndex { get; init; }
 
     /// <summary>
-    /// For table cells: the column index (accounting for grid span).
+    /// For table cells: the zero-based grid column the cell starts at. This is a true grid
+    /// coordinate — preceding <c>w:gridSpan</c> widths and the row's own <c>w:gridBefore</c>
+    /// offset are both accounted for, so a ragged row's cells still line up with the table grid.
     /// </summary>
     public int? ColumnIndex { get; init; }
 
     /// <summary>
-    /// For table cells: number of rows this cell spans.
+    /// For table cells: the vertical merge span. <c>null</c> when the cell is not vertically
+    /// merged; on a <c>w:vMerge</c> restart, the number of rows the merge covers; on a merge
+    /// <em>continuation</em>, <c>0</c> — the run's height is reported once, on its restart cell.
     /// </summary>
     public int? RowSpan { get; init; }
 

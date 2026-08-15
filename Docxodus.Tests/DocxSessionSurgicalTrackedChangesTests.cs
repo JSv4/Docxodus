@@ -15,7 +15,8 @@ namespace Docxodus.Tests;
 
 /// <summary>
 /// Surgical text replacements in <see cref="TrackedChangeMode.RenderInline"/>
-/// (issue #330). Test IDs DS400-DS407.
+/// (issue #330), and the visible-text contract those offsets are computed over
+/// (DS409-DS410, found by the issue #435 acceptance smoke). Test IDs DS400-DS410.
 /// </summary>
 public class DocxSessionSurgicalTrackedChangesTests
 {
@@ -358,6 +359,98 @@ public class DocxSessionSurgicalTrackedChangesTests
         Assert.Equal("Prefix replacement suffix", Text(root));
         Assert.Empty(root.Descendants()
             .Where(e => e.Name == W.del || e.Name == W.ins || e.Name == W.delText));
+    }
+
+    /// <summary>
+    /// Found by the issue #435 acceptance smoke. Text a tracked edit inserts lands inside
+    /// <c>w:ins</c>, and <c>InlineRuns</c> only descended into the containers listed in
+    /// <c>InlineContainerNames</c> — which omitted <c>w:ins</c>. Every offset-addressed
+    /// surface built on it (Grep, ParagraphText, ReplaceTextRange, format-by-substring)
+    /// therefore could not see the edit it had just made, while the markdown projection and
+    /// the anchor's TextPreview both showed it. An agent could not re-find its own work.
+    /// </summary>
+    [Fact]
+    public void DS409_TrackedInsertedText_IsVisibleToEveryOffsetAddressedSurface()
+    {
+        var source = BuildDocument(new XElement(W.p, Run("The name is [____].")));
+        using var session = new DocxSession(source,
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        Assert.True(Assert.Single(session.ReplaceTextRange(anchor, "[____]", "Northstar")).Success);
+
+        // The projection always saw it; these three surfaces did not.
+        Assert.Contains("Northstar", session.Project().Markdown, StringComparison.Ordinal);
+        var match = Assert.Single(session.Grep("Northstar"));
+        Assert.Equal("Northstar", match.Text);
+        Assert.Equal(anchor, match.EnclosingAnchor?.Anchor.Id);
+
+        // Flat text is contiguous across the w:del/w:ins pair: deleted text is w:delText and
+        // stays out, inserted text is w:t and comes in, so offsets address the visible string.
+        Assert.Equal("The name is Northstar.", session.Project().AnchorIndex[anchor].TextPreview);
+
+        // And the inserted text is addressable by a follow-up surgical op in the same session.
+        Assert.True(Assert.Single(session.ReplaceTextRange(anchor, "Northstar", "Southstar")).Success);
+        Assert.Equal("The name is Southstar.", AcceptedText(session.Save()));
+        Assert.Equal("The name is [____].", RejectedText(session.Save()));
+        AssertSchemaValid(session.Save());
+    }
+
+    /// <summary>
+    /// The same blindness applied to revisions already present in the input, so a redline
+    /// arriving from Word had its inserted and move-destination spans silently skipped by
+    /// every text search. Pins the whole split in one fixture: w:ins and w:moveTo are visible
+    /// text, w:del and w:moveFrom are not.
+    /// </summary>
+    [Fact]
+    public void DS410_PreExistingInsertionsAndMoveDestinations_ArePartOfTheVisibleText()
+    {
+        var source = BuildDocument(new XElement(W.p,
+            Run("Stage "),
+            new XElement(W.ins,
+                new XAttribute(W.id, 1),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                Run("IV in the chromatogram")),
+            new XElement(W.del,
+                new XAttribute(W.id, 2),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                new XElement(W.r,
+                    new XElement(W.delText,
+                        new XAttribute(Xml + "space", "preserve"), "III"))),
+            new XElement(W.moveToRangeStart,
+                new XAttribute(W.id, 3), new XAttribute(W.name, "move1")),
+            new XElement(W.moveTo,
+                new XAttribute(W.id, 4),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                Run(" per the addendum")),
+            new XElement(W.moveToRangeEnd, new XAttribute(W.id, 3)),
+            new XElement(W.moveFrom,
+                new XAttribute(W.id, 5),
+                new XAttribute(W.author, "Reviewer"),
+                new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                new XElement(W.r,
+                    new XElement(W.delText,
+                        new XAttribute(Xml + "space", "preserve"), " per the schedule"))),
+            Run(" is final.")));
+        using var session = new DocxSession(source);
+        var anchor = session.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        Assert.Equal("Stage IV in the chromatogram per the addendum is final.",
+            session.Project().AnchorIndex[anchor].TextPreview);
+
+        foreach (var needle in new[] { "chromatogram", "per the addendum" })
+        {
+            var match = Assert.Single(session.Grep(needle));
+            Assert.Equal(anchor, match.EnclosingAnchor?.Anchor.Id);
+        }
+
+        // Deleted text is NOT visible text: w:del and w:moveFrom hold w:delText, which never
+        // joins the flat string, so a search cannot match what the document says was removed.
+        Assert.Empty(session.Grep("III"));
+        Assert.Empty(session.Grep("per the schedule"));
     }
 
     private static byte[] BuildMarkerDocument()

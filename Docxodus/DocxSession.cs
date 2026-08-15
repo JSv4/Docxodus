@@ -7273,6 +7273,13 @@ public sealed partial class DocxSession : IDisposable
         if (characterOffset < 0 || characterOffset > totalText.Length)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+        // MoveInlineChildrenAfter relocates whole top-level children, so an offset strictly
+        // inside an atomic container would silently split at that container's far edge and
+        // still report success. Refuse instead — same boundary contract as note citations.
+        if (HasUnsupportedInlineInsertionBoundary(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "SplitParagraph offset falls inside a revision or unsupported inline container; " +
+                "choose a boundary before or after that container", anchorId);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported("SplitParagraph", anchorId);
 
@@ -8792,6 +8799,10 @@ public sealed partial class DocxSession : IDisposable
         if (characterOffset < 0 || characterOffset > totalText.Length)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+        if (HasUnsupportedInlineInsertionBoundary(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                $"{opName} offset falls inside a revision or unsupported inline container; " +
+                "choose a boundary before or after that container", anchorId);
 
         // Parse the note body BEFORE snapshotting so a malformed payload is a clean no-op
         // (no part created, no undo entry pushed).
@@ -13347,9 +13358,16 @@ public sealed partial class DocxSession : IDisposable
     // Hyperlinks, sdts, fldSimple and smartTag are transparent containers — their
     // descendant runs contribute to the paragraph's visible text. Bookmark/comment
     // markers (zero-width) are tracked separately and not enumerated here.
+    //
+    // w:ins and w:moveTo are transparent for the same reason: an insertion's text is
+    // present in the document as ordinary w:t and is exactly what a reader sees, so it
+    // belongs in the flat text every offset-addressed op works over. Their deleting
+    // counterparts w:del and w:moveFrom deliberately are NOT here — that content is
+    // w:delText, which RunText does not read, so deleted text stays out of the visible
+    // string and offsets keep addressing what the document actually shows.
     private static readonly HashSet<XName> InlineContainerNames = new()
     {
-        W.hyperlink, W.sdt, W.fldSimple, W.smartTag,
+        W.hyperlink, W.sdt, W.fldSimple, W.smartTag, W.ins, W.moveTo,
     };
 
     private static bool IsInlineChild(XElement e) =>
@@ -13358,8 +13376,10 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// All <c>&lt;w:r&gt;</c> elements that contribute to the paragraph's visible text,
     /// in document order — including runs nested inside hyperlinks, sdts, fldSimple,
-    /// smartTags. Iterating only <c>Elements(W.r)</c> silently skips hyperlink-internal
-    /// runs, which produced the bugs documented in DS080-DS090.
+    /// smartTags, and tracked insertions (<c>w:ins</c>/<c>w:moveTo</c>). Iterating only
+    /// <c>Elements(W.r)</c> silently skips hyperlink-internal runs, which produced the
+    /// bugs documented in DS080-DS090; skipping insertion-internal runs made an agent
+    /// unable to re-find its own tracked edit (DS409-DS410).
     /// </summary>
     internal static IEnumerable<XElement> InlineRuns(XElement paragraph)
     {
@@ -13380,6 +13400,42 @@ public sealed partial class DocxSession : IDisposable
 
     private static int InlineChildTextLength(XElement child) =>
         string.Concat(child.DescendantsAndSelf(W.t).Select(t => (string)t)).Length;
+
+    /// <summary>
+    /// Whether inserting a new top-level paragraph child at <paramref name="offset"/> would
+    /// silently move it away from the requested visible-text position. Plain runs are split by
+    /// <see cref="SplitRunsAtOffset"/>. A top-level hyperlink containing direct runs is split by
+    /// <see cref="SplitInlineContainersAtOffset"/>. Every other container — including
+    /// <c>w:ins</c>/<c>w:moveTo</c> — is atomic because splitting it requires revision- or
+    /// field-specific semantics.
+    /// </summary>
+    private static bool HasUnsupportedInlineInsertionBoundary(XElement paragraph, int offset)
+    {
+        int consumed = 0;
+        foreach (var child in paragraph.Elements().Where(IsInlineChild))
+        {
+            int length = InlineChildTextLength(child);
+            if (consumed < offset && offset < consumed + length)
+            {
+                if (child.Name == W.r) return false;
+                if (child.Name != W.hyperlink) return true;
+
+                int localOffset = offset - consumed;
+                int hyperlinkConsumed = 0;
+                foreach (var nested in child.Elements().Where(IsInlineChild))
+                {
+                    int nestedLength = InlineChildTextLength(nested);
+                    if (hyperlinkConsumed < localOffset
+                        && localOffset < hyperlinkConsumed + nestedLength)
+                        return nested.Name != W.r;
+                    hyperlinkConsumed += nestedLength;
+                }
+                return false;
+            }
+            consumed += length;
+        }
+        return false;
+    }
 
     /// <summary>
     /// If a run straddles <paramref name="offset"/>, split it into two adjacent runs
@@ -13435,9 +13491,10 @@ public sealed partial class DocxSession : IDisposable
 
             if (child.Name == W.hyperlink)
                 SplitHyperlinkAt(child, local);
-            // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag:
-            // treat as atomic — splitting these requires semantic care; the whole element
-            // stays with whichever side its leading run lands on.
+            // For <w:r>: SplitRunsAtOffset already handled it. For sdt/fldSimple/smartTag and
+            // revision wrappers: treat as atomic — callers that insert a top-level child must
+            // reject an interior boundary with HasUnsupportedInlineInsertionBoundary before
+            // reaching this helper.
             return;
         }
     }

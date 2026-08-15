@@ -1,4 +1,63 @@
-# Round-three DOCX MCP smoke workflow
+# DOCX MCP smoke workflows
+
+Two workflows live here. The **epic #435 acceptance run** is the one to reach for when
+verifying the agent-editing surface end to end; the **round-three run** below predates it
+and exercises a broader but less guarded operation mix.
+
+## Epic #435 acceptance run
+
+`epic-435-workflow.json` walks the acceptance gate for *Agent-safe headless document
+editing* — inspect, isolated preview, atomic apply under a transaction id, a retry proving
+byte-exact replay, an intentional stale request, an intentional atomic failure, an audit
+that nothing moved, a page citation, then save. `epic-435-validation.json` reopens the
+saved package and checks what persisted. Neither file is edited by hand: the first is
+emitted by `build_epic_435_workflow.py`, because the preview, the apply and the retry must
+send a byte-identical step array or the retry is a `transaction_conflict` rather than a
+replay.
+
+```bash
+dotnet build tools/mcp-server/mcpserver.csproj
+python3 tools/mcp-server/smoke/build_epic_435_workflow.py
+
+# Copy the source document into a scratch storage root — the run SAVES, and pointing
+# the root at TestFiles/ would overwrite a committed fixture.
+export DOCXODUS_STORAGE_ROOT=$(mktemp -d)
+cp TestFiles/NVCA-Model-COI.docx "$DOCXODUS_STORAGE_ROOT/local.docx"
+
+python3 tools/mcp-server/smoke/mcp_probe.py \
+  --calls tools/mcp-server/smoke/epic-435-workflow.json \
+  --trace /tmp/epic435-trace.json \
+  --quiet-server -- tools/mcp-server/bin/Debug/net10.0/docxodus-mcp
+
+python3 tools/mcp-server/smoke/mcp_probe.py \
+  --calls tools/mcp-server/smoke/epic-435-validation.json \
+  --trace /tmp/epic435-validation-trace.json \
+  --quiet-server -- tools/mcp-server/bin/Debug/net10.0/docxodus-mcp
+```
+
+Expected: 64 calls / 212 assertions and 13 calls / 27 assertions, both with zero failures,
+five expected failures in the first, and `replayMismatches: 0`.
+
+Five calls are *supposed* to fail, and the runner treats a success there as the defect
+(`unexpectedSuccesses`): a bookmark and a table insert refused under tracked recording, a
+bookmark endpoint refused inside a tracked insertion under direct recording, a stale
+precondition, and the batch that rolls back. The engine failing those closed is the property
+under test.
+
+### Workflow call fields
+
+Beyond `name`/`arguments`/`capture`/`expect`, honored by `mcp_probe.py`:
+
+| Field | Meaning |
+|---|---|
+| `expectFailure` | This call must fail. Its failure stops counting against the run, and a *success* becomes an `unexpectedSuccess`. |
+| `expectSameAs` | Compare this call's raw response text to that of the named earlier call. Byte-exact, before JSON parsing normalizes key order — which is what transaction replay actually promises. |
+| `expectNonEmpty` | List of result paths that must resolve to a non-empty string, array, or object. Used for generated payloads such as preview HTML and package hashes where pinning fixture-specific bytes would be brittle. |
+
+`expect` values substitute `$variables` too, so one call can be asserted against another's
+captured value (the apply's `resultVersion` against the preview's prediction).
+
+## Round-three DOCX MCP smoke workflow
 
 This directory contains a reproducible replacement-server workflow for the October 2025 model certificate of incorporation. It is intentionally heterogeneous: the sequence reads a large existing package, previews and rolls back a mutation batch, accepts and rejects tracked changes, performs undo/redo, formats runs and paragraphs, authors a resolved comment thread, creates and restarts a nested Roman list, and creates a styled table with explicit row-layout properties.
 

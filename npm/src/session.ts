@@ -1668,8 +1668,14 @@ export class DocxSession {
   }
 
   /**
-   * Return every anchor of the given `kind` (`"p"`, `"h"`, `"li"`, `"tbl"`,
-   * `"row"`, `"cell"`, …), in document order. Reads the projection's anchor
+   * Return every anchor of the given `kind` — one of `"p"`, `"h"`, `"li"`,
+   * `"tbl"`, `"tr"`, `"tc"`, `"col"`, `"sdt"`, `"sec"`, `"fn"`, `"en"`,
+   * `"cmt"`, `"unk"` — in document order. Matching is an exact string comparison;
+   * in particular the row and cell tokens are `"tr"` and `"tc"`, never
+   * `"row"`/`"cell"`. Unknown strings are not parsed or rejected: they simply
+   * return an empty array. `"img"` and `"drw"` likewise return empty because the
+   * projection never assigns those reserved kinds; address images through the
+   * image surface instead. Reads the projection's anchor
    * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
    * a single part; omit it to span all scopes.
    */

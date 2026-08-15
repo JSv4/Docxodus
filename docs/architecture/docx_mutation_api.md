@@ -77,7 +77,8 @@ The common wire object is available throughout the stack: npm exposes
 that attaches the guard to each mutation request; stdio accepts top-level
 `preconditions`; MCP mutation tools and individual batch steps accept the same
 property. MCP batches may additionally carry a batch-start guard. Preview mode
-restores the starting version after it undoes its speculative edits.
+runs against an isolated shadow clone and never mutates the live session, so there is
+no speculative edit to undo and no version to restore.
 
 ## Atomic batches and transactions
 

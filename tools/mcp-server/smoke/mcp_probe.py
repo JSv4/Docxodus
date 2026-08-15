@@ -61,6 +61,20 @@ def decoded_tool_result(message: dict[str, Any]) -> Any:
     return result.get("structuredContent", result)
 
 
+def raw_tool_text(message: dict[str, Any]) -> str | None:
+    """The server's response text exactly as it came off the wire.
+
+    Transaction replay promises the *original serialized* MutationBatchResult, so a
+    retry has to be compared before json.loads normalizes key order and number
+    spelling away. Returns None when the tool answered with something other than a
+    single text block.
+    """
+    content = message.get("result", {}).get("content", [])
+    if content and content[0].get("type") == "text":
+        return content[0].get("text", "")
+    return None
+
+
 def capture_path(value: Any, path: str) -> Any:
     current = value
     for part in path.split("."):
@@ -113,6 +127,8 @@ def main() -> int:
     ).start()
 
     responses: list[dict[str, Any]] = []
+    raw_by_id: dict[Any, str | None] = {}
+    capture_failures: list[str] = []
     variables: dict[str, Any] = {}
     initialized: dict[str, Any] | None = None
     request_id = 1
@@ -149,6 +165,7 @@ def main() -> int:
             )
             message = receive(process, request_id)
             decoded = decoded_tool_result(message)
+            raw = raw_tool_text(message)
             entry = {
                 "id": call.get("id"),
                 "tool": call["name"],
@@ -157,22 +174,92 @@ def main() -> int:
                 or bool(message.get("result", {}).get("isError", False)),
                 "result": decoded,
             }
-            assertions = []
-            for path, expected in call.get("expect", {}).items():
-                actual = capture_path(decoded, path)
-                assertions.append(
-                    {
-                        "path": path,
-                        "expected": expected,
-                        "actual": actual,
-                        "passed": actual == expected,
-                    }
+
+            # A guarded workflow has to be able to prove its refusals. `expectFailure`
+            # inverts the pass condition for one call: the result must fail, and a
+            # success is now the defect — otherwise a negative probe passes vacuously
+            # the day the guard it exercises stops guarding.
+            if call.get("expectFailure"):
+                entry["expectedFailure"] = True
+                entry["unexpectedSuccess"] = not (
+                    entry["isError"] or result_failed(decoded)
                 )
+
+            # Byte-exact replay: compare the retry's wire text to the original's.
+            same_as = call.get("expectSameAs")
+            if same_as is not None:
+                original = next(
+                    (item for item in responses if item.get("id") == same_as), None
+                )
+                if original is None:
+                    raise KeyError(f"expectSameAs references an unknown call: {same_as}")
+                entry["replayOf"] = same_as
+                entry["replayByteExact"] = (
+                    raw is not None and raw == raw_by_id.get(same_as)
+                )
+            raw_by_id[call.get("id")] = raw
+            assertions = []
+            # Expected values substitute too, so a workflow can assert one call
+            # against another's captured value — "the version this applied at is the
+            # version the preview predicted" is the whole point of a preview.
+            for path, expected in substitute(call.get("expect", {}), variables).items():
+                # An unresolvable path is a failed assertion, never an exception: the
+                # trace is this workflow's evidence, and crashing here would destroy it
+                # at exactly the moment something interesting went wrong.
+                try:
+                    actual: Any = capture_path(decoded, path)
+                    unresolved = None
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    actual, unresolved = None, f"{type(error).__name__}: {error}"
+                assertion = {
+                    "path": path,
+                    "expected": expected,
+                    "actual": actual,
+                    "passed": unresolved is None and actual == expected,
+                }
+                if unresolved:
+                    assertion["unresolved"] = unresolved
+                assertions.append(assertion)
+            for path in call.get("expectNonEmpty", []):
+                try:
+                    actual = capture_path(decoded, path)
+                    unresolved = None
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    actual, unresolved = None, f"{type(error).__name__}: {error}"
+                is_sized = isinstance(actual, (str, list, dict))
+                assertion = {
+                    "path": path,
+                    "expected": "non-empty",
+                    "actual": {
+                        "type": type(actual).__name__,
+                        "length": len(actual),
+                    } if is_sized else actual,
+                    "passed": unresolved is None
+                    and is_sized
+                    and len(actual) > 0,
+                }
+                if unresolved:
+                    assertion["unresolved"] = unresolved
+                assertions.append(assertion)
             if assertions:
                 entry["assertions"] = assertions
             responses.append(entry)
+            # A capture that cannot resolve stops the run — every later call that
+            # substitutes it would be meaningless — but it stops it as a recorded
+            # outcome, so the trace still explains why.
             for name, path in call.get("capture", {}).items():
-                variables[name] = capture_path(decoded, path)
+                try:
+                    variables[name] = capture_path(decoded, path)
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    entry["captureFailed"] = {
+                        "variable": name,
+                        "path": path,
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                    capture_failures.append(f"{call_id}: {name} <- {path}")
+                    break
+            if capture_failures:
+                break
 
         payload = {
             "initialize": initialized,
@@ -181,8 +268,21 @@ def main() -> int:
         }
         args.trace.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
-        transport_errors = sum(bool(entry["isError"]) for entry in responses)
-        failed_results = sum(result_failed(entry["result"]) for entry in responses)
+        transport_errors = sum(
+            bool(entry["isError"]) and not entry.get("expectedFailure")
+            for entry in responses
+        )
+        failed_results = sum(
+            result_failed(entry["result"]) and not entry.get("expectedFailure")
+            for entry in responses
+        )
+        unexpected_successes = sum(
+            bool(entry.get("unexpectedSuccess")) for entry in responses
+        )
+        replay_mismatches = sum(
+            "replayByteExact" in entry and not entry["replayByteExact"]
+            for entry in responses
+        )
         assertion_count = sum(len(entry.get("assertions", [])) for entry in responses)
         failed_assertions = sum(
             not assertion["passed"]
@@ -193,12 +293,28 @@ def main() -> int:
             "calls": len(responses),
             "transportErrors": transport_errors,
             "failedResults": failed_results,
+            "expectedFailures": sum(
+                bool(entry.get("expectedFailure")) for entry in responses
+            ),
+            "unexpectedSuccesses": unexpected_successes,
+            "captureFailures": capture_failures,
+            "replayComparisons": sum("replayByteExact" in entry for entry in responses),
+            "replayMismatches": replay_mismatches,
             "assertions": assertion_count,
             "failedAssertions": failed_assertions,
             "trace": str(args.trace),
         }
         print(json.dumps(summary, indent=2))
-        return 1 if transport_errors or failed_results or failed_assertions else 0
+        return (
+            1
+            if transport_errors
+            or failed_results
+            or failed_assertions
+            or unexpected_successes
+            or replay_mismatches
+            or capture_failures
+            else 0
+        )
     finally:
         if process.poll() is None:
             request_id += 1

@@ -554,6 +554,106 @@ public class DocxSessionNoteAuthoringTests
     }
 
     /// <summary>
+    /// Regression found while reviewing PR #491. Once tracked insertions joined the visible-text
+    /// walk, note offsets could resolve inside <c>w:ins</c>/<c>w:moveTo</c>. The run splitter cut
+    /// the nested run, but the top-level inserter treated the revision wrapper as atomic and
+    /// silently placed the citation after the entire revision. Refuse that boundary before the
+    /// history snapshot instead of reporting a successful wrong-location edit.
+    /// </summary>
+    [Theory]
+    [InlineData("ins", true)]
+    [InlineData("moveTo", false)]
+    public void DS339_InsertNote_InsideVisibleRevision_FailsClosedWithoutMutation(
+        string revisionName, bool footnote)
+    {
+        using var session = new DocxSession(BuildDocWithVisibleRevision(revisionName));
+        var anchor = FirstBodyParagraph(session);
+        var before = session.GetPackageContentHash();
+        var version = session.Version;
+        var undoCount = session.UndoCount;
+        var redoCount = session.RedoCount;
+
+        var result = footnote
+            ? session.InsertFootnote(anchor, 4, "Must not be misplaced.")
+            : session.InsertEndnote(anchor, 4, "Must not be misplaced.");
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.UnsupportedInlineBoundary, result.Error!.Code);
+        Assert.Equal(before, session.GetPackageContentHash());
+        Assert.Equal(version, session.Version);
+        Assert.Equal(undoCount, session.UndoCount);
+        Assert.Equal(redoCount, session.RedoCount);
+
+        using var stream = new MemoryStream(session.Save());
+        using var document = WordprocessingDocument.Open(stream, false);
+        Assert.Null(document.MainDocumentPart!.FootnotesPart);
+        Assert.Null(document.MainDocumentPart.EndnotesPart);
+        Assert.Empty(document.MainDocumentPart.GetXDocument().Descendants(W + "footnoteReference"));
+        Assert.Empty(document.MainDocumentPart.GetXDocument().Descendants(W + "endnoteReference"));
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(6)]
+    public void DS340_InsertFootnote_AtVisibleRevisionEdge_UsesTheExactOffset(int offset)
+    {
+        using var session = new DocxSession(BuildDocWithVisibleRevision("ins"));
+        var anchor = FirstBodyParagraph(session);
+
+        var result = session.InsertFootnote(anchor, offset, "Edge note.");
+
+        Assert.True(result.Success, result.Error?.Message);
+        var paragraph = BodyXml(session.Save()).Descendants(W + "p")
+            .Single(p => p.Descendants(W + "footnoteReference").Any());
+        var reference = paragraph.Descendants(W + "footnoteReference").Single();
+        var referenceRun = reference.Parent!;
+        var textBeforeReference = string.Concat(paragraph.Descendants(W + "r")
+            .TakeWhile(run => !ReferenceEquals(run, referenceRun))
+            .SelectMany(run => run.Elements(W + "t"))
+            .Select(text => (string)text));
+        Assert.Equal(offset, textBeforeReference.Length);
+    }
+
+    private static byte[] BuildDocWithVisibleRevision(string revisionName)
+    {
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(
+                   stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(
+                new DocumentFormat.OpenXml.Wordprocessing.Body());
+            main.AddNewPart<StyleDefinitionsPart>().Styles =
+                new DocumentFormat.OpenXml.Wordprocessing.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings =
+                new DocumentFormat.OpenXml.Wordprocessing.Settings();
+            main.Document.Save();
+
+            var revision = new XElement(W + revisionName,
+                new XAttribute(W + "id", "10"),
+                new XAttribute(W + "author", "Reviewer"),
+                new XAttribute(W + "date", "2026-01-01T00:00:00Z"),
+                new XElement(W + "r", new XElement(W + "t", "BBBB")));
+            var paragraphChildren = new System.Collections.Generic.List<object>
+            {
+                new XElement(W + "r", new XElement(W + "t", "AA")),
+            };
+            if (revisionName == "moveTo")
+                paragraphChildren.Add(new XElement(W + "moveToRangeStart",
+                    new XAttribute(W + "id", "9"), new XAttribute(W + "name", "move9")));
+            paragraphChildren.Add(revision);
+            if (revisionName == "moveTo")
+                paragraphChildren.Add(new XElement(W + "moveToRangeEnd", new XAttribute(W + "id", "9")));
+            paragraphChildren.Add(new XElement(W + "r", new XElement(W + "t", "CC")));
+
+            var xDocument = main.GetXDocument();
+            xDocument.Root!.Element(W + "body")!.ReplaceNodes(new XElement(W + "p", paragraphChildren));
+            main.PutXDocument();
+        }
+        return stream.ToArray();
+    }
+
+    /// <summary>
     /// Three paragraphs; the second and third each cite a footnote (ids 1 and 2, ascending in
     /// reference order as every Word document does). The first cites nothing — inserting there
     /// puts a new citation AHEAD of both existing ones.
