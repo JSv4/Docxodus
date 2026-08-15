@@ -85,11 +85,29 @@ All notable changes to this project will be documented in this file.
   canonical DrawingML subset. PNG/JPEG/GIF/BMP/TIFF bytes are validated by signature and dimensions;
   WebP, external links, legacy VML, multi-picture/non-canonical DrawingML, and unsupported
   floating layouts remain truthfully enumerable but read-only. Image relationships are owned by
-  the actual story part, identical media is reused across owners, orphan cleanup understands both
-  DrawingML and VML references, and undo/redo restores bytes, content type, exact media URI,
-  owner-local relationship ids, and external targets. Runtime capabilities, points-versus-EMU
-  units, 96-DPI default sizing, size caps, and base64-only JSON transports are exposed through
-  .NET, JSON ops, WASM/npm, stdio/Python, and MCP (`docxodus_images`).
+  the actual story part, identical media is reused across owners, and undo/redo restores bytes,
+  content type, exact media URI, owner-local relationship ids, and external targets. Runtime
+  capabilities, points-versus-EMU units, 96-DPI default sizing, size caps, and base64-only JSON
+  transports are exposed through .NET, JSON ops, WASM/npm, stdio/Python, and MCP
+  (`docxodus_images`). Three behaviours worth knowing before you adopt it:
+  - **Orphan cleanup deletes only provably unreferenced relationships.** The sweep asks whether
+    the relationship id appears in *any* attribute of the owning part, not whether it appears in
+    a whitelist of `r:embed`/`r:link`/`r:id`. OOXML names image relationships through more
+    attributes than the DrawingML pair (VML/OLE spellings such as `o:relid` and `r:href`), and a
+    whitelist would silently and irrecoverably drop media referenced any other way.
+  - **`ConvertToHtml(session)` mutates the package.** It is implemented as
+    `session.Save(persistAnchorIds: true)`, so save-time normalization — including that sweep —
+    runs on a caller who only asked to render. Nothing is lost, but a rendered session is not
+    byte-for-byte the session that was opened. A public setting to gate the sweep is deferred.
+  - **`ReplaceImage` is dimension-preserving.** It rewrites `r:embed` only; `wp:extent` and
+    `a:xfrm/a:ext` keep their EMUs, so the new media renders into the old box. `ListImages()`
+    reports the new intrinsic pixels immediately, and
+    `SetImageDimensions(id, w, h, preserveAspect: false)` re-fits from them. `PreserveAspect`
+    always scales the *current rendered box*, never the media's intrinsic ratio.
+
+  Pictures whose `a:blip` carries an extension list (an SVG `asvg:svgBlip` and its raster
+  fallback) are enumerable but `canMutate:false`: replacing only the fallback would leave an
+  SVG-aware renderer showing the old image while the API reported success.
 - **First-class hyperlinks and bookmarks across every editing surface (#448/#451/#469/#470).**
   `DocxSession` can enumerate and mutate external or bookmark-target hyperlinks and paired,
   multi-paragraph bookmarks with exact character spans. External relationships are owned and

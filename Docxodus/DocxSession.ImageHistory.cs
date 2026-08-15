@@ -18,13 +18,13 @@ public sealed partial class DocxSession
     private static void SweepOrphanedStoryRelationships(OpenXmlPart owner)
     {
         OwnedPartRelationships.SweepOrphanedHyperlinks(owner, R.id);
-        OwnedPartRelationships.SweepOrphanedImages(owner, R.embed, R.link);
+        OwnedPartRelationships.SweepOrphanedImages(owner);
     }
 
     private void SweepOrphanedStoryImageRelationships()
     {
         foreach (var owner in OwnedPartRelationships.StoryParts(_doc!))
-            OwnedPartRelationships.SweepOrphanedImages(owner.Part, R.embed, R.link);
+            OwnedPartRelationships.SweepOrphanedImages(owner.Part);
     }
 
     /// <summary>Restore image media and owner-local relationship topology after the owning XML

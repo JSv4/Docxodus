@@ -231,8 +231,7 @@ public sealed partial class DocxSession
             var relationship = OwnedPartRelationships.FindOrAddImagePart(
                 _doc!, candidate.Owner.Part, imageBytes, binary.ContentType!, binary.Format);
             candidate.Blip!.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part,
-                ImageR + "embed", ImageR + "link");
+            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
             InvalidateProjectionCache();
             return ImageMutationSuccess(candidate, imageId);
         }
@@ -361,8 +360,7 @@ public sealed partial class DocxSession
             var run = candidate.Outer.Ancestors(W.r).FirstOrDefault();
             candidate.Outer.Remove();
             if (run is not null && !run.Elements().Any(element => element.Name != W.rPr)) run.Remove();
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part,
-                ImageR + "embed", ImageR + "link");
+            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
             InvalidateProjectionCache();
             return new EditResult { Success = true, ImageId = imageId,
                 Modified = anchor is null ? Array.Empty<Anchor>() : new[] { anchor.Value } };
@@ -447,16 +445,29 @@ public sealed partial class DocxSession
                 || (!string.IsNullOrEmpty(linkId) && linked is null)
                 || (string.IsNullOrEmpty(embedId) && string.IsNullOrEmpty(linkId))
                 || media.IsMalformed || media.ContentTypeMatchesBytes == false;
+            // An SVG picture keeps its raster fallback in a:blip/@r:embed and the real art in an
+            // a:extLst/asvg:svgBlip extension. Descendants(A.blip) counts one blip either way, so
+            // without this check the occurrence would claim canMutate and ReplaceImage would swap
+            // only the fallback: an SVG-aware renderer keeps showing the OLD picture while the API
+            // reports success, and RemoveImage's sweep can strip the fallback part while the SVG
+            // part survives. Refuse instead — replacing both blips atomically is a feature, not a
+            // review fix. Namespace-agnostic on LocalName so any extLst dialect is caught.
+            bool blipExtension = blip is not null
+                && blip.Elements().Any(element => element.Name.LocalName == "extLst");
             string? unsupported = picturePayload ? null
                 : blip is null
                     ? "drawing contains no identifiable image blip"
                     : "drawing contains a non-canonical or multi-picture payload";
             if (picturePayload && !hasMutableStructure)
                 unsupported = "drawing lacks required picture properties or extents";
+            if (picturePayload && blipExtension)
+                unsupported = "picture carries a blip extension (such as an SVG asvg:svgBlip) whose "
+                    + "payload cannot be changed together with the raster fallback";
             if (layoutUnsupported is not null) unsupported = layoutUnsupported;
             if (!string.IsNullOrEmpty(linkId)) unsupported = "external linked images are read-only";
             if (boundaryReason is not null) unsupported = boundaryReason;
             bool canMutate = picturePayload && hasMutableStructure && blip is not null
+                && !blipExtension
                 && string.IsNullOrEmpty(linkId) && floatingSupported && boundaryReason is null;
             var info = new ImageOccurrence(
                 ImagePublicId(owner, drawing, occurrences.Length == 1 ? null : index),

@@ -18,9 +18,6 @@ namespace Docxodus.Internal;
 /// <summary>Image-specific operations layered on the generic owning-part relationship seam.</summary>
 internal static partial class OwnedPartRelationships
 {
-    private static readonly XNamespace OfficeRelationships =
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
     internal const string ImageRelationshipType =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 
@@ -121,45 +118,49 @@ internal static partial class OwnedPartRelationships
         return (created, owner.GetIdOfPart(created), false);
     }
 
-    internal static ImagePart CreateImagePart(OpenXmlPart owner, string contentType,
-        byte[] bytes, string relationshipId)
+    /// <summary>
+    /// True when ANY attribute anywhere in the owner's XML carries this relationship id.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately name-blind. Deletion is irreversible and the sweep runs on every
+    /// <see cref="DocxSession.Save(bool)"/> — including the one behind
+    /// <c>HtmlConversionOps.ConvertToHtml(session)</c>, i.e. on a pure render — so a whitelist of
+    /// known reference attributes ("is it <c>r:embed</c> or <c>r:link</c>?") is the wrong shape:
+    /// it silently destroys media named by anything outside the list (VML/OLE variants such as
+    /// <c>o:relid</c> or <c>r:href</c>, and any attribute a future Word version invents). The
+    /// question a sweep must answer is "is this provably unreferenced?", not "is it referenced in
+    /// one of the two ways I know about".
+    /// <para>
+    /// Value equality without a name test is safe because relationship ids are unique within a
+    /// part: an attribute whose value equals the id is either a real reference or a coincidence,
+    /// and a coincidence errs toward KEEPING media, which is the recoverable direction.
+    /// </para>
+    /// </remarks>
+    internal static bool IsReferencedByAnyAttribute(OpenXmlPart owner, string relationshipId)
     {
-        ImagePart created = owner switch
-        {
-            MainDocumentPart part => part.AddImagePart(contentType, relationshipId),
-            HeaderPart part => part.AddImagePart(contentType, relationshipId),
-            FooterPart part => part.AddImagePart(contentType, relationshipId),
-            FootnotesPart part => part.AddImagePart(contentType, relationshipId),
-            EndnotesPart part => part.AddImagePart(contentType, relationshipId),
-            WordprocessingCommentsPart part => part.AddImagePart(contentType, relationshipId),
-            _ => throw new NotSupportedException($"part cannot own a Word image: {owner.Uri}"),
-        };
-        using var input = new MemoryStream(bytes, writable: false);
-        created.FeedData(input);
-        return created;
+        var root = owner.GetXDocument().Root;
+        if (root is null || string.IsNullOrEmpty(relationshipId)) return false;
+        return root.DescendantsAndSelf().Attributes().Any(attribute =>
+            !attribute.IsNamespaceDeclaration
+            && string.Equals(attribute.Value, relationshipId, StringComparison.Ordinal));
     }
-
-    internal static void AttachImagePart(OpenXmlPart owner, ImagePart target,
-        string relationshipId) => owner.AddPart(target, relationshipId);
 
     /// <summary>Remove unreferenced embedded-image part relationships and external linked-image
     /// relationships from one owner. Shared package parts remain alive while any other owner still
     /// relates to them; the SDK removes the media part only after its last relationship is gone.</summary>
-    internal static int SweepOrphanedImages(OpenXmlPart owner, XName embedAttribute, XName linkAttribute)
+    internal static int SweepOrphanedImages(OpenXmlPart owner)
     {
         int removed = 0;
         foreach (var relationship in ImageRelationships(owner).ToList())
         {
-            if (IsReferenced(owner, relationship.RelationshipId, embedAttribute)
-                || IsReferenced(owner, relationship.RelationshipId, OfficeRelationships + "id")) continue;
+            if (IsReferencedByAnyAttribute(owner, relationship.RelationshipId)) continue;
             owner.DeletePart(relationship.RelationshipId);
             removed++;
         }
         foreach (var relationship in owner.ExternalRelationships
             .Where(r => r.RelationshipType == ImageRelationshipType).ToList())
         {
-            if (IsReferenced(owner, relationship.Id, linkAttribute)
-                || IsReferenced(owner, relationship.Id, OfficeRelationships + "id")) continue;
+            if (IsReferencedByAnyAttribute(owner, relationship.Id)) continue;
             owner.DeleteExternalRelationship(relationship.Id);
             removed++;
         }

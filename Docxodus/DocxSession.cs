@@ -5917,7 +5917,7 @@ public sealed partial class DocxSession : IDisposable
             {
                 foreach (var relationshipId in oldHyperlinkIds)
                     Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
-                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part, R.embed, R.link);
+                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part);
             }
 
             InvalidateProjectionCache();
@@ -7391,7 +7391,7 @@ public sealed partial class DocxSession : IDisposable
             {
                 foreach (var relationshipId in oldHyperlinkIds)
                     Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(owner.Part, relationshipId, R.id);
-                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part, R.embed, R.link);
+                Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part);
             }
             // A table cell must contain at least one paragraph per OOXML schema.
             if (!cell.Elements(W.p).Any())
@@ -8090,7 +8090,7 @@ public sealed partial class DocxSession : IDisposable
             foreach (var p in paras) PromoteHyperlinkRelationships(p);
             foreach (var relationshipId in oldHyperlinkIds)
                 Internal.OwnedPartRelationships.DeleteReferenceRelationshipIfOrphaned(part, relationshipId, R.id);
-            Internal.OwnedPartRelationships.SweepOrphanedImages(part, R.embed, R.link);
+            Internal.OwnedPartRelationships.SweepOrphanedImages(part);
 
             // Visibility flags so Word actually shows the First/Even stories.
             if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)

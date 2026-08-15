@@ -190,6 +190,14 @@ class EditErrorCode(str, Enum):
     EMPTY_HYPERLINK_SPAN = "empty_hyperlink_span"
     UNSUPPORTED_INLINE_BOUNDARY = "unsupported_inline_boundary"
     TRACKED_OPERATION_UNSUPPORTED = "tracked_operation_unsupported"
+    IMAGE_NOT_FOUND = "image_not_found"
+    INVALID_IMAGE_DATA = "invalid_image_data"
+    UNSUPPORTED_IMAGE_FORMAT = "unsupported_image_format"
+    IMAGE_TOO_LARGE = "image_too_large"
+    INVALID_IMAGE_DIMENSIONS = "invalid_image_dimensions"
+    UNSUPPORTED_IMAGE_MARKUP = "unsupported_image_markup"
+    LINKED_IMAGE_READ_ONLY = "linked_image_read_only"
+    INVALID_IMAGE_LAYOUT = "invalid_image_layout"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod
