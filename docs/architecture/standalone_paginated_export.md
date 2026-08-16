@@ -804,6 +804,9 @@ fail before rendering.
 Issue #489's current whole-paragraph footnote splitter can clip a note tail and omit its PageMap
 geometry. Full footnote fidelity is explicitly unsupported until #489 lands; the exporter detects
 the clipped/oversized condition and fails rather than shipping a complete result with missing text.
+Production export tests cover both a single oversized paragraph (C) and an oversized leading
+paragraph with otherwise splittable siblings (C2), and require the failed report to mark PageMap and
+HTML bindings unavailable.
 
 Package preflight, raw source identity, revision/comment/media inventory, safety findings, and ZIP
 resource ceilings reuse #493's `PackageManifestGenerator` contract through its WASM surface. The

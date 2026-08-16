@@ -16,6 +16,7 @@ import {
   RATCHET_RECORD_FILE,
   RATCHET_SCHEMA_VERSION,
   RATCHET_TOLERANCE,
+  assertRecordUpdateProvenance,
   buildRecord,
   chromiumFingerprint,
   compareToRecord,
@@ -298,6 +299,19 @@ test.describe('visual parity ratchet', () => {
     expect(serializeRecord(BASELINE_RECORD).endsWith('\n')).toBe(true);
     // Sorted by id so corpus reordering cannot churn the committed diff.
     expect(BASELINE_RECORD.cases.map(entry => entry.id)).toEqual(['multi-section', 'shape']);
+  });
+
+  test('record refresh requires an exact clean source commit', () => {
+    const clean = {
+      ...BASELINE_SUMMARY,
+      gitCommit: 'a'.repeat(40),
+      workingTreeDirty: false,
+    };
+    expect(() => assertRecordUpdateProvenance(clean)).not.toThrow();
+    expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
+      .toThrow(/dirty or unverified worktree/);
+    expect(() => assertRecordUpdateProvenance({ ...clean, gitCommit: 'deadbeef' }))
+      .toThrow(/40-character source commit/);
   });
 });
 

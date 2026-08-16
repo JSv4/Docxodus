@@ -1981,7 +1981,14 @@ public class HtmlConversionOpsTests
                    DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
-            main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph()));
+            // Word commonly serializes a visually empty paragraph as an explicit run with an
+            // empty w:t (for example, the spacer rows in VP004's signature table). It still
+            // needs the same paragraph-mark line box as a structurally empty w:p.
+            main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph(
+                new Wp.Run(new Wp.Text(string.Empty)
+                {
+                    Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve,
+                }))));
             main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
                 new Wp.DocDefaults(
                     new Wp.RunPropertiesDefault(
@@ -2001,12 +2008,14 @@ public class HtmlConversionOpsTests
             new HtmlConversionOptions { FabricateCssClasses = false });
         var root = System.Xml.Linq.XElement.Parse(html);
         var paragraph = root.Descendants().Single(e => e.Name.LocalName == "p");
-        var placeholder = paragraph.Elements().Single(e => e.Name.LocalName == "span");
+        var placeholder = paragraph.Elements().Single(e =>
+            e.Name.LocalName == "span" && e.Value == "\u00A0");
 
         Assert.Contains("--docx-auto-line-spacing: 1.079", (string?)paragraph.Attribute("style"));
         Assert.Contains("line-height: normal", (string?)paragraph.Attribute("style"));
         Assert.Contains("line-height: calc(1lh * var(--docx-auto-line-spacing))",
             (string?)placeholder.Attribute("style"));
+        Assert.Equal("\u00A0", placeholder.Value);
     }
 
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the

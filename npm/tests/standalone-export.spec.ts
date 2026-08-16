@@ -460,6 +460,60 @@ test.describe('standalone paginated HTML', () => {
       contentType: 'application/json',
     });
   });
+
+  test('fails closed before PageMap publication when a long footnote paragraph clips', async ({
+    page,
+  }, testInfo) => {
+    const cases = [
+      {
+        id: 'single-oversized-paragraph',
+        // Issue #489 case C: the whole-child splitter consumes this one paragraph even though
+        // it is taller than the maximum note band.
+        source: generateFootnoteDocx(1, 2, 1, [700]),
+      },
+      {
+        id: 'oversized-leading-paragraph-with-tail',
+        // Issue #489 case C2: the oversized leading paragraph must not permit the otherwise
+        // splittable tail to disappear behind the clipped note band.
+        source: generateFootnoteDocx(1, 2, 3, [700, 8, 8]),
+      },
+    ];
+    const evidence: Array<{ id: string; sourceSha256: string; failure: unknown }> = [];
+
+    for (const entry of cases) {
+      const failure = await page.evaluate(async ({ bytes }) =>
+        (window as any).DocxodusStandalone.convertFailure(bytes, {
+          reviewProfile: 'final',
+          commentProfile: 'hidden',
+        }), { bytes: Array.from(entry.source) });
+
+      expect(failure.unexpectedSuccess, entry.id).toBeUndefined();
+      expect(failure.code, entry.id).toBe('pagination_failure');
+      expect(failure.phase, entry.id).toBe('running_story_placement');
+      expect(failure.report, entry.id).toEqual(expect.objectContaining({
+        status: 'failed',
+        source: expect.objectContaining({ rawPackageBytesDigest: digest(entry.source) }),
+        failure: expect.objectContaining({
+          code: 'pagination_failure',
+          phase: 'running_story_placement',
+          message: expect.stringContaining('footnote continuation is clipped'),
+          remediation: expect.stringContaining('issue #489'),
+        }),
+        unavailable: expect.arrayContaining([
+          expect.objectContaining({ field: 'bindings.pageMapDigest' }),
+          expect.objectContaining({ field: 'bindings.htmlDigest' }),
+        ]),
+      }));
+      expect(failure.report.bindings, `${entry.id} must not publish artifact bindings`).toBeUndefined();
+      expect(failure.pageMap, `${entry.id} must not publish an incomplete PageMap`).toBeUndefined();
+      evidence.push({ id: entry.id, sourceSha256: digest(entry.source), failure });
+    }
+
+    await testInfo.attach('long-footnote-fail-closed.json', {
+      body: Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`),
+      contentType: 'application/json',
+    });
+  });
 });
 
 test('PaginationEngine uses the element realm and applies scale exactly once', async ({ page }) => {

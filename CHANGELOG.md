@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Generated-PDF visual-fidelity ratchet (#443).** A compact, provenance- and hash-pinned legal
+  document corpus now runs through the supported Node export API and LibreOffice, rasterizes both
+  PDFs under one Poppler contract, and gates page counts, physical boxes, searchable text,
+  hyperlink targets, SSIM, and directional ink precision/recall/F1 independently. CI always
+  uploads an incremental HTML evidence viewer with PDFs, page rasters, overlays, metrics, hashes,
+  environment fingerprints, and retained failure reports; the reviewable numbers-only baseline
+  prevents regressions without committing generated artifacts.
+- **Verified font runtime and deterministic embedding (#442).** Browser and Node export now resolve
+  configured font faces against the shared substitution contract, verify exact file bytes and
+  embedding permissions, and carry canonical evidence through offline HTML, PDF, render reports,
+  and renderer fingerprints. Resource limits, path redaction, ambiguity rejection, corrupt-font
+  policy, and package-boundary checks keep the runtime fail-closed and publishable.
 - **Deterministic print-readiness barrier (#441).** Browser and Node PDF export now coordinate
   explicit font loading, parallel image decoding, chart/SVG completion signals, paginator-ready
   diagnostics, and a mutation/resize-observed page-tree quiet interval under one deadline. Two
