@@ -950,6 +950,7 @@ namespace Docxodus
             CalculateSpanWidthForTabs(wordDoc);
             ReverseTableBordersForRtlTables(wordDoc);
             AdjustTableBorders(wordDoc);
+            AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart.GetXDocument().Root;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart);
             AnnotateForSections(wordDoc);
@@ -2828,9 +2829,10 @@ namespace Docxodus
             {
                 try
                 {
+                    var ownerPart = GetOwningPart(wordDoc, element);
                     var a = new XElement(Xhtml.a,
                         new XAttribute("href",
-                            wordDoc.MainDocumentPart
+                            ownerPart
                                 .HyperlinkRelationships
                                 .First(x => x.Id == (string)element.Attribute(R.id))
                                 .Uri
@@ -9239,9 +9241,35 @@ namespace Docxodus
                 : null;
         }
 
+        /// <summary>
+        /// Relationships are scoped to the OOXML part that owns the source element. Header,
+        /// footer, note, and comment parts commonly reuse relationship ids from document.xml;
+        /// resolving through MainDocumentPart can therefore select the wrong resource or silently
+        /// drop a valid one.
+        /// </summary>
+        private static void AnnotateOwningContentParts(WordprocessingDocument wordDoc)
+        {
+            var parts = wordDoc.ContentParts().ToList();
+            if (wordDoc.MainDocumentPart.WordprocessingCommentsPart is OpenXmlPart commentsPart)
+                parts.Add(commentsPart);
+
+            foreach (var part in parts)
+            {
+                var root = part.GetXDocument().Root;
+                if (root == null || ReferenceEquals(root.Annotation<OpenXmlPart>(), part))
+                    continue;
+                root.RemoveAnnotations<OpenXmlPart>();
+                root.AddAnnotation(part);
+            }
+        }
+
+        private static OpenXmlPart GetOwningPart(WordprocessingDocument wordDoc, XElement element) =>
+            element?.Document?.Root?.Annotation<OpenXmlPart>() ?? wordDoc.MainDocumentPart;
+
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
+            var ownerPart = GetOwningPart(wordDoc, element);
             var containerElement = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             if (containerElement == null) return null;
@@ -9257,7 +9285,7 @@ namespace Docxodus
                 var rId = (string)hyperlinkElement.Attribute(R.id);
                 if (rId != null)
                 {
-                    var hyperlinkRel = wordDoc.MainDocumentPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
+                    var hyperlinkRel = ownerPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
                     if (hyperlinkRel != null)
                     {
                         hyperlinkUri = hyperlinkRel.Uri.ToString();
@@ -9280,7 +9308,7 @@ namespace Docxodus
             var imageRid = (string)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
             if (imageRid == null) return null;
 
-            var pp3 = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
+            var pp3 = ownerPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
             if (pp3 == null) return null;
 
             // Broken packages can point drawing image markup at any relationship target (for
@@ -9292,7 +9320,7 @@ namespace Docxodus
             // If the image markup points to a NULL image, then following will throw an ArgumentOutOfRangeException
             try
             {
-                imagePart = wordDoc.MainDocumentPart.GetPartById(imageRid) as ImagePart;
+                imagePart = ownerPart.GetPartById(imageRid) as ImagePart;
             }
             catch (ArgumentOutOfRangeException)
             {
@@ -9482,12 +9510,13 @@ namespace Docxodus
         private static XElement ProcessPictureOrObject(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
+            var ownerPart = GetOwningPart(wordDoc, element);
             var imageRid = (string)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 
             try
             {
-                var pp = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
+                var pp = ownerPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
                 if (pp == null) return null;
 
                 // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:

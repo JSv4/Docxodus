@@ -46,6 +46,10 @@ try {
     'LICENSE',
     'README.md',
     'dist/wasm/_framework/dotnet.js',
+    'dist/export-browser.bundle.js',
+    'dist/export-browser.d.ts',
+    'dist/export-assets.json',
+    'dist/render-report-v1.schema.json',
   ]) {
     assert.ok(paths.includes(required), `npm package is missing required runtime file: ${required}`);
   }
@@ -65,6 +69,7 @@ try {
   const allowed = paths.filter((path) => {
     if (path === 'LICENSE' || path === 'README.md' || path === 'package.json') return false;
     if (/^dist\/[^/]+\.(?:js|d\.ts)(?:\.map)?$/.test(path)) return false;
+    if (/^dist\/[^/]+\.json$/.test(path)) return false;
     if (path.startsWith('dist/wasm/_framework/')) return false;
     return true;
   });

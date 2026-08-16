@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Standalone paginated HTML materialization (#438).** Added the UI-free
+  `docxodus/export-browser` entry point for immutable DOCX-to-offline-HTML export, with a finalized
+  page-box-only tree, post-cleanup PageMap, digest-bound render report, structured warnings and
+  failures, resource limits, font-environment disclosure, pristine-tree stability retry, offline
+  reopen verification, and a closed hashed runtime-asset graph. The paginator now operates in the
+  owning DOM realm, and converter relationships resolve from their actual story parts so header and
+  footer resources survive. Includes a file-picker/download example and Playwright artifacts for
+  the HTML, PageMap, report, and offline screenshot.
 - **Deterministic, non-mutating DOCX package manifests (#456).** Added a versioned
   verification artifact that inventories every OPC entry and content type, preserves duplicate
   occurrences, resolves every package/part relationship, reports dangling references and
