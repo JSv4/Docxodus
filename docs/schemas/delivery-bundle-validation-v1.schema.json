@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/delivery/delivery-bundle-validation/v1",
+  "title": "Docxodus delivery bundle validation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "decision", "finalDeliverable", "renderCohorts"],
+  "properties": {
+    "schema": {
+      "const": "https://docxodus.dev/schemas/delivery/delivery-bundle-validation/v1"
+    },
+    "schemaVersion": { "const": 1 },
+    "decision": {
+      "enum": ["passed", "passedWithPreExistingFindings", "failed", "notEvaluated"]
+    },
+    "finalDeliverable": {
+      "$ref": "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+    },
+    "renderCohorts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/renderCohort" }
+    }
+  },
+  "$defs": {
+    "renderCohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewProfile", "commentProfile", "sourceDocument", "verification"],
+      "properties": {
+        "reviewProfile": { "enum": ["final", "original", "markup"] },
+        "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
+        "sourceDocument": { "$ref": "#/$defs/documentIdentity" },
+        "verification": {
+          "$ref": "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+        }
+      }
+    },
+    "documentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "documentVersion", "byteLength", "digest"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "documentVersion": { "type": "integer", "minimum": 0 },
+        "byteLength": { "type": "integer", "minimum": 1 },
+        "digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": { "const": "SHA-256" },
+            "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      }
+    }
+  }
+}

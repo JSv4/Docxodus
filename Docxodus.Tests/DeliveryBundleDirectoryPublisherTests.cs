@@ -49,6 +49,7 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 (string?)"manifest.json"),
             (DeliveryBundleDirectoryPublisherCheckpoint.BeforeVerification, (string?)null),
             (DeliveryBundleDirectoryPublisherCheckpoint.BeforeCommit, (string?)null),
+            (DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit, (string?)null),
         }, trace);
         AssertNoStageDirectories(temporary.Path);
     }
@@ -73,6 +74,35 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 ["working"] = File.ReadAllBytes(
                     Path.Combine(target, "documents", "working.docx")),
             }).IsValid);
+        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_PublicBundleOverload_RequiresExplicitDiagnosticPublication()
+    {
+        using var temporary = new TemporaryDirectory();
+        var rejectedTarget = Path.Combine(temporary.Path, "rejected");
+        var diagnosticTarget = Path.Combine(temporary.Path, "diagnostic");
+        var bundle = DiagnosticModelBundle();
+
+        var exception = Assert.Throws<DeliveryBundleException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(bundle, rejectedTarget));
+
+        Assert.Equal("diagnostic_bundle_publication_not_enabled", exception.Code);
+        Assert.False(PathEntryExists(rejectedTarget));
+
+        DeliveryBundleDirectoryPublisher.Publish(
+            bundle,
+            diagnosticTarget,
+            publicationOptions: new DeliveryBundleDirectoryPublicationOptions
+            {
+                AllowDiagnosticBundle = true,
+            });
+
+        var verification = DeliveryBundleVerifier.VerifyJson(
+            File.ReadAllBytes(Path.Combine(diagnosticTarget, DeliveryBundle.ManifestFileName)));
+        Assert.True(verification.IsValid,
+            string.Join(Environment.NewLine, verification.Findings));
         AssertNoStageDirectories(temporary.Path);
     }
 
@@ -131,6 +161,60 @@ public sealed class DeliveryBundleDirectoryPublisherTests
 
         Assert.False(PathEntryExists(target));
         AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_WhenMarkerFreeCommitWindowFaults_PreservesAmbiguousStage()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        string? stage = null;
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint !=
+                DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)
+                return;
+            stage = context.StageDirectory;
+            throw new InjectedPublicationException("marker-free commit window");
+        });
+
+        var exception = Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
+        Assert.IsType<AggregateException>(exception.InnerException);
+        Assert.NotNull(stage);
+        Assert.True(Directory.Exists(stage));
+        Assert.False(File.Exists(Path.Combine(stage!, ".docxodus-delivery-stage")));
+        Assert.False(PathEntryExists(target));
+    }
+
+    [Fact]
+    public void Publish_WhenOwnedStageIsReplaced_ReportsCleanupFailureAndPreservesForeignPath()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        string? replacedStage = null;
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint !=
+                DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)
+                return;
+            replacedStage = context.StageDirectory;
+            Directory.Delete(context.StageDirectory, recursive: true);
+            File.WriteAllText(context.StageDirectory, "foreign replacement");
+        });
+
+        var exception = Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
+        Assert.IsType<AggregateException>(exception.InnerException);
+        Assert.NotNull(replacedStage);
+        Assert.Equal("foreign replacement", File.ReadAllText(replacedStage!));
+        Assert.False(PathEntryExists(target));
     }
 
     [Fact]
@@ -397,6 +481,37 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 "documents/working.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 WorkingBytes),
+        });
+    }
+
+    private static DeliveryBundle DiagnosticModelBundle()
+    {
+        var request = new DeliveryBundleRequest(
+            new DeliveryDocumentSnapshot("baseline", 1, new byte[] { 1 }),
+            new DeliveryDocumentSnapshot("working", 2, new byte[] { 2 }),
+            new DeliveryDocumentSnapshot("final", 3, new byte[] { 3 }),
+            new DeliveryBundleRevisionPolicy
+            {
+                PreExistingRevisions = DeliveryRevisionPolicy.Preserve,
+                GeneratedRevisions = DeliveryRevisionPolicy.Accept,
+            },
+            new[]
+            {
+                new DeliveryArtifactRequest
+                {
+                    ArtifactId = "working",
+                    Kind = DeliveryArtifactKind.WorkingDocx,
+                    Requiredness = DeliveryArtifactRequiredness.Required,
+                },
+            });
+        return DeliveryBundle.Create(request, new[]
+        {
+            DeliveryBundleArtifactInput.Unavailable(
+                "working",
+                DeliveryArtifactKind.WorkingDocx,
+                "documents/working.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "Intentionally unavailable for diagnostic publication coverage."),
         });
     }
 

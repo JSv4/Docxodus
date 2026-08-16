@@ -996,26 +996,28 @@ internal static class DocxSessionJson
     {
         ArgumentNullException.ThrowIfNull(pageMap);
         var sb = new StringBuilder(512)
-            .Append("{\"schemaVersion\":").Append(pageMap.SchemaVersion)
-            .Append(",\"mode\":").Append(JsonString(
-                pageMap.Mode == PageMapMode.Paginated ? "paginated" : "continuous"))
-            .Append(",\"availability\":")
+            .Append("{\"availability\":")
             .Append(JsonString(PageMapAvailabilityString(pageMap.Availability)))
             .Append(",\"documentVersion\":").Append(pageMap.DocumentVersion)
-            .Append(",\"rendererFingerprint\":").Append(JsonString(pageMap.RendererFingerprint))
+            .Append(",\"fragments\":[");
+        for (int i = 0; i < pageMap.Fragments.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapFragment(sb, pageMap.Fragments[i]);
+        }
+        sb.Append("],\"mode\":").Append(JsonString(
+                pageMap.Mode == PageMapMode.Paginated ? "paginated" : "continuous"))
             .Append(",\"pages\":[");
         for (int i = 0; i < pageMap.Pages.Count; i++)
         {
             if (i > 0) sb.Append(',');
             AppendPageMapPage(sb, pageMap.Pages[i]);
         }
-        sb.Append("],\"fragments\":[");
-        for (int i = 0; i < pageMap.Fragments.Count; i++)
-        {
-            if (i > 0) sb.Append(',');
-            AppendPageMapFragment(sb, pageMap.Fragments[i]);
-        }
-        return sb.Append("]}").ToString();
+        return sb.Append("],\"rendererFingerprint\":")
+            .Append(JsonString(pageMap.RendererFingerprint))
+            .Append(",\"schemaVersion\":").Append(pageMap.SchemaVersion)
+            .Append('}')
+            .ToString();
     }
 
     public static string SerializePageMapStatus(PageMapStatus status)
@@ -1064,27 +1066,27 @@ internal static class DocxSessionJson
 
     private static void AppendPageMapPage(StringBuilder sb, PageMapPage page)
     {
-        sb.Append("{\"pageNumber\":").Append(page.PageNumber)
+        sb.Append("{\"height\":").Append(Invariant(page.Height))
           .Append(",\"pageInSection\":").Append(page.PageInSection)
-          .Append(",\"width\":").Append(Invariant(page.Width))
-          .Append(",\"height\":").Append(Invariant(page.Height));
+          .Append(",\"pageName\":").Append(JsonString(page.PageName))
+          .Append(",\"pageNumber\":").Append(page.PageNumber);
         if (page.SectionIndex is { } sectionIndex)
             sb.Append(",\"sectionIndex\":").Append(sectionIndex);
-        sb.Append(",\"pageName\":").Append(JsonString(page.PageName)).Append('}');
+        sb.Append(",\"width\":").Append(Invariant(page.Width)).Append('}');
     }
 
     private static void AppendPageMapFragment(StringBuilder sb, PageMapFragment fragment)
     {
-        sb.Append("{\"fragmentId\":").Append(JsonString(fragment.FragmentId))
-          .Append(",\"anchorId\":").Append(JsonString(fragment.AnchorId))
+        sb.Append("{\"anchorId\":").Append(JsonString(fragment.AnchorId))
+          .Append(",\"fragmentId\":").Append(JsonString(fragment.FragmentId))
           .Append(",\"fragmentIndex\":").Append(fragment.FragmentIndex)
-          .Append(",\"pageNumber\":").Append(fragment.PageNumber)
-          .Append(",\"geometry\":{\"x\":").Append(Invariant(fragment.Geometry.X))
-          .Append(",\"y\":").Append(Invariant(fragment.Geometry.Y))
+          .Append(",\"geometry\":{\"height\":").Append(Invariant(fragment.Geometry.Height))
           .Append(",\"width\":").Append(Invariant(fragment.Geometry.Width))
-          .Append(",\"height\":").Append(Invariant(fragment.Geometry.Height)).Append('}')
-          .Append(",\"story\":").Append(JsonString(PageMapStoryString(fragment.Story)))
+          .Append(",\"x\":").Append(Invariant(fragment.Geometry.X))
+          .Append(",\"y\":").Append(Invariant(fragment.Geometry.Y)).Append('}')
           .Append(",\"inTableCell\":").Append(fragment.InTableCell ? "true" : "false")
+          .Append(",\"pageNumber\":").Append(fragment.PageNumber)
+          .Append(",\"story\":").Append(JsonString(PageMapStoryString(fragment.Story)))
           .Append('}');
     }
 

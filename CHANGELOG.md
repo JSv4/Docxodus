@@ -14,8 +14,16 @@ All notable changes to this project will be documented in this file.
   verifier checks separately supplied bytes. Fresh-directory publication stages, rereads, verifies,
   and atomically renames the complete bundle without replacing an existing target. The same
   implementation is exposed through .NET, the `docxodus-deliver` CLI, and MCP
-  `docxodus_deliver`. Production standalone paginated HTML/PDF remains truthfully unavailable until
-  the epic #434 renderer adapter exists. See
+  `docxodus_deliver`. The production adapter launches the explicitly configured epic #434 framed
+  Node host without a shell or PATH discovery, renders each exact source/profile cohort once, and
+  binds its HTML/PDF/PageMap/report outputs to the source name, document version, package digest,
+  renderer fingerprint, and page count. Render warnings retain their stable code, severity, phase,
+  owning part, anchor, resource, message, and remediation in the canonical manifest. A host failure
+  preserves its validated failed render report as evidence instead of flattening and discarding it.
+  Bundle validation now retains a baseline-aware final-DOCX result plus an independently
+  source-bound result for every review/comment render cohort, so malformed markup or original
+  outputs cannot hide behind a clean final-render check.
+  See
   [`docs/architecture/delivery_bundle.md`](docs/architecture/delivery_bundle.md) and the
   [`delivery-bundle-manifest-v1` schema](docs/schemas/delivery-bundle-manifest-v1.schema.json).
 - **Deterministic delivery change receipts (#458).** Added a versioned, canonical JSON

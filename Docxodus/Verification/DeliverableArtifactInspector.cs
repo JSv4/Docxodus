@@ -390,6 +390,9 @@ internal static class DeliverableArtifactInspector
             && ContainsPdfKeyword(span, "trailer"u8);
         bool xrefStream = ContainsPdfNamePair(span, "/Type"u8, "/XRef"u8);
         return supportedVersion
+            && ContainsPdfNamePair(span, "/Type"u8, "/Catalog"u8)
+            && ContainsPdfNamePair(span, "/Type"u8, "/Pages"u8)
+            && ContainsPdfNamePair(span, "/Type"u8, "/Page"u8)
             && ContainsPdfKeyword(span, "obj"u8)
             && (traditionalXref || xrefStream)
             && ContainsPdfKeyword(span, "startxref"u8)

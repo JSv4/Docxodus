@@ -4,8 +4,20 @@
 #nullable enable
 
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
 
 namespace Docxodus.Delivery;
+
+/// <summary>Explicit publication policy for non-delivery diagnostic bundles.</summary>
+public sealed record DeliveryBundleDirectoryPublicationOptions
+{
+    /// <summary>
+    /// Permit an incomplete or failed manifest to be published for diagnostics. The target still
+    /// uses the same verified, no-replace atomic commit, but callers must not present it as a
+    /// successful delivery.
+    /// </summary>
+    public bool AllowDiagnosticBundle { get; init; }
+}
 
 /// <summary>
 /// Publishes a verified delivery bundle as a new directory. Publication never replaces an
@@ -24,8 +36,16 @@ public static class DeliveryBundleDirectoryPublisher
     public static string Publish(
         DeliveryBundle bundle,
         string targetDirectory,
-        DeliveryBundleVerificationLimits? verificationLimits = null)
+        DeliveryBundleVerificationLimits? verificationLimits = null,
+        DeliveryBundleDirectoryPublicationOptions? publicationOptions = null)
     {
+        ArgumentNullException.ThrowIfNull(bundle);
+        publicationOptions ??= new DeliveryBundleDirectoryPublicationOptions();
+        if (bundle.Manifest.Payload.Status != DeliveryBundleStatus.Complete
+            && !publicationOptions.AllowDiagnosticBundle)
+            throw new DeliveryBundleException(
+                "diagnostic_bundle_publication_not_enabled",
+                $"Bundle status '{bundle.Manifest.Payload.Status}' requires explicit diagnostic publication.");
         return Publish(bundle, targetDirectory, verificationLimits, faultInjector: null);
     }
 
@@ -107,9 +127,11 @@ public static class DeliveryBundleDirectoryPublisher
 
         string? stage = null;
         var stageOwned = false;
+        byte[]? stageMarkerToken = null;
         try
         {
-            (stage, stageOwned) = CreateOwnedStage(parent, Path.GetFileName(target));
+            (stage, stageMarkerToken) = CreateOwnedStage(parent, Path.GetFileName(target));
+            stageOwned = true;
 
             for (var index = 0; index < snapshot.Artifacts.Count; index++)
             {
@@ -155,14 +177,37 @@ public static class DeliveryBundleDirectoryPublisher
             EnsureTargetStillAvailable(target, parent);
 
             File.Delete(Path.Combine(stage, StageMarkerName));
+            stageMarkerToken = null;
+            injector.OnCheckpoint(new DeliveryBundleDirectoryPublisherFaultContext(
+                DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit,
+                target,
+                stage,
+                null,
+                null));
+
+            // The final hook deliberately sits in the narrow marker-free rename window so tests
+            // can exercise recovery. Re-read once more after it; nothing mutable can bypass the
+            // byte identity verified above.
+            var preRenameBytes = ReadExpectedStage(stage, snapshot);
+            EnsureByteEquality(preCommitBytes, preRenameBytes);
+            EnsureTargetStillAvailable(target, parent);
             Directory.Move(stage, target);
             stageOwned = false;
             return target;
         }
-        catch
+        catch (Exception publicationFailure)
         {
             if (stageOwned && stage is not null)
-                TryDeleteOwnedStage(stage);
+            {
+                var cleanupFailure = TryDeleteOwnedStage(stage, stageMarkerToken);
+                if (cleanupFailure is not null)
+                {
+                    throw new IOException(
+                        $"Delivery publication failed and its owned staging directory could not "
+                        + $"be removed safely: '{stage}'.",
+                        new AggregateException(publicationFailure, cleanupFailure));
+                }
+            }
             throw;
         }
     }
@@ -322,7 +367,9 @@ public static class DeliveryBundleDirectoryPublisher
         }
     }
 
-    private static (string Path, bool Owned) CreateOwnedStage(string parent, string targetName)
+    private static (string Path, byte[] MarkerToken) CreateOwnedStage(
+        string parent,
+        string targetName)
     {
         for (var attempt = 0; attempt < StageCreationAttempts; attempt++)
         {
@@ -332,6 +379,7 @@ public static class DeliveryBundleDirectoryPublisher
                 continue;
 
             Directory.CreateDirectory(stage);
+            var markerToken = RandomNumberGenerator.GetBytes(32);
             try
             {
                 using var marker = new FileStream(
@@ -339,15 +387,15 @@ public static class DeliveryBundleDirectoryPublisher
                     FileMode.CreateNew,
                     FileAccess.Write,
                     FileShare.None,
-                    bufferSize: 1,
+                    bufferSize: markerToken.Length,
                     FileOptions.WriteThrough);
-                marker.WriteByte(1);
+                marker.Write(markerToken);
                 marker.Flush(flushToDisk: true);
-                return (stage, true);
+                return (stage, markerToken);
             }
             catch
             {
-                TryDeleteOwnedStage(stage);
+                _ = TryDeleteOwnedStage(stage, markerToken);
                 throw;
             }
         }
@@ -565,21 +613,33 @@ public static class DeliveryBundleDirectoryPublisher
         }
     }
 
-    private static void TryDeleteOwnedStage(string stage)
+    private static Exception? TryDeleteOwnedStage(string stage, byte[]? markerToken)
     {
         try
         {
-            if (Directory.Exists(stage) && !IsSymlink(stage))
-                Directory.Delete(stage, recursive: true);
-            else if (PathEntryExists(stage))
-                File.Delete(stage);
+            if (!PathEntryExists(stage))
+                return null;
+            if (!Directory.Exists(stage) || IsSymlink(stage))
+                throw new IOException(
+                    $"The owned delivery stage is no longer a safe directory: '{stage}'.");
+            if (markerToken is null)
+                throw new IOException(
+                    $"The delivery stage no longer has in-memory ownership evidence: '{stage}'.");
+            var markerPath = Path.Combine(stage, StageMarkerName);
+            if (!File.Exists(markerPath) || IsSymlink(markerPath)
+                || !CryptographicOperations.FixedTimeEquals(
+                    File.ReadAllBytes(markerPath), markerToken))
+                throw new IOException(
+                    $"The owned delivery stage marker is missing or invalid: '{markerPath}'.");
+
+            Directory.Delete(stage, recursive: true);
+            return null;
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
             or System.Security.SecurityException)
         {
-            // Best-effort cleanup must never replace the operation's original failure. The random
-            // stage name and in-memory ownership bit ensure no unrelated directory is selected.
+            return exception;
         }
     }
 
@@ -613,6 +673,7 @@ internal enum DeliveryBundleDirectoryPublisherCheckpoint
     BeforeManifestWrite,
     BeforeVerification,
     BeforeCommit,
+    BeforeDirectoryCommit,
 }
 
 internal sealed record DeliveryBundleDirectoryPublisherFaultContext(

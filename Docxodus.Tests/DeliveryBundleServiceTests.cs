@@ -189,6 +189,100 @@ public sealed class DeliveryBundleServiceTests
     }
 
     [Fact]
+    public async Task BuildAsync_FailedRendererReportRemainsAvailableEvidence()
+    {
+        var edit = SingleEdit("Failed render evidence edit.");
+        var reportBytes = Encoding.UTF8.GetBytes(
+            "{\"schema\":\"https://docxodus.dev/schemas/render/render-report/v1\","
+            + "\"schemaVersion\":1,\"status\":\"failed\"}");
+        var warning = new DeliverableRenderDiagnostic
+        {
+            Kind = DeliverableRenderDiagnosticKind.UnsupportedContent,
+            Code = "unsupported_revision_story",
+            Severity = VerificationFindingSeverity.Error,
+            Phase = "package_preflight",
+            Message = "A revision story could not be projected.",
+            OwningPartUri = "/word/comments.xml",
+            Resource = "comment:2",
+            Remediation = "Resolve the unsupported revision story.",
+        };
+        var bundle = await new DeliveryBundleService(
+            new FailedEvidenceRenderer(reportBytes, warning)).BuildAsync(
+            Request(edit, new[]
+            {
+                RenderArtifact(
+                    "optional-html",
+                    DeliveryArtifactKind.StandaloneHtml,
+                    DeliveryArtifactRequiredness.Optional,
+                    DeliveryReviewProfile.Final),
+            }),
+            new DeliveryBundleBuildOptions { FailOnDeliverableValidationFailure = false });
+
+        var html = Assert.Single(bundle.Manifest.Payload.Artifacts,
+            artifact => artifact.ArtifactId == "optional-html");
+        Assert.Equal(BundleArtifactAvailability.Unavailable, html.Availability);
+        Assert.Equal("unsupported_revision_story", Assert.Single(html.Render!.Warnings).Code);
+        var report = Assert.Single(bundle.Manifest.Payload.Artifacts,
+            artifact => artifact.Kind == DeliveryArtifactKind.RenderReport
+                && artifact.Render?.ReviewProfile == DeliveryReviewProfile.Final);
+        Assert.Equal(BundleArtifactAvailability.Available, report.Availability);
+        Assert.Null(report.Render!.RendererFingerprint);
+        Assert.Equal(reportBytes, bundle.GetArtifactBytes(report.ArtifactId));
+        Assert.True(bundle.Verification.IsValid,
+            string.Join(Environment.NewLine, bundle.Verification.Findings));
+    }
+
+    [Fact]
+    public async Task BuildAsync_RequiredRenderPromotesExplicitOptionalSidecars()
+    {
+        var edit = SingleEdit("Required review sidecar edit.", tracked: true);
+        var request = Request(edit, new[]
+        {
+            RenderArtifact(
+                "required-review-pdf",
+                DeliveryArtifactKind.ReviewPdf,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Markup),
+            RenderArtifact(
+                "optional-review-map",
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactRequiredness.Optional,
+                DeliveryReviewProfile.Markup),
+            RenderArtifact(
+                "optional-review-report",
+                DeliveryArtifactKind.RenderReport,
+                DeliveryArtifactRequiredness.Optional,
+                DeliveryReviewProfile.Markup),
+        });
+        var service = new DeliveryBundleService(new SidecarFailureRenderer());
+
+        var error = await Assert.ThrowsAsync<DeliveryBundleException>(async () =>
+            await service.BuildAsync(request,
+                new DeliveryBundleBuildOptions
+                {
+                    FailOnDeliverableValidationFailure = false,
+                }));
+        Assert.Equal("required_artifact_unavailable", error.Code);
+
+        var diagnostic = await service.BuildAsync(
+            request,
+            new DeliveryBundleBuildOptions
+            {
+                FailOnDeliverableValidationFailure = false,
+                ReturnIncompleteBundle = true,
+            });
+        Assert.Equal(DeliveryBundleStatus.Incomplete, diagnostic.Manifest.Payload.Status);
+        foreach (var id in new[] { "optional-review-map", "optional-review-report" })
+        {
+            var sidecar = Assert.Single(diagnostic.Manifest.Payload.Artifacts,
+                artifact => artifact.ArtifactId == id);
+            Assert.Equal(DeliveryArtifactRequiredness.Required, sidecar.Requiredness);
+            Assert.Equal(DeliveryArtifactProvenance.Requested, sidecar.Provenance);
+            Assert.Equal(BundleArtifactAvailability.Unavailable, sidecar.Availability);
+        }
+    }
+
+    [Fact]
     public async Task BuildAsync_RenderProfilesUseExactPolicySourcesAndRetainMetadata()
     {
         var edit = SingleEdit("Profile-aware render edit.", tracked: true);
@@ -215,7 +309,8 @@ public sealed class DeliveryBundleServiceTests
         var bundle = await new DeliveryBundleService(renderer).BuildAsync(request);
 
         Assert.Equal(DeliveryBundleStatus.Complete, bundle.Manifest.Payload.Status);
-        Assert.Equal(3, renderer.Requests.Count);
+        Assert.Equal(9, renderer.Requests.Count);
+        Assert.Equal(1, renderer.BatchCount);
         AssertSource("final-html", DeliveryArtifactKind.FinalDocx);
         AssertSource("original-html", DeliveryArtifactKind.PolicyBaselineDocx);
         AssertSource("review-pdf", DeliveryArtifactKind.ReviewDocx);
@@ -225,11 +320,30 @@ public sealed class DeliveryBundleServiceTests
                 value => value.ArtifactId == artifactId);
             Assert.Equal("test-renderer|engine-1|fonts-1", artifact.Render?.RendererFingerprint);
             Assert.Equal(1, artifact.Render?.PageCount);
-            Assert.Equal(new[] { "fixture diagnostic" }, artifact.Render?.Warnings);
+            var warning = Assert.Single(artifact.Render?.Warnings
+                ?? Array.Empty<DeliverableRenderDiagnostic>());
+            Assert.Equal("fixture_warning", warning.Code);
+            Assert.Equal("package_preflight", warning.Phase);
+            Assert.Equal("fixture diagnostic", warning.Message);
+            Assert.Equal("/word/document.xml", warning.OwningPartUri);
+            Assert.Equal("comment:7", warning.Resource);
         }
         Assert.Contains(bundle.Manifest.Payload.Artifacts, artifact =>
             artifact.Kind == DeliveryArtifactKind.ReversibilityProof
             && artifact.Provenance == DeliveryArtifactProvenance.Implicit);
+        var validationArtifact = Assert.Single(bundle.Manifest.Payload.Artifacts,
+            artifact => artifact.Kind == DeliveryArtifactKind.ValidationReport);
+        using var validation = JsonDocument.Parse(
+            bundle.GetArtifactBytes(validationArtifact.ArtifactId));
+        Assert.Equal(DeliveryBundleValidationReport.SchemaId,
+            validation.RootElement.GetProperty("schema").GetString());
+        var cohorts = validation.RootElement.GetProperty("renderCohorts")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Equal(3, cohorts.Length);
+        AssertValidationSource("final", DeliveryArtifactKind.FinalDocx);
+        AssertValidationSource("original", DeliveryArtifactKind.PolicyBaselineDocx);
+        AssertValidationSource("markup", DeliveryArtifactKind.ReviewDocx);
 
         void AssertSource(string renderId, DeliveryArtifactKind sourceKind)
         {
@@ -238,7 +352,65 @@ public sealed class DeliveryBundleServiceTests
             var source = Assert.Single(bundle.Manifest.Payload.Artifacts,
                 value => value.Kind == sourceKind);
             Assert.Equal(source.Digest, renderRequest.SourcePackageDigest);
+            var renderArtifact = Assert.Single(bundle.Manifest.Payload.Artifacts,
+                value => value.ArtifactId == renderId);
+            Assert.Equal(renderRequest.SourceDocumentName,
+                renderArtifact.Render?.SourceDocumentName);
+            Assert.Equal(renderRequest.SourceDocumentVersion,
+                renderArtifact.Render?.SourceDocumentVersion);
+            Assert.Equal(renderRequest.SourcePackageDigest,
+                renderArtifact.Render?.SourcePackageDigest);
+            Assert.Contains(bundle.Manifest.Payload.Relationships, relationship =>
+                relationship.Kind == DeliveryArtifactRelationshipKind.RenderedFrom
+                && relationship.FromArtifactId == renderId
+                && relationship.ToArtifactId == source.ArtifactId);
         }
+
+        void AssertValidationSource(string reviewProfile, DeliveryArtifactKind sourceKind)
+        {
+            var cohort = Assert.Single(cohorts, value =>
+                value.GetProperty("reviewProfile").GetString() == reviewProfile);
+            Assert.Equal("endnotes", cohort.GetProperty("commentProfile").GetString());
+            var source = Assert.Single(bundle.Manifest.Payload.Artifacts,
+                value => value.Kind == sourceKind);
+            var sourceDigest = cohort.GetProperty("sourceDocument")
+                .GetProperty("digest")
+                .GetProperty("value")
+                .GetString();
+            Assert.Equal(source.Digest?.Value, sourceDigest);
+            var verification = cohort.GetProperty("verification");
+            Assert.True(verification.GetProperty("baselineCompared").GetBoolean());
+            Assert.Equal(sourceDigest,
+                verification.GetProperty("deliverablePackage")
+                    .GetProperty("rawPackageBytesDigest")
+                    .GetProperty("value")
+                    .GetString());
+            Assert.Equal(3, verification.GetProperty("companionArtifacts")
+                .GetArrayLength());
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsync_MalformedMarkupCohortFailsBundleValidation()
+    {
+        var edit = SingleEdit("Malformed markup render edit.", tracked: true);
+        var request = Request(edit, new[]
+        {
+            RenderArtifact(
+                "review-pdf",
+                DeliveryArtifactKind.ReviewPdf,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Markup),
+        });
+
+        var error = await Assert.ThrowsAsync<DeliveryBundleException>(async () =>
+            await new DeliveryBundleService(new MalformedMarkupRenderer())
+                .BuildAsync(request));
+
+        Assert.Equal("deliverable_validation_failed", error.Code);
+        Assert.Contains("markup/endnotes", error.Message, StringComparison.Ordinal);
+        Assert.Contains("artifact.page_map_malformed", error.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -496,8 +668,14 @@ public sealed class DeliveryBundleServiceTests
                 var link = artifact.Availability == BundleArtifactAvailability.Available
                     ? $"<a href=\"bundle/{Html(artifact.RelativePath)}\">view</a>"
                     : Html(artifact.UnavailableReason ?? "unavailable");
+                var source = artifact.Render is null
+                    ? string.Empty
+                    : $"{Html(artifact.Render.SourceDocumentName)}@"
+                      + $"{artifact.Render.SourceDocumentVersion}<br><code>"
+                      + $"{Html(artifact.Render.SourcePackageDigest.Value)}</code>";
                 return $"<tr><td>{Html(artifact.ArtifactId)}</td><td>{artifact.Kind}</td>"
-                    + $"<td>{artifact.Provenance}</td><td>{availability}</td><td>{link}</td></tr>";
+                    + $"<td>{artifact.Provenance}</td><td>{availability}</td>"
+                    + $"<td>{source}</td><td>{link}</td></tr>";
             }));
         var index = "<!doctype html><meta charset=\"utf-8\"><title>Docxodus #465 artifacts</title>"
             + "<style>body{font:15px system-ui;margin:2rem;max-width:1100px}"
@@ -516,14 +694,18 @@ public sealed class DeliveryBundleServiceTests
             + $"<p>Manifest digest: <code>{Html(bundle.Manifest.ManifestDigest.Value)}</code>. "
             + "<a href=\"bundle/bundle-manifest.json\">View canonical manifest</a></p>"
             + "<table><thead><tr><th>ID</th><th>Kind</th><th>Provenance</th>"
-            + $"<th>Availability</th><th>Artifact</th></tr></thead><tbody>{rows}</tbody></table>";
+            + "<th>Availability</th><th>Render source</th>"
+            + $"<th>Artifact</th></tr></thead><tbody>{rows}</tbody></table>";
         File.WriteAllText(Path.Combine(root, "index.html"), index, Encoding.UTF8);
 
         var checksums = bundle.Manifest.Payload.Artifacts
             .Where(artifact => artifact.Availability == BundleArtifactAvailability.Available)
             .Select(artifact => $"{artifact.Digest!.Value}  bundle/{artifact.RelativePath}")
             .Append($"{Sha256(bundle.ManifestBytes)}  bundle/{DeliveryBundle.ManifestFileName}");
-        File.WriteAllLines(Path.Combine(root, "SHA256SUMS"), checksums, Encoding.UTF8);
+        File.WriteAllLines(
+            Path.Combine(root, "SHA256SUMS"),
+            checksums,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
     private static string Html(string value) => HtmlEncoder.Default.Encode(value);
@@ -546,7 +728,7 @@ public sealed class DeliveryBundleServiceTests
         return builder.ToString();
     }
 
-    private sealed class CapturingRenderer : IDeliveryArtifactRenderer
+    private sealed class CapturingRenderer : IDeliveryArtifactBatchRenderer
     {
         private readonly List<DeliveryRenderRequest> _requests = new();
 
@@ -564,12 +746,31 @@ public sealed class DeliveryBundleServiceTests
             Enum.GetValues<DeliveryCommentProfile>());
 
         public IReadOnlyList<DeliveryRenderRequest> Requests => _requests.ToArray();
+        public int BatchCount { get; private set; }
+
+        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
+            IReadOnlyList<DeliveryRenderRequest> requests,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BatchCount++;
+            var results = requests.ToDictionary(
+                request => request.ArtifactId,
+                Render,
+                StringComparer.Ordinal);
+            return ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(results);
+        }
 
         public ValueTask<DeliveryRenderResult> RenderAsync(
             DeliveryRenderRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Render(request));
+        }
+
+        private DeliveryRenderResult Render(DeliveryRenderRequest request)
+        {
             _requests.Add(request);
             var pageMap = PageMapBytes(request.SourceDocumentVersion);
             var bytes = request.Kind switch
@@ -583,7 +784,7 @@ public sealed class DeliveryBundleServiceTests
                     "{\"schema\":\"docxodus.test.render-report/v1\",\"valid\":true}"),
                 _ => throw new ArgumentOutOfRangeException(nameof(request)),
             };
-            return ValueTask.FromResult(DeliveryRenderResult.Available(
+            return DeliveryRenderResult.Available(
                 bytes,
                 request.Kind switch
                 {
@@ -601,9 +802,14 @@ public sealed class DeliveryBundleServiceTests
                     new DeliverableRenderDiagnostic
                     {
                         Kind = DeliverableRenderDiagnosticKind.Warning,
+                        Code = "fixture_warning",
+                        Phase = "package_preflight",
                         Message = "fixture diagnostic",
+                        OwningPartUri = "/word/document.xml",
+                        Resource = "comment:7",
+                        Remediation = "Inspect the fixture warning.",
                     },
-                }));
+                });
         }
 
         private static byte[] PageMapBytes(long documentVersion)
@@ -642,13 +848,179 @@ public sealed class DeliveryBundleServiceTests
             return Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map));
         }
 
-        private static byte[] MinimalPdfBytes() => Encoding.ASCII.GetBytes(
+        internal static byte[] MinimalPdfBytes() => Encoding.ASCII.GetBytes(
             "%PDF-1.4\n"
             + "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
             + "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n"
             + "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n"
             + "xref\n0 4\n0000000000 65535 f \n"
             + "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+    }
+
+    private sealed class FailedEvidenceRenderer : IDeliveryArtifactBatchRenderer
+    {
+        private readonly byte[] _reportBytes;
+        private readonly DeliverableRenderDiagnostic _warning;
+
+        internal FailedEvidenceRenderer(
+            byte[] reportBytes,
+            DeliverableRenderDiagnostic warning)
+        {
+            _reportBytes = reportBytes;
+            _warning = warning;
+        }
+
+        public DeliveryRendererCapabilities Capabilities { get; } = new(
+            "failed-evidence-renderer",
+            new[]
+            {
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactKind.RenderReport,
+            },
+            Enum.GetValues<DeliveryReviewProfile>(),
+            Enum.GetValues<DeliveryCommentProfile>());
+
+        public ValueTask<DeliveryRenderResult> RenderAsync(
+            DeliveryRenderRequest request,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Result(request));
+
+        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
+            IReadOnlyList<DeliveryRenderRequest> requests,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
+                requests.ToDictionary(
+                    request => request.ArtifactId,
+                    Result,
+                    StringComparer.Ordinal));
+
+        private DeliveryRenderResult Result(DeliveryRenderRequest request) =>
+            request.Kind == DeliveryArtifactKind.RenderReport
+                ? DeliveryRenderResult.FailedReport(_reportBytes, diagnostics: new[] { _warning })
+                : DeliveryRenderResult.Unavailable(
+                    request.Kind == DeliveryArtifactKind.StandaloneHtml
+                        ? "text/html"
+                        : "application/vnd.docxodus.pagemap+json",
+                    "Export host resource_policy_failure at package_preflight.",
+                    renderReportBytes: _reportBytes,
+                    diagnostics: new[] { _warning });
+    }
+
+    private sealed class SidecarFailureRenderer : IDeliveryArtifactBatchRenderer
+    {
+        public DeliveryRendererCapabilities Capabilities { get; } = new(
+            "sidecar-failure-renderer",
+            new[]
+            {
+                DeliveryArtifactKind.ReviewPdf,
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactKind.RenderReport,
+            },
+            Enum.GetValues<DeliveryReviewProfile>(),
+            Enum.GetValues<DeliveryCommentProfile>());
+
+        public ValueTask<DeliveryRenderResult> RenderAsync(
+            DeliveryRenderRequest request,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Result(request));
+
+        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
+            IReadOnlyList<DeliveryRenderRequest> requests,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
+                requests.ToDictionary(
+                    request => request.ArtifactId,
+                    Result,
+                    StringComparer.Ordinal));
+
+        private static DeliveryRenderResult Result(DeliveryRenderRequest request)
+        {
+            if (request.Kind != DeliveryArtifactKind.ReviewPdf)
+                return DeliveryRenderResult.Unavailable(
+                    request.Kind == DeliveryArtifactKind.PageMap
+                        ? "application/vnd.docxodus.pagemap+json"
+                        : "application/vnd.docxodus.render-report+json",
+                    "The renderer omitted required cohort evidence.");
+            var pageMap = new PageMap
+            {
+                Mode = PageMapMode.Paginated,
+                Availability = PageMapAvailability.Available,
+                DocumentVersion = request.SourceDocumentVersion,
+                RendererFingerprint = "sidecar-failure-renderer-v1",
+                Pages = new[]
+                {
+                    new PageMapPage
+                    {
+                        PageNumber = 1,
+                        PageInSection = 1,
+                        Width = 612,
+                        Height = 792,
+                        SectionIndex = 0,
+                        PageName = "page-1",
+                    },
+                },
+            };
+            var pageMapBytes = Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(pageMap));
+            return DeliveryRenderResult.Available(
+                CapturingRenderer.MinimalPdfBytes(),
+                "application/pdf",
+                "sidecar-failure-renderer-v1",
+                1,
+                pageMapBytes,
+                Encoding.UTF8.GetBytes("{\"status\":\"complete\"}"));
+        }
+    }
+
+    private sealed class MalformedMarkupRenderer : IDeliveryArtifactBatchRenderer
+    {
+        private static readonly byte[] MalformedPageMap = Encoding.UTF8.GetBytes("{");
+
+        public DeliveryRendererCapabilities Capabilities { get; } = new(
+            "malformed-markup-renderer",
+            new[]
+            {
+                DeliveryArtifactKind.ReviewPdf,
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactKind.RenderReport,
+            },
+            new[] { DeliveryReviewProfile.Markup },
+            Enum.GetValues<DeliveryCommentProfile>());
+
+        public ValueTask<DeliveryRenderResult> RenderAsync(
+            DeliveryRenderRequest request,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Result(request));
+
+        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
+            IReadOnlyList<DeliveryRenderRequest> requests,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
+                requests.ToDictionary(
+                    request => request.ArtifactId,
+                    Result,
+                    StringComparer.Ordinal));
+
+        private static DeliveryRenderResult Result(DeliveryRenderRequest request)
+        {
+            var bytes = request.Kind switch
+            {
+                DeliveryArtifactKind.ReviewPdf => CapturingRenderer.MinimalPdfBytes(),
+                DeliveryArtifactKind.PageMap => MalformedPageMap,
+                DeliveryArtifactKind.RenderReport =>
+                    Encoding.UTF8.GetBytes("{\"status\":\"complete\"}"),
+                _ => throw new ArgumentOutOfRangeException(nameof(request)),
+            };
+            return DeliveryRenderResult.Available(
+                bytes,
+                request.Kind == DeliveryArtifactKind.ReviewPdf
+                    ? "application/pdf"
+                    : "application/json",
+                "malformed-markup-renderer-v1",
+                1,
+                MalformedPageMap,
+                Encoding.UTF8.GetBytes("{\"status\":\"complete\"}"));
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable

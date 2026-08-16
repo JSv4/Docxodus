@@ -533,7 +533,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_deliver",
-            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Rendering and authoritative change-receipt evidence are reported unavailable unless a configured adapter supplies them.",
+            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration; authoritative change-receipt evidence remains available through the programmatic transaction API.",
             """
             {
               "type": "object",

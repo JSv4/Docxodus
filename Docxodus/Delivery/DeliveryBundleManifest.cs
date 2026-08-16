@@ -25,9 +25,13 @@ public sealed record DeliveryArtifactRenderMetadata
 {
     required public DeliveryReviewProfile ReviewProfile { get; init; }
     required public DeliveryCommentProfile CommentProfile { get; init; }
+    required public string SourceDocumentName { get; init; }
+    required public long SourceDocumentVersion { get; init; }
+    required public VerificationDigest SourcePackageDigest { get; init; }
     public string? RendererFingerprint { get; init; }
     public long? PageCount { get; init; }
-    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<DeliverableRenderDiagnostic> Warnings { get; init; } =
+        Array.Empty<DeliverableRenderDiagnostic>();
 }
 
 /// <summary>One hash-addressed artifact entry in a delivery bundle.</summary>
@@ -292,16 +296,58 @@ public sealed record DeliveryBundleManifest
                                   || input.CommentProfile != commentProfile))
             throw new ArgumentException(
                 $"Render metadata for '{artifact.ArtifactId}' does not match the requested profiles.");
+        if (input is null || string.IsNullOrWhiteSpace(input.SourceDocumentName)
+            || input.SourceDocumentVersion < 0 || input.SourcePackageDigest is null)
+            throw new ArgumentException(
+                $"Render metadata for '{artifact.ArtifactId}' requires an exact source document identity.");
         return new DeliveryArtifactRenderMetadata
         {
             ReviewProfile = reviewProfile.Value,
             CommentProfile = commentProfile.Value,
+            SourceDocumentName = input.SourceDocumentName,
+            SourceDocumentVersion = input.SourceDocumentVersion,
+            SourcePackageDigest = input.SourcePackageDigest,
             RendererFingerprint = input?.RendererFingerprint,
             PageCount = input?.PageCount,
-            Warnings = (input?.Warnings ?? Array.Empty<string>())
-                .OrderBy(value => value, StringComparer.Ordinal)
+            Warnings = (input?.Warnings ?? Array.Empty<DeliverableRenderDiagnostic>())
+                .OrderBy(value => value, RenderDiagnosticComparer.Instance)
                 .ToArray(),
         };
+    }
+
+    internal sealed class RenderDiagnosticComparer : IComparer<DeliverableRenderDiagnostic>
+    {
+        internal static readonly RenderDiagnosticComparer Instance = new();
+
+        public int Compare(DeliverableRenderDiagnostic? left, DeliverableRenderDiagnostic? right)
+        {
+            if (ReferenceEquals(left, right)) return 0;
+            if (left is null) return -1;
+            if (right is null) return 1;
+            int comparison = Compare(left.Code, right.Code);
+            if (comparison != 0) return comparison;
+            comparison = left.Severity.CompareTo(right.Severity);
+            if (comparison != 0) return comparison;
+            comparison = left.Kind.CompareTo(right.Kind);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.Phase, right.Phase);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.OwningPartUri, right.OwningPartUri);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.AnchorId, right.AnchorId);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.Resource, right.Resource);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.FontName, right.FontName);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.SubstitutedFontName, right.SubstitutedFontName);
+            if (comparison != 0) return comparison;
+            comparison = Compare(left.Message, right.Message);
+            return comparison != 0 ? comparison : Compare(left.Remediation, right.Remediation);
+        }
+
+        private static int Compare(string? left, string? right) =>
+            string.Compare(left, right, StringComparison.Ordinal);
     }
 
     internal static bool IsProfiledRenderKind(DeliveryArtifactKind kind) => kind is

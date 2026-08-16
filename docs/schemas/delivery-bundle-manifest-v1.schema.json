@@ -173,6 +173,9 @@
       "required": [
         "reviewProfile",
         "commentProfile",
+        "sourceDocumentName",
+        "sourceDocumentVersion",
+        "sourcePackageDigest",
         "rendererFingerprint",
         "pageCount",
         "warnings"
@@ -180,6 +183,9 @@
       "properties": {
         "reviewProfile": { "enum": ["final", "original", "markup"] },
         "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
+        "sourceDocumentName": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "sourceDocumentVersion": { "type": "integer", "minimum": 0 },
+        "sourcePackageDigest": { "$ref": "#/$defs/digest" },
         "rendererFingerprint": {
           "oneOf": [
             { "type": "string", "minLength": 1, "maxLength": 4096 },
@@ -195,9 +201,47 @@
         "warnings": {
           "type": "array",
           "maxItems": 1024,
-          "items": { "type": "string", "maxLength": 4096 }
+          "items": { "$ref": "#/$defs/renderWarning" }
         }
       }
+    },
+    "renderWarning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "message",
+        "severity",
+        "code",
+        "phase",
+        "owningPartUri",
+        "anchorId",
+        "resource",
+        "fontName",
+        "substitutedFontName",
+        "remediation"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["warning", "unsupportedContent", "missingFont", "fontSubstitution"]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "code": { "$ref": "#/$defs/optionalString" },
+        "phase": { "$ref": "#/$defs/optionalString" },
+        "owningPartUri": { "$ref": "#/$defs/optionalString" },
+        "anchorId": { "$ref": "#/$defs/optionalString" },
+        "resource": { "$ref": "#/$defs/optionalString" },
+        "fontName": { "$ref": "#/$defs/optionalString" },
+        "substitutedFontName": { "$ref": "#/$defs/optionalString" },
+        "remediation": { "$ref": "#/$defs/optionalString" }
+      }
+    },
+    "optionalString": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 4096 },
+        { "type": "null" }
+      ]
     },
     "relationship": {
       "type": "object",

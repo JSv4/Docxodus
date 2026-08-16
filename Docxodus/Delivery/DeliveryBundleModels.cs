@@ -3,6 +3,8 @@
 
 #nullable enable
 
+using Docxodus.Verification;
+
 namespace Docxodus.Delivery;
 
 /// <summary>How delivery treats revisions that were already present in an input document.</summary>
@@ -176,9 +178,13 @@ public sealed record DeliveryArtifactRenderMetadataInput
 {
     required public DeliveryReviewProfile ReviewProfile { get; init; }
     required public DeliveryCommentProfile CommentProfile { get; init; }
+    required public string SourceDocumentName { get; init; }
+    required public long SourceDocumentVersion { get; init; }
+    required public VerificationDigest SourcePackageDigest { get; init; }
     public string? RendererFingerprint { get; init; }
     public long? PageCount { get; init; }
-    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<DeliverableRenderDiagnostic> Warnings { get; init; } =
+        Array.Empty<DeliverableRenderDiagnostic>();
 }
 
 /// <summary>Artifact bytes or an explicit unavailability result supplied to manifest construction.</summary>

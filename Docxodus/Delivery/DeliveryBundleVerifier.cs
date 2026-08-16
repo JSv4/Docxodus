@@ -115,6 +115,7 @@ public static class DeliveryBundleVerifier
             findings.Add("complete_bundle_missing_required_artifact");
 
         ValidateRelationships(payload.Relationships, artifacts, limits, findings);
+        ValidateRenderSourceBindings(payload, artifacts, payload.Relationships, findings);
         VerifyArtifactBytes(artifacts, artifactBytes, limits, findings, artifactResults);
 
         return Result(findings, artifactResults);
@@ -288,8 +289,10 @@ public static class DeliveryBundleVerifier
     {
         var id = artifact.ArtifactId ?? "<null>";
         bool isProfiledRender = DeliveryBundleManifest.IsProfiledRenderKind(artifact.Kind);
+        // A failed render report is available evidence even when failure occurred before renderer
+        // identity completed. Layout artifacts still require the complete identity.
         bool needsCompleteRenderIdentity = artifact.Availability == DeliveryArtifactAvailability.Available
-            && isProfiledRender;
+            && isProfiledRender && artifact.Kind != DeliveryArtifactKind.RenderReport;
         bool needsPageCount = artifact.Availability == DeliveryArtifactAvailability.Available
             && (artifact.Kind is DeliveryArtifactKind.StandaloneHtml
                 or DeliveryArtifactKind.FinalPdf
@@ -311,6 +314,12 @@ public static class DeliveryBundleVerifier
             findings.Add($"invalid_review_profile:{id}");
         if (!Enum.IsDefined(render.CommentProfile))
             findings.Add($"invalid_comment_profile:{id}");
+        if (!ValidString(render.SourceDocumentName, limits))
+            findings.Add($"render_source_name_missing:{id}");
+        if (render.SourceDocumentVersion < 0)
+            findings.Add($"render_source_version_invalid:{id}");
+        if (!ValidDigest(render.SourcePackageDigest))
+            findings.Add($"render_source_digest_missing:{id}");
         if (needsCompleteRenderIdentity && !ValidString(render.RendererFingerprint, limits))
             findings.Add($"renderer_fingerprint_missing:{id}");
         if (render.RendererFingerprint is not null
@@ -334,12 +343,36 @@ public static class DeliveryBundleVerifier
         }
         if (render.Warnings.Count > limits.MaxWarningsPerArtifact)
             findings.Add($"render_warning_resource_limit:{id}");
-        ValidateCanonicalOrder(render.Warnings, $"render_warning_order_not_canonical:{id}", findings);
-        if (render.Warnings.Any(value => !ValidString(value, limits)))
+        var orderedWarnings = render.Warnings
+            .OrderBy(value => value, DeliveryBundleManifest.RenderDiagnosticComparer.Instance)
+            .ToArray();
+        if (!render.Warnings.SequenceEqual(orderedWarnings))
+            findings.Add($"render_warning_order_not_canonical:{id}");
+        if (render.Warnings.Any(value => !ValidRenderWarning(value, limits)))
             findings.Add($"invalid_render_warning:{id}");
-        if (render.Warnings.Distinct(StringComparer.Ordinal).Count() != render.Warnings.Count)
+        if (render.Warnings.Distinct().Count() != render.Warnings.Count)
             findings.Add($"duplicate_render_warning:{id}");
     }
+
+    private static bool ValidRenderWarning(
+        DeliverableRenderDiagnostic? warning,
+        DeliveryBundleVerificationLimits limits)
+    {
+        if (warning is null || !Enum.IsDefined(warning.Kind)
+            || !Enum.IsDefined(warning.Severity) || !ValidString(warning.Message, limits))
+            return false;
+        return OptionalString(warning.Code, limits)
+            && OptionalString(warning.Phase, limits)
+            && OptionalString(warning.OwningPartUri, limits)
+            && OptionalString(warning.AnchorId, limits)
+            && OptionalString(warning.Resource, limits)
+            && OptionalString(warning.FontName, limits)
+            && OptionalString(warning.SubstitutedFontName, limits)
+            && OptionalString(warning.Remediation, limits);
+    }
+
+    private static bool OptionalString(string? value, DeliveryBundleVerificationLimits limits) =>
+        value is null || ValidString(value, limits);
 
     private static void ValidateRelationships(
         IReadOnlyList<DeliveryArtifactRelationship>? relationships,
@@ -388,6 +421,80 @@ public static class DeliveryBundleVerifier
             if (string.Equals(relationship.FromArtifactId, relationship.ToArtifactId,
                     StringComparison.Ordinal))
                 findings.Add($"self_relationship:{id}");
+        }
+    }
+
+    private static void ValidateRenderSourceBindings(
+        DeliveryBundleManifestPayload payload,
+        IReadOnlyList<DeliveryBundleArtifact> artifacts,
+        IReadOnlyList<DeliveryArtifactRelationship>? relationships,
+        ICollection<string> findings)
+    {
+        if (relationships is null) return;
+        var uniqueArtifacts = artifacts.Where(value => value is not null)
+            .GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        foreach (var artifact in uniqueArtifacts.Values.Where(value =>
+                     DeliveryBundleManifest.IsProfiledRenderKind(value.Kind)))
+        {
+            var id = artifact.ArtifactId ?? "<null>";
+            var bindings = relationships.Where(relationship => relationship is not null
+                    && relationship.Kind == DeliveryArtifactRelationshipKind.RenderedFrom
+                    && string.Equals(relationship.FromArtifactId, artifact.ArtifactId,
+                        StringComparison.Ordinal))
+                .ToArray();
+            if (bindings.Length != 1)
+            {
+                findings.Add(bindings.Length == 0
+                    ? $"render_source_relationship_missing:{id}"
+                    : $"render_source_relationship_ambiguous:{id}");
+                continue;
+            }
+            if (!uniqueArtifacts.TryGetValue(bindings[0].ToArtifactId, out var source))
+                continue;
+
+            var expectedKind = artifact.Render?.ReviewProfile switch
+            {
+                DeliveryReviewProfile.Final => DeliveryArtifactKind.FinalDocx,
+                DeliveryReviewProfile.Original => DeliveryArtifactKind.PolicyBaselineDocx,
+                DeliveryReviewProfile.Markup => DeliveryArtifactKind.ReviewDocx,
+                _ => (DeliveryArtifactKind?)null,
+            };
+            if (expectedKind is null || source.Kind != expectedKind)
+            {
+                findings.Add($"render_source_kind_mismatch:{id}");
+                continue;
+            }
+            if (source.Availability != DeliveryArtifactAvailability.Available
+                || !ValidDigest(source.Digest))
+            {
+                findings.Add($"render_source_artifact_unavailable:{id}");
+                continue;
+            }
+            if (artifact.Render is not { } render || !ValidDigest(render.SourcePackageDigest))
+                continue;
+            if (!DigestEquals(render.SourcePackageDigest, source.Digest!))
+                findings.Add($"render_source_digest_mismatch:{id}");
+
+            var expectedName = render.ReviewProfile switch
+            {
+                DeliveryReviewProfile.Final => payload.FinalDocument?.Name,
+                DeliveryReviewProfile.Original => "policy-baseline",
+                DeliveryReviewProfile.Markup => "review",
+                _ => null,
+            };
+            var expectedVersion = render.ReviewProfile switch
+            {
+                DeliveryReviewProfile.Final => payload.FinalDocument?.DocumentVersion,
+                DeliveryReviewProfile.Original => payload.BaselineDocument?.DocumentVersion,
+                DeliveryReviewProfile.Markup => payload.FinalDocument?.DocumentVersion,
+                _ => null,
+            };
+            if (!string.Equals(render.SourceDocumentName, expectedName, StringComparison.Ordinal))
+                findings.Add($"render_source_name_mismatch:{id}");
+            if (render.SourceDocumentVersion != expectedVersion)
+                findings.Add($"render_source_version_mismatch:{id}");
         }
     }
 
@@ -484,6 +591,10 @@ public static class DeliveryBundleVerifier
         var actual = SHA256.HashData(bytes);
         return CryptographicOperations.FixedTimeEquals(expected, actual);
     }
+
+    private static bool DigestEquals(VerificationDigest left, VerificationDigest right) =>
+        string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal)
+        && string.Equals(left.Value, right.Value, StringComparison.Ordinal);
 
     private static void ValidateCanonicalOrder(
         IEnumerable<string?> values,

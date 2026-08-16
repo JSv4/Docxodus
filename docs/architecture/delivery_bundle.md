@@ -50,14 +50,27 @@ declared as an implicit required artifact.
 ## Rendering boundary
 
 The delivery core owns artifact intent, source selection, metadata validation, relationships,
-failure policy, and verification. It does not discover or launch a renderer. An
+failure policy, and verification. It does not discover a renderer. An
 `IDeliveryArtifactRenderer` declares its supported artifact kinds, review profiles, and comment
 profiles and returns bytes with its fingerprint, page count, PageMap, report, and diagnostics.
+Renderer diagnostics remain structured end to end: the canonical manifest retains their stable
+code, severity, phase, message, remediation, owning part, anchor, and resource identity rather than
+flattening them into display strings.
 
-Production standalone paginated HTML and PDF remain dependent on epic #434. Until that adapter is
-available, the CLI and MCP surfaces report those outputs as unavailable instead of promoting the
-LibreOffice legal-evaluation harness or silently returning staging/continuous HTML. Test fixtures
-exercise the complete orchestration contract but are not production renderer output.
+`DocxodusExportHostRenderer` is the production boundary to epic #434. It requires absolute Node
+and built-host paths owned by the process, launches without a shell or PATH guessing, uses one
+length-framed request/response envelope, and renders each exact source/review/comment cohort only
+once. HTML, PDF, PageMap, and render-report results from that cohort are validated together before
+they enter the bundle. Every render cohort implicitly includes its PageMap and report sidecars;
+their requiredness follows the cohort's requested outputs. If the adapter is not configured, the
+CLI and MCP surfaces retain truthful unavailability rather than substituting the LibreOffice
+legal-evaluation harness or continuous preview HTML.
+
+If the framed host returns a schema-valid failed render report, the adapter preserves that report
+as an available evidence artifact while marking HTML, PDF, and PageMap unavailable. The report's
+source/profile binding, failure identity, and structured warnings are checked before retention; a
+failure that occurred before renderer fingerprinting remains truthful rather than inventing an
+identity. Callers can retain this evidence through the explicit incomplete-bundle path.
 
 ## Manifest and independent verification
 
@@ -66,7 +79,8 @@ exercise the complete orchestration contract but are not production renderer out
 - exact baseline, working, and final names, versions, byte sizes, and SHA-256 digests;
 - the two-part revision policy;
 - every requested or implicit artifact, including explicit unavailable entries;
-- byte size, SHA-256 digest, MIME type, portable relative path, and render metadata; and
+- byte size, SHA-256 digest, MIME type, portable relative path, and render metadata including the
+  exact source name, document version, package digest, and structured renderer warnings; and
 - deterministic typed relationships between artifacts.
 
 The formal schema is
@@ -76,6 +90,15 @@ canonical ordering and path/resource limits, and independently matches every sup
 size and digest. The verifier takes artifact bytes separately, so it does not trust the in-memory
 bundle that created the declarations.
 
+The required validation artifact uses
+[`delivery-bundle-validation-v1.schema.json`](../schemas/delivery-bundle-validation-v1.schema.json).
+It retains one baseline-aware verification of the final DOCX plus one verification for every
+review/comment render cohort. Each cohort is compared with its own exact source snapshot so source
+package findings remain correctly classified as pre-existing, while malformed, mismatched, or
+unbound companion outputs remain new delivery blockers. The aggregate decision fails when any
+constituent verification fails and otherwise preserves `passedWithPreExistingFindings` or
+`notEvaluated` semantics from the selected verification mode.
+
 ## Atomic directory publication
 
 `DeliveryBundleDirectoryPublisher.Publish` only targets a new absolute directory. It creates a
@@ -84,9 +107,9 @@ last, rereads and verifies the staged bytes, checks the stage again immediately 
 renames the directory as the single commit point. Any failure removes only the owned stage. It
 never replaces an existing target or returns a misleading partial directory.
 
-Callers that explicitly need failure diagnostics can request an incomplete in-memory bundle. That
-choice does not weaken directory publication: incomplete and failed bundles are not published as a
-successful delivery.
+Callers that explicitly need failure diagnostics can request an incomplete in-memory bundle.
+Directory publication rejects incomplete and failed manifests by default; a separate explicit
+diagnostic-publication option can retain them without representing them as a successful delivery.
 
 ## Surfaces
 
@@ -97,6 +120,7 @@ the same service with a named baseline and the current session, returning canoni
 and bounded base64 artifacts. Neither transport fabricates receipt history or render capability it
 does not possess.
 
-End-to-end coverage requests every schema-v1 artifact, publishes a fresh directory, reopens every
-file independently, and verifies the canonical manifest. Its HTML/PDF/PageMap/report outputs use a
-clearly identified deterministic test renderer while production rendering is gated by #434.
+End-to-end coverage requests every schema-v1 artifact, drives the production #434 host in real
+Chromium, publishes a fresh directory, reopens every file independently, verifies source bindings
+and the canonical manifest, and retains an HTML evidence index plus checksums even when an
+assertion fails. Fast unit coverage also uses a clearly identified deterministic test renderer.

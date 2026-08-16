@@ -62,7 +62,11 @@ internal static class DeliveryTool
 
         try
         {
-            var bundle = new DeliveryBundleService()
+            var rendererOptions = DocxodusExportHostRendererOptions.FromEnvironment();
+            var renderer = rendererOptions is null
+                ? null
+                : new DocxodusExportHostRenderer(rendererOptions);
+            var bundle = new DeliveryBundleService(renderer)
                 .BuildAsync(request, options)
                 .AsTask()
                 .GetAwaiter()
@@ -72,6 +76,11 @@ internal static class DeliveryTool
         catch (DeliveryBundleException ex)
         {
             throw new McpToolException($"{ex.Code}: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException
+                                   or IOException or UnauthorizedAccessException)
+        {
+            throw new McpToolException($"delivery_configuration_failed: {ex.Message}");
         }
     }
 
@@ -117,6 +126,7 @@ internal static class DeliveryTool
             writer.WriteStartObject();
             writer.WriteString("status", Name(bundle.Manifest.Payload.Status));
             writer.WriteBoolean("verified", bundle.Verification.IsValid);
+            writer.WriteBoolean("manifestVerified", bundle.Verification.IsValid);
             writer.WritePropertyName("manifest");
             using (var manifest = JsonDocument.Parse(bundle.ManifestBytes))
                 manifest.RootElement.WriteTo(writer);

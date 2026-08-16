@@ -165,15 +165,47 @@ public sealed class DeliveryRenderResult
             null, rendererFingerprint, pageCount, pageMapBytes, renderReportBytes, diagnostics);
     }
 
-    public static DeliveryRenderResult Unavailable(string mediaType, string reason)
+    /// <summary>
+    /// A failed renderer's durable render-report artifact. Failed reports are useful evidence even
+    /// when no layout artifact or renderer fingerprint was produced.
+    /// </summary>
+    public static DeliveryRenderResult FailedReport(
+        ReadOnlySpan<byte> reportBytes,
+        string? rendererFingerprint = null,
+        IEnumerable<DeliverableRenderDiagnostic>? diagnostics = null)
+    {
+        if (reportBytes.IsEmpty)
+            throw new ArgumentException("Failed render-report bytes are required.", nameof(reportBytes));
+        if (rendererFingerprint is not null && string.IsNullOrWhiteSpace(rendererFingerprint))
+            throw new ArgumentException("A renderer fingerprint cannot be blank.", nameof(rendererFingerprint));
+        return new DeliveryRenderResult(
+            DeliveryArtifactAvailability.Available,
+            reportBytes,
+            "application/vnd.docxodus.render-report+json",
+            null,
+            rendererFingerprint,
+            null,
+            ReadOnlySpan<byte>.Empty,
+            reportBytes,
+            diagnostics);
+    }
+
+    public static DeliveryRenderResult Unavailable(
+        string mediaType,
+        string reason,
+        string? rendererFingerprint = null,
+        ReadOnlySpan<byte> renderReportBytes = default,
+        IEnumerable<DeliverableRenderDiagnostic>? diagnostics = null)
     {
         if (string.IsNullOrWhiteSpace(mediaType))
             throw new ArgumentException("A rendered artifact media type is required.", nameof(mediaType));
         if (string.IsNullOrWhiteSpace(reason))
             throw new ArgumentException("An unavailability reason is required.", nameof(reason));
+        if (rendererFingerprint is not null && string.IsNullOrWhiteSpace(rendererFingerprint))
+            throw new ArgumentException("A renderer fingerprint cannot be blank.", nameof(rendererFingerprint));
         return new DeliveryRenderResult(DeliveryArtifactAvailability.Unavailable,
-            ReadOnlySpan<byte>.Empty, mediaType, reason, null, null,
-            ReadOnlySpan<byte>.Empty, ReadOnlySpan<byte>.Empty, null);
+            ReadOnlySpan<byte>.Empty, mediaType, reason, rendererFingerprint, null,
+            ReadOnlySpan<byte>.Empty, renderReportBytes, diagnostics);
     }
 
     internal byte[]? CopyBytes() => _bytes?.ToArray();
@@ -188,5 +220,17 @@ public interface IDeliveryArtifactRenderer
 
     ValueTask<DeliveryRenderResult> RenderAsync(
         DeliveryRenderRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Bundle-level renderer boundary for adapters that materialize several coherent artifacts from
+/// one exact source/profile render. Results are keyed by the caller-owned artifact ID. The
+/// returned key set must match the request key set exactly.
+/// </summary>
+public interface IDeliveryArtifactBatchRenderer : IDeliveryArtifactRenderer
+{
+    ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
+        IReadOnlyList<DeliveryRenderRequest> requests,
         CancellationToken cancellationToken = default);
 }

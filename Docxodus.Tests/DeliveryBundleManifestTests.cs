@@ -35,7 +35,21 @@ public class DeliveryBundleManifestTests
         {
             DeliveryBundleArtifactInput.Unavailable(
                 "review-pdf", DeliveryArtifactKind.ReviewPdf, "review.pdf",
-                "application/pdf", "renderer capability is unavailable"),
+                "application/pdf", "renderer capability is unavailable",
+                renderMetadata: new DeliveryArtifactRenderMetadataInput
+                {
+                    ReviewProfile = DeliveryReviewProfile.Markup,
+                    CommentProfile = DeliveryCommentProfile.Margin,
+                    SourceDocumentName = "review",
+                    SourceDocumentVersion = final.DocumentVersion,
+                    SourcePackageDigest = PackageManifestGenerator.Generate(final.Bytes)
+                        .RawPackageBytesDigest,
+                }),
+            DeliveryBundleArtifactInput.Available(
+                "review-docx", DeliveryArtifactKind.ReviewDocx, "documents/review.docx",
+                DocxMediaType, final.Bytes,
+                isImplicit: true,
+                implicitRequiredness: DeliveryArtifactRequiredness.Required),
             DeliveryBundleArtifactInput.Available(
                 "final-docx", DeliveryArtifactKind.FinalDocx, "documents\\final.docx",
                 DocxMediaType, finalArtifactBytes,
@@ -47,6 +61,13 @@ public class DeliveryBundleManifestTests
         };
         var relationships = new[]
         {
+            new DeliveryArtifactRelationship
+            {
+                RelationshipId = "review-pdf-rendered-from-review",
+                Kind = DeliveryArtifactRelationshipKind.RenderedFrom,
+                FromArtifactId = "review-pdf",
+                ToArtifactId = "review-docx",
+            },
             new DeliveryArtifactRelationship
             {
                 RelationshipId = "validation-validates-final",
@@ -78,16 +99,36 @@ public class DeliveryBundleManifestTests
         Assert.Equal(DeliveryArtifactRequiredness.Optional, review.Requiredness);
         Assert.Equal(DeliveryReviewProfile.Markup, review.Render?.ReviewProfile);
         Assert.Equal(DeliveryCommentProfile.Margin, review.Render?.CommentProfile);
+        Assert.Equal("review", review.Render?.SourceDocumentName);
+        Assert.Equal(final.DocumentVersion, review.Render?.SourceDocumentVersion);
+        Assert.Equal(PackageManifestGenerator.Generate(final.Bytes).RawPackageBytesDigest,
+            review.Render?.SourcePackageDigest);
         Assert.Equal(first.ManifestDigest, second.ManifestDigest);
         Assert.Equal(first.ToJson(), second.ToJson());
 
         var bytes = new Dictionary<string, byte[]>
         {
             ["final-docx"] = finalArtifactBytes,
+            ["review-docx"] = final.Bytes,
             ["validation"] = validationBytes,
         };
         Assert.True(DeliveryBundleVerifier.Verify(first, bytes).IsValid);
         Assert.True(DeliveryBundleVerifier.VerifyJson(first.ToJsonBytes(indented: true), bytes).IsValid);
+
+        var forgedRender = review with
+        {
+            Render = review.Render! with
+            {
+                SourceDocumentVersion = review.Render.SourceDocumentVersion + 1,
+            },
+        };
+        var forged = DeliveryBundleManifest.FromPayload(first.Payload with
+        {
+            Artifacts = first.Payload.Artifacts.Select(artifact =>
+                artifact.ArtifactId == review.ArtifactId ? forgedRender : artifact).ToArray(),
+        });
+        Assert.Contains("render_source_version_mismatch:review-pdf",
+            DeliveryBundleVerifier.Verify(forged, bytes).Findings);
     }
 
     [Fact]
@@ -132,6 +173,10 @@ public class DeliveryBundleManifestTests
                     {
                         ReviewProfile = DeliveryReviewProfile.Final,
                         CommentProfile = DeliveryCommentProfile.Inline,
+                        SourceDocumentName = snapshots.Final.Name,
+                        SourceDocumentVersion = snapshots.Final.DocumentVersion,
+                        SourcePackageDigest = PackageManifestGenerator.Generate(
+                            snapshots.Final.Bytes).RawPackageBytesDigest,
                         RendererFingerprint = "renderer-v1",
                         PageCount = 1,
                     }),
@@ -250,6 +295,37 @@ public class DeliveryBundleManifestTests
         Assert.Equal(CamelNames<DeliveryRevisionPolicy>(),
             definitions.GetProperty("revisionDisposition").GetProperty("enum")
                 .EnumerateArray().Select(value => value.GetString()));
+        var renderRequired = definitions.GetProperty("renderMetadata").GetProperty("required")
+            .EnumerateArray().Select(value => value.GetString()).ToArray();
+        Assert.Contains("sourceDocumentName", renderRequired);
+        Assert.Contains("sourceDocumentVersion", renderRequired);
+        Assert.Contains("sourcePackageDigest", renderRequired);
+    }
+
+    [Fact]
+    public void DBM007_PublishedValidationSchemaTracksAggregateDecisionVocabulary()
+    {
+        var schemaPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../docs/schemas/delivery-bundle-validation-v1.schema.json"));
+        using var schema = JsonDocument.Parse(File.ReadAllBytes(schemaPath));
+        var root = schema.RootElement;
+
+        Assert.Equal("https://json-schema.org/draft/2020-12/schema",
+            root.GetProperty("$schema").GetString());
+        Assert.Equal(DeliveryBundleValidationReport.SchemaId,
+            root.GetProperty("$id").GetString());
+        Assert.Equal(CamelNames<DeliverableVerificationDecision>(),
+            root.GetProperty("properties").GetProperty("decision").GetProperty("enum")
+                .EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(CamelNames<DeliveryReviewProfile>(),
+            root.GetProperty("$defs").GetProperty("renderCohort")
+                .GetProperty("properties").GetProperty("reviewProfile")
+                .GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(CamelNames<DeliveryCommentProfile>(),
+            root.GetProperty("$defs").GetProperty("renderCohort")
+                .GetProperty("properties").GetProperty("commentProfile")
+                .GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
     }
 
     private static DeliveryBundleManifest MinimalManifest(

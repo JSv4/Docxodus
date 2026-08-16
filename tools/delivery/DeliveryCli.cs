@@ -26,22 +26,20 @@ internal static class DeliveryCli
         try
         {
             var parsed = Parse(args);
-            if (!File.Exists(parsed.BaselinePath))
-                throw new CliUsageException($"Baseline file not found: {parsed.BaselinePath}");
-            if (!File.Exists(parsed.WorkingPath))
-                throw new CliUsageException($"Working file not found: {parsed.WorkingPath}");
+            var baselineBytes = await ReadStableInputAsync(
+                parsed.BaselinePath, "Baseline", cancellationToken).ConfigureAwait(false);
+            var workingBytes = await ReadStableInputAsync(
+                parsed.WorkingPath, "Working", cancellationToken).ConfigureAwait(false);
 
             var request = new DeliveryBundleBuildRequest(
                 new DeliveryDocumentSnapshot(
                     "baseline:" + Path.GetFileName(parsed.BaselinePath),
                     parsed.BaselineVersion,
-                    await File.ReadAllBytesAsync(parsed.BaselinePath, cancellationToken)
-                        .ConfigureAwait(false)),
+                    baselineBytes),
                 new DeliveryDocumentSnapshot(
                     "working:" + Path.GetFileName(parsed.WorkingPath),
                     parsed.WorkingVersion,
-                    await File.ReadAllBytesAsync(parsed.WorkingPath, cancellationToken)
-                        .ConfigureAwait(false)),
+                    workingBytes),
                 parsed.FinalName,
                 parsed.FinalVersion,
                 new DeliveryBundleRevisionPolicy
@@ -50,7 +48,8 @@ internal static class DeliveryCli
                     GeneratedRevisions = parsed.GeneratedPolicy,
                 },
                 parsed.Artifacts);
-            var bundle = await new DeliveryBundleService().BuildAsync(
+            var renderer = CreateRenderer(parsed);
+            var bundle = await new DeliveryBundleService(renderer).BuildAsync(
                 request,
                 new DeliveryBundleBuildOptions
                 {
@@ -59,11 +58,17 @@ internal static class DeliveryCli
                 },
                 cancellationToken).ConfigureAwait(false);
             var published = DeliveryBundleDirectoryPublisher.Publish(
-                bundle, parsed.OutputDirectory);
+                bundle,
+                parsed.OutputDirectory,
+                publicationOptions: new DeliveryBundleDirectoryPublicationOptions
+                {
+                    AllowDiagnosticBundle = parsed.ReturnIncomplete,
+                });
             await output.WriteLineAsync(JsonSerializer.Serialize(new
             {
                 status = Name(bundle.Manifest.Payload.Status),
                 verified = bundle.Verification.IsValid,
+                manifestVerified = bundle.Verification.IsValid,
                 outputDirectory = published,
                 manifestPath = Path.Combine(published, DeliveryBundle.ManifestFileName),
                 manifestDigest = bundle.Manifest.ManifestDigest.Value,
@@ -82,7 +87,8 @@ internal static class DeliveryCli
             return 1;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException
-                                   or ArgumentException or UnauthorizedAccessException)
+                                   or ArgumentException or InvalidOperationException
+                                   or UnauthorizedAccessException)
         {
             await error.WriteLineAsync($"delivery_failed: {ex.Message}").ConfigureAwait(false);
             return 1;
@@ -99,6 +105,13 @@ internal static class DeliveryCli
         long? workingVersion = null;
         long? finalVersion = null;
         string? finalName = null;
+        string? nodeExecutable = null;
+        string? exportHost = null;
+        string? chromiumExecutable = null;
+        int? renderTimeoutMilliseconds = null;
+        DeliveryUnsupportedContentPolicy unsupportedContent =
+            DeliveryUnsupportedContentPolicy.Warn;
+        bool strictFonts = false;
         bool returnIncomplete = false;
         bool failOnValidation = true;
 
@@ -129,6 +142,25 @@ internal static class DeliveryCli
                     "--final-version");
             else if (Value(argument, "--final-name=") is { } finalNameValue)
                 finalName = One(finalName, NonBlank(finalNameValue, "--final-name"), "--final-name");
+            else if (Value(argument, "--node-executable=") is { } nodeValue)
+                nodeExecutable = One(nodeExecutable,
+                    NonBlank(nodeValue, "--node-executable"), "--node-executable");
+            else if (Value(argument, "--export-host=") is { } hostValue)
+                exportHost = One(exportHost,
+                    NonBlank(hostValue, "--export-host"), "--export-host");
+            else if (Value(argument, "--chromium-executable=") is { } chromiumValue)
+                chromiumExecutable = One(chromiumExecutable,
+                    NonBlank(chromiumValue, "--chromium-executable"), "--chromium-executable");
+            else if (Value(argument, "--render-timeout=") is { } timeoutValue)
+                renderTimeoutMilliseconds = One(
+                    renderTimeoutMilliseconds,
+                    PositiveInt(timeoutValue, "--render-timeout", maximum: 600_000),
+                    "--render-timeout");
+            else if (Value(argument, "--unsupported-content=") is { } unsupportedValue)
+                unsupportedContent = EnumValue<DeliveryUnsupportedContentPolicy>(
+                    unsupportedValue, "unsupported-content policy");
+            else if (argument == "--strict-fonts")
+                strictFonts = true;
             else if (argument == "--return-incomplete")
                 returnIncomplete = true;
             else if (argument == "--allow-validation-failure")
@@ -153,7 +185,7 @@ internal static class DeliveryCli
         return new ParsedRequest(
             positional[0],
             positional[1],
-            positional[2],
+            Path.GetFullPath(positional[2]),
             baselineVersion.Value,
             workingVersion ?? finalVersion.Value,
             finalVersion.Value,
@@ -162,7 +194,13 @@ internal static class DeliveryCli
             generated.Value,
             artifacts,
             returnIncomplete,
-            failOnValidation);
+            failOnValidation,
+            nodeExecutable,
+            exportHost,
+            chromiumExecutable,
+            renderTimeoutMilliseconds ?? 120_000,
+            unsupportedContent,
+            strictFonts);
     }
 
     private static DeliveryArtifactRequest ParseArtifact(string value)
@@ -216,6 +254,12 @@ internal static class DeliveryCli
             ? number
             : throw new CliUsageException($"Option {option} requires a non-negative integer.");
 
+    private static int PositiveInt(string value, string option, int maximum) =>
+        int.TryParse(value, out var number) && number > 0 && number <= maximum
+            ? number
+            : throw new CliUsageException(
+                $"Option {option} requires an integer from 1 through {maximum}.");
+
     private static string NonBlank(string value, string name) =>
         !string.IsNullOrWhiteSpace(value)
             ? value
@@ -257,10 +301,17 @@ internal static class DeliveryCli
           --return-incomplete          Return an explicitly incomplete bundle when a required
                                        adapter-backed artifact is unavailable.
           --allow-validation-failure   Record comprehensive validation without failing delivery.
+          --node-executable=PATH       Absolute Node.js executable for @docxodus/export.
+          --export-host=PATH           Absolute path to the built framed host script.
+          --chromium-executable=PATH   Optional explicit Chromium executable.
+          --render-timeout=MS          Per-render deadline, from 1 through 600000.
+          --unsupported-content=MODE   warn or strict (default: warn).
+          --strict-fonts               Fail unless the export runtime proves exact font identity.
 
         Render profiles are final, original, or markup; comment profiles are hidden, inline,
-        endnotes, or margin. HTML/PDF rendering requires an adapter from epic #434. Change-receipt
-        output requires authoritative transaction evidence through the programmatic API.
+        endnotes, or margin. Configure HTML/PDF rendering with the explicit options above or the
+        DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH process environment variables.
+        Change-receipt output requires authoritative transaction evidence through the programmatic API.
 
         Example:
           docxodus-deliver baseline.docx working.docx delivery \
@@ -283,7 +334,81 @@ internal static class DeliveryCli
         DeliveryRevisionPolicy GeneratedPolicy,
         IReadOnlyList<DeliveryArtifactRequest> Artifacts,
         bool ReturnIncomplete,
-        bool FailOnValidationFailure);
+        bool FailOnValidationFailure,
+        string? NodeExecutablePath,
+        string? ExportHostPath,
+        string? ChromiumExecutablePath,
+        int RenderTimeoutMilliseconds,
+        DeliveryUnsupportedContentPolicy UnsupportedContent,
+        bool StrictFonts);
+
+    private static IDeliveryArtifactRenderer? CreateRenderer(ParsedRequest request)
+    {
+        var environment = request.NodeExecutablePath is null || request.ExportHostPath is null
+            ? DocxodusExportHostRendererOptions.FromEnvironment()
+            : null;
+        var node = request.NodeExecutablePath ?? environment?.NodeExecutablePath;
+        var host = request.ExportHostPath ?? environment?.HostScriptPath;
+        if (node is null && host is null && request.ChromiumExecutablePath is null)
+            return null;
+        if (node is null || host is null)
+            throw new CliUsageException(
+                "Rendering requires both --node-executable and --export-host (or their environment variables).");
+        var chromium = request.ChromiumExecutablePath
+            ?? environment?.ChromiumExecutablePath
+            ?? Environment.GetEnvironmentVariable(
+                DocxodusExportHostRendererOptions.ChromiumPathEnvironmentVariable);
+        return new DocxodusExportHostRenderer(new DocxodusExportHostRendererOptions
+        {
+            NodeExecutablePath = Path.GetFullPath(node),
+            HostScriptPath = Path.GetFullPath(host),
+            ChromiumExecutablePath = chromium is null ? null : Path.GetFullPath(chromium),
+            RenderTimeout = TimeSpan.FromMilliseconds(request.RenderTimeoutMilliseconds),
+            UnsupportedContent = request.UnsupportedContent,
+            StrictFonts = request.StrictFonts,
+        });
+    }
+
+    private static async Task<byte[]> ReadStableInputAsync(
+        string path,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = new FileStream(path, new FileStreamOptions
+            {
+                Mode = FileMode.Open,
+                Access = FileAccess.Read,
+                Share = FileShare.Read,
+                BufferSize = 64 * 1024,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+            });
+            if (stream.Length > int.MaxValue)
+                throw new IOException($"{label} file exceeds the supported snapshot size: {path}");
+
+            var length = checked((int)stream.Length);
+            var first = new byte[length];
+            await stream.ReadExactlyAsync(first, cancellationToken).ConfigureAwait(false);
+            if (await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0)
+                throw new IOException($"{label} file changed while it was being snapshotted: {path}");
+
+            stream.Position = 0;
+            var second = new byte[length];
+            await stream.ReadExactlyAsync(second, cancellationToken).ConfigureAwait(false);
+            if (stream.Length != length || !first.AsSpan().SequenceEqual(second))
+                throw new IOException($"{label} file changed while it was being snapshotted: {path}");
+            return second;
+        }
+        catch (FileNotFoundException)
+        {
+            throw new CliUsageException($"{label} file not found: {path}");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new CliUsageException($"{label} file not found: {path}");
+        }
+    }
 
     private sealed class CliUsageException : Exception
     {

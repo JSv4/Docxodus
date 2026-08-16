@@ -71,7 +71,7 @@ public sealed class DeliveryBundleService
             request.Working,
             final,
             request.RevisionPolicy,
-            requested);
+            plans.Where(plan => !plan.IsImplicit).Select(plan => plan.Request));
 
         var baselineManifest = PackageManifestGenerator.Generate(
             request.Baseline.CopyBytes(), options.PackageManifestOptions);
@@ -103,46 +103,103 @@ public sealed class DeliveryBundleService
                 packageDelta);
         }
 
-        foreach (var plan in plans.Where(plan =>
-                     DeliveryBundleManifest.IsProfiledRenderKind(plan.Request.Kind)))
+        var rendered = await RenderAllAsync(
+            plans.Where(plan => DeliveryBundleManifest.IsProfiledRenderKind(plan.Request.Kind)),
+            policyBaseline,
+            final,
+            review,
+            options.PackageManifestOptions,
+            cancellationToken).ConfigureAwait(false);
+        foreach (var state in rendered)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var source = RenderSource(plan.Request.ReviewProfile!.Value,
-                policyBaseline, final, review);
-            var state = await RenderAsync(
-                plan,
-                source,
-                options.PackageManifestOptions,
-                cancellationToken).ConfigureAwait(false);
-            outputs.Add(plan.Request.ArtifactId, state.Output);
+            outputs.Add(state.Plan.Request.ArtifactId, state.Output);
             renderStates.Add(state);
         }
 
         foreach (var plan in plans.Where(plan =>
                      plan.Request.Kind == DeliveryArtifactKind.ValidationReport))
         {
-            var companions = renderStates
-                .Where(state => state.Plan.Request.ReviewProfile == DeliveryReviewProfile.Final)
-                .Select(ToDeliverableCompanion)
-                .ToArray();
-            var report = DeliverableVerifier.VerifyDeliverable(
+            var verificationOptions = options.DeliverableVerificationOptions with
+            {
+                PackageManifestOptions = options.PackageManifestOptions,
+            };
+            var finalReport = DeliverableVerifier.VerifyDeliverable(
                 new DeliverableVerificationRequest
                 {
                     BaselineBytes = request.Baseline.CopyBytes(),
                     DeliverableBytes = final.CopyBytes(),
                     ExpectedSemanticChanges = semantic,
-                    CompanionArtifacts = companions,
                 },
-                options.DeliverableVerificationOptions with
+                verificationOptions);
+            var cohortReports = renderStates
+                .GroupBy(state => new RenderProfileKey(
+                    state.Plan.Request.ReviewProfile!.Value,
+                    state.Plan.Request.CommentProfile!.Value))
+                .OrderBy(group => group.Key.ReviewProfile)
+                .ThenBy(group => group.Key.CommentProfile)
+                .Select(group =>
                 {
-                    PackageManifestOptions = options.PackageManifestOptions,
-                });
+                    var source = RenderSource(
+                        group.Key.ReviewProfile, policyBaseline, final, review);
+                    var sourceBytes = source.CopyBytes();
+                    return new DeliveryRenderCohortValidation
+                    {
+                        ReviewProfile = group.Key.ReviewProfile,
+                        CommentProfile = group.Key.CommentProfile,
+                        SourceDocument = new DeliveryBundleDocumentIdentity
+                        {
+                            Name = source.Name,
+                            DocumentVersion = source.DocumentVersion,
+                            ByteLength = sourceBytes.LongLength,
+                            Digest = DeliveryBundleCanonicalJson.Digest(sourceBytes),
+                        },
+                        Verification = DeliverableVerifier.VerifyDeliverable(
+                            new DeliverableVerificationRequest
+                            {
+                                BaselineBytes = sourceBytes,
+                                DeliverableBytes = sourceBytes,
+                                CompanionArtifacts = group.Select(ToDeliverableCompanion).ToArray(),
+                            },
+                            verificationOptions),
+                    };
+                })
+                .ToArray();
+            var report = new DeliveryBundleValidationReport
+            {
+                Decision = CombineVerificationDecisions(
+                    new[] { finalReport.Decision }.Concat(
+                        cohortReports.Select(cohort => cohort.Verification.Decision))),
+                FinalDeliverable = finalReport,
+                RenderCohorts = cohortReports,
+            };
             if (options.FailOnDeliverableValidationFailure
                 && report.Decision == DeliverableVerificationDecision.Failed)
             {
+                var failures = finalReport.Decision == DeliverableVerificationDecision.Failed
+                    ? new[]
+                    {
+                        "final:" + string.Join(",", finalReport.Findings
+                            .Where(finding => finding.BlocksDelivery)
+                            .Select(finding => finding.Code)
+                            .Distinct(StringComparer.Ordinal)
+                            .OrderBy(code => code, StringComparer.Ordinal)),
+                    }
+                    : Array.Empty<string>();
+                failures = failures.Concat(cohortReports
+                        .Where(cohort => cohort.Verification.Decision
+                            == DeliverableVerificationDecision.Failed)
+                        .Select(cohort =>
+                            $"{Kebab(cohort.ReviewProfile)}/{Kebab(cohort.CommentProfile)}:"
+                            + string.Join(",", cohort.Verification.Findings
+                                .Where(finding => finding.BlocksDelivery)
+                                .Select(finding => finding.Code)
+                                .Distinct(StringComparer.Ordinal)
+                                .OrderBy(code => code, StringComparer.Ordinal))))
+                    .ToArray();
                 throw new DeliveryBundleException(
                     "deliverable_validation_failed",
-                    "The final DOCX failed the selected deliverable-verification policy.");
+                    "The bundle failed the selected deliverable-verification policy: "
+                    + string.Join("; ", failures));
             }
             outputs.Add(plan.Request.ArtifactId,
                 Available(plan, report.ToCanonicalUtf8Bytes()));
@@ -172,6 +229,21 @@ public sealed class DeliveryBundleService
             outputs.Values,
             relationships,
             limits: options.BundleVerificationLimits);
+    }
+
+    private static DeliverableVerificationDecision CombineVerificationDecisions(
+        IEnumerable<DeliverableVerificationDecision> decisions)
+    {
+        var materialized = decisions.ToArray();
+        if (materialized.Any(decision => decision == DeliverableVerificationDecision.Failed))
+            return DeliverableVerificationDecision.Failed;
+        if (materialized.Any(decision =>
+                decision == DeliverableVerificationDecision.NotEvaluated))
+            return DeliverableVerificationDecision.NotEvaluated;
+        return materialized.Any(decision =>
+                decision == DeliverableVerificationDecision.PassedWithPreExistingFindings)
+            ? DeliverableVerificationDecision.PassedWithPreExistingFindings
+            : DeliverableVerificationDecision.Passed;
     }
 
     private static void AddCoreArtifact(
@@ -209,54 +281,111 @@ public sealed class DeliveryBundleService
         outputs.Add(plan.Request.ArtifactId, Available(plan, bytes));
     }
 
-    private async ValueTask<RenderState> RenderAsync(
-        ArtifactPlan plan,
-        DeliveryDocumentSnapshot source,
+    private async ValueTask<IReadOnlyList<RenderState>> RenderAllAsync(
+        IEnumerable<ArtifactPlan> renderPlans,
+        DeliveryDocumentSnapshot policyBaseline,
+        DeliveryDocumentSnapshot final,
+        DeliveryDocumentSnapshot? review,
         PackageManifestOptions packageManifestOptions,
         CancellationToken cancellationToken)
     {
-        var request = plan.Request;
-        var reviewProfile = request.ReviewProfile!.Value;
-        var commentProfile = request.CommentProfile!.Value;
-        var sourceDigest = PackageManifestGenerator.Generate(
-                source.CopyBytes(), packageManifestOptions)
-            .RawPackageBytesDigest;
-        if (_renderer is null)
+        var plans = renderPlans.ToArray();
+        var states = new Dictionary<string, RenderState>(StringComparer.Ordinal);
+        var jobs = new List<RenderJob>();
+        foreach (var plan in plans)
         {
-            return new RenderState(plan, Unavailable(plan,
-                "No delivery renderer was supplied."), sourceDigest, null);
-        }
-        if (!_renderer.Capabilities.Supports(
-                request.Kind, reviewProfile, commentProfile))
-        {
-            return new RenderState(plan, Unavailable(plan,
-                $"Renderer '{_renderer.Capabilities.RendererId}' does not advertise this artifact/profile combination."),
-                sourceDigest, null);
-        }
-
-        DeliveryRenderResult result;
-        try
-        {
-            result = await _renderer.RenderAsync(
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = plan.Request;
+            var reviewProfile = request.ReviewProfile!.Value;
+            var commentProfile = request.CommentProfile!.Value;
+            var source = RenderSource(reviewProfile, policyBaseline, final, review);
+            var sourceDigest = PackageManifestGenerator.Generate(
+                    source.CopyBytes(), packageManifestOptions)
+                .RawPackageBytesDigest;
+            var job = new RenderJob(
+                plan,
                 new DeliveryRenderRequest(
                     request.ArtifactId,
                     request.Kind,
                     reviewProfile,
                     commentProfile,
                     source),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new RenderState(plan, Unavailable(plan,
-                $"Renderer failed with {ex.GetType().Name}."), sourceDigest, null);
+                sourceDigest);
+            if (_renderer is null)
+            {
+                states.Add(request.ArtifactId, new RenderState(plan, UnavailableRender(job,
+                    "No delivery renderer was supplied."), sourceDigest, null));
+                continue;
+            }
+            if (!_renderer.Capabilities.Supports(
+                    request.Kind, reviewProfile, commentProfile))
+            {
+                states.Add(request.ArtifactId, new RenderState(plan, UnavailableRender(job,
+                    $"Renderer '{_renderer.Capabilities.RendererId}' does not advertise this artifact/profile combination."),
+                    sourceDigest, null));
+                continue;
+            }
+            jobs.Add(job);
         }
 
-        ArgumentNullException.ThrowIfNull(result);
+        if (jobs.Count != 0 && _renderer is IDeliveryArtifactBatchRenderer batchRenderer)
+        {
+            try
+            {
+                var results = await batchRenderer.RenderBatchAsync(
+                    jobs.Select(job => job.Request).ToArray(), cancellationToken)
+                    .ConfigureAwait(false);
+                ArgumentNullException.ThrowIfNull(results);
+                var expectedIds = jobs.Select(job => job.Request.ArtifactId)
+                    .ToHashSet(StringComparer.Ordinal);
+                if (!expectedIds.SetEquals(results.Keys)
+                    || results.Any(pair => pair.Value is null))
+                    throw new InvalidDataException(
+                        "The renderer batch result does not match the requested artifact IDs.");
+                foreach (var job in jobs)
+                    states.Add(job.Request.ArtifactId,
+                        RenderStateFromResult(job, results[job.Request.ArtifactId]));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                foreach (var job in jobs)
+                    states.Add(job.Request.ArtifactId, RendererFailure(job, ex));
+            }
+        }
+        else
+        {
+            foreach (var job in jobs)
+            {
+                try
+                {
+                    var result = await _renderer!.RenderAsync(job.Request, cancellationToken)
+                        .ConfigureAwait(false);
+                    states.Add(job.Request.ArtifactId,
+                        RenderStateFromResult(job, result
+                            ?? throw new InvalidDataException("Renderer returned a null result.")));
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    states.Add(job.Request.ArtifactId, RendererFailure(job, ex));
+                }
+            }
+        }
+
+        return plans.Select(plan => states[plan.Request.ArtifactId]).ToArray();
+    }
+
+    private static RenderState RenderStateFromResult(RenderJob job, DeliveryRenderResult result)
+    {
+        var plan = job.Plan;
+        var request = job.Request;
         if (result.Availability == DeliveryArtifactAvailability.Unavailable)
         {
             return new RenderState(plan, DeliveryBundleArtifactInput.Unavailable(
@@ -266,8 +395,9 @@ public sealed class DeliveryBundleService
                 result.MediaType,
                 result.UnavailableReason ?? "Renderer did not produce artifact bytes.",
                 plan.IsImplicit,
-                request.Requiredness),
-                sourceDigest,
+                plan.Request.Requiredness,
+                RenderMetadata(job, result)),
+                job.SourceDigest,
                 result);
         }
         return new RenderState(plan, DeliveryBundleArtifactInput.Available(
@@ -278,18 +408,39 @@ public sealed class DeliveryBundleService
             result.CopyBytes() ?? throw new InvalidDataException(
                 "An available renderer result has no bytes."),
             plan.IsImplicit,
-            request.Requiredness,
-            new DeliveryArtifactRenderMetadataInput
-            {
-                ReviewProfile = reviewProfile,
-                CommentProfile = commentProfile,
-                RendererFingerprint = result.RendererFingerprint,
-                PageCount = result.PageCount,
-                Warnings = result.Diagnostics.Select(value => value.Message).ToArray(),
-            }),
-            sourceDigest,
+            plan.Request.Requiredness,
+            RenderMetadata(job, result)),
+            job.SourceDigest,
             result);
     }
+
+    private static RenderState RendererFailure(RenderJob job, Exception exception) => new(
+        job.Plan,
+        UnavailableRender(job,
+            RendererFailureReason(exception)),
+        job.SourceDigest,
+        null);
+
+    private static string RendererFailureReason(Exception exception)
+    {
+        var reason = $"Renderer failed with {exception.GetType().Name}: {exception.Message}";
+        return reason.Length <= 4096 ? reason : reason[..4096];
+    }
+
+    private static DeliveryArtifactRenderMetadataInput RenderMetadata(
+        RenderJob job,
+        DeliveryRenderResult? result = null) => new()
+        {
+            ReviewProfile = job.Request.ReviewProfile,
+            CommentProfile = job.Request.CommentProfile,
+            SourceDocumentName = job.Request.SourceDocumentName,
+            SourceDocumentVersion = job.Request.SourceDocumentVersion,
+            SourcePackageDigest = job.SourceDigest,
+            RendererFingerprint = result?.RendererFingerprint,
+            PageCount = result?.PageCount,
+            Warnings = result?.Diagnostics.ToArray()
+                ?? Array.Empty<DeliverableRenderDiagnostic>(),
+        };
 
     private static DeliverableCompanionArtifactInput ToDeliverableCompanion(RenderState state)
     {
@@ -439,10 +590,10 @@ public sealed class DeliveryBundleService
                 builder.AddEvidence(new DeliveryEvidenceReference
                 {
                     Kind = DeliveryEvidenceKind.ValidationResult,
-                    Schema = DeliverableVerificationResult.SchemaId,
+                    Schema = DeliveryBundleValidationReport.SchemaId,
                     Digest = DeliveryBundleCanonicalJson.Digest(validationBytes),
                     ArtifactId = validation.ArtifactId,
-                    Summary = "Final deliverable verification result.",
+                    Summary = "Bundle and render-cohort verification result.",
                 });
             }
             var proofOutput = outputs.Values.FirstOrDefault(output =>
@@ -548,6 +699,8 @@ public sealed class DeliveryBundleService
             .ToList();
         EnsureImplicit(plans, DeliveryArtifactKind.FinalDocx,
             DeliveryArtifactRequiredness.Required, "final-docx");
+        EnsureImplicit(plans, DeliveryArtifactKind.ValidationReport,
+            DeliveryArtifactRequiredness.Required, "validation-report");
         bool needsReview = plans.Any(plan =>
             plan.Request.Kind is DeliveryArtifactKind.ReviewDocx
                 or DeliveryArtifactKind.ReversibilityProof
@@ -568,6 +721,35 @@ public sealed class DeliveryBundleService
         {
             EnsureImplicit(plans, DeliveryArtifactKind.SemanticDelta,
                 DeliveryArtifactRequiredness.Required, "semantic-source-to-delivered");
+        }
+        var renderGroups = plans
+            .Where(plan => DeliveryBundleManifest.IsProfiledRenderKind(plan.Request.Kind))
+            .GroupBy(plan => new RenderProfileKey(
+                plan.Request.ReviewProfile!.Value,
+                plan.Request.CommentProfile!.Value))
+            .Select(group => new
+            {
+                group.Key,
+                Requiredness = group.Any(plan =>
+                    plan.Request.Requiredness == DeliveryArtifactRequiredness.Required)
+                    ? DeliveryArtifactRequiredness.Required
+                    : DeliveryArtifactRequiredness.Optional,
+            })
+            .ToArray();
+        foreach (var group in renderGroups)
+        {
+            EnsureProfiledImplicit(
+                plans,
+                DeliveryArtifactKind.PageMap,
+                group.Key,
+                group.Requiredness,
+                $"page-map-{Kebab(group.Key.ReviewProfile)}-{Kebab(group.Key.CommentProfile)}");
+            EnsureProfiledImplicit(
+                plans,
+                DeliveryArtifactKind.RenderReport,
+                group.Key,
+                group.Requiredness,
+                $"render-report-{Kebab(group.Key.ReviewProfile)}-{Kebab(group.Key.CommentProfile)}");
         }
         return plans;
     }
@@ -630,6 +812,42 @@ public sealed class DeliveryBundleService
         }, true));
     }
 
+    private static void EnsureProfiledImplicit(
+        List<ArtifactPlan> plans,
+        DeliveryArtifactKind kind,
+        RenderProfileKey profile,
+        DeliveryArtifactRequiredness requiredness,
+        string preferredId)
+    {
+        var existingIndex = plans.FindIndex(plan => plan.Request.Kind == kind
+            && plan.Request.ReviewProfile == profile.ReviewProfile
+            && plan.Request.CommentProfile == profile.CommentProfile);
+        if (existingIndex >= 0)
+        {
+            var existing = plans[existingIndex];
+            if (requiredness == DeliveryArtifactRequiredness.Required
+                && existing.Request.Requiredness == DeliveryArtifactRequiredness.Optional)
+            {
+                plans[existingIndex] = existing with
+                {
+                    Request = existing.Request with
+                    {
+                        Requiredness = DeliveryArtifactRequiredness.Required,
+                    },
+                };
+            }
+            return;
+        }
+        plans.Add(new ArtifactPlan(new DeliveryArtifactRequest
+        {
+            ArtifactId = ReserveId(plans.Select(value => value.Request.ArtifactId), preferredId),
+            Kind = kind,
+            Requiredness = requiredness,
+            ReviewProfile = profile.ReviewProfile,
+            CommentProfile = profile.CommentProfile,
+        }, true));
+    }
+
     private static IReadOnlyList<DeliveryArtifactRelationship> BuildRelationships(
         IReadOnlyList<ArtifactPlan> plans,
         IEnumerable<DeliveryBundleArtifactInput> outputs,
@@ -678,6 +896,14 @@ public sealed class DeliveryBundleService
             DeliveryArtifactRelationshipKind.Describes, final);
         Add(First(DeliveryArtifactKind.ValidationReport),
             DeliveryArtifactRelationshipKind.Validates, final);
+        if (plans.Any(plan =>
+                plan.Request.ReviewProfile == DeliveryReviewProfile.Original))
+            Add(First(DeliveryArtifactKind.ValidationReport),
+                DeliveryArtifactRelationshipKind.Validates, policyBaseline);
+        if (plans.Any(plan =>
+                plan.Request.ReviewProfile == DeliveryReviewProfile.Markup))
+            Add(First(DeliveryArtifactKind.ValidationReport),
+                DeliveryArtifactRelationshipKind.Validates, review);
         Add(First(DeliveryArtifactKind.ReversibilityProof),
             DeliveryArtifactRelationshipKind.Proves, review);
         Add(First(DeliveryArtifactKind.ChangeReceipt),
@@ -774,6 +1000,19 @@ public sealed class DeliveryBundleService
             plan.IsImplicit,
             plan.Request.Requiredness);
 
+    private static DeliveryBundleArtifactInput UnavailableRender(
+        RenderJob job,
+        string reason) =>
+        DeliveryBundleArtifactInput.Unavailable(
+            job.Plan.Request.ArtifactId,
+            job.Plan.Request.Kind,
+            RelativePath(job.Plan),
+            MediaType(job.Plan.Request.Kind),
+            reason,
+            job.Plan.IsImplicit,
+            job.Plan.Request.Requiredness,
+            RenderMetadata(job));
+
     private static string RelativePath(ArtifactPlan plan)
     {
         var stem = Slug(plan.Request.ArtifactId);
@@ -812,6 +1051,21 @@ public sealed class DeliveryBundleService
                 SHA256.HashData(Encoding.UTF8.GetBytes(artifactId)))
             .ToLowerInvariant()[..8];
         return $"{normalized}-{suffix}";
+    }
+
+    private static string Kebab<T>(T value)
+        where T : struct, Enum
+    {
+        var name = value.ToString();
+        var builder = new StringBuilder(name.Length + 8);
+        for (var index = 0; index < name.Length; index++)
+        {
+            var character = name[index];
+            if (index > 0 && char.IsUpper(character))
+                builder.Append('-');
+            builder.Append(char.ToLowerInvariant(character));
+        }
+        return builder.ToString();
     }
 
     private static string MediaType(DeliveryArtifactKind kind) => kind switch
@@ -877,6 +1131,15 @@ public sealed class DeliveryBundleService
     }
 
     private sealed record ArtifactPlan(DeliveryArtifactRequest Request, bool IsImplicit);
+
+    private sealed record RenderProfileKey(
+        DeliveryReviewProfile ReviewProfile,
+        DeliveryCommentProfile CommentProfile);
+
+    private sealed record RenderJob(
+        ArtifactPlan Plan,
+        DeliveryRenderRequest Request,
+        VerificationDigest SourceDigest);
 
     private sealed record RenderState(
         ArtifactPlan Plan,
