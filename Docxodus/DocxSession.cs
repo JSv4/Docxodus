@@ -4112,11 +4112,11 @@ public sealed partial class DocxSession : IDisposable
         try
         {
             var results = step.Mutation(this);
-            if (results is not { Count: > 0 } || results.Any(result => result is null))
+            if (results is null || results.Any(result => result is null))
                 return new[]
                 {
                     EditResult.Fail(EditErrorCode.InternalError,
-                        "batch mutation returned no valid edit results"),
+                        "batch mutation returned invalid edit results"),
                 };
             return results;
         }
