@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic delivery change receipts (#458).** Added a versioned, canonical JSON
+  receipt that binds source/delivered package identities to every supplied mutation transaction,
+  normalized requests, explicit undo/redo lineage, requested/derived/unexpected package-change
+  attribution, required typed semantic evidence, optional validation/reversibility evidence, and
+  independently hashed clean DOCX, review DOCX, HTML, PDF, image, and report artifacts. Exactly
+  one clean DOCX must match the delivered raw package bytes, while exact #457 canonical semantic
+  bytes cover the source-to-delivered comparison and every state-changing transaction. Privacy
+  profiles support hash-only, structural-summary, and full-evidence output. Page citations are
+  accepted only when their exact PageMap bytes project the claimed coordinates for a reachable
+  document version/package digest and match the render fingerprint and artifact. Undo/redo is
+  checked as a LIFO state machine, and any indexed package attribution may point only to a
+  successful retained operation. Failed atomic receipts retain the complete requested-operation
+  list with explicit not-executed/rolled-back status, while a genuinely successful no-op may retain
+  an empty edit-result list. Strict typed semantic reconstruction, authoritative clean-DOCX inventory
+  recomputation, portable path normalization, canonical collection-order checks, aggregate object
+  budgets, stream-charged JSON collections, and capped canonical writers fail closed under forged or
+  oversized input. The portable verifier detects receipt,
+  record, artifact, semantic, lineage, and citation-binding tampering. See
+  [`docs/architecture/delivery_change_receipt.md`](docs/architecture/delivery_change_receipt.md).
 - **Deterministic, non-mutating DOCX package manifests (#456).** Added a versioned
   verification artifact that inventories every OPC entry and content type, preserves duplicate
   occurrences, resolves every package/part relationship, reports dangling references and

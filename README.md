@@ -267,6 +267,7 @@ reading first:
 | [`semantic_diff.md`](docs/architecture/semantic_diff.md) | Stable semantic-change schema, package coverage, canonicalization, and limits |
 | [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
 | [`native_content_controls.md`](docs/architecture/native_content_controls.md) | Native Word content-control registry, fills, binding/lock safety, and transports |
+| [`delivery_change_receipt.md`](docs/architecture/delivery_change_receipt.md) | Deterministic delivery receipts, LIFO lineage, exact semantic/package artifacts, privacy, citations, and verification |
 | [`markdown_projection.md`](docs/architecture/markdown_projection.md) | The projection spec and anchor format |
 | [`docx_converter.md`](docs/architecture/docx_converter.md) | `WmlToHtmlConverter` internals |
 | [`editor_ui_surface.md`](docs/architecture/editor_ui_surface.md) | The browser editor, control by control |
