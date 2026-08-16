@@ -196,6 +196,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
                     group.Key.DocumentVersion,
                     group.Key.SourceDigest,
                     Name(group.Key.ReviewProfile),
+                    UsesProfileResolvedSource(group.Key.ReviewProfile) ? true : null,
                     Name(group.Key.CommentProfile),
                     Name(_options.UnsupportedContent),
                     _options.StrictFonts,
@@ -409,10 +410,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
             || RequiredInt64(source, "documentVersion") != group.Key.DocumentVersion
             || RequiredInt64(source, "byteLength") != first.SourceBytes.LongLength)
             throw new InvalidDataException("The failed render report is bound to different source bytes.");
-        var options = RequiredObject(report, "options");
-        if (RequiredString(options, "reviewProfile") != Name(group.Key.ReviewProfile)
-            || RequiredString(options, "commentProfile") != Name(group.Key.CommentProfile))
-            throw new InvalidDataException("The failed render report profile binding is invalid.");
+        ValidateProfileBinding(group, report, "failed render report");
         var failure = RequiredObject(report, "failure");
         foreach (var field in new[] { "code", "phase", "message", "remediation" })
         {
@@ -487,10 +485,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
             || RequiredInt64(source, "documentVersion") != group.Key.DocumentVersion
             || RequiredInt64(source, "byteLength") != first.SourceBytes.LongLength)
             throw new InvalidDataException("The render report is bound to different source bytes.");
-        var options = RequiredObject(report, "options");
-        if (RequiredString(options, "reviewProfile") != Name(group.Key.ReviewProfile)
-            || RequiredString(options, "commentProfile") != Name(group.Key.CommentProfile))
-            throw new InvalidDataException("The render report profile binding is invalid.");
+        ValidateProfileBinding(group, report, "render report");
         var environment = RequiredObject(report, "environment");
         if (!string.Equals(RequiredString(environment, "rendererFingerprint"), fingerprint,
                 StringComparison.Ordinal))
@@ -550,6 +545,30 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(
                 $"The render report {bindingName} does not match the returned bytes.");
+    }
+
+    private static void ValidateProfileBinding(
+        RenderGroup group,
+        JsonElement report,
+        string label)
+    {
+        var options = RequiredObject(report, "options");
+        if (RequiredString(options, "reviewProfile") != Name(group.Key.ReviewProfile)
+            || RequiredString(options, "commentProfile") != Name(group.Key.CommentProfile))
+            throw new InvalidDataException($"The {label} profile binding is invalid.");
+
+        var expectsResolvedSource = UsesProfileResolvedSource(group.Key.ReviewProfile);
+        var declaresResolvedSource = options.TryGetProperty(
+            "reviewProfileAlreadyApplied", out var declaration);
+        var exactSourceBindingIsValid = expectsResolvedSource
+            ? declaresResolvedSource && declaration.ValueKind == JsonValueKind.True
+            : !declaresResolvedSource;
+        if (!exactSourceBindingIsValid)
+            throw new InvalidDataException(
+                $"The {label} exact-source profile binding is invalid.");
+        if (expectsResolvedSource && report.TryGetProperty("derivedProfileSource", out _))
+            throw new InvalidDataException(
+                $"The {label} rewrote an exact profile-resolved source.");
     }
 
     private static byte[] DecodeCanonicalBase64(string value)
@@ -703,6 +722,9 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         where T : struct, Enum =>
         JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
 
+    private static bool UsesProfileResolvedSource(DeliveryReviewProfile profile) =>
+        profile is DeliveryReviewProfile.Final or DeliveryReviewProfile.Original;
+
     private sealed record RenderGroupKey(
         string SourceDocumentName,
         string SourceDigest,
@@ -793,6 +815,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         long DocumentVersion,
         string ExpectedSourceDigest,
         string ReviewProfile,
+        bool? ReviewProfileAlreadyApplied,
         string CommentProfile,
         string UnsupportedContent,
         bool StrictFonts,

@@ -60,8 +60,12 @@ flattening them into display strings.
 `DocxodusExportHostRenderer` is the production boundary to epic #434. It requires absolute Node
 and built-host paths owned by the process, launches without a shell or PATH guessing, uses one
 length-framed request/response envelope, and renders each exact source/review/comment cohort only
-once. HTML, PDF, PageMap, and render-report results from that cohort are validated together before
-they enter the bundle. Every render cohort implicitly includes its PageMap and report sidecars;
+once. Final and original cohorts declare their policy-derived source as already profile-resolved;
+the host verifies that no tracked revision remains and preserves the exact package bytes rather
+than projecting them a second time. Markup cohorts omit that declaration. The adapter requires the
+same binding in successful and failed reports and rejects any derived-source claim for an exact
+final/original input. HTML, PDF, PageMap, and render-report results from that cohort are validated
+together before they enter the bundle. Every render cohort implicitly includes its PageMap and report sidecars;
 their requiredness follows the cohort's requested outputs. If the adapter is not configured, the
 CLI and MCP surfaces retain truthful unavailability rather than substituting the LibreOffice
 legal-evaluation harness or continuous preview HTML.
