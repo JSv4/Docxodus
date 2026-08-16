@@ -119,6 +119,26 @@ public static partial class DocxDiffBridge
     }
 
     /// <summary>
+    /// Materialize a standalone-export review profile on an isolated package.
+    /// This broader projection also resolves comment-definition and glossary
+    /// revisions; the historical diff round-trip methods above retain their
+    /// established scope.
+    /// </summary>
+    [JSExport]
+    public static byte[] ProjectReviewProfile(byte[] bytes, string profile)
+    {
+        try
+        {
+            return DocxDiffOps.ProjectReviewProfile(bytes, profile);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DocxDiff.ProjectReviewProfile error: {ex.GetType().Name}: {ex.Message}");
+            return Array.Empty<byte>();
+        }
+    }
+
+    /// <summary>
     /// Consolidate multiple reviewers' edits against a shared base DOCX and return
     /// the merged redlined DOCX as bytes (native tracked-changes markup, per-author
     /// attribution). Returns an empty array on error.

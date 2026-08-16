@@ -1338,6 +1338,8 @@ public sealed record RevisionListEntry
     required public string Type { get; init; }
     required public RevisionFamily Family { get; init; }
     required public IReadOnlyList<string> ConstituentIds { get; init; }
+    /// <summary>Distinct native WordprocessingML carrier names in lexical order.</summary>
+    required public IReadOnlyList<string> NativeElementNames { get; init; }
     required public string Author { get; init; }
     public string? Date { get; init; }
     required public string Text { get; init; }
@@ -2713,7 +2715,25 @@ public sealed partial class DocxSession : IDisposable
         ThrowIfDisposed();
         _ = AnchorIndex(); // guarantees Unids so entries can carry block anchors
 
-        var registry = BuildRevisionRegistry();
+        return ListRevisionEntries(BuildRevisionRegistry());
+    }
+
+    /// <summary>
+    /// Export preflight inventory includes every package part the explicit final/original
+    /// projector owns. It is deliberately read-only: the session mutation surface keeps its
+    /// established story scope and therefore never promises an auxiliary entry can be resolved
+    /// by <see cref="AcceptRevision"/> or <see cref="RejectRevision"/>.
+    /// </summary>
+    internal IReadOnlyList<RevisionListEntry> ListRevisionsForExportProfile()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex();
+        return ListRevisionEntries(BuildRevisionRegistry(includeExportAuxiliary: true));
+    }
+
+    private IReadOnlyList<RevisionListEntry> ListRevisionEntries(
+        Internal.RevisionRegistry registry)
+    {
         var result = new List<RevisionListEntry>(registry.Entries.Count);
         foreach (var g in registry.Entries)
         {
@@ -2724,6 +2744,10 @@ public sealed partial class DocxSession : IDisposable
                 Type = g.Type,
                 Family = g.Family,
                 ConstituentIds = Internal.RevisionOps.ConstituentIds(g),
+                NativeElementNames = g.Units.Select(unit => unit.Element.Name.LocalName)
+                    .Concat(g.RangeMarkers.Select(marker => marker.Name.LocalName))
+                    .Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal)
+                    .ToList(),
                 Author = g.Author,
                 Date = g.Date,
                 Text = Internal.RevisionOps.GroupText(g),
@@ -3009,18 +3033,20 @@ public sealed partial class DocxSession : IDisposable
         return anchors;
     }
 
-    private Internal.RevisionRegistry BuildRevisionRegistry()
+    private Internal.RevisionRegistry BuildRevisionRegistry(bool includeExportAuxiliary = false)
     {
-        var parts = RevisionStoryParts();
+        var parts = RevisionStoryParts(includeExportAuxiliary);
         return Internal.RevisionRegistry.Build(parts.Select(p =>
             new Internal.RevisionRegistry.Part(
                 p.Part.Uri.ToString(), p.Scope, p.Root)).ToList());
     }
 
     /// <summary>The story parts revision markup lives in, in the fixed order the
-    /// revision enumeration indexes them (main, headers, footers, footnotes, endnotes
-    /// — the same set RevisionProcessor's whole-document accept/reject walks).</summary>
-    private List<(OpenXmlPart Part, XElement Root, string Scope)> RevisionStoryParts()
+    /// revision enumeration indexes them (main, headers, footers, footnotes, endnotes).
+    /// Export preflight additionally inventories comments, glossary building blocks, and
+    /// styles because its final/original projector resolves those package parts too.</summary>
+    private List<(OpenXmlPart Part, XElement Root, string Scope)> RevisionStoryParts(
+        bool includeExportAuxiliary = false)
     {
         var list = new List<(OpenXmlPart, XElement, string)>();
         void Add(OpenXmlPart part, string scope)
@@ -3038,6 +3064,15 @@ public sealed partial class DocxSession : IDisposable
         foreach (var footer in main.FooterParts) Add(footer, $"ftr{index++}");
         if (main.FootnotesPart is not null) Add(main.FootnotesPart, "fn");
         if (main.EndnotesPart is not null) Add(main.EndnotesPart, "en");
+        if (includeExportAuxiliary)
+        {
+            if (main.WordprocessingCommentsPart is not null)
+                Add(main.WordprocessingCommentsPart, "cmt");
+            if (main.GlossaryDocumentPart is not null)
+                Add(main.GlossaryDocumentPart, "glossary");
+            if (main.StyleDefinitionsPart is not null)
+                Add(main.StyleDefinitionsPart, "styles");
+        }
         return list;
     }
 

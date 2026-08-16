@@ -25,6 +25,7 @@ import {
 } from "../dist/index.js";
 import { discoverFontCatalog, pathFreeCatalogManifest } from "../dist/fonts/index.js";
 import { generateFontProbeDocx, generateMixedSectionDocx } from "./mixed-section-fixture.mjs";
+import { generateReviewCommentDocx, REVIEW_TOKENS } from "./review-comment-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(here);
@@ -43,6 +44,7 @@ const loadFailureFontDirectory = join(artifacts, "load-failure-fonts");
 const emptyFontDirectory = join(artifacts, "empty-fonts");
 const ambiguousFontDirectory = join(artifacts, "ambiguous-fonts");
 const fontScenarioArtifacts = join(successArtifacts, "font-scenarios");
+const reviewProfileArtifacts = join(successArtifacts, "review-comment-profiles");
 const cliFontAttestationPath = join(artifacts, "font-license-attestations.json");
 const hostFontPolicyPath = join(artifacts, "host-font-policy.json");
 const ambiguousHostFontPolicyPath = join(artifacts, "ambiguous-host-font-policy.json");
@@ -75,6 +77,121 @@ async function captureStandaloneScreenshot(html, path) {
   } finally {
     await context.close();
   }
+}
+
+async function inspectStandaloneProfile(html, screenshotPath) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 960 } });
+  try {
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: "load" });
+    await page.evaluate(async () => { await document.fonts.ready; });
+    const inspection = await page.evaluate(() => {
+      const clean = (value) => (value ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+      const revisions = Array.from(document.querySelectorAll(
+        "ins, del, .rev-format-change, .rev-row-ins, .rev-row-del, .rev-cell-ins, .rev-cell-del, .rev-cell-merge",
+      )).map((node) => ({
+        tag: node.tagName.toLowerCase(),
+        classes: Array.from(node.classList),
+        text: clean(node.innerText),
+        author: node.dataset.author ?? null,
+        date: node.dataset.date ?? null,
+        moveId: node.dataset.moveId ?? null,
+        title: node.getAttribute("title"),
+      }));
+      const comments = Array.from(document.querySelectorAll("[data-comment-node-id]"))
+        .map((node) => ({
+          id: node.dataset.commentNodeId,
+          parentId: node.dataset.commentParentId ?? null,
+          status: node.dataset.commentStatus ?? null,
+          author: node.dataset.author ?? null,
+          date: node.dataset.date ?? null,
+          text: clean(node.innerText),
+        }));
+      return {
+        visibleText: clean(document.body.innerText),
+        revisions,
+        comments,
+        commentMarkers: document.querySelectorAll(".comment-marker").length,
+        commentHighlights: document.querySelectorAll(".comment-highlight").length,
+        inlineThreads: document.querySelectorAll(".comment-inline-thread").length,
+        endnoteSections: document.querySelectorAll(".comments-section").length,
+        marginNotes: document.querySelectorAll(".page-comment-margin .comment-margin-note").length,
+        commentBackReferences: Array.from(document.querySelectorAll(
+          '[data-comment-node-id] a[href^="#comment-ref-"]',
+        )).map((node) => node.getAttribute("href")),
+      };
+    });
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    return inspection;
+  } finally {
+    await context.close();
+  }
+}
+
+async function writeProfileViewer(directory, id, files, summary) {
+  const links = files.map((file) => `<li><a href="${file}">${file}</a></li>`).join("\n");
+  const viewer = `<!doctype html><meta charset="utf-8"><title>${id} profile evidence</title>
+<style>body{font:15px system-ui;margin:2rem;max-width:76rem}li{margin:.45rem 0}iframe,object,img{width:100%;border:1px solid #bbb}iframe,object{height:65rem}</style>
+<h1>${id}</h1><p>${summary}</p><ul>${links}</ul>
+${files.includes("output.pdf") ? '<h2>PDF</h2><object data="output.pdf" type="application/pdf"></object>' : ""}
+${files.includes("screenshot.png") ? '<h2>Rendered pages</h2><img src="screenshot.png" alt="Rendered pages">' : ""}
+${files.includes("standalone.html") ? '<h2>Standalone HTML</h2><iframe sandbox src="standalone.html"></iframe>' : ""}`;
+  await writeFile(join(directory, "view-artifacts.html"), viewer);
+}
+
+async function materializeProfileScenario(source, scenario) {
+  const directory = join(reviewProfileArtifacts, scenario.id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "source.docx"), source);
+  await writeJson(join(directory, "request.json"), {
+    reviewProfile: scenario.reviewProfile,
+    commentProfile: scenario.commentProfile,
+    unsupportedContent: "warn",
+    outputs: ["html", "pdf"],
+  });
+
+  const result = await renderDocxArtifacts(source, {
+    reviewProfile: scenario.reviewProfile,
+    commentProfile: scenario.commentProfile,
+    unsupportedContent: "warn",
+    timeoutMs: 120_000,
+    browser,
+    outputs: ["html", "pdf"],
+  });
+  // Persist core artifacts before parser or semantic assertions. A later gate
+  // must never erase the exact output under review.
+  await writeFile(join(directory, "standalone.html"), result.html);
+  await writeFile(join(directory, "output.pdf"), result.pdf);
+  await writeJson(join(directory, "page-map.json"), result.pageMap);
+  await writeJson(join(directory, "render-report.json"), result.renderReport);
+
+  const htmlInspection = await inspectStandaloneProfile(
+    result.html,
+    join(directory, "screenshot.png"),
+  );
+  const pdfInspection = await inspectPdf(result.pdf);
+  await writeJson(join(directory, "html-inspection.json"), htmlInspection);
+  await writeFile(join(directory, "html-visible-text.txt"), `${htmlInspection.visibleText}\n`);
+  await writeJson(join(directory, "pdf-inspection.json"), pdfInspection);
+  await writeFile(join(directory, "pdf-searchable-text.txt"), `${pdfInspection.searchableText}\n`);
+  await writeProfileViewer(directory, scenario.id, [
+    "source.docx", "request.json", "standalone.html", "output.pdf", "screenshot.png",
+    "page-map.json", "render-report.json", "html-inspection.json", "html-visible-text.txt",
+    "pdf-inspection.json", "pdf-searchable-text.txt",
+  ], "Successful Node/Chromium profile render; evidence was written before semantic assertions.");
+
+  return {
+    ...scenario,
+    sourceDigest: digest(source),
+    htmlDigest: result.renderReport.bindings.htmlDigest,
+    pdfDigest: result.renderReport.bindings.pdfDigest,
+    pageCount: result.pageCount,
+    warningCodes: result.warnings.map(({ code }) => code),
+    derivedProfileSource: result.renderReport.derivedProfileSource ?? null,
+    htmlInspection,
+    pdfInspection,
+    result,
+  };
 }
 
 async function writeFontScenario(id, source, result) {
@@ -201,9 +318,9 @@ async function writeViewer() {
       + `<a href="success/font-scenarios/${id}/screenshot.png">screenshot</a> · `
       + `<a href="success/font-scenarios/${id}/error.json">failure (if any)</a></li>`)
     .join("\n");
-  const viewer = `<!doctype html><meta charset="utf-8"><title>Docxodus #439/#440/#441/#442 test artifacts</title>
+  const viewer = `<!doctype html><meta charset="utf-8"><title>Docxodus #439/#440/#441/#442/#444 test artifacts</title>
 <style>body{font:15px system-ui;margin:2rem;max-width:70rem}li{margin:.55rem 0}iframe,object,img{width:100%;min-height:48rem;border:1px solid #bbb}</style>
-<h1>Docxodus #439/#440/#441/#442 Node/PDF export evidence</h1>
+<h1>Docxodus #439/#440/#441/#442/#444 Node/PDF export evidence</h1>
 <p>Generated by the end-to-end Node, CLI, Chromium, and PDF-parser test suite.</p>
 <ul>
 <li><a href="success/generated.pdf">Generated searchable PDF</a></li>
@@ -223,6 +340,10 @@ async function writeViewer() {
 <li><a href="success/hyperlinks.pdf">Hyperlink preservation PDF</a></li>
 <li><a href="success/chart-vector.pdf">Vector-chart preservation PDF</a></li>
 <li><a href="success/cli.pdf">CLI PDF</a></li>
+<li><a href="success/cli-original-inline.docx">CLI original + inline source DOCX</a></li>
+<li><a href="success/cli-original-inline.html">CLI original + inline standalone HTML</a></li>
+<li><a href="success/cli-original-inline-page-map.json">CLI original + inline PageMap</a></li>
+<li><a href="success/cli-original-inline-render-report.json">CLI original + inline render report</a></li>
 <li><a href="success/cli-configured-font.pdf">CLI repeatable font-directory PDF</a></li>
 <li><a href="success/cli-configured-font-report.json">CLI configured-font report</a></li>
 <li><a href="success/mixed-sections.docx">Mixed-section source DOCX</a></li>
@@ -233,6 +354,16 @@ async function writeViewer() {
 <li><a href="success/mixed-sections-render-report.json">Mixed-section render report</a></li>
 <li><a href="success/mixed-sections-inspection.json">Mixed-section PDF geometry/text inspection</a></li>
 <li><a href="success/mixed-sections-scaled-viewer.png">80% viewer screenshot</a></li>
+<li><a href="success/review-comment-profiles/matrix-manifest.json">#444 review/comment profile matrix</a></li>
+<li><a href="success/review-comment-profiles/final-hidden/view-artifacts.html">#444 final + hidden evidence</a></li>
+<li><a href="success/review-comment-profiles/original-inline/view-artifacts.html">#444 original + inline evidence</a></li>
+<li><a href="success/review-comment-profiles/markup-endnotes/view-artifacts.html">#444 markup + endnotes evidence</a></li>
+<li><a href="success/review-comment-profiles/markup-margin/view-artifacts.html">#444 markup + margin evidence</a></li>
+<li><a href="failure/review-comment-profiles/strict-unsupported/view-artifacts.html">#444 strict unsupported-family failure</a></li>
+<li><a href="failure/review-comment-profiles/unsupported-revision-family/view-artifacts.html">#444 unsupported revision warn/strict evidence</a></li>
+<li><a href="failure/review-comment-profiles/malformed-comment-topology/view-artifacts.html">#444 malformed reply topology warn/strict evidence</a></li>
+<li><a href="failure/review-comment-profiles/duplicate-comment-identity/view-artifacts.html">#444 duplicate comment identity warn/strict evidence</a></li>
+<li><a href="failure/review-comment-profiles/margin-overflow/view-artifacts.html">#444 clipped margin fail-closed evidence</a></li>
 <li><a href="failure/pdf-limit-render-report.json">Structured PDF-limit failure report</a></li>
 </ul>
 <h2>#442 font scenario matrix</h2><ul>${fontScenarioLinks}</ul>
@@ -269,6 +400,7 @@ before(async () => {
   await mkdir(emptyFontDirectory, { recursive: true });
   await mkdir(ambiguousFontDirectory, { recursive: true });
   await mkdir(fontScenarioArtifacts, { recursive: true });
+  await mkdir(reviewProfileArtifacts, { recursive: true });
   await writeFile(join(configuredFontDirectory, "face.woff2"), await readFile(configuredFontFixture));
   await writeFile(join(carlitoFontDirectory, "face.ttf"),
     await readFile(join(fontFixtureRoot, "synthetic-carlito.ttf")));
@@ -536,6 +668,501 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeJson(join(successArtifacts, "pdf-inspection.json"), inspection);
     await writeJson(join(successArtifacts, "request-log.json"), requests);
     await writeFile(join(successArtifacts, "offline-reopen.png"), screenshot);
+  });
+
+  test("publishes the review/comment HTML and PDF profile matrix", { timeout: 300_000 }, async () => {
+    const source = generateReviewCommentDocx();
+    const sourceSnapshot = new Uint8Array(source);
+    const sourceDigest = digest(source);
+    const scenarios = [
+      { id: "final-hidden", reviewProfile: "final", commentProfile: "hidden" },
+      { id: "original-inline", reviewProfile: "original", commentProfile: "inline" },
+      { id: "markup-endnotes", reviewProfile: "markup", commentProfile: "endnotes" },
+      { id: "markup-margin", reviewProfile: "markup", commentProfile: "margin" },
+    ];
+    const evidence = [];
+    for (const scenario of scenarios) {
+      evidence.push(await materializeProfileScenario(source, scenario));
+    }
+
+    const strictDirectory = join(failureArtifacts, "review-comment-profiles", "strict-unsupported");
+    const strictSource = generateReviewCommentDocx({ unsupportedParagraphChange: true });
+    const strictRequest = {
+      reviewProfile: "markup",
+      commentProfile: "hidden",
+      unsupportedContent: "strict",
+      timeoutMs: 120_000,
+      outputs: ["html", "pdf"],
+    };
+    await mkdir(strictDirectory, { recursive: true });
+    await writeFile(join(strictDirectory, "source.docx"), strictSource);
+    await writeJson(join(strictDirectory, "request.json"), strictRequest);
+    let strictFailure;
+    try {
+      await renderDocxArtifacts(strictSource, { ...strictRequest, browser });
+    } catch (error) {
+      strictFailure = error;
+    }
+    const serializedFailure = strictFailure instanceof DocxodusExportError
+      ? strictFailure.toJSON()
+      : { name: strictFailure?.name, message: strictFailure?.message ?? String(strictFailure) };
+    await writeJson(join(strictDirectory, "error.json"), serializedFailure);
+    if (strictFailure?.report) {
+      await writeJson(join(strictDirectory, "failed-render-report.json"), strictFailure.report);
+    }
+    const strictFiles = ["source.docx", "request.json", "error.json"];
+    if (strictFailure?.report) strictFiles.push("failed-render-report.json");
+    await writeProfileViewer(strictDirectory, "strict-unsupported", strictFiles,
+      "Expected fail-closed result; no nominal HTML or PDF was published.");
+
+    const unsupportedFamilyDirectory = join(
+      failureArtifacts,
+      "review-comment-profiles",
+      "unsupported-revision-family",
+    );
+    const unsupportedFamilySource = generateReviewCommentDocx({ unsupportedRevisionFamily: true });
+    const unsupportedFamilyWarnRequest = {
+      reviewProfile: "markup",
+      commentProfile: "hidden",
+      unsupportedContent: "warn",
+      timeoutMs: 120_000,
+      outputs: ["html"],
+    };
+    await mkdir(unsupportedFamilyDirectory, { recursive: true });
+    await writeFile(join(unsupportedFamilyDirectory, "source.docx"), unsupportedFamilySource);
+    const unsupportedFamilyWarn = await renderDocxArtifacts(unsupportedFamilySource, {
+      ...unsupportedFamilyWarnRequest,
+      browser,
+    });
+    await writeFile(join(unsupportedFamilyDirectory, "warn.html"), unsupportedFamilyWarn.html);
+    await writeJson(join(unsupportedFamilyDirectory, "warn-render-report.json"),
+      unsupportedFamilyWarn.renderReport);
+    let unsupportedFamilyStrictFailure;
+    try {
+      await renderDocxArtifacts(unsupportedFamilySource, {
+        ...unsupportedFamilyWarnRequest,
+        unsupportedContent: "strict",
+        browser,
+      });
+    } catch (error) {
+      unsupportedFamilyStrictFailure = error;
+    }
+    const unsupportedFamilyStrictJson = unsupportedFamilyStrictFailure instanceof DocxodusExportError
+      ? unsupportedFamilyStrictFailure.toJSON()
+      : {
+        name: unsupportedFamilyStrictFailure?.name,
+        message: unsupportedFamilyStrictFailure?.message ?? String(unsupportedFamilyStrictFailure),
+      };
+    await writeJson(join(unsupportedFamilyDirectory, "strict-error.json"), unsupportedFamilyStrictJson);
+    if (unsupportedFamilyStrictFailure?.report) {
+      await writeJson(join(unsupportedFamilyDirectory, "strict-render-report.json"),
+        unsupportedFamilyStrictFailure.report);
+    }
+    await writeProfileViewer(unsupportedFamilyDirectory, "unsupported-revision-family", [
+      "source.docx",
+      "warn.html",
+      "warn-render-report.json",
+      "strict-error.json",
+      ...(unsupportedFamilyStrictFailure?.report ? ["strict-render-report.json"] : []),
+    ], "Warn output plus the expected strict failure for a genuine unsupported registry family.");
+
+    const malformedCommentsDirectory = join(
+      failureArtifacts,
+      "review-comment-profiles",
+      "malformed-comment-topology",
+    );
+    const malformedCommentsSource = generateReviewCommentDocx({
+      malformedCommentTopology: true,
+      relocatedCommentsExtended: true,
+    });
+    const malformedCommentsWarnRequest = {
+      reviewProfile: "markup",
+      commentProfile: "endnotes",
+      unsupportedContent: "warn",
+      timeoutMs: 120_000,
+      outputs: ["html"],
+    };
+    await mkdir(malformedCommentsDirectory, { recursive: true });
+    await writeFile(join(malformedCommentsDirectory, "source.docx"), malformedCommentsSource);
+    const malformedCommentsWarn = await renderDocxArtifacts(malformedCommentsSource, {
+      ...malformedCommentsWarnRequest,
+      browser,
+    });
+    await writeFile(join(malformedCommentsDirectory, "warn.html"), malformedCommentsWarn.html);
+    await writeJson(join(malformedCommentsDirectory, "warn-render-report.json"),
+      malformedCommentsWarn.renderReport);
+    let malformedCommentsStrictFailure;
+    try {
+      await renderDocxArtifacts(malformedCommentsSource, {
+        ...malformedCommentsWarnRequest,
+        unsupportedContent: "strict",
+        browser,
+      });
+    } catch (error) {
+      malformedCommentsStrictFailure = error;
+    }
+    const malformedCommentsStrictJson = malformedCommentsStrictFailure instanceof DocxodusExportError
+      ? malformedCommentsStrictFailure.toJSON()
+      : {
+        name: malformedCommentsStrictFailure?.name,
+        message: malformedCommentsStrictFailure?.message ?? String(malformedCommentsStrictFailure),
+      };
+    await writeJson(join(malformedCommentsDirectory, "strict-error.json"), malformedCommentsStrictJson);
+    if (malformedCommentsStrictFailure?.report) {
+      await writeJson(join(malformedCommentsDirectory, "strict-render-report.json"),
+        malformedCommentsStrictFailure.report);
+    }
+    const malformedCommentsHiddenWarn = await renderDocxArtifacts(malformedCommentsSource, {
+      ...malformedCommentsWarnRequest,
+      commentProfile: "hidden",
+      browser,
+    });
+    await writeFile(join(malformedCommentsDirectory, "hidden-warn.html"),
+      malformedCommentsHiddenWarn.html);
+    await writeJson(join(malformedCommentsDirectory, "hidden-warn-render-report.json"),
+      malformedCommentsHiddenWarn.renderReport);
+    let malformedCommentsHiddenStrictFailure;
+    try {
+      await renderDocxArtifacts(malformedCommentsSource, {
+        ...malformedCommentsWarnRequest,
+        commentProfile: "hidden",
+        unsupportedContent: "strict",
+        browser,
+      });
+    } catch (error) {
+      malformedCommentsHiddenStrictFailure = error;
+    }
+    const malformedCommentsHiddenStrictJson = malformedCommentsHiddenStrictFailure instanceof DocxodusExportError
+      ? malformedCommentsHiddenStrictFailure.toJSON()
+      : {
+        name: malformedCommentsHiddenStrictFailure?.name,
+        message: malformedCommentsHiddenStrictFailure?.message
+          ?? String(malformedCommentsHiddenStrictFailure),
+      };
+    await writeJson(join(malformedCommentsDirectory, "hidden-strict-error.json"),
+      malformedCommentsHiddenStrictJson);
+    if (malformedCommentsHiddenStrictFailure?.report) {
+      await writeJson(join(malformedCommentsDirectory, "hidden-strict-render-report.json"),
+        malformedCommentsHiddenStrictFailure.report);
+    }
+    await writeProfileViewer(malformedCommentsDirectory, "malformed-comment-topology", [
+      "source.docx",
+      "warn.html",
+      "warn-render-report.json",
+      "strict-error.json",
+      ...(malformedCommentsStrictFailure?.report ? ["strict-render-report.json"] : []),
+      "hidden-warn.html",
+      "hidden-warn-render-report.json",
+      "hidden-strict-error.json",
+      ...(malformedCommentsHiddenStrictFailure?.report
+        ? ["hidden-strict-render-report.json"]
+        : []),
+    ], "Auditable root rendering plus structured warn/strict reply-topology diagnostics.");
+
+    const duplicateIdentityDirectory = join(
+      failureArtifacts,
+      "review-comment-profiles",
+      "duplicate-comment-identity",
+    );
+    const duplicateIdentitySource = generateReviewCommentDocx({ duplicateCommentIdentity: true });
+    const duplicateIdentityRequest = {
+      reviewProfile: "markup",
+      commentProfile: "hidden",
+      unsupportedContent: "warn",
+      timeoutMs: 120_000,
+      outputs: ["html"],
+    };
+    await mkdir(duplicateIdentityDirectory, { recursive: true });
+    await writeFile(join(duplicateIdentityDirectory, "source.docx"), duplicateIdentitySource);
+    await writeJson(join(duplicateIdentityDirectory, "request.json"), duplicateIdentityRequest);
+    const duplicateIdentityWarn = await renderDocxArtifacts(duplicateIdentitySource, {
+      ...duplicateIdentityRequest,
+      browser,
+    });
+    await writeFile(join(duplicateIdentityDirectory, "warn.html"), duplicateIdentityWarn.html);
+    await writeJson(join(duplicateIdentityDirectory, "warn-render-report.json"),
+      duplicateIdentityWarn.renderReport);
+    let duplicateIdentityStrictFailure;
+    try {
+      await renderDocxArtifacts(duplicateIdentitySource, {
+        ...duplicateIdentityRequest,
+        unsupportedContent: "strict",
+        browser,
+      });
+    } catch (error) {
+      duplicateIdentityStrictFailure = error;
+    }
+    const duplicateIdentityStrictJson = duplicateIdentityStrictFailure instanceof DocxodusExportError
+      ? duplicateIdentityStrictFailure.toJSON()
+      : {
+        name: duplicateIdentityStrictFailure?.name,
+        message: duplicateIdentityStrictFailure?.message ?? String(duplicateIdentityStrictFailure),
+      };
+    await writeJson(join(duplicateIdentityDirectory, "strict-error.json"),
+      duplicateIdentityStrictJson);
+    if (duplicateIdentityStrictFailure?.report) {
+      await writeJson(join(duplicateIdentityDirectory, "strict-render-report.json"),
+        duplicateIdentityStrictFailure.report);
+    }
+    await writeProfileViewer(duplicateIdentityDirectory, "duplicate-comment-identity", [
+      "source.docx",
+      "request.json",
+      "warn.html",
+      "warn-render-report.json",
+      "strict-error.json",
+      ...(duplicateIdentityStrictFailure?.report ? ["strict-render-report.json"] : []),
+    ], "Structured warn/strict evidence for ambiguous comment and thread identities.");
+
+    const marginOverflowDirectory = join(
+      failureArtifacts,
+      "review-comment-profiles",
+      "margin-overflow",
+    );
+    const marginOverflowSource = generateReviewCommentDocx({ oversizedMarginComment: true });
+    const marginOverflowRequest = {
+      reviewProfile: "final",
+      commentProfile: "margin",
+      unsupportedContent: "warn",
+      timeoutMs: 120_000,
+      outputs: ["html", "pdf"],
+    };
+    await mkdir(marginOverflowDirectory, { recursive: true });
+    await writeFile(join(marginOverflowDirectory, "source.docx"), marginOverflowSource);
+    await writeJson(join(marginOverflowDirectory, "request.json"), marginOverflowRequest);
+    let marginOverflowFailure;
+    try {
+      await renderDocxArtifacts(marginOverflowSource, { ...marginOverflowRequest, browser });
+    } catch (error) {
+      marginOverflowFailure = error;
+    }
+    const marginOverflowJson = marginOverflowFailure instanceof DocxodusExportError
+      ? marginOverflowFailure.toJSON()
+      : {
+        name: marginOverflowFailure?.name,
+        message: marginOverflowFailure?.message ?? String(marginOverflowFailure),
+      };
+    await writeJson(join(marginOverflowDirectory, "error.json"), marginOverflowJson);
+    if (marginOverflowFailure?.report) {
+      await writeJson(join(marginOverflowDirectory, "failed-render-report.json"),
+        marginOverflowFailure.report);
+    }
+    await writeProfileViewer(marginOverflowDirectory, "margin-overflow", [
+      "source.docx",
+      "request.json",
+      "error.json",
+      ...(marginOverflowFailure?.report ? ["failed-render-report.json"] : []),
+    ], "Expected fail-closed evidence for a comment thread taller than the printable margin band.");
+
+    const comparison = evidence.map((entry) => ({
+      id: entry.id,
+      reviewProfile: entry.reviewProfile,
+      commentProfile: entry.commentProfile,
+      sourceDigest: entry.sourceDigest,
+      htmlDigest: entry.htmlDigest,
+      pdfDigest: entry.pdfDigest,
+      pageCount: entry.pageCount,
+      warningCodes: entry.warningCodes,
+      derivedProfileSource: entry.derivedProfileSource,
+      htmlVisibleText: entry.htmlInspection.visibleText,
+      pdfSearchableText: entry.pdfInspection.searchableText,
+      revisionMetadata: entry.htmlInspection.revisions,
+      commentMetadata: entry.htmlInspection.comments,
+      artifacts: {
+        viewer: `${entry.id}/view-artifacts.html`,
+        source: `${entry.id}/source.docx`,
+        html: `${entry.id}/standalone.html`,
+        pdf: `${entry.id}/output.pdf`,
+        screenshot: `${entry.id}/screenshot.png`,
+        pageMap: `${entry.id}/page-map.json`,
+        report: `${entry.id}/render-report.json`,
+        htmlInspection: `${entry.id}/html-inspection.json`,
+        pdfInspection: `${entry.id}/pdf-inspection.json`,
+      },
+    }));
+    await writeJson(join(reviewProfileArtifacts, "matrix-manifest.json"), {
+      schemaVersion: 1,
+      sourceDigest,
+      scenarios: comparison,
+      strictFailure: {
+        request: strictRequest,
+        error: serializedFailure,
+        artifacts: {
+          viewer: "../../../failure/review-comment-profiles/strict-unsupported/view-artifacts.html",
+        },
+      },
+      policyDiagnostics: {
+        unsupportedRevisionFamily: {
+          viewer: "../../../failure/review-comment-profiles/unsupported-revision-family/view-artifacts.html",
+          warningCodes: unsupportedFamilyWarn.renderReport.warnings.map(({ code }) => code),
+          strictError: unsupportedFamilyStrictJson,
+        },
+        malformedCommentTopology: {
+          viewer: "../../../failure/review-comment-profiles/malformed-comment-topology/view-artifacts.html",
+          warningCodes: malformedCommentsWarn.renderReport.warnings.map(({ code }) => code),
+          strictError: malformedCommentsStrictJson,
+          hiddenWarningCodes: malformedCommentsHiddenWarn.renderReport.warnings.map(({ code }) => code),
+          hiddenStrictError: malformedCommentsHiddenStrictJson,
+        },
+        duplicateCommentIdentity: {
+          viewer: "../../../failure/review-comment-profiles/duplicate-comment-identity/view-artifacts.html",
+          warningCodes: duplicateIdentityWarn.renderReport.warnings.map(({ code }) => code),
+          strictError: duplicateIdentityStrictJson,
+        },
+        marginOverflow: {
+          viewer: "../../../failure/review-comment-profiles/margin-overflow/view-artifacts.html",
+          error: marginOverflowJson,
+        },
+      },
+    });
+
+    // Assertions intentionally follow artifact publication.
+    assert.deepEqual(source, sourceSnapshot);
+    for (const entry of evidence) {
+      assert.equal(entry.sourceDigest, sourceDigest);
+      assert.equal(entry.result.renderReport.source.rawPackageBytesDigest, sourceDigest);
+      assert.equal(entry.result.renderReport.options.reviewProfile, entry.reviewProfile);
+      assert.equal(entry.result.renderReport.options.commentProfile, entry.commentProfile);
+      assert.equal(entry.pdfInspection.pageCount, entry.result.pageCount);
+      assert.ok(entry.pdfInspection.searchableText.includes(REVIEW_TOKENS.stable));
+      assert.ok(entry.warningCodes.every((code) => !code.includes("revision")));
+      assert.ok(!entry.warningCodes.includes("fragment_target_unavailable"));
+      if (entry.reviewProfile === "markup") {
+        assert.equal(entry.result.renderReport.derivedProfileSource, undefined);
+        assert.ok(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.original));
+        assert.ok(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.final));
+        assert.ok(entry.pdfInspection.searchableText.includes(REVIEW_TOKENS.original));
+        assert.ok(entry.pdfInspection.searchableText.includes(REVIEW_TOKENS.final));
+        assert.ok(entry.htmlInspection.revisions.length >= 5);
+        assert.ok(entry.htmlInspection.revisions.every(({ author, date }) =>
+          (author === "Profile Reviewer" && date === "2026-08-16T12:34:56Z")
+          || (author === "Comment Reviewer" && date === "2026-08-15T11:22:33Z")));
+      } else {
+        assert.match(entry.result.renderReport.derivedProfileSource.rawPackageBytesDigest, /^[0-9a-f]{64}$/);
+        assert.ok(entry.result.renderReport.derivedProfileSource.byteLength > 0);
+        const present = entry.reviewProfile === "final" ? REVIEW_TOKENS.final : REVIEW_TOKENS.original;
+        const absent = entry.reviewProfile === "final" ? REVIEW_TOKENS.original : REVIEW_TOKENS.final;
+        assert.ok(entry.htmlInspection.visibleText.includes(present));
+        assert.ok(!entry.htmlInspection.visibleText.includes(absent));
+        assert.ok(entry.pdfInspection.searchableText.includes(present));
+        assert.ok(!entry.pdfInspection.searchableText.includes(absent));
+        assert.deepEqual(entry.htmlInspection.revisions, []);
+      }
+
+      const commentsVisible = entry.commentProfile !== "hidden";
+      assert.equal(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.rootComment), commentsVisible);
+      assert.equal(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.replyComment), commentsVisible);
+      assert.equal(entry.pdfInspection.searchableText.includes(REVIEW_TOKENS.rootComment), commentsVisible);
+      assert.equal(entry.pdfInspection.searchableText.includes(REVIEW_TOKENS.replyComment), commentsVisible);
+      if (commentsVisible) {
+        const commentOriginalVisible = entry.reviewProfile !== "final";
+        const commentFinalVisible = entry.reviewProfile !== "original";
+        const pdfLogicalText = entry.pdfInspection.searchableText.replace(/\s+/g, "");
+        assert.equal(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.commentOriginal),
+          commentOriginalVisible);
+        assert.equal(entry.htmlInspection.visibleText.includes(REVIEW_TOKENS.commentFinal),
+          commentFinalVisible);
+        assert.equal(pdfLogicalText.includes(REVIEW_TOKENS.commentOriginal),
+          commentOriginalVisible);
+        assert.equal(pdfLogicalText.includes(REVIEW_TOKENS.commentFinal),
+          commentFinalVisible);
+        assert.ok(entry.pdfInspection.searchableText.includes("Alice Root"));
+        assert.ok(entry.pdfInspection.searchableText.includes("Bob Reply"));
+        assert.ok(entry.pdfInspection.searchableText.includes("Resolved"));
+        assert.ok(entry.pdfInspection.searchableText.includes("Status unknown"));
+        assert.ok(entry.htmlInspection.comments.some(({ id, status }) => id === "0" && status === "resolved"));
+        assert.ok(entry.htmlInspection.comments.some(({ id, parentId }) => id === "1" && parentId === "0"));
+        assert.deepEqual(
+          [...new Set(entry.htmlInspection.commentBackReferences)],
+          entry.commentProfile === "margin" ? [] : ["#comment-ref-0"],
+        );
+      } else {
+        assert.equal(entry.htmlInspection.commentMarkers, 0);
+        assert.equal(entry.htmlInspection.commentHighlights, 0);
+        assert.deepEqual(entry.htmlInspection.comments, []);
+        assert.deepEqual(entry.htmlInspection.commentBackReferences, []);
+      }
+    }
+
+    assert.ok(evidence.find(({ id }) => id === "original-inline").htmlInspection.inlineThreads > 0);
+    assert.ok(evidence.find(({ id }) => id === "markup-endnotes").htmlInspection.endnoteSections > 0);
+    assert.ok(evidence.find(({ id }) => id === "markup-margin").htmlInspection.marginNotes > 0);
+    assert.ok(strictFailure instanceof DocxodusExportError);
+    assert.equal(strictFailure.code, "resource_policy_failure");
+    assert.equal(strictFailure.phase, "package_preflight");
+    assert.ok(strictFailure.report?.warnings.some(({ code }) => code === "markup_revision_not_visualized"));
+    assert.deepEqual(unsupportedFamilyWarn.renderReport.warnings
+      .filter(({ code }) => code === "unsupported_revision_family")
+      .map(({ code, severity, phase, resource }) => ({ code, severity, phase, resource })), [{
+        code: "unsupported_revision_family",
+        severity: "warning",
+        phase: "package_preflight",
+        resource: undefined,
+      }]);
+    assert.ok(unsupportedFamilyStrictFailure instanceof DocxodusExportError);
+    assert.equal(unsupportedFamilyStrictFailure.code, "resource_policy_failure");
+    assert.equal(unsupportedFamilyStrictFailure.phase, "package_preflight");
+    assert.deepEqual(unsupportedFamilyStrictFailure.report?.warnings
+      .filter(({ code }) => code === "unsupported_revision_family")
+      .map(({ code, severity, phase, resource }) => ({ code, severity, phase, resource })), [{
+        code: "unsupported_revision_family",
+        severity: "error",
+        phase: "package_preflight",
+        resource: undefined,
+      }]);
+    assert.match(unsupportedFamilyWarn.html, /UNSUPPORTED CUSTOM XML MOVE/);
+
+    const expectedCommentWarnings = (severity) => [
+      { code: "comment_parent_cycle", severity, phase: "docx_conversion", partUri: "/word/custom/reviewTopology.xml", resource: "comment:0" },
+      { code: "comment_parent_cycle", severity, phase: "docx_conversion", partUri: "/word/custom/reviewTopology.xml", resource: "comment:1" },
+      { code: "comment_parent_orphaned", severity, phase: "docx_conversion", partUri: "/word/custom/reviewTopology.xml", resource: "comment:2" },
+    ];
+    const commentWarnings = (report) => report.warnings
+      .filter(({ code }) => code === "comment_parent_cycle" || code === "comment_parent_orphaned")
+      .map(({ code, severity, phase, partUri, resource }) => ({
+        code, severity, phase, partUri, resource,
+      }));
+    assert.deepEqual(commentWarnings(malformedCommentsWarn.renderReport),
+      expectedCommentWarnings("warning"));
+    assert.match(malformedCommentsWarn.html, /data-comment-topology="cyclic_parent"/);
+    assert.match(malformedCommentsWarn.html, /data-comment-topology="orphaned_parent"/);
+    assert.ok(malformedCommentsStrictFailure instanceof DocxodusExportError);
+    assert.equal(malformedCommentsStrictFailure.code, "resource_policy_failure");
+    assert.equal(malformedCommentsStrictFailure.phase, "docx_conversion");
+    assert.deepEqual(commentWarnings(malformedCommentsStrictFailure.report),
+      expectedCommentWarnings("error"));
+    assert.deepEqual(commentWarnings(malformedCommentsHiddenWarn.renderReport),
+      expectedCommentWarnings("warning"));
+    assert.ok(!malformedCommentsHiddenWarn.html.includes(REVIEW_TOKENS.rootComment));
+    assert.ok(!malformedCommentsHiddenWarn.html.includes(REVIEW_TOKENS.replyComment));
+    assert.ok(malformedCommentsHiddenStrictFailure instanceof DocxodusExportError);
+    assert.equal(malformedCommentsHiddenStrictFailure.code, "resource_policy_failure");
+    assert.equal(malformedCommentsHiddenStrictFailure.phase, "docx_conversion");
+    assert.deepEqual(commentWarnings(malformedCommentsHiddenStrictFailure.report),
+      expectedCommentWarnings("error"));
+    const expectedIdentityWarnings = (severity) => [
+      { code: "comment_id_duplicate", severity, phase: "docx_conversion", partUri: "/word/comments.xml", resource: "comment:0" },
+      { code: "comment_paragraph_id_duplicate", severity, phase: "docx_conversion", partUri: "/word/comments.xml", resource: "comment:2" },
+      { code: "comment_metadata_duplicate", severity, phase: "docx_conversion", partUri: "/word/commentsExtended.xml", resource: "comment:0" },
+    ];
+    const identityWarnings = (report) => report.warnings
+      .filter(({ code }) => [
+        "comment_id_duplicate",
+        "comment_paragraph_id_duplicate",
+        "comment_metadata_duplicate",
+      ].includes(code))
+      .map(({ code, severity, phase, partUri, resource }) => ({
+        code, severity, phase, partUri, resource,
+      }));
+    assert.deepEqual(identityWarnings(duplicateIdentityWarn.renderReport),
+      expectedIdentityWarnings("warning"));
+    assert.ok(duplicateIdentityStrictFailure instanceof DocxodusExportError);
+    assert.equal(duplicateIdentityStrictFailure.code, "resource_policy_failure");
+    assert.equal(duplicateIdentityStrictFailure.phase, "docx_conversion");
+    assert.deepEqual(identityWarnings(duplicateIdentityStrictFailure.report),
+      expectedIdentityWarnings("error"));
+    assert.ok(marginOverflowFailure instanceof DocxodusExportError);
+    assert.equal(marginOverflowFailure.code, "pagination_failure");
+    assert.equal(marginOverflowFailure.phase, "running_story_placement");
   });
 
   test("publishes the five-scenario verified font artifact matrix", { timeout: 300_000 }, async () => {
@@ -1117,6 +1744,38 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(second.stdout.byteLength, 0);
     assert.match(second.stderr.toString(), /destination already exists/i);
     assert.equal(digest(await readFile(pdf)), originalDigest);
+
+    const reviewInput = join(successArtifacts, "cli-original-inline.docx");
+    const reviewHtml = join(successArtifacts, "cli-original-inline.html");
+    const reviewReport = join(successArtifacts, "cli-original-inline-render-report.json");
+    const reviewPageMap = join(successArtifacts, "cli-original-inline-page-map.json");
+    await writeFile(reviewInput, generateReviewCommentDocx());
+    const reviewCli = spawnSync(process.execPath, [
+      cliEntry,
+      "convert",
+      reviewInput,
+      "--to", "html",
+      "--output", reviewHtml,
+      "--review-profile", "original",
+      "--comments", "inline",
+      "--report", reviewReport,
+      "--page-map", reviewPageMap,
+      "--timeout", "120000",
+    ], {
+      cwd: packageRoot,
+      env: environment,
+      encoding: null,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.equal(reviewCli.status, 0, reviewCli.stderr.toString());
+    assert.equal(reviewCli.stdout.byteLength, 0);
+    const reviewCliHtml = await readFile(reviewHtml, "utf8");
+    const reviewCliReport = JSON.parse(await readFile(reviewReport, "utf8"));
+    assert.ok(reviewCliHtml.includes(REVIEW_TOKENS.original));
+    assert.ok(!reviewCliHtml.includes(REVIEW_TOKENS.final));
+    assert.ok(reviewCliHtml.includes(REVIEW_TOKENS.rootComment));
+    assert.equal(reviewCliReport.options.reviewProfile, "original");
+    assert.equal(reviewCliReport.options.commentProfile, "inline");
 
     const fontInput = join(successArtifacts, "cli-configured-font.docx");
     const fontPdf = join(successArtifacts, "cli-configured-font.pdf");

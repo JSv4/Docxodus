@@ -522,8 +522,10 @@ test.describe('PageMap materialization and citation navigation', () => {
     expect(result.totalPages).toBe(2);
     expect(result.commentPages).toEqual([1, 2]);
     expect(result.marginColumns).toBe(2);
-    expect(result.pageCommentIds).toBe(0);
-    expect(result.registryCommentIds).toBe(1);
+    // The first visible balloon owns the fragment target; repeated page balloons stay inert and
+    // the hidden registry relinquishes the same ID, leaving exactly one addressable target.
+    expect(result.pageCommentIds).toBe(1);
+    expect(result.registryCommentIds).toBe(0);
     expect(result.activeBackrefs).toBe(0);
   });
 });

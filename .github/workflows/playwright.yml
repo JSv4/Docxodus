@@ -63,6 +63,7 @@ jobs:
           path: |
             npm/playwright-report/
             npm/test-results/
+            npm/test-artifacts/
             npm-export/test-artifacts/
           if-no-files-found: ignore
           retention-days: 7

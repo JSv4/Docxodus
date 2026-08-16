@@ -10,6 +10,7 @@ dist/
 # Playwright
 playwright-report/
 test-results/
+test-artifacts/
 
 # OS files
 .DS_Store

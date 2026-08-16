@@ -700,6 +700,12 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListRevisions(int h) => DocxSessionOps.ListRevisions(h);
 
+    /// <summary>Read-only, export-complete revision inventory. Unlike ListRevisions, this also
+    /// reports revisions in comments, glossary building blocks, and style definitions.</summary>
+    [JSExport]
+    public static string ListRevisionsForExportProfile(int h) =>
+        DocxSessionOps.ListRevisionsForExportProfile(h);
+
     /// <summary>Accept ONE revision by id (an undoable session mutation); returns an
     /// EditResult envelope.</summary>
     [JSExport]

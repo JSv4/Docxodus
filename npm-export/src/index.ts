@@ -2,6 +2,8 @@ import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   DEFAULT_EXPORT_TIMEOUT_MS,
   HARD_EXPORT_TIMEOUT_MS,
+  COMMENT_PROFILES,
+  REVIEW_PROFILES,
   normalizeFontFamilyName,
   type CompleteRenderReport,
   type ExportResourceLimits,
@@ -41,10 +43,12 @@ import { createNodeFontRuntime } from "./fonts/index.js";
 
 export * from "./contracts.js";
 export {
+  COMMENT_PROFILES,
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   DEFAULT_EXPORT_TIMEOUT_MS,
   HARD_EXPORT_RESOURCE_LIMITS,
   HARD_EXPORT_TIMEOUT_MS,
+  REVIEW_PROFILES,
 } from "docxodus/export-browser";
 
 function ownedInput(document: Uint8Array): Uint8Array {
@@ -347,16 +351,11 @@ function nodeOptionsPreflight(options: NodeExportOptions): void {
       "Supply explicit reviewProfile and commentProfile values.",
     );
   }
-  if (options.reviewProfile !== "final"
-    && options.reviewProfile !== "original"
-    && options.reviewProfile !== "markup") {
+  if (!(REVIEW_PROFILES as readonly string[]).includes(options.reviewProfile)) {
     exportError("invalid_document", "input_validation", "reviewProfile is invalid.",
       "Use final, original, or markup.");
   }
-  if (options.commentProfile !== "hidden"
-    && options.commentProfile !== "inline"
-    && options.commentProfile !== "endnotes"
-    && options.commentProfile !== "margin") {
+  if (!(COMMENT_PROFILES as readonly string[]).includes(options.commentProfile)) {
     exportError("invalid_document", "input_validation", "commentProfile is invalid.",
       "Use hidden, inline, endnotes, or margin.");
   }

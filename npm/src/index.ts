@@ -237,6 +237,8 @@ export type {
   PageCitationNavigation,
 } from "./pagination.js";
 
+export { COMMENT_PROFILES, REVIEW_PROFILES } from "./export-browser.js";
+
 export {
   PaginationEngine,
   clearPageCitationHighlight,

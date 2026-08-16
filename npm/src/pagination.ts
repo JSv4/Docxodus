@@ -408,6 +408,12 @@ export class PaginationEngine {
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private commentMarginRegistry: Map<string, HTMLElement>;
+  /** Bookmark targets retained on the first visible clone of each margin thread node. */
+  private materializedMarginCommentTargetIds: Set<string> = new Set();
+  /** Inline comment definitions in running stories are logical-story content, not per-page chrome. */
+  private materializedRunningStoryInlineThreadIds: Set<string> = new Set();
+  /** Only the first physical clone of a running-story comment target owns its fragment id. */
+  private materializedRunningStoryCommentTargetIds: Set<string> = new Set();
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
@@ -804,7 +810,31 @@ export class PaginationEngine {
 
     const missingAnchor = Array.from(requiredAnchorIds).find((id) => !measuredAnchorIds.has(id));
     if (missingAnchor) {
-      throw new Error(`source anchor ${missingAnchor} has no measurable fragment in the paginated layout`);
+      const observations: string[] = [];
+      for (const page of this.lastPages) {
+        const pageRect = page.element.getBoundingClientRect();
+        for (const element of Array.from(
+          page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]"),
+        )) {
+          if (element.dataset.sourceAnchorId !== missingAnchor) continue;
+          const rect = element.getBoundingClientRect();
+          const visible = this.intersectWithClippingAncestors(
+            element, page.element, pageRect, rect,
+          );
+          observations.push(
+            `page ${page.pageNumber}: rect ${rect.width.toFixed(1)}x${rect.height.toFixed(1)}`
+            + ` at ${rect.left.toFixed(1)},${rect.top.toFixed(1)}`
+            + `; visible ${Math.max(0, visible.right - visible.left).toFixed(1)}`
+            + `x${Math.max(0, visible.bottom - visible.top).toFixed(1)}`,
+          );
+        }
+      }
+      const detail = observations.length > 0
+        ? ` (${observations.join("; ")})`
+        : " (no page-tree candidate)";
+      throw new Error(
+        `source anchor ${missingAnchor} has no measurable fragment in the paginated layout${detail}`,
+      );
     }
 
     return {
@@ -3416,20 +3446,48 @@ export class PaginationEngine {
    * cloned node cannot be uniquely addressed.
    */
   private makeClonedStoryInert(root: HTMLElement): void {
+    const inlineThreads = [
+      ...(root.matches("[data-comment-thread-id]") ? [root] : []),
+      ...Array.from(root.querySelectorAll<HTMLElement>("[data-comment-thread-id]")),
+    ];
+    for (const thread of inlineThreads) {
+      const id = thread.dataset.commentThreadId;
+      if (!id) continue;
+      if (this.materializedRunningStoryInlineThreadIds.has(id)) {
+        thread.remove();
+      } else {
+        this.materializedRunningStoryInlineThreadIds.add(id);
+      }
+    }
+
     const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
     for (const el of nodes) {
       el.removeAttribute("data-anchor");
       el.removeAttribute("data-committed-text");
       if (el.getAttribute("contenteditable") !== null) el.setAttribute("contenteditable", "false");
+      if (/^comment-(?:ref-)?/.test(el.id)) {
+        if (this.materializedRunningStoryCommentTargetIds.has(el.id)) {
+          el.removeAttribute("id");
+        } else {
+          this.materializedRunningStoryCommentTargetIds.add(el.id);
+        }
+      }
     }
   }
 
-  /** A repeated margin note is presentation, not a second bookmark/link target. */
+  /** A repeated margin note is presentation; only its first clone owns bookmark targets. */
   private makeClonedMarginCommentInert(root: HTMLElement): void {
     this.makeClonedStoryInert(root);
     const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
     for (const element of nodes) {
-      element.removeAttribute("id");
+      const id = element.id;
+      if (id) {
+        if (this.materializedMarginCommentTargetIds.has(id)) {
+          element.removeAttribute("id");
+        } else {
+          this.materializedMarginCommentTargetIds.add(id);
+        }
+      }
       if (element.localName === "a" && element.getAttribute("href")?.startsWith("#")) {
         element.removeAttribute("href");
         element.setAttribute("aria-disabled", "true");
@@ -3748,39 +3806,6 @@ export class PaginationEngine {
 
     pageBox.appendChild(contentArea);
 
-    // Materialize margin comments in a page-owned side column. The body only carries range
-    // markers; definition and comment-paragraph identities live on these selected registry
-    // clones, so PageMap geometry describes the actual visible margin presentation.
-    const pageCommentIds: string[] = [];
-    for (const marker of Array.from(
-      contentArea.querySelectorAll<HTMLElement>("[data-comment-id]"),
-    )) {
-      const id = marker.dataset.commentId;
-      if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
-        pageCommentIds.push(id);
-      }
-    }
-    if (pageCommentIds.length > 0) {
-      const marginColumn = this.document.createElement("aside");
-      marginColumn.className = `${this.cssPrefix}comment-margin`;
-      marginColumn.style.position = "absolute";
-      marginColumn.style.top = `${contentAreaTop}pt`;
-      marginColumn.style.left = `${dims.marginLeft + dims.contentWidth + 3}pt`;
-      marginColumn.style.width = `${Math.max(12, dims.marginRight - 6)}pt`;
-      marginColumn.style.maxHeight = `${contentAreaHeight}pt`;
-      marginColumn.style.overflow = "hidden";
-      marginColumn.style.boxSizing = "border-box";
-      for (const id of pageCommentIds) {
-        const source = this.commentMarginRegistry.get(id);
-        if (source) {
-          const clone = source.cloneNode(true) as HTMLElement;
-          this.makeClonedMarginCommentInert(clone);
-          marginColumn.appendChild(clone);
-        }
-      }
-      pageBox.appendChild(marginColumn);
-    }
-
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length > 0 || hasContinuation) {
@@ -3813,6 +3838,45 @@ export class PaginationEngine {
         footerDiv.appendChild(clonedfooterDiv);
       }
       pageBox.appendChild(footerDiv);
+    }
+
+    // Materialize margin comments only after every visible story has joined the
+    // page. A range/reference may live in body, header, footer, or a footnote;
+    // limiting discovery to the body silently dropped the other supported
+    // stories even though their comment definitions were in the registry.
+    const pageCommentIds: string[] = [];
+    for (const marker of Array.from(
+      pageBox.querySelectorAll<HTMLElement>("[data-comment-id]"),
+    )) {
+      const id = marker.dataset.commentId;
+      if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
+        pageCommentIds.push(id);
+      }
+    }
+    if (pageCommentIds.length > 0) {
+      const marginColumn = this.document.createElement("aside");
+      marginColumn.className = `${this.cssPrefix}comment-margin`;
+      marginColumn.style.position = "absolute";
+      marginColumn.style.top = `${contentAreaTop}pt`;
+      marginColumn.style.left = `${dims.marginLeft + dims.contentWidth + 3}pt`;
+      marginColumn.style.width = `${Math.max(12, dims.marginRight - 6)}pt`;
+      marginColumn.style.maxHeight = `${contentAreaHeight}pt`;
+      marginColumn.style.overflow = "hidden";
+      marginColumn.style.boxSizing = "border-box";
+      // The converter's margin UI is also used in a 250px continuous-view column. A physical
+      // Word page margin is often only 60–70pt wide, so give its cloned print balloons an
+      // explicit, readable small-note scale instead of inheriting the 12pt document body size.
+      // This keeps metadata and comment paragraphs inside the finite printable page substrate.
+      marginColumn.style.fontSize = "8.25pt";
+      for (const id of pageCommentIds) {
+        const source = this.commentMarginRegistry.get(id);
+        if (source) {
+          const clone = source.cloneNode(true) as HTMLElement;
+          this.makeClonedMarginCommentInert(clone);
+          marginColumn.appendChild(clone);
+        }
+      }
+      pageBox.appendChild(marginColumn);
     }
 
     // Add page number (will be hidden by CSS if document has footer)

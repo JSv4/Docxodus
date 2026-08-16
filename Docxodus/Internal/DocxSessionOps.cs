@@ -938,6 +938,12 @@ internal static class DocxSessionOps
     public static string ListRevisions(int handle) =>
         DocxSessionJson.SerializeRevisionList(SessionRegistry.Get(handle).ListRevisions());
 
+    /// <summary>Read-only revision inventory for standalone export preflight, including
+    /// comments, glossary building blocks, and style definitions owned by profile projection.</summary>
+    public static string ListRevisionsForExportProfile(int handle) =>
+        DocxSessionJson.SerializeRevisionList(
+            SessionRegistry.Get(handle).ListRevisionsForExportProfile());
+
     public static string AcceptRevision(int handle, string revisionId,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.AcceptRevision(revisionId));

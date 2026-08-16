@@ -14,6 +14,7 @@ import type {
   WorkerInitRequest,
   WorkerConvertRequest,
   WorkerGeneratePackageManifestRequest,
+  WorkerProjectReviewProfileRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetRevisionsRequest,
@@ -35,6 +36,7 @@ import type {
   CommentRenderMode,
   EditResult,
   PackageManifest,
+  RevisionListEntry,
 } from "./types.js";
 import { ComparisonEngine } from "./types.js";
 
@@ -121,6 +123,44 @@ function handleGeneratePackageManifest(
     return { manifest: JSON.parse(json) as PackageManifest };
   } catch (error) {
     return { error: String(error) };
+  }
+}
+
+function handleProjectReviewProfile(
+  request: WorkerProjectReviewProfileRequest
+): { documentBytes?: Uint8Array; revisions?: RevisionListEntry[]; error?: string } {
+  const exports = ensureInitialized();
+  let handle: number | undefined;
+  try {
+    // The live registry is the single part-aware source of revision families,
+    // authors, dates, story scope, and unsupported-topology diagnostics.
+    handle = exports.DocxSessionBridge.OpenSession(request.documentBytes, "");
+    const revisions = JSON.parse(
+      exports.DocxSessionBridge.ListRevisionsForExportProfile(handle)
+    ) as RevisionListEntry[];
+
+    // Projection operates on the worker-owned transfer, never on the caller's
+    // buffer. Markup still returns a fresh byte view so every profile follows
+    // the same ownership contract.
+    const documentBytes = exports.DocxDiffBridge.ProjectReviewProfile(
+      request.documentBytes,
+      request.profile
+    );
+    if (documentBytes.length === 0) {
+      throw new Error(`${request.profile} revision projection returned an empty package`);
+    }
+    return { documentBytes, revisions };
+  } catch (error) {
+    return { error: String(error) };
+  } finally {
+    if (handle !== undefined) {
+      try {
+        exports.DocxSessionBridge.CloseSession(handle);
+      } catch {
+        // Preserve the projection/listing error; the worker is terminated after
+        // each standalone export and cannot leak the handle across requests.
+      }
+    }
   }
 }
 
@@ -625,6 +665,27 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           manifest: result.manifest,
           error: result.error,
         };
+        break;
+      }
+
+      case "projectReviewProfile": {
+        const result = handleProjectReviewProfile(
+          request as WorkerProjectReviewProfileRequest
+        );
+        response = {
+          id: request.id,
+          type: "projectReviewProfile",
+          success: !result.error,
+          documentBytes: result.documentBytes,
+          revisions: result.revisions,
+          error: result.error,
+        };
+        if (result.documentBytes) {
+          self.postMessage(response, {
+            transfer: [result.documentBytes.buffer as ArrayBuffer],
+          });
+          return;
+        }
         break;
       }
 

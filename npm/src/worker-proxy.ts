@@ -24,6 +24,7 @@ import type {
   WorkerResponse,
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
+  WorkerProjectReviewProfileResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
@@ -45,6 +46,8 @@ import type {
   CharSpan,
   EditResult,
   PackageManifest,
+  RevisionListEntry,
+  WorkerReviewProfile,
 } from "./types.js";
 
 /**
@@ -155,6 +158,15 @@ export interface WorkerDocxSession {
 export interface WorkerDocxodus {
   /** Generate a deterministic, non-mutating verification manifest. */
   generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+
+  /**
+   * Inventory native revisions and materialize a worker-owned profile copy.
+   * The returned inventory always describes the unprojected source package.
+   */
+  projectReviewProfile(
+    document: File | Uint8Array,
+    profile: WorkerReviewProfile
+  ): Promise<{ documentBytes: Uint8Array; revisions: RevisionListEntry[] }>;
 
   /**
    * Convert a DOCX document to HTML.
@@ -408,6 +420,26 @@ export async function createWorkerDocxodus(
         [bytes.buffer]
       );
       return response.manifest!;
+    },
+
+    async projectReviewProfile(
+      document: File | Uint8Array,
+      profile: WorkerReviewProfile
+    ): Promise<{ documentBytes: Uint8Array; revisions: RevisionListEntry[] }> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerProjectReviewProfileResponse>(
+        {
+          id: generateId(),
+          type: "projectReviewProfile",
+          documentBytes: bytes,
+          profile,
+        },
+        [bytes.buffer]
+      );
+      return {
+        documentBytes: response.documentBytes!,
+        revisions: response.revisions ?? [],
+      };
     },
 
     async convertDocxToHtml(

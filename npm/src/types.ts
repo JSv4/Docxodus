@@ -1140,6 +1140,8 @@ export interface DocxodusWasmExports {
     AcceptRevisions: (bytes: Uint8Array) => Uint8Array;
     /** Reject all tracked revisions in a redlined DOCX → "left"-side bytes, or empty array on error. */
     RejectRevisions: (bytes: Uint8Array) => Uint8Array;
+    /** Project final/original/markup for export, including auxiliary Word stories. */
+    ProjectReviewProfile: (bytes: Uint8Array, profile: WorkerReviewProfile) => Uint8Array;
     /** Consolidated redlined DOCX bytes (native markup), or empty array on error. */
     Consolidate: (
       baseBytes: Uint8Array,
@@ -1345,6 +1347,7 @@ export interface DocxodusWasmExports {
     MoveBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RemoveBookmark: (handle: number, name: string) => string;
     ListRevisions: (handle: number) => string;
+    ListRevisionsForExportProfile: (handle: number) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
     RejectRevision: (handle: number, revisionId: string) => string;
     AcceptAllRevisions: (handle: number) => string;
@@ -1874,6 +1877,7 @@ export interface RevisionListEntry {
   type: SessionRevisionType;
   family: RevisionFamily;
   constituentIds: string[];
+  nativeElementNames: string[];
   author: string;
   date?: string;
   text: string;
@@ -3564,6 +3568,7 @@ export interface DocumentMetadata {
 export type WorkerRequestType =
   | "init"
   | "generatePackageManifest"
+  | "projectReviewProfile"
   | "convertDocxToHtml"
   | "compareDocuments"
   | "compareDocumentsToHtml"
@@ -3606,6 +3611,20 @@ export interface WorkerConvertRequest extends WorkerRequestBase {
   documentBytes: Uint8Array;
   /** Conversion options */
   options?: ConversionOptions;
+}
+
+/** Review-result projection requested by the standalone exporter. */
+export type WorkerReviewProfile = "final" | "original" | "markup";
+
+/**
+ * Inspect native revision topology and materialize the requested result into a
+ * worker-owned package copy. The caller's source buffer is never returned or
+ * mutated in place.
+ */
+export interface WorkerProjectReviewProfileRequest extends WorkerRequestBase {
+  type: "projectReviewProfile";
+  documentBytes: Uint8Array;
+  profile: WorkerReviewProfile;
 }
 
 /** Generate a deterministic package manifest without opening a live session. */
@@ -3744,6 +3763,7 @@ export interface WorkerSessionMoveAnnotationRequest extends WorkerRequestBase {
 export type WorkerRequest =
   | WorkerInitRequest
   | WorkerGeneratePackageManifestRequest
+  | WorkerProjectReviewProfileRequest
   | WorkerConvertRequest
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
@@ -3789,6 +3809,14 @@ export interface WorkerConvertResponse extends WorkerResponseBase {
 export interface WorkerGeneratePackageManifestResponse extends WorkerResponseBase {
   type: "generatePackageManifest";
   manifest?: PackageManifest;
+}
+
+export interface WorkerProjectReviewProfileResponse extends WorkerResponseBase {
+  type: "projectReviewProfile";
+  /** Isolated package bytes after projection (an unchanged copy for markup). */
+  documentBytes?: Uint8Array;
+  /** Part-qualified revision inventory captured before projection. */
+  revisions?: RevisionListEntry[];
 }
 
 /**
@@ -3879,6 +3907,7 @@ export interface WorkerSessionEditResponse extends WorkerResponseBase {
 export type WorkerResponse =
   | WorkerInitResponse
   | WorkerGeneratePackageManifestResponse
+  | WorkerProjectReviewProfileResponse
   | WorkerConvertResponse
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse

@@ -33,6 +33,8 @@ export type {
   ReviewProfile,
 } from "docxodus/export-browser";
 
+export { COMMENT_PROFILES, REVIEW_PROFILES } from "docxodus/export-browser";
+
 export interface FontLicenseAttestation {
   schemaVersion: 1;
   usage: "standalone-document-font-embedding";
@@ -64,7 +66,7 @@ export interface NodeExportRuntime {
   browser?: Browser;
   /** Explicit Chromium executable used when `browser` is omitted. */
   browserExecutablePath?: string;
-  /** Reserved for the verified font runtime delivered by issue #442. */
+  /** Ordered caller-owned roots searched by the verified font resolver. */
   fontDirectories?: readonly string[];
   fontLicenseAttestations?: readonly FontLicenseAttestation[];
   environmentAttestation?: RenderEnvironmentAttestation;

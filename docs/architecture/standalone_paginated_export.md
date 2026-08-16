@@ -395,26 +395,52 @@ multi-file transactionality.
 
 ## Review and comment profiles
 
-Issue #444 owns their implementation, but the shared semantics are fixed here:
+The browser API, Node API, framed host, CLI, render report, and #465 adapter use the same profile
+strings and semantics. A profile is a rendering choice, never permission to mutate the caller's
+package or silently resolve an unsupported edit.
 
 | Profile | Visible revision result |
 |---|---|
-| `final` | Inserted/destination content and final formatting; deleted/source content hidden |
-| `original` | Deleted/source content and original formatting; inserted/destination content hidden |
-| `markup` | Supported insertions, deletions, moves, and before/after formatting with author/date metadata |
+| `final` | Accepted result: insertions and move destinations use final formatting; deletions and move sources are hidden; revision chrome is absent. |
+| `original` | Rejected result: deletions and move sources use original formatting; insertions and move destinations are hidden; revision chrome is absent. |
+| `markup` | Review result: insertions and move destinations are marked as additions, deletions and move sources remain printable as deletions, and supported formatting changes expose before/after state plus available author/date metadata. |
 
-The caller's source bytes are immutable. For the standalone API, `final` and `original` may derive
-an isolated in-memory DOCX copy by accepting or rejecting native revisions before HTML conversion;
-the report records the source and derived package identities. `markup` renders the unchanged
-source. When #465 supplies an already policy-derived exact profile source, the renderer uses those
-bytes directly and never applies the policy a second time.
+The exporter synchronously owns a snapshot of the caller's bytes. `renderReport.source` always
+identifies that immutable raw package with its digest, byte length, and document version. `final`
+and `original` accept or reject revisions in an isolated in-memory package before anchor stamping
+and HTML conversion; `derivedProfileSource` records the exact projected digest and byte length even
+when projection does not change visible content. `markup` renders the unchanged source and omits
+`derivedProfileSource`. The requested profile is included in the layout digest and renderer
+fingerprint. When #465 supplies an already policy-derived exact profile source, the renderer uses
+those bytes directly and never applies the policy a second time.
 
-Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
-range, body, the ordered reply tree, author, date, and resolved state in body, headers, footers,
-footnotes, and endnotes. Missing extended-comment metadata is represented as unknown rather than
-invented. An unsupported story or revision/comment family produces a structured warning naming the
-family and owning part; strict unsupported-content policy fails. HTML, PDF, CLI, and #465 use these
-exact strings.
+Comment presentation is orthogonal to revision projection:
+
+| Profile | Visible comment result |
+|---|---|
+| `hidden` | Comment highlights, markers, and bodies are omitted; the document text inside a commented range remains governed only by the revision profile. |
+| `inline` | One print-visible thread is placed beside the root comment's first range/reference in story order. |
+| `endnotes` | Print-visible threads are collected in a deterministic document-end section with links to their references. |
+| `margin` | A print-visible thread is placed in the owning page's margin and associated with its range/reference. |
+
+Every visible comment presentation retains the range, body, ordered reply tree, author and date
+when present, and a printable `open`, `resolved`, or `unknown` state. Missing author/date fields stay
+absent. A missing commentsExtended entry means `unknown`, not unresolved or resolved. Ordering is
+by the root's first document/story reference and then comments-part reply order. The contract covers
+the body, headers, footers, footnotes, and endnotes. In visible modes, an orphaned or cyclic parent
+chain is rendered as independent roots with `data-comment-topology` and the requested parent para-id
+retained for audit. Hidden presentation still inventories the same topology through inert converter
+metadata before final sanitization, without leaking comment bodies. Export records
+`comment_parent_orphaned` or `comment_parent_cycle`; warn mode preserves the complete diagnostic set,
+while strict mode fails instead of inventing a reply order.
+
+Package preflight and part-aware revision inspection classify each revision/comment family and its
+owning part before publication. Under the default `warn` policy, an unsupported family produces a
+structured warning and output may continue only when the limitation remains explicit in the output
+or report. `strict` converts the same finding into `resource_policy_failure` before artifact
+publication, including for `markup`. Malformed or unsafe topology always fails projection. A
+`final` or `original` projection with any remaining tracked-change marker fails under both policies:
+the converter never silently accepts, rejects, drops, or relabels source markup it does not own.
 
 ## Readiness and diagnostics
 
@@ -763,15 +789,34 @@ output bytes happen to match.
 ## Verification artifacts
 
 The Node export suite writes a self-contained `npm-export/test-artifacts/view-artifacts.html` index
-after its scenarios complete. The #442 section links exact-match, substitution, missing,
-load-failure, and metric-difference HTML/PDF/PageMap/report evidence, screenshots, a canonical
-path-free font manifest, and the compared fingerprints. The index uses relative links so the
-uploaded directory remains directly browsable after download. Artifact generation is best-effort
-per scenario: evidence completed before a later failure remains linked alongside the structured
-failure report.
+after its scenarios complete. The index uses relative links so the uploaded directory remains
+directly browsable after download. Artifact generation is best-effort per scenario: evidence
+completed before a later failure remains linked alongside the structured failure report.
+
+The profile suite publishes this minimum matrix:
+
+| Scenario | Purpose | Required viewable evidence |
+|---|---|---|
+| `final` + `hidden` | Accepted-result baseline with no comment chrome | Source DOCX, standalone HTML, PDF, screenshot, PageMap, render report, HTML/PDF extracted text |
+| `original` + `inline` | Rejected-result text plus printable adjacent threads | The same successful artifacts plus normalized comment-thread evidence |
+| `markup` + `endnotes` | Printable inserted/deleted/moved text, formatting metadata, and document-end threads | The same successful artifacts plus a profile-comparison summary |
+| `markup` + `margin` | Review layout with page-owned margin threads | The same successful artifacts plus margin association/overflow evidence |
+| strict unsupported family | Fail-closed policy | Exact request/options, source inventory, structured warnings, and failed render report; no nominally complete PDF |
+
+The browser matrix owns `npm/test-artifacts/review-comment-profiles/index.html` and atomically
+updates `matrix.json` while it traverses all twelve profile pairs. Every row links its source DOCX,
+standalone HTML, screenshot, PageMap, render report, semantic audit, and per-case viewer; failures
+are captured per row and reported together only after the complete matrix has run. Playwright
+attachments contain the root viewer and manifest as a convenience, not as the retention contract.
+Node adds the exact printed PDF, PDF text extraction, and PDF inspection. Together the evidence
+makes accepted, rejected, inserted, deleted, reply, and resolved/unknown behavior inspectable
+without rerunning the test. The existing #442 section also
+links exact-match, substitution, missing, load-failure, and metric-difference evidence, a canonical
+path-free font manifest, and the compared fingerprints.
 
 The Playwright workflow runs export tests before the broader browser matrix and uploads
-`npm-export/test-artifacts/`, `npm/test-results/`, and the Playwright report under `if: always()`.
+`npm-export/test-artifacts/`, `npm/test-artifacts/`, `npm/test-results/`, and the Playwright report
+under `if: always()`.
 This makes the edit evidence available when tests complete successfully and keeps it available when
 an unrelated later gate fails.
 
@@ -804,9 +849,6 @@ fail before rendering.
 Issue #489's current whole-paragraph footnote splitter can clip a note tail and omit its PageMap
 geometry. Full footnote fidelity is explicitly unsupported until #489 lands; the exporter detects
 the clipped/oversized condition and fails rather than shipping a complete result with missing text.
-Production export tests cover both a single oversized paragraph (C) and an oversized leading
-paragraph with otherwise splittable siblings (C2), and require the failed report to mark PageMap and
-HTML bindings unavailable.
 
 Package preflight, raw source identity, revision/comment/media inventory, safety findings, and ZIP
 resource ceilings reuse #493's `PackageManifestGenerator` contract through its WASM surface. The

@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
+  COMMENT_PROFILES,
   DocxodusExportError,
   renderDocxFile,
+  REVIEW_PROFILES,
   type CommentProfile,
   type ExportResourceLimits,
   type FontLicenseAttestation,
@@ -136,12 +138,12 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (!outputPath) throw new Error("--output is required.");
     const reviewProfile = oneOf<ReviewProfile>(
       parsed.values["review-profile"],
-      ["final", "original", "markup"],
+      REVIEW_PROFILES,
       "--review-profile",
     );
     const commentProfile = oneOf<CommentProfile>(
       parsed.values.comments,
-      ["hidden", "inline", "endnotes", "margin"],
+      COMMENT_PROFILES,
       "--comments",
     );
     reportPath = parsed.values.report;

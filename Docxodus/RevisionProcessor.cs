@@ -17,18 +17,35 @@ namespace Docxodus
     public class RevisionProcessor
     {
         public static WmlDocument RejectRevisions(WmlDocument document)
+            => RejectRevisionsCore(document, includeAuxiliaryStories: false);
+
+        /// <summary>
+        /// Export-profile projection includes comment definitions and glossary
+        /// building blocks in addition to the historical body/running/note/style
+        /// scope. Kept separate so DocxDiff's documented input-normalization
+        /// behavior is not broadened implicitly.
+        /// </summary>
+        internal static WmlDocument RejectRevisionsForExportProfile(WmlDocument document)
+            => RejectRevisionsCore(document, includeAuxiliaryStories: true);
+
+        private static WmlDocument RejectRevisionsCore(
+            WmlDocument document, bool includeAuxiliaryStories)
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
                 using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
                 {
-                    RejectRevisions(doc);
+                    RejectRevisions(doc, includeAuxiliaryStories);
                 }
                 return streamDoc.GetModifiedWmlDocument();
             }
         }
 
         public static void RejectRevisions(WordprocessingDocument doc)
+            => RejectRevisions(doc, includeAuxiliaryStories: false);
+
+        private static void RejectRevisions(
+            WordprocessingDocument doc, bool includeAuxiliaryStories)
         {
             RejectRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -42,7 +59,15 @@ namespace Docxodus
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 RejectRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
 
-            ReverseRevisions(doc);
+            if (includeAuxiliaryStories)
+            {
+                if (doc.MainDocumentPart.WordprocessingCommentsPart != null)
+                    RejectRevisionsForPart(doc.MainDocumentPart.WordprocessingCommentsPart);
+                if (doc.MainDocumentPart.GlossaryDocumentPart != null)
+                    RejectRevisionsForPart(doc.MainDocumentPart.GlossaryDocumentPart);
+            }
+
+            ReverseRevisions(doc, includeAuxiliaryStories);
             AcceptRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
                 AcceptRevisionsForPart(part);
@@ -54,6 +79,13 @@ namespace Docxodus
                 AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
+            if (includeAuxiliaryStories)
+            {
+                if (doc.MainDocumentPart.WordprocessingCommentsPart != null)
+                    AcceptRevisionsForPart(doc.MainDocumentPart.WordprocessingCommentsPart);
+                if (doc.MainDocumentPart.GlossaryDocumentPart != null)
+                    AcceptRevisionsForPart(doc.MainDocumentPart.GlossaryDocumentPart);
+            }
         }
 
         // Reject revisions for those revisions that can't be rejected by inverting the sense of the revision, and then accepting.
@@ -434,7 +466,8 @@ namespace Docxodus
 
 
 
-        private static void ReverseRevisions(WordprocessingDocument doc)
+        private static void ReverseRevisions(
+            WordprocessingDocument doc, bool includeAuxiliaryStories = false)
         {
             ReverseRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -445,6 +478,13 @@ namespace Docxodus
                 ReverseRevisionsForPart(doc.MainDocumentPart.EndnotesPart);
             if (doc.MainDocumentPart.FootnotesPart != null)
                 ReverseRevisionsForPart(doc.MainDocumentPart.FootnotesPart);
+            if (includeAuxiliaryStories)
+            {
+                if (doc.MainDocumentPart.WordprocessingCommentsPart != null)
+                    ReverseRevisionsForPart(doc.MainDocumentPart.WordprocessingCommentsPart);
+                if (doc.MainDocumentPart.GlossaryDocumentPart != null)
+                    ReverseRevisionsForPart(doc.MainDocumentPart.GlossaryDocumentPart);
+            }
         }
 
         private static void ReverseRevisionsForPart(OpenXmlPart part)
@@ -1429,7 +1469,12 @@ namespace Docxodus
         }
 
         public static WmlDocument AcceptRevisions(WmlDocument document) =>
-            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: false);
+            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: false,
+                includeAuxiliaryStories: false);
+
+        internal static WmlDocument AcceptRevisionsForExportProfile(WmlDocument document) =>
+            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: false,
+                includeAuxiliaryStories: true);
 
         /// <summary>
         /// Accepts revisions for the IR reader while retaining adjacent, revision-free tables that
@@ -1440,26 +1485,33 @@ namespace Docxodus
         /// normalisation into a delete-plus-insert table diff.
         /// </summary>
         internal static WmlDocument AcceptRevisionsForIrReader(WmlDocument document) =>
-            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: true);
+            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: true,
+                includeAuxiliaryStories: false);
 
         private static WmlDocument AcceptRevisionsCore(
             WmlDocument document,
-            bool preservePreexistingCleanTableRuns)
+            bool preservePreexistingCleanTableRuns,
+            bool includeAuxiliaryStories)
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
                 using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
                 {
-                    AcceptRevisions(doc, preservePreexistingCleanTableRuns);
+                    AcceptRevisions(doc, preservePreexistingCleanTableRuns,
+                        includeAuxiliaryStories);
                 }
                 return streamDoc.GetModifiedWmlDocument();
             }
         }
 
         public static void AcceptRevisions(WordprocessingDocument doc) =>
-            AcceptRevisions(doc, preservePreexistingCleanTableRuns: false);
+            AcceptRevisions(doc, preservePreexistingCleanTableRuns: false,
+                includeAuxiliaryStories: false);
 
-        private static void AcceptRevisions(WordprocessingDocument doc, bool preservePreexistingCleanTableRuns)
+        private static void AcceptRevisions(
+            WordprocessingDocument doc,
+            bool preservePreexistingCleanTableRuns,
+            bool includeAuxiliaryStories)
         {
             AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -1472,6 +1524,15 @@ namespace Docxodus
                 AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
+            if (includeAuxiliaryStories)
+            {
+                if (doc.MainDocumentPart.WordprocessingCommentsPart != null)
+                    AcceptRevisionsForPart(doc.MainDocumentPart.WordprocessingCommentsPart,
+                        preservePreexistingCleanTableRuns);
+                if (doc.MainDocumentPart.GlossaryDocumentPart != null)
+                    AcceptRevisionsForPart(doc.MainDocumentPart.GlossaryDocumentPart,
+                        preservePreexistingCleanTableRuns);
+            }
         }
 
         private static void AcceptRevisionsForStylesDefinitionPart(StyleDefinitionsPart stylesDefinitionsPart)

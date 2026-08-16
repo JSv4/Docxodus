@@ -51,6 +51,45 @@ await renderDocxFile("contract.docx", {
 });
 ```
 
+## Review and comment profiles
+
+`reviewProfile` selects one deterministic view of native Word revisions:
+
+| Value | Rendered result |
+|---|---|
+| `final` | Accepted result: insertions and move destinations use final formatting; deletions and move sources are hidden. |
+| `original` | Rejected result: deletions and move sources use original formatting; insertions and move destinations are hidden. |
+| `markup` | Review result: supported insertions, deletions, moves, and formatting changes remain visibly marked with their available author/date metadata. |
+
+`commentProfile` is orthogonal to that view:
+
+| Value | Rendered result |
+|---|---|
+| `hidden` | Comment highlights, markers, and bodies are omitted without hiding the commented document text. |
+| `inline` | A print-visible comment thread is placed beside its first range/reference in story order. |
+| `endnotes` | Print-visible comment threads are collected in an ordered document-end section with reference links. |
+| `margin` | Print-visible comment threads are placed in the owning page's margin and associated with their ranges. |
+
+Visible modes retain each range and body, ordered replies, author and date when present, and a
+printable `open`, `resolved`, or `unknown` state. Missing extended-comment metadata is represented
+as `unknown`, never inferred. This contract applies in the body, headers, footers, footnotes, and
+endnotes and is shared by the browser API, Node API, framed host, and CLI. Orphaned and cyclic
+reply-parent chains remain visible as auditable independent roots, carry `data-comment-topology`,
+and produce `comment_parent_orphaned` or `comment_parent_cycle` warnings; strict policy rejects
+the same malformed topology. Hidden presentation still emits the complete report diagnostics while
+omitting comment bodies and markers from the published HTML/PDF.
+
+The input snapshot is immutable. `renderReport.source` always records its exact raw-package digest,
+byte length, and document version. `final` and `original` project an isolated package and record the
+projected digest and length as `derivedProfileSource`; `markup` renders the unchanged source and
+omits that field. The requested profiles participate in the layout digest and renderer fingerprint.
+
+The default `unsupportedContent: "warn"` policy records a structured diagnostic naming every
+unsupported revision, comment, or story family and its owning package part, and continues only when
+the limitation remains explicit. `"strict"` rejects before publishing output. Under either policy,
+`final` and `original` fail if any tracked-change marker remains after projection; neither profile
+silently accepts, rejects, removes, or relabels an unsupported edit.
+
 Caller `Uint8Array` values are synchronously copied. A caller-supplied Playwright Chromium
 `Browser` remains caller-owned; Docxodus closes only the fresh context it creates. Every runtime
 asset is length/hash checked against the public manifest and served at a routed `.invalid` origin.
@@ -68,8 +107,12 @@ tree signals. It repeats the barrier after reopening the serialized standalone d
 checks apply to the exact DOM Chromium prints. One total deadline bounds the operation; structured
 failures identify the incomplete phase and current pending resources. The end-to-end test output
 includes `test-artifacts/view-artifacts.html`, which links the successful PDF/HTML plus readiness,
-geometry, font-resolution, request, and failure evidence even when a later test fails. CI uploads
-that directory with `if: always()`, so a later test failure does not hide the completed evidence.
+geometry, font-resolution, request, and failure evidence even when a later test fails. Its profile
+matrix covers `final`/`hidden`, `original`/`inline`, `markup`/`endnotes`, and `markup`/`margin`.
+Successful rows retain the source DOCX, standalone HTML, PDF, screenshot, PageMap, render report,
+HTML/PDF extracted text, and profile-comparison summary; the strict-policy row retains its request
+and structured failed report. CI uploads that directory with `if: always()`, so a later test failure
+does not hide completed evidence.
 
 ## Deterministic fonts
 
@@ -110,7 +153,10 @@ mismatch, partial glyph coverage, synthesized faces, and unattested browser fall
 unverified outcome. Missing legal embedding evidence fails regardless of strictness.
 
 Reports expose requested stacks and face attributes, selected family/face, status, source, format,
-file digest/version, coverage, metric compatibility, and a canonical license-evidence identity.
+file digest/version, coverage, metric compatibility, browser-fallback availability, and a canonical
+license-evidence identity. A configured resolver miss remains `missing` even when Chromium can paint
+the sample through an unidentified generic fallback; that fallback observation is recorded
+separately and never upgrades the resolution status.
 The accompanying `fontIdentity` binds the resolver contract, substitution contract, and complete
 resolution decision set. Absolute font paths are excluded from generated CSS, standalone metadata,
 reports, diagnostics, and renderer fingerprints. Font bytes appear only in the standalone
@@ -128,6 +174,18 @@ docxodus convert contract.docx --to pdf --output contract.pdf \
   --page-map contract.pages.json
 ```
 
+The same vocabulary produces a rejected-result PDF or a review PDF without a second CLI policy:
+
+```console
+docxodus convert contract.docx --to pdf --output contract-original.pdf \
+  --review-profile original --comments inline \
+  --report contract-original.render.json --page-map contract-original.pages.json
+
+docxodus convert contract.docx --to pdf --output contract-review.pdf \
+  --review-profile markup --comments margin --unsupported-content strict \
+  --report contract-review.render.json --page-map contract-review.pages.json
+```
+
 Additional flags include `--document-version`, `--expected-source-digest`, `--title`,
 `--unsupported-content`, `--strict-fonts`, `--browser-executable`, repeatable `--limit
 name=integer`, repeatable `--font-directory`, `--font-license-attestations`, and
@@ -140,7 +198,6 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
   `docxodus/export-browser`; `@docxodus/export` owns filesystem discovery, licensing policy, and the
   Playwright bridge. Unattested system fonts remain `browserObserved` and cannot satisfy strict
   mode. A caller-owned browser is at most `callerAttested`, never `nodeVerified`.
-- The `original` review profile remains fail-closed until issue #444 completes its projection.
 - The broader generated-PDF fidelity ratchet is extended by issue #443.
 
 Failures are `DocxodusExportError` objects with stable code, phase, remediation, safe detail, and a

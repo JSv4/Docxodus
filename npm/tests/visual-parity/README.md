@@ -52,9 +52,9 @@ For every selected corpus entry, the generated-PDF runner performs one ordered, 
    and every internal destination must resolve to a page in the generated PDF.
 
 A page-count mismatch, out-of-contract physical page, semantic extraction failure, unresolved link,
-or conversion error is severe regardless of a visually white or similar page. Pixel severity and
-the reviewed disposition contract below decide whether a remaining visual difference gates strict
-mode.
+or conversion error fails every generated-PDF run regardless of raster similarity, strict mode, or
+attribution. Pixel severity and the reviewed disposition contract below decide only whether a
+remaining visual difference gates strict mode.
 
 ## Deterministic rendering contract
 
@@ -200,13 +200,13 @@ Severity is assigned by the worst signal:
 | major | ≥ 0.85 | ≥ 0.75 | ≤ 0.15 | ≤ 1 px |
 | severe | below major | below major | above major | > 1 px |
 
-A page-count mismatch is always severe. The generated-PDF path unconditionally fails conversion,
-page-count, MediaBox/CropBox, selectable-text, and hyperlink-contract errors; raster similarity or a
-reviewed disposition cannot excuse a broken hard signal. `DOCXODUS_VISUAL_PARITY_STRICT=1`
-additionally turns renderer-attributable severe raster cases into a failing gate (see the disposition
-contract below). This keeps the baseline useful while known environment deltas and reference
-deviations are tracked without waiving PDF correctness. Independently of strict mode, every run
-compares itself against the committed regression record described next.
+A page-count mismatch is always severe. The generated-PDF path also treats a MediaBox/CropBox origin
+or dimension delta beyond 0.5 point as severe; raster similarity cannot excuse the wrong physical
+paper. Those physical, page-count, conversion, and semantic contracts are unconditional.
+`DOCXODUS_VISUAL_PARITY_STRICT=1` additionally turns renderer-attributable severe raster cases into
+a failing gate (see the disposition contract below). This keeps the raster baseline useful while
+known environment deltas and reference deviations are tracked without waiving document correctness.
+Independently of strict mode, every run compares itself against the committed regression record.
 
 ## Regression ratchet
 
@@ -227,8 +227,8 @@ artifact expired in 14 days and nothing compared one run to the next.
 | mean SSIM | falls more than `tolerance.ssim` (0.0005) below the record |
 | worst ink F1 | falls more than `tolerance.inkF1` (0.001) below the record |
 | conversion | the case errors where the record has none |
-| physical geometry | a generated PDF fails the absolute MediaBox/CropBox contract |
-| semantics | generated-PDF selectable text or supported hyperlink targets fail |
+| physical geometry | a generated PDF violates its absolute MediaBox/CropBox contract |
+| semantics | generated selectable text or supported hyperlink expectations fail |
 | coverage | a recorded case is missing, or a measured case is unrecorded |
 
 The tolerances are tight because within one environment the benchmark is *deterministic* — two
@@ -255,9 +255,9 @@ DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 \
 npm run test:visual-parity
 ```
 
-The update path refuses a filtered run and any dirty or unverified worktree. Commit the
-implementation first, then generate the record from that exact clean commit so `sourceCommit`
-identifies reproducible source rather than merely the base of local edits. A passing run still lists
+The update path refuses a filtered run and any dirty or unidentified source tree, so a partial or
+unreproducible record cannot be committed. Commit the implementation first, then rerun the complete
+benchmark to bind the record to the exact 40-character source commit. A passing run still lists
 every improvement it measured, so a stale record announces itself. Set
 `DOCXODUS_VISUAL_PARITY_RATCHET=0` to observe without gating; the comparison is reported either
 way. A filtered run compares only the cases it measured.
@@ -355,7 +355,7 @@ DOCXODUS_VISUAL_PARITY_OUTPUT="$DOCXODUS_BROWSER_PARITY_OUTPUT" \
 Run selected manifest IDs:
 
 ```bash
-DOCXODUS_GENERATED_PDF_PARITY_FILTER=pdf-footnote,pdf-chart \
+DOCXODUS_VISUAL_PARITY_FILTER=text-formatting,merged-table \
 DOCXODUS_GENERATED_PDF_PARITY_OUTPUT="$(mktemp -d)" \
   npm --prefix npm run test:generated-pdf-parity
 ```
@@ -370,11 +370,12 @@ the summary records the source commit and whether the worktree was dirty.
 
 The generated-PDF runner writes progress incrementally. A failed case retains all PDFs and page
 evidence produced before the failure and receives structured failure evidence rather than being
-deleted. Pull-request, manual, and scheduled CI create `ci-context.json` and a pending viewer before installing external tools, so even
+deleted. CI creates `ci-context.json` and a pending viewer before installing external tools, so even
 an apt, LibreOffice, npm, build, or run-start failure leaves a viewable artifact that names the
-commit and workflow run. `.github/workflows/visual-parity.yml` uploads this root with `if: always()`,
-retains it for 14 days, and treats a missing artifact root as an error. The browser-page report is
-uploaded separately, also on failure; one benchmark cannot suppress the other's evidence.
+commit and workflow run. `.github/workflows/visual-parity.yml` runs on pull requests, weekly, and
+on demand; it uploads this root with `if: always()`, retains it for 14 days, and treats a missing
+artifact root as an error. The browser-page report is uploaded separately, also on failure; one
+benchmark cannot suppress the other's evidence.
 
 The generated-PDF test runs even when the preceding browser-page benchmark fails, unless the job was
 explicitly cancelled. Both failures still contribute to the job result. A timeout may interrupt the

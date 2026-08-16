@@ -5,13 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Explicit review and comment export profiles (#444).** Browser, Node, and CLI export now require
+  independent `final`/`original`/`markup` revision and `hidden`/`inline`/`endnotes`/`margin`
+  comment policies. Final and original projection is derived from immutable source bytes; markup
+  preserves tracked-change authorship and timestamps; comment threads retain author, date, reply,
+  and resolution metadata across body, running stories, and notes. Orphaned or cyclic reply metadata
+  renders as auditable roots with structured diagnostics. Unsupported or residual revision families
+  likewise warn and fail closed under strict policy. Browser and PDF matrices retain source, HTML,
+  PDF, screenshots, PageMaps, reports, semantic inspections, and expected strict-failure evidence
+  before assertions run; the complete 12-case browser gallery has one portable durable index.
 - **Generated-PDF visual-fidelity ratchet (#443).** A compact, provenance- and hash-pinned legal
   document corpus now runs through the supported Node export API and LibreOffice, rasterizes both
   PDFs under one Poppler contract, and gates page counts, physical boxes, searchable text,
   hyperlink targets, SSIM, and directional ink precision/recall/F1 independently. CI always
   uploads an incremental HTML evidence viewer with PDFs, page rasters, overlays, metrics, hashes,
   environment fingerprints, and retained failure reports; the reviewable numbers-only baseline
-  prevents regressions without committing generated artifacts.
+  prevents regressions without committing generated artifacts. Pull requests run the full bounded
+  comparison; conversion, page-count, physical-geometry, and semantic failures are unconditional,
+  while strict mode separately governs attributable severe raster differences. Baseline refreshes
+  refuse dirty worktrees and bind to the exact tested commit.
 - **Verified font runtime and deterministic embedding (#442).** Browser and Node export now resolve
   configured font faces against the shared substitution contract, verify exact file bytes and
   embedding permissions, and carry canonical evidence through offline HTML, PDF, render reports,

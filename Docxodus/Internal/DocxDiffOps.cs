@@ -71,6 +71,25 @@ internal static class DocxDiffOps
         return RevisionProcessor.RejectRevisions(new WmlDocument("redline.docx", bytes)).DocumentByteArray;
     }
 
+    /// <summary>
+    /// Materialize the standalone export review profile on an isolated package.
+    /// Unlike the historical diff-engine accept/reject helpers, export projection
+    /// also resolves revisions inside comment definitions and glossary stories.
+    /// </summary>
+    public static byte[] ProjectReviewProfile(byte[] bytes, string profile)
+    {
+        if (bytes == null || bytes.Length == 0)
+            throw new ArgumentException("No document data provided", nameof(bytes));
+        var document = new WmlDocument("profile-source.docx", bytes);
+        return profile switch
+        {
+            "final" => RevisionProcessor.AcceptRevisionsForExportProfile(document).DocumentByteArray,
+            "original" => RevisionProcessor.RejectRevisionsForExportProfile(document).DocumentByteArray,
+            "markup" => (byte[])bytes.Clone(),
+            _ => throw new ArgumentException("review profile must be final, original, or markup", nameof(profile)),
+        };
+    }
+
     private static (WmlDocument left, WmlDocument right, DocxDiffSettings settings) Prepare(
         byte[] leftBytes, byte[] rightBytes, string? settingsJson)
     {

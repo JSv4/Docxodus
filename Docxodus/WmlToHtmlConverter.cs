@@ -636,8 +636,43 @@ namespace Docxodus
         public string Author { get; set; }
         public string Date { get; set; }
         public string Initials { get; set; }
+        /// <summary>
+        /// The parent comment id for a threaded reply, or null for a root comment
+        /// (and for malformed/unresolvable parent metadata).
+        /// </summary>
+        public int? ParentId { get; set; }
+        /// <summary>
+        /// True for resolved, false for open, and null when the package does not
+        /// provide a recognized w15:done value.
+        /// </summary>
+        public bool? Resolved { get; set; }
+        /// <summary>
+        /// Whether the commentsExtended parent chain is usable as a reply tree.
+        /// Invalid chains render as independent roots and retain this status as
+        /// auditable HTML metadata instead of being silently reinterpreted.
+        /// </summary>
+        public CommentThreadTopology ThreadTopology { get; internal set; }
+        /// <summary>The raw w15:paraIdParent requested by commentsExtended, when present.</summary>
+        public string RequestedParentParaId { get; internal set; }
+        /// <summary>The resolved OPC part URI that supplied threaded-comment metadata.</summary>
+        public string ThreadMetadataPartUri { get; internal set; }
         internal XElement SourceElement { get; set; }
+        internal int DefinitionOrder { get; set; }
         public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
+    }
+
+    public enum CommentThreadTopology
+    {
+        Valid,
+        OrphanedParent,
+        CyclicParent,
+    }
+
+    internal sealed class CommentTopologyDiagnostic
+    {
+        required public string Kind { get; init; }
+        required public string NodeId { get; init; }
+        required public string PartUri { get; init; }
     }
 
     /// <summary>
@@ -666,6 +701,30 @@ namespace Docxodus
         /// open; its reference marker becomes the visible presentation anchor instead.
         /// </summary>
         public HashSet<int> RenderedRangeIds { get; } = new HashSet<int>();
+
+        /// <summary>
+        /// Thread roots whose visible inline note tree has already been emitted.
+        /// A reply can have its own reference marker, but its body must not cause
+        /// the complete thread to be duplicated in the printable output.
+        /// </summary>
+        public HashSet<int> RenderedInlineThreadRootIds { get; } = new HashSet<int>();
+
+        /// <summary>Validated reply adjacency, sorted by comments-part definition order.</summary>
+        internal Dictionary<int, List<CommentInfo>> RepliesByParentId { get; }
+            = new Dictionary<int, List<CommentInfo>>();
+
+        /// <summary>Precomputed root identity for every comment in the normalized forest.</summary>
+        internal Dictionary<int, int> ThreadRootIdByCommentId { get; }
+            = new Dictionary<int, int>();
+
+        /// <summary>The resolved OPC URI that supplied threaded-comment metadata.</summary>
+        internal string CommentsExtendedPartUri { get; set; }
+
+        /// <summary>Ambiguous comment identities retained as inert conversion evidence.</summary>
+        internal List<CommentTopologyDiagnostic> TopologyDiagnostics { get; } = new();
+
+        /// <summary>The package whose already-formatted comment paragraphs are rendered.</summary>
+        internal WordprocessingDocument Document { get; set; }
     }
 
     /// <summary>
@@ -906,6 +965,14 @@ namespace Docxodus
                 RevisionAccepter.AcceptRevisions(wordDoc);
             }
 
+            // Hidden presentation still owes callers malformed-thread diagnostics. Capture
+            // commentsExtended topology before MarkupSimplifier removes comment parts/ranges;
+            // visible modes load after simplification so their source elements match the tree
+            // transformed below.
+            var commentTracker = new CommentTracker();
+            if (!htmlConverterSettings.RenderComments)
+                LoadComments(wordDoc, commentTracker);
+
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
                 RemoveComments = !htmlConverterSettings.RenderComments,
@@ -955,14 +1022,15 @@ namespace Docxodus
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart);
             AnnotateForSections(wordDoc);
 
-            // Load comments if rendering is enabled and store as annotation
-            var commentTracker = new CommentTracker();
+            // Load visible comment content after simplification and store it as an annotation.
             if (htmlConverterSettings.RenderComments)
             {
                 LoadComments(wordDoc, commentTracker);
             }
-            // Store tracker as annotation on the root element for access during transform
-            rootElement.AddAnnotation(commentTracker);
+            // A comment range/reference can live in every rendered Word story. Keep one
+            // shared tracker so reference order and thread rendering remain deterministic
+            // across body, running stories, footnotes, and endnotes.
+            AttachCommentTrackerToStoryRoots(wordDoc, commentTracker);
 
             // Load custom annotations if rendering is enabled
             var annotationTracker = new AnnotationTracker();
@@ -2056,9 +2124,50 @@ namespace Docxodus
             sb.AppendLine("    margin: 0;");
             sb.AppendLine("}");
 
-            // Inline mode - tooltip on hover
+            sb.AppendLine($"span.{prefix}status {{");
+            sb.AppendLine("    color: #555;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}reply-label {{");
+            sb.AppendLine("    font-weight: bold;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"ol.{prefix}replies {{");
+            sb.AppendLine("    list-style: none;");
+            sb.AppendLine("    margin: 0.75em 0 0 1em;");
+            sb.AppendLine("    padding: 0;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"li.{prefix}reply {{");
+            sb.AppendLine("    border-left-color: #90a4ae;");
+            sb.AppendLine("}");
+
+            // Inline mode remains readable in print/PDF; title/data attributes are
+            // supplementary metadata, never the only copy of a comment body.
             sb.AppendLine($"span.{prefix}highlight[title] {{");
             sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}inline-thread {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    margin: 0 0.25em;");
+            sb.AppendLine("    padding: 0.35em;");
+            sb.AppendLine("    background-color: #fff9c4;");
+            sb.AppendLine("    border: 1px solid #fbc02d;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}inline-comment,");
+            sb.AppendLine($"span.{prefix}inline-body,");
+            sb.AppendLine($"span.{prefix}inline-replies,");
+            sb.AppendLine($"span.{prefix}paragraph {{");
+            sb.AppendLine("    display: block;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}inline-reply {{");
+            sb.AppendLine("    margin-left: 1em;");
+            sb.AppendLine("    border-left: 2px solid #90a4ae;");
+            sb.AppendLine("    padding-left: 0.5em;");
             sb.AppendLine("}");
 
             // Margin mode styles
@@ -2101,11 +2210,19 @@ namespace Docxodus
 
                 // Margin comment header
                 sb.AppendLine($"div.{prefix}margin-note-header {{");
-                sb.AppendLine("    display: flex;");
-                sb.AppendLine("    justify-content: space-between;");
-                sb.AppendLine("    align-items: center;");
+                // A Word margin can be much narrower than the legacy 250px continuous-view
+                // column. Use a compact three-line header with an out-of-flow back-reference:
+                // every field remains printable without allowing link chrome to consume an
+                // additional line in a dense page margin.
+                sb.AppendLine("    display: block;");
+                sb.AppendLine("    position: relative;");
+                sb.AppendLine("    overflow-wrap: anywhere;");
                 sb.AppendLine("    margin-bottom: 0.25em;");
                 sb.AppendLine("    font-size: 0.9em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"div.{prefix}margin-note-header > span {{");
+                sb.AppendLine("    display: block;");
                 sb.AppendLine("}");
 
                 sb.AppendLine($"span.{prefix}margin-author {{");
@@ -2116,6 +2233,7 @@ namespace Docxodus
                 sb.AppendLine($"span.{prefix}margin-date {{");
                 sb.AppendLine("    color: #666;");
                 sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("    overflow-wrap: anywhere;");
                 sb.AppendLine("}");
 
                 // Margin comment body
@@ -2127,8 +2245,20 @@ namespace Docxodus
                 sb.AppendLine("    margin: 0;");
                 sb.AppendLine("}");
 
+                sb.AppendLine($"div.{prefix}margin-replies {{");
+                sb.AppendLine("    margin: 0.5em 0 0 0.5em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"div.{prefix}margin-reply {{");
+                sb.AppendLine("    box-shadow: none;");
+                sb.AppendLine("    border-left-color: #90a4ae;");
+                sb.AppendLine("}");
+
                 // Back reference link
                 sb.AppendLine($"a.{prefix}margin-backref {{");
+                sb.AppendLine("    position: absolute;");
+                sb.AppendLine("    top: 0;");
+                sb.AppendLine("    right: 0;");
                 sb.AppendLine("    color: #1976d2;");
                 sb.AppendLine("    text-decoration: none;");
                 sb.AppendLine("    font-size: 0.85em;");
@@ -2710,7 +2840,8 @@ namespace Docxodus
                             : new XElement(Xhtml.title, new XText(string.Empty)),
                         new XElement(Xhtml.meta,
                             new XAttribute("name", "Generator"),
-                            new XAttribute("content", "PowerTools for Open XML"))),
+                            new XAttribute("content", "PowerTools for Open XML")),
+                        RenderCommentTopologyMetadata(GetCommentTracker(element))),
                     element.Elements()
                         .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             }
@@ -2751,7 +2882,7 @@ namespace Docxodus
                         new XElement(Xhtml.div,
                             new XAttribute("class", prefix + "margin-content"),
                             mainContent),
-                        RenderMarginCommentsColumn(wordDoc, settings, tracker, prefix));
+                        RenderMarginCommentsColumn(settings, tracker, prefix));
 
                     bodyContent.Add(marginContainer);
                 }
@@ -2808,7 +2939,7 @@ namespace Docxodus
                     var tracker = GetCommentTracker(element);
                     if (tracker != null)
                     {
-                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                            var commentsSection = RenderCommentsSection(settings, tracker);
                         if (commentsSection != null)
                             bodyContent.Add(commentsSection);
                     }
@@ -4099,6 +4230,7 @@ namespace Docxodus
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
         {
+            tracker.Document = wordDoc;
             var commentsPart = wordDoc.MainDocumentPart.WordprocessingCommentsPart;
             if (commentsPart == null)
                 return;
@@ -4107,21 +4239,226 @@ namespace Docxodus
             if (commentsXDoc.Root == null)
                 return;
 
-            foreach (var comment in commentsXDoc.Root.Elements(W.comment))
+            var comments = commentsXDoc.Root.Elements(W.comment).ToList();
+            var idByParaId = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            for (var index = 0; index < comments.Count; index++)
             {
+                var comment = comments[index];
                 var id = (int?)comment.Attribute(W.id);
                 if (id == null)
                     continue;
 
-                tracker.Comments[id.Value] = new CommentInfo
+                if (tracker.Comments.ContainsKey(id.Value))
+                {
+                    tracker.TopologyDiagnostics.Add(new CommentTopologyDiagnostic
+                    {
+                        Kind = "duplicate_comment_id",
+                        NodeId = id.Value.ToString(CultureInfo.InvariantCulture),
+                        PartUri = commentsPart.Uri.ToString(),
+                    });
+                    continue;
+                }
+
+                tracker.Comments.Add(id.Value, new CommentInfo
                 {
                     Id = id.Value,
                     Author = (string)comment.Attribute(W.author),
                     Date = (string)comment.Attribute(W.date),
                     Initials = (string)comment.Attribute(W.initials),
                     SourceElement = comment,
+                    DefinitionOrder = index,
                     ContentParagraphs = comment.Elements(W.p).ToList()
-                };
+                });
+
+                var paraId = (string)comment.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+                if (!string.IsNullOrEmpty(paraId))
+                {
+                    if (idByParaId.ContainsKey(paraId))
+                    {
+                        tracker.TopologyDiagnostics.Add(new CommentTopologyDiagnostic
+                        {
+                            Kind = "duplicate_paragraph_id",
+                            NodeId = id.Value.ToString(CultureInfo.InvariantCulture),
+                            PartUri = commentsPart.Uri.ToString(),
+                        });
+                    }
+                    else
+                    {
+                        idByParaId.Add(paraId, id.Value);
+                    }
+                }
+            }
+
+            var commentsExPart = wordDoc.MainDocumentPart.WordprocessingCommentsExPart;
+            tracker.CommentsExtendedPartUri = commentsExPart?.Uri?.ToString();
+            var commentsEx = new Dictionary<string, XElement>(StringComparer.Ordinal);
+            foreach (var entry in commentsExPart?.GetXDocument().Root?
+                .Elements(Internal.CommentOps.W15 + "commentEx")
+                ?? Enumerable.Empty<XElement>())
+            {
+                var paraId = (string)entry.Attribute(Internal.CommentOps.W15 + "paraId");
+                if (paraId == null)
+                    continue;
+                if (!commentsEx.TryAdd(paraId, entry))
+                {
+                    tracker.TopologyDiagnostics.Add(new CommentTopologyDiagnostic
+                    {
+                        Kind = "duplicate_thread_metadata",
+                        NodeId = idByParaId.TryGetValue(paraId, out var nodeId)
+                            ? nodeId.ToString(CultureInfo.InvariantCulture)
+                            : paraId,
+                        PartUri = commentsExPart.Uri.ToString(),
+                    });
+                }
+            }
+
+            foreach (var comment in comments)
+            {
+                var id = (int?)comment.Attribute(W.id);
+                if (id == null || !tracker.Comments.TryGetValue(id.Value, out var info))
+                    continue;
+                info.ThreadMetadataPartUri = tracker.CommentsExtendedPartUri;
+
+                var paraId = (string)comment.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+                if (string.IsNullOrEmpty(paraId) || !commentsEx.TryGetValue(paraId, out var commentEx))
+                    continue;
+
+                info.Resolved = ParseCommentResolution(
+                    (string)commentEx.Attribute(Internal.CommentOps.W15 + "done"));
+                var parentParaId = (string)commentEx.Attribute(
+                    Internal.CommentOps.W15 + "paraIdParent");
+                if (string.IsNullOrEmpty(parentParaId))
+                    continue;
+
+                info.RequestedParentParaId = parentParaId;
+                if (idByParaId.TryGetValue(parentParaId, out var parentId))
+                    info.ParentId = parentId;
+                else
+                    info.ThreadTopology = CommentThreadTopology.OrphanedParent;
+            }
+
+            NormalizeInvalidCommentTopology(tracker);
+        }
+
+        private static void NormalizeInvalidCommentTopology(CommentTracker tracker)
+        {
+            var cyclic = new HashSet<int>();
+            var processed = new HashSet<int>();
+            foreach (var start in tracker.Comments.Values)
+            {
+                if (processed.Contains(start.Id))
+                    continue;
+
+                var path = new List<int>();
+                var pathIndex = new Dictionary<int, int>();
+                var cursor = start;
+                while (!processed.Contains(cursor.Id))
+                {
+                    if (pathIndex.TryGetValue(cursor.Id, out var cycleStart))
+                    {
+                        for (var index = cycleStart; index < path.Count; index++)
+                            cyclic.Add(path[index]);
+                        break;
+                    }
+                    pathIndex.Add(cursor.Id, path.Count);
+                    path.Add(cursor.Id);
+                    if (cursor.ParentId is not int parentId
+                        || !tracker.Comments.TryGetValue(parentId, out cursor))
+                        break;
+                }
+                processed.UnionWith(path);
+            }
+
+            foreach (var comment in tracker.Comments.Values)
+            {
+                if (cyclic.Contains(comment.Id))
+                    comment.ThreadTopology = CommentThreadTopology.CyclicParent;
+                if (comment.ThreadTopology != CommentThreadTopology.Valid)
+                    comment.ParentId = null;
+            }
+
+            RebuildCommentThreadIndex(tracker);
+        }
+
+        private static void RebuildCommentThreadIndex(CommentTracker tracker)
+        {
+            tracker.RepliesByParentId.Clear();
+            tracker.ThreadRootIdByCommentId.Clear();
+            foreach (var comment in tracker.Comments.Values
+                .Where(comment => comment.ParentId != null)
+                .OrderBy(comment => comment.DefinitionOrder)
+                .ThenBy(comment => comment.Id))
+            {
+                var parentId = comment.ParentId.Value;
+                if (!tracker.RepliesByParentId.TryGetValue(parentId, out var replies))
+                {
+                    replies = new List<CommentInfo>();
+                    tracker.RepliesByParentId.Add(parentId, replies);
+                }
+                replies.Add(comment);
+            }
+
+            foreach (var root in tracker.Comments.Values
+                .Where(comment => comment.ParentId == null)
+                .OrderBy(comment => comment.DefinitionOrder)
+                .ThenBy(comment => comment.Id))
+            {
+                var pending = new Stack<CommentInfo>();
+                pending.Push(root);
+                while (pending.Count > 0)
+                {
+                    var current = pending.Pop();
+                    if (!tracker.ThreadRootIdByCommentId.TryAdd(current.Id, root.Id))
+                        continue;
+                    if (!tracker.RepliesByParentId.TryGetValue(current.Id, out var replies))
+                        continue;
+                    for (var index = replies.Count - 1; index >= 0; index--)
+                        pending.Push(replies[index]);
+                }
+            }
+
+            // Defensive fallback for duplicate/corrupt IDs: every loaded definition still gets a
+            // deterministic independent identity even if it was unreachable from the forest roots.
+            foreach (var comment in tracker.Comments.Values)
+                tracker.ThreadRootIdByCommentId.TryAdd(comment.Id, comment.Id);
+        }
+
+        private static bool? ParseCommentResolution(string value)
+        {
+            if (value == null)
+                return null;
+            if (value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("on", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("off", StringComparison.OrdinalIgnoreCase))
+                return false;
+            return null;
+        }
+
+        private static void AttachCommentTrackerToStoryRoots(
+            WordprocessingDocument wordDoc, CommentTracker tracker)
+        {
+            var main = wordDoc.MainDocumentPart;
+            if (main == null)
+                return;
+
+            var roots = new List<XElement>
+            {
+                main.GetXDocument().Root,
+            };
+            roots.AddRange(main.HeaderParts.Select(part => part.GetXDocument().Root));
+            roots.AddRange(main.FooterParts.Select(part => part.GetXDocument().Root));
+            if (main.FootnotesPart != null)
+                roots.Add(main.FootnotesPart.GetXDocument().Root);
+            if (main.EndnotesPart != null)
+                roots.Add(main.EndnotesPart.GetXDocument().Root);
+
+            foreach (var root in roots.Where(root => root != null).Distinct())
+            {
+                root.RemoveAnnotations<CommentTracker>();
+                root.AddAnnotation(tracker);
             }
         }
 
@@ -4304,7 +4641,10 @@ namespace Docxodus
                 // owning page. Make the already-visible reference marker that presentation point.
                 // Margin mode uses data-comment-id to select the page-owned note clone; inline mode
                 // additionally carries the comment-story identities used by PageMap/search.
-                marker.Add(new XAttribute("data-comment-id", id.Value.ToString()));
+                var presentationId = settings.CommentRenderMode == CommentRenderMode.Margin
+                    ? CommentThreadRootId(tracker, id.Value)
+                    : id.Value;
+                marker.Add(new XAttribute("data-comment-id", presentationId.ToString()));
                 if (settings.CommentRenderMode == CommentRenderMode.Inline && comment != null)
                     marker.Add(SourceAnchorIdentityAttribute(settings, comment.SourceElement));
             }
@@ -4335,27 +4675,32 @@ namespace Docxodus
                 }
             }
 
+            if (settings.CommentRenderMode == CommentRenderMode.Inline && comment != null)
+            {
+                var rootId = CommentThreadRootId(tracker, comment.Id);
+                if (tracker.RenderedInlineThreadRootIds.Add(rootId)
+                    && tracker.Comments.TryGetValue(rootId, out var rootComment))
+                {
+                    return new object[]
+                    {
+                        presentation,
+                        RenderInlineCommentThread(settings, tracker, rootComment, prefix),
+                    };
+                }
+            }
+
             return presentation;
         }
 
-        private static XElement RenderCommentsSection(WordprocessingDocument wordDoc,
+        private static XElement RenderCommentsSection(
             WmlToHtmlConverterSettings settings, CommentTracker tracker)
         {
             if (!settings.RenderComments || !tracker.Comments.Any())
                 return null;
 
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
-
-            // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = tracker.ReferencedCommentIds.Any()
-                ? tracker.ReferencedCommentIds
-                    .Where(id => tracker.Comments.ContainsKey(id))
-                    .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id);
-
-            var commentItems = orderedComments
-                .Select(c => RenderCommentItem(wordDoc, settings, c, prefix))
-                .Where(item => item != null)
+            var commentItems = OrderedCommentThreadRoots(tracker)
+                .Select(c => RenderCommentItem(settings, tracker, c, prefix))
                 .ToList();
 
             if (!commentItems.Any())
@@ -4369,87 +4714,33 @@ namespace Docxodus
                     commentItems));
         }
 
-        private static XElement RenderCommentItem(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix)
+        private static XElement RenderCommentItem(
+            WmlToHtmlConverterSettings settings, CommentTracker tracker,
+            CommentInfo comment, string prefix)
         {
-            var li = new XElement(Xhtml.li,
-                new XAttribute("id", $"comment-{comment.Id}"),
-                new XAttribute("class", prefix.TrimEnd('-')),
-                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
-
-            if (settings.IncludeCommentMetadata)
-            {
-                if (comment.Author != null)
-                    li.Add(new XAttribute("data-author", comment.Author));
-                if (comment.Date != null)
-                    li.Add(new XAttribute("data-date", comment.Date));
-            }
-
-            // Header with author, date, and back link
-            var header = new XElement(Xhtml.div,
-                new XAttribute("class", prefix + "header"));
-
-            if (comment.Author != null)
-            {
-                header.Add(new XElement(Xhtml.span,
-                    new XAttribute("class", prefix + "author"),
-                    comment.Author));
-            }
-
-            if (comment.Date != null)
-            {
-                // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
+            return RenderCommentTree(
+                tracker,
+                comment,
+                (current, _) =>
                 {
-                    header.Add(new XElement(Xhtml.span,
-                        new XAttribute("class", prefix + "date"),
-                        dt.ToString("MMM d, yyyy")));
-                }
-            }
-
-            header.Add(new XElement(Xhtml.a,
-                new XAttribute("href", $"#comment-ref-{comment.Id}"),
-                new XAttribute("class", prefix + "backref"),
-                "↩"));
-
-            li.Add(header);
-
-            // Comment body - extract text content from paragraphs
-            var body = new XElement(Xhtml.div,
-                new XAttribute("class", prefix + "body"));
-
-            foreach (var para in comment.ContentParagraphs)
-            {
-                // Skip the annotation reference run and get text content
-                var textContent = para.Descendants(W.t)
-                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
-                    .Select(t => t.Value)
-                    .StringConcatenate();
-
-                if (!string.IsNullOrWhiteSpace(textContent))
-                {
-                    body.Add(new XElement(Xhtml.p,
-                        SourceAnchorIdentityAttribute(settings, para), textContent));
-                }
-            }
-
-            // Only add if body has content
-            if (body.HasElements)
-            {
-                li.Add(body);
-            }
-            else
-            {
-                // Add empty paragraph to avoid empty li
-                li.Add(new XElement(Xhtml.div,
-                    new XAttribute("class", prefix + "body"),
-                    new XElement(Xhtml.p, "(empty comment)")));
-            }
-
-            return li;
+                    var item = new XElement(Xhtml.li,
+                        new XAttribute("id", $"comment-{current.Id}"),
+                        new XAttribute("class", current.ParentId == null
+                            ? prefix.TrimEnd('-')
+                            : prefix.TrimEnd('-') + " " + prefix + "reply"),
+                        SourceAnchorIdentityAttribute(settings, current.SourceElement));
+                    AddCommentSemanticAttributes(item, settings, current);
+                    item.Add(RenderCommentHeader(current, comment.Id, prefix,
+                        margin: false, inline: false));
+                    item.Add(RenderCommentBody(settings, tracker, current, prefix,
+                        prefix + "body", Xhtml.div, Xhtml.p));
+                    return item;
+                },
+                replies => new XElement(Xhtml.ol,
+                    new XAttribute("class", prefix + "replies"), replies));
         }
 
-        private static XElement RenderMarginCommentsColumn(WordprocessingDocument wordDoc,
+        private static XElement RenderMarginCommentsColumn(
             WmlToHtmlConverterSettings settings, CommentTracker tracker, string prefix)
         {
             var marginColumn = new XElement(Xhtml.aside,
@@ -4458,16 +4749,10 @@ namespace Docxodus
             if (tracker == null || !tracker.Comments.Any())
                 return marginColumn;
 
-            // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = tracker.ReferencedCommentIds.Any()
-                ? tracker.ReferencedCommentIds
-                    .Where(id => tracker.Comments.ContainsKey(id))
-                    .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id);
-
-            foreach (var comment in orderedComments)
+            foreach (var comment in OrderedCommentThreadRoots(tracker))
             {
-                var marginNote = RenderMarginCommentNote(settings, comment, prefix);
+                var marginNote = RenderMarginCommentNote(settings, tracker, comment, prefix,
+                    isThreadRoot: true);
                 if (marginNote != null)
                     marginColumn.Add(marginNote);
             }
@@ -4476,84 +4761,283 @@ namespace Docxodus
         }
 
         private static XElement RenderMarginCommentNote(WmlToHtmlConverterSettings settings,
-            CommentInfo comment, string prefix)
+            CommentTracker tracker, CommentInfo comment, string prefix, bool isThreadRoot)
         {
-            var note = new XElement(Xhtml.div,
-                new XAttribute("id", $"comment-{comment.Id}"),
-                new XAttribute("class", prefix + "margin-note"),
-                new XAttribute("data-comment-id", comment.Id.ToString()),
-                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
+            return RenderCommentTree(
+                tracker,
+                comment,
+                (current, root) =>
+                {
+                    var note = new XElement(Xhtml.div,
+                        new XAttribute("id", $"comment-{current.Id}"),
+                        new XAttribute("class", root && isThreadRoot
+                            ? prefix + "margin-note"
+                            : prefix + "margin-note " + prefix + "margin-reply"),
+                        SourceAnchorIdentityAttribute(settings, current.SourceElement));
+                    if (root && isThreadRoot)
+                        note.Add(new XAttribute("data-comment-id", current.Id.ToString()));
+                    AddCommentSemanticAttributes(note, settings, current);
+                    note.Add(RenderCommentHeader(current, comment.Id, prefix,
+                        margin: true, inline: false));
+                    note.Add(RenderCommentBody(settings, tracker, current, prefix,
+                        prefix + "margin-note-body", Xhtml.div, Xhtml.p));
+                    return note;
+                },
+                replies => new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "margin-replies"), replies));
+        }
 
-            if (settings.IncludeCommentMetadata)
+        private static XElement RenderCommentTree(
+            CommentTracker tracker,
+            CommentInfo root,
+            Func<CommentInfo, bool, XElement> renderNode,
+            Func<IReadOnlyList<XElement>, XElement> renderReplies)
+        {
+            var rootElement = renderNode(root, true);
+            var pending = new Stack<(CommentInfo Comment, XElement Element)>();
+            pending.Push((root, rootElement));
+            while (pending.Count > 0)
             {
-                if (comment.Author != null)
-                    note.Add(new XAttribute("data-author", comment.Author));
-                if (comment.Date != null)
-                    note.Add(new XAttribute("data-date", comment.Date));
+                var current = pending.Pop();
+                var replies = OrderedCommentReplies(tracker, current.Comment.Id).ToList();
+                if (replies.Count == 0)
+                    continue;
+
+                var replyElements = replies
+                    .Select(reply => renderNode(reply, false))
+                    .ToList();
+                current.Element.Add(renderReplies(replyElements));
+                for (var index = replies.Count - 1; index >= 0; index--)
+                    pending.Push((replies[index], replyElements[index]));
+            }
+            return rootElement;
+        }
+
+        private static int CommentThreadRootId(CommentTracker tracker, int commentId)
+            => tracker.ThreadRootIdByCommentId.TryGetValue(commentId, out var rootId)
+                ? rootId
+                : commentId;
+
+        private static IEnumerable<CommentInfo> OrderedCommentThreadRoots(CommentTracker tracker)
+        {
+            var emitted = new HashSet<int>();
+            foreach (var referencedId in tracker.ReferencedCommentIds)
+            {
+                var rootId = CommentThreadRootId(tracker, referencedId);
+                if (emitted.Add(rootId) && tracker.Comments.TryGetValue(rootId, out var root))
+                    yield return root;
             }
 
-            // Header with author, date, and back link
-            var header = new XElement(Xhtml.div,
-                new XAttribute("class", prefix + "margin-note-header"));
+            foreach (var root in tracker.Comments.Values
+                .Where(comment => comment.ParentId == null)
+                .OrderBy(comment => comment.DefinitionOrder)
+                .ThenBy(comment => comment.Id))
+            {
+                if (emitted.Add(root.Id))
+                    yield return root;
+            }
+        }
 
+        private static IEnumerable<CommentInfo> OrderedCommentReplies(
+            CommentTracker tracker, int parentId) =>
+            tracker.RepliesByParentId.TryGetValue(parentId, out var replies)
+                ? replies
+                : Enumerable.Empty<CommentInfo>();
+
+        private static string CommentStatusToken(CommentInfo comment) =>
+            comment.Resolved == true ? "resolved"
+            : comment.Resolved == false ? "open"
+            : "unknown";
+
+        private static string CommentStatusLabel(CommentInfo comment) =>
+            comment.Resolved == true ? "Resolved"
+            : comment.Resolved == false ? "Open"
+            : "Status unknown";
+
+        private static IEnumerable<XElement> RenderCommentTopologyMetadata(CommentTracker tracker)
+        {
+            if (tracker == null)
+                return Enumerable.Empty<XElement>();
+            var threadDiagnostics = tracker.Comments.Values
+                .Where(comment => comment.ThreadTopology != CommentThreadTopology.Valid)
+                .OrderBy(comment => comment.DefinitionOrder)
+                .ThenBy(comment => comment.Id)
+                .Select(comment => new XElement(Xhtml.meta,
+                    new XAttribute("name", "docxodus-comment-topology"),
+                    new XAttribute("data-comment-node-id", comment.Id),
+                    new XAttribute("data-comment-topology",
+                        comment.ThreadTopology == CommentThreadTopology.OrphanedParent
+                            ? "orphaned_parent"
+                            : "cyclic_parent"),
+                    !string.IsNullOrEmpty(tracker.CommentsExtendedPartUri)
+                        ? new XAttribute("data-comment-part-uri", tracker.CommentsExtendedPartUri)
+                        : null,
+                    !string.IsNullOrEmpty(comment.RequestedParentParaId)
+                        ? new XAttribute("data-comment-parent-para-id",
+                            comment.RequestedParentParaId)
+                        : null));
+            var identityDiagnostics = tracker.TopologyDiagnostics.Select(diagnostic =>
+                new XElement(Xhtml.meta,
+                    new XAttribute("name", "docxodus-comment-topology"),
+                    new XAttribute("data-comment-node-id", diagnostic.NodeId),
+                    new XAttribute("data-comment-topology", diagnostic.Kind),
+                    new XAttribute("data-comment-part-uri", diagnostic.PartUri)));
+            return threadDiagnostics.Concat(identityDiagnostics);
+        }
+
+        private static void AddCommentSemanticAttributes(
+            XElement element, WmlToHtmlConverterSettings settings, CommentInfo comment)
+        {
+            // data-comment-id is reserved for the page-placement/thread-root contract in
+            // margin mode. Keep the definition identity on a separate attribute so cloned
+            // reply nodes remain auditable after paginator bookmark ids are removed.
+            element.Add(new XAttribute("data-comment-node-id", comment.Id));
+            element.Add(new XAttribute("data-comment-status", CommentStatusToken(comment)));
+            if (comment.ParentId != null)
+                element.Add(new XAttribute("data-comment-parent-id", comment.ParentId.Value));
+            if (comment.ThreadTopology != CommentThreadTopology.Valid)
+            {
+                element.Add(new XAttribute("data-comment-topology",
+                    comment.ThreadTopology == CommentThreadTopology.OrphanedParent
+                        ? "orphaned_parent"
+                        : "cyclic_parent"));
+                if (!string.IsNullOrEmpty(comment.ThreadMetadataPartUri))
+                    element.Add(new XAttribute("data-comment-part-uri",
+                        comment.ThreadMetadataPartUri));
+                if (!string.IsNullOrEmpty(comment.RequestedParentParaId))
+                    element.Add(new XAttribute("data-comment-parent-para-id",
+                        comment.RequestedParentParaId));
+            }
+            if (!settings.IncludeCommentMetadata)
+                return;
             if (comment.Author != null)
+                element.Add(new XAttribute("data-author", comment.Author));
+            if (comment.Date != null)
+                element.Add(new XAttribute("data-date", comment.Date));
+        }
+
+        private static XElement RenderCommentHeader(
+            CommentInfo comment, int backReferenceId, string prefix, bool margin, bool inline)
+        {
+            var elementName = inline ? Xhtml.span : Xhtml.div;
+            var headerClass = margin ? prefix + "margin-note-header" : prefix + "header";
+            var authorClass = margin ? prefix + "margin-author" : prefix + "author";
+            var dateClass = margin ? prefix + "margin-date" : prefix + "date";
+            var backrefClass = margin ? prefix + "margin-backref" : prefix + "backref";
+            var header = new XElement(elementName, new XAttribute("class", headerClass));
+
+            if (comment.ParentId != null)
             {
                 header.Add(new XElement(Xhtml.span,
-                    new XAttribute("class", prefix + "margin-author"),
-                    comment.Author));
+                    new XAttribute("class", prefix + "reply-label"), "Reply"));
             }
-
-            if (comment.Date != null)
-            {
-                // Format date nicely
-                if (DateTime.TryParse(comment.Date, out var dt))
-                {
-                    header.Add(new XElement(Xhtml.span,
-                        new XAttribute("class", prefix + "margin-date"),
-                        dt.ToString("MMM d")));
-                }
-            }
-
+            header.Add(new XElement(Xhtml.span,
+                new XAttribute("class", authorClass), comment.Author ?? "Unknown author"));
+            var visibleDate = margin ? CompactMarginDate(comment.Date) : comment.Date ?? "Date unknown";
+            var date = new XElement(Xhtml.span,
+                new XAttribute("class", dateClass), visibleDate);
+            if (margin && comment.Date != null)
+                date.Add(new XAttribute("title", comment.Date));
+            header.Add(date);
+            header.Add(new XElement(Xhtml.span,
+                new XAttribute("class", prefix + "status"), CommentStatusLabel(comment)));
             header.Add(new XElement(Xhtml.a,
-                new XAttribute("href", $"#comment-ref-{comment.Id}"),
-                new XAttribute("class", prefix + "margin-backref"),
-                "↩"));
+                new XAttribute("href", $"#comment-ref-{backReferenceId}"),
+                new XAttribute("class", backrefClass), "↩"));
+            return header;
+        }
 
-            note.Add(header);
+        private static string CompactMarginDate(string value)
+        {
+            if (value == null)
+                return "Date unknown";
+            return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var parsed)
+                ? parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                : value;
+        }
 
-            // Comment body - extract text content from paragraphs
-            var body = new XElement(Xhtml.div,
-                new XAttribute("class", prefix + "margin-note-body"));
-
-            foreach (var para in comment.ContentParagraphs)
+        private static XElement RenderCommentBody(
+            WmlToHtmlConverterSettings settings, CommentTracker tracker, CommentInfo comment, string prefix,
+            string bodyClass, XName bodyName, XName paragraphName)
+        {
+            var body = new XElement(bodyName, new XAttribute("class", bodyClass));
+            foreach (var paragraph in comment.ContentParagraphs)
             {
-                // Skip the annotation reference run and get text content
-                var textContent = para.Descendants(W.t)
-                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
-                    .Select(t => t.Value)
-                    .StringConcatenate();
-
-                if (!string.IsNullOrWhiteSpace(textContent))
+                var rendered = tracker.Document == null
+                    ? null
+                    : ConvertToHtmlTransform(tracker.Document, settings, paragraph,
+                        false, 0m) as XElement;
+                if (rendered != null && rendered.Nodes().Any())
                 {
-                    body.Add(new XElement(Xhtml.p,
-                        SourceAnchorIdentityAttribute(settings, para), textContent));
+                    body.Add(new XElement(paragraphName,
+                        new XAttribute("class", prefix + "paragraph"),
+                        SourceAnchorIdentityAttribute(settings, paragraph),
+                        rendered.Nodes().Select(node => node is XElement element
+                            ? (object)new XElement(element)
+                            : node is XText text
+                                ? new XText(text.Value)
+                                : null)));
+                    continue;
+                }
+
+                var text = paragraph.Descendants()
+                    .Where(node => node.Name == W.t
+                        || (settings.RenderTrackedChanges && node.Name == W.delText))
+                    .Where(node => !node.Ancestors(W.r)
+                        .Any(run => run.Elements(W.annotationRef).Any()))
+                    .Select(node => node.Value)
+                    .StringConcatenate();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    body.Add(new XElement(paragraphName,
+                        new XAttribute("class", prefix + "paragraph"),
+                        SourceAnchorIdentityAttribute(settings, paragraph), text));
                 }
             }
-
-            // Only add if body has content
-            if (body.HasElements)
+            if (!body.HasElements)
             {
-                note.Add(body);
+                body.Add(new XElement(paragraphName,
+                    new XAttribute("class", prefix + "paragraph"), "(empty comment)"));
             }
-            else
-            {
-                // Add empty paragraph to avoid empty note
-                note.Add(new XElement(Xhtml.div,
-                    new XAttribute("class", prefix + "margin-note-body"),
-                    new XElement(Xhtml.p, "(empty comment)")));
-            }
+            return body;
+        }
 
-            return note;
+        private static XElement RenderInlineCommentThread(
+            WmlToHtmlConverterSettings settings, CommentTracker tracker,
+            CommentInfo root, string prefix)
+        {
+            return new XElement(Xhtml.span,
+                new XAttribute("class", prefix + "inline-thread"),
+                new XAttribute("data-comment-thread-id", root.Id),
+                new XAttribute("role", "note"),
+                RenderInlineCommentNode(settings, tracker, root, prefix));
+        }
+
+        private static XElement RenderInlineCommentNode(
+            WmlToHtmlConverterSettings settings, CommentTracker tracker,
+            CommentInfo comment, string prefix)
+        {
+            return RenderCommentTree(
+                tracker,
+                comment,
+                (current, _) =>
+                {
+                    var node = new XElement(Xhtml.span,
+                        new XAttribute("id", $"comment-{current.Id}"),
+                        new XAttribute("class", current.ParentId == null
+                            ? prefix + "inline-comment"
+                            : prefix + "inline-comment " + prefix + "inline-reply"),
+                        SourceAnchorIdentityAttribute(settings, current.SourceElement));
+                    AddCommentSemanticAttributes(node, settings, current);
+                    node.Add(RenderCommentHeader(current, comment.Id, prefix,
+                        margin: false, inline: true));
+                    node.Add(RenderCommentBody(settings, tracker, current, prefix,
+                        prefix + "inline-body", Xhtml.span, Xhtml.span));
+                    return node;
+                },
+                replies => new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "inline-replies"), replies));
         }
 
         private static object ProcessTab(XElement element)
@@ -5517,7 +6001,7 @@ namespace Docxodus
                     {
                         var commentPrefix = settings.CommentCssClassPrefix ?? "comment-";
                         var marginRegistry = RenderMarginCommentsColumn(
-                            wordDoc, settings, tracker, commentPrefix);
+                            settings, tracker, commentPrefix);
                         if (marginRegistry.HasElements)
                         {
                             marginRegistry.Add(new XAttribute(
@@ -5539,7 +6023,7 @@ namespace Docxodus
                     var tracker = GetCommentTracker(element);
                     if (tracker != null)
                     {
-                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                        var commentsSection = RenderCommentsSection(settings, tracker);
                         if (commentsSection != null)
                             divList[divList.Count - 1].Add(commentsSection);
                     }
@@ -6257,9 +6741,12 @@ namespace Docxodus
                     foreach (var commentId in tracker.OpenRanges.OrderBy(id => id))
                     {
                         tracker.RenderedRangeIds.Add(commentId);
+                        var presentationId = settings.CommentRenderMode == CommentRenderMode.Margin
+                            ? CommentThreadRootId(tracker, commentId)
+                            : commentId;
                         var highlightSpan = new XElement(Xhtml.span,
                             new XAttribute("class", prefix + "highlight"),
-                            new XAttribute("data-comment-id", commentId.ToString()));
+                            new XAttribute("data-comment-id", presentationId.ToString()));
 
                         // Add tooltip in inline mode
                         if (settings.CommentRenderMode == CommentRenderMode.Inline)
@@ -6425,26 +6912,32 @@ namespace Docxodus
             var previousRPr = rPrChange.Element(W.rPr);
 
             // Check for bold change
-            var currentBold = currentRPr.Element(W.b) != null;
-            var previousBold = previousRPr?.Element(W.b) != null;
+            var currentBold = GetBoolProp(currentRPr, W.b);
+            var previousBold = previousRPr != null && GetBoolProp(previousRPr, W.b);
             if (currentBold != previousBold)
                 changes.Add(currentBold ? "Bold added" : "Bold removed");
 
             // Check for italic change
-            var currentItalic = currentRPr.Element(W.i) != null;
-            var previousItalic = previousRPr?.Element(W.i) != null;
+            var currentItalic = GetBoolProp(currentRPr, W.i);
+            var previousItalic = previousRPr != null && GetBoolProp(previousRPr, W.i);
             if (currentItalic != previousItalic)
                 changes.Add(currentItalic ? "Italic added" : "Italic removed");
 
             // Check for underline change
-            var currentUnderline = currentRPr.Element(W.u) != null;
-            var previousUnderline = previousRPr?.Element(W.u) != null;
+            var currentUnderline = currentRPr.Element(W.u) is XElement currentUnderlineElement
+                && !string.Equals((string)currentUnderlineElement.Attribute(W.val), "none",
+                    StringComparison.OrdinalIgnoreCase);
+            var previousUnderline = previousRPr?.Element(W.u) is XElement previousUnderlineElement
+                && !string.Equals((string)previousUnderlineElement.Attribute(W.val), "none",
+                    StringComparison.OrdinalIgnoreCase);
             if (currentUnderline != previousUnderline)
                 changes.Add(currentUnderline ? "Underline added" : "Underline removed");
 
             // Check for strikethrough change
-            var currentStrike = currentRPr.Element(W.strike) != null;
-            var previousStrike = previousRPr?.Element(W.strike) != null;
+            var currentStrike = GetBoolProp(currentRPr, W.strike)
+                || GetBoolProp(currentRPr, W.dstrike);
+            var previousStrike = previousRPr != null
+                && (GetBoolProp(previousRPr, W.strike) || GetBoolProp(previousRPr, W.dstrike));
             if (currentStrike != previousStrike)
                 changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
 
@@ -8678,9 +9171,9 @@ namespace Docxodus
             if (v == null)
                 return true;
             var s = v.Value.ToLower();
-            if (s == "0" || s == "false")
+            if (s == "0" || s == "false" || s == "off")
                 return false;
-            if (s == "1" || s == "true")
+            if (s == "1" || s == "true" || s == "on")
                 return true;
             return false;
         }

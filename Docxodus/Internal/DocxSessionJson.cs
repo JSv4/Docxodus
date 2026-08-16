@@ -2035,6 +2035,12 @@ internal static class DocxSessionJson
                 if (c > 0) sb.Append(',');
                 sb.Append(JsonString(r.ConstituentIds[c]));
             }
+            sb.Append(']').Append(",\"nativeElementNames\":[");
+            for (int n = 0; n < r.NativeElementNames.Count; n++)
+            {
+                if (n > 0) sb.Append(',');
+                sb.Append(JsonString(r.NativeElementNames[n]));
+            }
             sb.Append(']')
               .Append(",\"author\":").Append(JsonString(r.Author));
             if (r.Date is not null) sb.Append(",\"date\":").Append(JsonString(r.Date));

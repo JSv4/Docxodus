@@ -20,6 +20,7 @@ import {
   CommentRenderMode,
   PaginationMode,
   type PackageManifest,
+  type RevisionListEntry,
   type VersionInfo,
 } from "./types.js";
 import {
@@ -84,8 +85,10 @@ export type {
   FontSubstitutionEntry,
 } from "./font-contract.js";
 
-export type ReviewProfile = "final" | "original" | "markup";
-export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
+export const REVIEW_PROFILES = ["final", "original", "markup"] as const;
+export type ReviewProfile = typeof REVIEW_PROFILES[number];
+export const COMMENT_PROFILES = ["hidden", "inline", "endnotes", "margin"] as const;
+export type CommentProfile = typeof COMMENT_PROFILES[number];
 export type UnsupportedContentPolicy = "warn" | "strict";
 
 export type ExportPhase =
@@ -359,6 +362,10 @@ interface ExecutionState {
   fonts: FontResolution[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
+  derivedProfileSource?: {
+    rawPackageBytesDigest: string;
+    byteLength: number;
+  };
 }
 
 interface FinalizedTree {
@@ -393,8 +400,8 @@ class PageTreeInstabilityError extends Error {
 
 const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v1" as const;
 const TEXT_ENCODER = new TextEncoder();
-const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
-const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
+const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(REVIEW_PROFILES);
+const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(COMMENT_PROFILES);
 const ALLOWED_UNSUPPORTED_POLICIES = new Set<UnsupportedContentPolicy>(["warn", "strict"]);
 const PACKAGE_LIMIT_FINDINGS = new Set([
   "entry_count_limit_exceeded",
@@ -880,6 +887,152 @@ function preflightManifest(
     if (options.unsupportedContent === "strict") {
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
+  }
+}
+
+function recordRevisionDiagnostics(
+  manifest: PackageManifest,
+  revisions: RevisionListEntry[],
+  options: NormalizedOptions,
+  state: ExecutionState,
+): void {
+  const blocked = revisions.filter((revision) =>
+    revision.resolutionStatus !== "supported");
+  for (const revision of blocked) {
+    const status = revision.resolutionStatus;
+    const alwaysFatal = status === "malformed" || status === "ambiguous";
+    addWarning(state, {
+      code: status === "unsupported"
+        ? "unsupported_revision_family"
+        : `${status}_revision_topology`,
+      severity: alwaysFatal || options.unsupportedContent === "strict" ? "error" : "warning",
+      phase: "package_preflight",
+      message: revision.diagnostic?.message
+        ?? `The ${revision.family} revision cannot be projected with guaranteed fidelity.`,
+      remediation: options.reviewProfile === "markup"
+        ? "Inspect the named revision in markup output before relying on it."
+        : "Resolve the named revision in Word or export with reviewProfile: markup.",
+      partUri: revision.partUri,
+      ...(revision.anchorId ? { anchorId: revision.anchorId } : {}),
+    });
+  }
+
+  const markupUnsupported = options.reviewProfile === "markup"
+    ? revisions.filter((revision) => {
+      if (revision.resolutionStatus !== "supported") return false;
+      // Glossary and style-definition revisions are package-level inputs to the rendered
+      // document, but they have no visible story substrate on which markup can be audited.
+      if (revision.scope === "glossary" || revision.scope === "styles") return true;
+      if ([
+        "content_insert", "content_delete", "move", "paragraph_mark",
+        "row_insert", "row_delete", "cell_insert", "cell_delete", "cell_merge",
+      ].includes(revision.family)) return false;
+      return revision.family !== "properties_change"
+        || revision.nativeElementNames.some((name) => name !== "rPrChange");
+    })
+    : [];
+  const seenMarkupWarnings = new Set<string>();
+  for (const revision of markupUnsupported) {
+    const key = `${revision.family}\u0000${revision.partUri}\u0000${revision.nativeElementNames.join(",")}`;
+    if (seenMarkupWarnings.has(key)) continue;
+    seenMarkupWarnings.add(key);
+    addWarning(state, {
+      code: "markup_revision_not_visualized",
+      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      phase: "package_preflight",
+      message: `Markup output cannot expose ${revision.family} (${revision.nativeElementNames.join(", ")}) with auditable before/after evidence.`,
+      remediation: "Resolve the revision or use final/original output; retain the source DOCX for audit.",
+      partUri: revision.partUri,
+      ...(revision.anchorId ? { anchorId: revision.anchorId } : {}),
+    });
+  }
+
+  // A non-zero manifest count with no registry entry means a native family
+  // escaped the part-aware inventory. Surface that gap instead of silently
+  // claiming the requested profile was fully understood.
+  const inventoryIncomplete = manifest.facts.revisions.total > 0 && revisions.length === 0;
+  if (inventoryIncomplete) {
+    addWarning(state, {
+      code: "revision_inventory_incomplete",
+      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      phase: "package_preflight",
+      message: "Tracked-change markup was detected but could not be inventoried by revision family.",
+      remediation: "Inspect the source package and use markup output until the family is supported.",
+      partUri: manifest.facts.mainDocumentUri ?? undefined,
+    });
+  }
+
+  const unsafeTopology = blocked.some((revision) =>
+    revision.resolutionStatus === "malformed" || revision.resolutionStatus === "ambiguous");
+  if (unsafeTopology || (options.unsupportedContent === "strict"
+    && (blocked.length > 0 || inventoryIncomplete || markupUnsupported.length > 0))) {
+    fail("resource_policy_failure", "package_preflight",
+      "Strict export rejected unsupported or unsafe revision topology.",
+      "Resolve the reported revisions or use unsupportedContent: warn.");
+  }
+}
+
+function recordCommentTopologyDiagnostics(
+  convertedHtml: string,
+  options: NormalizedOptions,
+  state: ExecutionState,
+): void {
+  const parsed = new DOMParser().parseFromString(convertedHtml, "text/html");
+  const reported = new Set<string>();
+  for (const element of Array.from(
+    parsed.querySelectorAll<HTMLElement>("[data-comment-topology]"),
+  )) {
+    const topology = element.dataset.commentTopology;
+    if (![
+      "orphaned_parent",
+      "cyclic_parent",
+      "duplicate_comment_id",
+      "duplicate_paragraph_id",
+      "duplicate_thread_metadata",
+    ].includes(topology ?? "")) continue;
+    const nodeId = element.dataset.commentNodeId ?? "unknown";
+    const key = `${topology}\u0000${nodeId}`;
+    if (reported.has(key)) continue;
+    reported.add(key);
+    const identityDiagnostic = topology?.startsWith("duplicate_") ?? false;
+    const code = topology === "orphaned_parent"
+      ? "comment_parent_orphaned"
+      : topology === "cyclic_parent"
+        ? "comment_parent_cycle"
+        : topology === "duplicate_comment_id"
+          ? "comment_id_duplicate"
+          : topology === "duplicate_paragraph_id"
+            ? "comment_paragraph_id_duplicate"
+            : "comment_metadata_duplicate";
+    const message = topology === "orphaned_parent"
+      ? `Comment ${nodeId} names a reply parent that is absent from the comments part.`
+      : topology === "cyclic_parent"
+        ? `Comment ${nodeId} participates in a cyclic reply-parent chain.`
+        : topology === "duplicate_comment_id"
+          ? `Comment id ${nodeId} identifies multiple comment definitions.`
+          : topology === "duplicate_paragraph_id"
+            ? `Comment ${nodeId} reuses a paragraph identity owned by another comment.`
+            : `Comment ${nodeId} has multiple commentsExtended metadata records.`;
+    addWarning(state, {
+      code,
+      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      phase: "docx_conversion",
+      message,
+      remediation: identityDiagnostic
+        ? "Make comment and commentsExtended identities unique before relying on comment attribution."
+        : "Repair commentsExtended reply metadata in Word or retain the warning with the source DOCX.",
+      partUri: element.dataset.commentPartUri,
+      resource: `comment:${nodeId}`,
+    });
+  }
+  // Collect the complete malformed topology before rejecting strict output so
+  // the retained failure report identifies every affected comment in one pass.
+  if (reported.size > 0 && options.unsupportedContent === "strict") {
+    fail("resource_policy_failure", "docx_conversion",
+      "Strict export rejected malformed or ambiguous comment topology.",
+      "Repair comment identities and commentsExtended metadata or use unsupportedContent: warn.", {
+        detail: `${reported.size} malformed comment topology record(s)`,
+      });
   }
 }
 
@@ -1786,6 +1939,27 @@ function finalizePageTree(
 }
 
 function assertNoClippedContent(document: Document): void {
+  for (const margin of Array.from(
+    document.querySelectorAll<HTMLElement>(".page-comment-margin"),
+  )) {
+    const boundary = margin.getBoundingClientRect().bottom;
+    const overflow = Array.from(margin.querySelectorAll<HTMLElement>("*"))
+      .map((element) => ({
+        element,
+        bottom: element.getBoundingClientRect().bottom,
+      }))
+      .filter(({ bottom }) => bottom > boundary + 1)
+      .sort((left, right) => right.bottom - left.bottom)
+      .slice(0, 3)
+      .map(({ element, bottom }) =>
+        `${element.localName}${element.className ? `.${String(element.className).trim().replace(/\s+/g, ".")}` : ""} (+${(bottom - boundary).toFixed(1)}px)`);
+    if (margin.scrollHeight > margin.clientHeight + 1 && overflow.length > 0) {
+      const pageNumber = margin.closest<HTMLElement>(".page-box")?.dataset.pageNumber ?? "unknown";
+      fail("pagination_failure", "running_story_placement",
+        `Page ${pageNumber} comment margin is clipped (${margin.scrollHeight}px scroll height in a ${margin.clientHeight}px band; ${overflow.join(", ")}).`,
+        "Use inline or endnote comments, shorten the thread, or increase the page margin before export.");
+    }
+  }
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
     const boundary = footnotes.getBoundingClientRect().bottom;
     const hasVisibleOverflow = Array.from(footnotes.querySelectorAll<HTMLElement>("*"))
@@ -2054,6 +2228,9 @@ function reportBase(
       byteLength: sourceBytes.byteLength,
       documentVersion: options.documentVersion,
     },
+    ...(state.derivedProfileSource
+      ? { derivedProfileSource: { ...state.derivedProfileSource } }
+      : {}),
     options: {
       reviewProfile: options.reviewProfile,
       commentProfile: options.commentProfile,
@@ -2156,6 +2333,7 @@ export async function convertDocxToPaginatedHtml(
   let layoutDigest = "";
   let rendererFingerprint: string | undefined;
   let pagesForFailure: CompleteRenderReport["pages"] | undefined;
+  let profileBytes: Uint8Array | undefined;
 
   try {
     sourceBytes = await runPhase(state, "input_validation", ["document bytes"], () => sourcePromise);
@@ -2164,11 +2342,6 @@ export async function convertDocxToPaginatedHtml(
     if (sourceBytes.byteLength === 0) {
       fail("invalid_document", "input_validation", "The DOCX input is empty.",
         "Pass a non-empty OPC package.");
-    }
-    if (options.reviewProfile === "original") {
-      fail("unsupported_runtime", "input_validation",
-        "The original revision profile is not yet available in the browser materializer.",
-        "Use final or markup until issue #444 supplies shared reject-revision projection.");
     }
     layoutDigest = await layoutDigestForOptions(options);
 
@@ -2182,8 +2355,59 @@ export async function convertDocxToPaginatedHtml(
       worker!.generatePackageManifest(sourceBytes!));
     preflightManifest(manifest, sourceBytes, options, state);
 
+    const projection = await runPhase(
+      state,
+      "package_preflight",
+      ["revision inventory", `${options.reviewProfile} profile projection`],
+      () => worker!.projectReviewProfile(sourceBytes!, options.reviewProfile),
+    );
+    recordRevisionDiagnostics(manifest, projection.revisions, options, state);
+    profileBytes = projection.documentBytes;
+
+    if (options.reviewProfile === "markup") {
+      const profileDigest = await runPhase(state, "package_preflight", ["markup source identity"], () =>
+        sha256(profileBytes!));
+      if (profileDigest !== manifest.rawPackageBytesDigest.value.toLowerCase()) {
+        fail("conversion_failure", "package_preflight",
+          "Markup profile projection changed the source package bytes.",
+          "Report this exporter immutability invariant failure.");
+      }
+    } else {
+      const derivedManifest = await runPhase(
+        state,
+        "package_preflight",
+        ["derived profile package manifest"],
+        () => worker!.generatePackageManifest(profileBytes!),
+      );
+      if (derivedManifest.packageKind !== "opc" || !derivedManifest.isValid
+        || !derivedManifest.facts.mainDocumentUri) {
+        fail("conversion_failure", "package_preflight",
+          "Revision projection did not produce a valid DOCX package.",
+          "Inspect the source revision topology and the failed render report.");
+      }
+      if (derivedManifest.facts.revisions.total !== 0) {
+        const warning: RenderWarning = {
+          code: "unsupported_revision_story",
+          severity: options.unsupportedContent === "strict" ? "error" : "warning",
+          phase: "package_preflight",
+          message: `${derivedManifest.facts.revisions.total} tracked-change marker(s) remain outside the supported projection stories.`,
+          remediation: "Resolve revisions in comments, glossary, or another unsupported story before final/original export.",
+        };
+        addWarning(state, warning);
+        // A final/original PDF with live revision markup is not unambiguous. Do
+        // not let the HTML converter's accepted-view default silently choose a
+        // result for a story the projector does not own.
+        fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
+      }
+      state.derivedProfileSource = {
+        rawPackageBytesDigest: derivedManifest.rawPackageBytesDigest.value.toLowerCase(),
+        byteLength: profileBytes.byteLength,
+      };
+    }
+
     const convertedHtml = await runPhase(state, "docx_conversion", ["WASM conversion"], () =>
-      worker!.convertDocxToHtml(sourceBytes!, conversionOptions(options)));
+      worker!.convertDocxToHtml(profileBytes!, conversionOptions(options)));
+    recordCommentTopologyDiagnostics(convertedHtml, options, state);
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
     let stableReferenceSignature: string | undefined;

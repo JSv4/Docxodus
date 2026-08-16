@@ -653,6 +653,31 @@ download(new Blob([result.html], { type: 'text/html' }));
 console.log(result.pageCount, result.pageMap, result.renderReport);
 ```
 
+`reviewProfile` selects one deterministic view of native Word revisions:
+
+| Value | Rendered result |
+|---|---|
+| `final` | Accepted result: insertions and move destinations use final formatting; deletions and move sources are hidden. |
+| `original` | Rejected result: deletions and move sources use original formatting; insertions and move destinations are hidden. |
+| `markup` | Review result: supported insertions, deletions, moves, and formatting changes remain visibly marked with their available author/date metadata. |
+
+`commentProfile` is independent of the revision view:
+
+| Value | Rendered result |
+|---|---|
+| `hidden` | Comment highlights, markers, and bodies are omitted; the commented document text is unaffected. |
+| `inline` | A print-visible comment thread is placed beside its first range/reference in story order. |
+| `endnotes` | Print-visible comment threads are collected in an ordered document-end section with reference links. |
+| `margin` | Print-visible comment threads are placed in the owning page's margin and associated with their ranges. |
+
+Every visible comment mode retains the range, body, ordered replies, author and date when present,
+and a printable `open`, `resolved`, or `unknown` state. Missing extended-comment metadata is
+`unknown`; it is never guessed. The same rules apply in the body, headers, footers, footnotes, and
+endnotes. Orphaned and cyclic reply-parent chains render as auditable independent roots with
+`data-comment-topology`; export records `comment_parent_orphaned` or `comment_parent_cycle`, and
+strict policy rejects the same malformed topology. The `hidden` profile omits all comment bodies and
+presentation but still reports malformed topology from inert pre-sanitization metadata.
+
 The exporter copies caller bytes before its first asynchronous boundary, verifies them with the
 package manifest API, performs layout in an attached script-disabled frame, embeds or removes every
 automatic resource, and reopens the serialized result to verify fonts, decoded images, chart/SVG
@@ -660,16 +685,30 @@ completion, stable page count, and physical geometry. Readiness uses one bounded
 the exact phase and pending resources on timeout; pagination reports its page count and diagnostics
 explicitly, and two matching stable-tree signatures are required before publication.
 External HTTPS/mail/tel links remain user-activated links and are inventoried in the report; the
-exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
-resources instead of returning a nominally complete artifact.
+exporter never follows them. Under the default `unsupportedContent: 'warn'` policy, an unsupported
+revision, comment, or story family is named with its owning package part and may continue only when
+the limitation remains explicit. `strict` rejects it before publishing output. A `final` or
+`original` export also fails under either policy if tracked-change markup remains after projection;
+it never silently presents an ambiguous accepted/rejected result.
 
-The browser surface currently supports `final` and `markup` revision profiles. `original` fails
-explicitly until the shared revision projection in issue #444 lands. Browser callers may supply a
-`fontResolver` that returns immutable font bytes and canonical resolution records; it is a trusted
-policy authority for face selection, license evidence, and glyph-coverage claims. Docxodus checks
-the response schema, byte length/digest, and actual browser decoding/loading, but cannot
-independently prove those caller declarations. Without a resolver, the normal result is labelled
-`browserObserved` and cannot satisfy `strictFonts: true`.
+The exporter never changes the caller's snapshot. `renderReport.source` always identifies those
+raw bytes. `final` and `original` operate on an isolated derived package and record its exact digest
+and length in `renderReport.derivedProfileSource`; `markup` renders the unchanged source and omits
+that field. Profiles participate in the layout digest and renderer fingerprint. Browser-only font
+facts remain labelled `browserObserved` unless the host supplies attestable resolution; they are
+not presented as a verified host-font environment.
+
+Browser callers may supply a `fontResolver` that returns immutable font bytes and canonical
+resolution records; it is a trusted policy authority for face selection, license evidence, and
+glyph-coverage claims. Docxodus checks the response schema, byte length/digest, and actual browser
+decoding/loading, but cannot independently prove those caller declarations. Without a resolver,
+the normal result is labelled `browserObserved` and cannot satisfy `strictFonts: true`.
+
+The profile test matrix keeps the edits viewable after a run: each successful row captures the
+standalone HTML, screenshot, PageMap, render report, extracted visible text, and profile-comparison
+summary. Node coverage adds the printed PDF and PDF text extraction. The matrix covers
+`final`/`hidden`, `original`/`inline`, `markup`/`endnotes`, and `markup`/`margin`, plus the structured
+report from a strict unsupported-family failure.
 
 By default the worker loads from `dist/wasm/` beside the package entry point. A deployment that
 hosts those files elsewhere may pass `wasmBasePath`. `docxodus/export-assets.json` is the closed,
