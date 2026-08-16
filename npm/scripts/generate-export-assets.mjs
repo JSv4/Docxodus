@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const dist = join(packageRoot, 'dist');
 const framework = join(dist, 'wasm', '_framework');
-const reportSchemaSources = [1, 2].map((version) =>
+const reportSchemaSources = [1, 2, 3].map((version) =>
   resolve(packageRoot, '..', 'docs', 'schemas', `render-report-v${version}.schema.json`));
-const reportSchemaDestinations = [1, 2].map((version) =>
+const reportSchemaDestinations = [1, 2, 3].map((version) =>
   join(dist, `render-report-v${version}.schema.json`));
 const limitsContractSource = join(packageRoot, 'src', 'export-resource-limits-v1.json');
 const limitsContractDestination = join(dist, 'export-resource-limits-v1.json');

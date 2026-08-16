@@ -475,6 +475,11 @@ decoded input and aggregate decoded output, JSON depth/collections/strings, ever
 stderr; stdout is reserved exclusively for protocol frames. Export error code, phase, fixed `error` severity, pending resources,
 part/anchor/resource, remediation, and safe detail cross this frame unchanged. PR #499 extends its current renderer diagnostic model to
 retain those fields through .NET, CLI, MCP, validation evidence, and failure reports.
+Executable and font-filesystem authority stays outside the frame. `DOCXODUS_FONT_POLICY_PATH`
+names one bounded schema-v1 JSON policy containing ordered `fontDirectories` and
+`fontLicenseAttestations`; relative directories resolve from that policy file, it is read once at
+host startup, and the same policy is applied to every batch. Batch payloads cannot name executable
+paths, font roots, or embedding-rights attestations.
 
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive
@@ -517,11 +522,15 @@ docxodus convert contract.docx --to pdf --output contract.pdf \
 unknown limit keys are errors. `--title`, the digest, profile, comments, unsupported-content,
 strict-font, timeout, and browser-executable flags map directly to the public API. Font-license and
 environment attestations are canonical JSON files conforming to the public types above; unknown
-fields, duplicate license attestations or host-face identities, or incomplete required facts fail
-validation rather than being ignored. Multiple distinct host faces may legitimately share one font
-file digest. JSON input is bounded before allocation and requires strict UTF-8, unique properties,
+fields, duplicate license/font digests or host-face identities, or incomplete required facts fail
+validation rather than being ignored. JSON input is bounded before allocation and requires strict UTF-8, unique properties,
 bounded depth/collections/strings, and closed schema discriminators. The CLI parses these files into
-the corresponding Node API fields; it does not invent a second policy shape.
+the corresponding Node API fields; it does not invent a second policy shape. Font-directory order
+is significant: an earlier root has precedence over a
+later root. Directory entries are code-unit sorted and traversed in a deterministic
+files-before-descendants order; duplicate bytes are collapsed,
+while distinct files claiming the same family/style/weight/stretch within one root are ambiguous
+and fail before browser launch.
 
 An explicit `--browser-executable` wins over no setting; specifying it together with a conflicting
 `DOCXODUS_CHROMIUM_PATH` is an error rather than silent precedence. SIGINT/SIGTERM abort the active
@@ -662,7 +671,10 @@ of masking it as a generic Node timeout.
 Warnings use stable codes, severity, phase, source/part when known, message, and remediation. The
 render report records requested and resolved fonts, substitutions, missing fonts, image/chart/SVG
 outcomes, unsupported placeholders, external links, page metadata, readiness timings, and any
-policy decision. Missing or substituted fonts warn by default and fail under `strictFonts`.
+policy decision. Default mode warns for substituted, missing, load-failed, synthesized, partially
+covered, or browser-unverified fonts. `strictFonts` fails every non-exact, synthesized, partial, or
+unverified result in `font_loading`. A face without legal embedding evidence is a policy failure in
+both modes.
 
 The Node adapter deterministically and boundedly discovers TTF, OTF, WOFF, and WOFF2 files in each
 ordered explicit font directory, rejects symlinks/devices/escaping or changing paths, reads
@@ -675,8 +687,8 @@ is implemented. For TTF/OTF, OS/2 `fsType` restricted-license bits forbid inject
 caller-supplied files whose embedding rights cannot be derived require an explicit caller licensing
 attestation recorded in the report; absence is a policy error, not assumed permission. A license
 record is scoped to its permitted HTML/PDF outputs and states whether subsetting is permitted.
-When an OS/2 no-subsetting restriction applies, PDF export fails unless verification proves that
-Chromium embedded the complete permitted font program; it never assumes Chromium's subset is legal.
+When an OS/2 or caller-attested no-subsetting restriction applies, PDF export fails closed because
+Chromium does not expose proof that it embedded the complete permitted font program.
 License basis/attester strings and all font metadata are bounded and control-free. Font resolution
 records include family stack, PostScript face, style, weight, stretch, glyph coverage, exact file
 identity/version, substitution decision, and license evidence; these normalized records, not local
@@ -687,6 +699,53 @@ request/result records and an `AbortSignal`; Node constructs the same resolver f
 `fontDirectories`. A configured root's order is policy and is preserved. Duplicate resolved roots
 or ambiguous faces fail. The resolver cannot fetch URLs, and its returned font bytes are
 length/digest/media-type/license checked before injection.
+
+After profile projection and before pagination, the browser inventories every final text-bearing
+node. Requests are deduplicated by ordered family stack, style, numeric weight, percentage stretch,
+and a bounded sorted set of Unicode scalar samples. The Node adapter discovers TTF, OTF, WOFF, and
+WOFF2 files in each explicit font directory, snapshots each file once, reads family/face and glyph
+metadata from those bytes, hashes them, and injects license-permitted faces as data webfonts into
+the isolated page. Generated `@font-face` rules remain in standalone HTML so the reopened PDF check
+uses the same bytes. This works for owned and caller-owned browsers on supported hosts.
+
+An exact configured family wins; otherwise the browser-portable substitution contract is applied.
+Earlier explicit directories win across directory boundaries. Within one directory, conflicting
+files for the same family/style/weight/stretch are rejected; byte-identical files are deduplicated.
+Each root is resolved once and traversed iteratively in deterministic, code-unit-sorted
+files-before-descendants order. Symlinks and non-regular
+files are rejected, and directory entries, font count, per-file bytes, total bytes, requests, and
+sample code points are bounded by the shared resource contract.
+
+A configured face is exposed under a deterministic synthetic family keyed by the path-free font
+configuration identity. CSS places that family first while retaining the original family stack as
+a non-strict fallback. Multiple faces retain explicit style/weight/stretch descriptors and parser-
+verified glyph coverage. A browser's `document.fonts.check()` proves availability only; it cannot
+prove an exact system file. System fonts therefore remain `browserObserved` unless a caller
+attestation covers their exact family, PostScript face, style, weight, stretch, version, and file
+digest. An injected browser is at most `callerAttested`; an owned browser with verified runtime and
+configured font bytes may be `nodeVerified`.
+
+The browser-level `FontResolver` is executable caller code and therefore a trusted policy
+authority for face selection, embedding-license evidence, and declared glyph coverage. The
+coordinator independently validates the response vocabulary, bounds, byte digest, and actual font
+decode/load result; it does not claim to re-derive licensing or font-table coverage from arbitrary
+browser-supplied resolver records. Node callers that need Docxodus-owned verification use the
+companion package's filesystem resolver instead.
+
+OOXML embedded fonts are not exported until de-obfuscation and embedding-license policy is
+implemented; their package-manifest records produce structured unsupported diagnostics without a
+second ZIP scan. For TTF/OTF, `OS/2.fsType` restricted or bitmap-only flags forbid injection.
+Installable, preview/print, and editable permissions are recorded, and no subsetting is performed.
+WOFF/WOFF2, or any format whose rights cannot be derived, requires an affirmative caller
+schema-v1 attestation with usage `standalone-document-font-embedding`, bound to the exact lowercase
+SHA-256. The `basis` and optional `attester` are bounded printable evidence strings. An attestation
+cannot override an explicit restriction.
+
+Absolute paths never enter browser requests, generated CSS family names, standalone metadata,
+reports, errors, or fingerprints. The canonical `fontIdentity.resolutionDigest` instead covers the
+substitution-contract identity, ordered requests, selected face metadata/digests, resolution
+decisions, and license-evidence identities. Base64 bytes and paths are excluded. This digest and the
+path-free resolution records participate in the renderer fingerprint.
 
 ## Error taxonomy and limits
 
@@ -821,9 +880,10 @@ HTML/PDF/report/PageMap destination and `filesystem_failure` for stage or commit
 ## Render report schema
 
 `RenderReport` is canonical JSON. The initial public shape remains frozen at
-`https://docxodus.dev/schemas/render/render-report/v1`; the current writer emits
-`https://docxodus.dev/schemas/render/render-report/v2`, which adds bounded print-readiness and
-pagination evidence without silently widening the closed v1 schema. The current public shape is:
+`https://docxodus.dev/schemas/render/render-report/v1`; v2 remains frozen with bounded
+print-readiness and pagination evidence. The current writer emits
+`https://docxodus.dev/schemas/render/render-report/v3`, which adds the verified font-runtime
+contract without silently widening either earlier closed schema. The current public shape is:
 
 ```ts
 interface RenderWarning {
@@ -838,18 +898,52 @@ interface RenderWarning {
   resource?: string;
 }
 
+interface FontLicenseEvidence {
+  kind: "installable" | "previewPrint" | "editable" | "attested";
+  identity: string; // lowercase SHA-256 of canonical, path-free evidence
+  noSubsetting: boolean;
+}
+
 interface FontResolution {
-  requestKey: Sha256Hex; // exact FontFaceSet.load/check specification + sample commitment
-  requestedFamily: string; // bounded diagnostic label only
-  requestedFamilyStack?: readonly string[];
+  requestId: string;
+  requestedFamily: string;
+  requestedFamilies: string[];
+  requestedStyle: "normal" | "italic" | "oblique";
+  requestedWeight: number;
+  requestedStretch: number;
+  sampleCodePointCount: number;
+  sampleDigest: string;
   resolvedFamily?: string;
-  status: "resolved" | "substituted" | "missing" | "unverified";
-  source: "browser" | "embedded" | "configured";
+  resolvedFace?: string;
+  status: "resolved" | "substituted" | "missing" | "load_failed" | "unverified";
+  source: "browser" | "configured" | "attested";
+  format?: "ttf" | "otf" | "woff" | "woff2";
+  fileSha256?: string;
+  version?: string;
+  faceMatch?: "exact" | "synthesized";
+  metricCompatible?: boolean;
+  glyphCoverage?: "complete" | "partial" | "unverified";
+  missingCodePointCount?: number;
+  browserFallbackAvailable?: boolean;
+  licenseEvidence?: FontLicenseEvidence;
+}
+
+interface FontReadinessProbe {
+  requestKey: Sha256Hex; // exact final CSS shorthand + bounded text-sample commitment
+  requestedFamily: string;
+  available: boolean;
+}
+
+interface FontConfigurationIdentity {
+  resolverContract: "https://docxodus.dev/contracts/font-resolver/v1";
+  substitutionContractVersion: 1;
+  substitutionContractDigest: string;
+  resolutionDigest: string;
 }
 
 interface RenderReportBase {
-  schema: "https://docxodus.dev/schemas/render/render-report/v2";
-  schemaVersion: 2;
+  schema: "https://docxodus.dev/schemas/render/render-report/v3";
+  schemaVersion: 3;
   source: { rawPackageBytesDigest: Sha256Hex; byteLength: number; documentVersion: number };
   derivedProfileSource?: { rawPackageBytesDigest: Sha256Hex; byteLength: number };
   options: {
@@ -876,6 +970,7 @@ interface RenderReportBase {
   }>;
   fontIdentity?: FontConfigurationIdentity;
   fonts: readonly FontResolution[];
+  fontReadiness: readonly FontReadinessProbe[];
   resources: readonly ResourceOutcome[];
   unsupportedContent: readonly UnsupportedContentOutcome[];
   warnings: readonly RenderWarning[];
@@ -1016,20 +1111,20 @@ Browser/WASM callers are not falsely restricted to Chromium: facts unavailable t
 privacy boundary are omitted, and such a report is `browserObserved` and `unbaselined` unless a
 separately supported baseline says otherwise. Node export accepts Chromium only. `nodeVerified`
 requires all optional Node/Chromium identity fields in `observed`; `callerAttested` requires the
-closed attested evidence above and the digest of the complete versioned input attestation. An
-attestation without `executableSha256` may still be inventoried, but cannot raise verification above
-`browserObserved`.
+closed attested evidence above and the digest of the complete versioned input attestation. A caller
+attestation may omit `executableSha256`; in that case it attests the named build, launch policy, and
+font inventory but makes no claim about executable bytes. Supplying an executable digest that an
+injected browser cannot expose leaves the result `browserObserved` rather than treating it as proved.
 
-#438 lands the complete closed v1 JSON Schema, including resolved
-`reviewProfileAlreadyApplied`, font-resolution definitions, font/sidecar limit keys, and
-environment evidence needed by #442/#444. V1 remains byte-for-byte available for legacy validation.
-#505 introduces v2 because its pagination diagnostics and visual-readiness fields cannot be added to
-an `additionalProperties: false` v1 report compatibly. New browser and Node writers emit v2; the Node
-materializer boundary rejects any non-v2 report rather than guessing across versions. There is no
-public API that ingests a caller-supplied render report. Frozen v1 is retained only for validating
-legacy output, while the default package schema export points at v2. Compatibility tests preserve a
-representative v1 contract, prove the v1/v2 discriminators are disjoint, validate v2 evidence, and
-reject schema/version mismatches.
+#438 lands the complete closed v1 JSON Schema. #505 introduces v2 because its pagination
+diagnostics and visual-readiness fields cannot be added to an `additionalProperties: false` v1
+report compatibly. #506 introduces v3 for rich, path-free font-resolution decisions, font
+configuration identity, and a separate exact final-font readiness inventory. New browser and Node
+writers emit v3; the Node materializer boundary rejects non-v3 reports rather than guessing across
+versions. There is no public API that ingests a caller-supplied render report. Frozen v1 and v2 are
+retained only for legacy validation, while the default package schema export points at v3.
+Compatibility tests preserve both legacy hashes, prove all three discriminators are disjoint,
+validate v3 evidence, and reject schema/version mismatches.
 
 The report is a separate sidecar;
 HTML and PDF do not embed it, avoiding a digest cycle while the report binds their bytes. Failed
@@ -1076,6 +1171,21 @@ explicit `browserObserved` verification level. Attested injected environments ar
 fields. A caller uses the report's bounded observed/attested facts and font records—not the one-way
 fingerprint itself—to provision the same runtime. Recomputing the fingerprint then verifies that
 recipe. Any change in a bound input is visible even when output bytes happen to match.
+
+## Verification artifacts
+
+The Node export suite writes a self-contained `npm-export/test-artifacts/view-artifacts.html` index
+after its scenarios complete. The #442 section links exact-match, substitution, missing,
+load-failure, and metric-difference HTML/PDF/PageMap/report evidence, screenshots, a canonical
+path-free font manifest, and the compared fingerprints. The index uses relative links so the
+uploaded directory remains directly browsable after download. Artifact generation is best-effort
+per scenario: evidence completed before a later failure remains linked alongside the structured
+failure report.
+
+The Playwright workflow runs export tests before the broader browser matrix and uploads
+`npm-export/test-artifacts/`, `npm/test-results/`, and the Playwright report under `if: always()`.
+This makes the edit evidence available when tests complete successfully and keeps it available when
+an unrelated later gate fails.
 
 ## Supported fidelity
 

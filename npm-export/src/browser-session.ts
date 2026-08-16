@@ -9,6 +9,7 @@ import {
   cssSecurityTokens,
   dataUrlInfo,
   DEFAULT_EXPORT_RESOURCE_LIMITS,
+  type FontResolverRequest,
   type PaginatedHtmlOptions,
 } from "docxodus/export-browser";
 import { loadVerifiedAssetGraph } from "./assets.js";
@@ -17,6 +18,7 @@ import type {
   BrowserMaterializationSuccess,
   ExportPhase,
   NodeExportRuntime,
+  ValidatedNodeExportRuntime,
 } from "./contracts.js";
 import {
   attachFailedReport,
@@ -59,6 +61,7 @@ export interface RequestLogEntry {
 }
 
 export interface BrowserRuntimeIdentity {
+  chromiumProduct: "chromium";
   browserVersion: string;
   executableDigest?: string;
   launchMode: "injected" | "explicit" | "pinned";
@@ -82,6 +85,12 @@ interface BridgeResponse {
   ok: boolean;
   result?: BrowserMaterializationSuccess & { pdfHtml?: string };
   error?: BrowserMaterializationFailure;
+}
+
+interface FontBindingResponse {
+  ok: boolean;
+  result?: unknown;
+  error?: Record<string, unknown>;
 }
 
 interface ReadinessProgress {
@@ -565,7 +574,7 @@ export async function validatePrintDocument(
     domNodes: number;
     automaticResourceBytes: number;
   },
-  expectedFonts: BrowserMaterializationSuccess["renderReport"]["fonts"],
+  expectedFonts: BrowserMaterializationSuccess["renderReport"]["fontReadiness"],
   expectedResources: BrowserMaterializationSuccess["renderReport"]["resources"],
 ): Promise<void> {
   const readiness = await page.evaluate(async ({
@@ -840,7 +849,7 @@ export async function validatePrintDocument(
       });
       const expected = expectedFontOutcomes.map((font) => ({
         requestKey: font.requestKey,
-        available: font.status !== "missing",
+        available: font.available,
       })).sort((left, right) => left.requestKey < right.requestKey ? -1 : 1);
       const actual = fonts.map((font) => ({
         requestKey: font.requestKey,
@@ -1488,8 +1497,8 @@ async function printPdfStream(
 
 export async function renderInBrowser(
   sourceBytes: Uint8Array,
-  browserOptions: Omit<PaginatedHtmlOptions, "wasmBasePath">,
-  runtime: NodeExportRuntime,
+  browserOptions: Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver">,
+  runtime: ValidatedNodeExportRuntime,
   includeHtml: boolean,
   includePdf: boolean,
   deadline: number,
@@ -1549,6 +1558,7 @@ export async function renderInBrowser(
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
   let lastReadinessProgress: ReadinessProgress | undefined;
+  const fontAbortController = new AbortController();
 
   try {
     launch = await launchBrowser(runtime, deadline, signal);
@@ -1662,6 +1672,30 @@ export async function renderInBrowser(
       recordDenied(download.url(), "GET", "download");
       void download.cancel();
     });
+    if (runtime.fontResolver) {
+      await page.exposeBinding("__docxodusResolveFonts", async (
+        _source,
+        request: FontResolverRequest,
+      ): Promise<FontBindingResponse> => {
+        try {
+          return {
+            ok: true,
+            result: await runtime.fontResolver!(request, fontAbortController.signal),
+          };
+        } catch (error) {
+          const normalized = error instanceof DocxodusExportError
+            ? error
+            : new DocxodusExportError(
+              "resource_policy_failure",
+              "font_loading",
+              "The configured font resolver failed.",
+              "Inspect the configured font directories and attestations.",
+              { cause: error },
+            );
+          return { ok: false, error: normalized.toJSON() };
+        }
+      });
+    }
     await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
       const progress = parseReadinessProgress(value);
       if (progress) {
@@ -1869,7 +1903,7 @@ export async function renderInBrowser(
                   automaticResourceBytes: browserOptions.limits?.automaticResourceBytes
                     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.automaticResourceBytes,
                 },
-                materialization!.renderReport.fonts,
+                materialization!.renderReport.fontReadiness,
                 materialization!.renderReport.resources,
               );
               if (printReads !== 1) {
@@ -1950,6 +1984,7 @@ export async function renderInBrowser(
       pdf,
       requestLog,
       runtime: {
+        chromiumProduct: launch.browser.browserType().name() as "chromium",
         browserVersion: launch.browser.version(),
         executableDigest: launch.executableDigest,
         launchMode: launch.launchMode,
@@ -1980,6 +2015,7 @@ export async function renderInBrowser(
       );
     primaryError = attachFailedReport(normalized, materialization?.renderReport);
   } finally {
+    fontAbortController.abort(new Error("The browser render context has closed."));
     const cleanupFailures: unknown[] = [];
     if (printContext) {
       const failure = await cleanupStep("PDF browser context shutdown", () => printContext!.close());

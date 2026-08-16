@@ -2,10 +2,13 @@ import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   DEFAULT_EXPORT_TIMEOUT_MS,
   HARD_EXPORT_TIMEOUT_MS,
+  normalizeFontFamilyName,
   type CompleteRenderReport,
   type ExportRuntimeAttestationEvidence,
   type ExportRuntimeObservedFacts,
   type ExportResourceLimits,
+  type FontFaceStyle,
+  type FontResolution,
   type PaginatedHtmlOptions,
   type PaginatedHtmlResult,
 } from "docxodus/export-browser";
@@ -16,6 +19,7 @@ import {
   type BrowserRuntimeIdentity,
 } from "./browser-session.js";
 import type {
+  FontLicenseAttestation,
   NodeExportOptions,
   NodeExportRuntime,
   PdfExportResult,
@@ -25,6 +29,7 @@ import type {
   RenderFileDestinations,
   RenderFileResult,
   RenderOutput,
+  ValidatedNodeExportRuntime,
 } from "./contracts.js";
 import { isAbsolute, resolve } from "node:path";
 import {
@@ -42,6 +47,7 @@ import {
   readStableInputFile,
 } from "./files.js";
 import { verifyPdf } from "./pdf.js";
+import { createNodeFontRuntime } from "./fonts/index.js";
 
 export * from "./contracts.js";
 export {
@@ -119,6 +125,10 @@ function nonEmptyString(value: unknown, label: string): string {
       "Correct the runtime attestation and retry.",
     );
   }
+  if (value.length > 1024 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    exportError("invalid_document", "input_validation", `${label} is not a bounded plain string.`,
+      "Use at most 1024 printable characters.");
+  }
   return value;
 }
 
@@ -137,6 +147,7 @@ function digestString(value: unknown, label: string): string {
 
 function validateEnvironmentAttestation(
   value: RenderEnvironmentAttestation | undefined,
+  limits: Readonly<ExportResourceLimits>,
 ): RenderEnvironmentAttestation | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -169,6 +180,10 @@ function validateEnvironmentAttestation(
     exportError("invalid_argument", "input_validation", "launchFlags must be a string array.",
       "Record every attested Chromium launch flag.");
   }
+  if (launchFlags.length > 128) {
+    exportError("resource_limit", "input_validation", "launchFlags exceeds 128 entries.",
+      "Use the bounded canonical Chromium launch configuration.");
+  }
   if (new Set(launchFlags).size !== launchFlags.length) {
     exportError(
       "invalid_argument",
@@ -181,7 +196,15 @@ function validateEnvironmentAttestation(
     exportError("invalid_argument", "input_validation", "hostFonts must be an array.",
       "Provide an empty array when no host fonts are attested.");
   }
-  const seen = new Set<string>();
+  if (hostFonts.length > limits.fontFiles) {
+    exportError("resource_limit", "input_validation",
+      `fontFiles limit exceeded by hostFonts (${hostFonts.length} > ${limits.fontFiles}).`,
+      "Attest no more host font faces than the configured fontFiles limit.");
+  }
+  const resolvedLaunchFlags = launchFlags.map((flag, index) =>
+    nonEmptyString(flag, `launchFlags[${index}]`));
+  const seenDigests = new Set<string>();
+  const seenFaces = new Set<string>();
   const resolvedFonts = hostFonts.map((font, index) => {
     if (!font || typeof font !== "object" || Array.isArray(font)) {
       exportError("invalid_argument", "input_validation", `hostFonts[${index}] must be an object.`,
@@ -193,37 +216,52 @@ function validateEnvironmentAttestation(
       ["family", "postscriptName", "style", "weight", "stretch", "fileSha256", "version"],
       `hostFonts[${index}]`,
     );
+    if (item.style !== "normal" && item.style !== "italic" && item.style !== "oblique") {
+      exportError("invalid_argument", "input_validation", `hostFonts[${index}].style is invalid.`,
+        "Use normal, italic, or oblique.");
+    }
+    const style = item.style as FontFaceStyle;
     if (!Number.isSafeInteger(item.weight) || (item.weight as number) < 1
       || (item.weight as number) > 1000) {
       exportError("invalid_argument", "input_validation", `hostFonts[${index}].weight is invalid.`,
         "Use an integer font weight from 1 through 1000.");
     }
-    if (item.style !== "normal" && item.style !== "italic" && item.style !== "oblique") {
-      exportError("invalid_argument", "input_validation", `hostFonts[${index}].style is invalid.`,
-        "Use normal, italic, or oblique.");
-    }
     if (typeof item.stretch !== "number" || !Number.isFinite(item.stretch)
-      || item.stretch <= 0 || item.stretch > 1000) {
+      || item.stretch < 50 || item.stretch > 200) {
       exportError("invalid_argument", "input_validation", `hostFonts[${index}].stretch is invalid.`,
-        "Use a finite positive font-stretch percentage no greater than 1000.");
+        "Use a CSS stretch percentage from 50 through 200.");
     }
+    const family = normalizeFontFamilyName(nonEmptyString(item.family, `hostFonts[${index}].family`));
+    const postscriptName = normalizeFontFamilyName(
+      nonEmptyString(item.postscriptName, `hostFonts[${index}].postscriptName`),
+    );
+    const faceKey = canonicalJson([
+      family.toLowerCase(),
+      postscriptName.toLowerCase(),
+      style,
+      item.weight,
+      item.stretch,
+    ]);
+    if (seenFaces.has(faceKey)) {
+      exportError("invalid_argument", "input_validation", "hostFonts contains a duplicate face identity.",
+        "List each family/PostScript-name/style/weight/stretch face exactly once.");
+    }
+    seenFaces.add(faceKey);
     const fileSha256 = digestString(item.fileSha256, `hostFonts[${index}].fileSha256`);
-    const resolved = {
-      family: nonEmptyString(item.family, `hostFonts[${index}].family`),
-      postscriptName: nonEmptyString(item.postscriptName, `hostFonts[${index}].postscriptName`),
-      style: item.style as "normal" | "italic" | "oblique",
+    if (seenDigests.has(fileSha256)) {
+      exportError("invalid_argument", "input_validation", "hostFonts contains a duplicate file digest.",
+        "List each attested font file exactly once.");
+    }
+    seenDigests.add(fileSha256);
+    return {
+      family,
+      postscriptName,
+      style,
       weight: item.weight as number,
       stretch: item.stretch,
       fileSha256,
       version: nonEmptyString(item.version, `hostFonts[${index}].version`),
     };
-    const faceKey = canonicalJson(resolved);
-    if (seen.has(faceKey)) {
-      exportError("invalid_argument", "input_validation", "hostFonts contains a duplicate face identity.",
-        "List each attested host font face exactly once.");
-    }
-    seen.add(faceKey);
-    return resolved;
   });
   return Object.freeze({
     schemaVersion: 1 as const,
@@ -233,7 +271,7 @@ function validateEnvironmentAttestation(
     ...(record.executableSha256 === undefined
       ? {}
       : { executableSha256: digestString(record.executableSha256, "executableSha256") }),
-    launchFlags: Object.freeze([...(launchFlags as string[])]),
+    launchFlags: Object.freeze(resolvedLaunchFlags),
     hostFonts: Object.freeze(resolvedFonts.sort((left, right) => {
       const leftKey = canonicalJson(left);
       const rightKey = canonicalJson(right);
@@ -243,7 +281,11 @@ function validateEnvironmentAttestation(
   });
 }
 
-function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
+function validateRuntime(
+  runtime: NodeExportRuntime,
+  limits: Readonly<ExportResourceLimits>,
+  outputs: readonly RenderOutput[],
+): ValidatedNodeExportRuntime {
   if (runtime.browser && runtime.browserExecutablePath) {
     exportError(
       "invalid_argument",
@@ -281,12 +323,23 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
     exportError("invalid_argument", "input_validation", "fontDirectories must be a string array.",
       "Provide each explicit font directory as a non-empty path.");
   }
+  if (fontDirectories.length > limits.fontDirectoryEntries) {
+    exportError("resource_limit", "input_validation",
+      `fontDirectoryEntries limit exceeded by fontDirectories (${fontDirectories.length} > ${limits.fontDirectoryEntries}).`,
+      "Configure fewer explicit font directory roots.");
+  }
   const attestations = runtime.fontLicenseAttestations ?? [];
   if (!Array.isArray(attestations)) {
     exportError("invalid_argument", "input_validation", "fontLicenseAttestations must be an array.",
       "Provide the documented attestation objects.");
   }
-  const attestedFiles = new Set<string>();
+  if (attestations.length > limits.fontFiles) {
+    exportError("resource_limit", "input_validation",
+      `fontFiles limit exceeded by fontLicenseAttestations (${attestations.length} > ${limits.fontFiles}).`,
+      "Attest no more font identities than the configured fontFiles limit.");
+  }
+  const normalizedAttestations: FontLicenseAttestation[] = [];
+  const attestationDigests = new Set<string>();
   for (const [index, attestation] of attestations.entries()) {
     if (!attestation || typeof attestation !== "object" || Array.isArray(attestation)) {
       exportError(
@@ -324,7 +377,7 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
       record.fileSha256,
       `fontLicenseAttestations[${index}].fileSha256`,
     );
-    if (attestedFiles.has(fileSha256)) {
+    if (attestationDigests.has(fileSha256)) {
       exportError(
         "invalid_argument",
         "input_validation",
@@ -332,7 +385,7 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
         "Provide exactly one embedding decision per font file.",
       );
     }
-    attestedFiles.add(fileSha256);
+    attestationDigests.add(fileSha256);
     if (record.embeddingPermitted !== true) {
       exportError(
         "invalid_argument",
@@ -360,33 +413,50 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
         "Record the font license's exact subsetting permission.",
       );
     }
-    nonEmptyString(record.basis, `fontLicenseAttestations[${index}].basis`);
+    const basis = nonEmptyString(record.basis, `fontLicenseAttestations[${index}].basis`);
+    let attester: string | undefined;
     if (record.attester !== undefined) {
-      nonEmptyString(record.attester, `fontLicenseAttestations[${index}].attester`);
+      attester = nonEmptyString(record.attester, `fontLicenseAttestations[${index}].attester`);
     }
-  }
-  if (fontDirectories.length > 0) {
-    exportError(
-      "unsupported_runtime",
-      "font_loading",
-      "Explicit font-directory injection is not available in this renderer version.",
-      "Use the browser-observed font mode until issue #442 lands the verified font runtime.",
-    );
+    normalizedAttestations.push(Object.freeze({
+      schemaVersion: 1 as const,
+      usage: "standalone-document-font-embedding" as const,
+      fileSha256,
+      embeddingPermitted: true as const,
+      permittedOutputs: Object.freeze([
+        ...(record.permittedOutputs.includes("html") ? ["html" as const] : []),
+        ...(record.permittedOutputs.includes("pdf") ? ["pdf" as const] : []),
+      ]),
+      subsettingPermitted: record.subsettingPermitted as boolean,
+      basis,
+      ...(attester ? { attester } : {}),
+    }));
   }
   if (attestations.length > 0 && fontDirectories.length === 0) {
     exportError(
       "invalid_argument",
       "input_validation",
       "Font-license attestations require at least one font directory.",
-      "Remove the unattached attestations or provide the matching directory after #442.",
+      "Remove the unattached attestations or provide the matching font directory.",
     );
   }
+  // Capture relative roots against the call-time working directory before the
+  // first asynchronous browser operation can observe a changed process cwd.
+  const normalizedDirectories = Object.freeze(fontDirectories.map((directory) => resolve(directory)));
+  const frozenAttestations = Object.freeze(normalizedAttestations);
+  const fontRuntime = normalizedDirectories.length === 0
+    ? undefined
+    : createNodeFontRuntime(normalizedDirectories, frozenAttestations, limits, outputs);
   return {
     browser: runtime.browser,
     browserExecutablePath: runtime.browserExecutablePath,
-    fontDirectories: [],
-    fontLicenseAttestations: [],
-    environmentAttestation: validateEnvironmentAttestation(runtime.environmentAttestation),
+    fontDirectories: normalizedDirectories,
+    fontLicenseAttestations: frozenAttestations,
+    ...(fontRuntime ? {
+      fontResolver: fontRuntime.resolver,
+      prepareFonts: fontRuntime.prepare,
+    } : {}),
+    environmentAttestation: validateEnvironmentAttestation(runtime.environmentAttestation, limits),
   };
 }
 
@@ -707,7 +777,9 @@ function normalizedTimeout(options: NodeExportOptions): number {
   return timeout;
 }
 
-function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, "wasmBasePath"> {
+function browserOptions(
+  options: NodeExportOptions,
+): Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver"> {
   return {
     documentVersion: options.documentVersion,
     expectedSourceDigest: options.expectedSourceDigest,
@@ -727,9 +799,8 @@ function runtimeEnvironment(
   runtime: BrowserRuntimeIdentity,
   attestation: RenderEnvironmentAttestation | undefined,
 ): CompleteRenderReport["environment"] {
-  const slash = runtime.browserVersion.indexOf("/");
-  const browserProduct = slash > 0 ? runtime.browserVersion.slice(0, slash) : "Chromium";
-  const browserBuild = slash > 0 ? runtime.browserVersion.slice(slash + 1) : runtime.browserVersion;
+  const browserProduct = runtime.chromiumProduct;
+  const browserBuild = runtime.browserVersion;
   const observed: ExportRuntimeObservedFacts = {
     ...report.environment.observed,
     runtimeKind: "nodeChromium",
@@ -747,7 +818,9 @@ function runtimeEnvironment(
       : "ownedProcessRestricted",
   };
   const nodeFontsVerified = report.fonts.every((font) =>
-    font.status === "resolved" && (font.source === "embedded" || font.source === "configured"));
+    strictFontResolution(font, runtime, undefined)
+    && (font.source === "configured" || font.source === "attested")
+    && font.licenseEvidence !== undefined);
   const baselineVerification = runtime.launchMode !== "injected" && nodeFontsVerified
     ? "nodeVerified"
     : "browserObserved";
@@ -756,7 +829,7 @@ function runtimeEnvironment(
       ? "releaseBaselined"
       : "experimental"
     : "unbaselined";
-  if (!attestation || attestation.executableSha256 === undefined) {
+  if (!attestation) {
     return {
       ...report.environment,
       verification: baselineVerification,
@@ -772,11 +845,13 @@ function runtimeEnvironment(
   const flagsMatch = runtime.launchMode === "injected"
     || (runtime.launchFlags.length === attestation.launchFlags.length
       && runtime.launchFlags.every((flag, index) => flag === attestation.launchFlags[index]));
-  const digestMatches = runtime.executableDigest === undefined
+  const digestUnobservable = attestation.executableSha256 !== undefined
+    && runtime.executableDigest === undefined;
+  const digestMatches = attestation.executableSha256 === undefined
     || runtime.executableDigest === attestation.executableSha256;
   if (attestation.chromiumProduct !== browserProduct
     || attestation.chromiumBuild !== browserBuild
-    || !flagsMatch || !digestMatches || uncoveredFont) {
+    || !flagsMatch || (!digestUnobservable && !digestMatches) || uncoveredFont) {
     exportError(
       "output_verification_failure",
       "output_verification",
@@ -789,10 +864,20 @@ function runtimeEnvironment(
       },
     );
   }
+  if (digestUnobservable) {
+    return {
+      ...report.environment,
+      verification: baselineVerification,
+      fidelityTier,
+      observed,
+    };
+  }
   const attested: ExportRuntimeAttestationEvidence = {
     chromiumProduct: attestation.chromiumProduct,
     chromiumBuild: attestation.chromiumBuild,
-    executableSha256: attestation.executableSha256,
+    ...(attestation.executableSha256 === undefined
+      ? {}
+      : { executableSha256: attestation.executableSha256 }),
     launchFlags: [...attestation.launchFlags],
     hostFontsDigest: materialDigest("docxodus:font-configuration:v1", attestation.hostFonts),
     basis: attestation.basis,
@@ -819,13 +904,13 @@ function verifyBrowserOutcome(
   const report = materialization.renderReport;
   if (!isCurrentCompleteRenderReport(report)) {
     const version = hasCurrentRenderReportDiscriminator(report)
-      ? "a malformed v2 complete report"
+      ? "a malformed v3 complete report"
       : "an unsupported report discriminator";
     exportError(
       "output_verification_failure",
       "output_verification",
       `The browser materializer returned ${version}; expected ${CURRENT_RENDER_REPORT_SCHEMA} version ${CURRENT_RENDER_REPORT_SCHEMA_VERSION}.`,
-      "Use matching hardened docxodus and @docxodus/export package versions; legacy v1 is validation-only.",
+      "Use matching hardened docxodus and @docxodus/export package versions; legacy v1/v2 are validation-only.",
     );
   }
   const pageMapDigest = sha256(canonicalJson(materialization.pageMap));
@@ -890,6 +975,205 @@ function enforceSerializedLimit(
   }
 }
 
+function applyHostFontAttestation(
+  report: CompleteRenderReport,
+  runtime: BrowserRuntimeIdentity,
+  attestation: RenderEnvironmentAttestation | undefined,
+): void {
+  if (!attestation || !runtimeAttestationMatches(runtime, attestation)) return;
+  let changed = false;
+  report.fonts = report.fonts.map((font): FontResolution => {
+    if (font.source !== "browser" || font.status !== "unverified") return font;
+    const family = font.resolvedFamily ?? font.requestedFamily;
+    const match = attestation.hostFonts.find((candidate) =>
+      normalizeFontFamilyName(candidate.family).toLowerCase()
+        === normalizeFontFamilyName(family).toLowerCase()
+      && candidate.style === font.requestedStyle
+      && candidate.weight === font.requestedWeight
+      && candidate.stretch === font.requestedStretch);
+    if (!match) return font;
+    changed = true;
+    return {
+      ...font,
+      status: "resolved",
+      source: "attested",
+      resolvedFamily: match.family,
+      resolvedFace: match.postscriptName,
+      fileSha256: match.fileSha256,
+      version: match.version,
+      faceMatch: "exact",
+      // document.fonts already proved the sampled request loadable. Exact host
+      // attestation binds that observation to this immutable face identity.
+      glyphCoverage: "complete",
+    };
+  });
+  if (changed && report.fontIdentity) {
+    const previousResolutionDigest = report.fontIdentity.resolutionDigest;
+    report.fontIdentity = {
+      ...report.fontIdentity,
+      resolutionDigest: sha256(canonicalJson({
+        schemaVersion: 1,
+        previousResolutionDigest,
+        resolutions: report.fonts,
+      })),
+    };
+  }
+}
+
+function runtimeAttestationMatches(
+  runtime: BrowserRuntimeIdentity,
+  attestation: RenderEnvironmentAttestation,
+): boolean {
+  if (attestation.chromiumProduct !== runtime.chromiumProduct) return false;
+  if (attestation.chromiumBuild !== runtime.browserVersion) return false;
+  if (attestation.executableSha256 !== undefined
+    && attestation.executableSha256 !== runtime.executableDigest) return false;
+  if (runtime.launchMode !== "injected"
+    && canonicalJson(attestation.launchFlags) !== canonicalJson(runtime.launchFlags)) return false;
+  return true;
+}
+
+function strictFontResolution(
+  font: FontResolution,
+  runtime: BrowserRuntimeIdentity,
+  attestation: RenderEnvironmentAttestation | undefined,
+): boolean {
+  const exact = font.status === "resolved"
+    && font.faceMatch === "exact"
+    && font.glyphCoverage === "complete"
+    && typeof font.fileSha256 === "string"
+    && typeof font.version === "string";
+  if (!exact) return false;
+  if ((font.source === "configured" || font.source === "attested")
+    && font.licenseEvidence !== undefined) return true;
+  return font.source === "attested"
+    && font.licenseEvidence === undefined
+    && attestation !== undefined
+    && runtimeAttestationMatches(runtime, attestation)
+    && attestation.hostFonts.some((face) =>
+      face.fileSha256 === font.fileSha256
+      && face.version === font.version
+      && face.postscriptName === font.resolvedFace);
+}
+
+function reconcileHostFontWarnings(report: CompleteRenderReport): void {
+  const stillUnverified = report.fonts.some((font) =>
+    font.status === "unverified" || font.source === "browser");
+  if (!stillUnverified) {
+    report.warnings = report.warnings.filter(({ code }) => code !== "font_environment_unverified");
+  }
+}
+
+function enforceStrictFontPolicy(
+  report: CompleteRenderReport,
+  runtime: BrowserRuntimeIdentity,
+  attestation: RenderEnvironmentAttestation | undefined,
+): void {
+  const failures = report.fonts.filter((font) => !strictFontResolution(font, runtime, attestation));
+  if (failures.length === 0) return;
+  exportError(
+    "resource_policy_failure",
+    "font_loading",
+    "Strict font policy rejected a non-exact, unverified, or incompletely covered font outcome.",
+    "Supply exact verified or host-attested faces with complete glyph coverage, or disable strictFonts.",
+    {
+      detail: failures.map(({ requestId, status }) => `${requestId}:${status}`).join(", "),
+    },
+  );
+}
+
+function finalRendererFingerprint(
+  browserMaterializerFingerprint: string,
+  runtime: BrowserRuntimeIdentity,
+  report: CompleteRenderReport,
+  verification: CompleteRenderReport["environment"]["verification"],
+  attestation: RenderEnvironmentAttestation | undefined,
+): string {
+  const fonts = report.fonts.map((font) => ({ ...font }))
+    .sort((left, right) => {
+      const leftKey = canonicalJson(left);
+      const rightKey = canonicalJson(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  return sha256(canonicalJson({
+    schemaVersion: 1,
+    browserMaterializerFingerprint,
+    runtime,
+    environment: {
+      verification,
+      ...(verification === "callerAttested" && attestation
+        ? {
+          attestedRuntime: {
+            chromiumProduct: attestation.chromiumProduct,
+            chromiumBuild: attestation.chromiumBuild,
+            launchFlags: attestation.launchFlags,
+            ...(attestation.executableSha256
+              ? { executableSha256: attestation.executableSha256 }
+              : {}),
+          },
+        }
+        : {}),
+    },
+    fontIdentity: report.fontIdentity,
+    fonts,
+  }));
+}
+
+async function prepareFontsBeforeBrowser(
+  runtime: ValidatedNodeExportRuntime,
+  deadline: number,
+  callerSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (!runtime.prepareFonts) return;
+  if (callerSignal?.aborted) {
+    exportError(
+      "operation_cancelled",
+      "font_loading",
+      "Export was cancelled before validating the configured font catalog.",
+      "Retry with a non-aborted signal.",
+      { pending: ["configured font catalog"] },
+    );
+  }
+  const timeoutMs = deadline - performance.now();
+  if (timeoutMs <= 0) {
+    exportError(
+      "readiness_timeout",
+      "font_loading",
+      "Export timed out while validating the configured font catalog.",
+      "Increase timeoutMs or reduce the configured font catalog.",
+    );
+  }
+  const controller = new AbortController();
+  const onCallerAbort = (): void => controller.abort(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await runtime.prepareFonts(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      if (callerSignal?.aborted) {
+        exportError(
+          "operation_cancelled",
+          "font_loading",
+          "Export was cancelled while validating the configured font catalog.",
+          "Retry with a non-aborted signal.",
+          { pending: ["configured font catalog"] },
+        );
+      }
+      exportError(
+        "readiness_timeout",
+        "font_loading",
+        "Export timed out while validating the configured font catalog.",
+        "Increase timeoutMs or reduce the configured font catalog.",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
+}
+
 async function renderOwned(
   sourceBytes: Uint8Array,
   options: NodeExportOptions,
@@ -899,8 +1183,12 @@ async function renderOwned(
   const requested = validateOutputs(outputs);
   nodeOptionsPreflight(options, allowOutputs);
   sourcePreflight(sourceBytes, options);
-  const runtime = validateRuntime(options);
   const timeoutMs = normalizedTimeout(options);
+  const effectiveLimits = Object.freeze({
+    ...DEFAULT_EXPORT_RESOURCE_LIMITS,
+    ...(options.limits ?? {}),
+  });
+  const runtime = validateRuntime(options, effectiveLimits, requested);
   const deadline = performance.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes
     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.pdfOutputBytes;
@@ -908,9 +1196,17 @@ async function renderOwned(
     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.pdfParserExpandedBytes;
   let report: CompleteRenderReport | undefined;
   try {
+    await prepareFontsBeforeBrowser(runtime, deadline, options.signal);
+    const attestation = runtime.environmentAttestation;
+    const deferStrictFontPolicy = options.strictFonts === true
+      && (attestation?.hostFonts.length ?? 0) > 0;
     const browser = await renderInBrowser(
       sourceBytes,
-      browserOptions({ ...options, timeoutMs }),
+      browserOptions({
+        ...options,
+        timeoutMs,
+        ...(deferStrictFontPolicy ? { strictFonts: false } : {}),
+      }),
       runtime,
       requested.includes("html"),
       requested.includes("pdf"),
@@ -919,21 +1215,17 @@ async function renderOwned(
       options.signal,
     );
     verifyBrowserOutcome(browser, requested);
-    const attestation = runtime.environmentAttestation;
     report = structuredClone(browser.materialization.renderReport);
+    applyHostFontAttestation(report, browser.runtime, attestation);
+    reconcileHostFontWarnings(report);
     const environment = runtimeEnvironment(report, browser.runtime, attestation);
-    const rendererFingerprint = materialDigest("docxodus:renderer-fingerprint:v1", {
-      schemaVersion: 1,
-      browserMaterializerFingerprint: browser.materialization.rendererFingerprint,
-      runtime: browser.runtime,
-      environment: {
-        verification: environment.verification,
-        fidelityTier: environment.fidelityTier,
-        observed: environment.observed,
-        attested: environment.attested,
-        attestationDigest: environment.attestationDigest,
-      },
-    });
+    const rendererFingerprint = finalRendererFingerprint(
+      browser.materialization.rendererFingerprint,
+      browser.runtime,
+      report,
+      environment.verification,
+      attestation,
+    );
     const pageMap = structuredClone(browser.materialization.pageMap);
     pageMap.rendererFingerprint = rendererFingerprint;
     environment.rendererFingerprint = rendererFingerprint;
@@ -954,6 +1246,7 @@ async function renderOwned(
     } else {
       delete report.bindings.htmlDigest;
     }
+    if (options.strictFonts) enforceStrictFontPolicy(report, browser.runtime, attestation);
 
     if (browser.pdf) {
       if (browser.pdf.byteLength > pdfLimit) {
@@ -972,6 +1265,15 @@ async function renderOwned(
       delete report.bindings.pdfDigest;
       delete report.bindings.pdfByteDeterministic;
       delete report.bindings.volatilePdfMetadata;
+    }
+
+    if (!isCurrentCompleteRenderReport(report)) {
+      exportError(
+        "output_verification_failure",
+        "output_verification",
+        "The Node export boundary produced a malformed v3 render report after applying runtime bindings.",
+        "Report this invariant failure; final Node mutations must preserve the closed report contract.",
+      );
     }
 
     const reportJson = canonicalJson(report);
@@ -1000,7 +1302,10 @@ async function renderOwned(
         "Inspect the retained cause and retry with the supported runtime.",
         { cause: error },
       );
-    throw attachFailedReport(normalized, report);
+    throw attachFailedReport(
+      normalized,
+      report && isCurrentCompleteRenderReport(report) ? report : undefined,
+    );
   }
 }
 

@@ -14,8 +14,12 @@ const reportSchemaV1Bytes = readFileSync(
   join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
 );
 const reportSchemaV1 = JSON.parse(reportSchemaV1Bytes.toString('utf8'));
-const reportSchemaV2 = JSON.parse(readFileSync(
+const reportSchemaV2Bytes = readFileSync(
   join(here, '..', '..', 'docs', 'schemas', 'render-report-v2.schema.json'),
+);
+const reportSchemaV2 = JSON.parse(reportSchemaV2Bytes.toString('utf8'));
+const reportSchemaV3 = JSON.parse(readFileSync(
+  join(here, '..', '..', 'docs', 'schemas', 'render-report-v3.schema.json'),
   'utf8',
 ));
 
@@ -35,8 +39,8 @@ interface BrowserExportResult {
     fragments: unknown[];
   };
   renderReport: {
-    schema: 'https://docxodus.dev/schemas/render/render-report/v2';
-    schemaVersion: 2;
+    schema: 'https://docxodus.dev/schemas/render/render-report/v3';
+    schemaVersion: 3;
     status: 'complete';
     source: { rawPackageBytesDigest: string };
     derivedProfileSource?: { rawPackageBytesDigest: string; byteLength: number };
@@ -57,7 +61,15 @@ interface BrowserExportResult {
       pending: string[];
       diagnostics?: Array<{ code: string; count: number }>;
     }>;
-    fonts: Array<{ requestKey: string; requestedFamily: string; status: string; source: string }>;
+    fontIdentity: { resolutionDigest: string };
+    fonts: Array<{
+      requestId: string;
+      requestedFamily: string;
+      requestedFamilies: string[];
+      status: string;
+      source: string;
+    }>;
+    fontReadiness: Array<{ requestKey: string; requestedFamily: string; available: boolean }>;
     resources: Array<{
       kind: string;
       status: string;
@@ -177,18 +189,29 @@ function schemaErrors(
   return errors;
 }
 
-test('keeps frozen render-report v1 disjoint from the closed v2 readiness schema', () => {
+test('keeps frozen render-report v1/v2 disjoint from the closed v3 font schema', () => {
   const v1Bytes = reportSchemaV1Bytes;
   const v1 = reportSchemaV1;
   const schema = reportSchemaV2;
   const limits = JSON.parse(readFileSync(join(here, '..', 'src', 'export-resource-limits-v1.json'), 'utf8'));
   const definitions = schema.$defs;
   expect(digest(v1Bytes)).toBe('50476223d2707ebd178a08239273af14b5dd9fb47504a7f152e17230f13accad');
+  expect(digest(reportSchemaV2Bytes)).toBe('a9f80b7cc6134034b376b57b43aa80ead51301227b0d38b39f5120aa9ad1e78c');
   expect(v1.$id).toBe('https://docxodus.dev/schemas/render/render-report/v1');
   expect(v1.$defs.complete.properties.schemaVersion.const).toBe(1);
   expect(v1.$defs.baseProperties.readiness.items.properties.diagnostics).toBeUndefined();
   expect(v1.$defs.baseProperties.resources.items.properties.readiness).toBeUndefined();
   expect(schema.$id).toBe('https://docxodus.dev/schemas/render/render-report/v2');
+  expect(reportSchemaV3.$id).toBe('https://docxodus.dev/schemas/render/render-report/v3');
+  expect(reportSchemaV3.$defs.complete.properties.schemaVersion.const).toBe(3);
+  expect(reportSchemaV3.$defs.complete.required).toContain('fontReadiness');
+  expect(reportSchemaV3.$defs.failed.required).toContain('fontReadiness');
+  expect(reportSchemaV3.$defs.baseProperties.fonts.items).toEqual({
+    $ref: '#/$defs/fontResolution',
+  });
+  expect(reportSchemaV3.$defs.baseProperties.fontReadiness.items).toEqual({
+    $ref: '#/$defs/fontReadinessProbe',
+  });
   expect(definitions.complete.properties.schemaVersion.const).toBe(2);
   expect(definitions.complete.properties.schema.const).not.toBe(
     v1.$defs.complete.properties.schema.const,
@@ -213,6 +236,7 @@ test('keeps frozen render-report v1 disjoint from the closed v2 readiness schema
     'chromiumProduct', 'chromiumBuild', 'executableSha256', 'launchFlags',
     'hostFontsDigest', 'basis',
   ]));
+  expect(reportSchemaV3.$defs.runtimeAttestation.required).not.toContain('executableSha256');
   expect(definitions.errorCode.enum).toEqual(expect.arrayContaining([
     'invalid_argument', 'source_digest_mismatch', 'document_version_unrepresentable',
     'operation_cancelled', 'resource_limit',
@@ -424,12 +448,31 @@ test.describe('standalone paginated HTML', () => {
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
     expect(result.renderReport).toEqual(expect.objectContaining({
-      schema: 'https://docxodus.dev/schemas/render/render-report/v2',
-      schemaVersion: 2,
+      schema: 'https://docxodus.dev/schemas/render/render-report/v3',
+      schemaVersion: 3,
     }));
-    expect(schemaErrors(reportSchemaV2, reportSchemaV2, result.renderReport)).toEqual([]);
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, result.renderReport)).toEqual([]);
     expect(schemaErrors(reportSchemaV1, reportSchemaV1, result.renderReport)).not.toEqual([]);
-    const legacyV1Report = structuredClone(result.renderReport) as any;
+    expect(schemaErrors(reportSchemaV2, reportSchemaV2, result.renderReport)).not.toEqual([]);
+    const legacyV2Report = structuredClone(result.renderReport) as any;
+    legacyV2Report.schema = 'https://docxodus.dev/schemas/render/render-report/v2';
+    legacyV2Report.schemaVersion = 2;
+    legacyV2Report.fonts = legacyV2Report.fontReadiness.map((entry: any) => ({
+      requestKey: entry.requestKey,
+      requestedFamily: entry.requestedFamily,
+      status: entry.available ? 'unverified' : 'missing',
+      source: 'browser',
+    }));
+    delete legacyV2Report.fontReadiness;
+    legacyV2Report.fontIdentity = {
+      schemaVersion: 1,
+      digest: result.renderReport.fontIdentity.resolutionDigest,
+      verification: 'browserObserved',
+    };
+    expect(schemaErrors(reportSchemaV2, reportSchemaV2, legacyV2Report)).toEqual([]);
+    expect(schemaErrors(reportSchemaV1, reportSchemaV1, legacyV2Report)).not.toEqual([]);
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, legacyV2Report)).not.toEqual([]);
+    const legacyV1Report = structuredClone(legacyV2Report) as any;
     legacyV1Report.schema = 'https://docxodus.dev/schemas/render/render-report/v1';
     legacyV1Report.schemaVersion = 1;
     legacyV1Report.readiness.forEach((entry: any) => { delete entry.diagnostics; });
@@ -442,9 +485,9 @@ test.describe('standalone paginated HTML', () => {
     legacyV1Report.fonts.forEach((entry: any) => { delete entry.requestKey; });
     expect(schemaErrors(reportSchemaV1, reportSchemaV1, legacyV1Report)).toEqual([]);
     expect(schemaErrors(reportSchemaV2, reportSchemaV2, legacyV1Report)).not.toEqual([]);
-    expect(schemaErrors(reportSchemaV2, reportSchemaV2, {
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, {
       ...result.renderReport,
-      schemaVersion: 1,
+      schemaVersion: 2,
     })).not.toEqual([]);
     expect(result.renderReport.fonts.every((font) =>
       font.requestedFamily.length > 0

@@ -3,11 +3,13 @@ import { test } from "node:test";
 import {
   CURRENT_RENDER_REPORT_SCHEMA,
   CURRENT_RENDER_REPORT_SCHEMA_VERSION,
+  fromBrowserFailure,
   hasCurrentRenderReportDiscriminator,
   isCurrentCompleteRenderReport,
+  isCurrentFailedRenderReport,
 } from "../dist/contracts.js";
 
-test("accepts only the current v2 browser-materializer report discriminator", () => {
+test("accepts only a closed current v3 browser-materializer report", () => {
   const hash = "0".repeat(64);
   const limits = Object.fromEntries([
     "compressedDocxBytes", "opcEntries", "expandedOpcBytes", "xmlPartBytes",
@@ -42,9 +44,15 @@ test("accepts only the current v2 browser-materializer report discriminator", ()
       ].map((code) => ({ code, severity: "info", message: code, count: 0 })),
     }],
     fonts: [],
+    fontReadiness: [],
     resources: [],
     unsupportedContent: [],
-    fontIdentity: { schemaVersion: 1, digest: hash, verification: "browserObserved" },
+    fontIdentity: {
+      resolverContract: "https://docxodus.dev/contracts/font-resolver/v1",
+      substitutionContractVersion: 1,
+      substitutionContractDigest: hash,
+      resolutionDigest: hash,
+    },
     warnings: [],
     status: "complete",
     environment: {
@@ -70,8 +78,8 @@ test("accepts only the current v2 browser-materializer report discriminator", ()
     bindings: { pageMapDigest: hash, artifactRequestIds: [] },
   };
   assert.equal(CURRENT_RENDER_REPORT_SCHEMA,
-    "https://docxodus.dev/schemas/render/render-report/v2");
-  assert.equal(CURRENT_RENDER_REPORT_SCHEMA_VERSION, 2);
+    "https://docxodus.dev/schemas/render/render-report/v3");
+  assert.equal(CURRENT_RENDER_REPORT_SCHEMA_VERSION, 3);
   assert.equal(hasCurrentRenderReportDiscriminator({
     schema: CURRENT_RENDER_REPORT_SCHEMA,
     schemaVersion: CURRENT_RENDER_REPORT_SCHEMA_VERSION,
@@ -81,12 +89,16 @@ test("accepts only the current v2 browser-materializer report discriminator", ()
     schemaVersion: 1,
   }), false);
   assert.equal(hasCurrentRenderReportDiscriminator({
+    schema: "https://docxodus.dev/schemas/render/render-report/v2",
+    schemaVersion: 2,
+  }), false);
+  assert.equal(hasCurrentRenderReportDiscriminator({
     schema: CURRENT_RENDER_REPORT_SCHEMA,
     schemaVersion: 1,
   }), false);
   assert.equal(hasCurrentRenderReportDiscriminator({
-    schema: "https://docxodus.dev/schemas/render/render-report/v1",
-    schemaVersion: 2,
+    schema: "https://docxodus.dev/schemas/render/render-report/v2",
+    schemaVersion: 3,
   }), false);
   assert.equal(hasCurrentRenderReportDiscriminator(null), false);
   assert.equal(isCurrentCompleteRenderReport({
@@ -99,12 +111,36 @@ test("accepts only the current v2 browser-materializer report discriminator", ()
   assert.equal(isCurrentCompleteRenderReport(incomplete), false);
   const badFont = structuredClone(valid);
   badFont.fonts = [{
-    requestKey: "not-a-digest",
+    requestId: "font-0001",
     requestedFamily: "serif",
+    requestedFamilies: ["serif"],
+    requestedStyle: "normal",
+    requestedWeight: 400,
+    requestedStretch: 100,
+    sampleCodePointCount: 1,
+    sampleDigest: "not-a-digest",
     status: "unverified",
     source: "browser",
+    glyphCoverage: "unverified",
   }];
   assert.equal(isCurrentCompleteRenderReport(badFont), false);
+  const badReadiness = structuredClone(valid);
+  badReadiness.fontReadiness = [{
+    requestKey: hash,
+    requestedFamily: "serif",
+    available: true,
+    bytesBase64: "forbidden",
+  }];
+  assert.equal(isCurrentCompleteRenderReport(badReadiness), false);
+  const duplicateReadiness = structuredClone(valid);
+  duplicateReadiness.fontReadiness = [
+    { requestKey: hash, requestedFamily: "serif", available: true },
+    { requestKey: hash, requestedFamily: "sans-serif", available: true },
+  ];
+  assert.equal(isCurrentCompleteRenderReport(duplicateReadiness), false);
+  const oldIdentity = structuredClone(valid);
+  oldIdentity.fontIdentity = { schemaVersion: 1, digest: hash, verification: "browserObserved" };
+  assert.equal(isCurrentCompleteRenderReport(oldIdentity), false);
   const badResource = structuredClone(valid);
   badResource.resources = [{
     kind: "chart",
@@ -113,4 +149,66 @@ test("accepts only the current v2 browser-materializer report discriminator", ()
     contentKey: hash,
   }];
   assert.equal(isCurrentCompleteRenderReport(badResource), false);
+
+  const {
+    status: _status,
+    environment,
+    pages,
+    bindings,
+    readiness: _readiness,
+    ...failedBase
+  } = structuredClone(valid);
+  const failed = {
+    ...failedBase,
+    readiness: [{
+      phase: "font_loading",
+      status: "failed",
+      elapsedMs: 1,
+      pending: ["font:configured"],
+    }],
+    status: "failed",
+    failure: {
+      code: "resource_policy_failure",
+      severity: "error",
+      phase: "font_loading",
+      message: "Font policy failed.",
+      remediation: "Supply a permitted font.",
+      pending: ["font:configured"],
+    },
+    environment: { verification: environment.verification },
+    partial: { pages, bindings },
+    unavailable: [],
+  };
+  assert.equal(isCurrentFailedRenderReport(failed), true);
+  assert.equal(isCurrentCompleteRenderReport(failed), false);
+
+  const twoTerminalPhases = structuredClone(failed);
+  twoTerminalPhases.readiness.push({
+    phase: "output_verification",
+    status: "cancelled",
+    elapsedMs: 0,
+    pending: [],
+  });
+  assert.equal(isCurrentFailedRenderReport(twoTerminalPhases), false);
+  const malformedFailure = structuredClone(failed);
+  malformedFailure.failure.bytesBase64 = "forbidden";
+  assert.equal(isCurrentFailedRenderReport(malformedFailure), false);
+
+  const acceptedError = fromBrowserFailure({
+    code: "resource_policy_failure",
+    phase: "font_loading",
+    message: "Font policy failed.",
+    remediation: "Supply a permitted font.",
+    report: failed,
+  });
+  assert.notEqual(acceptedError.report, failed);
+  assert.equal(acceptedError.report?.status, "failed");
+  failed.failure.message = "mutated after validation";
+  assert.equal(acceptedError.report?.failure.message, "Font policy failed.");
+  const rejectedError = fromBrowserFailure({
+    code: "resource_policy_failure",
+    phase: "font_loading",
+    report: malformedFailure,
+  });
+  assert.equal(rejectedError.report, undefined);
 });

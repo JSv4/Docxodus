@@ -282,3 +282,63 @@ export function generateLongFootnoteDocx(wordCount = 600) {
     },
   ]);
 }
+
+/** Minimal deterministic document whose only declared face is supplied by the #442 test matrix. */
+export function generateFontProbeDocx(
+  family = "Docxodus Canvas Mono",
+  text = "AZ AZA ZAZ",
+  {
+    pageWidth = 12240,
+    pageHeight = 15840,
+    margin = 1440,
+    paragraphCount = 1,
+  } = {},
+) {
+  const paragraphs = Array.from({ length: paragraphCount }, () => `
+  <w:p><w:r><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/></w:rPr>
+    <w:t>${text}</w:t></w:r></w:p>`).join("");
+  return storedZip([
+    {
+      name: "[Content_Types].xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`),
+    },
+    {
+      name: "_rels/.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "word/_rels/document.xml.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "word/styles.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="${W_NS}">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="${family}" w:hAnsi="${family}"/>
+    <w:sz w:val="24"/><w:szCs w:val="24"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+</w:styles>`),
+    },
+    {
+      name: "word/document.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="${W_NS}"><w:body>${paragraphs}
+  <w:sectPr><w:pgSz w:w="${pageWidth}" w:h="${pageHeight}"/><w:pgMar w:top="${margin}" w:right="${margin}" w:bottom="${margin}" w:left="${margin}"/></w:sectPr>
+</w:body></w:document>`),
+    },
+  ]);
+}

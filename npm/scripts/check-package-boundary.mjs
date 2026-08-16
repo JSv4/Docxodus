@@ -42,6 +42,18 @@ try {
     'npm LICENSE must preserve the inherited Microsoft notice');
   assert.match(packageLicense, /Copyright \(c\) 2025-2026 John Scrudato IV/,
     'npm LICENSE must credit John Scrudato IV');
+  assert.equal(
+    packageJson.exports['./render-report.schema.json'],
+    './dist/render-report-v3.schema.json',
+    'the unversioned render-report schema export must target the current v3 schema',
+  );
+  for (const version of [1, 2, 3]) {
+    assert.equal(
+      packageJson.exports[`./render-report-v${version}.schema.json`],
+      `./dist/render-report-v${version}.schema.json`,
+      `render-report v${version} must retain an explicit immutable export`,
+    );
+  }
   for (const required of [
     'LICENSE',
     'README.md',
@@ -51,6 +63,7 @@ try {
     'dist/export-assets.json',
     'dist/render-report-v1.schema.json',
     'dist/render-report-v2.schema.json',
+    'dist/render-report-v3.schema.json',
   ]) {
     assert.ok(paths.includes(required), `npm package is missing required runtime file: ${required}`);
   }

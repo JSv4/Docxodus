@@ -72,7 +72,62 @@ tree signals. It repeats the barrier after reopening the serialized standalone d
 checks apply to the exact DOM Chromium prints. One total deadline bounds the operation; structured
 failures identify the incomplete phase and current pending resources. The end-to-end test output
 includes `test-artifacts/view-artifacts.html`, which links the successful PDF/HTML plus readiness,
-geometry, request, and failure evidence even when a later test fails.
+geometry, font-resolution, request, and failure evidence even when a later test fails. CI uploads
+that directory with `if: always()`, so a later test failure does not hide the completed evidence.
+
+## Deterministic fonts
+
+Pass deployment-controlled font roots through `fontDirectories`; the CLI exposes the same option
+as repeatable `--font-directory` flags. Roots are resolved once in caller order. Entries are
+code-unit sorted and scanned in a deterministic files-before-descendants order. An exact requested
+family wins, followed by the shared Docxodus substitution
+contract. Earlier roots win across root boundaries, while conflicting files for the same family,
+style, weight, and stretch inside one root are rejected. Byte-identical files are deduplicated.
+Symlinks and non-regular files are never followed.
+
+```js
+const result = await convertDocxToPdf(source, {
+  reviewProfile: "final",
+  commentProfile: "hidden",
+  fontDirectories: ["/opt/contract-fonts", "/opt/fallback-fonts"],
+  fontLicenseAttestations: [{
+    schemaVersion: 1,
+    usage: "standalone-document-font-embedding",
+    fileSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    embeddingPermitted: true,
+    permittedOutputs: ["html", "pdf"],
+    subsettingPermitted: true,
+    basis: "Vendor webfont license, order 2026-1042",
+    attester: "release-engineering@example.invalid",
+  }],
+  strictFonts: true,
+});
+```
+
+TTF/OTF embedding rights are read from `OS/2.fsType`. An explicit restricted or bitmap-only value
+always fails closed. WOFF/WOFF2, or any file whose rights cannot be derived, requires an affirmative
+schema-v1 attestation with usage `standalone-document-font-embedding`, bound to the exact lowercase
+SHA-256; an attestation cannot override an explicit restriction. `basis` and optional `attester`
+are bounded printable evidence strings. Each attestation names its permitted HTML/PDF outputs and
+whether subsetting is permitted. HTML carries the verified complete data-webfont bytes; PDF fails
+closed for a no-subsetting face because Chromium does not expose full-program embedding proof.
+OOXML-obfuscated embedded fonts remain unsupported and are reported from package preflight rather
+than silently substituted.
+
+Default mode returns structured warnings for substitutions, missing/load-failed fonts, metric
+mismatch, partial glyph coverage, synthesized faces, and unattested browser fallback.
+`strictFonts: true` fails the `font_loading` phase for every non-exact, partial, synthesized, or
+unverified outcome. Missing legal embedding evidence fails regardless of strictness.
+
+Reports expose requested stacks and face attributes, selected family/face, status, source, format,
+file digest/version, coverage, metric compatibility, and a canonical license-evidence identity.
+The accompanying `fontIdentity` binds the resolver contract, substitution contract, and complete
+resolution decision set. A separate `fontReadiness` array records the exact final CSS request key,
+bounded sample commitment, and availability used for offline reopen and JS-disabled PDF parity.
+Absolute font paths are excluded from generated CSS, standalone metadata,
+reports, diagnostics, and renderer fingerprints. Font bytes appear only in the standalone
+document's generated data-webfont rules; base64 bytes never enter reports or fingerprints. Use the
+reported digests to correlate deployment files without disclosing their locations.
 
 ## CLI
 
@@ -93,9 +148,10 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
 
 ## Runtime boundaries
 
-- Explicit font-directory loading is accepted by the public contract but fails with
-  `unsupported_runtime` until issue #442 supplies the verified pre-layout font hook. Browser-observed
-  fonts remain reported honestly; `strictFonts` therefore fails closed.
+- Browser-only callers may supply their own asynchronous resolver through
+  `docxodus/export-browser`; `@docxodus/export` owns filesystem discovery, licensing policy, and the
+  Playwright bridge. Unattested system fonts remain `browserObserved` and cannot satisfy strict
+  mode. A caller-owned browser is at most `callerAttested`, never `nodeVerified`.
 - The `original` review profile remains fail-closed until issue #444 completes its projection.
 - The broader generated-PDF fidelity ratchet is extended by issue #443.
 
@@ -123,4 +179,16 @@ returned as nominal artifacts. A safely retained failed report may follow only a
 diagnostic artifact. One host-owned Chromium browser is reused while every batch receives a fresh
 isolated materialization context and a separate PDF context. Executable and font-directory
 authority is process-owned: a deployment may set `DOCXODUS_CHROMIUM_PATH`, but a framed request
-cannot select a local executable or filesystem directory.
+cannot select a local executable, filesystem directory, or embedding-rights attestation. A
+deployment may set `DOCXODUS_FONT_POLICY_PATH` to a bounded schema-v1 JSON object with
+`fontDirectories` and `fontLicenseAttestations` arrays. Relative roots resolve from the policy
+file's directory. The host reads the policy once and applies the same process-owned configuration
+to every batch; each batch snapshots the selected font bytes before rendering.
+
+```json
+{
+  "schemaVersion": 1,
+  "fontDirectories": ["fonts/contract", "fonts/fallback"],
+  "fontLicenseAttestations": []
+}
+```

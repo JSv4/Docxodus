@@ -1,0 +1,2120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/render/render-report/v3",
+  "title": "Docxodus standalone render report v3",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/complete"
+    },
+    {
+      "$ref": "#/$defs/failed"
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "status",
+          "options"
+        ],
+        "properties": {
+          "status": {
+            "const": "complete"
+          },
+          "options": {
+            "required": [
+              "reviewProfile",
+              "reviewProfileAlreadyApplied"
+            ],
+            "properties": {
+              "reviewProfile": {
+                "enum": [
+                  "final",
+                  "original"
+                ]
+              },
+              "reviewProfileAlreadyApplied": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "derivedProfileSource"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "anyOf": [
+              {
+                "required": [
+                  "reviewProfile"
+                ],
+                "properties": {
+                  "reviewProfile": {
+                    "const": "markup"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "reviewProfileAlreadyApplied"
+                ],
+                "properties": {
+                  "reviewProfileAlreadyApplied": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "derivedProfileSource"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "phase": {
+      "enum": [
+        "input_validation",
+        "package_preflight",
+        "browser_launch",
+        "wasm_initialization",
+        "docx_conversion",
+        "font_loading",
+        "image_decoding",
+        "chart_svg_materialization",
+        "pagination",
+        "running_story_placement",
+        "page_tree_stability",
+        "pdf_print",
+        "output_verification",
+        "output_write",
+        "filesystem_commit",
+        "cleanup"
+      ]
+    },
+    "errorCode": {
+      "enum": [
+        "invalid_argument",
+        "invalid_document",
+        "source_digest_mismatch",
+        "document_version_unrepresentable",
+        "conversion_failure",
+        "browser_launch_failure",
+        "resource_policy_failure",
+        "readiness_timeout",
+        "operation_cancelled",
+        "pagination_failure",
+        "pdf_write_failure",
+        "output_write_failure",
+        "output_verification_failure",
+        "resource_limit",
+        "unsupported_runtime",
+        "filesystem_failure"
+      ]
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "phase",
+        "message",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "const": "warning"
+        },
+        "phase": {
+          "$ref": "#/$defs/phase"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "type": "string"
+        },
+        "partUri": {
+          "type": "string"
+        },
+        "anchorId": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageNumber",
+        "pageInSection",
+        "pageName",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageInSection": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "sectionIndex": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "paginationDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "count"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "sections_processed",
+            "page_runs_processed",
+            "source_anchors_inventoried",
+            "note_references_inventoried"
+          ]
+        },
+        "severity": {
+          "const": "info"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageMapDigest",
+        "artifactRequestIds"
+      ],
+      "properties": {
+        "pageMapDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "htmlDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pdfDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "artifactRequestIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pdfByteDeterministic": {
+          "const": false
+        },
+        "volatilePdfMetadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "fontIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolverContract",
+        "substitutionContractVersion",
+        "substitutionContractDigest",
+        "resolutionDigest"
+      ],
+      "properties": {
+        "resolverContract": {
+          "const": "https://docxodus.dev/contracts/font-resolver/v1"
+        },
+        "substitutionContractVersion": {
+          "const": 1
+        },
+        "substitutionContractDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "resolutionDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compressedDocxBytes",
+        "opcEntries",
+        "expandedOpcBytes",
+        "xmlPartBytes",
+        "opcUriCharacters",
+        "opcCompressionRatio",
+        "htmlOutputBytes",
+        "pdfOutputBytes",
+        "pageMapOutputBytes",
+        "renderReportOutputBytes",
+        "pdfParserExpandedBytes",
+        "finalPages",
+        "domNodes",
+        "automaticResources",
+        "automaticResourceBytes",
+        "renderDiagnostics",
+        "fontDirectoryEntries",
+        "fontFiles",
+        "fontFileBytes",
+        "fontTotalBytes",
+        "fontRequests",
+        "fontSampleCodePoints"
+      ],
+      "properties": {
+        "compressedDocxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "opcEntries": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expandedOpcBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "xmlPartBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "opcUriCharacters": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "opcCompressionRatio": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "htmlOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pdfOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageMapOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "renderReportOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pdfParserExpandedBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "finalPages": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "domNodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "automaticResources": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "automaticResourceBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "renderDiagnostics": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontDirectoryEntries": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontFiles": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontFileBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontTotalBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontRequests": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fontSampleCodePoints": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "observedRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeKind",
+        "locale",
+        "timezone",
+        "viewport",
+        "deviceScaleFactor",
+        "media",
+        "networkIsolation"
+      ],
+      "properties": {
+        "runtimeKind": {
+          "enum": [
+            "browser",
+            "nodeChromium"
+          ]
+        },
+        "playwrightVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browserProduct": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browserBuild": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executableSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "launchFlags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatingSystem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "viewport": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "deviceScaleFactor": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "colorScheme",
+            "reducedMotion",
+            "forcedColors",
+            "printMedia"
+          ],
+          "properties": {
+            "colorScheme": {
+              "enum": [
+                "light",
+                "dark",
+                "no-preference"
+              ]
+            },
+            "reducedMotion": {
+              "enum": [
+                "reduce",
+                "no-preference"
+              ]
+            },
+            "forcedColors": {
+              "enum": [
+                "active",
+                "none"
+              ]
+            },
+            "printMedia": {
+              "const": true
+            }
+          }
+        },
+        "networkIsolation": {
+          "enum": [
+            "ownedProcessRestricted",
+            "contextRestricted"
+          ]
+        }
+      }
+    },
+    "runtimeAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chromiumProduct",
+        "chromiumBuild",
+        "launchFlags",
+        "hostFontsDigest",
+        "basis"
+      ],
+      "properties": {
+        "chromiumProduct": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chromiumBuild": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executableSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "launchFlags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hostFontsDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "baseProperties": {
+      "schema": {
+        "const": "https://docxodus.dev/schemas/render/render-report/v3"
+      },
+      "schemaVersion": {
+        "const": 3
+      },
+      "source": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rawPackageBytesDigest",
+          "byteLength",
+          "documentVersion"
+        ],
+        "properties": {
+          "rawPackageBytesDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "documentVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      },
+      "derivedProfileSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rawPackageBytesDigest",
+          "byteLength"
+        ],
+        "properties": {
+          "rawPackageBytesDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "options": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reviewProfile",
+          "reviewProfileAlreadyApplied",
+          "commentProfile",
+          "title",
+          "outputs",
+          "layoutDigest",
+          "runtimePolicyDigest",
+          "policy"
+        ],
+        "properties": {
+          "reviewProfile": {
+            "enum": [
+              "final",
+              "original",
+              "markup"
+            ]
+          },
+          "reviewProfileAlreadyApplied": {
+            "type": "boolean"
+          },
+          "commentProfile": {
+            "enum": [
+              "hidden",
+              "inline",
+              "endnotes",
+              "margin"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "outputs": {
+            "oneOf": [
+              {
+                "const": []
+              },
+              {
+                "const": [
+                  "html"
+                ]
+              },
+              {
+                "const": [
+                  "pdf"
+                ]
+              },
+              {
+                "const": [
+                  "html",
+                  "pdf"
+                ]
+              }
+            ]
+          },
+          "layoutDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "runtimePolicyDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unsupportedContent",
+              "strictFonts",
+              "timeoutMs",
+              "limits"
+            ],
+            "properties": {
+              "unsupportedContent": {
+                "enum": [
+                  "warn",
+                  "strict"
+                ]
+              },
+              "strictFonts": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "limits": {
+                "$ref": "#/$defs/limits"
+              }
+            }
+          }
+        }
+      },
+      "readiness": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "status",
+            "elapsedMs",
+            "pending"
+          ],
+          "properties": {
+            "phase": {
+              "$ref": "#/$defs/phase"
+            },
+            "status": {
+              "enum": [
+                "complete",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "elapsedMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "pending": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "$ref": "#/$defs/paginationDiagnostic"
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "phase",
+                  "status"
+                ],
+                "properties": {
+                  "phase": {
+                    "const": "pagination"
+                  },
+                  "status": {
+                    "const": "complete"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "diagnostics"
+                ],
+                "properties": {
+                  "diagnostics": {
+                    "allOf": [
+                      {
+                        "contains": {
+                          "properties": {
+                            "code": {
+                              "const": "sections_processed"
+                            }
+                          },
+                          "required": [
+                            "code"
+                          ]
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "code": {
+                              "const": "page_runs_processed"
+                            }
+                          },
+                          "required": [
+                            "code"
+                          ]
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "code": {
+                              "const": "source_anchors_inventoried"
+                            }
+                          },
+                          "required": [
+                            "code"
+                          ]
+                        }
+                      },
+                      {
+                        "contains": {
+                          "properties": {
+                            "code": {
+                              "const": "note_references_inventoried"
+                            }
+                          },
+                          "required": [
+                            "code"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "diagnostics"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fonts": {
+        "type": "array",
+        "maxItems": 16384,
+        "items": {
+          "$ref": "#/$defs/fontResolution"
+        }
+      },
+      "resources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "status"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "image",
+                "svg",
+                "chart",
+                "external_link"
+              ]
+            },
+            "status": {
+              "enum": [
+                "embedded",
+                "inline",
+                "allowed_user_link",
+                "omitted"
+              ]
+            },
+            "readiness": {
+              "enum": [
+                "complete",
+                "failed"
+              ]
+            },
+            "contentKey": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "resource": {
+              "type": "string"
+            },
+            "anchorId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mediaType": {
+              "type": "string",
+              "minLength": 1
+            },
+            "byteLength": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "external_link"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "allowed_user_link",
+                      "omitted"
+                    ]
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "readiness"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "contentKey"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "else": {
+                "required": [
+                  "readiness",
+                  "contentKey"
+                ],
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "embedded",
+                      "inline",
+                      "omitted"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "embedded"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "kind": {
+                    "const": "image"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "inline"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "svg",
+                      "chart"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "readiness": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "readiness"
+                ]
+              },
+              "then": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "image"
+                      },
+                      "status": {
+                        "const": "embedded"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "svg",
+                          "chart"
+                        ]
+                      },
+                      "status": {
+                        "const": "inline"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "readiness": {
+                    "const": "failed"
+                  }
+                },
+                "required": [
+                  "readiness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "image",
+                      "svg",
+                      "chart"
+                    ]
+                  },
+                  "status": {
+                    "const": "omitted"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "unsupportedContent": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contentType",
+            "action"
+          ],
+          "properties": {
+            "contentType": {
+              "type": "string",
+              "minLength": 1
+            },
+            "elementName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "anchorId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "const": "placeholder"
+            }
+          }
+        }
+      },
+      "fontIdentity": {
+        "$ref": "#/$defs/fontIdentity"
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/warning"
+        }
+      },
+      "fontReadiness": {
+        "type": "array",
+        "maxItems": 16384,
+        "items": {
+          "$ref": "#/$defs/fontReadinessProbe"
+        }
+      }
+    },
+    "complete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "schemaVersion",
+        "source",
+        "options",
+        "readiness",
+        "fonts",
+        "fontReadiness",
+        "resources",
+        "unsupportedContent",
+        "warnings",
+        "fontIdentity",
+        "status",
+        "environment",
+        "pages",
+        "bindings"
+      ],
+      "properties": {
+        "schema": {
+          "const": "https://docxodus.dev/schemas/render/render-report/v3"
+        },
+        "schemaVersion": {
+          "const": 3
+        },
+        "source": {
+          "$ref": "#/$defs/baseProperties/source"
+        },
+        "derivedProfileSource": {
+          "$ref": "#/$defs/baseProperties/derivedProfileSource"
+        },
+        "options": {
+          "$ref": "#/$defs/baseProperties/options"
+        },
+        "readiness": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/baseProperties/readiness"
+            },
+            {
+              "items": {
+                "properties": {
+                  "status": {
+                    "const": "complete"
+                  }
+                }
+              }
+            },
+            {
+              "contains": {
+                "properties": {
+                  "phase": {
+                    "const": "pagination"
+                  }
+                },
+                "required": [
+                  "phase"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "fonts": {
+          "$ref": "#/$defs/baseProperties/fonts"
+        },
+        "resources": {
+          "$ref": "#/$defs/baseProperties/resources"
+        },
+        "unsupportedContent": {
+          "$ref": "#/$defs/baseProperties/unsupportedContent"
+        },
+        "fontIdentity": {
+          "$ref": "#/$defs/fontIdentity"
+        },
+        "warnings": {
+          "$ref": "#/$defs/baseProperties/warnings"
+        },
+        "status": {
+          "const": "complete"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rendererFingerprint",
+            "verification",
+            "fidelityTier",
+            "observed"
+          ],
+          "properties": {
+            "rendererFingerprint": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verification": {
+              "enum": [
+                "nodeVerified",
+                "browserObserved",
+                "callerAttested"
+              ]
+            },
+            "fidelityTier": {
+              "enum": [
+                "releaseBaselined",
+                "experimental",
+                "unbaselined"
+              ]
+            },
+            "observed": {
+              "$ref": "#/$defs/observedRuntime"
+            },
+            "attested": {
+              "$ref": "#/$defs/runtimeAttestation"
+            },
+            "attestationDigest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "verification": {
+                    "const": "callerAttested"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "attested",
+                  "attestationDigest"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "verification": {
+                    "const": "nodeVerified"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "observed": {
+                    "required": [
+                      "playwrightVersion",
+                      "browserProduct",
+                      "browserBuild",
+                      "executableSha256",
+                      "launchFlags",
+                      "operatingSystem",
+                      "architecture"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        },
+        "bindings": {
+          "$ref": "#/$defs/bindings"
+        },
+        "fontReadiness": {
+          "$ref": "#/$defs/baseProperties/fontReadiness"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "options": {
+                "properties": {
+                  "outputs": {
+                    "contains": {
+                      "const": "html"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "bindings": {
+                "required": [
+                  "htmlDigest"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "bindings": {
+                "not": {
+                  "required": [
+                    "htmlDigest"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "options": {
+                "properties": {
+                  "outputs": {
+                    "contains": {
+                      "const": "pdf"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "bindings": {
+                "required": [
+                  "pdfDigest"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "bindings": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "pdfDigest"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "pdfByteDeterministic"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "volatilePdfMetadata"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "schemaVersion",
+        "source",
+        "options",
+        "readiness",
+        "fonts",
+        "fontReadiness",
+        "resources",
+        "unsupportedContent",
+        "warnings",
+        "status",
+        "failure",
+        "unavailable"
+      ],
+      "properties": {
+        "schema": {
+          "const": "https://docxodus.dev/schemas/render/render-report/v3"
+        },
+        "schemaVersion": {
+          "const": 3
+        },
+        "source": {
+          "$ref": "#/$defs/baseProperties/source"
+        },
+        "derivedProfileSource": {
+          "$ref": "#/$defs/baseProperties/derivedProfileSource"
+        },
+        "options": {
+          "$ref": "#/$defs/baseProperties/options"
+        },
+        "readiness": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/baseProperties/readiness"
+            },
+            {
+              "contains": {
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "failed",
+                      "cancelled"
+                    ]
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
+        "fonts": {
+          "$ref": "#/$defs/baseProperties/fonts"
+        },
+        "resources": {
+          "$ref": "#/$defs/baseProperties/resources"
+        },
+        "unsupportedContent": {
+          "$ref": "#/$defs/baseProperties/unsupportedContent"
+        },
+        "fontIdentity": {
+          "$ref": "#/$defs/fontIdentity"
+        },
+        "warnings": {
+          "$ref": "#/$defs/baseProperties/warnings"
+        },
+        "status": {
+          "const": "failed"
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "severity",
+            "phase",
+            "message",
+            "remediation"
+          ],
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/errorCode"
+            },
+            "severity": {
+              "const": "error"
+            },
+            "phase": {
+              "$ref": "#/$defs/phase"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "remediation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "detail": {
+              "type": "string"
+            },
+            "pending": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "partUri": {
+              "type": "string"
+            },
+            "anchorId": {
+              "type": "string"
+            },
+            "resource": {
+              "type": "string"
+            }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verification"
+          ],
+          "properties": {
+            "rendererFingerprint": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verification": {
+              "enum": [
+                "nodeVerified",
+                "browserObserved",
+                "callerAttested"
+              ]
+            },
+            "fidelityTier": {
+              "enum": [
+                "releaseBaselined",
+                "experimental",
+                "unbaselined"
+              ]
+            },
+            "observed": {
+              "$ref": "#/$defs/observedRuntime"
+            },
+            "attested": {
+              "$ref": "#/$defs/runtimeAttestation"
+            },
+            "attestationDigest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "verification"
+                ],
+                "properties": {
+                  "verification": {
+                    "const": "callerAttested"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "attested",
+                  "attestationDigest"
+                ]
+              }
+            }
+          ]
+        },
+        "partial": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/page"
+              }
+            },
+            "bindings": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pageMapDigest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "htmlDigest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "pdfDigest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "artifactRequestIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pdfByteDeterministic": {
+                  "const": false
+                },
+                "volatilePdfMetadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "unavailable": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "field",
+              "reasonCode",
+              "detail"
+            ],
+            "properties": {
+              "field": {
+                "enum": [
+                  "environment.rendererFingerprint",
+                  "bindings.pageMapDigest",
+                  "bindings.htmlDigest",
+                  "bindings.pdfDigest"
+                ]
+              },
+              "reasonCode": {
+                "enum": [
+                  "notReached",
+                  "notRequested",
+                  "failedVerification",
+                  "discardedOnFailure"
+                ]
+              },
+              "detail": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "field": {
+                    "const": "environment.rendererFingerprint"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "field": {
+                    "const": "bindings.pageMapDigest"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "field": {
+                    "const": "bindings.htmlDigest"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "field": {
+                    "const": "bindings.pdfDigest"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            }
+          ]
+        },
+        "fontReadiness": {
+          "$ref": "#/$defs/baseProperties/fontReadiness"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "failure": {
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "const": "operation_cancelled"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "readiness": {
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "cancelled"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "readiness": {
+                "contains": {
+                  "properties": {
+                    "status": {
+                      "const": "failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "fontLicenseEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "identity",
+        "noSubsetting"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "installable",
+            "previewPrint",
+            "editable",
+            "attested"
+          ]
+        },
+        "identity": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "noSubsetting": {
+          "type": "boolean"
+        }
+      }
+    },
+    "fontResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "requestedFamily",
+        "requestedFamilies",
+        "requestedStyle",
+        "requestedWeight",
+        "requestedStretch",
+        "sampleCodePointCount",
+        "sampleDigest",
+        "status",
+        "source"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^font-[0-9]{4,}$",
+          "maxLength": 128
+        },
+        "requestedFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "requestedFamilies": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "requestedStyle": {
+          "enum": [
+            "normal",
+            "italic",
+            "oblique"
+          ]
+        },
+        "requestedWeight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "requestedStretch": {
+          "type": "number",
+          "minimum": 50,
+          "maximum": 200
+        },
+        "sampleCodePointCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        },
+        "sampleDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "resolvedFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "resolvedFace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "substituted",
+            "missing",
+            "load_failed",
+            "unverified"
+          ]
+        },
+        "source": {
+          "enum": [
+            "browser",
+            "configured",
+            "attested"
+          ]
+        },
+        "format": {
+          "enum": [
+            "ttf",
+            "otf",
+            "woff",
+            "woff2"
+          ]
+        },
+        "fileSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "faceMatch": {
+          "enum": [
+            "exact",
+            "synthesized"
+          ]
+        },
+        "metricCompatible": {
+          "type": "boolean"
+        },
+        "glyphCoverage": {
+          "enum": [
+            "complete",
+            "partial",
+            "unverified"
+          ]
+        },
+        "missingCodePointCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        },
+        "browserFallbackAvailable": {
+          "type": "boolean"
+        },
+        "licenseEvidence": {
+          "$ref": "#/$defs/fontLicenseEvidence"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "browser"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "missing",
+                  "unverified"
+                ]
+              },
+              "glyphCoverage": {
+                "const": "unverified"
+              }
+            },
+            "required": [
+              "glyphCoverage"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "resolvedFamily"
+                  ]
+                },
+                {
+                  "required": [
+                    "resolvedFace"
+                  ]
+                },
+                {
+                  "required": [
+                    "format"
+                  ]
+                },
+                {
+                  "required": [
+                    "fileSha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "version"
+                  ]
+                },
+                {
+                  "required": [
+                    "faceMatch"
+                  ]
+                },
+                {
+                  "required": [
+                    "metricCompatible"
+                  ]
+                },
+                {
+                  "required": [
+                    "missingCodePointCount"
+                  ]
+                },
+                {
+                  "required": [
+                    "licenseEvidence"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "configured"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "required": [
+              "format",
+              "licenseEvidence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "resolved",
+                  "substituted",
+                  "load_failed"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "configured",
+                  "attested"
+                ]
+              }
+            },
+            "required": [
+              "resolvedFamily",
+              "resolvedFace",
+              "fileSha256",
+              "version"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "missing",
+                  "unverified"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "browser"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "glyphCoverage": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "glyphCoverage"
+            ]
+          },
+          "then": {
+            "properties": {
+              "missingCodePointCount": {
+                "minimum": 1
+              }
+            },
+            "required": [
+              "missingCodePointCount"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "glyphCoverage": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "glyphCoverage"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "missingCodePointCount"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "fontReadinessProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestKey",
+        "requestedFamily",
+        "available"
+      ],
+      "properties": {
+        "requestKey": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "requestedFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "available": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -41,6 +41,19 @@ import {
   dataUrlInfo,
   standaloneSrcsetAllowed,
 } from "./standalone-resource-policy.js";
+import {
+  BrowserFontError,
+  createBrowserFontTask,
+  inventoryDocumentFontRequests,
+  parseCssFontFamily,
+  type BrowserFontResult,
+  type BrowserFontTask,
+} from "./font-runtime.js";
+import type {
+  FontConfigurationIdentity,
+  FontResolution,
+  FontResolver,
+} from "./font-contract.js";
 
 export { awaitFinalPrintReadiness, PrintReadinessError } from "./print-readiness.js";
 export {
@@ -55,6 +68,36 @@ export type {
   PrintReadinessPhase,
   VisualResourceProbe,
 } from "./print-readiness.js";
+export {
+  fontFamilyKey,
+  FONT_RESOLVER_CONTRACT_ID,
+  FONT_RESOLVER_SCHEMA_VERSION,
+  FONT_SUBSTITUTION_CONTRACT,
+  FONT_SUBSTITUTION_CONTRACT_MATERIAL,
+  FONT_SUBSTITUTION_CONTRACT_VERSION,
+  normalizeFontFamilyName,
+} from "./font-contract.js";
+export { inventoryDocumentFontRequests, parseCssFontFamily } from "./font-runtime.js";
+export type {
+  FontConfigurationIdentity,
+  FontEmbeddingKind,
+  FontFaceMatch,
+  FontFaceStyle,
+  FontFileFormat,
+  FontGlyphCoverage,
+  FontLicenseEvidence,
+  FontMediaType,
+  FontRequest,
+  FontResolution,
+  FontResolutionSource,
+  FontResolutionStatus,
+  FontResolver,
+  FontResolverFace,
+  FontResolverOutcome,
+  FontResolverRequest,
+  FontResolverResponse,
+  FontSubstitutionEntry,
+} from "./font-contract.js";
 
 export type ReviewProfile = "final" | "original" | "markup";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
@@ -145,11 +188,11 @@ export interface PaginatedHtmlOptions {
   title?: string;
   unsupportedContent?: UnsupportedContentPolicy;
   strictFonts?: boolean;
+  /** Ephemeral browser-side resolver; never serialized into standalone output. */
+  fontResolver?: FontResolver;
   timeoutMs?: number;
   limits?: Partial<ExportResourceLimits>;
   signal?: AbortSignal;
-  /** Reserved browser-only resolver boundary implemented by issue #442. */
-  fontResolver?: unknown;
   /** Trusted runtime assets only; never a document-resource base URL. */
   wasmBasePath?: string;
 }
@@ -174,21 +217,6 @@ export interface ReadinessOutcome {
   diagnostics?: PaginationDiagnostic[];
 }
 
-export interface FontResolution {
-  requestKey: string;
-  requestedFamily: string;
-  requestedFamilyStack?: string[];
-  resolvedFamily?: string;
-  status: "resolved" | "substituted" | "missing" | "unverified";
-  source: "browser" | "embedded" | "configured";
-}
-
-export interface FontConfigurationIdentity {
-  schemaVersion: 1;
-  digest: string;
-  verification: "browserObserved" | "configured";
-}
-
 export interface ResourceOutcome {
   kind: "image" | "svg" | "chart" | "external_link";
   status: "embedded" | "inline" | "allowed_user_link" | "omitted";
@@ -209,8 +237,8 @@ export interface UnsupportedContentOutcome {
 }
 
 export interface RenderReportBase {
-  schema: "https://docxodus.dev/schemas/render/render-report/v2";
-  schemaVersion: 2;
+  schema: "https://docxodus.dev/schemas/render/render-report/v3";
+  schemaVersion: 3;
   source: {
     rawPackageBytesDigest: string;
     byteLength: number;
@@ -236,11 +264,12 @@ export interface RenderReportBase {
     };
   };
   readiness: ReadinessOutcome[];
+  fontIdentity?: FontConfigurationIdentity;
   fonts: FontResolution[];
+  fontReadiness: FontReadinessProbe[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   warnings: RenderWarning[];
-  fontIdentity?: FontConfigurationIdentity;
 }
 
 export type EnvironmentVerification = "nodeVerified" | "browserObserved" | "callerAttested";
@@ -271,7 +300,7 @@ export interface ExportRuntimeObservedFacts {
 export interface ExportRuntimeAttestationEvidence {
   chromiumProduct: string;
   chromiumBuild: string;
-  executableSha256: string;
+  executableSha256?: string;
   launchFlags: string[];
   hostFontsDigest: string;
   basis: string;
@@ -425,6 +454,7 @@ interface NormalizedOptions {
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
   strictFonts: boolean;
+  fontResolver?: FontResolver;
   timeoutMs: number;
   limits: ExportResourceLimits;
   wasmBasePath: string;
@@ -437,7 +467,9 @@ interface ExecutionState {
   phase: ExportPhase;
   readiness: ReadinessOutcome[];
   warnings: RenderWarning[];
+  fontIdentity?: FontConfigurationIdentity;
   fonts: FontResolution[];
+  fontReadiness: FontReadinessProbe[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   limits: ExportResourceLimits;
@@ -455,6 +487,8 @@ interface AttemptStateCheckpoint {
   readiness: number;
   warnings: number;
   fonts: number;
+  fontReadiness: number;
+  fontIdentity?: FontConfigurationIdentity;
   resources: number;
   unsupportedContent: number;
 }
@@ -477,7 +511,7 @@ class PageTreeInstabilityError extends Error {
   }
 }
 
-const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v2" as const;
+const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v3" as const;
 const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
@@ -584,11 +618,6 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation", "strictFonts must be boolean.",
       "Pass true or false.");
   }
-  if (options.fontResolver !== undefined) {
-    fail("unsupported_runtime", "font_loading",
-      "The browser fontResolver contract is reserved but not implemented on this branch.",
-      "Omit fontResolver until issue #442 supplies the versioned resolver.");
-  }
   if (options.signal !== undefined
     && (typeof options.signal !== "object"
       || typeof options.signal.addEventListener !== "function"
@@ -611,6 +640,10 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   } catch {
     fail("invalid_argument", "input_validation", "wasmBasePath must be a valid non-empty URL string.",
       "Point it only at the closed, hash-verified Docxodus runtime asset directory.");
+  }
+  if (options.fontResolver !== undefined && typeof options.fontResolver !== "function") {
+    fail("invalid_argument", "input_validation", "fontResolver must be a function.",
+      "Provide an asynchronous FontResolver callback or omit the option.");
   }
 
   const limits = { ...DEFAULT_EXPORT_RESOURCE_LIMITS };
@@ -652,6 +685,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     title,
     unsupportedContent,
     strictFonts: options.strictFonts ?? false,
+    ...(options.fontResolver ? { fontResolver: options.fontResolver } : {}),
     timeoutMs,
     limits: Object.freeze(limits),
     wasmBasePath,
@@ -759,9 +793,20 @@ async function runPhase<T>(
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
   let timedOutPending: string[] | undefined;
   const controller = new AbortController();
+  let pendingSignature = JSON.stringify(initialPending);
   reportProgress("pending", initialPending);
+  if (typeof pendingResources === "function") {
+    progressTimer = setInterval(() => {
+      const resources = pending();
+      const signature = JSON.stringify(resources);
+      if (signature === pendingSignature) return;
+      pendingSignature = signature;
+      reportProgress("pending", resources);
+    }, 25);
+  }
   try {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -854,6 +899,7 @@ async function runPhase<T>(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (abortListener && state.signal) state.signal.removeEventListener("abort", abortListener);
+    if (progressTimer !== undefined) clearInterval(progressTimer);
     controller.abort();
   }
 }
@@ -1517,15 +1563,9 @@ function addUnsupportedContent(state: ExecutionState, outcome: UnsupportedConten
   state.unsupportedContent.push(outcome);
 }
 
-function addFont(state: ExecutionState, font: FontResolution): void {
-  enforceLimit(state.fonts.length + 1, state.limits.fontRequests, "fontRequests", "font_loading");
-  enforceDiagnosticAdmission(state, 1);
-  state.fonts.push(font);
-}
-
 function enforceDiagnosticAdmission(state: ExecutionState, additional: number): void {
   const current = state.warnings.length + state.resources.length
-    + state.unsupportedContent.length + state.fonts.length;
+    + state.unsupportedContent.length + state.fonts.length + state.fontReadiness.length;
   if (current + additional > state.limits.renderDiagnostics) {
     fail("resource_limit", state.phase,
       `renderDiagnostics limit exceeded (${current + additional} > ${state.limits.renderDiagnostics}).`,
@@ -2092,45 +2132,137 @@ function inventoryConvertedContent(
   }
 }
 
-function recordFontReadiness(
-  probes: FontReadinessProbe[],
+function recordFontResolution(
+  result: BrowserFontResult,
   state: ExecutionState,
   options: NormalizedOptions,
 ): void {
-  for (const probe of probes) {
-    addFont(state, {
-      requestKey: probe.requestKey,
-      requestedFamily: probe.requestedFamily,
-      status: probe.available ? "unverified" : "missing",
-      source: "browser",
-    });
-    if (!probe.available) {
+  enforceLimit(result.resolutions.length, state.limits.fontRequests, "fontRequests", "font_loading");
+  enforceDiagnosticAdmission(state, result.resolutions.length);
+  state.fontIdentity = { ...result.identity };
+  state.fonts.push(...result.resolutions.map((resolution) => ({
+    ...resolution,
+    requestedFamilies: [...resolution.requestedFamilies],
+    ...(resolution.licenseEvidence
+      ? { licenseEvidence: { ...resolution.licenseEvidence } }
+      : {}),
+  })));
+  if (result.renderedTextNodeCount > 0 && result.resolutions.length === 0) {
+    fail("resource_policy_failure", "font_loading",
+      "Rendered text was present, but the canonical font inventory was unexpectedly empty.",
+      "Report this font inventory invariant failure before relying on the output.");
+  }
+  for (const resolution of result.resolutions) {
+    const severity = "warning" as const;
+    if (resolution.status === "missing") {
       addWarning(state, {
         code: "font_unavailable",
-        severity: "warning",
+        severity,
         phase: "font_loading",
-        message: `The browser could not load the required font family: ${probe.requestedFamily}.`,
+        message: `No configured face resolved the required font family: ${resolution.requestedFamily}.`,
         remediation: "Install or explicitly supply the required font before export.",
-        resource: probe.requestedFamily,
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.status === "load_failed") {
+      addWarning(state, {
+        code: "font_load_failed",
+        severity,
+        phase: "font_loading",
+        message: `The configured font face for ${resolution.requestedFamily} could not be decoded or loaded.`,
+        remediation: "Replace the configured font with a valid browser-supported face.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.status === "substituted") {
+      addWarning(state, {
+        code: "font_substituted",
+        severity,
+        phase: "font_loading",
+        message: `${resolution.requestedFamily} was resolved to ${resolution.resolvedFamily ?? "a configured substitute"}.`,
+        remediation: "Supply an exact configured family when substitution is not acceptable.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.faceMatch === "synthesized") {
+      addWarning(state, {
+        code: "font_face_synthesized",
+        severity,
+        phase: "font_loading",
+        message: `The requested style, weight, or stretch for ${resolution.requestedFamily} requires synthesis.`,
+        remediation: "Supply an exact configured face for this style, weight, and stretch.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.metricCompatible === false) {
+      addWarning(state, {
+        code: "font_metric_mismatch",
+        severity,
+        phase: "font_loading",
+        message: `The substitute selected for ${resolution.requestedFamily} is not metrically compatible.`,
+        remediation: "Supply the exact family or review PageMap and line wrapping before publication.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.glyphCoverage === "partial") {
+      addWarning(state, {
+        code: "font_glyph_coverage_partial",
+        severity,
+        phase: "font_loading",
+        message: `The configured face for ${resolution.requestedFamily} covers only part of the rendered text.`,
+        remediation: "Supply a face with complete glyph coverage for the reported sample.",
+        resource: resolution.requestedFamily,
       });
     }
   }
-  if (probes.some(({ available }) => available)) {
+  if (result.resolutions.some((resolution) =>
+    resolution.status === "unverified" || resolution.source === "browser")) {
     addWarning(state, {
       code: "font_environment_unverified",
       severity: "warning",
       phase: "font_loading",
       message: "The browser loaded the requested CSS font families, but their exact files and substitutions are not attestable.",
-      remediation: "Use the verified font resolver from issue #442 when exact font identity is required.",
+      remediation: "Use an explicit verified font resolver when exact font identity is required.",
     });
   }
-  if (options.strictFonts && probes.length > 0) {
+  const strictFailures = result.resolutions.filter((resolution) =>
+    resolution.status !== "resolved"
+    || (resolution.source !== "configured" && resolution.source !== "attested")
+    || resolution.faceMatch !== "exact"
+    || resolution.glyphCoverage !== "complete"
+    || !resolution.fileSha256
+    || !resolution.licenseEvidence);
+  if (options.strictFonts && strictFailures.length > 0) {
     fail("resource_policy_failure", "font_loading",
-      "Strict font policy requires verified font files, but this runtime can only observe browser availability.",
-      "Use the verified font resolver delivered by issue #442 or disable strictFonts.", {
-        detail: probes.map(({ requestedFamily }) => requestedFamily).join(", "),
+      "Strict font policy rejected a non-exact, unverified, or incompletely covered font outcome.",
+      "Supply exact verified faces with complete glyph coverage or disable strictFonts.", {
+        detail: strictFailures.map(({ requestId, status }) => `${requestId}:${status}`).join(", "),
       });
   }
+}
+
+function recordExactFontReadiness(
+  probes: readonly FontReadinessProbe[],
+  state: ExecutionState,
+): void {
+  enforceLimit(probes.length, state.limits.fontRequests, "fontRequests", "font_loading");
+  enforceDiagnosticAdmission(state, probes.length);
+  state.fontReadiness.push(...probes.map((probe) => ({ ...probe })));
+}
+
+function rethrowBrowserFontError(error: unknown): never {
+  if (error instanceof BrowserFontError) {
+    fail(
+      error.kind === "resource_limit" ? "resource_limit" : "resource_policy_failure",
+      "font_loading",
+      error.message,
+      error.kind === "resource_limit"
+        ? "Lower the number or size of configured fonts or raise the versioned font limit."
+        : "Return one canonical, digest-verified resolver outcome for every font request.",
+      { detail: error.detail, cause: error },
+    );
+  }
+  throw error;
 }
 
 function replaceFailedVisual(element: Element, label: string): void {
@@ -2482,6 +2614,8 @@ function checkpointAttemptState(state: ExecutionState): AttemptStateCheckpoint {
     readiness: state.readiness.length,
     warnings: state.warnings.length,
     fonts: state.fonts.length,
+    fontReadiness: state.fontReadiness.length,
+    fontIdentity: state.fontIdentity ? { ...state.fontIdentity } : undefined,
     resources: state.resources.length,
     unsupportedContent: state.unsupportedContent.length,
   };
@@ -2491,6 +2625,8 @@ function restoreAttemptState(state: ExecutionState, checkpoint: AttemptStateChec
   state.readiness.length = checkpoint.readiness;
   state.warnings.length = checkpoint.warnings;
   state.fonts.length = checkpoint.fonts;
+  state.fontReadiness.length = checkpoint.fontReadiness;
+  state.fontIdentity = checkpoint.fontIdentity ? { ...checkpoint.fontIdentity } : undefined;
   state.resources.length = checkpoint.resources;
   state.unsupportedContent.length = checkpoint.unsupportedContent;
 }
@@ -2499,9 +2635,9 @@ async function pristineAttemptAgreementSignature(
   pageTreeSignature: string,
   state: ExecutionState,
 ): Promise<string> {
-  const fonts = state.fonts.map((font) => ({
+  const fonts = state.fontReadiness.map((font) => ({
     requestKey: font.requestKey,
-    available: font.status !== "missing",
+    available: font.available,
   })).sort((left, right) => compareCodeUnits(left.requestKey, right.requestKey));
   const resources = state.resources
     .filter((resource) => resource.kind !== "external_link")
@@ -2634,6 +2770,7 @@ async function rendererIdentity(
   runtimePolicyDigest: string,
   runtimeAssets: RuntimeAssetIdentity,
   runtimeVersion: VersionInfo,
+  fontIdentity: FontConfigurationIdentity,
   fonts: FontResolution[],
 ): Promise<{
   rendererFingerprint: string;
@@ -2647,15 +2784,6 @@ async function rendererIdentity(
   }
   const fontRecords = fonts.map((font) => ({ ...font }))
     .sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
-  const fontDigest = await canonicalMaterialDigest(
-    "docxodus:font-configuration:v1",
-    { verification: "browserObserved", fonts: fontRecords },
-  );
-  const fontIdentity: FontConfigurationIdentity = {
-    schemaVersion: 1,
-    digest: fontDigest,
-    verification: "browserObserved",
-  };
   const observed = observedRuntimeFacts(document);
   const fingerprint = {
     contract: "docxodus-standalone-browser-v1",
@@ -2664,10 +2792,10 @@ async function rendererIdentity(
     runtimeVersion,
     paginatorContractVersion: 1,
     pageMapSchemaVersion: 1,
-    renderReportSchemaVersion: 2,
+    renderReportSchemaVersion: 3,
     layoutDigest,
     runtimePolicyDigest,
-    fontConfigurationDigest: fontDigest,
+    fontIdentity,
     fonts: fontRecords,
     observed,
   };
@@ -2795,9 +2923,9 @@ async function verifyOfflineReopen(
         automaticResourceBytes: state.limits.automaticResourceBytes,
       },
     });
-    const expectedFonts = state.fonts.map((font) => ({
+    const expectedFonts = state.fontReadiness.map((font) => ({
       requestKey: font.requestKey,
-      available: font.status !== "missing",
+      available: font.available,
     })).sort((left, right) => compareCodeUnits(left.requestKey, right.requestKey));
     const reopenedFonts = reopenedReadiness.fonts.map((font) => ({
       requestKey: font.requestKey,
@@ -2937,7 +3065,7 @@ function reportBase(
 ): RenderReportBase {
   return {
     schema: REPORT_SCHEMA,
-    schemaVersion: 2,
+    schemaVersion: 3,
     source: {
       rawPackageBytesDigest: manifest.rawPackageBytesDigest.value.toLowerCase(),
       byteLength: sourceBytes.byteLength,
@@ -2971,7 +3099,13 @@ function reportBase(
         ? { diagnostics: outcome.diagnostics.map((diagnostic) => ({ ...diagnostic })) }
         : {}),
     })),
-    fonts: state.fonts.map((font) => ({ ...font })),
+    ...(state.fontIdentity ? { fontIdentity: { ...state.fontIdentity } } : {}),
+    fonts: state.fonts.map((font) => ({
+      ...font,
+      requestedFamilies: [...font.requestedFamilies],
+      ...(font.licenseEvidence ? { licenseEvidence: { ...font.licenseEvidence } } : {}),
+    })),
+    fontReadiness: state.fontReadiness.map((font) => ({ ...font })),
     resources: state.resources.map((resource) => ({ ...resource })),
     unsupportedContent: state.unsupportedContent.map((outcome) => ({ ...outcome })),
     warnings: state.warnings.map((warning) => ({ ...warning })),
@@ -3113,6 +3247,7 @@ export async function convertDocxToPaginatedHtml(
     readiness: [],
     warnings: [],
     fonts: [],
+    fontReadiness: [],
     resources: [],
     unsupportedContent: [],
     limits: options.limits,
@@ -3141,11 +3276,6 @@ export async function convertDocxToPaginatedHtml(
     if (sourceBytes.byteLength === 0) {
       fail("invalid_document", "input_validation", "The DOCX input is empty.",
         "Pass a non-empty OPC package.");
-    }
-    if (options.strictFonts) {
-      fail("unsupported_runtime", "font_loading",
-        "Strict font verification is not yet available in the browser materializer.",
-        "Use the browser-observed font mode until issue #442 lands.");
     }
     layoutDigest = await layoutDigestForOptions(options);
 
@@ -3243,12 +3373,22 @@ export async function convertDocxToPaginatedHtml(
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
     let stableReferenceSignature: string | undefined;
+    let fontResolutionReferenceDigest: string | undefined;
     let pageTreeRetries = 0;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         frame = await createIsolatedFrame(globalThis.document, state, bootstrapHtml(options.title));
         const renderDocument = frame.contentDocument!;
         sanitizeConvertedDocument(renderDocument, convertedHtml, state, options);
+        // The converter hides its source staging tree from the viewer, but this
+        // is the tree the paginator measures and clones. It is already offscreen;
+        // expose only that renderer-owned root to computed-style inventory.
+        // Author-hidden descendants remain hidden and are still excluded.
+        const measurementStaging = renderDocument.getElementById("pagination-staging") as HTMLElement | null;
+        if (measurementStaging) {
+          measurementStaging.style.setProperty("visibility", "visible", "important");
+          measurementStaging.style.setProperty("pointer-events", "none", "important");
+        }
         inventoryConvertedContent(renderDocument, state, options);
         const readinessEvidenceCheckpoint = checkpointAttemptState(state);
 
@@ -3259,12 +3399,28 @@ export async function convertDocxToPaginatedHtml(
           domNodes: options.limits.domNodes,
           automaticResourceBytes: options.limits.automaticResourceBytes,
         };
-        const fontTask = documentFontReadiness(renderDocument, readinessLimits);
+        let fontTask: BrowserFontTask | undefined;
+        await runPhase(state, "font_loading", () =>
+          fontTask?.pending() ?? ["font:inventory"], async (signal) => {
+          try {
+            fontTask = createBrowserFontTask(renderDocument, options.fontResolver, options.limits);
+            const result = await fontTask.wait(signal);
+            if (fontResolutionReferenceDigest === undefined) {
+              fontResolutionReferenceDigest = result.identity.resolutionDigest;
+            } else if (fontResolutionReferenceDigest !== result.identity.resolutionDigest) {
+              fail("resource_policy_failure", "font_loading",
+                "The font resolver produced a different configuration across pristine layout attempts.",
+                "Use an immutable resolver response for one export operation.", {
+                  detail: `first=${fontResolutionReferenceDigest}; current=${result.identity.resolutionDigest}`,
+                });
+            }
+            recordFontResolution(result, state, options);
+          } catch (error) {
+            rethrowBrowserFontError(error);
+          }
+        });
         const imageTask = documentImageReadiness(renderDocument, readinessLimits);
         const graphicTask = documentGraphicReadiness(renderDocument, readinessLimits);
-        await runPhase(state, "font_loading", fontTask.pending, async (signal) => {
-          recordFontReadiness(await fontTask.wait(signal), state, options);
-        });
         await runPhase(state, "image_decoding", imageTask.pending, async (signal) => {
           await admitPrintVisualResources(renderDocument, readinessLimits, signal);
           const probes = await imageTask.wait(signal);
@@ -3368,14 +3524,14 @@ export async function convertDocxToPaginatedHtml(
         const failedVisualEvidence = state.resources
           .slice(readinessEvidenceCheckpoint.resources)
           .filter((resource) => resource.readiness === "failed");
-        state.fonts.length = readinessEvidenceCheckpoint.fonts;
+        state.fontReadiness.length = readinessEvidenceCheckpoint.fontReadiness;
         state.resources.length = readinessEvidenceCheckpoint.resources;
         state.resources.push(...failedVisualEvidence);
         const finalFontTask = documentFontReadiness(renderDocument, readinessLimits);
         const finalImageTask = documentImageReadiness(renderDocument, readinessLimits);
         const finalGraphicTask = documentGraphicReadiness(renderDocument, readinessLimits);
         await runPhase(state, "font_loading", finalFontTask.pending, async (signal) => {
-          recordFontReadiness(await finalFontTask.wait(signal), state, options);
+          recordExactFontReadiness(await finalFontTask.wait(signal), state);
         });
         await runPhase(state, "image_decoding", finalImageTask.pending, async (signal) => {
           await admitPrintVisualResources(renderDocument, readinessLimits, signal);
@@ -3482,6 +3638,11 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
+    if (!state.fontIdentity) {
+      fail("resource_policy_failure", "output_verification",
+        "The successful render is missing its font configuration identity.",
+        "Report this exporter invariant failure.");
+    }
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,
@@ -3489,6 +3650,7 @@ export async function convertDocxToPaginatedHtml(
         runtimePolicyDigest,
         runtimeAssets!,
         runtimeVersion!,
+        state.fontIdentity!,
         state.fonts,
       ));
     rendererFingerprint = renderer.rendererFingerprint;

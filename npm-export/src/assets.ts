@@ -67,9 +67,27 @@ globalThis.__docxodusExportBridge = {
     try {
       const response = await fetch(inputUrl, { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error(\`Input snapshot could not be loaded (\${response.status}).\`);
+      const fontResolver = typeof globalThis.__docxodusResolveFonts === "function"
+        ? async (request, signal) => {
+          if (signal.aborted) throw signal.reason;
+          const resolved = await globalThis.__docxodusResolveFonts(request);
+          if (!resolved || resolved.ok !== true || !resolved.result) {
+            const failure = resolved?.error ?? {};
+            throw new DocxodusExportError(
+              failure.code ?? "resource_policy_failure",
+              failure.phase ?? "font_loading",
+              failure.message ?? "The Node font resolver failed without a message.",
+              failure.remediation ?? "Inspect the configured font directories and attestations.",
+              failure.detail ? { detail: failure.detail } : {},
+            );
+          }
+          if (signal.aborted) throw signal.reason;
+          return resolved.result;
+        }
+        : undefined;
       const result = await convertDocxToPaginatedHtml(
         new Uint8Array(await response.arrayBuffer()),
-        { ...options, wasmBasePath: "/wasm/" },
+        { ...options, fontResolver, wasmBasePath: "/wasm/" },
       );
       return {
         ok: true,
