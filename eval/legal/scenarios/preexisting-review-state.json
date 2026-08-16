@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/preexisting-review-state.docx",
+    "provenanceId": "docxodus-scripted-preexisting-review-state-v1",
     "sourceSha256": "cadbf7dbaad5e050790c05b2a2debc05792433dbcce6e42c1c96a688e78191ac"
   },
   "instruction": {

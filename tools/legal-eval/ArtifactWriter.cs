@@ -12,6 +12,11 @@ using System.Text.Json.Serialization;
 
 namespace LegalEval;
 
+internal sealed record ArtifactPublication(
+    string Status,
+    IReadOnlyList<MetricResult> Metrics,
+    IReadOnlyList<ArtifactRecord> Artifacts);
+
 internal static class ArtifactWriter
 {
     private const string DocxMediaType =
@@ -32,12 +37,13 @@ internal static class ArtifactWriter
         return directory;
     }
 
-    public static IReadOnlyList<ArtifactRecord> WriteIncomplete(
+    public static ArtifactPublication WriteIncomplete(
         string directory,
         string scenarioId,
         ScoreKind scoreKind,
         string status,
         IReadOnlyList<MetricResult> metrics,
+        IReadOnlyList<ExpectedArtifact> expectedOutputs,
         string reason,
         IReadOnlyList<string>? operationLog = null,
         byte[]? input = null,
@@ -56,8 +62,7 @@ internal static class ArtifactWriter
     {
         return PublishFresh(directory, stage =>
         {
-            var records = CoreMetadata(stage, scenarioId, scoreKind, status, metrics,
-                operationLog ?? Array.Empty<string>());
+            var records = new List<ArtifactRecord>();
             records.Add(WriteOptionalDocx(stage, "input.docx", "input-docx", input, reason));
             records.Add(WriteOptionalDocx(stage, "candidate.docx", "candidate-docx", candidate, reason));
             records.Add(WriteOptionalDocx(stage, "expected.docx", "expected-docx", expected, reason));
@@ -88,18 +93,18 @@ internal static class ArtifactWriter
             AddFoundationRecords(records);
             AddRenderArtifacts(stage, records, renderMode, allowExternalRenderer,
                 input, candidate, expected, redline: null, artifactRenderer);
-            FinalizeIndexes(stage, scenarioId, scoreKind, status, metrics,
-                operationLog ?? Array.Empty<string>(), records);
-            return records;
+            return FinalizeScore(stage, scenarioId, scoreKind, status, metrics,
+                expectedOutputs, operationLog ?? Array.Empty<string>(), records);
         });
     }
 
-    public static IReadOnlyList<ArtifactRecord> Write(
+    public static ArtifactPublication Write(
         string directory,
         string scenarioId,
         ScoreKind scoreKind,
         string status,
         IReadOnlyList<MetricResult> metrics,
+        IReadOnlyList<ExpectedArtifact> expectedOutputs,
         IReadOnlyList<string> operationLog,
         byte[] input,
         byte[] candidate,
@@ -117,7 +122,7 @@ internal static class ArtifactWriter
     {
         return PublishFresh(directory, stage =>
         {
-            var records = CoreMetadata(stage, scenarioId, scoreKind, status, metrics, operationLog);
+            var records = new List<ArtifactRecord>();
             records.Add(WriteBytes(stage, "input.docx", "input-docx", input, DocxMediaType));
             records.Add(WriteBytes(stage, "candidate.docx", "candidate-docx", candidate, DocxMediaType));
             records.Add(WriteBytes(stage, "expected.docx", "expected-docx", expected, DocxMediaType));
@@ -145,50 +150,54 @@ internal static class ArtifactWriter
             AddFoundationRecords(records);
             AddRenderArtifacts(stage, records, renderMode, allowExternalRenderer,
                 input, candidate, expected, redline, artifactRenderer);
-            FinalizeIndexes(stage, scenarioId, scoreKind, status, metrics, operationLog, records);
-            return records;
+            return FinalizeScore(stage, scenarioId, scoreKind, status, metrics,
+                expectedOutputs, operationLog, records);
         });
     }
 
-    public static IReadOnlyList<ArtifactRecord> RewriteScoreMetadata(
+    private static ArtifactPublication FinalizeScore(
         string directory,
         string scenarioId,
         ScoreKind scoreKind,
         string status,
         IReadOnlyList<MetricResult> metrics,
-        IReadOnlyList<ArtifactRecord> artifacts,
-        IReadOnlyList<string>? operationLog = null)
+        IReadOnlyList<ExpectedArtifact> expectedOutputs,
+        IReadOnlyList<string> operationLog,
+        List<ArtifactRecord> records)
     {
-        var records = artifacts.Where(value => value.Id is not
-            ("metrics-json" or "scenario-summary" or "artifact-index-markdown"
-                or "artifact-index-html" or "evaluation-receipt" or "artifact-status"))
-            .ToList();
-        records.Add(WriteMetrics(directory, scenarioId, scoreKind, status, metrics));
-        records.Add(WriteText(directory, "summary.md", "scenario-summary",
-            BuildSummary(scenarioId, scoreKind, status, metrics), "text/markdown"));
-        FinalizeIndexes(directory, scenarioId, scoreKind, status, metrics,
-            operationLog ?? ReadOperationLog(directory), records);
-        return records;
-    }
-
-    private static List<ArtifactRecord> CoreMetadata(
-        string directory,
-        string scenarioId,
-        ScoreKind scoreKind,
-        string status,
-        IReadOnlyList<MetricResult> metrics,
-        IReadOnlyList<string> operationLog) =>
-        new()
-        {
-            WriteMetrics(directory, scenarioId, scoreKind, status, metrics),
-            WriteText(directory, "operation-log.json", "operation-log", JsonSerializer.Serialize(new
+        var finalMetrics = metrics.Append(RequiredOutputMetric(expectedOutputs, records)).ToList();
+        var finalStatus = status == "incomplete"
+            ? "incomplete"
+            : finalMetrics.Any(value => value.Status != "passed") ? "failed" : "passed";
+        records.Insert(0, WriteMetrics(directory, scenarioId, scoreKind, finalStatus, finalMetrics));
+        records.Insert(1, WriteText(directory, "operation-log.json", "operation-log",
+            JsonSerializer.Serialize(new
             {
                 schemaVersion = "1.0",
                 operations = operationLog,
-            }, JsonOptions), "application/json"),
-            WriteText(directory, "summary.md", "scenario-summary",
-                BuildSummary(scenarioId, scoreKind, status, metrics), "text/markdown"),
-        };
+            }, JsonOptions), "application/json"));
+        records.Add(WriteText(directory, "summary.md", "scenario-summary",
+            BuildSummary(scenarioId, scoreKind, finalStatus, finalMetrics), "text/markdown"));
+        FinalizeIndexes(directory, scenarioId, scoreKind, finalStatus, finalMetrics,
+            operationLog, records);
+        return new ArtifactPublication(finalStatus, finalMetrics, records);
+    }
+
+    private static MetricResult RequiredOutputMetric(
+        IReadOnlyList<ExpectedArtifact> expectedOutputs,
+        IReadOnlyList<ArtifactRecord> artifacts)
+    {
+        var required = expectedOutputs.Where(value => value.Required).ToList();
+        var missing = required.Where(output => !artifacts.Any(artifact =>
+                artifact.Id == output.Id && artifact.Status == "available"))
+            .Select(value => value.Id).Order(StringComparer.Ordinal).ToList();
+        return new MetricResult("task-completion.required-artifacts", "task_completion",
+            missing.Count == 0 ? "passed" : "failed",
+            missing.Count == 0
+                ? $"all required artifacts are available: {string.Join(", ", required.Select(value => value.Id))}"
+                : $"required artifacts are absent or unavailable: {string.Join(", ", missing)}",
+            missing.Count == 0 ? 1 : 0);
+    }
 
     private static ArtifactRecord WriteMetrics(
         string directory,
@@ -525,13 +534,16 @@ internal static class ArtifactWriter
     {
         records.RemoveAll(value => value.Id is "artifact-index-markdown" or "artifact-index-html"
             or "evaluation-receipt" or "artifact-status");
-        records.Add(WriteText(directory, "index.md", "artifact-index-markdown",
-            BuildArtifactIndexMarkdown(scenarioId, status, records), "text/markdown"));
-        records.Add(WriteText(directory, "index.html", "artifact-index-html",
-            BuildArtifactIndexHtml(scenarioId, status, records), "text/html"));
+        // The receipt covers content evidence, status covers content plus the receipt, and the
+        // indexes link both. Excluding the indexes from the hashed documents avoids a digest cycle.
         records.Add(WriteEvaluationReceipt(directory, scenarioId, scoreKind, status,
             metrics, operationLog, records));
         records.Add(WriteArtifactStatus(directory, records));
+        var indexedRecords = records.ToList();
+        records.Add(WriteText(directory, "index.md", "artifact-index-markdown",
+            BuildArtifactIndexMarkdown(scenarioId, status, indexedRecords), "text/markdown"));
+        records.Add(WriteText(directory, "index.html", "artifact-index-html",
+            BuildArtifactIndexHtml(scenarioId, status, indexedRecords), "text/html"));
     }
 
     private static ArtifactRecord WriteEvaluationReceipt(
@@ -561,6 +573,10 @@ internal static class ArtifactWriter
                 schemaVersion = "docxodus.evaluation-receipt/1.0",
                 receiptKind = "legal-workflow-evaluation",
                 runId,
+                contentScope = "content artifacts only; excludes evaluation receipt, artifact status, and indexes to avoid digest cycles",
+                rendererOutputSemantics = records.Any(value => value.Status == "available" && IsRenderedArtifact(value.Id))
+                    ? "renderer outputs are content-addressed for this run; the runId is reproducible only when the renderer and its output are reproducible"
+                    : "no external renderer output is included in this receipt",
                 scenarioId,
                 scoreKind,
                 status,
@@ -731,8 +747,8 @@ internal static class ArtifactWriter
     private static ArtifactRecord Unavailable(string id, string reason, string mediaType) =>
         new(id, "unavailable", null, null, reason, mediaType, null);
 
-    private static IReadOnlyList<ArtifactRecord> PublishFresh(
-        string directory, Func<string, List<ArtifactRecord>> build)
+    private static ArtifactPublication PublishFresh(
+        string directory, Func<string, ArtifactPublication> build)
     {
         directory = Path.GetFullPath(directory);
         var parent = Path.GetDirectoryName(directory)
@@ -743,7 +759,7 @@ internal static class ArtifactWriter
         Directory.CreateDirectory(stage);
         try
         {
-            var stagedRecords = build(stage);
+            var stagedPublication = build(stage);
             var hadExisting = Directory.Exists(directory);
             if (hadExisting) Directory.Move(directory, backup);
             try
@@ -757,30 +773,20 @@ internal static class ArtifactWriter
                 throw;
             }
             if (Directory.Exists(backup)) Directory.Delete(backup, recursive: true);
-            return stagedRecords.Select(record => record.Path is null
-                    ? record
-                    : record with { Path = Path.Combine(directory, Path.GetRelativePath(stage, record.Path)) })
-                .ToList();
+            return stagedPublication with
+            {
+                Artifacts = stagedPublication.Artifacts.Select(record => record.Path is null
+                        ? record
+                        : record with
+                        {
+                            Path = Path.Combine(directory, Path.GetRelativePath(stage, record.Path)),
+                        })
+                    .ToList(),
+            };
         }
         finally
         {
             if (Directory.Exists(stage)) Directory.Delete(stage, recursive: true);
-        }
-    }
-
-    private static IReadOnlyList<string> ReadOperationLog(string directory)
-    {
-        var path = Path.Combine(directory, "operation-log.json");
-        if (!File.Exists(path)) return Array.Empty<string>();
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
-            return document.RootElement.GetProperty("operations").EnumerateArray()
-                .Select(value => value.GetString() ?? string.Empty).ToList();
-        }
-        catch (Exception exception) when (exception is JsonException or IOException)
-        {
-            return new[] { $"operation-log-unreadable:{exception.Message}" };
         }
     }
 
@@ -795,6 +801,12 @@ internal static class ArtifactWriter
         value.Replace("|", "\\|", StringComparison.Ordinal)
             .Replace("\r\n", "<br>", StringComparison.Ordinal)
             .Replace("\n", "<br>", StringComparison.Ordinal);
+
+    private static bool IsRenderedArtifact(string id) =>
+        id.EndsWith("-pdf", StringComparison.Ordinal)
+        || id.EndsWith("-visual", StringComparison.Ordinal)
+        || id.Contains("-page-", StringComparison.Ordinal)
+        || id == "candidate-target-visual-diff";
 
     private static string? FindExecutable(string name)
     {

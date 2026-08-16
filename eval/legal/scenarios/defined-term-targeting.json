@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/defined-term-targeting.docx",
+    "provenanceId": "docxodus-scripted-defined-term-targeting-v1",
     "sourceSha256": "7b147c24c3056fc34ac41d232008447afcc8efeaf8d6912f8fe9598436d370c4"
   },
   "instruction": {

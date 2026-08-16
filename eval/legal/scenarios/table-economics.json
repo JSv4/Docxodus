@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/table-economics.docx",
+    "provenanceId": "docxodus-scripted-table-economics-v1",
     "sourceSha256": "956ef0e1d7438c819860b811fdd2ab8128dff08e3942e3486c0310a6b6e5302e"
   },
   "instruction": {

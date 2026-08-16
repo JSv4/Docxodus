@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/tracked-notice-amendment.docx",
+    "provenanceId": "docxodus-scripted-tracked-notice-amendment-v1",
     "sourceSha256": "ef1a61d0d01e5d6d3936557a03eaa754319f72f43cf5fb2648bb6495c61737cc"
   },
   "instruction": {

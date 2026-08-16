@@ -68,9 +68,11 @@ jobs:
           --report TestResults/legal-eval/fast-report.json
 
       - name: Generate epic 435 smoke workflow
+        if: always()
         run: python3 tools/mcp-server/smoke/build_epic_435_workflow.py
 
       - name: Stage epic 435 smoke fixture
+        if: always()
         run: |
           mkdir -p "$DOCXODUS_STORAGE_ROOT"
           cp TestFiles/NVCA-Model-COI.docx "$DOCXODUS_STORAGE_ROOT/local.docx"
@@ -78,6 +80,7 @@ jobs:
           cp TestFiles/NVCA-Model-COI.docx TestResults/legal-eval/epic435/before.docx
 
       - name: Run epic 435 editing smoke
+        if: always()
         run: >-
           python3 tools/mcp-server/smoke/mcp_probe.py
           --calls tools/mcp-server/smoke/epic-435-workflow.json
@@ -85,6 +88,7 @@ jobs:
           --quiet-server -- tools/mcp-server/bin/Release/net10.0/docxodus-mcp
 
       - name: Reopen and validate epic 435 output
+        if: always()
         run: >-
           python3 tools/mcp-server/smoke/mcp_probe.py
           --calls tools/mcp-server/smoke/epic-435-validation.json

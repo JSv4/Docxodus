@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/content-control-fill.docx",
+    "provenanceId": "docxodus-scripted-content-control-fill-v1",
     "sourceSha256": "3a8173280c1d23a0b81a903d5d782b9eb5e1d7556c50c20bb6e8cde946f9b8ea"
   },
   "instruction": {

@@ -208,9 +208,10 @@
     "expectedDocument": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sourceSha256"],
+      "required": ["path", "provenanceId", "sourceSha256"],
       "properties": {
         "path": { "type": "string", "minLength": 1 },
+        "provenanceId": { "type": "string", "minLength": 1 },
         "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },

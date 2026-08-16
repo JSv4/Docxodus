@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/numbered-clause-insertion.docx",
+    "provenanceId": "docxodus-scripted-numbered-clause-insertion-v1",
     "sourceSha256": "df5abd56abec02131b6a087ea75e8159f11029d109216fb25361f40e77ade207"
   },
   "instruction": {

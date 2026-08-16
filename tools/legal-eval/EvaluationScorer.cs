@@ -96,12 +96,13 @@ public sealed class EvaluationScorer
             ? TrySemanticDiff(baseline.Input, candidate)
             : (Json: (string?)null, Error: packageSafetyError);
         var targetSemanticDiff = TrySemanticDiff(baseline.Input, baseline.Expected);
-        var artifacts = ArtifactWriter.Write(
+        var publication = ArtifactWriter.Write(
             artifactDirectory,
             scenario.Id,
             kind,
             status,
             metrics,
+            scenario.ExpectedOutputs,
             baseline.OperationLog,
             baseline.Input,
             candidate,
@@ -118,13 +119,9 @@ public sealed class EvaluationScorer
             allowExternalRenderer: kind == ScoreKind.EngineBaseline,
             packageSafetyError,
             _artifactRenderer);
-        metrics.Add(EvaluateExpectedOutputs(scenario, artifacts));
-        status = metrics.Any(value => value.Status != "passed") ? "failed" : "passed";
-        artifacts = ArtifactWriter.RewriteScoreMetadata(
-            artifactDirectory, scenario.Id, kind, status, metrics, artifacts,
-            baseline.OperationLog);
 
-        return new EvaluationScore(scenario.Id, kind, status, metrics, artifacts, artifactDirectory);
+        return new EvaluationScore(scenario.Id, kind, publication.Status,
+            publication.Metrics, publication.Artifacts, artifactDirectory);
     }
 
     private static IReadOnlyList<MetricResult> BlockedMetrics(
@@ -173,21 +170,6 @@ public sealed class EvaluationScorer
                 value.Id, value.Category, "failed",
                 $"evaluation error: {exception.Message}", 0)).ToList();
         }
-    }
-
-    private static MetricResult EvaluateExpectedOutputs(
-        LegalScenario scenario, IReadOnlyList<ArtifactRecord> artifacts)
-    {
-        var required = scenario.ExpectedOutputs.Where(value => value.Required).ToList();
-        var missing = required.Where(output => !artifacts.Any(artifact =>
-                artifact.Id == output.Id && artifact.Status == "available"))
-            .Select(value => value.Id).Order(StringComparer.Ordinal).ToList();
-        return new MetricResult("task-completion.required-artifacts", "task_completion",
-            missing.Count == 0 ? "passed" : "failed",
-            missing.Count == 0
-                ? $"all required artifacts are available: {string.Join(", ", required.Select(value => value.Id))}"
-                : $"required artifacts are absent or unavailable: {string.Join(", ", missing)}",
-            missing.Count == 0 ? 1 : 0);
     }
 
     private static IReadOnlyList<MetricResult> EvaluateInvariants(

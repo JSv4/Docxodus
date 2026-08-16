@@ -59,6 +59,7 @@ public sealed record FixtureReference(
 
 public sealed record ExpectedDocumentReference(
     string Path,
+    string ProvenanceId,
     string SourceSha256);
 
 public sealed record ChangeBudget(
@@ -105,10 +106,24 @@ public sealed record FixtureProvenance(
     string? RecipePath,
     string? RecipeSha256);
 
+public sealed record ExpectedDocumentProvenance(
+    string Id,
+    string ScenarioId,
+    string Origin,
+    string GeneratedBy,
+    string Created,
+    string ReviewStatus,
+    string ReviewNotes,
+    string License,
+    string RedistributionPermission,
+    string SourcePath,
+    string SourceSha256);
+
 public sealed record LegalCorpus(
     string RootDirectory,
     IReadOnlyList<LegalScenario> Scenarios,
-    IReadOnlyDictionary<string, FixtureProvenance> Provenance);
+    IReadOnlyDictionary<string, FixtureProvenance> Provenance,
+    IReadOnlyDictionary<string, ExpectedDocumentProvenance> ExpectedDocumentProvenance);
 
 public sealed record MetricResult(
     string Id,

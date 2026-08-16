@@ -22,9 +22,11 @@ public sealed record EvaluationRunOptions(
 public sealed record EvaluationRunOutcome(
     int ExitCode,
     string ArtifactRoot,
-    string SummaryPath,
+    bool ArtifactsPublished,
+    string? SummaryPath,
     IReadOnlyList<ScenarioRunResult> Results,
-    string? FatalError);
+    string? FatalError,
+    string? ReportError);
 
 /// <summary>
 /// Single artifact-producing orchestration path used by both the CLI and xUnit. Scenario-level
@@ -34,15 +36,22 @@ public sealed record EvaluationRunOutcome(
 public sealed class LegalEvaluationRunner
 {
     private const long MaximumCandidateBytes = 64L * 1024 * 1024;
+    private const long MaximumOwnedReportBytes = 64L * 1024 * 1024;
+    private const string ArtifactRootMarkerName = ".docxodus-legal-eval-root";
+    private const string ArtifactRootMarkerContent = "docxodus.legal-evaluation-artifacts/1.0\n";
+    private const string RunSummaryDocumentKind = "docxodus.legal-evaluation-run-summary";
     private readonly Func<LegalScenario, LegalScenario>? _scenarioTransform;
     private readonly IEvaluationArtifactRenderer? _artifactRenderer;
+    private readonly Action<string, string> _externalReportCommitter;
 
     public LegalEvaluationRunner(
         Func<LegalScenario, LegalScenario>? scenarioTransform = null,
-        IEvaluationArtifactRenderer? artifactRenderer = null)
+        IEvaluationArtifactRenderer? artifactRenderer = null,
+        Action<string, string>? externalReportCommitter = null)
     {
         _scenarioTransform = scenarioTransform;
         _artifactRenderer = artifactRenderer;
+        _externalReportCommitter = externalReportCommitter ?? CommitStagedExternalReport;
     }
 
     public EvaluationRunOutcome Run(
@@ -52,17 +61,32 @@ public sealed class LegalEvaluationRunner
     {
         output ??= TextWriter.Null;
         error ??= TextWriter.Null;
-        var artifactRoot = Path.GetFullPath(options.ArtifactRoot);
-        Directory.CreateDirectory(artifactRoot);
+        var artifactRoot = NormalizeDirectoryPath(options.ArtifactRoot);
+        var corpusPath = ResolveCanonicalPath(options.CorpusPath);
+        var corpusRoot = Path.GetDirectoryName(corpusPath)
+            ?? throw new ScenarioValidationException("corpus path has no parent directory");
+        var candidateDirectory = options.CandidateDirectory is null
+            ? null
+            : NormalizeDirectoryPath(options.CandidateDirectory);
+        ValidateArtifactRootScope(artifactRoot, corpusRoot, candidateDirectory);
+        ValidateArtifactRootOwnership(artifactRoot);
+        var requestedSummaryPath = Path.Combine(artifactRoot, "run-summary.json");
+        var externalReportPath = ResolveExternalReportPath(
+            options.ReportPath, artifactRoot, requestedSummaryPath, corpusRoot, candidateDirectory);
+        var stagingRoot = CreateStagingRoot(artifactRoot);
         output.WriteLine($"Artifacts: {artifactRoot}");
         var results = new List<ScenarioRunResult>();
         string? fatalError = null;
+        string? reportError = null;
         var exitCode = 0;
-        var summaryPath = Path.Combine(artifactRoot, "run-summary.json");
+        string? summaryPath = requestedSummaryPath;
+        var published = false;
+        StagedExternalReport? stagedExternalReport = null;
+        var publicationPhase = "assemble the artifact root";
 
         try
         {
-            var corpus = ScenarioLoader.LoadCorpus(options.CorpusPath);
+            var corpus = ScenarioLoader.LoadCorpus(corpusPath);
             var scenarios = corpus.Scenarios
                 .Where(value => options.ScenarioId is null || value.Id == options.ScenarioId)
                 .Where(value => options.Subset == "full" || value.Tier == EvalTier.Fast)
@@ -83,34 +107,35 @@ public sealed class LegalEvaluationRunner
                     if (!baseline.Succeeded)
                     {
                         engineScore = FailureScore(scenario, baseline, ScoreKind.EngineBaseline,
-                            artifactRoot, baseline.Error ?? "scripted baseline failed", options.RenderMode,
+                            stagingRoot, baseline.Error ?? "scripted baseline failed", options.RenderMode,
                             artifactRenderer: _artifactRenderer);
                     }
                     else
                     {
                         engineScore = scorer.Score(scenario, baseline, baseline.Output,
-                            ScoreKind.EngineBaseline, artifactRoot, options.RenderMode);
+                            ScoreKind.EngineBaseline, stagingRoot, options.RenderMode);
                     }
                 }
                 catch (Exception exception)
                 {
                     baseline ??= EmergencyBaseline(scenario, exception);
                     engineScore = FailureScore(scenario, baseline, ScoreKind.EngineBaseline,
-                        artifactRoot, ExceptionDetail(exception,
-                            Path.GetDirectoryName(scenario.FilePath), artifactRoot), options.RenderMode,
+                        stagingRoot, ExceptionDetail(exception,
+                            Path.GetDirectoryName(scenario.FilePath), stagingRoot, artifactRoot),
+                        options.RenderMode,
                         artifactRenderer: _artifactRenderer);
                 }
 
                 EvaluationScore? planningScore = null;
-                if (engineScore.Status == "passed" && options.CandidateDirectory is not null)
+                if (engineScore.Status == "passed" && candidateDirectory is not null)
                 {
                     var candidatePath = Path.Combine(
-                        Path.GetFullPath(options.CandidateDirectory), scenario.Id + ".docx");
+                        candidateDirectory, scenario.Id + ".docx");
                     if (!File.Exists(candidatePath))
                     {
                         var reason = $"candidate file is absent: {scenario.Id}.docx in the requested candidate directory";
                         planningScore = FailureScore(scenario, baseline!, ScoreKind.ModelPlanning,
-                            artifactRoot, reason, ArtifactRenderMode.Disabled, status: "incomplete",
+                            stagingRoot, reason, ArtifactRenderMode.Disabled, status: "incomplete",
                             candidate: null, artifactRenderer: _artifactRenderer);
                     }
                     else
@@ -119,7 +144,7 @@ public sealed class LegalEvaluationRunner
                         {
                             var candidate = ReadCandidateBounded(candidatePath);
                             planningScore = scorer.Score(scenario, baseline!, candidate,
-                                ScoreKind.ModelPlanning, artifactRoot, options.RenderMode);
+                                ScoreKind.ModelPlanning, stagingRoot, options.RenderMode);
                         }
                         catch (Exception exception)
                         {
@@ -127,8 +152,9 @@ public sealed class LegalEvaluationRunner
                             try { candidate = ReadCandidateBounded(candidatePath); }
                             catch { }
                             planningScore = FailureScore(scenario, baseline!, ScoreKind.ModelPlanning,
-                                artifactRoot, ExceptionDetail(exception,
-                                    options.CandidateDirectory, artifactRoot), ArtifactRenderMode.Disabled,
+                                stagingRoot, ExceptionDetail(exception,
+                                    candidateDirectory, stagingRoot, artifactRoot),
+                                ArtifactRenderMode.Disabled,
                                 candidate: candidate, artifactRenderer: _artifactRenderer);
                         }
                     }
@@ -137,7 +163,7 @@ public sealed class LegalEvaluationRunner
                 results.Add(new ScenarioRunResult(scenario.Id, engineScore, planningScore));
                 output.WriteLine($"{engineScore.Status.ToUpperInvariant()} {scenario.Id} engine-baseline"
                     + (planningScore is null ? string.Empty : $"; {planningScore.Status} model-planning")
-                    + $"; artifacts={engineScore.ArtifactDirectory}");
+                    + $"; artifacts={RemapPath(stagingRoot, artifactRoot, engineScore.ArtifactDirectory!)}");
                 if (engineScore.Status != "passed"
                     || planningScore?.Status is "failed" or "incomplete")
                     exitCode = 1;
@@ -146,7 +172,7 @@ public sealed class LegalEvaluationRunner
         catch (Exception exception)
         {
             fatalError = ExceptionDetail(exception,
-                Path.GetDirectoryName(Path.GetFullPath(options.CorpusPath)), artifactRoot);
+                corpusRoot, stagingRoot, artifactRoot);
             error.WriteLine(exception.Message);
             exitCode = 2;
         }
@@ -155,36 +181,408 @@ public sealed class LegalEvaluationRunner
             try
             {
                 var summaryJson = BuildPortableSummary(
-                    options, artifactRoot, results, fatalError);
-                AtomicWriteText(summaryPath, summaryJson);
-                AtomicWriteText(Path.Combine(artifactRoot, "index.html"),
+                    options, stagingRoot, results, fatalError);
+                AtomicWriteText(Path.Combine(stagingRoot, "run-summary.json"), summaryJson);
+                AtomicWriteText(Path.Combine(stagingRoot, "index.html"),
                     BuildRunIndex(results, fatalError));
-                if (options.ReportPath is not null)
+                publicationPhase = "stage the external report";
+                if (externalReportPath is not null)
+                    stagedExternalReport = StageExternalReport(externalReportPath, summaryJson);
+
+                var publishedResults = RemapResults(results, stagingRoot, artifactRoot);
+                publicationPhase = "publish the artifact root";
+                PublishStagedRoot(stagingRoot, artifactRoot);
+                published = true;
+                results = publishedResults;
+                if (stagedExternalReport is not null)
                 {
-                    var reportPath = Path.GetFullPath(options.ReportPath);
-                    var reportDirectory = Path.GetDirectoryName(reportPath);
-                    if (reportDirectory is not null) Directory.CreateDirectory(reportDirectory);
-                    if (!string.Equals(reportPath, summaryPath, PathComparison))
-                        AtomicWriteText(reportPath, summaryJson);
+                    try
+                    {
+                        ValidateExternalReportDestinationOwnership(
+                            stagedExternalReport.DestinationPath);
+                        _externalReportCommitter(
+                            stagedExternalReport.TemporaryPath,
+                            stagedExternalReport.DestinationPath);
+                        stagedExternalReport = null;
+                    }
+                    catch (Exception exception)
+                    {
+                        reportError = "external report publication failed after the artifact root "
+                            + "was published; the artifact root remains valid: "
+                            + ExceptionDetail(exception, artifactRoot,
+                                Path.GetDirectoryName(externalReportPath));
+                        error.WriteLine(reportError);
+                        exitCode = 2;
+                    }
                 }
                 output.WriteLine($"Summary: {summaryPath}");
             }
             catch (Exception exception)
             {
-                var publicationError = "run summary publication failed: "
-                    + ExceptionDetail(exception, artifactRoot,
-                        options.ReportPath is null
-                            ? null
-                            : Path.GetDirectoryName(Path.GetFullPath(options.ReportPath)));
+                var publicationError = published
+                    ? "artifact root publication completed, but final reporting failed; "
+                        + "the published artifact root remains valid: "
+                        + ExceptionDetail(exception, stagingRoot, artifactRoot,
+                            externalReportPath is null
+                                ? null
+                                : Path.GetDirectoryName(externalReportPath))
+                    : $"failed to {publicationPhase} before artifact root publication: "
+                        + ExceptionDetail(exception, stagingRoot, artifactRoot,
+                            externalReportPath is null
+                                ? null
+                                : Path.GetDirectoryName(externalReportPath));
                 fatalError = fatalError is null
                     ? publicationError
                     : fatalError + Environment.NewLine + publicationError;
                 error.WriteLine(exception.Message);
                 exitCode = 2;
+                if (!published)
+                {
+                    results.Clear();
+                    summaryPath = null;
+                }
+            }
+            finally
+            {
+                if (stagedExternalReport is not null)
+                    DeleteFileBestEffort(stagedExternalReport.TemporaryPath);
+                if (!published) DeleteDirectoryBestEffort(stagingRoot);
             }
         }
 
-        return new EvaluationRunOutcome(exitCode, artifactRoot, summaryPath, results, fatalError);
+        return new EvaluationRunOutcome(exitCode, artifactRoot, published, summaryPath,
+            results, fatalError, reportError);
+    }
+
+    private static string CreateStagingRoot(string artifactRoot)
+    {
+        var parent = Path.GetDirectoryName(artifactRoot)
+            ?? throw new InvalidOperationException("artifact root has no parent directory");
+        var name = Path.GetFileName(artifactRoot);
+        if (name.Length == 0)
+            throw new InvalidOperationException("artifact root must name a directory");
+        Directory.CreateDirectory(parent);
+        var stagingRoot = Path.Combine(parent,
+            "." + name + ".stage-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(stagingRoot);
+            File.WriteAllText(Path.Combine(stagingRoot, ArtifactRootMarkerName),
+                ArtifactRootMarkerContent,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            return stagingRoot;
+        }
+        catch
+        {
+            DeleteDirectoryBestEffort(stagingRoot);
+            throw;
+        }
+    }
+
+    private static void PublishStagedRoot(string stagingRoot, string artifactRoot)
+    {
+        if (!HasArtifactRootMarker(stagingRoot))
+            throw new IOException("staged artifact root is missing its ownership marker");
+        ValidateArtifactRootOwnership(artifactRoot);
+        if (File.Exists(artifactRoot))
+            throw new IOException("artifact root is an existing file");
+        var parent = Path.GetDirectoryName(artifactRoot)
+            ?? throw new InvalidOperationException("artifact root has no parent directory");
+        var backup = Path.Combine(parent, "." + Path.GetFileName(artifactRoot)
+            + ".backup-" + Guid.NewGuid().ToString("N"));
+        var hadExisting = Directory.Exists(artifactRoot);
+        if (hadExisting) Directory.Move(artifactRoot, backup);
+        try
+        {
+            Directory.Move(stagingRoot, artifactRoot);
+        }
+        catch
+        {
+            if (hadExisting && Directory.Exists(backup) && !Directory.Exists(artifactRoot))
+                Directory.Move(backup, artifactRoot);
+            throw;
+        }
+        DeleteDirectoryBestEffort(backup);
+    }
+
+    private static void ValidateArtifactRootScope(
+        string artifactRoot, string corpusRoot, string? candidateDirectory)
+    {
+        var currentDirectory = NormalizeDirectoryPath(Directory.GetCurrentDirectory());
+        if (IsUnderRoot(artifactRoot, currentDirectory))
+            throw new ScenarioValidationException(
+                "artifact root must not equal or contain the current working directory");
+        if (PathsOverlap(artifactRoot, corpusRoot))
+            throw new ScenarioValidationException(
+                "artifact root must not overlap the legal evaluation corpus or its source files");
+        if (candidateDirectory is not null && PathsOverlap(artifactRoot, candidateDirectory))
+            throw new ScenarioValidationException(
+                "artifact root must not overlap the model candidate directory");
+    }
+
+    private static void ValidateArtifactRootOwnership(string artifactRoot)
+    {
+        if (File.Exists(artifactRoot))
+            throw new ScenarioValidationException("artifact root is an existing file");
+        if (!Directory.Exists(artifactRoot)
+            || !Directory.EnumerateFileSystemEntries(artifactRoot).Any())
+            return;
+        var markerPath = Path.Combine(artifactRoot, ArtifactRootMarkerName);
+        if (File.Exists(markerPath))
+        {
+            if (HasArtifactRootMarker(artifactRoot)) return;
+            throw new ScenarioValidationException(
+                "existing artifact root has an invalid legal-eval ownership marker");
+        }
+        throw new ScenarioValidationException(
+            "existing artifact root is not owned by legal-eval; choose an empty directory or a prior legal-eval root");
+    }
+
+    private static bool HasArtifactRootMarker(string artifactRoot)
+    {
+        var marker = Path.Combine(artifactRoot, ArtifactRootMarkerName);
+        try
+        {
+            var info = new FileInfo(marker);
+            return info.Exists
+                && info.LinkTarget is null
+                && info.Length == Encoding.UTF8.GetByteCount(ArtifactRootMarkerContent)
+                && string.Equals(File.ReadAllText(marker), ArtifactRootMarkerContent,
+                    StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string? ResolveExternalReportPath(
+        string? reportPath,
+        string artifactRoot,
+        string summaryPath,
+        string corpusRoot,
+        string? candidateDirectory)
+    {
+        if (reportPath is null) return null;
+        var fullReportPath = ResolveCanonicalPath(reportPath);
+        if (IsUnderRoot(artifactRoot, fullReportPath))
+        {
+            if (string.Equals(fullReportPath, summaryPath, PathComparison)) return null;
+            throw new ScenarioValidationException(
+                "--report inside the artifact root must be the canonical run-summary.json path");
+        }
+        if (IsUnderRoot(corpusRoot, fullReportPath))
+            throw new ScenarioValidationException(
+                "external report path must not overwrite the corpus or its source files");
+        if (candidateDirectory is not null && IsUnderRoot(candidateDirectory, fullReportPath))
+            throw new ScenarioValidationException(
+                "external report path must not overwrite a model candidate");
+        ValidateExternalReportDestinationOwnership(fullReportPath);
+        return fullReportPath;
+    }
+
+    private static StagedExternalReport StageExternalReport(string destinationPath, string value)
+    {
+        if (Directory.Exists(destinationPath))
+            throw new IOException("external report path is an existing directory");
+        ValidateExternalReportDestinationOwnership(destinationPath);
+        var directory = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidOperationException("external report path has no parent directory");
+        Directory.CreateDirectory(directory);
+        var temporaryPath = destinationPath + ".stage-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporaryPath, value,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            return new StagedExternalReport(destinationPath, temporaryPath);
+        }
+        catch
+        {
+            DeleteFileBestEffort(temporaryPath);
+            throw;
+        }
+    }
+
+    private static void CommitStagedExternalReport(string temporaryPath, string destinationPath)
+    {
+        if (!File.Exists(destinationPath))
+        {
+            // Do not overwrite a file created after the final ownership check.
+            File.Move(temporaryPath, destinationPath);
+            return;
+        }
+        ValidateExternalReportDestinationOwnership(destinationPath);
+        File.Move(temporaryPath, destinationPath, overwrite: true);
+    }
+
+    private static void ValidateExternalReportDestinationOwnership(string destinationPath)
+    {
+        if (!File.Exists(destinationPath)) return;
+        try
+        {
+            using var stream = File.OpenRead(destinationPath);
+            if (stream.Length > MaximumOwnedReportBytes)
+                throw new ScenarioValidationException(
+                    "existing external report is not owned by legal-eval");
+            using var document = JsonDocument.Parse(stream);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("documentKind", out var documentKind)
+                && documentKind.ValueKind == JsonValueKind.String
+                && documentKind.GetString() == RunSummaryDocumentKind
+                && root.TryGetProperty("schemaVersion", out var version)
+                && version.ValueKind == JsonValueKind.String
+                && version.GetString() == "1.0"
+                && root.TryGetProperty("artifactRoot", out var reportedRoot)
+                && reportedRoot.ValueKind == JsonValueKind.String
+                && reportedRoot.GetString() == "."
+                && root.TryGetProperty("corpus", out var corpus)
+                && corpus.ValueKind == JsonValueKind.String
+                && root.TryGetProperty("subset", out var subset)
+                && subset.ValueKind == JsonValueKind.String
+                && root.TryGetProperty("results", out var results)
+                && results.ValueKind == JsonValueKind.Array)
+                return;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException
+            or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // The uniform refusal below avoids treating malformed or unreadable files as owned.
+        }
+        throw new ScenarioValidationException(
+            "existing external report is not owned by legal-eval");
+    }
+
+    private static void DeleteFileBestEffort(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A failed best-effort cleanup must not invalidate a published artifact root.
+        }
+    }
+
+    private static void DeleteDirectoryBestEffort(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Publication is complete (or the prior root has already been restored). A leftover
+            // hidden stage/backup is safer than invalidating the visible root during cleanup.
+        }
+    }
+
+    private static List<ScenarioRunResult> RemapResults(
+        IReadOnlyList<ScenarioRunResult> results, string stagingRoot, string artifactRoot) =>
+        results.Select(result => result with
+        {
+            EngineBaseline = RemapScore(result.EngineBaseline, stagingRoot, artifactRoot),
+            ModelPlanning = result.ModelPlanning is null
+                ? null
+                : RemapScore(result.ModelPlanning, stagingRoot, artifactRoot),
+        }).ToList();
+
+    private static EvaluationScore RemapScore(
+        EvaluationScore score, string stagingRoot, string artifactRoot) =>
+        score with
+        {
+            ArtifactDirectory = score.ArtifactDirectory is null
+                ? null
+                : RemapPath(stagingRoot, artifactRoot, score.ArtifactDirectory),
+            Artifacts = score.Artifacts.Select(artifact => artifact.Path is null
+                    ? artifact
+                    : artifact with
+                    {
+                        Path = RemapPath(stagingRoot, artifactRoot, artifact.Path),
+                    })
+                .ToList(),
+        };
+
+    private static string RemapPath(string sourceRoot, string destinationRoot, string path) =>
+        Path.GetFullPath(Path.Combine(destinationRoot, RelativeUnderRoot(sourceRoot, path)));
+
+    private static string NormalizeDirectoryPath(string path) =>
+        Path.TrimEndingDirectorySeparator(ResolveCanonicalPath(path));
+
+    private static bool PathsOverlap(string left, string right) =>
+        IsUnderRoot(left, right) || IsUnderRoot(right, left);
+
+    private static bool IsUnderRoot(string root, string path)
+    {
+        var fullRoot = ResolveCanonicalPath(root);
+        var fullPath = ResolveCanonicalPath(path);
+        var prefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(prefix, PathComparison)
+            || string.Equals(fullPath, fullRoot, PathComparison);
+    }
+
+    /// <summary>
+    /// Resolves every existing path component (including directory symlinks/junctions), then
+    /// appends any not-yet-existing suffix. This makes scope checks reflect the location that a
+    /// later create or replace operation will actually address.
+    /// </summary>
+    private static string ResolveCanonicalPath(string path)
+    {
+        var remainingComponents = 1024;
+        var remainingLinks = 64;
+        return ResolveCanonicalPathCore(
+            Path.GetFullPath(path), ref remainingComponents, ref remainingLinks);
+    }
+
+    private static string ResolveCanonicalPathCore(
+        string fullPath, ref int remainingComponents, ref int remainingLinks)
+    {
+        var root = Path.GetPathRoot(fullPath)
+            ?? throw new ScenarioValidationException("path has no filesystem root");
+        var remainder = fullPath[root.Length..];
+        var segments = remainder.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+
+        var current = root;
+        var existingPrefix = true;
+        foreach (var segment in segments)
+        {
+            if (--remainingComponents < 0)
+                throw new ScenarioValidationException("path resolution exceeded its component limit");
+            var candidate = Path.Combine(current, segment);
+            if (existingPrefix && (Directory.Exists(candidate) || File.Exists(candidate)))
+            {
+                FileSystemInfo info = Directory.Exists(candidate)
+                    ? new DirectoryInfo(candidate)
+                    : new FileInfo(candidate);
+                var resolved = info.ResolveLinkTarget(returnFinalTarget: true);
+                if (resolved is null)
+                {
+                    current = candidate;
+                }
+                else
+                {
+                    if (--remainingLinks < 0)
+                        throw new ScenarioValidationException(
+                            "path resolution exceeded its symbolic-link limit");
+                    // A link target can itself contain symlinked ancestors even when its final
+                    // component is not a link, so canonicalize the returned target from its root.
+                    current = ResolveCanonicalPathCore(
+                        Path.GetFullPath(resolved.FullName),
+                        ref remainingComponents,
+                        ref remainingLinks);
+                }
+            }
+            else
+            {
+                existingPrefix = false;
+                current = candidate;
+            }
+        }
+        return Path.GetFullPath(current);
     }
 
     private static EvaluationScore FailureScore(
@@ -219,8 +617,9 @@ public sealed class LegalEvaluationRunner
         var rendererSafe = inputSafetyError is null
             && candidateSafetyError is null
             && expectedSafetyError is null;
-        var artifacts = ArtifactWriter.WriteIncomplete(directory, scenario.Id, kind, status,
-            metrics, reason, baseline.OperationLog, baseline.Input, candidate, baseline.Expected,
+        var publication = ArtifactWriter.WriteIncomplete(directory, scenario.Id, kind, status,
+            metrics, scenario.ExpectedOutputs, reason, baseline.OperationLog, baseline.Input,
+            candidate, baseline.Expected,
             baseline.SemanticDiffJson,
             baseline.SemanticDiffSucceeded,
             targetSemanticDiff.Json,
@@ -231,7 +630,8 @@ public sealed class LegalEvaluationRunner
             inputSafetyError: inputSafetyError,
             candidateSafetyError: candidateSafetyError,
             expectedSafetyError: expectedSafetyError);
-        return new EvaluationScore(scenario.Id, kind, status, metrics, artifacts, directory);
+        return new EvaluationScore(scenario.Id, kind, publication.Status, publication.Metrics,
+            publication.Artifacts, directory);
     }
 
     private static BaselineExecution EmergencyBaseline(
@@ -300,6 +700,7 @@ public sealed class LegalEvaluationRunner
         };
         return JsonSerializer.Serialize(new
         {
+            documentKind = RunSummaryDocumentKind,
             schemaVersion = "1.0",
             corpus = Path.GetFileName(options.CorpusPath),
             subset = options.Subset,
@@ -391,6 +792,8 @@ public sealed class LegalEvaluationRunner
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private sealed record StagedExternalReport(string DestinationPath, string TemporaryPath);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

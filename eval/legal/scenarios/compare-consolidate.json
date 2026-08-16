@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/compare-consolidate.docx",
+    "provenanceId": "docxodus-scripted-compare-consolidate-v1",
     "sourceSha256": "f9ca8db2781fe780a2f64ebce3ecb205022981b5dcd0a62491a7e2f99ab7ea25"
   },
   "instruction": {

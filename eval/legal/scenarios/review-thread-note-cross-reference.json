@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/review-thread-note-cross-reference.docx",
+    "provenanceId": "docxodus-scripted-review-thread-note-cross-reference-v1",
     "sourceSha256": "c93aa625608f172a7cf1d80fd4b98b24242e945b6bff6f79dbd5b0523dcb00ec"
   },
   "instruction": {

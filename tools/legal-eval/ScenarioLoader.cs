@@ -61,19 +61,22 @@ public static class ScenarioLoader
             var relative = node?.GetValue<string>()
                 ?? throw Error(fullCorpusPath, "scenario paths must be strings");
             var path = ResolveUnderRoot(root, relative, fullCorpusPath);
-            var scenario = LoadScenario(path, root, provenance);
+            var scenario = LoadScenario(path, root, provenance.Fixtures,
+                provenance.ExpectedDocuments);
             if (!ids.Add(scenario.Id))
                 throw Error(path, $"duplicate scenario id '{scenario.Id}'");
             scenarios.Add(scenario);
         }
 
-        return new LegalCorpus(root, scenarios, provenance);
+        return new LegalCorpus(root, scenarios, provenance.Fixtures,
+            provenance.ExpectedDocuments);
     }
 
     public static LegalScenario LoadScenario(
         string scenarioPath,
         string corpusRoot,
-        IReadOnlyDictionary<string, FixtureProvenance> provenance)
+        IReadOnlyDictionary<string, FixtureProvenance> provenance,
+        IReadOnlyDictionary<string, ExpectedDocumentProvenance> expectedDocumentProvenance)
     {
         var fullPath = Path.GetFullPath(scenarioPath);
         var node = ReadObject(fullPath, "scenario");
@@ -110,16 +113,29 @@ public static class ScenarioLoader
             throw Error(fullPath, $"provenance hash mismatch for '{provenanceId}'");
 
         var expectedNode = RequireObject(node, "expectedDocument", fullPath);
-        RejectUnknown(expectedNode, fullPath, "path", "sourceSha256");
+        RejectUnknown(expectedNode, fullPath, "path", "provenanceId", "sourceSha256");
         var expectedRelative = RequireString(expectedNode, "path", fullPath);
         var expectedPath = ResolveUnderRoot(corpusRoot, expectedRelative, fullPath);
         if (!File.Exists(expectedPath))
             throw Error(fullPath, $"expected document does not exist: {expectedRelative}");
         var expectedSha = RequireSha256(expectedNode, "sourceSha256", fullPath);
+        var expectedProvenanceId = RequireString(expectedNode, "provenanceId", fullPath);
+        if (!expectedDocumentProvenance.TryGetValue(expectedProvenanceId,
+                out var expectedProvenanceEntry))
+            throw Error(fullPath,
+                $"unknown expectedDocument provenanceId '{expectedProvenanceId}'");
         var actualExpectedSha = Sha256File(expectedPath);
         if (!string.Equals(expectedSha, actualExpectedSha, StringComparison.Ordinal))
             throw Error(fullPath,
                 $"expected document sourceSha256 mismatch for {expectedRelative}: expected {expectedSha}, actual {actualExpectedSha}");
+        if (!string.Equals(expectedProvenanceEntry.SourcePath, expectedPath, PathComparison)
+            || !string.Equals(expectedProvenanceEntry.SourceSha256, actualExpectedSha,
+                StringComparison.Ordinal))
+            throw Error(fullPath,
+                $"expected document provenance mismatch for '{expectedProvenanceId}'");
+        if (!string.Equals(expectedProvenanceEntry.ScenarioId, id, StringComparison.Ordinal))
+            throw Error(fullPath,
+                $"expected document provenance '{expectedProvenanceId}' belongs to scenario '{expectedProvenanceEntry.ScenarioId}'");
 
         var instructionNode = RequireObject(node, "instruction", fullPath);
         RejectUnknown(instructionNode, fullPath, "text", "constraints");
@@ -219,16 +235,17 @@ public static class ScenarioLoader
 
         return new LegalScenario(fullPath, id, title, tier,
             new FixtureReference(fixturePath, provenanceId, sourceSha),
-            new ExpectedDocumentReference(expectedPath, expectedSha), instruction, constraints,
+            new ExpectedDocumentReference(expectedPath, expectedProvenanceId, expectedSha),
+            instruction, constraints,
             outputs, operations, invariants,
             new ChangeBudget(allowedParts, maximumChangedAnchors));
     }
 
-    private static IReadOnlyDictionary<string, FixtureProvenance> LoadProvenance(
+    private static ProvenanceCatalog LoadProvenance(
         string path, string corpusRoot)
     {
         var root = ReadObject(path, "provenance");
-        RejectUnknown(root, path, "schemaVersion", "fixtures");
+        RejectUnknown(root, path, "schemaVersion", "fixtures", "expectedDocuments");
         RequireExactVersion(root, path);
         var records = RequireArray(root, "fixtures", path);
         var result = new Dictionary<string, FixtureProvenance>(StringComparer.Ordinal);
@@ -278,8 +295,52 @@ public static class ScenarioLoader
         }
         if (result.Count == 0)
             throw Error(path, "fixtures provenance must not be empty");
-        return result;
+        var expectedRecords = RequireArray(root, "expectedDocuments", path);
+        var expectedResult = new Dictionary<string, ExpectedDocumentProvenance>(StringComparer.Ordinal);
+        foreach (var value in expectedRecords)
+        {
+            var record = value as JsonObject
+                ?? throw Error(path, "expectedDocuments entries must be objects");
+            RejectUnknown(record, path, "id", "scenarioId", "origin", "generatedBy",
+                "created", "reviewStatus", "reviewNotes", "license",
+                "redistributionPermission", "sourcePath", "sourceSha256");
+            var sourcePath = ResolveUnderRoot(corpusRoot,
+                RequireString(record, "sourcePath", path), path);
+            var sourceSha = RequireSha256(record, "sourceSha256", path);
+            if (!File.Exists(sourcePath))
+                throw Error(path, $"expected document provenance source does not exist: {sourcePath}");
+            var actualSha = Sha256File(sourcePath);
+            if (!string.Equals(sourceSha, actualSha, StringComparison.Ordinal))
+                throw Error(path,
+                    $"expected document provenance sourceSha256 mismatch: expected {sourceSha}, actual {actualSha}");
+            var entry = new ExpectedDocumentProvenance(
+                RequireString(record, "id", path),
+                RequireString(record, "scenarioId", path),
+                RequireString(record, "origin", path),
+                RequireString(record, "generatedBy", path),
+                RequireString(record, "created", path),
+                RequireString(record, "reviewStatus", path),
+                RequireString(record, "reviewNotes", path),
+                RequireString(record, "license", path),
+                RequireString(record, "redistributionPermission", path),
+                sourcePath,
+                sourceSha);
+            if (string.IsNullOrWhiteSpace(entry.RedistributionPermission)
+                || string.IsNullOrWhiteSpace(entry.ReviewStatus)
+                || string.IsNullOrWhiteSpace(entry.ReviewNotes))
+                throw Error(path,
+                    $"expected document '{entry.Id}' has incomplete review or redistribution metadata");
+            if (!expectedResult.TryAdd(entry.Id, entry))
+                throw Error(path, $"duplicate expected document provenance id '{entry.Id}'");
+        }
+        if (expectedResult.Count == 0)
+            throw Error(path, "expected document provenance must not be empty");
+        return new ProvenanceCatalog(result, expectedResult);
     }
+
+    private sealed record ProvenanceCatalog(
+        IReadOnlyDictionary<string, FixtureProvenance> Fixtures,
+        IReadOnlyDictionary<string, ExpectedDocumentProvenance> ExpectedDocuments);
 
     private static void ValidateOperation(JsonObject operation, string path, bool nestedReviewer)
     {

@@ -14,5 +14,124 @@
       "recipePath": "fixtures/northstar-cloud-services-agreement.fixture.json",
       "recipeSha256": "ddef9723c64e128cb683a00e2ebb2abedacd506fe572a0522703b4f141f5d837"
     }
+  ],
+  "expectedDocuments": [
+    {
+      "id": "docxodus-scripted-defined-term-targeting-v1",
+      "scenarioId": "defined-term-targeting",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/defined-term-targeting.docx",
+      "sourceSha256": "7b147c24c3056fc34ac41d232008447afcc8efeaf8d6912f8fe9598436d370c4"
+    },
+    {
+      "id": "docxodus-scripted-tracked-notice-amendment-v1",
+      "scenarioId": "tracked-notice-amendment",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/tracked-notice-amendment.docx",
+      "sourceSha256": "ef1a61d0d01e5d6d3936557a03eaa754319f72f43cf5fb2648bb6495c61737cc"
+    },
+    {
+      "id": "docxodus-scripted-numbered-clause-insertion-v1",
+      "scenarioId": "numbered-clause-insertion",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/numbered-clause-insertion.docx",
+      "sourceSha256": "df5abd56abec02131b6a087ea75e8159f11029d109216fb25361f40e77ade207"
+    },
+    {
+      "id": "docxodus-scripted-table-economics-v1",
+      "scenarioId": "table-economics",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/table-economics.docx",
+      "sourceSha256": "956ef0e1d7438c819860b811fdd2ab8128dff08e3942e3486c0310a6b6e5302e"
+    },
+    {
+      "id": "docxodus-scripted-review-thread-note-cross-reference-v1",
+      "scenarioId": "review-thread-note-cross-reference",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/review-thread-note-cross-reference.docx",
+      "sourceSha256": "c93aa625608f172a7cf1d80fd4b98b24242e945b6bff6f79dbd5b0523dcb00ec"
+    },
+    {
+      "id": "docxodus-scripted-preserve-package-structures-v1",
+      "scenarioId": "preserve-package-structures",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/preserve-package-structures.docx",
+      "sourceSha256": "3239bacbeec8f3e1921dcebc19941f3cd6b771d7593752f7af039bca28becd0d"
+    },
+    {
+      "id": "docxodus-scripted-content-control-fill-v1",
+      "scenarioId": "content-control-fill",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/content-control-fill.docx",
+      "sourceSha256": "3a8173280c1d23a0b81a903d5d782b9eb5e1d7556c50c20bb6e8cde946f9b8ea"
+    },
+    {
+      "id": "docxodus-scripted-compare-consolidate-v1",
+      "scenarioId": "compare-consolidate",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/compare-consolidate.docx",
+      "sourceSha256": "f9ca8db2781fe780a2f64ebce3ecb205022981b5dcd0a62491a7e2f99ab7ea25"
+    },
+    {
+      "id": "docxodus-scripted-preexisting-review-state-v1",
+      "scenarioId": "preexisting-review-state",
+      "origin": "Pinned golden snapshot generated from the corpus fixture by the scenario's declared scripted baseline operations.",
+      "generatedBy": "scripted-session-v1 using Docxodus public APIs",
+      "created": "2026-08-15",
+      "reviewStatus": "not-independently-reviewed",
+      "reviewNotes": "Used to detect drift from the declared scripted edit. It is not an independently authored or cross-engine correctness oracle.",
+      "license": "MIT (repository LICENSE)",
+      "redistributionPermission": "Generated from the repository-authored fixture for this repository and redistributable under the repository MIT license.",
+      "sourcePath": "expected/preexisting-review-state.docx",
+      "sourceSha256": "cadbf7dbaad5e050790c05b2a2debc05792433dbcce6e42c1c96a688e78191ac"
+    }
   ]
 }

@@ -10,6 +10,7 @@
   },
   "expectedDocument": {
     "path": "expected/preserve-package-structures.docx",
+    "provenanceId": "docxodus-scripted-preserve-package-structures-v1",
     "sourceSha256": "3239bacbeec8f3e1921dcebc19941f3cd6b771d7593752f7af039bca28becd0d"
   },
   "instruction": {
