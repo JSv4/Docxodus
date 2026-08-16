@@ -1,7 +1,9 @@
 #nullable enable
 
+using System;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -87,6 +89,9 @@ public class PaginatedHeaderFooterContentTests
         {
             RenderPagination = PaginationMode.Paginated,
             RenderHeadersAndFooters = true,
+            ImageHandler = image => new XElement(
+                XName.Get("img", "http://www.w3.org/1999/xhtml"),
+                new XAttribute("src", $"data:{image.ContentType};base64,{Convert.ToBase64String(image.ImageBytes)}")),
         }).ToString();
     }
 
@@ -143,5 +148,20 @@ public class PaginatedHeaderFooterContentTests
         // stylesheet edge would silently win for any band it happened to leave unset.
         Assert.DoesNotContain("top:", header);
         Assert.DoesNotContain("bottom:", footer);
+    }
+
+    /// <summary>
+    /// A relationship id is local to its owning OPC part. DB005 deliberately gives a header its
+    /// own image relationship; resolving that id through MainDocumentPart either loses the image
+    /// or collides with an unrelated main-story relationship.
+    /// </summary>
+    [Fact]
+    public void PHF012_HeaderImagesResolveAgainstTheOwningStoryPart()
+    {
+        var bytes = File.ReadAllBytes("../../../../TestFiles/DB005-Headers-With-Images.docx");
+        var html = PaginatedHtml(bytes);
+
+        Assert.Contains("data:image/png;base64,", html);
+        Assert.DoesNotContain("[UNSUPPORTED IMAGE]", html);
     }
 }

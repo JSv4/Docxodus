@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Standalone export harness</title>
+</head>
+<body>
+  <p id="status">ready</p>
+  <script type="module">
+    import {
+      canonicalJson,
+      convertDocxToPaginatedHtml,
+      DocxodusExportError,
+    } from './export-browser.js';
+
+    window.DocxodusStandalone = {
+      canonicalJson,
+      convert: (bytes, options) => convertDocxToPaginatedHtml(
+        new Uint8Array(bytes),
+        { wasmBasePath: './', ...options },
+      ),
+      convertAfterCallerMutation: async (bytes, options) => {
+        const input = new Uint8Array(bytes);
+        const conversion = convertDocxToPaginatedHtml(
+          input,
+          { wasmBasePath: './', ...options },
+        );
+        input.fill(0);
+        return conversion;
+      },
+      convertFailure: async (bytes, options) => {
+        try {
+          await convertDocxToPaginatedHtml(
+            new Uint8Array(bytes),
+            { wasmBasePath: './', ...options },
+          );
+          return { unexpectedSuccess: true };
+        } catch (error) {
+          if (!(error instanceof DocxodusExportError)) throw error;
+          return error.toJSON();
+        }
+      },
+    };
+    window.DocxodusStandaloneReady = true;
+  </script>
+</body>
+</html>

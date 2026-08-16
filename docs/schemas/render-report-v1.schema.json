@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/render/render-report/v1",
+  "title": "Docxodus render report v1",
+  "oneOf": [
+    { "$ref": "#/$defs/complete" },
+    { "$ref": "#/$defs/failed" }
+  ],
+  "$defs": {
+    "phase": {
+      "enum": [
+        "input_validation", "package_preflight", "browser_launch", "wasm_initialization",
+        "docx_conversion", "font_loading", "image_decoding", "chart_svg_materialization",
+        "pagination", "running_story_placement", "page_tree_stability", "pdf_print",
+        "output_verification", "output_write", "filesystem_commit", "cleanup"
+      ]
+    },
+    "errorCode": {
+      "enum": [
+        "invalid_document", "conversion_failure", "browser_launch_failure",
+        "resource_policy_failure", "readiness_timeout", "pagination_failure",
+        "pdf_write_failure", "output_write_failure", "output_verification_failure",
+        "resource_limit", "unsupported_runtime", "filesystem_failure"
+      ]
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "phase", "message", "remediation"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["warning", "error"] },
+        "phase": { "$ref": "#/$defs/phase" },
+        "message": { "type": "string", "minLength": 1 },
+        "remediation": { "type": "string", "minLength": 1 },
+        "partUri": { "type": "string" },
+        "anchorId": { "type": "string" },
+        "resource": { "type": "string" }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageNumber", "width", "height"],
+      "properties": {
+        "pageNumber": { "type": "integer", "minimum": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "sectionIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageMapDigest", "artifactRequestIds"],
+      "properties": {
+        "pageMapDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "htmlDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "pdfDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "artifactRequestIds": { "type": "array", "items": { "type": "string" } },
+        "pdfByteDeterministic": { "const": false },
+        "volatilePdfMetadata": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "baseProperties": {
+      "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
+      "schemaVersion": { "const": 1 },
+      "source": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rawPackageBytesDigest", "byteLength", "documentVersion"],
+        "properties": {
+          "rawPackageBytesDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "byteLength": { "type": "integer", "minimum": 1 },
+          "documentVersion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      },
+      "derivedProfileSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rawPackageBytesDigest", "byteLength"],
+        "properties": {
+          "rawPackageBytesDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "byteLength": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "options": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewProfile", "commentProfile", "layoutDigest"],
+        "properties": {
+          "reviewProfile": { "enum": ["final", "original", "markup"] },
+          "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
+          "layoutDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      },
+      "readiness": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["phase", "status", "elapsedMs", "pending"],
+          "properties": {
+            "phase": { "$ref": "#/$defs/phase" },
+            "status": { "enum": ["complete", "failed"] },
+            "elapsedMs": { "type": "number", "minimum": 0 },
+            "pending": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "fonts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestedFamily", "status", "source"],
+          "properties": {
+            "requestedFamily": { "type": "string", "minLength": 1 },
+            "resolvedFamily": { "type": "string", "minLength": 1 },
+            "status": { "enum": ["resolved", "substituted", "missing", "unverified"] },
+            "source": { "enum": ["browser", "embedded", "configured"] }
+          }
+        }
+      },
+      "resources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "status"],
+          "properties": {
+            "kind": { "enum": ["image", "svg", "chart", "external_link"] },
+            "status": { "enum": ["embedded", "inline", "allowed_user_link", "omitted"] },
+            "resource": { "type": "string" },
+            "mediaType": { "type": "string", "minLength": 1 },
+            "byteLength": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unsupportedContent": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contentType", "action"],
+          "properties": {
+            "contentType": { "type": "string", "minLength": 1 },
+            "elementName": { "type": "string", "minLength": 1 },
+            "anchorId": { "type": "string", "minLength": 1 },
+            "action": { "const": "placeholder" }
+          }
+        }
+      },
+      "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
+    },
+    "baseRequired": [
+      "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
+      "unsupportedContent", "warnings"
+    ],
+    "complete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
+        "unsupportedContent", "warnings", "status", "environment", "pages", "bindings"
+      ],
+      "properties": {
+        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
+        "schemaVersion": { "const": 1 },
+        "source": { "$ref": "#/$defs/baseProperties/source" },
+        "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
+        "options": { "$ref": "#/$defs/baseProperties/options" },
+        "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
+        "resources": { "$ref": "#/$defs/baseProperties/resources" },
+        "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },
+        "warnings": { "$ref": "#/$defs/baseProperties/warnings" },
+        "status": { "const": "complete" },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rendererFingerprint", "verification"],
+          "properties": {
+            "rendererFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] }
+          }
+        },
+        "pages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/page" } },
+        "bindings": { "$ref": "#/$defs/bindings" }
+      }
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
+        "unsupportedContent", "warnings", "status", "failure", "unavailable"
+      ],
+      "properties": {
+        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
+        "schemaVersion": { "const": 1 },
+        "source": { "$ref": "#/$defs/baseProperties/source" },
+        "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
+        "options": { "$ref": "#/$defs/baseProperties/options" },
+        "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
+        "resources": { "$ref": "#/$defs/baseProperties/resources" },
+        "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },
+        "warnings": { "$ref": "#/$defs/baseProperties/warnings" },
+        "status": { "const": "failed" },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "phase", "message", "remediation"],
+          "properties": {
+            "code": { "$ref": "#/$defs/errorCode" },
+            "phase": { "$ref": "#/$defs/phase" },
+            "message": { "type": "string", "minLength": 1 },
+            "remediation": { "type": "string", "minLength": 1 }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verification"],
+          "properties": {
+            "rendererFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] }
+          }
+        },
+        "partial": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pages": { "type": "array", "items": { "$ref": "#/$defs/page" } },
+            "bindings": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pageMapDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "htmlDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "pdfDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "artifactRequestIds": { "type": "array", "items": { "type": "string" } },
+                "pdfByteDeterministic": { "const": false },
+                "volatilePdfMetadata": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "unavailable": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "reason"],
+            "properties": {
+              "field": {
+                "enum": [
+                  "environment.rendererFingerprint", "bindings.pageMapDigest",
+                  "bindings.htmlDigest", "bindings.pdfDigest"
+                ]
+              },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
