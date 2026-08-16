@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Docxodus\Docxodus.csproj" />
     <ProjectReference Include="..\tools\mcp-server\mcpserver.csproj" />
+    <ProjectReference Include="..\tools\delivery\delivery.csproj" />
   </ItemGroup>
 
 </Project>

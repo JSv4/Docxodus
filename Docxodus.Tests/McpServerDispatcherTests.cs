@@ -1593,6 +1593,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_comment",
             "docxodus_content_controls",
             "docxodus_create",
+            "docxodus_deliver",
             "docxodus_edit",
             "docxodus_format",
             "docxodus_get_content",

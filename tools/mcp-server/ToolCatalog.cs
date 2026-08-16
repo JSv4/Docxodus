@@ -11,7 +11,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus sixteen
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus seventeen
 /// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
 /// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -529,6 +529,50 @@ internal static class ToolCatalog
                 }
               },
               "required": ["sessionId", "steps"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_deliver",
+            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Rendering and authoritative change-receipt evidence are reported unavailable unless a configured adapter supplies them.",
+            """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "sessionId": { "type": "string" },
+                "baselinePath": { "type": "string", "description": "Store-scoped baseline DOCX location." },
+                "baselineDocumentVersion": { "type": "integer", "minimum": 0 },
+                "finalDocumentName": { "type": "string", "minLength": 1 },
+                "finalDocumentVersion": { "type": "integer", "minimum": 0 },
+                "revisionPolicy": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "preExistingRevisions": { "type": "string", "enum": ["preserve", "accept", "reject"] },
+                    "generatedRevisions": { "type": "string", "enum": ["preserve", "accept", "reject"] }
+                  },
+                  "required": ["preExistingRevisions", "generatedRevisions"]
+                },
+                "artifacts": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "artifactId": { "type": "string", "minLength": 1 },
+                      "kind": { "type": "string", "enum": ["baselineDocx", "policyBaselineDocx", "workingDocx", "reviewDocx", "finalDocx", "standaloneHtml", "finalPdf", "reviewPdf", "pageMap", "renderReport", "baselinePackageManifest", "finalPackageManifest", "semanticDelta", "packageDelta", "validationReport", "reversibilityProof", "changeReceipt"] },
+                      "requiredness": { "type": "string", "enum": ["required", "optional"] },
+                      "reviewProfile": { "type": "string", "enum": ["final", "original", "markup"] },
+                      "commentProfile": { "type": "string", "enum": ["hidden", "inline", "endnotes", "margin"] }
+                    },
+                    "required": ["artifactId", "kind", "requiredness"]
+                  }
+                },
+                "failOnDeliverableValidationFailure": { "type": "boolean", "default": true },
+                "returnIncompleteBundle": { "type": "boolean", "default": false }
+              },
+              "required": ["sessionId", "baselinePath", "baselineDocumentVersion", "finalDocumentName", "finalDocumentVersion", "revisionPolicy", "artifacts"]
             }
             """),
         new ToolDefinition(
