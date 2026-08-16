@@ -23,40 +23,63 @@ internal static class WordprocessingClosureInspector
 
     internal static DeliverableCheckResult Inspect(
         PackageManifestInspection inspection,
+        WordprocessingInspectionGraph graph,
         ICollection<DeliverableFindingObservation> observations,
-        int maximumFindings)
+        int maximumFindings,
+        DeliverableInspectionBudget budget)
     {
         int before = observations.Count;
-        var sink = new FindingSink(observations, maximumFindings);
-        var wordParts = inspection.Entries
-            .Where(entry => entry.Xml?.Root is not null && IsWord(entry.Xml.Root))
-            .ToArray();
+        var sink = new FindingSink(observations, maximumFindings, budget);
+        var wordParts = graph.WordParts;
+        try
+        {
+            // Count while traversing, before any detector can accidentally turn a large retained
+            // XML tree into unbounded repeated work.
+            foreach (var part in wordParts)
+            foreach (var _ in part.Xml!.Root!.DescendantsAndSelf())
+                if (!budget.Node() || !budget.Step()) break;
 
-        InspectMediaClosure(inspection.Manifest, sink);
-        InspectBookmarks(wordParts, sink);
-        InspectComments(wordParts, sink);
-        InspectNotes(wordParts, sink, "footnote", "footnoteReference", "/word/footnotes.xml");
-        InspectNotes(wordParts, sink, "endnote", "endnoteReference", "/word/endnotes.xml");
-        InspectMoves(wordParts, sink);
-        InspectContentControls(inspection, wordParts, sink);
-        InspectNumbering(wordParts, sink);
-        InspectFields(wordParts, sink);
-        InspectStaticRenderRisks(inspection, wordParts, sink);
+            if (!sink.Stopped) InspectMediaClosure(graph.ReachableRelationships, sink);
+            if (!sink.Stopped) InspectBookmarks(wordParts, sink);
+            if (!sink.Stopped) InspectComments(wordParts, sink);
+            if (!sink.Stopped)
+                InspectNotes(wordParts, sink, "footnote", "footnoteReference", "/word/footnotes.xml");
+            if (!sink.Stopped)
+                InspectNotes(wordParts, sink, "endnote", "endnoteReference", "/word/endnotes.xml");
+            if (!sink.Stopped) InspectMoves(wordParts, sink);
+            if (!sink.Stopped) InspectContentControls(graph, wordParts, sink);
+            if (!sink.Stopped) InspectNumbering(wordParts, sink);
+            if (!sink.Stopped) InspectFields(wordParts, sink);
+            if (!sink.Stopped) InspectStaticRenderRisks(graph, wordParts, sink);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException
+            or FormatException or OverflowException)
+        {
+            sink.Add("structure.closure_inspection_unavailable",
+                DeliverableFindingCategory.Structure, VerificationFindingSeverity.Error,
+                $"Bounded Wordprocessing closure inspection failed ({exception.GetType().Name}).", "/",
+                "Repair the implicated Wordprocessing markup before delivery.",
+                new ChangeLocation { PropertyPath = "wordprocessingClosure" },
+                subject: exception.GetType().FullName);
+            sink.ForceUnavailable(exception.GetType().Name);
+        }
 
         return new DeliverableCheckResult
         {
             Check = "wordprocessing_closure",
-            Status = sink.Truncated
+            Status = sink.Stopped
                 ? DeliverableCheckStatus.UnavailableEvidence
                 : DeliverableCheckStatus.Completed,
             FindingCount = observations.Count - before,
-            Diagnostic = sink.Truncated ? "finding limit reached" : null,
+            Diagnostic = sink.Diagnostic,
         };
     }
 
-    private static void InspectMediaClosure(PackageManifest manifest, FindingSink sink)
+    private static void InspectMediaClosure(
+        IReadOnlyList<PackageRelationship> relationships,
+        FindingSink sink)
     {
-        foreach (var relationship in manifest.Relationships.Where(relationship =>
+        foreach (var relationship in relationships.Where(relationship =>
                      relationship.TargetMode == "Internal"
                      && relationship.IsTargetPresent == false
                      && (relationship.Type.EndsWith("/image", StringComparison.OrdinalIgnoreCase)
@@ -86,10 +109,33 @@ internal static class WordprocessingClosureInspector
             StringComparer.Ordinal);
         foreach (var part in parts)
         {
-            var starts = Descendants(part, "bookmarkStart").ToArray();
-            var ends = Descendants(part, "bookmarkEnd").ToArray();
-            foreach (var start in starts)
+            var startsById = new Dictionary<string, List<(XElement Element, int Position)>>(StringComparer.Ordinal);
+            var endsById = new Dictionary<string, List<(XElement Element, int Position)>>(StringComparer.Ordinal);
+            int position = 0;
+            foreach (var marker in part.Xml!.Descendants().Where(element =>
+                         IsElement(element, "bookmarkStart") || IsElement(element, "bookmarkEnd")))
             {
+                position++;
+                var id = WordAttribute(marker, "id");
+                if (string.IsNullOrEmpty(id))
+                {
+                    AddElementFinding(sink, part, marker,
+                        IsElement(marker, "bookmarkStart")
+                            ? "structure.bookmark_id_missing" : "structure.bookmark_end_id_missing",
+                        VerificationFindingSeverity.Error,
+                        "A bookmark marker has no w:id.",
+                        "Assign a story-part-unique numeric w:id and pair the bookmark markers.",
+                        WordAttribute(marker, "name"));
+                    continue;
+                }
+                var index = IsElement(marker, "bookmarkStart") ? startsById : endsById;
+                if (!index.TryGetValue(id, out var occurrences)) index[id] = occurrences = new();
+                occurrences.Add((marker, position));
+            }
+
+            foreach (var startOccurrence in startsById.Values.SelectMany(value => value))
+            {
+                var start = startOccurrence.Element;
                 var id = WordAttribute(start, "id");
                 var name = WordAttribute(start, "name");
                 if (!string.IsNullOrEmpty(name))
@@ -98,36 +144,26 @@ internal static class WordprocessingClosureInspector
                         names.Add(name, values = new());
                     values.Add((part, start));
                 }
-                if (string.IsNullOrEmpty(id))
-                {
-                    AddElementFinding(sink, part, start, "structure.bookmark_id_missing",
-                        VerificationFindingSeverity.Error,
-                        "A bookmark start has no w:id.",
-                        "Assign a story-part-unique numeric w:id and add its matching bookmark end.",
-                        name);
-                    continue;
-                }
-                int startCount = starts.Count(candidate => WordAttribute(candidate, "id") == id);
-                int endCount = ends.Count(candidate => WordAttribute(candidate, "id") == id);
-                if (startCount != 1 || endCount != 1)
-                {
-                    AddElementFinding(sink, part, start, "structure.bookmark_pair_invalid",
-                        VerificationFindingSeverity.Error,
-                        $"Bookmark id '{id}' has {startCount} start marker(s) and {endCount} end marker(s) in this part.",
-                        "Use exactly one bookmark start and one bookmark end for each id within its story part.",
-                        id);
-                }
             }
-            foreach (var end in ends.Where(end =>
-                         string.IsNullOrEmpty(WordAttribute(end, "id"))
-                         || starts.All(start => WordAttribute(start, "id") != WordAttribute(end, "id"))))
+
+            foreach (var id in startsById.Keys.Concat(endsById.Keys).Distinct(StringComparer.Ordinal))
             {
-                var id = WordAttribute(end, "id");
-                AddElementFinding(sink, part, end, "structure.bookmark_start_missing",
-                    VerificationFindingSeverity.Error,
-                    $"Bookmark end id '{id ?? "(missing)"}' has no start in this part.",
-                    "Remove the orphan end or restore its matching bookmark start.", id);
+                var starts = startsById.GetValueOrDefault(id) ?? new();
+                var ends = endsById.GetValueOrDefault(id) ?? new();
+                var marker = starts.FirstOrDefault().Element ?? ends[0].Element;
+                if (starts.Count != 1 || ends.Count != 1)
+                    AddElementFinding(sink, part, marker, "structure.bookmark_pair_invalid",
+                        VerificationFindingSeverity.Error,
+                        $"Bookmark id '{id}' has {starts.Count} start marker(s) and {ends.Count} end marker(s) in this part.",
+                        "Use exactly one bookmark start and one bookmark end for each id within its story part.", id);
+                else if (ends[0].Position <= starts[0].Position)
+                    AddElementFinding(sink, part, marker, "structure.bookmark_order_invalid",
+                        VerificationFindingSeverity.Error,
+                        $"Bookmark end id '{id}' occurs before its start.",
+                        "Place each bookmark end after its matching start in the same story part.", id);
             }
+            InspectRangeNesting(part, "bookmarkStart", "bookmarkEnd",
+                "structure.bookmark_nesting_invalid", sink);
         }
 
         foreach (var duplicate in names.Where(pair => pair.Value.Count > 1))
@@ -161,6 +197,20 @@ internal static class WordprocessingClosureInspector
         FindingSink sink)
     {
         var commentParts = parts.Where(part => IsElement(part.Xml!.Root!, "comments")).ToArray();
+        foreach (var part in commentParts)
+        foreach (var definition in Descendants(part, "comment")
+                     .Where(element => string.IsNullOrEmpty(WordAttribute(element, "id"))))
+            AddElementFinding(sink, part, definition, "structure.comment_id_missing",
+                VerificationFindingSeverity.Error, "A comment definition has no w:id.",
+                "Assign the comment a unique numeric id and update its markers.", null);
+        foreach (var part in parts)
+        foreach (var marker in Descendants(part, "commentReference")
+                     .Concat(Descendants(part, "commentRangeStart"))
+                     .Concat(Descendants(part, "commentRangeEnd"))
+                     .Where(element => string.IsNullOrEmpty(WordAttribute(element, "id"))))
+            AddElementFinding(sink, part, marker, "structure.comment_marker_id_missing",
+                VerificationFindingSeverity.Error, "A comment marker has no w:id.",
+                "Assign the marker its comment definition id or remove it.", null);
         var definitions = commentParts.SelectMany(part => Descendants(part, "comment")
                 .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
             .Where(item => item.Id is not null)
@@ -202,7 +252,17 @@ internal static class WordprocessingClosureInspector
             int starts = group.Count(item => IsElement(item.Element, "commentRangeStart"));
             int ends = group.Count(item => IsElement(item.Element, "commentRangeEnd"));
             int marks = group.Count(item => IsElement(item.Element, "commentReference"));
-            if (starts == ends && marks > 0) continue;
+            if (starts == 1 && ends == 1)
+            {
+                var start = group.Single(item => IsElement(item.Element, "commentRangeStart"));
+                var end = group.Single(item => IsElement(item.Element, "commentRangeEnd"));
+                if (XNode.CompareDocumentOrder(start.Element, end.Element) >= 0)
+                    AddElementFinding(sink, start.Part, start.Element,
+                        "structure.comment_range_order_invalid", VerificationFindingSeverity.Error,
+                        $"Comment range end id '{group.Key.Id}' does not follow its start.",
+                        "Place the range end after its matching start within the story.", group.Key.Id);
+            }
+            if (starts == ends && starts <= 1 && marks > 0) continue;
             var item = group.First();
             AddElementFinding(sink, item.Part, item.Element, "structure.comment_markers_invalid",
                 VerificationFindingSeverity.Error,
@@ -210,6 +270,9 @@ internal static class WordprocessingClosureInspector
                 "Pair comment range markers within each story part and retain at least one comment reference mark.",
                 group.Key.Id);
         }
+        foreach (var part in parts)
+            InspectRangeNesting(part, "commentRangeStart", "commentRangeEnd",
+                "structure.comment_range_nesting_invalid", sink);
     }
 
     private static void InspectNotes(
@@ -219,6 +282,21 @@ internal static class WordprocessingClosureInspector
         string referenceName,
         string conventionalPartUri)
     {
+        foreach (var part in parts)
+        foreach (var definition in Descendants(part, definitionName).Where(element =>
+                     WordAttribute(element, "type") is not ("separator" or "continuationSeparator")
+                     && string.IsNullOrEmpty(WordAttribute(element, "id"))))
+            AddElementFinding(sink, part, definition,
+                $"structure.{definitionName}_id_missing", VerificationFindingSeverity.Error,
+                $"A {definitionName} definition has no w:id.",
+                $"Assign the {definitionName} a unique id and update its reference.", null);
+        foreach (var part in parts)
+        foreach (var reference in Descendants(part, referenceName)
+                     .Where(element => string.IsNullOrEmpty(WordAttribute(element, "id"))))
+            AddElementFinding(sink, part, reference,
+                $"structure.{definitionName}_reference_id_missing", VerificationFindingSeverity.Error,
+                $"A {definitionName} reference has no w:id.",
+                $"Assign the reference its {definitionName} id or remove it.", null);
         var definitions = parts.SelectMany(part => Descendants(part, definitionName)
                 .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"),
                     Type: WordAttribute(element, "type"))))
@@ -280,7 +358,8 @@ internal static class WordprocessingClosureInspector
                 int wrapperFromCount = wrapperFrom.Count(item => item.Id == id);
                 int wrapperToCount = wrapperTo.Count(item => item.Id == id);
                 var element = all.First(item => item.Id == id).Element;
-                if (wrapperFromCount != wrapperToCount)
+                if (wrapperFromCount + wrapperToCount > 0
+                    && (wrapperFromCount != 1 || wrapperToCount != 1))
                     AddElementFinding(sink, part, element, "structure.move_pair_invalid",
                         VerificationFindingSeverity.Error,
                         $"Tracked move id '{id}' has {wrapperFromCount} source wrapper(s) and {wrapperToCount} destination wrapper(s).",
@@ -291,13 +370,23 @@ internal static class WordprocessingClosureInspector
                 int toStartCount = rangeToStarts.Count(item => item.Id == id);
                 int toEndCount = rangeToEnds.Count(item => item.Id == id);
                 bool hasRangeMarker = fromStartCount + fromEndCount + toStartCount + toEndCount > 0;
-                if (hasRangeMarker && (fromStartCount != fromEndCount
-                                       || toStartCount != toEndCount
-                                       || fromStartCount != toStartCount))
+                if (hasRangeMarker && (fromStartCount != 1 || fromEndCount != 1
+                                       || toStartCount != 1 || toEndCount != 1))
                     AddElementFinding(sink, part, element, "structure.move_range_pair_invalid",
                         VerificationFindingSeverity.Error,
                         $"Tracked move range id '{id}' has source start/end counts {fromStartCount}/{fromEndCount} and destination start/end counts {toStartCount}/{toEndCount}.",
                         "Pair every move range start/end and retain matching source and destination ranges.", id);
+                else if (hasRangeMarker
+                         && (XNode.CompareDocumentOrder(
+                                 rangeFromStarts.Single(item => item.Id == id).Element,
+                                 rangeFromEnds.Single(item => item.Id == id).Element) >= 0
+                             || XNode.CompareDocumentOrder(
+                                 rangeToStarts.Single(item => item.Id == id).Element,
+                                 rangeToEnds.Single(item => item.Id == id).Element) >= 0))
+                    AddElementFinding(sink, part, element, "structure.move_range_order_invalid",
+                        VerificationFindingSeverity.Error,
+                        $"Tracked move range id '{id}' has an end before its start.",
+                        "Place each move range end after its matching start.", id);
             }
         }
     }
@@ -309,11 +398,11 @@ internal static class WordprocessingClosureInspector
         .ToArray();
 
     private static void InspectContentControls(
-        PackageManifestInspection inspection,
+        WordprocessingInspectionGraph graph,
         IReadOnlyList<PackageManifestInspectionEntry> parts,
         FindingSink sink)
     {
-        var storeItemIds = inspection.Entries
+        var storeItemIds = graph.ReachableEntries
             .Where(entry => string.Equals(entry.ManifestEntry.ContentType,
                 CustomXmlPropertiesContentType, StringComparison.OrdinalIgnoreCase))
             .SelectMany(entry => entry.Xml?.Root?.DescendantsAndSelf() ?? Enumerable.Empty<XElement>())
@@ -376,15 +465,32 @@ internal static class WordprocessingClosureInspector
         IReadOnlyList<PackageManifestInspectionEntry> parts,
         FindingSink sink)
     {
-        var numberingPart = parts.FirstOrDefault(part => IsElement(part.Xml!.Root!, "numbering"));
+        var numberingParts = parts.Where(part => IsElement(part.Xml!.Root!, "numbering")).ToArray();
+        if (numberingParts.Length > 1)
+            foreach (var ambiguous in numberingParts)
+                AddElementFinding(sink, ambiguous, ambiguous.Xml!.Root!,
+                    "structure.numbering_part_ambiguous", VerificationFindingSeverity.Error,
+                    "More than one relationship-reachable numbering definition part exists.",
+                    "Retain exactly one numbering part reachable from the main document.", ambiguous.Uri);
+        var numberingPart = numberingParts.FirstOrDefault();
         var nums = numberingPart is null
-            ? new Dictionary<string, string?>(StringComparer.Ordinal)
+            ? new Dictionary<string, (string? AbstractId, HashSet<string> OverrideLevels)>(StringComparer.Ordinal)
             : Descendants(numberingPart, "num")
                 .Where(element => WordAttribute(element, "numId") is not null)
                 .GroupBy(element => WordAttribute(element, "numId")!, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key,
-                    group => WordAttribute(group.First().Elements()
-                        .FirstOrDefault(element => IsElement(element, "abstractNumId")), "val"),
+                    group =>
+                    {
+                        var first = group.First();
+                        return (
+                            AbstractId: WordAttribute(first.Elements().FirstOrDefault(element =>
+                                IsElement(element, "abstractNumId")), "val"),
+                            OverrideLevels: first.Elements().Where(element => IsElement(element, "lvlOverride")
+                                    && element.Elements().Any(child => IsElement(child, "lvl")))
+                                .Select(element => WordAttribute(element, "ilvl"))
+                                .Where(value => value is not null).Select(value => value!)
+                                .ToHashSet(StringComparer.Ordinal));
+                    },
                     StringComparer.Ordinal);
         var abstracts = numberingPart is null
             ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
@@ -399,17 +505,56 @@ internal static class WordprocessingClosureInspector
 
         if (numberingPart is not null)
         {
+            foreach (var element in Descendants(numberingPart, "num")
+                         .Where(element => string.IsNullOrEmpty(WordAttribute(element, "numId"))))
+                AddElementFinding(sink, numberingPart, element,
+                    "structure.numbering_num_id_missing", VerificationFindingSeverity.Error,
+                    "A numbering instance has no w:numId.",
+                    "Assign one unique numbering instance id.", null);
+            foreach (var element in Descendants(numberingPart, "abstractNum")
+                         .Where(element => string.IsNullOrEmpty(WordAttribute(element, "abstractNumId"))))
+                AddElementFinding(sink, numberingPart, element,
+                    "structure.numbering_abstract_id_missing", VerificationFindingSeverity.Error,
+                    "An abstract numbering definition has no w:abstractNumId.",
+                    "Assign one unique abstract numbering id.", null);
+            foreach (var element in Descendants(numberingPart, "lvl")
+                         .Where(element => string.IsNullOrEmpty(WordAttribute(element, "ilvl"))))
+                AddElementFinding(sink, numberingPart, element,
+                    "structure.numbering_level_id_missing", VerificationFindingSeverity.Error,
+                    "A numbering level has no w:ilvl.",
+                    "Assign the level an unambiguous level index.", null);
             ReportDuplicateIds(numberingPart, "num", "numId", "structure.numbering_num_id_duplicate", sink);
             ReportDuplicateIds(numberingPart, "abstractNum", "abstractNumId",
                 "structure.numbering_abstract_id_duplicate", sink);
+            foreach (var numElement in Descendants(numberingPart, "num"))
+            {
+                var numId = WordAttribute(numElement, "numId");
+                var overrides = numElement.Elements().Where(element => IsElement(element, "lvlOverride")).ToArray();
+                foreach (var missing in overrides.Where(element =>
+                             string.IsNullOrEmpty(WordAttribute(element, "ilvl"))))
+                    AddElementFinding(sink, numberingPart, missing,
+                        "structure.numbering_override_level_missing", VerificationFindingSeverity.Error,
+                        $"Numbering instance '{numId ?? "(missing)"}' has a level override without w:ilvl.",
+                        "Assign the override one unambiguous list level or remove it.", numId);
+                foreach (var duplicate in overrides.Where(element =>
+                             WordAttribute(element, "ilvl") is not null)
+                             .GroupBy(element => WordAttribute(element, "ilvl")!, StringComparer.Ordinal)
+                             .Where(group => group.Count() > 1))
+                    foreach (var element in duplicate)
+                        AddElementFinding(sink, numberingPart, element,
+                            "structure.numbering_override_level_duplicate", VerificationFindingSeverity.Error,
+                            $"Numbering instance '{numId}' has duplicate overrides for level '{duplicate.Key}'.",
+                            "Retain at most one level override per numbering instance and level.",
+                            numId + ":" + duplicate.Key);
+            }
             foreach (var num in nums)
             {
-                if (num.Value is not null && abstracts.ContainsKey(num.Value)) continue;
+                if (num.Value.AbstractId is not null && abstracts.ContainsKey(num.Value.AbstractId)) continue;
                 var element = Descendants(numberingPart, "num")
                     .First(candidate => WordAttribute(candidate, "numId") == num.Key);
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_abstract_missing", VerificationFindingSeverity.Error,
-                    $"Numbering instance '{num.Key}' references missing abstract numbering '{num.Value ?? "(missing)"}'.",
+                    $"Numbering instance '{num.Key}' references missing abstract numbering '{num.Value.AbstractId ?? "(missing)"}'.",
                     "Restore the abstract numbering definition or retarget the numbering instance.", num.Key);
             }
         }
@@ -420,15 +565,17 @@ internal static class WordprocessingClosureInspector
             var numId = WordAttribute(numPr.Elements().FirstOrDefault(element => IsElement(element, "numId")), "val");
             var level = WordAttribute(numPr.Elements().FirstOrDefault(element => IsElement(element, "ilvl")), "val") ?? "0";
             if (string.IsNullOrEmpty(numId) || numId == "0") continue;
-            if (!nums.TryGetValue(numId, out var abstractId))
+            if (!nums.TryGetValue(numId, out var num))
             {
                 AddElementFinding(sink, part, numPr, "structure.numbering_instance_missing",
                     VerificationFindingSeverity.Error,
                     $"List item references missing numbering instance '{numId}'.",
                     "Restore the w:num definition or remove the paragraph numbering properties.", numId);
             }
-            else if (abstractId is null || !abstracts.TryGetValue(abstractId, out var levels)
-                     || !levels.Contains(level))
+            else if (!num.OverrideLevels.Contains(level)
+                     && (num.AbstractId is null
+                         || !abstracts.TryGetValue(num.AbstractId, out var levels)
+                         || !levels.Contains(level)))
             {
                 AddElementFinding(sink, part, numPr, "structure.numbering_level_missing",
                     VerificationFindingSeverity.Error,
@@ -493,7 +640,7 @@ internal static class WordprocessingClosureInspector
     }
 
     private static void InspectStaticRenderRisks(
-        PackageManifestInspection inspection,
+        WordprocessingInspectionGraph graph,
         IReadOnlyList<PackageManifestInspectionEntry> parts,
         FindingSink sink)
     {
@@ -514,7 +661,7 @@ internal static class WordprocessingClosureInspector
                 "Inspect this content in the target renderer and attach its structured render diagnostics.",
                 pair.Key, DeliverableFindingCategory.Render);
 
-        foreach (var entry in inspection.Manifest.Entries.Where(entry =>
+        foreach (var entry in graph.ReachableEntries.Select(item => item.ManifestEntry).Where(entry =>
                      entry.Uri.EndsWith(".wmf", StringComparison.OrdinalIgnoreCase)
                      || entry.Uri.EndsWith(".emf", StringComparison.OrdinalIgnoreCase)
                      || entry.Uri.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)))
@@ -540,6 +687,43 @@ internal static class WordprocessingClosureInspector
             AddElementFinding(sink, part, element, code, VerificationFindingSeverity.Error,
                 $"{elementName} id '{duplicate.Key}' is duplicated.",
                 "Assign unique numbering identifiers and update dependent references.", duplicate.Key);
+    }
+
+    private static void InspectRangeNesting(
+        PackageManifestInspectionEntry part,
+        string startName,
+        string endName,
+        string code,
+        FindingSink sink)
+    {
+        var open = new Stack<string>();
+        var openIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var marker in part.Xml!.Descendants().Where(element =>
+                     IsElement(element, startName) || IsElement(element, endName)))
+        {
+            var id = WordAttribute(marker, "id");
+            if (string.IsNullOrEmpty(id)) continue;
+            if (IsElement(marker, startName))
+            {
+                if (openIds.Add(id)) open.Push(id);
+                continue;
+            }
+            if (!openIds.Remove(id)) continue;
+            if (open.Count > 0 && open.Peek() == id)
+            {
+                open.Pop();
+                continue;
+            }
+            AddElementFinding(sink, part, marker, code, VerificationFindingSeverity.Error,
+                $"Range id '{id}' crosses another range instead of closing in nested order.",
+                "Repair the start/end ordering so ranges are properly nested.", id);
+            while (open.Count > 0)
+            {
+                var popped = open.Pop();
+                openIds.Remove(popped);
+                if (popped == id) break;
+            }
+        }
     }
 
     private static void AddElementFinding(
@@ -589,10 +773,18 @@ internal static class WordprocessingClosureInspector
 
     private sealed class FindingSink(
         ICollection<DeliverableFindingObservation> observations,
-        int maximumFindings)
+        int maximumFindings,
+        DeliverableInspectionBudget budget)
     {
         private readonly int _maximum = Math.Max(0, maximumFindings);
         internal bool Truncated { get; private set; }
+        internal string? ForcedDiagnostic { get; private set; }
+        internal bool Stopped => Truncated || budget.Exhausted || ForcedDiagnostic is not null;
+        internal string? Diagnostic => ForcedDiagnostic
+            ?? (budget.Exhausted ? "resource budget exceeded: " + budget.ExhaustedResource
+                : Truncated ? "finding limit reached" : null);
+
+        internal void ForceUnavailable(string diagnostic) => ForcedDiagnostic = diagnostic;
 
         internal void Add(
             string code,
@@ -605,6 +797,7 @@ internal static class WordprocessingClosureInspector
             string? xpath = null,
             string? subject = null)
         {
+            if (!budget.Step()) return;
             if (observations.Count >= _maximum)
             {
                 Truncated = true;

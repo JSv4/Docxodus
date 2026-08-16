@@ -9,6 +9,7 @@ namespace Docxodus.Verification;
 internal sealed record DeliverableFindingObservation
 {
     required public string IdentityKey { get; init; }
+    required public string OccurrenceKey { get; init; }
     required public string Code { get; init; }
     required public DeliverableFindingCategory Category { get; init; }
     required public VerificationFindingSeverity Severity { get; init; }
@@ -31,21 +32,26 @@ internal sealed record DeliverableFindingObservation
         string? anchorId = null,
         string? scope = null,
         string? xpath = null,
-        string? subjectKey = null)
+        string? subjectKey = null,
+        string ruleVersion = "1")
     {
         var normalizedOwner = string.IsNullOrWhiteSpace(owningPartUri) ? "/" : owningPartUri;
+        var nativeIdentity = string.Join("\u001e", new[]
+        {
+            "docxodus.deliverable-finding.v2",
+            code,
+            ruleVersion,
+            normalizedOwner,
+            DeliverableVerificationIdentity.LocationKey(location),
+            scope ?? string.Empty,
+            xpath ?? string.Empty,
+            anchorId ?? string.Empty,
+            subjectKey ?? string.Empty,
+        });
         return new DeliverableFindingObservation
         {
-            IdentityKey = string.Join("\u001e", new[]
-            {
-                "docxodus.deliverable-finding.v1",
-                code,
-                normalizedOwner,
-                DeliverableVerificationIdentity.LocationKey(location),
-                scope ?? string.Empty,
-                xpath ?? string.Empty,
-                subjectKey ?? string.Empty,
-            }),
+            IdentityKey = nativeIdentity,
+            OccurrenceKey = nativeIdentity,
             Code = code,
             Category = category,
             Severity = severity,

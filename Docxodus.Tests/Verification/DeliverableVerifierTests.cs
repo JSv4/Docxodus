@@ -4,9 +4,11 @@
 #nullable enable
 
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using Docxodus.Internal;
 using Docxodus.Tests.Ir;
 using Docxodus.Verification;
 using Xunit;
@@ -242,6 +244,9 @@ public sealed class DeliverableVerifierTests
             Algorithm = "sha-256",
             Value = sourceDigest.Value.ToUpperInvariant(),
         };
+        const string renderer = "fixture-renderer/1";
+        var pageMapBytes = MinimalPageMapBytes(renderer);
+        var pageMapDigest = Digest(pageMapBytes);
         var request = new DeliverableVerificationRequest
         {
             DeliverableBytes = document.DocumentByteArray,
@@ -249,14 +254,26 @@ public sealed class DeliverableVerifierTests
             {
                 new DeliverableCompanionArtifactInput
                 {
+                    ArtifactId = "preview.pagemap.json",
+                    Role = DeliverableArtifactRole.PageMap,
+                    MediaType = "application/vnd.docxodus.pagemap+json",
+                    Availability = DeliverableArtifactAvailability.Available,
+                    Bytes = pageMapBytes,
+                    PageCount = 1,
+                    RendererFingerprint = renderer,
+                    SourcePackageDigest = nonCanonicalSourceDigest,
+                },
+                new DeliverableCompanionArtifactInput
+                {
                     ArtifactId = "preview.pdf",
                     Role = DeliverableArtifactRole.Pdf,
                     MediaType = "application/pdf",
                     Availability = DeliverableArtifactAvailability.Available,
-                    Bytes = Encoding.ASCII.GetBytes("%PDF-1.7 test fixture"),
+                    Bytes = MinimalPdfBytes(),
                     PageCount = 1,
-                    RendererFingerprint = "fixture-renderer/1",
+                    RendererFingerprint = renderer,
                     SourcePackageDigest = nonCanonicalSourceDigest,
+                    PageMapDigest = pageMapDigest,
                     RenderDiagnostics = new[]
                     {
                         new DeliverableRenderDiagnostic
@@ -278,11 +295,13 @@ public sealed class DeliverableVerifierTests
         Assert.Equal(DeliverableVerificationDecision.Passed, standard.Decision);
         Assert.Contains(standard.Findings, finding =>
             finding.Code == "render.font_substitution" && !finding.BlocksDelivery);
-        var artifact = Assert.Single(standard.CompanionArtifacts);
+        var artifact = Assert.Single(standard.CompanionArtifacts,
+            item => item.Role == DeliverableArtifactRole.Pdf);
         Assert.NotNull(artifact.Digest);
         Assert.Equal("SHA-256", artifact.SourcePackageDigest!.Algorithm);
         Assert.Equal(sourceDigest.Value, artifact.SourcePackageDigest.Value);
         Assert.Equal(1, artifact.RenderDiagnosticCount);
+        Assert.Equal(2, standard.CompanionArtifacts.Count);
         Assert.Equal(DeliverableVerificationDecision.Failed, strict.Decision);
     }
 
@@ -335,7 +354,25 @@ public sealed class DeliverableVerifierTests
         File.WriteAllText(Path.Combine(directory, "corrupt-report.json"),
             DeliverableVerifier.VerifyDeliverable(corrupt).ToJson());
 
+        var editBaseline = IrTestDocuments.Create("Alpha").DocumentByteArray;
+        using (var editSession = new DocxSession(editBaseline))
+        {
+            var target = Assert.Single(editSession.FindAllByText("Alpha"));
+            Assert.True(Assert.Single(editSession.ReplaceTextRange(
+                target.Anchor.Id, "Alpha", "Beta")).Success);
+            var prepared = editSession.PrepareDeliverable();
+            File.WriteAllBytes(Path.Combine(directory, "edit-before.docx"), editBaseline);
+            File.WriteAllBytes(Path.Combine(directory, "edit-after.docx"), prepared.DeliverableBytes);
+            File.WriteAllText(Path.Combine(directory, "edit-report.json"),
+                prepared.Report.ToJson());
+        }
+
         var digest = PackageManifestGenerator.Generate(valid).RawPackageBytesDigest;
+        const string renderer = "artifact-fixture/1";
+        var pageMap = MinimalPageMapBytes(renderer);
+        var pageMapDigest = Digest(pageMap);
+        File.WriteAllBytes(Path.Combine(directory, "fixture.pdf"), MinimalPdfBytes());
+        File.WriteAllBytes(Path.Combine(directory, "fixture.pagemap.json"), pageMap);
         var renderReport = DeliverableVerifier.VerifyDeliverable(new DeliverableVerificationRequest
         {
             DeliverableBytes = valid,
@@ -343,14 +380,26 @@ public sealed class DeliverableVerifierTests
             {
                 new DeliverableCompanionArtifactInput
                 {
+                    ArtifactId = "fixture.pagemap.json",
+                    Role = DeliverableArtifactRole.PageMap,
+                    MediaType = "application/vnd.docxodus.pagemap+json",
+                    Availability = DeliverableArtifactAvailability.Available,
+                    Bytes = pageMap,
+                    PageCount = 1,
+                    RendererFingerprint = renderer,
+                    SourcePackageDigest = digest,
+                },
+                new DeliverableCompanionArtifactInput
+                {
                     ArtifactId = "fixture.pdf",
                     Role = DeliverableArtifactRole.Pdf,
                     MediaType = "application/pdf",
                     Availability = DeliverableArtifactAvailability.Available,
-                    Bytes = Encoding.ASCII.GetBytes("%PDF-1.7 artifact fixture"),
-                    PageCount = 2,
-                    RendererFingerprint = "artifact-fixture/1",
+                    Bytes = MinimalPdfBytes(),
+                    PageCount = 1,
+                    RendererFingerprint = renderer,
                     SourcePackageDigest = digest,
+                    PageMapDigest = pageMapDigest,
                     RenderDiagnostics = new[]
                     {
                         new DeliverableRenderDiagnostic
@@ -374,6 +423,56 @@ public sealed class DeliverableVerifierTests
             xml.Replace("<w:p>", "<w:p w:invalidFixtureAttribute=\"true\">",
                 StringComparison.Ordinal));
     }
+
+    private static byte[] MinimalPageMapBytes(string renderer)
+    {
+        var map = new PageMap
+        {
+            Mode = PageMapMode.Paginated,
+            Availability = PageMapAvailability.Available,
+            DocumentVersion = 0,
+            RendererFingerprint = renderer,
+            Pages = new[]
+            {
+                new PageMapPage
+                {
+                    PageNumber = 1,
+                    PageInSection = 1,
+                    Width = 612,
+                    Height = 792,
+                    SectionIndex = 0,
+                    PageName = "letter",
+                },
+            },
+            Fragments = new[]
+            {
+                new PageMapFragment
+                {
+                    FragmentId = "anchor-1:p1:0",
+                    AnchorId = "anchor-1",
+                    FragmentIndex = 0,
+                    PageNumber = 1,
+                    Geometry = new PageMapRect(72, 72, 200, 20),
+                    Story = PageMapStory.Body,
+                },
+            },
+        };
+        return Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map));
+    }
+
+    private static byte[] MinimalPdfBytes() => Encoding.ASCII.GetBytes(
+        "%PDF-1.4\n"
+        + "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+        + "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n"
+        + "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n"
+        + "xref\n0 4\n0000000000 65535 f \n"
+        + "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+
+    private static VerificationDigest Digest(byte[] bytes) => new()
+    {
+        Algorithm = "SHA-256",
+        Value = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+    };
 
     private static WmlDocument ComplexValidDocument() => IrTestDocuments.FromParts(
         "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/>" +

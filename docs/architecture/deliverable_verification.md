@@ -5,7 +5,7 @@
 
 `DeliverableVerifier.VerifyDeliverable` is the final-delivery gate for DOCX bytes. One call composes
 the bounded OPC manifest, the Open XML SDK validator, WordprocessingML cross-part closure checks,
-Docxodus's part-aware placeholder and revision registries, semantic/package deltas, and any supplied
+bounded part-aware workflow/revision scanners, semantic/package deltas, and any supplied
 renderer evidence. The result is a deterministic report with a policy decision and actionable,
 stable findings.
 
@@ -31,10 +31,11 @@ var compared = DeliverableVerifier.VerifyDeliverable(
 var canonicalJson = compared.ToCanonicalJson();
 ```
 
-For a live editing session, `session.VerifyDeliverable()` verifies an isolated serialization of the
-current logical package, including unsaved cached XML. If the session captured its initial state
-(the default), those exact opening bytes become the baseline. The checkpoint clone does not save,
-version, or otherwise mutate the live session.
+For a live editing session, `session.VerifyDeliverable()` verifies the same clean-save form returned
+by `Save(false)`, including unsaved cached XML and excluding internal projector anchor attributes.
+When the bytes will be delivered, prefer `session.PrepareDeliverable()`: it returns the exact byte
+snapshot together with the report that hashes it, eliminating a verify/serialize identity gap. If
+the session captured its initial state (the default), those exact opening bytes become the baseline.
 
 The full request form adds approved deltas and companion artifacts:
 
@@ -55,22 +56,26 @@ var report = DeliverableVerifier.VerifyDeliverable(
 
 The operation records the status and finding count of each stage. `UnavailableEvidence` and
 `SkippedPrerequisiteFailed` are different from an empty successful check; standard and strict modes
-fail closed when analysis cannot complete. An invalid or partial manifest is a hard prerequisite
-boundary: the verifier does not hand that package to the Open XML SDK, semantic projection, or
-session readers after bounded preflight fails.
+fail closed when analysis cannot complete. Safety failures (malformed/unreadable ZIP data,
+encryption, or a size/expansion/resource limit) are hard prerequisite boundaries. Ordinary OPC
+defects such as duplicate or dangling relationships do not suppress independent checks over XML
+that preflight read safely; SDK exceptions become structured unavailable-evidence findings.
 
 - **Bounded OPC/package inspection:** ZIP shape, duplicate entries, content types, encryption,
   expansion budgets, relationship owner/target closure, dangling relationship IDs, and exact/raw,
   ordered-content, and normalized-semantic SHA-256 identities.
 - **Pinned Open XML validation:** `OpenXmlValidator` runs against the requested
   `FileFormatVersions` value (Office 2019 by default). Validation errors retain part URI and XPath.
-- **WordprocessingML closure:** bookmark pairs and hyperlink targets; comment markers and
+- **WordprocessingML closure:** relationship-reachable bookmark pairs and hyperlink targets; comment markers and
   definitions; footnote/endnote references and definitions; move pairs; content-control shape,
-  IDs, placeholder state, and custom-XML bindings; numbering instances/abstract definitions/levels;
+  IDs, placeholder state, and reachable custom-XML bindings; numbering instances/abstract definitions,
+  levels, and level overrides;
   complex and simple field shape; media relationship closure.
-- **Workflow residue:** bracketed blanks/instructions/optional clauses, bare underscore runs,
-  `{{...}}`, `${...}`, `<<...>>`, and `TODO`/`TBD`/`FIXME`, across body, stories, notes, and comments.
-  Findings carry the owning part, projection scope, and stable anchor when one exists.
+- **Workflow residue:** explicit bracketed blanks/instructions, bare underscore runs, `{{...}}`,
+  `${...}`, `<<...>>`, configured exact tokens, and configured case-sensitive editorial markers,
+  across relationship-reachable body/stories/notes/comments. Broad square-bracket alternatives are
+  opt-in and advisory, so legal references such as `[Section 4.2]` and `[1]` do not block by default.
+  Findings carry the owning part, structural path, scope, and stable anchor when one exists.
 - **Revision registry:** malformed, ambiguous, and unsupported native tracked-change groups remain
   visible instead of being silently ignored.
 - **Render risks and evidence:** static OOXML risks (for example altChunk, Office Math, OLE objects,
@@ -82,8 +87,10 @@ session readers after bounded preflight fails.
   merely because another change in the same XML part was modeled.
 
 The package safety limits are shared with `PackageManifestGenerator` and `SemanticDiff`. Companion
-artifacts have separate per-item and aggregate byte limits. Reaching a finding or evidence budget
-makes `analysisCompleted` false rather than producing a misleading pass.
+artifacts have separate per-item and aggregate byte limits. Semantic detectors additionally share
+budgets for XML nodes, relationships, text, regex matches, and general steps. Reaching a finding,
+work, or evidence budget produces a deterministic resource finding and makes `analysisCompleted`
+false rather than producing a misleading pass.
 
 ## Findings and baseline disposition
 
@@ -94,8 +101,9 @@ Every finding contains:
 - `new`, `preExisting`, `resolved`, or `unclassified` disposition;
 - `blocksDelivery`, which is the selected policy's decision for that finding.
 
-Baseline matching is an exact multiset match over detector code, owner/location, scope/XPath, and
-detector subject. It does not match by message text or by aggregate counts. Duplicate observations
+Baseline matching is an exact multiset match over detector/rule version, owner/location,
+scope/XPath, native anchor or deterministic structural path, and detector subject. It does not
+match by message/remediation text or by aggregate counts. Duplicate observations
 receive deterministic occurrence numbers. A `findingId` hashes this detector identity plus the
 occurrence; message, severity, remediation wording, and policy disposition are deliberately not
 part of the ID. The same underlying condition therefore keeps its identity as policy or explanatory
@@ -125,13 +133,17 @@ unexpected actual changes and approved changes that did not occur are errors.
 
 `DeliverableCompanionArtifactInput` records a stable ID, role, media type, availability, bytes,
 page count, renderer fingerprint, page-map digest, source-package digest, and structured renderer
-diagnostics. Available bytes are hashed into report metadata. Layout-dependent PDF/PageMap evidence
-without a renderer fingerprint is warned; a source digest mismatch is an error. Unavailable outputs
-remain explicit metadata instead of disappearing from the report.
+diagnostics. Available bytes are hashed into report metadata. Available PDF, HTML, and PageMap
+evidence must bind to the exact delivered package, renderer fingerprint, and page count. PageMap
+JSON is parsed with the shared portable schema-v1 contract and assigned a canonical digest; PDF and
+HTML evidence must reference supplied PageMap bytes by that digest and agree on source, renderer,
+and count. Basic role/media/format checks reject placeholder bytes such as a bare `%PDF` header.
+Unavailable outputs remain explicit metadata instead of disappearing from the report.
 
-The verifier does not create PDF or HTML. It verifies metadata and diagnostics for artifacts a
-renderer already produced. This keeps conversion policy separate from delivery policy and avoids
-guessing whether a renderer warning applies to the exact delivered bytes.
+The verifier does not create PDF or HTML and these closure checks do not prove visual fidelity. It
+verifies basic format, metadata, and diagnostics for artifacts a renderer already produced. This
+keeps conversion policy separate from delivery policy and avoids guessing whether a renderer
+warning applies to the exact delivered bytes.
 
 ## Canonical report and schema
 

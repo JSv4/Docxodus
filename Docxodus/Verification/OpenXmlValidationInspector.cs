@@ -29,8 +29,7 @@ internal static class OpenXmlValidationInspector
             using var document = WordprocessingDocument.Open(stream, isEditable: false);
             int retainedBoundary = remaining == int.MaxValue ? int.MaxValue : remaining + 1;
             var errors = new OpenXmlValidator(version).Validate(document)
-                .Where(error => !(error.Description ?? string.Empty)
-                    .Contains(InternalAnchorNamespace, StringComparison.Ordinal))
+                .Where(error => error.Node?.NamespaceUri != InternalAnchorNamespace)
                 .Take(retainedBoundary)
                 .ToArray();
             foreach (var error in errors.Take(remaining))
@@ -50,7 +49,8 @@ internal static class OpenXmlValidationInspector
                     code,
                     DeliverableFindingCategory.OpenXml,
                     VerificationFindingSeverity.Error,
-                    error.Description ?? $"Open XML validation error {validatorId}.",
+                    $"Open XML validation {error.ErrorType} '{validatorId}' at "
+                    + $"'{xpath ?? "/"}' on '{(nodeName.Length == 0 ? "unknown node" : nodeName)}'.",
                     partUri,
                     "Repair the reported Open XML schema or semantic constraint without suppressing the validator error.",
                     new ChangeLocation { EntryUri = partUri, PropertyPath = xpath },
@@ -87,15 +87,16 @@ internal static class OpenXmlValidationInspector
             or NotSupportedException
             or XmlException)
         {
-            observations.Add(DeliverableFindingObservation.Create(
-                "openxml.validation_unavailable",
-                DeliverableFindingCategory.OpenXml,
-                VerificationFindingSeverity.Error,
-                $"Open XML validation could not be completed ({exception.GetType().Name}).",
-                "/",
-                "Repair the package so the Open XML SDK can open and validate it.",
-                new ChangeLocation { PropertyPath = "openXmlValidation" },
-                subjectKey: exception.GetType().FullName));
+            if (observations.Count < maximumFindings)
+                observations.Add(DeliverableFindingObservation.Create(
+                    "openxml.validation_unavailable",
+                    DeliverableFindingCategory.OpenXml,
+                    VerificationFindingSeverity.Error,
+                    $"Open XML validation could not be completed ({exception.GetType().Name}).",
+                    "/",
+                    "Repair the package so the Open XML SDK can open and validate it.",
+                    new ChangeLocation { PropertyPath = "openXmlValidation" },
+                    subjectKey: exception.GetType().FullName));
             return new DeliverableCheckResult
             {
                 Check = "open_xml",
