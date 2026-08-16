@@ -48,10 +48,12 @@ evidence, warnings, authored changes, object changes, affected-anchor sets, tran
 lineage events therefore remains invalid.
 
 Wall-clock receipt-generation time, local paths, ZIP timestamps, random identifiers, and
-renderer process details are excluded. A caller-provided transaction ID is retained, but
-the receipt entry identity is deterministically derived from its request fingerprint,
-base/result document versions, and before/after package identities. Replaying an already
-committed idempotent transaction contributes the same entry rather than a second edit.
+renderer process details are excluded. A caller-provided transaction ID is retained and included
+in the receipt entry identity; entries without one use their deterministic receipt sequence. The
+remaining identity inputs are the request fingerprint, base/result document versions, and
+before/after package identities. Replaying an already committed identified transaction contributes
+the same entry rather than a second edit, while distinct identified or anonymous no-op
+transactions remain distinct entries.
 
 ## Transaction evidence
 
@@ -92,24 +94,25 @@ advances the document version by exactly one, and a new state-changing transacti
 A committed no-op neither enters applied history nor clears redo. Undo followed by redo therefore
 preserves one transaction entry plus two reversible state transitions. Repeated undo, redo before
 undo, and undo of an older entry while a newer entry is applied all fail closed. A retry with an
-identical transaction ID and request fingerprint references the original entry; a conflicting
-fingerprint fails before receipt composition.
+identical transaction ID, request fingerprint, and result evidence references the original entry;
+a conflicting fingerprint or result fails before receipt composition.
 
 ## Change attribution
 
-Receipt change records use one of three dispositions:
+Receipt package-change records use one of three dispositions:
 
 - `userRequested`: directly covered by a normalized requested operation;
 - `derived`: required fallout whose derivation is known, such as a relationship or content
   type added for requested media;
-- `unexpected`: observed in the package or semantic change set but not covered by requested
-  or declared derived-change rules.
+- `unexpected`: observed in the package delta but not covered by requested or declared
+  derived-change rules.
 
-Attribution never hides evidence. The complete semantic change set and changed manifest
-entries remain referenced even when every change is expected. A caller may provide an
-expected-change policy, but unknown parts, relationships, or semantic locations default to
-`unexpected`. Receipt success can be configured to fail on any unexpected change without
-altering the underlying evidence.
+Attribution never hides evidence. The complete semantic change set remains referenced and every
+changed manifest entry remains recorded even when each package change is expected. Attribution
+rules apply to the package delta; semantic changes retain their owner-defined #457 classification
+instead of receiving a second receipt-level disposition. Unknown parts and relationships default
+to `unexpected`. Receipt success can be configured to fail on any unexpected package change
+without altering the underlying evidence.
 
 Every package-change record carrying an operation index, including `derived`, must identify an
 operation that succeeded and was not rolled back in a committed or partially committed
@@ -266,15 +269,20 @@ new digest, not the original evidence.
 
 ## Dependency boundary
 
-The receipt consumes package manifests from #456 and semantic change sets from #457. All
-package-manifest API assumptions are confined to `DeliveryPackageManifestAdapter`, which uses the
-corrected #493 contract and rejects manifests whose `IsValid` flag is false while preserving the
-distinction between unavailable optional content/semantic digests and invalid packages. The sole
-#457 seam accepts a typed `SemanticChangeSet`, stores its exact `ToCanonicalUtf8Bytes()` output,
-and records the public schema, version, and count. Portable verification strictly reconstructs the
-full nested #457 change/value schema and requires its exact canonical bytes; receipt fields are not
-used as a substitute for that owner-defined contract.
-The receipt embeds validation and reversibility results from #463/#464 when supplied, without
-flattening or renaming their fields. The delivery operation in #465 assembles artifacts and
-invokes the receipt builder; receipt construction itself performs no document mutation,
+The receipt consumes package manifests from #456, semantic change sets from #457, and the
+policy-neutral package delta from #463. All package-manifest API assumptions are confined to
+`DeliveryPackageManifestAdapter`, which uses the corrected #493 contract, rejects manifests whose
+`IsValid` flag is false, preserves the distinction between unavailable optional content/semantic
+digests and invalid packages, and adapts the shared delta instead of defining another entry or
+relationship comparator. The sole #457 seam accepts a typed `SemanticChangeSet`, stores its exact
+`ToCanonicalUtf8Bytes()` output, and records the public schema, version, and count. Portable
+verification strictly reconstructs the full nested #457 change/value schema and requires its exact
+canonical bytes; receipt fields are not used as a substitute for that owner-defined contract.
+The receipt hash-addresses exact validation and reversibility artifacts from #463/#464 when
+supplied, using their owner-defined schema identifiers and canonical bytes without flattening or
+renaming their fields. This generic evidence boundary verifies artifact identity and availability;
+it does not reinterpret the owner's pass/fail decision. A consumer that needs to trust that
+decision must parse and verify the artifact with the #463 or #464 contract. The delivery operation
+in #465 assembles artifacts and invokes the receipt builder; receipt construction itself performs
+no document mutation,
 rendering, ZIP inspection, or OOXML parsing outside those shared components.

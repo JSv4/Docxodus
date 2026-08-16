@@ -492,6 +492,10 @@ public static class DeliveryChangeReceiptVerifier
                 beforePackage = transaction.BeforeDocument.RawPackageBytesDigest,
                 requestFingerprint = transaction.RequestFingerprint,
                 resultVersion = transaction.ResultVersion,
+                transactionId = transaction.TransactionId,
+                transactionSequence = transaction.TransactionId is null
+                    ? transaction.Sequence
+                    : (long?)null,
             }));
         if (!string.Equals(transaction.EntryId, expectedEntryId, StringComparison.Ordinal))
         {
@@ -795,6 +799,9 @@ public static class DeliveryChangeReceiptVerifier
         comparison = string.CompareOrdinal(
             left.Location.RelationshipId, right.Location.RelationshipId);
         if (comparison != 0) return comparison;
+        comparison = string.CompareOrdinal(
+            left.Location.TargetUri, right.Location.TargetUri);
+        if (comparison != 0) return comparison;
         return string.CompareOrdinal(
             left.Location.PropertyPath, right.Location.PropertyPath);
     }
@@ -835,9 +842,15 @@ public static class DeliveryChangeReceiptVerifier
         int comparison = left.EntityKind.CompareTo(right.EntityKind);
         if (comparison != 0) return comparison;
         comparison = left.ChangeKind.CompareTo(right.ChangeKind);
+        if (comparison != 0) return comparison;
+        comparison = string.CompareOrdinal(left.EntityId, right.EntityId);
+        if (comparison != 0) return comparison;
+        comparison = string.CompareOrdinal(left.PartUri, right.PartUri);
+        if (comparison != 0) return comparison;
+        comparison = string.CompareOrdinal(left.Scope, right.Scope);
         return comparison != 0
             ? comparison
-            : string.CompareOrdinal(left.EntityId, right.EntityId);
+            : string.CompareOrdinal(left.SourceDigest.Value, right.SourceDigest.Value);
     }
 
     private static int CompareObjectChanges(
