@@ -18,6 +18,8 @@ namespace LegalEval;
 internal static class GeneratedPackageNormalizer
 {
     private const string FixedRevisionDate = "2026-01-15T12:00:00Z";
+    private static readonly XNamespace W =
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     internal static byte[] Normalize(byte[] bytes)
     {
@@ -63,6 +65,69 @@ internal static class GeneratedPackageNormalizer
         }
         return ZipPackageOutputNormalizer.NormalizeDeterministic(stream.ToArray());
     }
+
+    /// <summary>
+    /// Restore revision-bearing baseline paragraphs that a composite comparison flattened even
+    /// though their accepted text is untouched.  A paragraph is copied only when its accepted text
+    /// has one unambiguous, revision-free peer in the result.
+    /// </summary>
+    internal static byte[] RestoreUnchangedReviewParagraphs(byte[] baseline, byte[] result)
+    {
+        XDocument baselineXml;
+        using (var baselineStream = new MemoryStream(baseline))
+        using (var baselinePackage = WordprocessingDocument.Open(baselineStream, false))
+            baselineXml = new XDocument(baselinePackage.MainDocumentPart!.GetXDocument());
+
+        using var output = new MemoryStream();
+        output.Write(result);
+        output.Position = 0;
+        using (var package = WordprocessingDocument.Open(output, true))
+        {
+            var main = package.MainDocumentPart!;
+            var resultXml = main.GetXDocument();
+            var resultParagraphs = resultXml.Descendants(W + "p").ToList();
+            var changed = false;
+            foreach (var paragraph in baselineXml.Descendants(W + "p")
+                .Where(ContainsInlineRevision))
+            {
+                var acceptedText = string.Concat(
+                    paragraph.Descendants(W + "t").Select(value => value.Value));
+                var matches = resultParagraphs.Where(value =>
+                        !ContainsInlineRevision(value)
+                        && string.Equals(string.Concat(value.Descendants(W + "t")
+                                .Select(text => text.Value)),
+                            acceptedText, StringComparison.Ordinal))
+                    .ToList();
+                if (matches.Count != 1) continue;
+                var replacement = new XElement(paragraph);
+                var offset = resultParagraphs.IndexOf(matches[0]);
+                matches[0].ReplaceWith(replacement);
+                resultParagraphs[offset] = replacement;
+                changed = true;
+            }
+            var baselineParagraphs = baselineXml.Descendants(W + "p").ToList();
+            if (baselineParagraphs.Count == resultParagraphs.Count)
+            {
+                for (var index = 0; index < baselineParagraphs.Count; index++)
+                {
+                    var baselineProperties = baselineParagraphs[index].Element(W + "pPr");
+                    if (baselineProperties is null
+                        || resultParagraphs[index].Element(W + "pPr") is not null)
+                        continue;
+                    resultParagraphs[index].AddFirst(new XElement(baselineProperties));
+                    changed = true;
+                }
+            }
+            if (changed) main.PutXDocument();
+        }
+        return ZipPackageOutputNormalizer.NormalizeDeterministic(output.ToArray());
+    }
+
+    private static bool ContainsInlineRevision(XElement paragraph) =>
+        paragraph.Descendants().Any(value => value.Name == W + "ins"
+            || value.Name == W + "del"
+            || value.Name == W + "moveFrom"
+            || value.Name == W + "moveTo");
 
     private static void SetRelationshipId(
         OpenXmlPartContainer parent, OpenXmlPart? part, string relationshipId)

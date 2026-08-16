@@ -1815,6 +1815,17 @@ public sealed class DocxSessionSettings
     public bool ValidateRawOps { get; init; } = false;
     public TrackedChangeMode TrackedChanges { get; init; } = TrackedChangeMode.Accept;
     public string? RevisionAuthor { get; init; }
+    /// <summary>
+    /// Supplies UTC timestamps for revision metadata. Internal so deterministic harnesses can pin
+    /// time without widening the public session contract; production callers use the wall clock.
+    /// </summary>
+    internal Func<DateTime> UtcNowProvider { get; init; } = static () => DateTime.UtcNow;
+    /// <summary>
+    /// Sorts and fixed-timestamps the final ZIP container for deterministic internal harnesses.
+    /// This changes container metadata only and is applied inside <see cref="DocxSession.Save()"/>
+    /// so returned bytes remain the authoritative transaction boundary.
+    /// </summary>
+    internal bool DeterministicPackageOutput { get; init; }
     public WmlToMarkdownConverterSettings ProjectionSettings { get; init; } = new();
 
     /// <summary>
@@ -1923,6 +1934,13 @@ public sealed partial class DocxSession : IDisposable
     private bool _revisionCounterSeeded;
     private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
+
+    private DateTime UtcNow() => _settings.UtcNowProvider();
+
+    private byte[] NormalizeSavedPackage(byte[] bytes) =>
+        _settings.DeterministicPackageOutput
+            ? ZipPackageOutputNormalizer.NormalizeDeterministic(bytes)
+            : ZipPackageOutputNormalizer.Normalize(bytes);
 
     internal bool IsDisposed => _disposed;
 
@@ -3961,6 +3979,8 @@ public sealed partial class DocxSession : IDisposable
             SmartQuotes = _settings.SmartQuotes,
             EmitMarkdownPatch = _settings.EmitMarkdownPatch,
             CaptureInitialProjection = _settings.CaptureInitialProjection,
+            UtcNowProvider = _settings.UtcNowProvider,
+            DeterministicPackageOutput = _settings.DeterministicPackageOutput,
             ProjectionSettings = new WmlToMarkdownConverterSettings
             {
                 Scopes = projection.Scopes,
@@ -4951,7 +4971,7 @@ public sealed partial class DocxSession : IDisposable
             var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
             var revisionAuthor = _revisionAuthor ?? "docxodus";
             var revisionDate = tracked
-                ? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                ? UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ")
                 : null;
 
             // Reverse offset order so earlier-offset matches' SpanInElement stays valid
@@ -5085,7 +5105,7 @@ public sealed partial class DocxSession : IDisposable
                     synthetic,
                     replace,
                     _revisionAuthor ?? "docxodus",
-                    DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+                    UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ"));
             }
             else
             {
@@ -6363,7 +6383,7 @@ public sealed partial class DocxSession : IDisposable
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
-            return ZipPackageOutputNormalizer.Normalize(_stream.ToArray());
+            return NormalizeSavedPackage(_stream.ToArray());
         }
 
         // Strip the internal PtOpenXml:Unid attributes before serializing — they're
@@ -6427,7 +6447,7 @@ public sealed partial class DocxSession : IDisposable
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
-            return ZipPackageOutputNormalizer.Normalize(_stream.ToArray());
+            return NormalizeSavedPackage(_stream.ToArray());
         }
         finally
         {
@@ -7103,7 +7123,7 @@ public sealed partial class DocxSession : IDisposable
                 Internal.CommentOps.CloneCommentsForMoveSource(commentHost, source);
 
             var author = _revisionAuthor ?? "docxodus";
-            var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
             if (source.Name == W.p)
             {
                 var moveName = $"move{NextRevisionId()}";
@@ -8211,7 +8231,7 @@ public sealed partial class DocxSession : IDisposable
         while (true)
         {
             var observed = System.Threading.Interlocked.Read(ref _lastFormatRevisionTicks);
-            var now = DateTime.UtcNow.Ticks;
+            var now = UtcNow().Ticks;
             var next = now > observed ? now : observed + 1;
             if (System.Threading.Interlocked.CompareExchange(
                     ref _lastFormatRevisionTicks, next, observed) == observed)
@@ -13082,7 +13102,7 @@ public sealed partial class DocxSession : IDisposable
     private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
     {
         var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
 
         // Note references (footnote/endnote) are zero-width, semantically-significant
         // markers that must survive the edit on BOTH accept and reject — they must not
@@ -13134,7 +13154,7 @@ public sealed partial class DocxSession : IDisposable
     private void WrapRunsInDel(XElement element)
     {
         var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
         foreach (var run in element.Elements(W.r).ToList())
         {
             run.Remove();
@@ -13169,7 +13189,7 @@ public sealed partial class DocxSession : IDisposable
         if (rPr.Element(W.del) is null)
         {
             var author = _revisionAuthor ?? "docxodus";
-            var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
             WordprocessingMLUtil.InsertRPrChildInOrder(
                 rPr, CreateRevisionEnvelope(W.del, author, date));
         }
@@ -13184,7 +13204,7 @@ public sealed partial class DocxSession : IDisposable
     private void MarkTableAsTrackedDeleted(XElement table)
     {
         var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
 
         foreach (var row in table.Elements(W.tr))
         {
@@ -13226,7 +13246,7 @@ public sealed partial class DocxSession : IDisposable
             MarkTrackedStructuredContentChild(child);
 
         var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var date = UtcNow().ToString("yyyy-MM-ddTHH:mm:ssZ");
         var boundaries = Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(
             contentContainer,
             W.customXmlDelRangeStart,

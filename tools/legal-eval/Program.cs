@@ -21,7 +21,7 @@ try
         Console.Error);
     return outcome.ExitCode;
 }
-catch (Exception exception)
+catch (Exception exception) when (Docxodus.Verification.DeliverableExceptionBoundary.IsRecoverable(exception))
 {
     Console.Error.WriteLine(exception.Message);
     return 2;

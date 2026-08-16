@@ -18,7 +18,7 @@ working directory, corpus sources, or model-candidate directory are rejected bef
 existing symlink/junction ancestors are resolved for every scope comparison. If an
 operation throws, the bundle preserves the original document, the last valid document checkpoint,
 the operation log through the failing operation, diagnostic HTML/diff envelopes, and a
-content-addressed evaluation receipt. Full-to-filtered and candidate-to-no-candidate reruns therefore
+content-addressed evaluation bundle manifest. Full-to-filtered and candidate-to-no-candidate reruns therefore
 cannot leave stale scenario or model-planning directories that look current.
 
 ## Run it
@@ -71,8 +71,9 @@ while leaving the published root valid and inspectable.
 
 Every scenario declares a machine-readable instruction, explicit constraints, canonical expected
 artifact IDs, scripted baseline operations, change budgets, and at least one deterministic
-invariant. `ScenarioLoader` rejects missing or empty invariant lists; visual inspection is never a
-substitute for a probe.
+invariant. It must also declare whether a Word accept/reject proof is required or is structurally
+not applicable, with a reason for the latter. `ScenarioLoader` rejects implicit policies and
+missing or empty invariant lists; visual inspection is never a substitute for a probe.
 
 ## Scoring contract
 
@@ -81,21 +82,26 @@ Each score contains these metric categories:
 | Category | What is measured |
 | --- | --- |
 | `task_completion` | Scenario-specific OOXML/text invariants and availability of every required output |
-| `target_precision` | Normalized-package equivalence to the pinned scripted golden DOCX |
-| `unintended_change` | Changed OPC parts and distinct `DocxDiff` anchors against the scenario budget |
-| `document_validity` | Material `OpenXmlValidator` errors |
-| `redline_reversibility` | `redline-reversibility.interim-text-projection`: accept/reject body/header/footer text projection; not the full issue #464 proof |
-| `rendering_regression` | `rendering-regression.html-projection`: sanitized Docxodus HTML equivalence; not a page-layout proof |
+| `target_precision` | #457 semantic equivalence between the candidate and pinned scripted golden |
+| `unintended_change` | #463 changed-package entries/relationship owners and distinct #457 anchors against the scenario budget |
+| `document_validity` | Bounded #456 package inspection plus #463 Open XML, closure, workflow, and revision checks |
+| `redline_reversibility` | Required #464 whole-package accept/reject proof for revision-representable edits; explicit `not_applicable` for package-level review structures, with the diagnostic proof retained but not scored |
+| `rendering_regression` | Sanitized Docxodus HTML equivalence, plus exact raster pixel equivalence when full rendering is requested |
 
 Metric evaluation is exception-safe. A malformed candidate becomes failed metrics and still keeps
 its original bytes and evidence; it does not abort the remaining corpus. Required `expectedOutputs`
 are joined to the produced artifact index by canonical ID and add the
 `task-completion.required-artifacts` metric. An absent or unavailable required artifact fails the
-score. Optional renderer artifacts remain non-fatal.
+score. Optional renderer artifact declarations remain non-fatal; when `--render` is requested,
+missing or different visual evidence fails the separate visual-layout metric.
 
-The canonical scenario output IDs are `candidate-docx`, `semantic-diff`, `after-html`,
-`redline-docx`, `candidate-pdf`, and `redline-proof-v1`. The schema and loader reject aliases so a
-scenario cannot silently request an artifact the runner does not know how to verify.
+The canonical scenario output IDs are `candidate-docx`, `redline-docx`,
+`semantic-change-set-v1`, `candidate-package-manifest-v1`, `deliverable-verification-v1`,
+`delivery-change-receipt-v1`, `redline-reversibility-proof-v1`, `after-html`, and
+`candidate-pdf`. The schema and loader verify each ID, media type, and role so a scenario cannot
+silently request an artifact the runner does not know how to produce or verify. A real #458
+delivery receipt is required only when the engine path has authoritative batch traces; model and
+consolidation paths retain an explicit unavailable record instead of synthetic provenance.
 
 ## Evidence from every score
 
@@ -112,14 +118,19 @@ Each safe completed edit score contains:
 - `input.docx`, `candidate.docx`, and scripted `expected.docx`;
 - native `redline.docx`;
 - `before.html`, `after.html`, and `target.html` previews;
-- full input-to-candidate and input-to-target semantic-diff JSON using the public `DocxDiff`
-  edit-script schema;
+- canonical #457 source-to-candidate, source-to-target, and candidate-to-target semantic change
+  sets;
+- #456 input/candidate/target package manifests and the exact #463 deliverable-verification result
+  used by scoring;
+- the #464 proof, accepted-path DOCX, and rejected-path DOCX, plus a verified #458 delivery receipt
+  and per-transaction semantic evidence when an authoritative batch trace exists;
 - `metrics.json`, `operation-log.json`, `summary.md`, and a content-addressed
-  `evaluation-receipt.json`;
-- linked `index.html`/`index.md` views whose entries include the receipt and artifact-status
+  `evaluation-bundle-manifest-v2.json`;
+- linked `index.html`/`index.md` views whose entries include the bundle manifest and artifact-status
   documents along with media type, size, and SHA-256;
 - before/candidate/target/redline PDFs, every rendered page, and page-aligned visual diffs when
-  LibreOffice, Poppler, and ImageMagick are available;
+  LibreOffice and Poppler are available (with bounded in-process pixel comparison when ImageMagick
+  is absent);
 - `artifact-status.json`, with relative paths, media types, sizes, SHA-256 values, and explicit
   unavailable reasons.
 
@@ -134,21 +145,12 @@ visual. External renderers are used only for trusted scripted-engine documents; 
 candidates retain sanitized HTML and explicit renderer-unavailable records. Preview HTML has a
 restrictive CSP and removes active handlers plus external links/resources.
 
-`evaluation-receipt.json` is content-addressed evidence for this test run; it is deliberately not
-the future delivery-receipt schema. Its digest scope excludes the receipt/status/index files to
-avoid a hash cycle. Receipts without external renderer output are reproducible when their inputs and
-deterministic providers are unchanged. A receipt containing PDFs, page images, or visual diffs is run-specific
-unless the selected renderer and its output are independently reproducible. The same
-explicit-unavailable rule applies to dependent foundation work that is not yet available:
-
-- package manifest v1: issue #456;
-- expanded semantic diff v2: issue #457;
-- delivery receipt v1: issue #458;
-- embeddable full-surface redline proof v1: issue #464.
-
-Those stable unavailable IDs are intentional extension points. When a foundation lands, its real
-provider can replace the corresponding record without changing scenario execution or the scoring
-pipeline.
+`evaluation-bundle-manifest-v2.json` is the evaluator's cycle-free inventory of the files retained
+for one score; it is distinct from the typed #458 `delivery-change-receipt-v1.json`. Its digest
+scope excludes the bundle manifest, status, and index files to avoid a hash cycle. Bundles without
+external renderer output are reproducible when their inputs and deterministic providers are
+unchanged. A bundle containing PDFs, page images, or visual diffs is run-specific unless the
+selected renderer and its output are independently reproducible.
 
 ## Fixture provenance
 
@@ -179,12 +181,11 @@ before/candidate/target/redline evidence and visual diffs. Every smoke-evidence 
 artifact uploads use `if: always()`, so earlier failures do not silently suppress later diagnostic
 attempts or uploads.
 
-The current package guard enforces bounded raw/expanded/XML sizes, ZIP entry counts, compression
-ratios, path safety, duplicate names, and DTD-free XML parsing. It is an adapter seam, not a second
-permanent security policy: issue #456 remains the source of truth for the shared package safety
-manifest/budget implementation. A package that fails this boundary is retained as evidence but is
-not sent to downstream OOXML/diff/HTML parsers or external renderers. Likewise, expanded semantic diff v2 (#457), delivery receipt v1
-(#458), and the embeddable full-surface redline proof (#464) remain explicitly gated.
+Package inspection uses #456 as the single source of truth for bounded raw/expanded/XML sizes, ZIP
+entry counts, compression ratios, path safety, duplicate names, and DTD-free XML parsing. The same
+manifest options flow through #457 semantic comparison, #463 verification, #464 proof, and artifact
+serialization. A package that fails this boundary is retained as evidence but is not sent to
+downstream OOXML/diff/HTML parsers or external renderers.
 
 New operations belong in `ScriptedBaselineExecutor`; new deterministic package probes belong in
 `EvaluationScorer`. Every new scenario must include at least one compatible deterministic invariant.

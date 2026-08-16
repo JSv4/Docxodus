@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
   "id": "tracked-notice-amendment",
   "title": "Amend a notice period with native tracked changes",
   "tier": "fast",
@@ -21,10 +21,16 @@
       "Preserve the fixture's pre-existing Prior Counsel revision."
     ]
   },
+  "redlineReversibility": { "applicability": "required" },
   "expectedOutputs": [
     { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
     { "id": "redline-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "review", "required": true },
-    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true }
+    { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
   ],
   "baseline": {
     "executor": "scripted-session-v1",
@@ -40,6 +46,7 @@
   ],
   "changeBudget": {
     "allowedChangedParts": ["/word/document.xml", "/word/settings.xml"],
+    "allowedRelationshipOwners": [],
     "maximumChangedAnchors": 4
   }
 }

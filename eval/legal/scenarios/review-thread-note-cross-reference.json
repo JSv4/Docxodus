@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
   "id": "review-thread-note-cross-reference",
   "title": "Add a comment thread, footnote, and internal cross-reference",
   "tier": "full",
@@ -21,9 +21,18 @@
       "Use fixed evaluation authorship metadata from the scripted expectation."
     ]
   },
+  "redlineReversibility": {
+    "applicability": "notApplicable",
+    "reason": "Native comments, replies, notes, bookmarks, and relationships are package-level review structures that Word revision acceptance/rejection does not reverse"
+  },
   "expectedOutputs": [
     { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
-    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "redline-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "review", "required": true },
+    { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": false },
     { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
     { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
   ],
@@ -43,6 +52,7 @@
   ],
   "changeBudget": {
     "allowedChangedParts": ["/[Content_Types].xml", "/word/_rels/document.xml.rels", "/word/comments.xml", "/word/commentsExtended.xml", "/word/commentsIds.xml", "/word/document.xml", "/word/footnotes.xml", "/word/settings.xml", "/word/styles.xml"],
+    "allowedRelationshipOwners": ["/word/document.xml"],
     "maximumChangedAnchors": 12
   }
 }

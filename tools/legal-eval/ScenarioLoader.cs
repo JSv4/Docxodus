@@ -4,13 +4,19 @@
 #nullable enable
 
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Docxodus.Verification;
 
 namespace LegalEval;
 
 public static class ScenarioLoader
 {
+    private const int MaximumJsonBytes = 4 * 1024 * 1024;
+    private const int MaximumProvenanceDocumentBytes = 64 * 1024 * 1024;
+    private const int MaximumArrayItems = 256;
+    private const int MaximumStringCharacters = 16 * 1024;
     private static readonly Regex ScenarioSlug = new(
         "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
@@ -25,17 +31,21 @@ public static class ScenarioLoader
         "rendering_regression",
     };
 
-    private static readonly IReadOnlyDictionary<string, string> ExpectedOutputMediaTypes =
-        new Dictionary<string, string>(StringComparer.Ordinal)
+    private static readonly IReadOnlyDictionary<string, (string MediaType, string Role)>
+        ExpectedOutputContracts =
+        new Dictionary<string, (string MediaType, string Role)>(StringComparer.Ordinal)
         {
             ["candidate-docx"] =
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ["semantic-diff"] = "application/json",
-            ["after-html"] = "text/html",
+                ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "candidate"),
+            ["semantic-change-set-v1"] = ("application/json", "verification"),
+            ["after-html"] = ("text/html", "review"),
             ["redline-docx"] =
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ["candidate-pdf"] = "application/pdf",
-            ["redline-proof-v1"] = "application/json",
+                ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "review"),
+            ["candidate-pdf"] = ("application/pdf", "review"),
+            ["candidate-package-manifest-v1"] = ("application/json", "verification"),
+            ["deliverable-verification-v1"] = ("application/json", "verification"),
+            ["delivery-change-receipt-v1"] = ("application/json", "verification"),
+            ["redline-reversibility-proof-v1"] = ("application/json", "verification"),
         };
 
     public static LegalCorpus LoadCorpus(string corpusPath)
@@ -45,7 +55,7 @@ public static class ScenarioLoader
             ?? throw new ScenarioValidationException($"Corpus path has no directory: {corpusPath}");
         var corpus = ReadObject(fullCorpusPath, "corpus");
         RejectUnknown(corpus, fullCorpusPath, "schemaVersion", "provenance", "scenarios");
-        RequireExactVersion(corpus, fullCorpusPath);
+        RequireExactVersion(corpus, fullCorpusPath, "1.0");
 
         var provenancePath = ResolveUnderRoot(root,
             RequireString(corpus, "provenance", fullCorpusPath), fullCorpusPath);
@@ -58,8 +68,7 @@ public static class ScenarioLoader
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in scenarioNodes)
         {
-            var relative = node?.GetValue<string>()
-                ?? throw Error(fullCorpusPath, "scenario paths must be strings");
+            var relative = RequireNodeString(node, fullCorpusPath, "scenario path");
             var path = ResolveUnderRoot(root, relative, fullCorpusPath);
             var scenario = LoadScenario(path, root, provenance.Fixtures,
                 provenance.ExpectedDocuments);
@@ -81,9 +90,9 @@ public static class ScenarioLoader
         var fullPath = Path.GetFullPath(scenarioPath);
         var node = ReadObject(fullPath, "scenario");
         RejectUnknown(node, fullPath, "schemaVersion", "id", "title", "tier", "fixture",
-            "expectedDocument", "instruction", "expectedOutputs", "baseline", "invariants",
-            "changeBudget");
-        RequireExactVersion(node, fullPath);
+            "expectedDocument", "instruction", "redlineReversibility", "expectedOutputs",
+            "baseline", "invariants", "changeBudget");
+        RequireExactVersion(node, fullPath, "2.0");
         var id = RequireString(node, "id", fullPath);
         if (id.Length > 128 || !ScenarioSlug.IsMatch(id))
             throw Error(fullPath, $"id '{id}' is not a safe scenario slug");
@@ -141,11 +150,35 @@ public static class ScenarioLoader
         RejectUnknown(instructionNode, fullPath, "text", "constraints");
         var instruction = RequireString(instructionNode, "text", fullPath);
         var constraints = RequireArray(instructionNode, "constraints", fullPath)
-            .Select((value, index) => value?.GetValue<string>()
-                ?? throw Error(fullPath, $"instruction.constraints[{index}] must be a string"))
+            .Select((value, index) => RequireNodeString(
+                value, fullPath, $"instruction.constraints[{index}]"))
             .ToList();
         if (constraints.Count == 0)
             throw Error(fullPath, "instruction.constraints must be explicit and non-empty");
+
+        var reversibilityNode = RequireObject(node, "redlineReversibility", fullPath);
+        RejectUnknown(reversibilityNode, fullPath, "applicability", "reason");
+        var reversibilityApplicability = RequireString(
+            reversibilityNode, "applicability", fullPath) switch
+        {
+            "required" => RedlineReversibilityApplicability.Required,
+            "notApplicable" => RedlineReversibilityApplicability.NotApplicable,
+            var value => throw Error(fullPath,
+                $"redlineReversibility.applicability is unsupported: '{value}'"),
+        };
+        var reversibilityReason = reversibilityNode["reason"] is null
+            ? null
+            : RequireString(reversibilityNode, "reason", fullPath);
+        if (reversibilityApplicability == RedlineReversibilityApplicability.NotApplicable
+            && reversibilityReason is null)
+            throw Error(fullPath,
+                "redlineReversibility.reason is required when applicability is notApplicable");
+        if (reversibilityApplicability == RedlineReversibilityApplicability.Required
+            && reversibilityReason is not null)
+            throw Error(fullPath,
+                "redlineReversibility.reason is allowed only when applicability is notApplicable");
+        var reversibility = new RedlineReversibilityPolicy(
+            reversibilityApplicability, reversibilityReason);
 
         var outputsNode = RequireArray(node, "expectedOutputs", fullPath);
         if (outputsNode.Count == 0)
@@ -157,16 +190,20 @@ public static class ScenarioLoader
             RejectUnknown(output, fullPath, "id", "mediaType", "role", "required");
             var outputId = RequireString(output, "id", fullPath);
             var mediaType = RequireString(output, "mediaType", fullPath);
-            if (!ExpectedOutputMediaTypes.TryGetValue(outputId, out var expectedMediaType))
+            if (!ExpectedOutputContracts.TryGetValue(outputId, out var contract))
                 throw Error(fullPath,
                     $"expectedOutputs[{index}].id '{outputId}' is not a canonical artifact id");
-            if (!string.Equals(mediaType, expectedMediaType, StringComparison.Ordinal))
+            if (!string.Equals(mediaType, contract.MediaType, StringComparison.Ordinal))
                 throw Error(fullPath,
-                    $"expectedOutputs[{index}] mediaType for '{outputId}' must be '{expectedMediaType}'");
+                    $"expectedOutputs[{index}] mediaType for '{outputId}' must be '{contract.MediaType}'");
+            var role = RequireString(output, "role", fullPath);
+            if (!string.Equals(role, contract.Role, StringComparison.Ordinal))
+                throw Error(fullPath,
+                    $"expectedOutputs[{index}] role for '{outputId}' must be '{contract.Role}'");
             return new ExpectedArtifact(
                 outputId,
                 mediaType,
-                RequireString(output, "role", fullPath),
+                role,
                 RequireBool(output, "required", fullPath));
         }).ToList();
         if (outputs.Select(value => value.Id).Distinct(StringComparer.Ordinal).Count() != outputs.Count)
@@ -218,10 +255,11 @@ public static class ScenarioLoader
             throw Error(fullPath, "invariant ids must be unique within a scenario");
 
         var budgetNode = RequireObject(node, "changeBudget", fullPath);
-        RejectUnknown(budgetNode, fullPath, "allowedChangedParts", "maximumChangedAnchors");
+        RejectUnknown(budgetNode, fullPath, "allowedChangedParts",
+            "allowedRelationshipOwners", "maximumChangedAnchors");
         var allowedParts = RequireArray(budgetNode, "allowedChangedParts", fullPath)
-            .Select((value, index) => value?.GetValue<string>()
-                ?? throw Error(fullPath, $"changeBudget.allowedChangedParts[{index}] must be a string"))
+            .Select((value, index) => RequireNodeString(
+                value, fullPath, $"changeBudget.allowedChangedParts[{index}]"))
             .ToHashSet(StringComparer.Ordinal);
         if (allowedParts.Count == 0)
             throw Error(fullPath, "changeBudget.allowedChangedParts must be explicit and non-empty");
@@ -229,6 +267,15 @@ public static class ScenarioLoader
                 || !value.StartsWith('/') || value.Contains("..", StringComparison.Ordinal)))
             throw Error(fullPath,
                 "changeBudget.allowedChangedParts entries must be absolute safe OPC part names");
+        var allowedRelationshipOwners = RequireArray(
+                budgetNode, "allowedRelationshipOwners", fullPath)
+            .Select((value, index) => RequireNodeString(
+                value, fullPath, $"changeBudget.allowedRelationshipOwners[{index}]"))
+            .ToHashSet(StringComparer.Ordinal);
+        if (allowedRelationshipOwners.Any(value => string.IsNullOrWhiteSpace(value)
+                || !value.StartsWith('/') || value.Contains("..", StringComparison.Ordinal)))
+            throw Error(fullPath,
+                "changeBudget.allowedRelationshipOwners entries must be absolute safe OPC owner names");
         var maximumChangedAnchors = RequireInt(budgetNode, "maximumChangedAnchors", fullPath);
         if (maximumChangedAnchors < 0)
             throw Error(fullPath, "changeBudget.maximumChangedAnchors must be non-negative");
@@ -236,9 +283,9 @@ public static class ScenarioLoader
         return new LegalScenario(fullPath, id, title, tier,
             new FixtureReference(fixturePath, provenanceId, sourceSha),
             new ExpectedDocumentReference(expectedPath, expectedProvenanceId, expectedSha),
-            instruction, constraints,
+            instruction, constraints, reversibility,
             outputs, operations, invariants,
-            new ChangeBudget(allowedParts, maximumChangedAnchors));
+            new ChangeBudget(allowedParts, allowedRelationshipOwners, maximumChangedAnchors));
     }
 
     private static ProvenanceCatalog LoadProvenance(
@@ -246,7 +293,7 @@ public static class ScenarioLoader
     {
         var root = ReadObject(path, "provenance");
         RejectUnknown(root, path, "schemaVersion", "fixtures", "expectedDocuments");
-        RequireExactVersion(root, path);
+        RequireExactVersion(root, path, "1.0");
         var records = RequireArray(root, "fixtures", path);
         var result = new Dictionary<string, FixtureProvenance>(StringComparer.Ordinal);
         foreach (var value in records)
@@ -485,34 +532,54 @@ public static class ScenarioLoader
             throw new ScenarioValidationException($"{kind} file does not exist: {path}");
         try
         {
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            return JsonNode.Parse(ReadUtf8Bounded(path, MaximumJsonBytes, kind)) as JsonObject
                 ?? throw Error(path, $"{kind} root must be a JSON object");
         }
         catch (ScenarioValidationException) { throw; }
-        catch (Exception exception)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             throw Error(path, $"invalid JSON: {exception.Message}");
         }
     }
 
-    private static void RequireExactVersion(JsonObject node, string path)
+    private static void RequireExactVersion(JsonObject node, string path, string expected)
     {
         var version = RequireString(node, "schemaVersion", path);
-        if (version != "1.0")
-            throw Error(path, $"unsupported schemaVersion '{version}'; expected '1.0'");
+        if (version != expected)
+            throw Error(path, $"unsupported schemaVersion '{version}'; expected '{expected}'");
     }
 
     private static JsonObject RequireObject(JsonObject parent, string name, string path) =>
         parent[name] as JsonObject ?? throw Error(path, $"{name} must be an object");
 
-    private static JsonArray RequireArray(JsonObject parent, string name, string path) =>
-        parent[name] as JsonArray ?? throw Error(path, $"{name} must be an array");
+    private static JsonArray RequireArray(JsonObject parent, string name, string path)
+    {
+        var result = parent[name] as JsonArray
+            ?? throw Error(path, $"{name} must be an array");
+        if (result.Count > MaximumArrayItems)
+            throw Error(path, $"{name} exceeds the {MaximumArrayItems}-item limit");
+        return result;
+    }
 
     private static string RequireString(JsonObject parent, string name, string path)
     {
         if (parent[name] is not JsonValue value || !value.TryGetValue<string>(out var result)
             || string.IsNullOrWhiteSpace(result))
             throw Error(path, $"{name} must be a non-empty string");
+        if (result.Length > MaximumStringCharacters)
+            throw Error(path,
+                $"{name} exceeds the {MaximumStringCharacters}-character limit");
+        return result;
+    }
+
+    private static string RequireNodeString(JsonNode? node, string path, string label)
+    {
+        if (node is not JsonValue value || !value.TryGetValue<string>(out var result)
+            || string.IsNullOrWhiteSpace(result))
+            throw Error(path, $"{label} must be a non-empty string");
+        if (result.Length > MaximumStringCharacters)
+            throw Error(path,
+                $"{label} exceeds the {MaximumStringCharacters}-character limit");
         return result;
     }
 
@@ -551,7 +618,26 @@ public static class ScenarioLoader
     }
 
     internal static string Sha256File(string path) =>
-        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(
+            ReadBytesBounded(path, MaximumProvenanceDocumentBytes, "provenance document")))
+            .ToLowerInvariant();
+
+    private static string ReadUtf8Bounded(string path, int maximumBytes, string label) =>
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+            .GetString(ReadBytesBounded(path, maximumBytes, label));
+
+    private static byte[] ReadBytesBounded(string path, int maximumBytes, string label)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 81920, FileOptions.SequentialScan);
+        if (stream.Length > maximumBytes)
+            throw Error(path, $"{label} exceeds the {maximumBytes}-byte read limit");
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1)
+            throw Error(path, $"{label} changed while it was being read");
+        return bytes;
+    }
 
     private static ScenarioValidationException Error(string path, string message) =>
         new($"{path}: {message}");

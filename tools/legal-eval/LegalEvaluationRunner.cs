@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Docxodus.Verification;
 
 namespace LegalEval;
 
@@ -116,7 +117,7 @@ public sealed class LegalEvaluationRunner
                             ScoreKind.EngineBaseline, stagingRoot, options.RenderMode);
                     }
                 }
-                catch (Exception exception)
+                catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                 {
                     baseline ??= EmergencyBaseline(scenario, exception);
                     engineScore = FailureScore(scenario, baseline, ScoreKind.EngineBaseline,
@@ -146,11 +147,12 @@ public sealed class LegalEvaluationRunner
                             planningScore = scorer.Score(scenario, baseline!, candidate,
                                 ScoreKind.ModelPlanning, stagingRoot, options.RenderMode);
                         }
-                        catch (Exception exception)
+                        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                         {
                             byte[]? candidate = null;
                             try { candidate = ReadCandidateBounded(candidatePath); }
-                            catch { }
+                            catch (Exception readException)
+                                when (DeliverableExceptionBoundary.IsRecoverable(readException)) { }
                             planningScore = FailureScore(scenario, baseline!, ScoreKind.ModelPlanning,
                                 stagingRoot, ExceptionDetail(exception,
                                     candidateDirectory, stagingRoot, artifactRoot),
@@ -169,7 +171,7 @@ public sealed class LegalEvaluationRunner
                     exitCode = 1;
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             fatalError = ExceptionDetail(exception,
                 corpusRoot, stagingRoot, artifactRoot);
@@ -205,7 +207,7 @@ public sealed class LegalEvaluationRunner
                             stagedExternalReport.DestinationPath);
                         stagedExternalReport = null;
                     }
-                    catch (Exception exception)
+                    catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                     {
                         reportError = "external report publication failed after the artifact root "
                             + "was published; the artifact root remains valid: "
@@ -217,7 +219,7 @@ public sealed class LegalEvaluationRunner
                 }
                 output.WriteLine($"Summary: {summaryPath}");
             }
-            catch (Exception exception)
+            catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
             {
                 var publicationError = published
                     ? "artifact root publication completed, but final reporting failed; "
@@ -608,22 +610,15 @@ public sealed class LegalEvaluationRunner
             ? null
             : SafetyError(candidate, "candidate document");
         var expectedSafetyError = SafetyError(baseline.Expected, "pinned expected document");
-        var targetSemanticDiff = inputSafetyError is null && expectedSafetyError is null
-            ? EvaluationScorer.SemanticDiffArtifact(
-                baseline.Input, baseline.Expected, "target-semantic-diff")
-            : (Json: EvaluationScorer.ErrorEnvelope("target-semantic-diff", "failed",
-                inputSafetyError ?? expectedSafetyError ?? "package safety validation failed"),
-                Succeeded: false);
         var rendererSafe = inputSafetyError is null
             && candidateSafetyError is null
             && expectedSafetyError is null;
+        var scorer = new EvaluationScorer(artifactRenderer: artifactRenderer);
+        var evidence = scorer.AnalyzeAvailableEvidence(
+            baseline, candidate, kind, reason,
+            inputSafetyError, candidateSafetyError, expectedSafetyError);
         var publication = ArtifactWriter.WriteIncomplete(directory, scenario.Id, kind, status,
-            metrics, scenario.ExpectedOutputs, reason, baseline.OperationLog, baseline.Input,
-            candidate, baseline.Expected,
-            baseline.SemanticDiffJson,
-            baseline.SemanticDiffSucceeded,
-            targetSemanticDiff.Json,
-            targetSemanticDiff.Succeeded,
+            metrics, scenario.ExpectedOutputs, reason, baseline.OperationLog, evidence,
             rendererSafe ? renderMode : ArtifactRenderMode.Disabled,
             allowExternalRenderer: rendererSafe && kind == ScoreKind.EngineBaseline,
             artifactRenderer: artifactRenderer,
@@ -639,8 +634,18 @@ public sealed class LegalEvaluationRunner
     {
         byte[] input = Array.Empty<byte>();
         byte[] expected = Array.Empty<byte>();
-        try { input = File.ReadAllBytes(scenario.Fixture.Path); } catch { }
-        try { expected = File.ReadAllBytes(scenario.ExpectedDocument.Path); } catch { }
+        try
+        {
+            input = ReadFileBounded(scenario.Fixture.Path, MaximumCandidateBytes,
+                "evaluation input");
+        }
+        catch (Exception readException) when (DeliverableExceptionBoundary.IsRecoverable(readException)) { }
+        try
+        {
+            expected = ReadFileBounded(scenario.ExpectedDocument.Path, MaximumCandidateBytes,
+                "pinned expected document");
+        }
+        catch (Exception readException) when (DeliverableExceptionBoundary.IsRecoverable(readException)) { }
         var detail = ExceptionDetail(exception, Path.GetDirectoryName(scenario.FilePath));
         return new BaselineExecution(input, input, expected,
             EvaluationScorer.ErrorEnvelope("semantic-diff", "failed", detail),
@@ -650,23 +655,31 @@ public sealed class LegalEvaluationRunner
             Error: exception.ToString());
     }
 
-    private static byte[] ReadCandidateBounded(string path)
+    private static byte[] ReadCandidateBounded(string path) =>
+        ReadFileBounded(path, MaximumCandidateBytes, "candidate");
+
+    private static byte[] ReadFileBounded(string path, long maximumBytes, string label)
     {
-        var info = new FileInfo(path);
-        if (info.Length > MaximumCandidateBytes)
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 81920, FileOptions.SequentialScan);
+        if (stream.Length > maximumBytes)
             throw new ScenarioValidationException(
-                $"candidate exceeds the {MaximumCandidateBytes}-byte read limit");
-        return File.ReadAllBytes(path);
+                $"{label} exceeds the {maximumBytes}-byte read limit");
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1)
+            throw new ScenarioValidationException($"{label} changed while it was being read");
+        return bytes;
     }
 
     private static string? SafetyError(byte[] bytes, string label)
     {
         try
         {
-            new InterimEvaluationPackageValidator().Validate(bytes, label);
+            _ = new EvaluationPackageValidator().Inspect(bytes, label);
             return null;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             return ExceptionDetail(exception);
         }

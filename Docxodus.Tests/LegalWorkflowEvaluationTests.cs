@@ -7,6 +7,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Docxodus.Verification;
 using LegalEval;
 using Xunit;
 
@@ -29,6 +30,7 @@ public sealed class LegalWorkflowEvaluationTests
         RepositoryRoot, "TestResults", "legal-eval", "xunit");
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Corpus_has_nine_explicit_provenanced_scenarios()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -47,6 +49,14 @@ public sealed class LegalWorkflowEvaluationTests
         }, corpus.Scenarios.Select(value => value.Id).Order(StringComparer.Ordinal));
         Assert.Equal(6, corpus.Scenarios.Count(value => value.Tier == EvalTier.Fast));
         Assert.Equal(3, corpus.Scenarios.Count(value => value.Tier == EvalTier.Full));
+        Assert.Equal(8, corpus.Scenarios.Count(value =>
+            value.RedlineReversibility.Applicability
+                == RedlineReversibilityApplicability.Required));
+        var nonRevisionScenario = Assert.Single(corpus.Scenarios, value =>
+            value.RedlineReversibility.Applicability
+                == RedlineReversibilityApplicability.NotApplicable);
+        Assert.Equal("review-thread-note-cross-reference", nonRevisionScenario.Id);
+        Assert.False(string.IsNullOrWhiteSpace(nonRevisionScenario.RedlineReversibility.Reason));
         Assert.All(corpus.Scenarios, scenario =>
         {
             Assert.NotEmpty(scenario.Constraints);
@@ -65,11 +75,14 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.All(scenario.ExpectedOutputs, output => Assert.Contains(output.Id, new[]
             {
                 "candidate-docx",
-                "semantic-diff",
+                "semantic-change-set-v1",
                 "after-html",
                 "redline-docx",
                 "candidate-pdf",
-                "redline-proof-v1",
+                "candidate-package-manifest-v1",
+                "deliverable-verification-v1",
+                "delivery-change-receipt-v1",
+                "redline-reversibility-proof-v1",
             }));
         });
         Assert.All(corpus.Provenance.Values, provenance =>
@@ -93,6 +106,85 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
+    public void Cli_runner_fast_and_full_subsets_select_exactly_six_and_nine_scenarios()
+    {
+        var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
+        var expectedFast = corpus.Scenarios.Where(value => value.Tier == EvalTier.Fast)
+            .Select(value => value.Id).Order(StringComparer.Ordinal).ToList();
+        var expectedFull = corpus.Scenarios.Select(value => value.Id)
+            .Order(StringComparer.Ordinal).ToList();
+        var runner = new LegalEvaluationRunner(scenario => scenario with
+        {
+            BaselineOperations = new[]
+            {
+                new JsonObject
+                {
+                    ["op"] = "failForTest",
+                    ["message"] = "selection-only checkpoint",
+                },
+            },
+        });
+        var root = Path.Combine(ArtifactRoot, "cli-subset-selection");
+
+        var fast = runner.Run(new EvaluationRunOptions(
+            CorpusPath, "fast", null, null, Path.Combine(root, "fast"), null));
+        var full = runner.Run(new EvaluationRunOptions(
+            CorpusPath, "full", null, null, Path.Combine(root, "full"), null));
+
+        Assert.Equal(6, fast.Results.Count);
+        Assert.Equal(expectedFast,
+            fast.Results.Select(value => value.ScenarioId).Order(StringComparer.Ordinal));
+        Assert.Equal(9, full.Results.Count);
+        Assert.Equal(expectedFull,
+            full.Results.Select(value => value.ScenarioId).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Redline_reversibility_is_explicitly_not_applicable_for_package_review_structures()
+    {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "review-thread-note-cross-reference");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
+
+        var score = new EvaluationScorer().Score(scenario, baseline, baseline.Output,
+            ScoreKind.EngineBaseline, Path.Combine(ArtifactRoot, "redline-not-applicable"));
+
+        Assert.Equal("passed", score.Status);
+        var metric = Assert.Single(score.Metrics,
+            value => value.Category == "redline_reversibility");
+        Assert.Equal("redline-reversibility.not-applicable", metric.Id);
+        Assert.Equal("not_applicable", metric.Status);
+        Assert.Null(metric.Score);
+        var proof = AssertArtifactContract(score, "redline-reversibility-proof-v1",
+            "application/json", "verification");
+        var proofJson = JsonNode.Parse(File.ReadAllText(proof.Path!))!;
+        Assert.False(proofJson["success"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Loader_requires_an_explicit_redline_reversibility_policy()
+    {
+        var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
+        var source = corpus.Scenarios.Single(value => value.Id == "defined-term-targeting");
+        var node = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        node.Remove("redlineReversibility");
+        var inspectionDirectory = Path.Combine(ArtifactRoot, "loader-validation");
+        Directory.CreateDirectory(inspectionDirectory);
+        var invalidPath = Path.Combine(inspectionDirectory, "missing-redline-policy.scenario.json");
+        File.WriteAllText(invalidPath, node.ToJsonString(new() { WriteIndented = true }));
+
+        var exception = Assert.Throws<ScenarioValidationException>(() =>
+            ScenarioLoader.LoadScenario(invalidPath, corpus.RootDirectory, corpus.Provenance,
+                corpus.ExpectedDocumentProvenance));
+
+        Assert.Contains("redlineReversibility", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Loader_rejects_a_scenario_without_deterministic_invariants()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -113,6 +205,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Fast_scripted_baselines_pass_and_always_leave_inspectable_artifacts()
     {
         var root = Path.Combine(ArtifactRoot, "fast");
@@ -148,6 +241,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Whole_run_publication_removes_scenarios_excluded_by_a_filtered_rerun()
     {
         var root = Path.Combine(ArtifactRoot, "full-then-filtered");
@@ -179,6 +273,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Whole_run_publication_removes_model_evidence_when_candidates_are_not_requested()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -206,6 +301,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Artifact_root_validation_refuses_protected_or_unowned_directories()
     {
         var runner = new LegalEvaluationRunner();
@@ -252,6 +348,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Markerless_legacy_lookalike_root_is_refused_without_changing_its_files()
     {
         var root = Path.Combine(
@@ -288,6 +385,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Symlinked_ancestors_cannot_alias_artifacts_or_reports_into_protected_trees()
     {
         var corpusRoot = Path.GetDirectoryName(CorpusPath)!;
@@ -370,6 +468,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void In_root_report_collision_is_rejected_before_staging_but_summary_alias_is_allowed()
     {
         var root = Path.Combine(
@@ -398,6 +497,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void External_report_is_staged_and_committed_without_changing_the_sealed_root()
     {
         var root = Path.Combine(
@@ -428,6 +528,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void External_report_refuses_an_unowned_existing_file_without_changing_it()
     {
         var root = Path.Combine(
@@ -449,6 +550,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Failed_prepublication_preserves_the_previous_root_without_dangling_outcome_paths()
     {
         var root = Path.Combine(ArtifactRoot, "publication-failure-preserves-root");
@@ -481,6 +583,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void External_report_commit_failure_keeps_the_published_root_truthful()
     {
         var root = Path.Combine(ArtifactRoot, "external-report-commit-failure");
@@ -512,6 +615,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Engine_baseline_and_model_planning_are_scored_separately()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -535,15 +639,97 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
-    public void Required_unavailable_artifact_fails_task_completion()
+    [Trait("LegalEvalTier", "Fast")]
+    public void Canonical_foundation_artifacts_are_available_with_exact_owner_serializations()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
             .Single(value => value.Id == "defined-term-targeting");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
+        var score = new EvaluationScorer().Score(scenario, baseline, baseline.Output,
+            ScoreKind.EngineBaseline, Path.Combine(ArtifactRoot, "canonical-foundations"));
+
+        var semantic = AssertArtifactContract(score, "semantic-change-set-v1",
+            "application/json", "verification");
+        var expectedSemantic = SemanticDiff.Compare(
+            new WmlDocument("input.docx", baseline.Input),
+            new WmlDocument("candidate.docx", baseline.Output)).ToCanonicalUtf8Bytes();
+        Assert.Equal(expectedSemantic, File.ReadAllBytes(semantic.Path!));
+
+        var manifest = AssertArtifactContract(score, "candidate-package-manifest-v1",
+            "application/json", "verification");
+        var expectedManifest = new EvaluationPackageValidator()
+            .Inspect(baseline.Output, "candidate").ToJsonBytes();
+        Assert.Equal(expectedManifest, File.ReadAllBytes(manifest.Path!));
+
+        var verification = AssertArtifactContract(score, "deliverable-verification-v1",
+            "application/json", "verification");
+        var verificationJson = JsonNode.Parse(File.ReadAllText(verification.Path!))!;
+        Assert.Equal("https://docxodus.dev/schemas/verification/deliverable-verification/v1",
+            verificationJson["schema"]!.GetValue<string>());
+
+        var proof = AssertArtifactContract(score, "redline-reversibility-proof-v1",
+            "application/json", "verification");
+        var proofJson = JsonNode.Parse(File.ReadAllText(proof.Path!))!;
+        Assert.Equal("https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1",
+            proofJson["schema"]!.GetValue<string>());
+        AssertArtifactContract(score, "redline-accepted-path-docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "proof-output");
+        AssertArtifactContract(score, "redline-rejected-path-docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "proof-output");
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Traced_engine_receipt_verifies_and_unsupported_score_kinds_are_explicitly_unavailable()
+    {
+        var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
+        var scenario = corpus.Scenarios.Single(value => value.Id == "defined-term-targeting");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
+        var scorer = new EvaluationScorer();
+        var root = Path.Combine(ArtifactRoot, "delivery-receipts");
+
+        var engine = scorer.Score(scenario, baseline, baseline.Output,
+            ScoreKind.EngineBaseline, Path.Combine(root, "engine"));
+        var receipt = AssertArtifactContract(engine, "delivery-change-receipt-v1",
+            "application/json", "verification");
+        var suppliedArtifacts = ReceiptArtifactBytes(engine, receipt.Path!);
+        var verification = DeliveryChangeReceiptVerifier.VerifyJson(
+            File.ReadAllBytes(receipt.Path!), suppliedArtifacts);
+        Assert.True(verification.IsValid, string.Join(Environment.NewLine, verification.Findings));
+
+        var model = scorer.Score(scenario, baseline, baseline.Output,
+            ScoreKind.ModelPlanning, Path.Combine(root, "model"));
+        var modelReceipt = Assert.Single(model.Artifacts,
+            value => value.Id == "delivery-change-receipt-v1");
+        Assert.Equal("unavailable", modelReceipt.Status);
+        Assert.Contains("model-planning candidates", modelReceipt.UnavailableReason!,
+            StringComparison.Ordinal);
+
+        var consolidateScenario = corpus.Scenarios
+            .Single(value => value.Id == "compare-consolidate");
+        var consolidateBaseline = new ScriptedBaselineExecutor().Execute(consolidateScenario);
+        var consolidation = scorer.Score(consolidateScenario, consolidateBaseline,
+            consolidateBaseline.Output, ScoreKind.EngineBaseline, Path.Combine(root, "consolidate"));
+        var consolidationReceipt = Assert.Single(consolidation.Artifacts,
+            value => value.Id == "delivery-change-receipt-v1");
+        Assert.Equal("unavailable", consolidationReceipt.Status);
+        Assert.Contains("consolidate facade", consolidationReceipt.UnavailableReason!,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Required_unavailable_receipt_fails_task_completion_without_hiding_other_evidence()
+    {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "compare-consolidate");
         scenario = scenario with
         {
             ExpectedOutputs = new[]
             {
-                new ExpectedArtifact("redline-proof-v1", "application/json",
+                new ExpectedArtifact("delivery-change-receipt-v1", "application/json",
                     "verification", Required: true),
             },
         };
@@ -556,9 +742,23 @@ public sealed class LegalWorkflowEvaluationTests
         var metric = Assert.Single(score.Metrics,
             value => value.Id == "task-completion.required-artifacts");
         Assert.Equal("failed", metric.Status);
-        Assert.Contains("redline-proof-v1", metric.Detail, StringComparison.Ordinal);
-        var proof = Assert.Single(score.Artifacts, value => value.Id == "redline-proof-v1");
-        Assert.Equal("unavailable", proof.Status);
+        Assert.Contains("delivery-change-receipt-v1", metric.Detail, StringComparison.Ordinal);
+        var receipt = Assert.Single(score.Artifacts,
+            value => value.Id == "delivery-change-receipt-v1");
+        Assert.Equal("unavailable", receipt.Status);
+        Assert.Contains("authoritative ExecuteBatch trace", receipt.UnavailableReason!,
+            StringComparison.Ordinal);
+        foreach (var id in new[]
+        {
+            "semantic-change-set-v1",
+            "candidate-package-manifest-v1",
+            "deliverable-verification-v1",
+            "redline-reversibility-proof-v1",
+        })
+        {
+            Assert.Equal("available", Assert.Single(score.Artifacts,
+                value => value.Id == id).Status);
+        }
         var metrics = JsonNode.Parse(File.ReadAllText(Assert.Single(score.Artifacts,
             value => value.Id == "metrics-json").Path!))!;
         Assert.Equal("failed", metrics["status"]!.GetValue<string>());
@@ -568,15 +768,16 @@ public sealed class LegalWorkflowEvaluationTests
         var summary = File.ReadAllText(Assert.Single(score.Artifacts,
             value => value.Id == "scenario-summary").Path!);
         Assert.Contains("Status: `failed`", summary, StringComparison.Ordinal);
-        var receipt = JsonNode.Parse(File.ReadAllText(Assert.Single(score.Artifacts,
-            value => value.Id == "evaluation-receipt").Path!))!;
-        Assert.Equal("failed", receipt["status"]!.GetValue<string>());
-        Assert.Equal("failed", receipt["metricStatus"]!.AsArray().Single(value =>
+        var bundle = JsonNode.Parse(File.ReadAllText(Assert.Single(score.Artifacts,
+            value => value.Id == "evaluation-bundle-manifest-v2").Path!))!;
+        Assert.Equal("failed", bundle["status"]!.GetValue<string>());
+        Assert.Equal("failed", bundle["metricStatus"]!.AsArray().Single(value =>
             value!["id"]!.GetValue<string>() == "task-completion.required-artifacts")!["status"]!
             .GetValue<string>());
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Malformed_model_candidate_fails_without_losing_evidence()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -609,6 +810,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Generated_fixture_and_baseline_are_byte_deterministic()
     {
         var scenarios = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios;
@@ -633,6 +835,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Readable_fixture_recipe_reproduces_the_pinned_input_fixture()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -646,6 +849,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Shared_runner_preserves_checkpointed_failure_bundle_and_replaces_stale_evidence()
     {
         var root = Path.Combine(ArtifactRoot, "checkpointed-failure");
@@ -678,9 +882,11 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.False(File.Exists(Path.Combine(scoreDirectory, "candidate-page-1.png")));
         foreach (var id in new[]
         {
-            "input-docx", "candidate-docx", "expected-docx", "semantic-diff",
+            "input-docx", "candidate-docx", "expected-docx", "semantic-change-set-v1",
+            "candidate-package-manifest-v1", "deliverable-verification-v1",
+            "redline-reversibility-proof-v1",
             "before-html", "after-html", "target-html", "metrics-json",
-            "evaluation-receipt", "artifact-index-html", "artifact-status",
+            "evaluation-bundle-manifest-v2", "artifact-index-html", "artifact-status",
         })
         {
             var artifact = Assert.Single(score.Artifacts, value => value.Id == id);
@@ -691,20 +897,21 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.Equal("available", candidatePdf.Status);
         Assert.StartsWith("%PDF", Encoding.ASCII.GetString(File.ReadAllBytes(candidatePdf.Path!)),
             StringComparison.Ordinal);
-        Assert.Equal(3, renderer.RenderCalls);
+        Assert.Equal(4, renderer.RenderCalls);
         Assert.Equal(1, renderer.CompareCalls);
         var afterHtml = File.ReadAllText(Assert.Single(score.Artifacts,
             value => value.Id == "after-html").Path!);
         Assert.Contains("Availability Credit", afterHtml, StringComparison.Ordinal);
         Assert.DoesNotContain("Unavailable preview", afterHtml, StringComparison.Ordinal);
-        var receipt = File.ReadAllText(Assert.Single(score.Artifacts,
-            value => value.Id == "evaluation-receipt").Path!);
-        Assert.Contains("induced checkpoint failure", receipt, StringComparison.Ordinal);
-        Assert.Contains("\"status\": \"failed\"", receipt, StringComparison.Ordinal);
+        var bundle = File.ReadAllText(Assert.Single(score.Artifacts,
+            value => value.Id == "evaluation-bundle-manifest-v2").Path!);
+        Assert.Contains("induced checkpoint failure", bundle, StringComparison.Ordinal);
+        Assert.Contains("\"status\": \"failed\"", bundle, StringComparison.Ordinal);
         Assert.True(File.Exists(Assert.IsType<string>(failing.SummaryPath)));
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Pinned_scripted_golden_detects_divergence_from_the_declared_edit()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -726,24 +933,43 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
-    public void Multi_operation_target_diff_covers_the_complete_input_to_target_change()
+    [Trait("LegalEvalTier", "Fast")]
+    public void Canonical_semantic_artifacts_are_the_exact_shared_457_serialization()
     {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "defined-term-targeting");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
         var root = Path.Combine(ArtifactRoot, "complete-target-diff");
         var outcome = new LegalEvaluationRunner().Run(new EvaluationRunOptions(
             CorpusPath, "full", "defined-term-targeting", null, root, null));
         var score = outcome.Results.Single().EngineBaseline;
-        var candidatePath = Assert.Single(score.Artifacts, value => value.Id == "semantic-diff").Path!;
-        var targetPath = Assert.Single(score.Artifacts, value => value.Id == "target-semantic-diff").Path!;
-        var candidate = JsonNode.Parse(File.ReadAllText(candidatePath));
-        var target = JsonNode.Parse(File.ReadAllText(targetPath));
+        var candidatePath = Assert.Single(score.Artifacts,
+            value => value.Id == "semantic-change-set-v1").Path!;
+        var targetPath = Assert.Single(score.Artifacts,
+            value => value.Id == "target-semantic-change-set-v1").Path!;
+        var candidateTargetPath = Assert.Single(score.Artifacts,
+            value => value.Id == "candidate-target-semantic-change-set-v1").Path!;
 
-        Assert.True(JsonNode.DeepEquals(candidate, target));
-        var operations = target!["operations"]!.AsArray();
-        Assert.Equal(2, operations.Count(value =>
-            value?["kind"]?.GetValue<string>() == "ModifyBlock"));
+        var expectedCandidate = SemanticDiff.Compare(
+            new WmlDocument("input.docx", baseline.Input),
+            new WmlDocument("candidate.docx", baseline.Output))
+            .ToCanonicalUtf8Bytes();
+        var expectedTarget = SemanticDiff.Compare(
+            new WmlDocument("input.docx", baseline.Input),
+            new WmlDocument("expected.docx", baseline.Expected))
+            .ToCanonicalUtf8Bytes();
+        var expectedCandidateTarget = SemanticDiff.Compare(
+            new WmlDocument("candidate.docx", baseline.Output),
+            new WmlDocument("expected.docx", baseline.Expected))
+            .ToCanonicalUtf8Bytes();
+        Assert.Equal(expectedCandidate, File.ReadAllBytes(candidatePath));
+        Assert.Equal(expectedTarget, File.ReadAllBytes(targetPath));
+        Assert.Equal(expectedCandidateTarget, File.ReadAllBytes(candidateTargetPath));
+        Assert.Equal(File.ReadAllBytes(candidatePath), File.ReadAllBytes(targetPath));
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Loader_rejects_unsafe_ids_unknown_properties_and_invalid_probe_operands()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -771,6 +997,16 @@ public sealed class LegalWorkflowEvaluationTests
         AssertInvalidScenario(escapingFixture, directory, "escaping-fixture.json", corpus,
             "path escapes corpus root");
 
+        var invalidMediaType = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        invalidMediaType["expectedOutputs"]![0]!["mediaType"] = "text/plain";
+        AssertInvalidScenario(invalidMediaType, directory, "invalid-output-media.json", corpus,
+            "mediaType for 'candidate-docx' must be");
+
+        var invalidRole = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        invalidRole["expectedOutputs"]![0]!["role"] = "verification";
+        AssertInvalidScenario(invalidRole, directory, "invalid-output-role.json", corpus,
+            "role for 'candidate-docx' must be 'candidate'");
+
         var consolidationSource = corpus.Scenarios
             .Single(value => value.Id == "compare-consolidate");
         var invalidReviewer = JsonNode.Parse(File.ReadAllText(consolidationSource.FilePath))!.AsObject();
@@ -785,13 +1021,14 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
-    public void Interim_package_guard_enforces_read_and_zip_path_budgets()
+    [Trait("LegalEvalTier", "Fast")]
+    public void Package_manifest_adapter_enforces_read_and_zip_path_budgets()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios[0];
         var bytes = File.ReadAllBytes(scenario.Fixture.Path);
-        var tiny = new InterimEvaluationPackageValidator(
+        var tiny = new EvaluationPackageValidator(
             new EvaluationPackageLimits(MaximumPackageBytes: 4));
-        Assert.Throws<ScenarioValidationException>(() => tiny.Validate(bytes, "candidate"));
+        Assert.Throws<ScenarioValidationException>(() => tiny.Inspect(bytes, "candidate"));
 
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
@@ -800,31 +1037,32 @@ public sealed class LegalWorkflowEvaluationTests
             writer.Write("<root/>");
         }
         Assert.Throws<ScenarioValidationException>(() =>
-            new InterimEvaluationPackageValidator().Validate(stream.ToArray(), "candidate"));
+            new EvaluationPackageValidator().Inspect(stream.ToArray(), "candidate"));
 
         var xmlBytes = Zip(("document.xml", "<root>" + new string('x', 128) + "</root>"));
-        var tinyXml = new InterimEvaluationPackageValidator(new EvaluationPackageLimits(
+        var tinyXml = new EvaluationPackageValidator(new EvaluationPackageLimits(
             MaximumXmlPartBytes: 32));
-        Assert.Throws<ScenarioValidationException>(() => tinyXml.Validate(xmlBytes, "candidate"));
+        Assert.Throws<ScenarioValidationException>(() => tinyXml.Inspect(xmlBytes, "candidate"));
 
         var expandedBytes = Zip(("payload.bin", new string('x', 256)));
-        var tinyExpanded = new InterimEvaluationPackageValidator(new EvaluationPackageLimits(
+        var tinyExpanded = new EvaluationPackageValidator(new EvaluationPackageLimits(
             MaximumExpandedBytes: 64, MaximumCompressionRatio: 10_000));
         Assert.Throws<ScenarioValidationException>(() =>
-            tinyExpanded.Validate(expandedBytes, "candidate"));
+            tinyExpanded.Inspect(expandedBytes, "candidate"));
 
         var compressedBytes = Zip(("payload.bin", new string('x', 16_384)));
-        var tinyRatio = new InterimEvaluationPackageValidator(new EvaluationPackageLimits(
+        var tinyRatio = new EvaluationPackageValidator(new EvaluationPackageLimits(
             MaximumCompressionRatio: 2));
         Assert.Throws<ScenarioValidationException>(() =>
-            tinyRatio.Validate(compressedBytes, "candidate"));
+            tinyRatio.Inspect(compressedBytes, "candidate"));
 
         var dtdBytes = Zip(("document.xml", "<!DOCTYPE root [<!ENTITY x 'boom'>]><root>&x;</root>"));
         Assert.Throws<ScenarioValidationException>(() =>
-            new InterimEvaluationPackageValidator().Validate(dtdBytes, "candidate"));
+            new EvaluationPackageValidator().Inspect(dtdBytes, "candidate"));
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Model_preview_suppresses_active_external_links_and_external_rendering()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -853,6 +1091,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Full")]
     public void Renderer_contract_records_deterministic_available_and_unavailable_evidence()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -888,11 +1127,27 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.Equal("available", artifact.Status);
             Assert.True(File.Exists(artifact.Path), artifact.Path);
         }
+        Assert.Equal("passed", Assert.Single(available.Metrics,
+            value => value.Id == "rendering-regression.visual-layout").Status);
         Assert.False(File.Exists(Path.Combine(available.ArtifactDirectory!, "before.docx")));
         Assert.False(File.Exists(Path.Combine(available.ArtifactDirectory!, "target.docx")));
+
+        var differingRenderer = new StubArtifactRenderer(available: true, differentPixels: 17);
+        var differing = new EvaluationScorer(artifactRenderer: differingRenderer).Score(
+            scenario, baseline, baseline.Output, ScoreKind.EngineBaseline,
+            Path.Combine(ArtifactRoot, "renderer-different-pixels"),
+            ArtifactRenderMode.TrustedDocuments);
+        var visualMetric = Assert.Single(differing.Metrics,
+            value => value.Id == "rendering-regression.visual-layout");
+        Assert.Equal("failed", visualMetric.Status);
+        Assert.Equal(0, visualMetric.Score);
+        Assert.Contains("difference pixels=17", visualMetric.Detail, StringComparison.Ordinal);
+        Assert.Equal("available", Assert.Single(differing.Artifacts,
+            value => value.Id == "candidate-target-visual-diff").Status);
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Requested_model_directory_with_missing_candidate_is_incomplete_and_nonzero()
     {
         var candidateDirectory = Path.Combine(ArtifactRoot, "missing-candidates", Guid.NewGuid().ToString("N"));
@@ -905,13 +1160,14 @@ public sealed class LegalWorkflowEvaluationTests
         var planning = Assert.IsType<EvaluationScore>(outcome.Results.Single().ModelPlanning);
         Assert.Equal("incomplete", planning.Status);
         Assert.Equal("available", Assert.Single(planning.Artifacts,
-            value => value.Id == "evaluation-receipt").Status);
+            value => value.Id == "evaluation-bundle-manifest-v2").Status);
         Assert.DoesNotContain(RepositoryRoot,
             File.ReadAllText(Assert.IsType<string>(outcome.SummaryPath)),
             StringComparison.Ordinal);
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Runner_writes_a_portable_summary_even_for_a_fatal_corpus_error()
     {
         var root = Path.Combine(ArtifactRoot, "fatal-summary");
@@ -932,6 +1188,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Legal_eval_workflow_keeps_every_smoke_evidence_step_runnable_after_failure()
     {
         var workflow = File.ReadAllLines(Path.Combine(
@@ -982,15 +1239,23 @@ public sealed class LegalWorkflowEvaluationTests
             "input-docx",
             "candidate-docx",
             "expected-docx",
-            "semantic-diff",
+            "semantic-change-set-v1",
+            "target-semantic-change-set-v1",
+            "candidate-target-semantic-change-set-v1",
+            "input-package-manifest-v1",
+            "candidate-package-manifest-v1",
+            "target-package-manifest-v1",
+            "deliverable-verification-v1",
             "metrics-json",
             "scenario-summary",
             "before-html",
             "after-html",
             "target-html",
             "redline-docx",
-            "target-semantic-diff",
-            "evaluation-receipt",
+            "redline-reversibility-proof-v1",
+            "redline-accepted-path-docx",
+            "redline-rejected-path-docx",
+            "evaluation-bundle-manifest-v2",
             "artifact-index-markdown",
             "artifact-index-html",
             "artifact-status",
@@ -1002,41 +1267,49 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.True(File.Exists(artifact.Path), artifact.Path);
             Assert.False(string.IsNullOrWhiteSpace(artifact.Sha256));
             Assert.False(string.IsNullOrWhiteSpace(artifact.MediaType));
+            Assert.False(string.IsNullOrWhiteSpace(artifact.Role));
             Assert.True(artifact.SizeBytes > 0);
         }
 
         Assert.Single(score.Artifacts, value => value.Id == "candidate-pdf");
         Assert.Single(score.Artifacts, value => value.Id == "candidate-visual");
 
-        var receiptRecord = Assert.Single(score.Artifacts,
-            value => value.Id == "evaluation-receipt");
+        var bundleRecord = Assert.Single(score.Artifacts,
+            value => value.Id == "evaluation-bundle-manifest-v2");
         var statusRecord = Assert.Single(score.Artifacts,
             value => value.Id == "artifact-status");
         var markdownIndex = File.ReadAllText(Assert.Single(score.Artifacts,
             value => value.Id == "artifact-index-markdown").Path!);
         var htmlIndex = File.ReadAllText(Assert.Single(score.Artifacts,
             value => value.Id == "artifact-index-html").Path!);
-        foreach (var fileName in new[] { "evaluation-receipt.json", "artifact-status.json" })
+        foreach (var fileName in new[]
+        {
+            "evaluation-bundle-manifest-v2.json",
+            "artifact-status.json",
+        })
         {
             Assert.Contains(fileName, markdownIndex, StringComparison.Ordinal);
             Assert.Contains(fileName, htmlIndex, StringComparison.Ordinal);
         }
-        var receipt = JsonNode.Parse(File.ReadAllText(receiptRecord.Path!))!;
-        var receiptIds = receipt["artifacts"]!.AsArray()
+        var bundle = JsonNode.Parse(File.ReadAllText(bundleRecord.Path!))!;
+        Assert.Equal("docxodus.evaluation-bundle-manifest/2.0",
+            bundle["schemaVersion"]!.GetValue<string>());
+        Assert.Equal("legal-workflow-evaluation", bundle["bundleKind"]!.GetValue<string>());
+        var bundleIds = bundle["artifacts"]!.AsArray()
             .Select(value => value!["id"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
-        Assert.DoesNotContain("evaluation-receipt", receiptIds);
-        Assert.DoesNotContain("artifact-status", receiptIds);
-        Assert.DoesNotContain("artifact-index-markdown", receiptIds);
-        Assert.DoesNotContain("artifact-index-html", receiptIds);
+        Assert.DoesNotContain("evaluation-bundle-manifest-v2", bundleIds);
+        Assert.DoesNotContain("artifact-status", bundleIds);
+        Assert.DoesNotContain("artifact-index-markdown", bundleIds);
+        Assert.DoesNotContain("artifact-index-html", bundleIds);
         var fingerprintComponents = new List<string>
         {
-            receipt["scenarioId"]!.GetValue<string>(),
+            bundle["scenarioId"]!.GetValue<string>(),
             score.Kind.ToString(),
-            receipt["status"]!.GetValue<string>(),
+            bundle["status"]!.GetValue<string>(),
         };
-        fingerprintComponents.AddRange(receipt["operations"]!.AsArray()
+        fingerprintComponents.AddRange(bundle["operations"]!.AsArray()
             .Select(value => value!.GetValue<string>()));
-        foreach (var artifact in receipt["artifacts"]!.AsArray())
+        foreach (var artifact in bundle["artifacts"]!.AsArray())
         {
             var value = artifact!;
             var path = value["path"]?.GetValue<string>();
@@ -1057,10 +1330,60 @@ public sealed class LegalWorkflowEvaluationTests
         var expectedRunId = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)))
             .ToLowerInvariant();
-        Assert.Equal(expectedRunId, receipt["runId"]!.GetValue<string>());
+        Assert.Equal(expectedRunId, bundle["runId"]!.GetValue<string>());
         var status = JsonNode.Parse(File.ReadAllText(statusRecord.Path!))!;
         Assert.Contains(status["artifacts"]!.AsArray(), value =>
-            value!["id"]!.GetValue<string>() == "evaluation-receipt");
+            value!["id"]!.GetValue<string>() == "evaluation-bundle-manifest-v2");
+
+        var deliveryReceipt = Assert.Single(score.Artifacts,
+            value => value.Id == "delivery-change-receipt-v1");
+        if (score.Kind == ScoreKind.EngineBaseline)
+        {
+            Assert.Equal("available", deliveryReceipt.Status);
+            var verification = DeliveryChangeReceiptVerifier.VerifyJson(
+                File.ReadAllBytes(deliveryReceipt.Path!),
+                ReceiptArtifactBytes(score, deliveryReceipt.Path!));
+            Assert.True(verification.IsValid,
+                string.Join(Environment.NewLine, verification.Findings));
+        }
+        else
+        {
+            Assert.Equal("unavailable", deliveryReceipt.Status);
+            Assert.Contains("model-planning candidates", deliveryReceipt.UnavailableReason!,
+                StringComparison.Ordinal);
+        }
+    }
+
+    private static ArtifactRecord AssertArtifactContract(
+        EvaluationScore score,
+        string id,
+        string mediaType,
+        string role)
+    {
+        var artifact = Assert.Single(score.Artifacts, value => value.Id == id);
+        Assert.Equal("available", artifact.Status);
+        Assert.Equal(mediaType, artifact.MediaType);
+        Assert.Equal(role, artifact.Role);
+        Assert.NotNull(artifact.Path);
+        Assert.True(File.Exists(artifact.Path), artifact.Path);
+        return artifact;
+    }
+
+    private static IReadOnlyDictionary<string, byte[]> ReceiptArtifactBytes(
+        EvaluationScore score,
+        string receiptPath)
+    {
+        var receipt = JsonNode.Parse(File.ReadAllText(receiptPath))!;
+        var supplied = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var artifact in receipt["payload"]!["artifacts"]!.AsArray())
+        {
+            if (artifact!["availability"]!.GetValue<string>() != "available") continue;
+            var id = artifact["artifactId"]!.GetValue<string>();
+            var scoreId = id == "clean-docx" ? "candidate-docx" : id;
+            var record = Assert.Single(score.Artifacts, value => value.Id == scoreId);
+            supplied.Add(id, File.ReadAllBytes(record.Path!));
+        }
+        return supplied;
     }
 
     private static void AssertDeterministicContainer(byte[] bytes)
@@ -1105,7 +1428,9 @@ public sealed class LegalWorkflowEvaluationTests
         return stream.ToArray();
     }
 
-    private sealed class StubArtifactRenderer(bool available) : IEvaluationArtifactRenderer
+    private sealed class StubArtifactRenderer(
+        bool available,
+        long? differentPixels = 0) : IEvaluationArtifactRenderer
     {
         public int RenderCalls { get; private set; }
         public int CompareCalls { get; private set; }
@@ -1135,12 +1460,12 @@ public sealed class LegalWorkflowEvaluationTests
             CompareCalls++;
             if (!available)
                 return new RenderedVisualDiffEvidence(
-                    Array.Empty<string>(), "stub renderer unavailable");
+                    Array.Empty<string>(), "stub renderer unavailable", null);
             Assert.Single(targetPages);
             Assert.Single(candidatePages);
             var path = Path.Combine(artifactDirectory, "candidate-target-diff-page-001.png");
             File.WriteAllBytes(path, new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
-            return new RenderedVisualDiffEvidence(new[] { path }, null);
+            return new RenderedVisualDiffEvidence(new[] { path }, null, differentPixels);
         }
     }
 }

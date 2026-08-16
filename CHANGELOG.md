@@ -93,8 +93,10 @@ All notable changes to this project will be documented in this file.
   consolidation, and pre-existing review state. A scripted public-API baseline is
   established before optional model planning is scored against a pinned scripted golden
   DOCX (explicitly provenance-marked as not independently authored or cross-engine reviewed)
-  across task completion, target precision, unintended change, document
-  validity, interim redline text projection, and sanitized HTML projection. The CLI and
+  across task completion, #457 semantic target precision, #463 package/anchor change budgets,
+  #456/#463 document validity, required #464 whole-package redline reversibility for
+  revision-representable edits (or an explicit reasoned N/A for package-level structures), and
+  sanitized HTML plus optional exact-pixel rendering checks. The CLI and
   focused xUnit suite share one artifact-producing runner: every successful or failed
   run is assembled under a fresh staged root and failure-safely replaces its prior owned root;
   ownership markers and protected-path validation prevent artifact publication from replacing
@@ -103,14 +105,17 @@ All notable changes to this project will be documented in this file.
   each scenario retains known-good DOCX
   checkpoints plus operation logs, renders safe failure checkpoints for inspection, preserves
   diagnostic diff/HTML envelopes when content is unsafe or unavailable, and emits a portable,
-  cycle-free linked artifact index and content-addressed `evaluation-receipt.json` (distinct from issue
-  #458's future delivery receipt). Scheduled/manual full runs add all-page
+  cycle-free linked artifact index and content-addressed `evaluation-bundle-manifest-v2.json`.
+  Traced engine operations publish independently verified #458 delivery receipts; consolidation and
+  model-planning attempts explicitly report receipt unavailability rather than fabricating lineage.
+  Every score also retains canonical #457 change sets, #456 manifests, its exact #463 verification,
+  and the #464 proof with accept/reject packages. Scheduled/manual full runs add all-page
   before/candidate/target/redline PDFs, rasters, and visual diffs when isolated renderers
   are available; rendered receipts are run-specific unless renderer output is reproducible,
   and untrusted model candidates never invoke external renderers. Fast CI reuses
-  the epic #435 MCP smoke, and all smoke-evidence steps and CI uploads run even after failure. Package safety is
-  bounded behind the #456 replacement seam; #457, #458, and #464 outputs remain explicit
-  unavailable gates rather than overclaimed substitutes. See
+  the epic #435 MCP smoke, and all smoke-evidence steps and CI uploads run even after failure.
+  Package limits and typed foundation evidence are shared across analysis and serialization so
+  metrics, receipts, and downloadable artifacts cannot disagree. See
   [`eval/legal/README.md`](eval/legal/README.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root

@@ -619,6 +619,51 @@ public class DocxSessionPreviewBatchTests
             DocxSessionJson.SerializeMutationBatchResult(applied), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DS472_PreviewShadow_PreservesInternalDeterminismSettings()
+    {
+        var fixedUtc = new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        Func<DateTime> clock = () => fixedUtc;
+        using var session = OpenRich(new DocxSessionSettings
+        {
+            PersistAnchorIds = false,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Deterministic Preview",
+            UtcNowProvider = clock,
+            DeterministicPackageOutput = true,
+        });
+        var anchor = BodyParagraphs(session)[0];
+        var steps = new[]
+        {
+            new MutationBatchStep("docx_edit", "replace_text",
+                s => s.ReplaceText(anchor, "Deterministic tracked preview.")),
+        };
+
+        var preview = session.PreviewBatch(steps);
+        var applied = session.ExecuteBatch(steps);
+
+        Assert.True(preview.Success);
+        Assert.True(applied.Success);
+        Assert.Equal(preview.PackageHash, applied.PackageHash);
+        Assert.NotEmpty(preview.RevisionChanges.Added);
+        Assert.NotEmpty(applied.RevisionChanges.Added);
+        Assert.All(preview.RevisionChanges.Added, revision =>
+            Assert.Equal("2001-02-03T04:05:06Z", revision.Date));
+        Assert.All(applied.RevisionChanges.Added, revision =>
+            Assert.Equal("2001-02-03T04:05:06Z", revision.Date));
+
+        using var shadow = session.CreateShadowSession();
+        var shadowSettings = PrivateField<DocxSessionSettings>(shadow, "_settings");
+        Assert.Same(clock, shadowSettings.UtcNowProvider);
+        Assert.True(shadowSettings.DeterministicPackageOutput);
+        using var archive = new ZipArchive(
+            new MemoryStream(shadow.Save(persistAnchorIds: false)), ZipArchiveMode.Read);
+        var names = archive.Entries.Select(entry => entry.FullName).ToList();
+        Assert.Equal(names.Order(StringComparer.Ordinal), names);
+        Assert.All(archive.Entries, entry =>
+            Assert.Equal(new DateTime(2000, 1, 1), entry.LastWriteTime.DateTime));
+    }
+
     /// <summary>Bytes carrying a comment and a default header — the parts the editor's render
     /// profile drops and a preview's must keep.</summary>
     private static byte[] CommentedBytes(out string[] anchors)

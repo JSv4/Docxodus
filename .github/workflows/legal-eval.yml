@@ -55,7 +55,7 @@ jobs:
       - name: Run focused evaluation tests
         run: >-
           dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-restore
-          --filter FullyQualifiedName~LegalWorkflowEvaluationTests
+          --filter LegalEvalTier=Fast
           --logger "trx;LogFileName=legal-eval.trx"
           --results-directory TestResults/legal-eval/xunit-results
 
@@ -128,13 +128,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes imagemagick libreoffice-writer poppler-utils
 
-      - name: Restore evaluation project
-        run: dotnet restore tools/legal-eval/legal-eval.csproj
+      - name: Restore evaluation and test projects
+        run: |
+          dotnet restore tools/legal-eval/legal-eval.csproj
+          dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
 
-      - name: Build evaluation project
-        run: dotnet build tools/legal-eval/legal-eval.csproj -c Release --no-restore
+      - name: Build evaluation and test projects
+        run: |
+          dotnet build tools/legal-eval/legal-eval.csproj -c Release --no-restore
+          dotnet build Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-restore
+
+      - name: Run full-only evaluation tests
+        run: >-
+          dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-restore --no-build
+          --filter LegalEvalTier=Full
+          --logger "trx;LogFileName=legal-eval-full.trx"
+          --results-directory TestResults/legal-eval/xunit-results
 
       - name: Run full legal corpus
+        if: always()
         run: >-
           dotnet run --project tools/legal-eval/legal-eval.csproj -c Release --no-build --
           --subset full

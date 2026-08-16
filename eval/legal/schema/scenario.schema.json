@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docxodus.dev/schemas/legal-eval/scenario-1.0.json",
+  "$id": "https://docxodus.dev/schemas/legal-eval/scenario-2.0.json",
   "title": "Docxodus deterministic legal workflow scenario",
   "$defs": {
     "replaceTextOperation": {
@@ -103,6 +103,7 @@
             "reviewers": {
               "type": "array",
               "minItems": 2,
+              "maxItems": 256,
               "items": { "$ref": "#/$defs/reviewerOperation" }
             }
           }
@@ -185,13 +186,14 @@
     "fixture",
     "expectedDocument",
     "instruction",
+    "redlineReversibility",
     "expectedOutputs",
     "baseline",
     "invariants",
     "changeBudget"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "2.0" },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" },
     "title": { "type": "string", "minLength": 1 },
     "tier": { "enum": ["fast", "full"] },
@@ -224,13 +226,36 @@
         "constraints": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "items": { "type": "string", "minLength": 1 }
         }
       }
     },
+    "redlineReversibility": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applicability"],
+          "properties": {
+            "applicability": { "const": "required" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applicability", "reason"],
+          "properties": {
+            "applicability": { "const": "notApplicable" },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 16384 }
+          }
+        }
+      ]
+    },
     "expectedOutputs": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 256,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -239,11 +264,14 @@
           "id": {
             "enum": [
               "candidate-docx",
-              "semantic-diff",
+              "semantic-change-set-v1",
               "after-html",
               "redline-docx",
               "candidate-pdf",
-              "redline-proof-v1"
+              "candidate-package-manifest-v1",
+              "deliverable-verification-v1",
+              "delivery-change-receipt-v1",
+              "redline-reversibility-proof-v1"
             ]
           },
           "mediaType": { "type": "string", "minLength": 1 },
@@ -261,6 +289,7 @@
         "operations": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "items": { "$ref": "#/$defs/operation" }
         }
       }
@@ -268,6 +297,7 @@
     "invariants": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 256,
       "items": {
         "oneOf": [
           { "$ref": "#/$defs/numericInvariant" },
@@ -278,11 +308,17 @@
     "changeBudget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowedChangedParts", "maximumChangedAnchors"],
+      "required": ["allowedChangedParts", "allowedRelationshipOwners", "maximumChangedAnchors"],
       "properties": {
         "allowedChangedParts": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
+          "items": { "type": "string", "pattern": "^/(?!.*\\.\\.)" }
+        },
+        "allowedRelationshipOwners": {
+          "type": "array",
+          "maxItems": 256,
           "items": { "type": "string", "pattern": "^/(?!.*\\.\\.)" }
         },
         "maximumChangedAnchors": { "type": "integer", "minimum": 0 }

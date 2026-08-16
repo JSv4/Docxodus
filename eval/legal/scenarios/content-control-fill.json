@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
   "id": "content-control-fill",
   "title": "Fill a tagged legal-template content control",
   "tier": "fast",
@@ -21,9 +21,15 @@
       "Remove the placeholder-display state and placeholder text only for that control."
     ]
   },
+  "redlineReversibility": { "applicability": "required" },
   "expectedOutputs": [
     { "id": "candidate-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "candidate", "required": true },
-    { "id": "semantic-diff", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "redline-docx", "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "role": "review", "required": true },
+    { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
   ],
   "baseline": {
@@ -39,6 +45,7 @@
   ],
   "changeBudget": {
     "allowedChangedParts": ["/word/document.xml"],
-    "maximumChangedAnchors": 2
+    "allowedRelationshipOwners": [],
+    "maximumChangedAnchors": 3
   }
 }

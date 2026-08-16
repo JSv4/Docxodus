@@ -234,7 +234,8 @@ internal static class CommentOps
         var exPart = main.WordprocessingCommentsExPart;
         if (exPart is null)
         {
-            exPart = main.AddNewPart<WordprocessingCommentsExPart>();
+            exPart = main.AddNewPart<WordprocessingCommentsExPart>(
+                AvailableRelationshipId(main, "rIdCommentsExtended"));
             exPart.PutXDocument(new XDocument(
                 new XElement(W15 + "commentsEx",
                     new XAttribute(XNamespace.Xmlns + "w15", W15))));
@@ -258,7 +259,8 @@ internal static class CommentOps
         var idsPart = main.WordprocessingCommentsIdsPart;
         if (idsPart is null)
         {
-            idsPart = main.AddNewPart<WordprocessingCommentsIdsPart>();
+            idsPart = main.AddNewPart<WordprocessingCommentsIdsPart>(
+                AvailableRelationshipId(main, "rIdCommentsIds"));
             idsPart.PutXDocument(new XDocument(
                 new XElement(W16Cid + "commentsIds",
                     new XAttribute(XNamespace.Xmlns + "w16cid", W16Cid))));
@@ -277,6 +279,30 @@ internal static class CommentOps
         exPart.PutXDocument();
         idsPart.PutXDocument();
         return paraId;
+    }
+
+    /// <summary>
+    /// Choose a stable relationship id for a newly-created singleton part without colliding with
+    /// any package, external, hyperlink, or data-part relationship already owned by the main part.
+    /// Existing documents keep their original ids; only a genuinely new singleton is named here.
+    /// </summary>
+    private static string AvailableRelationshipId(
+        OpenXmlPartContainer parent, string preferred)
+    {
+        var used = parent.Parts.Select(value => value.RelationshipId)
+            .Concat(parent.ExternalRelationships.Select(value => value.Id))
+            .Concat(parent.HyperlinkRelationships.Select(value => value.Id))
+            .Concat(parent.DataPartReferenceRelationships.Select(value => value.Id))
+            .ToHashSet(StringComparer.Ordinal);
+        if (!used.Contains(preferred)) return preferred;
+
+        for (var suffix = 2; suffix < int.MaxValue; suffix++)
+        {
+            var candidate = preferred + suffix.ToString(CultureInfo.InvariantCulture);
+            if (!used.Contains(candidate)) return candidate;
+        }
+        throw new InvalidOperationException(
+            $"no relationship id is available for singleton part '{preferred}'");
     }
 
     private static void EnsureIgnorablePrefix(XElement root, string prefix, XNamespace ns)

@@ -5,6 +5,7 @@
 
 using System.Text.Json.Nodes;
 using Docxodus;
+using Docxodus.Verification;
 
 namespace LegalEval;
 
@@ -16,7 +17,20 @@ public sealed record BaselineExecution(
     bool SemanticDiffSucceeded,
     IReadOnlyList<string> OperationLog,
     bool Succeeded,
-    string? Error);
+    string? Error,
+    PackageManifest? InputManifest = null,
+    PackageManifest? OutputManifest = null,
+    PackageManifest? ExpectedManifest = null,
+    IReadOnlyList<BaselineTransactionTrace>? TransactionTraces = null,
+    string? DeliveryReceiptUnavailableReason = null);
+
+public sealed record BaselineTransactionTrace(
+    byte[] BeforeBytes,
+    byte[] AfterBytes,
+    PackageManifest BeforeManifest,
+    PackageManifest AfterManifest,
+    MutationBatchResult Result,
+    DeliveryNormalizedOperation Operation);
 
 public sealed class BaselineExecutionException : Exception
 {
@@ -34,10 +48,14 @@ public sealed class BaselineExecutionException : Exception
 public sealed class ScriptedBaselineExecutor
 {
     private const string FixedRevisionDate = "2026-01-15T12:00:00Z";
+    private static readonly DateTime FixedRevisionTimestamp = DateTime.Parse(
+        FixedRevisionDate, null,
+        System.Globalization.DateTimeStyles.AdjustToUniversal
+        | System.Globalization.DateTimeStyles.AssumeUniversal);
     private readonly IEvaluationPackageValidator _packageValidator;
 
     public ScriptedBaselineExecutor(IEvaluationPackageValidator? packageValidator = null) =>
-        _packageValidator = packageValidator ?? new InterimEvaluationPackageValidator();
+        _packageValidator = packageValidator ?? new EvaluationPackageValidator();
 
     public BaselineExecution Execute(LegalScenario scenario)
     {
@@ -48,79 +66,94 @@ public sealed class ScriptedBaselineExecutor
 
     public BaselineExecution ExecuteCheckpointed(LegalScenario scenario)
     {
-        var input = File.ReadAllBytes(scenario.Fixture.Path);
-        var expected = File.ReadAllBytes(scenario.ExpectedDocument.Path);
-        _packageValidator.Validate(input, "evaluation input");
-        _packageValidator.Validate(expected, "pinned expected document");
+        var input = ReadBounded(scenario.Fixture.Path, _packageValidator.MaximumPackageBytes,
+            "evaluation input");
+        var expected = ReadBounded(scenario.ExpectedDocument.Path,
+            _packageValidator.MaximumPackageBytes, "pinned expected document");
+        var inputManifest = _packageValidator.Inspect(input, "evaluation input");
+        var expectedManifest = _packageValidator.Inspect(expected, "pinned expected document");
         var current = input;
+        var outputManifest = inputManifest;
         var log = new List<string>();
+        var traces = new List<BaselineTransactionTrace>();
         string? error = null;
+        string? receiptUnavailableReason = null;
+        DocxSession? session = null;
 
-        for (var index = 0; index < scenario.BaselineOperations.Count; index++)
+        try
         {
-            var operation = scenario.BaselineOperations[index];
-            var kind = String(operation, "op");
-            log.Add($"begin:{index}:{kind}");
-            try
+            for (var index = 0; index < scenario.BaselineOperations.Count; index++)
             {
+                var operation = scenario.BaselineOperations[index];
+                var kind = String(operation, "op");
+                log.Add($"begin:{index}:{kind}");
                 if (kind == "consolidate")
                 {
+                    if (session is not null || traces.Count != 0)
+                        throw new ScenarioValidationException(
+                            "consolidate cannot be mixed with session-backed baseline operations");
                     current = ExecuteConsolidate(current, operation, log);
+                    outputManifest = _packageValidator.Inspect(current, "scripted baseline output");
+                    receiptUnavailableReason =
+                        "the consolidate facade does not expose an authoritative ExecuteBatch trace";
                 }
                 else
                 {
-                    using var session = new DocxSession(current, new DocxSessionSettings
+                    session ??= new DocxSession(current, new DocxSessionSettings
                     {
                         CaptureInitialProjection = true,
                         PersistAnchorIds = false,
                         EmitMarkdownPatch = false,
+                        UtcNowProvider = static () => FixedRevisionTimestamp,
+                        DeterministicPackageOutput = true,
                     });
-                    Exception? operationError = null;
-                    try
+                    var before = session.Save(false);
+                    var beforeManifest = _packageValidator.Inspect(
+                        before, $"scripted operation {index} input");
+                    var normalized = DeliveryNormalizedOperation.Create(
+                        "legal_eval", kind, operation.ToJsonString());
+                    var result = session.ExecuteBatch(new[]
                     {
-                        ExecuteSessionOperation(session, operation, log);
-                    }
-                    catch (Exception exception)
+                        new MutationBatchStep("legal_eval", kind,
+                            value => ExecuteSessionOperation(value, operation, log)),
+                    });
+                    var after = session.Save(false);
+                    var afterManifest = _packageValidator.Inspect(
+                        after, $"scripted operation {index} output");
+                    traces.Add(new BaselineTransactionTrace(
+                        before, after, beforeManifest, afterManifest, result, normalized));
+                    current = after;
+                    outputManifest = afterManifest;
+                    if (!result.Success)
                     {
-                        operationError = exception;
-                        throw;
-                    }
-                    finally
-                    {
-                        // Preserve the latest writable checkpoint even when an operation reports a
-                        // post-mutation failure. If saving itself fails, the preceding checkpoint is
-                        // still retained by the outer catch.
-                        try
-                        {
-                            current = GeneratedPackageNormalizer.Normalize(session.Save(false));
-                        }
-                        catch when (operationError is not null)
-                        {
-                            // The operation's original failure remains the primary diagnostic.
-                        }
+                        var failure = result.Failure?.Error;
+                        throw new InvalidOperationException(
+                            $"{kind} failed: {failure?.Code}: {failure?.Message}");
                     }
                 }
                 log.Add($"complete:{index}:{kind}");
             }
-            catch (Exception exception)
-            {
-                error = ExceptionDetail(exception);
-                log.Add($"failed:{index}:{kind}:{exception.GetType().Name}:{exception.Message}");
-                break;
-            }
+        }
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
+        {
+            error = ExceptionDetail(exception);
+            log.Add($"failed:{exception.GetType().Name}:{exception.Message}");
+        }
+        finally
+        {
+            session?.Dispose();
         }
 
         string semanticDiff;
         var semanticDiffSucceeded = false;
         try
         {
-            semanticDiff = DocxDiff.GetEditScriptJson(
+            semanticDiff = SemanticDiff.Compare(
                 new WmlDocument("input.docx", input),
-                new WmlDocument("output.docx", current),
-                DiffSettings("Legal Evaluation Artifact"));
+                new WmlDocument("output.docx", current)).ToCanonicalJson();
             semanticDiffSucceeded = true;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             semanticDiff = EvaluationScorer.ErrorEnvelope(
                 "semantic-diff", "failed", ExceptionDetail(exception));
@@ -129,30 +162,27 @@ public sealed class ScriptedBaselineExecutor
 
         return new BaselineExecution(
             input, current, expected, semanticDiff, semanticDiffSucceeded,
-            log, error is null, error);
+            log, error is null, error,
+            inputManifest, outputManifest, expectedManifest, traces,
+            receiptUnavailableReason);
     }
 
-    private static void ExecuteSessionOperation(
+    private static IReadOnlyList<EditResult> ExecuteSessionOperation(
         DocxSession session, JsonObject operation, List<string> log)
     {
         var kind = String(operation, "op");
         switch (kind)
         {
             case "replaceText":
-                ReplaceText(session, operation, log);
-                break;
+                return ReplaceText(session, operation, log);
             case "insertNumberedClause":
-                InsertNumberedClause(session, operation, log);
-                break;
+                return InsertNumberedClause(session, operation, log);
             case "replaceTableCell":
-                ReplaceTableCell(session, operation, log);
-                break;
+                return ReplaceTableCell(session, operation, log);
             case "addReviewBundle":
-                AddReviewBundle(session, operation, log);
-                break;
+                return AddReviewBundle(session, operation, log);
             case "fillContentControl":
-                FillContentControl(session, operation, log);
-                break;
+                return FillContentControl(session, operation, log);
             case "failForTest":
                 throw new InvalidOperationException(String(operation, "message"));
             default:
@@ -160,7 +190,8 @@ public sealed class ScriptedBaselineExecutor
         }
     }
 
-    private static void ReplaceText(DocxSession session, JsonObject operation, List<string> log)
+    private static IReadOnlyList<EditResult> ReplaceText(
+        DocxSession session, JsonObject operation, List<string> log)
     {
         var locator = String(operation, "anchorContains");
         var find = String(operation, "find");
@@ -175,26 +206,34 @@ public sealed class ScriptedBaselineExecutor
         if (replacements.Count != 1)
             throw new InvalidOperationException(
                 $"replaceText '{find}' resolved {replacements.Count} matches in anchor located by '{locator}'");
-        Ensure(replacements[0], kind: "replaceText");
-        log.Add($"replaceText:{locator}:{find}->{replacement}");
+        if (replacements[0].Success)
+            log.Add($"replaceText:{locator}:{find}->{replacement}");
+        return replacements;
     }
 
-    private static void InsertNumberedClause(
+    private static IReadOnlyList<EditResult> InsertNumberedClause(
         DocxSession session, JsonObject operation, List<string> log)
     {
         var anchor = UniqueAnchor(session, String(operation, "afterAnchorContains"));
         var result = session.InsertParagraph(anchor, Position.After, $"1. {String(operation, "text")}");
-        Ensure(result, "insertNumberedClause");
+        if (!result.Success) return new[] { result };
         var created = result.Created.Single(value => value.Kind is "li" or "p").Id;
-        Ensure(session.SetParagraphStyle(created, String(operation, "styleId")),
-            "insertNumberedClause.style");
+        var style = session.SetParagraphStyle(created, String(operation, "styleId"));
+        if (!style.Success) return new[] { result, style };
         var membership = session.GetListMembership(created);
         if (membership is null)
-            throw new InvalidOperationException("insertNumberedClause did not inherit list numbering");
+            return new[]
+            {
+                result,
+                style,
+                EditResult.Fail(EditErrorCode.InternalError,
+                    "insertNumberedClause did not inherit list numbering"),
+            };
         log.Add($"insertNumberedClause:{created}");
+        return new[] { result, style };
     }
 
-    private static void ReplaceTableCell(
+    private static IReadOnlyList<EditResult> ReplaceTableCell(
         DocxSession session, JsonObject operation, List<string> log)
     {
         var table = session.FindByKind("tbl").Single().Anchor.Id;
@@ -202,12 +241,13 @@ public sealed class ScriptedBaselineExecutor
             table, Int(operation, "row"), Int(operation, "column"));
         if (!resolution.Success || resolution.Cell is null)
             throw new InvalidOperationException($"replaceTableCell could not resolve cell: {resolution.Error?.Message}");
-        Ensure(session.ReplaceCellContent(resolution.Cell.Anchor.Id, String(operation, "text")),
-            "replaceTableCell");
-        log.Add($"replaceTableCell:{resolution.Cell.Anchor.Id}");
+        var result = session.ReplaceCellContent(
+            resolution.Cell.Anchor.Id, String(operation, "text"));
+        if (result.Success) log.Add($"replaceTableCell:{resolution.Cell.Anchor.Id}");
+        return new[] { result };
     }
 
-    private static void AddReviewBundle(
+    private static IReadOnlyList<EditResult> AddReviewBundle(
         DocxSession session, JsonObject operation, List<string> log)
     {
         var anchor = UniqueAnchor(session, String(operation, "anchorContains"));
@@ -216,29 +256,30 @@ public sealed class ScriptedBaselineExecutor
         var spanOffset = anchorText.IndexOf(spanText, StringComparison.Ordinal);
         if (spanOffset < 0)
             throw new InvalidOperationException($"review span '{spanText}' is absent");
-        var date = DateTime.Parse(FixedRevisionDate, null,
-            System.Globalization.DateTimeStyles.AdjustToUniversal
-            | System.Globalization.DateTimeStyles.AssumeUniversal);
+        var date = FixedRevisionTimestamp;
         var comment = session.AddComment(anchor, new CharSpan(spanOffset, spanText.Length),
             String(operation, "author"), String(operation, "comment"),
             String(operation, "initials"), date);
-        Ensure(comment, "addReviewBundle.comment");
+        if (!comment.Success) return new[] { comment };
         var commentAnchor = comment.Created.Single(value => value.Kind == "cmt").Id;
-        Ensure(session.AddCommentReply(commentAnchor, String(operation, "replyAuthor"),
-            String(operation, "reply"), String(operation, "replyInitials"), date),
-            "addReviewBundle.reply");
-        Ensure(session.InsertFootnote(anchor, spanOffset + spanText.Length,
-            String(operation, "footnote")), "addReviewBundle.footnote");
-        Ensure(session.AddBookmark(String(operation, "bookmark"),
-            DocumentRange.In(anchor, new CharSpan(spanOffset, spanText.Length))),
-            "addReviewBundle.bookmark");
+        var reply = session.AddCommentReply(commentAnchor, String(operation, "replyAuthor"),
+            String(operation, "reply"), String(operation, "replyInitials"), date);
+        if (!reply.Success) return new[] { comment, reply };
+        var footnote = session.InsertFootnote(anchor, spanOffset + spanText.Length,
+            String(operation, "footnote"));
+        if (!footnote.Success) return new[] { comment, reply, footnote };
+        var bookmark = session.AddBookmark(String(operation, "bookmark"),
+            DocumentRange.In(anchor, new CharSpan(spanOffset, spanText.Length)));
+        if (!bookmark.Success) return new[] { comment, reply, footnote, bookmark };
         var crossReference = session.InsertParagraph(anchor, Position.After,
             $"For the negotiated cap, see [{String(operation, "linkText")}](#{String(operation, "bookmark")}).");
-        Ensure(crossReference, "addReviewBundle.crossReference");
+        if (!crossReference.Success)
+            return new[] { comment, reply, footnote, bookmark, crossReference };
         log.Add($"addReviewBundle:{commentAnchor}");
+        return new[] { comment, reply, footnote, bookmark, crossReference };
     }
 
-    private static void FillContentControl(
+    private static IReadOnlyList<EditResult> FillContentControl(
         DocxSession session, JsonObject operation, List<string> log)
     {
         var tag = String(operation, "tag");
@@ -246,9 +287,10 @@ public sealed class ScriptedBaselineExecutor
             .Where(value => string.Equals(value.Tag, tag, StringComparison.Ordinal)).ToList();
         if (controls.Count != 1)
             throw new InvalidOperationException($"content-control tag '{tag}' resolved {controls.Count} controls");
-        Ensure(session.FillContentControlRichText(controls[0].AnchorId, String(operation, "text")),
-            "fillContentControl");
-        log.Add($"fillContentControl:{tag}");
+        var result = session.FillContentControlRichText(
+            controls[0].AnchorId, String(operation, "text"));
+        if (result.Success) log.Add($"fillContentControl:{tag}");
+        return new[] { result };
     }
 
     private static byte[] ExecuteConsolidate(
@@ -267,13 +309,17 @@ public sealed class ScriptedBaselineExecutor
             {
                 CaptureInitialProjection = false,
                 EmitMarkdownPatch = false,
+                UtcNowProvider = static () => FixedRevisionTimestamp,
+                DeterministicPackageOutput = true,
             });
-            ExecuteSessionOperation(session, reviewer, log);
+            var results = ExecuteSessionOperation(session, reviewer, log);
+            if (results.Any(result => !result.Success))
+                throw new InvalidOperationException(
+                    $"consolidate reviewer operation failed: {results.First(result => !result.Success).Error?.Message}");
             reviewers.Add(new DocxDiffReviewer
             {
                 Author = String(reviewer, "author"),
-                Document = new WmlDocument("reviewer.docx",
-                    GeneratedPackageNormalizer.Normalize(session.Save(false))),
+                Document = new WmlDocument("reviewer.docx", session.Save(false)),
             });
         }
         var settings = new DocxDiffConsolidateSettings
@@ -281,12 +327,13 @@ public sealed class ScriptedBaselineExecutor
             Diff = DiffSettings("Legal Evaluation"),
             ConflictResolution = ConflictResolution.FirstReviewerWins,
         };
-        // The fixture deliberately has pre-existing revisions; consolidation owns only the accepted
-        // shared-base view so its per-reviewer authorship is mechanically attributable.
-        settings.Diff.PreAcceptInputRevisions = true;
+        // The selected base carries pre-existing legal review state.  Consolidation must preserve
+        // that state while attributing only the two new reviewer deltas to their declared authors.
+        settings.Diff.PreAcceptInputRevisions = false;
+        settings.Diff.PreserveInputRevisions = true;
         var output = DocxDiff.Consolidate(new WmlDocument("base.docx", input), reviewers, settings);
         log.Add($"consolidate:{reviewers.Count}");
-        return GeneratedPackageNormalizer.Normalize(output.DocumentByteArray);
+        return output.DocumentByteArray;
     }
 
     private static DocxDiffSettings DiffSettings(string author) => new()
@@ -307,12 +354,6 @@ public sealed class ScriptedBaselineExecutor
         return matches[0].Anchor.Id;
     }
 
-    private static void Ensure(EditResult result, string kind)
-    {
-        if (!result.Success)
-            throw new InvalidOperationException($"{kind} failed: {result.Error?.Code}: {result.Error?.Message}");
-    }
-
     private static string String(JsonObject parent, string name) =>
         parent[name]?.GetValue<string>()
             ?? throw new ScenarioValidationException($"operation property '{name}' must be a string");
@@ -323,6 +364,20 @@ public sealed class ScriptedBaselineExecutor
 
     private static bool Bool(JsonObject parent, string name, bool fallback) =>
         parent[name]?.GetValue<bool>() ?? fallback;
+
+    private static byte[] ReadBounded(string path, long maximumBytes, string label)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 81920, FileOptions.SequentialScan);
+        if (stream.Length > maximumBytes)
+            throw new ScenarioValidationException(
+                $"{label} exceeds the {maximumBytes}-byte package limit");
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1)
+            throw new ScenarioValidationException($"{label} changed while it was being read");
+        return bytes;
+    }
 
     private static string ExceptionDetail(Exception exception)
     {
