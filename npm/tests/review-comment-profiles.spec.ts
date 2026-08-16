@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
@@ -21,7 +21,11 @@ interface RenderReport {
   status: 'complete';
   source: { rawPackageBytesDigest: string; byteLength: number };
   derivedProfileSource?: { rawPackageBytesDigest: string; byteLength: number };
-  options: { reviewProfile: ReviewProfile; commentProfile: CommentProfile };
+  options: {
+    reviewProfile: ReviewProfile;
+    reviewProfileAlreadyApplied?: true;
+    commentProfile: CommentProfile;
+  };
   warnings: Array<{ code: string; severity: string; phase: string; partUri?: string }>;
 }
 
@@ -120,6 +124,7 @@ async function convert(
   source: Uint8Array,
   reviewProfile: ReviewProfile,
   commentProfile: CommentProfile,
+  reviewProfileAlreadyApplied = false,
 ): Promise<ConversionOutcome> {
   return page.evaluate(async ({ bytes, options }) => {
     const api = (window as any).DocxodusStandalone;
@@ -148,7 +153,11 @@ async function convert(
     }
   }, {
     bytes: Array.from(source),
-    options: { reviewProfile, commentProfile },
+    options: {
+      reviewProfile,
+      commentProfile,
+      ...(reviewProfileAlreadyApplied ? { reviewProfileAlreadyApplied: true } : {}),
+    },
   }) as Promise<ConversionOutcome>;
 }
 
@@ -545,6 +554,70 @@ test('review/comment fixtures are byte deterministic', async ({}, testInfo) => {
   await attachPaths(testInfo, 'fixtures', [
     { name: 'overlap.docx', path: overlapPath, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
     { name: 'all-stories.docx', path: storiesPath, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  ]);
+});
+
+test('pre-resolved final/original sources preserve exact bytes and reject false declarations', async ({ page }, testInfo) => {
+  test.setTimeout(3 * 60 * 1000);
+  const artifactRoot = resolve(__dirname, '../test-artifacts/profile-resolved-sources');
+  rmSync(artifactRoot, { recursive: true, force: true });
+  mkdirSync(artifactRoot, { recursive: true });
+  const exactSource = new Uint8Array(readFileSync(
+    resolve(__dirname, '../../TestFiles/CA/CA001-Plain.docx'),
+  ));
+  const sourceDigest = digest(exactSource);
+
+  for (const reviewProfile of ['final', 'original'] as const) {
+    const directory = join(artifactRoot, reviewProfile);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'source.docx'), exactSource);
+    await ready(page);
+    const outcome = await convert(page, exactSource, reviewProfile, 'hidden', true);
+    writeJson(join(directory, outcome.ok ? 'render-report.json' : 'unexpected-error.json'),
+      outcome.ok ? outcome.result.renderReport : outcome.error);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) continue;
+    writeFileSync(join(directory, 'standalone.html'), outcome.result.html);
+    await auditRenderedPage(page, outcome.result.html);
+    await page.screenshot({ path: join(directory, 'screenshot.png'), fullPage: true });
+    writeViewer(directory, `${reviewProfile}-profile-resolved`, [
+      'source.docx', 'render-report.json', 'standalone.html', 'screenshot.png',
+    ]);
+    expect(outcome.result.renderReport.source).toEqual({
+      rawPackageBytesDigest: sourceDigest,
+      byteLength: exactSource.byteLength,
+      documentVersion: 444,
+    });
+    expect(outcome.result.renderReport.options.reviewProfileAlreadyApplied).toBe(true);
+    expect(outcome.result.renderReport.derivedProfileSource).toBeUndefined();
+  }
+
+  const unresolvedSource = generateReviewCommentOverlapDocx();
+  await ready(page);
+  const unresolved = await convert(page, unresolvedSource, 'final', 'hidden', true);
+  writeJson(join(artifactRoot, 'unresolved-source-error.json'), unresolved);
+  expect(unresolved.ok).toBe(false);
+  if (!unresolved.ok) {
+    expect(unresolved.error.code).toBe('resource_policy_failure');
+    expect(unresolved.error.phase).toBe('package_preflight');
+  }
+
+  await ready(page);
+  const markup = await convert(page, exactSource, 'markup', 'hidden', true);
+  writeJson(join(artifactRoot, 'markup-declaration-error.json'), markup);
+  expect(markup.ok).toBe(false);
+  if (!markup.ok) expect(markup.error.phase).toBe('input_validation');
+
+  writeText(join(artifactRoot, 'index.html'), `<!doctype html><meta charset="utf-8">
+<title>Exact profile-resolved source evidence</title><h1>Exact profile-resolved source evidence</h1>
+<ul><li><a href="final/view-artifacts.html">final</a></li>
+<li><a href="original/view-artifacts.html">original</a></li>
+<li><a href="unresolved-source-error.json">residual-revision rejection</a></li>
+<li><a href="markup-declaration-error.json">markup declaration rejection</a></li></ul>`);
+  await attachPaths(testInfo, 'profile-resolved-sources', [
+    { name: 'index.html', path: join(artifactRoot, 'index.html'), contentType: 'text/html' },
+    { name: 'unresolved-source-error.json', path: join(artifactRoot, 'unresolved-source-error.json'), contentType: 'application/json' },
+    { name: 'markup-declaration-error.json', path: join(artifactRoot, 'markup-declaration-error.json'), contentType: 'application/json' },
   ]);
 });
 

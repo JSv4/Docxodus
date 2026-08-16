@@ -82,7 +82,10 @@ omitting comment bodies and markers from the published HTML/PDF.
 The input snapshot is immutable. `renderReport.source` always records its exact raw-package digest,
 byte length, and document version. `final` and `original` project an isolated package and record the
 projected digest and length as `derivedProfileSource`; `markup` renders the unchanged source and
-omits that field. The requested profiles participate in the layout digest and renderer fingerprint.
+omits that field. When an upstream policy engine already owns the exact final/original package, set
+`reviewProfileAlreadyApplied: true` to preserve it byte-for-byte. Export then verifies that no
+tracked revision remains, omits `derivedProfileSource`, and rejects the option for `markup`. The
+requested profiles participate in the layout digest and renderer fingerprint.
 
 The default `unsupportedContent: "warn"` policy records a structured diagnostic naming every
 unsupported revision, comment, or story family and its owning package part, and continues only when
@@ -186,7 +189,8 @@ docxodus convert contract.docx --to pdf --output contract-review.pdf \
   --report contract-review.render.json --page-map contract-review.pages.json
 ```
 
-Additional flags include `--document-version`, `--expected-source-digest`, `--title`,
+Additional flags include `--document-version`, `--expected-source-digest`,
+`--review-profile-already-applied`, `--title`,
 `--unsupported-content`, `--strict-fonts`, `--browser-executable`, repeatable `--limit
 name=integer`, repeatable `--font-directory`, `--font-license-attestations`, and
 `--environment-attestation`. Artifact bytes are never written to stdout. Existing destinations,

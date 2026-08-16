@@ -161,11 +161,13 @@ export interface WorkerDocxodus {
 
   /**
    * Inventory native revisions and materialize a worker-owned profile copy.
-   * The returned inventory always describes the unprojected source package.
+   * Set reviewProfileAlreadyApplied only for an exact final/original package;
+   * the caller remains responsible for rejecting a non-empty inventory.
    */
   projectReviewProfile(
     document: File | Uint8Array,
-    profile: WorkerReviewProfile
+    profile: WorkerReviewProfile,
+    reviewProfileAlreadyApplied?: boolean,
   ): Promise<{ documentBytes: Uint8Array; revisions: RevisionListEntry[] }>;
 
   /**
@@ -424,7 +426,8 @@ export async function createWorkerDocxodus(
 
     async projectReviewProfile(
       document: File | Uint8Array,
-      profile: WorkerReviewProfile
+      profile: WorkerReviewProfile,
+      reviewProfileAlreadyApplied = false,
     ): Promise<{ documentBytes: Uint8Array; revisions: RevisionListEntry[] }> {
       const bytes = await toBytes(document);
       const response = await sendRequest<WorkerProjectReviewProfileResponse>(
@@ -433,6 +436,7 @@ export async function createWorkerDocxodus(
           type: "projectReviewProfile",
           documentBytes: bytes,
           profile,
+          ...(reviewProfileAlreadyApplied ? { reviewProfileAlreadyApplied: true as const } : {}),
         },
         [bytes.buffer]
       );

@@ -94,6 +94,7 @@ function validateRequest(value: unknown): HostRequest {
       "documentVersion",
       "expectedSourceDigest",
       "reviewProfile",
+      "reviewProfileAlreadyApplied",
       "commentProfile",
       "title",
       "unsupportedContent",

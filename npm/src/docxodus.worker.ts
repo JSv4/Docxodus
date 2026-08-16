@@ -142,10 +142,9 @@ function handleProjectReviewProfile(
     // Projection operates on the worker-owned transfer, never on the caller's
     // buffer. Markup still returns a fresh byte view so every profile follows
     // the same ownership contract.
-    const documentBytes = exports.DocxDiffBridge.ProjectReviewProfile(
-      request.documentBytes,
-      request.profile
-    );
+    const documentBytes = request.reviewProfileAlreadyApplied
+      ? new Uint8Array(request.documentBytes)
+      : exports.DocxDiffBridge.ProjectReviewProfile(request.documentBytes, request.profile);
     if (documentBytes.length === 0) {
       throw new Error(`${request.profile} revision projection returned an empty package`);
     }

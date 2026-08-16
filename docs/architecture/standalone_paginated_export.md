@@ -38,6 +38,7 @@ interface PaginatedHtmlOptions {
   documentVersion?: number;
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
+  reviewProfileAlreadyApplied?: boolean;
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: "warn" | "strict";
@@ -357,7 +358,7 @@ The package exposes one command with the same option vocabulary:
 
 ```console
 docxodus convert contract.docx --to html --output contract.html \
-  --document-version 12 --review-profile final --comments endnotes
+  --document-version 12 --review-profile final --review-profile-already-applied --comments endnotes
 
 docxodus convert contract.docx --to pdf --output contract.pdf \
   --document-version 12 --review-profile markup --comments margin \
@@ -412,7 +413,10 @@ and HTML conversion; `derivedProfileSource` records the exact projected digest a
 when projection does not change visible content. `markup` renders the unchanged source and omits
 `derivedProfileSource`. The requested profile is included in the layout digest and renderer
 fingerprint. When #465 supplies an already policy-derived exact profile source, the renderer uses
-those bytes directly and never applies the policy a second time.
+those bytes directly and never applies the policy a second time. It must set
+`reviewProfileAlreadyApplied: true`; the exporter inventories the package, fails if any tracked
+revision remains, preserves the exact source digest, and omits `derivedProfileSource`. The option is
+invalid for `markup`.
 
 Comment presentation is orthogonal to revision projection:
 
@@ -692,6 +696,7 @@ interface RenderReportBase {
   derivedProfileSource?: { rawPackageBytesDigest: string; byteLength: number };
   options: {
     reviewProfile: ReviewProfile;
+    reviewProfileAlreadyApplied?: true;
     commentProfile: CommentProfile;
     layoutDigest: string;
   };

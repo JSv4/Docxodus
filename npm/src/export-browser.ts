@@ -161,6 +161,11 @@ export interface PaginatedHtmlOptions {
   documentVersion?: number;
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
+  /**
+   * Preserve an exact final/original source that the caller has already projected.
+   * The exporter inventories the package and fails if any tracked revision remains.
+   */
+  reviewProfileAlreadyApplied?: boolean;
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: UnsupportedContentPolicy;
@@ -224,6 +229,7 @@ export interface RenderReportBase {
   };
   options: {
     reviewProfile: ReviewProfile;
+    reviewProfileAlreadyApplied?: true;
     commentProfile: CommentProfile;
     layoutDigest: string;
   };
@@ -342,6 +348,7 @@ interface NormalizedOptions {
   documentVersion: number;
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
+  reviewProfileAlreadyApplied: boolean;
   commentProfile: CommentProfile;
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -445,6 +452,16 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_document", "input_validation", "reviewProfile is invalid.",
       "Use final, original, or markup.");
   }
+  if (options.reviewProfileAlreadyApplied !== undefined
+    && typeof options.reviewProfileAlreadyApplied !== "boolean") {
+    fail("invalid_document", "input_validation", "reviewProfileAlreadyApplied must be a boolean.",
+      "Use true only for an exact final/original source that contains no tracked revisions.");
+  }
+  if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
+    fail("invalid_document", "input_validation",
+      "reviewProfileAlreadyApplied cannot be used with the markup profile.",
+      "Omit reviewProfileAlreadyApplied for markup, which renders the unchanged revision-bearing source.");
+  }
   if (!ALLOWED_COMMENT_PROFILES.has(options.commentProfile)) {
     fail("invalid_document", "input_validation", "commentProfile is invalid.",
       "Use hidden, inline, endnotes, or margin.");
@@ -499,6 +516,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     documentVersion,
     expectedSourceDigest: options.expectedSourceDigest?.toLowerCase(),
     reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied ?? false,
     commentProfile: options.commentProfile,
     title: options.title ?? "Document",
     unsupportedContent,
@@ -2058,6 +2076,7 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
 async function layoutDigestForOptions(options: NormalizedOptions): Promise<string> {
   const layoutContract = {
     reviewProfile: options.reviewProfile,
+    ...(options.reviewProfileAlreadyApplied ? { reviewProfileAlreadyApplied: true as const } : {}),
     commentProfile: options.commentProfile,
     unsupportedContent: options.unsupportedContent,
     pagination: {
@@ -2233,6 +2252,7 @@ function reportBase(
       : {}),
     options: {
       reviewProfile: options.reviewProfile,
+      ...(options.reviewProfileAlreadyApplied ? { reviewProfileAlreadyApplied: true as const } : {}),
       commentProfile: options.commentProfile,
       layoutDigest,
     },
@@ -2359,50 +2379,70 @@ export async function convertDocxToPaginatedHtml(
       state,
       "package_preflight",
       ["revision inventory", `${options.reviewProfile} profile projection`],
-      () => worker!.projectReviewProfile(sourceBytes!, options.reviewProfile),
+      () => worker!.projectReviewProfile(
+        sourceBytes!,
+        options.reviewProfile,
+        options.reviewProfileAlreadyApplied,
+      ),
     );
-    recordRevisionDiagnostics(manifest, projection.revisions, options, state);
     profileBytes = projection.documentBytes;
+    recordRevisionDiagnostics(manifest, projection.revisions, options, state);
 
-    if (options.reviewProfile === "markup") {
-      const profileDigest = await runPhase(state, "package_preflight", ["markup source identity"], () =>
+    if (options.reviewProfileAlreadyApplied) {
+      if (manifest.facts.revisions.total !== 0 || projection.revisions.length !== 0) {
+        fail("resource_policy_failure", "package_preflight",
+          "The source was declared profile-resolved but still contains tracked revisions.",
+          "Project the source to the requested final/original result before setting reviewProfileAlreadyApplied.",
+          { detail: `manifest=${manifest.facts.revisions.total}; inventory=${projection.revisions.length}` });
+      }
+      const profileDigest = await runPhase(state, "package_preflight", ["profile-resolved source identity"], () =>
         sha256(profileBytes!));
       if (profileDigest !== manifest.rawPackageBytesDigest.value.toLowerCase()) {
         fail("conversion_failure", "package_preflight",
-          "Markup profile projection changed the source package bytes.",
+          "Profile-resolved export changed the source package bytes.",
           "Report this exporter immutability invariant failure.");
       }
     } else {
-      const derivedManifest = await runPhase(
-        state,
-        "package_preflight",
-        ["derived profile package manifest"],
-        () => worker!.generatePackageManifest(profileBytes!),
-      );
-      if (derivedManifest.packageKind !== "opc" || !derivedManifest.isValid
-        || !derivedManifest.facts.mainDocumentUri) {
-        fail("conversion_failure", "package_preflight",
-          "Revision projection did not produce a valid DOCX package.",
-          "Inspect the source revision topology and the failed render report.");
-      }
-      if (derivedManifest.facts.revisions.total !== 0) {
-        const warning: RenderWarning = {
-          code: "unsupported_revision_story",
-          severity: options.unsupportedContent === "strict" ? "error" : "warning",
-          phase: "package_preflight",
-          message: `${derivedManifest.facts.revisions.total} tracked-change marker(s) remain outside the supported projection stories.`,
-          remediation: "Resolve revisions in comments, glossary, or another unsupported story before final/original export.",
+      if (options.reviewProfile === "markup") {
+        const profileDigest = await runPhase(state, "package_preflight", ["markup source identity"], () =>
+          sha256(profileBytes!));
+        if (profileDigest !== manifest.rawPackageBytesDigest.value.toLowerCase()) {
+          fail("conversion_failure", "package_preflight",
+            "Markup profile projection changed the source package bytes.",
+            "Report this exporter immutability invariant failure.");
+        }
+      } else {
+        const derivedManifest = await runPhase(
+          state,
+          "package_preflight",
+          ["derived profile package manifest"],
+          () => worker!.generatePackageManifest(profileBytes!),
+        );
+        if (derivedManifest.packageKind !== "opc" || !derivedManifest.isValid
+          || !derivedManifest.facts.mainDocumentUri) {
+          fail("conversion_failure", "package_preflight",
+            "Revision projection did not produce a valid DOCX package.",
+            "Inspect the source revision topology and the failed render report.");
+        }
+        if (derivedManifest.facts.revisions.total !== 0) {
+          const warning: RenderWarning = {
+            code: "unsupported_revision_story",
+            severity: options.unsupportedContent === "strict" ? "error" : "warning",
+            phase: "package_preflight",
+            message: `${derivedManifest.facts.revisions.total} tracked-change marker(s) remain outside the supported projection stories.`,
+            remediation: "Resolve revisions in comments, glossary, or another unsupported story before final/original export.",
+          };
+          addWarning(state, warning);
+          // A final/original PDF with live revision markup is not unambiguous. Do
+          // not let the HTML converter's accepted-view default silently choose a
+          // result for a story the projector does not own.
+          fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
+        }
+        state.derivedProfileSource = {
+          rawPackageBytesDigest: derivedManifest.rawPackageBytesDigest.value.toLowerCase(),
+          byteLength: profileBytes.byteLength,
         };
-        addWarning(state, warning);
-        // A final/original PDF with live revision markup is not unambiguous. Do
-        // not let the HTML converter's accepted-view default silently choose a
-        // result for a story the projector does not own.
-        fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
       }
-      state.derivedProfileSource = {
-        rawPackageBytesDigest: derivedManifest.rawPackageBytesDigest.value.toLowerCase(),
-        byteLength: profileBytes.byteLength,
-      };
     }
 
     const convertedHtml = await runPhase(state, "docx_conversion", ["WASM conversion"], () =>

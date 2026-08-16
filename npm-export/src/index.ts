@@ -355,6 +355,17 @@ function nodeOptionsPreflight(options: NodeExportOptions): void {
     exportError("invalid_document", "input_validation", "reviewProfile is invalid.",
       "Use final, original, or markup.");
   }
+  if (options.reviewProfileAlreadyApplied !== undefined
+    && typeof options.reviewProfileAlreadyApplied !== "boolean") {
+    exportError("invalid_document", "input_validation",
+      "reviewProfileAlreadyApplied must be a boolean.",
+      "Use true only for an exact final/original source that contains no tracked revisions.");
+  }
+  if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
+    exportError("invalid_document", "input_validation",
+      "reviewProfileAlreadyApplied cannot be used with the markup profile.",
+      "Omit reviewProfileAlreadyApplied for markup, which renders the unchanged revision-bearing source.");
+  }
   if (!(COMMENT_PROFILES as readonly string[]).includes(options.commentProfile)) {
     exportError("invalid_document", "input_validation", "commentProfile is invalid.",
       "Use hidden, inline, endnotes, or margin.");
@@ -546,6 +557,7 @@ function browserOptions(
     documentVersion: options.documentVersion,
     expectedSourceDigest: options.expectedSourceDigest,
     reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     commentProfile: options.commentProfile,
     title: options.title,
     unsupportedContent: options.unsupportedContent,

@@ -45,6 +45,7 @@ const emptyFontDirectory = join(artifacts, "empty-fonts");
 const ambiguousFontDirectory = join(artifacts, "ambiguous-fonts");
 const fontScenarioArtifacts = join(successArtifacts, "font-scenarios");
 const reviewProfileArtifacts = join(successArtifacts, "review-comment-profiles");
+const profileResolvedArtifacts = join(successArtifacts, "profile-resolved-sources");
 const cliFontAttestationPath = join(artifacts, "font-license-attestations.json");
 const hostFontPolicyPath = join(artifacts, "host-font-policy.json");
 const ambiguousHostFontPolicyPath = join(artifacts, "ambiguous-host-font-policy.json");
@@ -359,6 +360,7 @@ async function writeViewer() {
 <li><a href="success/review-comment-profiles/original-inline/view-artifacts.html">#444 original + inline evidence</a></li>
 <li><a href="success/review-comment-profiles/markup-endnotes/view-artifacts.html">#444 markup + endnotes evidence</a></li>
 <li><a href="success/review-comment-profiles/markup-margin/view-artifacts.html">#444 markup + margin evidence</a></li>
+<li><a href="success/profile-resolved-sources/index.html">#444 exact profile-resolved source evidence</a></li>
 <li><a href="failure/review-comment-profiles/strict-unsupported/view-artifacts.html">#444 strict unsupported-family failure</a></li>
 <li><a href="failure/review-comment-profiles/unsupported-revision-family/view-artifacts.html">#444 unsupported revision warn/strict evidence</a></li>
 <li><a href="failure/review-comment-profiles/malformed-comment-topology/view-artifacts.html">#444 malformed reply topology warn/strict evidence</a></li>
@@ -459,6 +461,16 @@ describe("@docxodus/export", { concurrency: false }, () => {
       (error) => error instanceof DocxodusExportError
         && error.code === "invalid_document"
         && error.phase === "package_preflight",
+    );
+    await assert.rejects(
+      convertDocxToPdf(source, {
+        ...baseOptions,
+        reviewProfile: "markup",
+        reviewProfileAlreadyApplied: true,
+      }),
+      (error) => error instanceof DocxodusExportError
+        && error.code === "invalid_document"
+        && error.phase === "input_validation",
     );
     await assert.rejects(
       renderDocxArtifacts(generateFontProbeDocx(), {
@@ -668,6 +680,67 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeJson(join(successArtifacts, "pdf-inspection.json"), inspection);
     await writeJson(join(successArtifacts, "request-log.json"), requests);
     await writeFile(join(successArtifacts, "offline-reopen.png"), screenshot);
+  });
+
+  test("preserves exact pre-resolved final/original source identity and rejects residual revisions", { timeout: 180_000 }, async () => {
+    const source = new Uint8Array(await readFile(join(fixtures, "CA", "CA001-Plain.docx")));
+    const sourceDigest = digest(source);
+    await rm(profileResolvedArtifacts, { recursive: true, force: true });
+    await mkdir(profileResolvedArtifacts, { recursive: true });
+    const links = [];
+
+    for (const reviewProfile of ["final", "original"]) {
+      const directory = join(profileResolvedArtifacts, reviewProfile);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "source.docx"), source);
+      const result = await renderDocxArtifacts(source, {
+        reviewProfile,
+        reviewProfileAlreadyApplied: true,
+        commentProfile: "hidden",
+        expectedSourceDigest: sourceDigest,
+        timeoutMs: 120_000,
+        browser,
+        outputs: ["html", "pdf"],
+      });
+      await writeFile(join(directory, "standalone.html"), result.html);
+      await writeFile(join(directory, "output.pdf"), result.pdf);
+      await writeJson(join(directory, "page-map.json"), result.pageMap);
+      await writeJson(join(directory, "render-report.json"), result.renderReport);
+      await captureStandaloneScreenshot(result.html, join(directory, "screenshot.png"));
+      await writeProfileViewer(directory, `${reviewProfile}-profile-resolved`, [
+        "source.docx", "standalone.html", "output.pdf", "screenshot.png",
+        "page-map.json", "render-report.json",
+      ], "The caller-supplied package was verified revision-free and rendered without byte rewriting.");
+      assert.equal(result.renderReport.source.rawPackageBytesDigest, sourceDigest);
+      assert.equal(result.renderReport.source.byteLength, source.byteLength);
+      assert.equal(result.renderReport.options.reviewProfileAlreadyApplied, true);
+      assert.equal(result.renderReport.derivedProfileSource, undefined);
+      links.push(`<li><a href="${reviewProfile}/view-artifacts.html">${reviewProfile}</a></li>`);
+    }
+
+    const unresolved = generateReviewCommentDocx();
+    let failure;
+    await assert.rejects(
+      renderDocxArtifacts(unresolved, {
+        reviewProfile: "final",
+        reviewProfileAlreadyApplied: true,
+        commentProfile: "hidden",
+        timeoutMs: 120_000,
+        browser,
+        outputs: ["html"],
+      }),
+      (error) => {
+        failure = error;
+        return error instanceof DocxodusExportError
+          && error.code === "resource_policy_failure"
+          && error.phase === "package_preflight";
+      },
+    );
+    await writeJson(join(profileResolvedArtifacts, "residual-revision-error.json"),
+      failure instanceof DocxodusExportError ? failure.toJSON() : failure);
+    await writeFile(join(profileResolvedArtifacts, "index.html"), `<!doctype html><meta charset="utf-8">
+<title>Exact profile-resolved source evidence</title><h1>Exact profile-resolved source evidence</h1>
+<ul>${links.join("\n")}<li><a href="residual-revision-error.json">residual-revision rejection</a></li></ul>`);
   });
 
   test("publishes the review/comment HTML and PDF profile matrix", { timeout: 300_000 }, async () => {
@@ -1713,6 +1786,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
       "--to", "pdf",
       "--output", pdf,
       "--review-profile", "final",
+      "--review-profile-already-applied",
       "--comments", "hidden",
       "--report", report,
       "--page-map", pageMap,
@@ -1731,6 +1805,9 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(first.status, 0, first.stderr.toString());
     assert.equal(first.stdout.byteLength, 0);
     assert.match(first.stderr.toString(), /Rendered \d+ page/);
+    const cliReport = JSON.parse(await readFile(report, "utf8"));
+    assert.equal(cliReport.options.reviewProfileAlreadyApplied, true);
+    assert.equal(cliReport.derivedProfileSource, undefined);
     const originalDigest = digest(await readFile(pdf));
     assert.ok((await stat(pdf)).size > 1_000);
 

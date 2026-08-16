@@ -171,6 +171,7 @@
         "required": ["reviewProfile", "commentProfile", "layoutDigest"],
         "properties": {
           "reviewProfile": { "enum": ["final", "original", "markup"] },
+          "reviewProfileAlreadyApplied": { "const": true },
           "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
           "layoutDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }

@@ -3625,6 +3625,8 @@ export interface WorkerProjectReviewProfileRequest extends WorkerRequestBase {
   type: "projectReviewProfile";
   documentBytes: Uint8Array;
   profile: WorkerReviewProfile;
+  /** Skip projection after inventorying a caller-declared final/original source. */
+  reviewProfileAlreadyApplied?: true;
 }
 
 /** Generate a deterministic package manifest without opening a live session. */

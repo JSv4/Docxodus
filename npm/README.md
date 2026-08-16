@@ -694,7 +694,10 @@ it never silently presents an ambiguous accepted/rejected result.
 The exporter never changes the caller's snapshot. `renderReport.source` always identifies those
 raw bytes. `final` and `original` operate on an isolated derived package and record its exact digest
 and length in `renderReport.derivedProfileSource`; `markup` renders the unchanged source and omits
-that field. Profiles participate in the layout digest and renderer fingerprint. Browser-only font
+that field. A caller that already owns the exact final/original package may set
+`reviewProfileAlreadyApplied: true`; the exporter preserves those bytes, omits
+`derivedProfileSource`, and fails if it inventories any residual tracked revision. The option is
+invalid with `markup`. Profiles participate in the layout digest and renderer fingerprint. Browser-only font
 facts remain labelled `browserObserved` unless the host supplies attestable resolution; they are
 not presented as a verified host-font environment.
 

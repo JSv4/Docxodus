@@ -26,6 +26,7 @@ const HELP = `Usage:
 Options:
   --document-version <integer>       Immutable source version (default: 0)
   --expected-source-digest <sha256>  Required source digest
+  --review-profile-already-applied   Preserve an exact pre-resolved final/original source
   --unsupported-content <warn|strict>
   --strict-fonts
   --timeout <milliseconds>
@@ -111,6 +112,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         comments: { type: "string" },
         "document-version": { type: "string" },
         "expected-source-digest": { type: "string" },
+        "review-profile-already-applied": { type: "boolean", default: false },
         "unsupported-content": { type: "string" },
         "strict-fonts": { type: "boolean", default: false },
         timeout: { type: "string" },
@@ -162,6 +164,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       commentProfile,
       documentVersion: integer(parsed.values["document-version"], "--document-version"),
       expectedSourceDigest: parsed.values["expected-source-digest"],
+      reviewProfileAlreadyApplied: parsed.values["review-profile-already-applied"],
       unsupportedContent: parsed.values["unsupported-content"] === undefined
         ? undefined
         : oneOf(parsed.values["unsupported-content"], ["warn", "strict"] as const,

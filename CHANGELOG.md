@@ -11,7 +11,8 @@ All notable changes to this project will be documented in this file.
   preserves tracked-change authorship and timestamps; comment threads retain author, date, reply,
   and resolution metadata across body, running stories, and notes. Orphaned or cyclic reply metadata
   renders as auditable roots with structured diagnostics. Unsupported or residual revision families
-  likewise warn and fail closed under strict policy. Browser and PDF matrices retain source, HTML,
+  likewise warn and fail closed under strict policy. Exact pre-resolved final/original sources can
+  be preserved byte-for-byte only after a zero-residual-revision check. Browser and PDF matrices retain source, HTML,
   PDF, screenshots, PageMaps, reports, semantic inspections, and expected strict-failure evidence
   before assertions run; the complete 12-case browser gallery has one portable durable index.
 - **Generated-PDF visual-fidelity ratchet (#443).** A compact, provenance- and hash-pinned legal
