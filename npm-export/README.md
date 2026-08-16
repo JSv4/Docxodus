@@ -57,9 +57,11 @@ asset is length/hash checked against the public manifest and served at a routed 
 Any request outside that closed graph fails the operation.
 
 PDF printing enables backgrounds, uses CSS page sizes, applies zero browser margins, preserves DOM
-text/links/vector content, and verifies every page MediaBox/CropBox with a real PDF parser. Reports
-record the exact PDF SHA-256 and Chromium's volatile metadata; PDF byte identity is intentionally
-not claimed across runs.
+text/links/vector content, and verifies every page MediaBox/CropBox origin and dimensions with a
+real PDF parser. Mixed portrait/landscape and Letter/A4 sections retain their per-page CSS size;
+screen zoom/transforms are removed by the print contract and cannot change physical PDF geometry.
+Reports record the exact PDF SHA-256 and Chromium's volatile metadata; PDF byte identity is
+intentionally not claimed across runs.
 
 ## CLI
 
@@ -84,7 +86,7 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
   `unsupported_runtime` until issue #442 supplies the verified pre-layout font hook. Browser-observed
   fonts remain reported honestly; `strictFonts` therefore fails closed.
 - The `original` review profile remains fail-closed until issue #444 completes its projection.
-- Mixed-section and broader fidelity ratchets are extended by issues #440 and #443.
+- The broader generated-PDF fidelity ratchet is extended by issue #443.
 
 Failures are `DocxodusExportError` objects with stable code, phase, remediation, safe detail, and a
 structured failed report when materialization had begun.

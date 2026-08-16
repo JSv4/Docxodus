@@ -22,6 +22,20 @@ const PAGE_GEOMETRY = `
   data-margin-top="1" data-margin-right="1"
   data-margin-bottom="1" data-margin-left="1"`;
 
+const SHARED_PAGE_GEOMETRY = `
+  data-page-width="102" data-page-height="302"
+  data-content-width="100" data-content-height="300"
+  data-margin-top="1" data-margin-right="1"
+  data-margin-bottom="1" data-margin-left="1"
+  data-header-height="1" data-footer-height="1"`;
+
+const SPILL_SECTION_GEOMETRY = `
+  data-page-width="102" data-page-height="302"
+  data-content-width="100" data-content-height="300"
+  data-margin-top="1" data-margin-right="1"
+  data-margin-bottom="1" data-margin-left="1"
+  data-header-height="25" data-footer-height="17"`;
+
 function staging(sections: string): string {
   return `
     <style>
@@ -37,6 +51,15 @@ interface PaginatedShape {
   content: string[][];
   /** Per page, each top-level block's inline column-count ('' when none). */
   columnCounts: string[][];
+  /** Section that owns each physical page's running stories and numbering. */
+  sectionIndices: number[];
+  /** One-based page number within the owning section. */
+  pagesInSection: number[];
+  headers: string[];
+  footers: string[];
+  footnotes: string[];
+  headerTops: number[];
+  footerBottoms: number[];
 }
 
 async function paginate(page: Page): Promise<PaginatedShape> {
@@ -49,6 +72,7 @@ async function paginate(page: Page): Promise<PaginatedShape> {
     new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
 
     const pages = Array.from(container.querySelectorAll<HTMLElement>('.page-content'));
+    const boxes = Array.from(container.querySelectorAll<HTMLElement>('.page-box'));
     return {
       content: pages.map(content =>
         Array.from(content.children).map(block => (block.textContent || '').trim())
@@ -58,6 +82,20 @@ async function paginate(page: Page): Promise<PaginatedShape> {
           block => (block as HTMLElement).style.columnCount || ''
         )
       ),
+      sectionIndices: boxes.map(box => Number(box.dataset.sectionIndex)),
+      pagesInSection: boxes.map(box => Number(box.dataset.pageInSection)),
+      headers: boxes.map(box =>
+        (box.querySelector<HTMLElement>('.page-header')?.innerText || '').trim()),
+      footers: boxes.map(box =>
+        (box.querySelector<HTMLElement>('.page-footer')?.innerText || '').trim()),
+      footnotes: boxes.map(box =>
+        (box.querySelector<HTMLElement>('.page-footnotes')?.innerText || '')
+          .replace(/\s+/g, ' ')
+          .trim()),
+      headerTops: boxes.map(box =>
+        parseFloat(box.querySelector<HTMLElement>('.page-header')?.style.top || 'NaN')),
+      footerBottoms: boxes.map(box =>
+        parseFloat(box.querySelector<HTMLElement>('.page-footer')?.style.bottom || 'NaN')),
     };
   });
 }
@@ -122,6 +160,62 @@ test.describe('Continuous section breaks', () => {
     const { content } = await paginate(page);
 
     expect(content).toEqual([['title', 'first'], ['second']]);
+  });
+
+  test('an overflow page belongs to the continuous section that supplies its content', async ({ page }) => {
+    await page.setContent(staging(`
+      <div id="pagination-hf-registry">
+        <div data-section="0" data-hf-type="header-default"><p>old header</p></div>
+        <div data-section="0" data-hf-type="footer-default"><p>old footer</p></div>
+        <div data-section="1" data-hf-type="header-first"><p>new first header</p></div>
+        <div data-section="1" data-hf-type="header-even"><p>new even header</p></div>
+        <div data-section="1" data-hf-type="header-default"><p>new default header</p></div>
+        <div data-section="1" data-hf-type="footer-first"><p>new first footer</p></div>
+        <div data-section="1" data-hf-type="footer-even"><p>new even footer</p></div>
+        <div data-section="1" data-hf-type="footer-default"><p>new default footer</p></div>
+      </div>
+      <div data-section-index="0" ${SHARED_PAGE_GEOMETRY}>
+        <p style="height: 80pt">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous" ${SPILL_SECTION_GEOMETRY}>
+        <p style="height: 60pt">first</p>
+        <p style="height: 180pt">second</p>
+      </div>`));
+
+    const result = await paginate(page);
+
+    expect(result.content).toEqual([['title', 'first'], ['second']]);
+    expect(result.sectionIndices).toEqual([0, 1]);
+    // The shared page is already page 1 of section 1 even though section 0 owns its stories.
+    expect(result.pagesInSection).toEqual([1, 2]);
+    expect(result.headers).toEqual(['old header', 'new even header']);
+    expect(result.footers).toEqual(['old footer', 'new even footer']);
+    expect(result.headerTops).toEqual([1, 25]);
+    expect(result.footerBottoms).toEqual([1, 17]);
+  });
+
+  test('a pre-break footnote promotes a continuous section to a fresh page', async ({ page }) => {
+    await page.setContent(staging(`
+      <div id="pagination-footnote-registry">
+        <div class="footnote-item" data-footnote-id="f1">
+          <span class="footnote-number">1</span>
+          <span class="footnote-content">note before section break</span>
+        </div>
+      </div>
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt">citing text <sup data-footnote-id="f1">1</sup></p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt">later section</p>
+      </div>`));
+
+    const result = await paginate(page);
+
+    expect(result.content).toEqual([['citing text 1'], ['later section']]);
+    expect(result.sectionIndices).toEqual([0, 1]);
+    expect(result.pagesInSection).toEqual([1, 1]);
+    expect(result.footnotes[0]).toContain('note before section break');
+    expect(result.footnotes[1]).toBe('');
   });
 });
 

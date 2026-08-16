@@ -84,12 +84,14 @@ export async function verifyPdf(
     const media = page.getMediaBox();
     const crop = page.getCropBox();
     for (const [boxName, box] of [["MediaBox", media], ["CropBox", crop]] as const) {
-      if (!closeTo(box.width, expected.width) || !closeTo(box.height, expected.height)) {
+      if (!closeTo(box.x, 0) || !closeTo(box.y, 0)
+        || !closeTo(box.width, expected.width) || !closeTo(box.height, expected.height)) {
         exportError(
           "output_verification_failure",
           "output_verification",
-          `PDF page ${index + 1} ${boxName} is ${box.width}×${box.height}pt; `
-            + `finalized layout requires ${expected.width}×${expected.height}pt.`,
+          `PDF page ${index + 1} ${boxName} is `
+            + `[${box.x}, ${box.y}, ${box.width}, ${box.height}]pt; finalized layout requires `
+            + `[0, 0, ${expected.width}, ${expected.height}]pt.`,
           "Use CSS page-size printing with zero browser margins.",
         );
       }

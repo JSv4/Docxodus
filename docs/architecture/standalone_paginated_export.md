@@ -687,8 +687,8 @@ the clipped/oversized condition and fails rather than shipping a complete result
 
 Package preflight, raw source identity, revision/comment/media inventory, safety findings, and ZIP
 resource ceilings reuse #493's `PackageManifestGenerator` contract through its WASM surface. The
-export path does not add a second partial ZIP inspector. Until #493 is merged into the export stack,
-the production Node/CLI gate cannot be declared complete.
+export path does not add a second partial ZIP inspector. The corrected #493 implementation is an
+ancestor of the export stack and is exercised by the browser and Node/CLI production gates.
 
 ## Follow-on reconciliation
 
@@ -707,5 +707,5 @@ the production Node/CLI gate cannot be declared complete.
 These remain separate PRs in dependency order. #489 may land independently on `main`; #438 builds
 on this decision; #439 builds on #438; #440–#442 and #444 stack on the first vertical PDF path;
 #443 is the release gate. #439 supplies the production adapter contract, and a final commit on the
-existing draft #499 consumes it without creating a second #465 PR. The production export stack also
-rebases onto #493 before its preflight contract is finalized.
+existing draft #499 consumes it without creating a second #465 PR. The production export stack is
+rooted in the corrected #493 preflight contract.
