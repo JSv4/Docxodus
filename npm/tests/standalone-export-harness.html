@@ -8,10 +8,63 @@
   <p id="status">ready</p>
   <script type="module">
     import {
+      awaitFinalPrintReadiness,
       canonicalJson,
       convertDocxToPaginatedHtml,
       DocxodusExportError,
+      PrintReadinessError,
     } from './export-browser.js';
+
+    let readinessProbe;
+    let readinessSettled = true;
+    let activeGraphic;
+
+    function resetReadinessFixture(options) {
+      document.getElementById('readiness-fixture')?.remove();
+      const fixture = document.createElement('section');
+      fixture.id = 'readiness-fixture';
+      const style = options.fontUrl
+        ? `<style>@font-face{font-family:"Docxodus Delayed Readiness";src:url("${options.fontUrl}") format("woff2")}
+          .readiness-font{font-family:"Docxodus Delayed Readiness"}</style>`
+        : '';
+      const image = options.imageUrl
+        ? `<img alt="delayed-readiness-image" src="${options.imageUrl}" width="32" height="32">`
+        : '';
+      fixture.innerHTML = `${style}<div class="page-box" data-page-number="1"
+        data-section-index="0" style="width:612pt;height:792pt">
+        <p class="readiness-font" data-source-anchor-id="p:main:readiness">Delayed readiness text</p>
+        ${image}
+        <svg data-docxodus-materialization="chart"
+          data-docxodus-materialization-state="pending"
+          data-docxodus-materialization-id="delayed-chart"></svg>
+      </div>`;
+      document.body.appendChild(fixture);
+      activeGraphic = fixture.querySelector('svg');
+    }
+
+    async function runReadinessProbe(options) {
+      const started = performance.now();
+      try {
+        const result = await awaitFinalPrintReadiness(document, {
+          timeoutMs: options.timeoutMs,
+          quietIntervalMs: options.quietIntervalMs ?? 100,
+        });
+        return { ok: true, elapsedMs: performance.now() - started, result };
+      } catch (error) {
+        if (!(error instanceof PrintReadinessError)) throw error;
+        return {
+          ok: false,
+          elapsedMs: performance.now() - started,
+          error: {
+            phase: error.phase,
+            message: error.message,
+            pending: Array.from(error.pending),
+          },
+        };
+      } finally {
+        readinessSettled = true;
+      }
+    }
 
     window.DocxodusStandalone = {
       canonicalJson,
@@ -40,6 +93,54 @@
           return error.toJSON();
         }
       },
+      convertWithDelayedPagination: async (bytes, options, delayMs = 50) => {
+        const previousProgress = globalThis.__docxodusReadinessProgress;
+        let paginationEntered = false;
+        try {
+          globalThis.__docxodusReadinessProgress = (snapshot) => {
+            if (snapshot.phase !== 'pagination' || snapshot.status !== 'pending') return;
+            paginationEntered = true;
+            const delayUntil = performance.now() + delayMs;
+            while (performance.now() < delayUntil) {
+              // Deliberately hold the pagination phase long enough to model delayed layout work.
+            }
+          };
+          const unexpectedSuccess = await convertDocxToPaginatedHtml(
+            new Uint8Array(bytes),
+            { wasmBasePath: './', ...options },
+          );
+          return { paginationEntered, unexpectedSuccess };
+        } catch (error) {
+          if (!(error instanceof DocxodusExportError)) throw error;
+          return { paginationEntered, error: error.toJSON() };
+        } finally {
+          if (previousProgress === undefined) delete globalThis.__docxodusReadinessProgress;
+          else globalThis.__docxodusReadinessProgress = previousProgress;
+        }
+      },
+      startReadinessProbe: (options) => {
+        resetReadinessFixture(options);
+        readinessSettled = false;
+        readinessProbe = runReadinessProbe(options);
+      },
+      releaseReadinessGraphic: () => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        activeGraphic.setAttribute('viewBox', '0 0 32 32');
+        activeGraphic.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.setAttribute('data-docxodus-materialization-state', 'complete');
+      },
+      releaseReadinessGraphicWithDelayedTreeMutation: (delayMs) => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        activeGraphic.setAttribute('viewBox', '0 0 32 32');
+        activeGraphic.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.setAttribute('data-docxodus-materialization-state', 'complete');
+        setTimeout(() => {
+          const page = document.querySelector('#readiness-fixture .page-box');
+          page?.setAttribute('data-delayed-layout', 'complete');
+        }, delayMs);
+      },
+      readinessProbeSettled: () => readinessSettled,
+      finishReadinessProbe: () => readinessProbe,
     };
     window.DocxodusStandaloneReady = true;
   </script>

@@ -63,6 +63,13 @@ screen zoom/transforms are removed by the print contract and cannot change physi
 Reports record the exact PDF SHA-256 and Chromium's volatile metadata; PDF byte identity is
 intentionally not claimed across runs.
 
+Before printing, the browser waits for explicit font, image, chart/SVG, pagination, and stable-page
+tree signals. It repeats the barrier after reopening the serialized standalone document so the
+checks apply to the exact DOM Chromium prints. One total deadline bounds the operation; structured
+failures identify the incomplete phase and current pending resources. The end-to-end test output
+includes `test-artifacts/view-artifacts.html`, which links the successful PDF/HTML plus readiness,
+geometry, request, and failure evidence even when a later test fails.
+
 ## CLI
 
 Profiles are explicit:

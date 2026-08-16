@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { generateCorruptImageDocx } from './docx-corrupt-image-fixture.js';
 import { generateFootnoteDocx } from './docx-footnote-fixture.js';
 import { generateTableCommentDocx } from './docx-page-map-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
@@ -25,7 +26,19 @@ interface BrowserExportResult {
     environment: { rendererFingerprint: string; verification: string };
     pages: Array<{ pageNumber: number; width: number; height: number; sectionIndex?: number }>;
     bindings: { pageMapDigest: string; htmlDigest: string };
+    readiness: Array<{
+      phase: string;
+      status: string;
+      pending: string[];
+      diagnostics?: Array<{ code: string; count: number }>;
+    }>;
     fonts: Array<{ requestedFamily: string; status: string; source: string }>;
+    resources: Array<{
+      kind: string;
+      status: string;
+      readiness?: string;
+      resource?: string;
+    }>;
     warnings: Array<{ code: string; severity: string; phase: string }>;
   };
   warnings: unknown[];
@@ -209,6 +222,29 @@ test.describe('standalone paginated HTML', () => {
       severity: 'warning',
       phase: 'font_loading',
     }));
+    for (const phase of [
+      'wasm_initialization',
+      'docx_conversion',
+      'font_loading',
+      'image_decoding',
+      'chart_svg_materialization',
+      'pagination',
+      'running_story_placement',
+      'page_tree_stability',
+    ]) {
+      expect(result.renderReport.readiness).toContainEqual(expect.objectContaining({
+        phase,
+        status: 'complete',
+        pending: [],
+      }));
+    }
+    expect(result.renderReport.readiness).toContainEqual(expect.objectContaining({
+      phase: 'pagination',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'sections_processed', count: 1 }),
+        expect.objectContaining({ code: 'page_runs_processed', count: 1 }),
+      ]),
+    }));
     expect(result.renderReport.source.rawPackageBytesDigest).toBe(digest(source));
     expect(result.renderReport.bindings.htmlDigest).toBe(digest(result.html));
     expect(result.renderReport.bindings.pageMapDigest).toBe(digest(canonical(result.pageMap)));
@@ -350,6 +386,47 @@ test.describe('standalone paginated HTML', () => {
     expect(linkAudit.fragmentsResolve).toBe(true);
   });
 
+  test('reports a failed supported-image decode according to warn or strict policy', async ({ page }, testInfo) => {
+    const source = generateCorruptImageDocx();
+    const warned = await convert(page, source, false, { unsupportedContent: 'warn' });
+    expect(warned.html).toContain('docxodus-export-resource-placeholder');
+    expect(warned.renderReport.resources).toContainEqual(expect.objectContaining({
+      kind: 'image',
+      status: 'omitted',
+      readiness: 'failed',
+    }));
+    expect(warned.renderReport.warnings).toContainEqual(expect.objectContaining({
+      code: 'image_decode_failed',
+      severity: 'warning',
+      phase: 'image_decoding',
+    }));
+
+    const strictFailure = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertFailure(bytes, {
+        reviewProfile: 'final',
+        commentProfile: 'hidden',
+        unsupportedContent: 'strict',
+      }), Array.from(source));
+    expect(strictFailure.code).toBe('resource_policy_failure');
+    expect(strictFailure.phase).toBe('image_decoding');
+    expect(strictFailure.report.readiness).toContainEqual(expect.objectContaining({
+      phase: 'image_decoding',
+      status: 'failed',
+    }));
+    expect(strictFailure.report.resources).toContainEqual(expect.objectContaining({
+      kind: 'image',
+      status: 'omitted',
+      readiness: 'failed',
+    }));
+    await testInfo.attach('image-readiness-policy.json', {
+      body: Buffer.from(`${JSON.stringify({
+        warning: warned.renderReport,
+        strictFailure,
+      }, null, 2)}\n`),
+      contentType: 'application/json',
+    });
+  });
+
   test('preserves a structured failed report for strict unsupported content', async ({ page }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'WC', 'WC012-Math-After.docx')));
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
@@ -421,6 +498,7 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
       const first = foreign.querySelector<HTMLElement>('.page-box')!;
       return {
         pages: pagination.totalPages,
+        readiness: pagination.readiness,
         width: first.getBoundingClientRect().width,
         authoredWidth: first.style.width,
         zoom: first.style.zoom,
@@ -433,6 +511,12 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
   });
 
   expect(result.pages).toBeGreaterThan(1);
+  expect(result.readiness.status).toBe('ready');
+  expect(result.readiness.pageCount).toBe(result.pages);
+  expect(result.readiness.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'sections_processed', count: 1 }),
+    expect.objectContaining({ code: 'page_runs_processed', count: 1 }),
+  ]));
   expect(result.authoredWidth).toBe('612pt');
   expect(result.width).toBeGreaterThan(0);
   expect(Number(result.zoom)).toBeCloseTo(0.8, 5);

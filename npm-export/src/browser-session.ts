@@ -63,12 +63,33 @@ interface BridgeResponse {
   error?: BrowserMaterializationFailure;
 }
 
+interface ReadinessProgress {
+  phase: ExportPhase;
+  status: "pending" | "complete" | "failed";
+  pending: string[];
+}
+
+interface PdfActivationResponse {
+  ok: boolean;
+  readiness?: {
+    pageCount: number;
+    signature: string;
+    quietIntervalMs: number;
+    animationFrames: number;
+  };
+  error?: {
+    phase: ExportPhase;
+    message: string;
+    pending: string[];
+  };
+}
+
 export interface OwnedExportBrowserSession {
   browser: Browser;
   close(): Promise<void>;
 }
 
-function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print", pending: string) {
+function timeoutError(phase: ExportPhase, pending: string) {
   return new DocxodusExportError(
     "readiness_timeout",
     phase,
@@ -90,6 +111,7 @@ async function bounded<T>(
   phase: "wasm_initialization" | "pdf_print",
   pending: string,
   operation: () => Promise<T>,
+  readinessProgress?: () => ReadinessProgress | undefined,
 ): Promise<T> {
   const timeoutMs = remaining(deadline, phase);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -100,7 +122,11 @@ async function bounded<T>(
         timer = setTimeout(() => {
           // Closing the owned context cancels page work, workers, and PDF printing.
           void context?.close().catch(() => undefined);
-          reject(timeoutError(phase, pending));
+          const progress = readinessProgress?.();
+          reject(timeoutError(
+            progress?.phase ?? phase,
+            progress && progress.pending.length > 0 ? progress.pending.join(", ") : pending,
+          ));
         }, timeoutMs);
       }),
     ]);
@@ -246,19 +272,38 @@ async function activateFinalDocument(
   context: BrowserContext,
   page: Page,
   deadline: number,
-): Promise<void> {
-  await bounded(context, deadline, "pdf_print", "offline finalized HTML reopen", async () => {
-    await page.evaluate(() => {
+  expectedPageCount: number,
+): Promise<NonNullable<PdfActivationResponse["readiness"]>> {
+  return bounded(context, deadline, "pdf_print", "offline finalized HTML print readiness", async () => {
+    const timeoutMs = Math.max(1, remaining(deadline, "pdf_print") - 250);
+    const activation = await page.evaluate(async (readinessTimeoutMs) => {
       const bridge = (globalThis as unknown as {
-        __docxodusExportBridge: { activatePdfDocument(): void };
+        __docxodusExportBridge: {
+          activatePdfDocument(timeout: number): Promise<PdfActivationResponse>;
+        };
       }).__docxodusExportBridge;
-      bridge.activatePdfDocument();
-    });
-    await page.waitForFunction(() =>
-      document.readyState === "complete"
-      && document.documentElement.dataset.docxodusStandalone === "v1"
-      && document.querySelectorAll(".page-box").length > 0);
-    await page.evaluate(async () => { await document.fonts.ready; });
+      return bridge.activatePdfDocument(readinessTimeoutMs);
+    }, timeoutMs);
+    if (!activation.ok || !activation.readiness) {
+      const failure = activation.error;
+      exportError(
+        failure?.message.includes("timed out") ? "readiness_timeout" : "output_verification_failure",
+        failure?.phase ?? "page_tree_stability",
+        failure?.message ?? "The reopened print document did not report readiness.",
+        "Inspect the pending resource and retry with a stable standalone document.",
+        { detail: failure?.pending.join(", ") },
+      );
+    }
+    if (activation.readiness.pageCount !== expectedPageCount) {
+      exportError(
+        "output_verification_failure",
+        "page_tree_stability",
+        `The reopened print document changed page count (${activation.readiness.pageCount} != ${expectedPageCount}).`,
+        "Report the source document and final-tree signature to Docxodus.",
+        { detail: activation.readiness.signature },
+      );
+    }
+    return activation.readiness;
   });
 }
 
@@ -297,6 +342,7 @@ export async function renderInBrowser(
   let primaryError: unknown;
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
+  let lastReadinessProgress: ReadinessProgress | undefined;
 
   try {
     launch = await launchBrowser(runtime, deadline);
@@ -380,6 +426,20 @@ export async function renderInBrowser(
     });
 
     const page = await context.newPage();
+    await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
+      const progress = value as Partial<ReadinessProgress>;
+      if (typeof progress.phase === "string"
+        && (progress.status === "pending" || progress.status === "complete" || progress.status === "failed")
+        && Array.isArray(progress.pending)
+        && progress.pending.every((entry) => typeof entry === "string")) {
+        lastReadinessProgress = {
+          phase: progress.phase as ExportPhase,
+          status: progress.status,
+          pending: [...progress.pending],
+        };
+        currentPhase = lastReadinessProgress.phase;
+      }
+    });
     page.on("popup", (popup) => { denied.push(popup.url()); void popup.close(); });
     page.on("download", (download) => { denied.push(download.url()); void download.cancel(); });
     page.setDefaultTimeout(remaining(deadline, "wasm_initialization"));
@@ -408,10 +468,16 @@ export async function renderInBrowser(
         return bridge.render(inputUrl, options, wantsHtml, wantsPdf);
       }, {
         inputUrl: `${origin}${inputPath}`,
-        options: { ...browserOptions, timeoutMs: remaining(deadline, "wasm_initialization") },
+        options: {
+          ...browserOptions,
+          // Let the in-browser coordinator publish its exact phase/pending report
+          // before the hard Node watchdog closes the context.
+          timeoutMs: Math.max(1, remaining(deadline, "wasm_initialization") - 250),
+        },
         wantsHtml: includeHtml,
         wantsPdf: includePdf,
       }),
+      () => lastReadinessProgress,
     );
     if (!bridgeResponse.ok || !bridgeResponse.result) {
       throw fromBrowserFailure(bridgeResponse.error ?? {});
@@ -423,7 +489,7 @@ export async function renderInBrowser(
       currentPhase = "pdf_print";
       const printStarted = performance.now();
       try {
-        await activateFinalDocument(context, page, deadline);
+        await activateFinalDocument(context, page, deadline, materialization.pageCount);
         await page.emulateMedia({ media: "print", colorScheme: "light", reducedMotion: "reduce" });
         pdf = new Uint8Array(await bounded(context, deadline, "pdf_print", "Chromium PDF printing", () =>
           page.pdf({

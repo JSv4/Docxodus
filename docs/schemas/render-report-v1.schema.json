@@ -49,6 +49,22 @@
         "sectionIndex": { "type": "integer", "minimum": 0 }
       }
     },
+    "paginationDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "count"],
+      "properties": {
+        "code": {
+          "enum": [
+            "sections_processed", "page_runs_processed", "source_anchors_inventoried",
+            "note_references_inventoried"
+          ]
+        },
+        "severity": { "const": "info" },
+        "message": { "type": "string", "minLength": 1 },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    },
     "bindings": {
       "type": "object",
       "additionalProperties": false,
@@ -107,7 +123,11 @@
             "phase": { "$ref": "#/$defs/phase" },
             "status": { "enum": ["complete", "failed"] },
             "elapsedMs": { "type": "number", "minimum": 0 },
-            "pending": { "type": "array", "items": { "type": "string" } }
+            "pending": { "type": "array", "items": { "type": "string" } },
+            "diagnostics": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/paginationDiagnostic" }
+            }
           }
         }
       },
@@ -134,7 +154,10 @@
           "properties": {
             "kind": { "enum": ["image", "svg", "chart", "external_link"] },
             "status": { "enum": ["embedded", "inline", "allowed_user_link", "omitted"] },
+            "readiness": { "enum": ["complete", "failed"] },
             "resource": { "type": "string" },
+            "anchorId": { "type": "string", "minLength": 1 },
+            "message": { "type": "string", "minLength": 1 },
             "mediaType": { "type": "string", "minLength": 1 },
             "byteLength": { "type": "integer", "minimum": 0 }
           }
@@ -156,10 +179,6 @@
       },
       "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
     },
-    "baseRequired": [
-      "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
-      "unsupportedContent", "warnings"
-    ],
     "complete": {
       "type": "object",
       "additionalProperties": false,

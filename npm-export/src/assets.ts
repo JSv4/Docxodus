@@ -41,8 +41,10 @@ const BOOTSTRAP_HTML = `<!doctype html>
 <script type="module" src="/bootstrap.js"></script></body></html>`;
 
 const BOOTSTRAP_JS = `import {
+  awaitFinalPrintReadiness,
   convertDocxToPaginatedHtml,
   DocxodusExportError,
+  PrintReadinessError,
 } from "/export-browser.bundle.js";
 
 globalThis.__docxodusExportBridge = {
@@ -79,13 +81,34 @@ globalThis.__docxodusExportBridge = {
       };
     }
   },
-  activatePdfDocument() {
-    const html = globalThis.__docxodusPdfHtml;
-    delete globalThis.__docxodusPdfHtml;
-    if (typeof html !== "string") throw new Error("No finalized HTML is staged for PDF output.");
-    document.open();
-    document.write(html);
-    document.close();
+  async activatePdfDocument(timeoutMs) {
+    try {
+      const html = globalThis.__docxodusPdfHtml;
+      delete globalThis.__docxodusPdfHtml;
+      if (typeof html !== "string") throw new Error("No finalized HTML is staged for PDF output.");
+      document.open();
+      document.write(html);
+      document.close();
+      const readiness = await awaitFinalPrintReadiness(document, { timeoutMs });
+      return {
+        ok: true,
+        readiness: {
+          pageCount: readiness.pageTree.pageCount,
+          signature: readiness.pageTree.signature,
+          quietIntervalMs: readiness.pageTree.quietIntervalMs,
+          animationFrames: readiness.pageTree.animationFrames,
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          phase: error instanceof PrintReadinessError ? error.phase : "page_tree_stability",
+          message: error instanceof Error ? error.message : String(error),
+          pending: error instanceof PrintReadinessError ? Array.from(error.pending) : [],
+        },
+      };
+    }
   },
 };
 globalThis.__docxodusExportReady = true;

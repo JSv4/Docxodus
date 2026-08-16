@@ -223,6 +223,8 @@ export type {
   PageDimensions,
   MeasuredBlock,
   PageInfo,
+  PaginationDiagnostic,
+  PaginationReadyResult,
   PaginationResult,
   PaginationOptions,
   PageMap,

@@ -7,7 +7,11 @@
  */
 
 import limitsContractJson from "./export-resource-limits-v1.json";
-import { PaginationEngine, type PageMap } from "./pagination.js";
+import {
+  PaginationEngine,
+  type PageMap,
+  type PaginationDiagnostic,
+} from "./pagination.js";
 import {
   createWorkerDocxodus,
   type WorkerDocxodus,
@@ -18,6 +22,25 @@ import {
   type PackageManifest,
   type VersionInfo,
 } from "./types.js";
+import {
+  documentFontReadiness,
+  documentGraphicReadiness,
+  documentImageReadiness,
+  pageTreeReadiness,
+  PrintReadinessError,
+  type FontReadinessProbe,
+  type PageTreeStabilityProbe,
+  type VisualResourceProbe,
+} from "./print-readiness.js";
+
+export { awaitFinalPrintReadiness, PrintReadinessError } from "./print-readiness.js";
+export type {
+  FinalPrintReadinessResult,
+  FontReadinessProbe,
+  PageTreeStabilityProbe,
+  PrintReadinessPhase,
+  VisualResourceProbe,
+} from "./print-readiness.js";
 
 export type ReviewProfile = "final" | "original" | "markup";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
@@ -113,6 +136,7 @@ export interface ReadinessOutcome {
   status: "complete" | "failed";
   elapsedMs: number;
   pending: string[];
+  diagnostics?: PaginationDiagnostic[];
 }
 
 export interface FontResolution {
@@ -125,7 +149,10 @@ export interface FontResolution {
 export interface ResourceOutcome {
   kind: "image" | "svg" | "chart" | "external_link";
   status: "embedded" | "inline" | "allowed_user_link" | "omitted";
+  readiness?: "complete" | "failed";
   resource?: string;
+  anchorId?: string;
+  message?: string;
   mediaType?: string;
   byteLength?: number;
 }
@@ -440,34 +467,64 @@ function monotonicNow(): number {
 async function runPhase<T>(
   state: ExecutionState,
   phase: ExportPhase,
-  pending: string[],
-  operation: () => T | Promise<T>,
+  pendingResources: string[] | (() => string[]),
+  operation: (signal: AbortSignal) => T | Promise<T>,
 ): Promise<T> {
   state.phase = phase;
   const started = monotonicNow();
+  const pending = (): string[] => [
+    ...(typeof pendingResources === "function" ? pendingResources() : pendingResources),
+  ];
+  const reportProgress = (status: "pending" | "complete" | "failed", resources: string[]): void => {
+    const reporter = (globalThis as typeof globalThis & {
+      __docxodusReadinessProgress?: (snapshot: {
+        phase: ExportPhase;
+        status: "pending" | "complete" | "failed";
+        pending: string[];
+      }) => unknown;
+    }).__docxodusReadinessProgress;
+    if (typeof reporter === "function") {
+      try {
+        void reporter({ phase, status, pending: [...resources] });
+      } catch {
+        // Progress is diagnostic-only; the readiness result remains authoritative.
+      }
+    }
+  };
   const remaining = state.deadline - Date.now();
   if (remaining <= 0) {
     fail("readiness_timeout", phase, `Export timed out during ${phase}.`,
-      "Increase timeoutMs or remove the pending resource.", { detail: pending.join(", ") });
+      "Increase timeoutMs or remove the pending resource.", { detail: pending().join(", ") });
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOutPending: string[] | undefined;
+  const controller = new AbortController();
+  reportProgress("pending", pending());
   try {
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new DocxodusExportError(
-        "readiness_timeout",
-        phase,
-        `Export timed out during ${phase}.`,
-        "Increase timeoutMs or remove the pending resource.",
-        { detail: pending.join(", ") },
-      )), remaining);
+      timer = setTimeout(() => {
+        const resources = pending();
+        timedOutPending = resources;
+        controller.abort();
+        reject(new DocxodusExportError(
+          "readiness_timeout",
+          phase,
+          `Export timed out during ${phase}.`,
+          "Increase timeoutMs or remove the pending resource.",
+          { detail: resources.join(", ") },
+        ));
+      }, remaining);
     });
-    const result = await Promise.race([Promise.resolve().then(operation), timeout]);
+    const result = await Promise.race([
+      Promise.resolve().then(() => operation(controller.signal)),
+      timeout,
+    ]);
     // A synchronous DOM operation cannot be pre-empted by the timer because it
     // blocks the event loop. Reject it immediately after control returns; hot
     // pagination loops also invoke the cooperative checkpoint below.
     if (Date.now() >= state.deadline) {
       fail("readiness_timeout", phase, `Export timed out during ${phase}.`,
-        "Increase timeoutMs or remove the pending resource.", { detail: pending.join(", ") });
+        "Increase timeoutMs or remove the pending resource.", { detail: pending().join(", ") });
     }
     state.readiness.push({
       phase,
@@ -475,17 +532,21 @@ async function runPhase<T>(
       elapsedMs: Math.max(0, monotonicNow() - started),
       pending: [],
     });
+    reportProgress("complete", []);
     return result;
   } catch (error) {
+    const resources = timedOutPending ?? pending();
     state.readiness.push({
       phase,
       status: "failed",
       elapsedMs: Math.max(0, monotonicNow() - started),
-      pending: [...pending],
+      pending: resources,
     });
+    reportProgress("failed", resources);
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    controller.abort();
   }
 }
 
@@ -631,6 +692,16 @@ export function canonicalJson(value: unknown): string {
 
 function addWarning(state: ExecutionState, warning: RenderWarning): void {
   state.warnings.push(warning);
+}
+
+function addPageTreeRetryWarning(state: ExecutionState): void {
+  addWarning(state, {
+    code: "page_tree_retry",
+    severity: "warning",
+    phase: "page_tree_stability",
+    message: "The finalized page tree changed during its quiet interval and was rebuilt from pristine converted HTML.",
+    remediation: "No action is required unless repeated exports fail page-tree stability.",
+  });
 }
 
 function enforceLimit(actual: number, maximum: number, name: keyof ExportResourceLimits, phase: ExportPhase): void {
@@ -1294,80 +1365,129 @@ function inventoryConvertedContent(
       ...(outcome.anchorId ? { anchorId: outcome.anchorId } : {}),
     });
   }
-
-  for (const image of Array.from(document.querySelectorAll<HTMLImageElement>("img"))) {
-    const source = image.getAttribute("src") ?? "";
-    const metadata = /^data:([^;,]+)/i.exec(source);
-    state.resources.push({
-      kind: "image",
-      status: "embedded",
-      resource: image.alt || undefined,
-      mediaType: metadata?.[1],
-      byteLength: estimateDataUrlBytes(source),
-    });
-  }
-  for (const svg of Array.from(document.querySelectorAll<SVGSVGElement>("svg"))) {
-    state.resources.push({
-      kind: svg.classList.contains("chart") || svg.closest("[class*='chart']") ? "chart" : "svg",
-      status: "inline",
-    });
-  }
 }
 
-async function awaitFonts(document: Document): Promise<void> {
-  if (document.fonts) await document.fonts.ready;
-}
-
-function inventoryBrowserObservedFonts(document: Document, state: ExecutionState): void {
-  const view = document.defaultView;
-  if (!view) throw new Error("render document has no defaultView");
-
-  const candidates = new Set<Element>([
-    document.body,
-    ...Array.from(document.querySelectorAll<HTMLElement>("[data-source-anchor-id]")),
-  ]);
-  const families = new Set<string>();
-  for (const element of candidates) {
-    if (!element.textContent?.trim()) continue;
-    const family = view.getComputedStyle(element).fontFamily.trim();
-    if (family) families.add(family);
-  }
-  for (const requestedFamily of Array.from(families).sort((left, right) =>
-    left.localeCompare(right))) {
+function recordFontReadiness(
+  probes: FontReadinessProbe[],
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  for (const probe of probes) {
     state.fonts.push({
-      requestedFamily,
-      status: "unverified",
+      requestedFamily: probe.requestedFamily,
+      status: probe.available ? "unverified" : "missing",
       source: "browser",
     });
+    if (!probe.available) {
+      addWarning(state, {
+        code: "font_unavailable",
+        severity: options.strictFonts ? "error" : "warning",
+        phase: "font_loading",
+        message: `The browser could not load the required font family: ${probe.requestedFamily}.`,
+        remediation: "Install or explicitly supply the required font before export.",
+        resource: probe.requestedFamily,
+      });
+    }
   }
-  if (families.size > 0) {
+  if (probes.some(({ available }) => available)) {
     addWarning(state, {
       code: "font_environment_unverified",
-      severity: "warning",
+      severity: options.strictFonts ? "error" : "warning",
       phase: "font_loading",
       message: "The browser loaded the requested CSS font families, but their exact files and substitutions are not attestable.",
       remediation: "Use the verified font resolver from issue #442 when exact font identity is required.",
     });
   }
-}
-
-async function decodeImages(document: Document): Promise<void> {
-  for (const image of Array.from(document.images)) {
-    if (typeof image.decode === "function") await image.decode();
-    if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
-      throw new Error(`Image failed to decode${image.alt ? `: ${image.alt}` : ""}`);
-    }
+  if (options.strictFonts && probes.length > 0) {
+    fail("resource_policy_failure", "font_loading",
+      "Strict font policy requires verified font files, but this runtime can only observe browser availability.",
+      "Use the verified font resolver delivered by issue #442 or disable strictFonts.", {
+        detail: probes.map(({ requestedFamily }) => requestedFamily).join(", "),
+      });
   }
 }
 
-function validateInlineSvg(document: Document): void {
-  for (const svg of Array.from(document.querySelectorAll<SVGSVGElement>("svg"))) {
-    if (!svg.hasAttribute("viewBox")
-      && !(Number.parseFloat(svg.getAttribute("width") ?? "") > 0
-        && Number.parseFloat(svg.getAttribute("height") ?? "") > 0)) {
-      throw new Error("Inline SVG has neither a viewBox nor explicit dimensions");
+function replaceFailedVisual(element: Element, label: string): void {
+  const placeholder = element.ownerDocument.createElement("span");
+  placeholder.className = "docxodus-export-resource-placeholder";
+  placeholder.setAttribute("role", "img");
+  placeholder.setAttribute("aria-label", `${label} unavailable`);
+  placeholder.textContent = `[${label} unavailable]`;
+  const style = element.getAttribute("style");
+  if (style) placeholder.setAttribute("style", style);
+  element.replaceWith(placeholder);
+}
+
+function recordImageReadiness(
+  images: HTMLImageElement[],
+  probes: VisualResourceProbe[],
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  probes.forEach((probe, index) => {
+    const image = images[index];
+    const source = image?.getAttribute("src") ?? "";
+    const metadata = /^data:([^;,]+)/i.exec(source);
+    state.resources.push({
+      kind: "image",
+      status: probe.status === "complete" ? "embedded" : "omitted",
+      readiness: probe.status,
+      resource: probe.resource,
+      ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
+      ...(probe.message ? { message: probe.message } : {}),
+      mediaType: metadata?.[1],
+      byteLength: estimateDataUrlBytes(source),
+    });
+    if (probe.status === "failed") {
+      if (image) replaceFailedVisual(image, probe.resource);
+      policyWarning(state, options, {
+        code: "image_decode_failed",
+        phase: "image_decoding",
+        message: `An embedded image could not be decoded: ${probe.resource}.`,
+        remediation: "Replace the image with a supported, non-corrupt embedded image.",
+        ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
+        resource: probe.resource,
+      });
     }
-  }
+  });
+}
+
+function graphicElements(document: Document): Element[] {
+  return Array.from(new Set(Array.from(document.querySelectorAll<Element>(
+    "svg, [data-docxodus-materialization]",
+  )))).filter((element) =>
+    element.closest("[data-docxodus-materialization]") === element
+    || !element.parentElement?.closest("[data-docxodus-materialization]"));
+}
+
+function recordGraphicReadiness(
+  elements: Element[],
+  probes: VisualResourceProbe[],
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  probes.forEach((probe, index) => {
+    state.resources.push({
+      kind: probe.kind,
+      status: probe.status === "complete" ? "inline" : "omitted",
+      readiness: probe.status,
+      resource: probe.resource,
+      ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
+      ...(probe.message ? { message: probe.message } : {}),
+    });
+    if (probe.status === "failed") {
+      const element = elements[index];
+      if (element) replaceFailedVisual(element, probe.resource);
+      policyWarning(state, options, {
+        code: "graphic_materialization_failed",
+        phase: "chart_svg_materialization",
+        message: `${probe.kind} content did not finish materializing: ${probe.resource}.`,
+        remediation: "Replace the graphic or use a supported static SVG representation.",
+        ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
+        resource: probe.resource,
+      });
+    }
+  });
 }
 
 function normalizeFragmentTargets(
@@ -1497,6 +1617,10 @@ function finalizePageTree(
     element.removeAttribute("contenteditable");
     element.removeAttribute("data-anchor");
     element.removeAttribute("data-committed-text");
+    element.removeAttribute("data-docxodus-materialization");
+    element.removeAttribute("data-docxodus-materialization-state");
+    element.removeAttribute("data-docxodus-materialization-id");
+    element.removeAttribute("data-docxodus-materialization-error");
     element.removeAttribute("draggable");
     element.style.removeProperty("will-change");
     element.style.removeProperty("contain");
@@ -1546,98 +1670,6 @@ function assertNoClippedContent(document: Document): void {
         `Page ${pageNumber} body content is clipped (${content.scrollHeight}px scroll height in a ${content.clientHeight}px band; ${overflow.join(", ")}).`,
         "Split the oversized block or reduce its dimensions before export.");
     }
-  }
-}
-
-function treeSignature(document: Document, pages: HTMLElement[]): string {
-  const geometry = pages.map((page) => {
-    const rect = page.getBoundingClientRect();
-    return [
-      page.dataset.pageNumber,
-      page.dataset.sectionIndex,
-      rect.width.toFixed(3),
-      rect.height.toFixed(3),
-      page.scrollWidth,
-      page.scrollHeight,
-    ];
-  });
-  const fragments = Array.from(
-    document.querySelectorAll<HTMLElement>(".page-box [data-source-anchor-id]"),
-    (element) => {
-      const rect = element.getBoundingClientRect();
-      const style = document.defaultView!.getComputedStyle(element);
-      return [
-        element.dataset.sourceAnchorId,
-        element.dataset.pageNumber,
-        element.dataset.fragmentIndex,
-        rect.left.toFixed(3),
-        rect.top.toFixed(3),
-        rect.width.toFixed(3),
-        rect.height.toFixed(3),
-        style.display,
-        style.visibility,
-      ];
-    },
-  );
-  return canonicalJson({
-    fragments,
-    geometry,
-    nodes: document.querySelectorAll("*").length,
-    textLength: document.body.textContent?.length ?? 0,
-  });
-}
-
-async function animationFrame(document: Document): Promise<void> {
-  const view = document.defaultView;
-  if (!view) throw new Error("render document has no defaultView");
-  await new Promise<void>((resolve) => view.requestAnimationFrame(() => resolve()));
-}
-
-async function awaitStableTree(document: Document, pages: HTMLElement[]): Promise<string> {
-  const view = document.defaultView as (Window & typeof globalThis) | null;
-  if (!view) throw new Error("render document has no defaultView");
-
-  let mutations = 0;
-  let resizes = 0;
-  const mutationObserver = new view.MutationObserver((records) => {
-    mutations += records.length;
-  });
-  const resizeObserver = typeof view.ResizeObserver === "function"
-    ? new view.ResizeObserver((records) => {
-      resizes += records.length;
-    })
-    : undefined;
-  mutationObserver.observe(document.documentElement, {
-    attributes: true,
-    characterData: true,
-    childList: true,
-    subtree: true,
-  });
-  for (const page of pages) resizeObserver?.observe(page);
-
-  try {
-    // Let initial ResizeObserver delivery and style/layout work settle before
-    // beginning the contractual quiet interval.
-    await animationFrame(document);
-    await animationFrame(document);
-    const first = treeSignature(document, pages);
-    mutations = 0;
-    resizes = 0;
-    // The render frame is intentionally script-disabled; use the caller realm's
-    // timer while continuing to observe and measure only the render realm.
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 100));
-    await animationFrame(document);
-    await animationFrame(document);
-    const second = treeSignature(document, pages);
-    if (first !== second || mutations !== 0 || resizes !== 0) {
-      throw new PageTreeInstabilityError(
-        `Final page tree changed during the quiet interval (mutations=${mutations}, resizes=${resizes})`,
-      );
-    }
-    return second;
-  } finally {
-    mutationObserver.disconnect();
-    resizeObserver?.disconnect();
   }
 }
 
@@ -1859,7 +1891,13 @@ function reportBase(
       commentProfile: options.commentProfile,
       layoutDigest,
     },
-    readiness: state.readiness.map((outcome) => ({ ...outcome, pending: [...outcome.pending] })),
+    readiness: state.readiness.map((outcome) => ({
+      ...outcome,
+      pending: [...outcome.pending],
+      ...(outcome.diagnostics
+        ? { diagnostics: outcome.diagnostics.map((diagnostic) => ({ ...diagnostic })) }
+        : {}),
+    })),
     fonts: state.fonts.map((font) => ({ ...font })),
     resources: state.resources.map((resource) => ({ ...resource })),
     unsupportedContent: state.unsupportedContent.map((outcome) => ({ ...outcome })),
@@ -1963,11 +2001,6 @@ export async function convertDocxToPaginatedHtml(
         "The original revision profile is not yet available in the browser materializer.",
         "Use final or markup until issue #444 supplies shared reject-revision projection.");
     }
-    if (options.strictFonts) {
-      fail("unsupported_runtime", "font_loading",
-        "Strict font verification is not yet available in the browser materializer.",
-        "Use the browser-observed font mode until issue #442 lands.");
-    }
     layoutDigest = await layoutDigestForOptions(options);
 
     runtimeAssets = await runPhase(state, "wasm_initialization", ["runtime asset graph"], () =>
@@ -1984,22 +2017,34 @@ export async function convertDocxToPaginatedHtml(
       worker!.convertDocxToHtml(sourceBytes!, conversionOptions(options)));
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
-    let firstAttemptSignature: string | undefined;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    let stableReferenceSignature: string | undefined;
+    let pageTreeRetries = 0;
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         frame = await createIsolatedFrame(globalThis.document, state, bootstrapHtml(options.title));
         const renderDocument = frame.contentDocument!;
         sanitizeConvertedDocument(renderDocument, convertedHtml, state, options);
         inventoryConvertedContent(renderDocument, state, options);
 
-        await runPhase(state, "font_loading", ["document.fonts.ready"], async () => {
-          await awaitFonts(renderDocument);
-          inventoryBrowserObservedFonts(renderDocument, state);
+        const fontTask = documentFontReadiness(renderDocument);
+        await runPhase(state, "font_loading", fontTask.pending, async (signal) => {
+          recordFontReadiness(await fontTask.wait(signal), state, options);
         });
-        await runPhase(state, "image_decoding", ["embedded images"], () =>
-          decodeImages(renderDocument));
-        await runPhase(state, "chart_svg_materialization", ["inline SVG"], () =>
-          validateInlineSvg(renderDocument));
+        const images = Array.from(renderDocument.images);
+        const imageTask = documentImageReadiness(renderDocument);
+        await runPhase(state, "image_decoding", imageTask.pending, async (signal) => {
+          recordImageReadiness(images, await imageTask.wait(signal), state, options);
+        });
+        const graphics = graphicElements(renderDocument);
+        const graphicTask = documentGraphicReadiness(renderDocument);
+        await runPhase(
+          state,
+          "chart_svg_materialization",
+          graphicTask.pending,
+          async (signal) => {
+            recordGraphicReadiness(graphics, await graphicTask.wait(signal), state, options);
+          },
+        );
 
         rendererFingerprint = await rendererIdentity(
           renderDocument,
@@ -2031,6 +2076,12 @@ export async function convertDocxToPaginatedHtml(
           },
         });
         const pagination = await runPhase(state, "pagination", ["page layout"], () => engine.paginate());
+        const paginationOutcome = state.readiness[state.readiness.length - 1];
+        if (paginationOutcome?.phase === "pagination" && paginationOutcome.status === "complete") {
+          paginationOutcome.diagnostics = pagination.readiness.diagnostics.map((diagnostic) => ({
+            ...diagnostic,
+          }));
+        }
         enforceLimit(pagination.totalPages, options.limits.finalPages, "finalPages", "pagination");
         const pages = pagination.pages.map((page) => page.element);
         if (pages.length === 0) {
@@ -2050,18 +2101,36 @@ export async function convertDocxToPaginatedHtml(
         enforceLimit(automaticResources.bytes, options.limits.automaticResourceBytes,
           "automaticResourceBytes", "running_story_placement");
 
-        const stableSignature = await runPhase(state, "page_tree_stability", ["fixed page tree"], () =>
-          awaitStableTree(renderDocument, pages));
-        if (attempt === 1) {
-          firstAttemptSignature = stableSignature;
+        const stabilityTask = pageTreeReadiness(renderDocument, pages);
+        const stability = await runPhase(
+          state,
+          "page_tree_stability",
+          stabilityTask.pending,
+          async (signal): Promise<PageTreeStabilityProbe> => {
+            try {
+              return await stabilityTask.wait(signal);
+            } catch (error) {
+              if (error instanceof PrintReadinessError) {
+                throw new PageTreeInstabilityError(error.message);
+              }
+              throw error;
+            }
+          },
+        );
+        if (stableReferenceSignature === undefined) {
+          stableReferenceSignature = stability.signature;
           frame.remove();
           frame = undefined;
           restoreAttemptState(state, attemptCheckpoint);
+          if (pageTreeRetries > 0) addPageTreeRetryWarning(state);
           continue;
         }
-        if (!firstAttemptSignature || firstAttemptSignature !== stableSignature) {
+        if (stableReferenceSignature !== stability.signature) {
+          // A mismatch resets the reference: publication requires two
+          // consecutive pristine-tree attempts with the same signature.
+          stableReferenceSignature = stability.signature;
           throw new PageTreeInstabilityError(
-            "Two layouts created from the same pristine converted HTML produced different final page trees",
+            "Consecutive layouts created from the same pristine converted HTML produced different final page trees",
           );
         }
         finalized = { frame, document: renderDocument, engine, pages };
@@ -2069,20 +2138,16 @@ export async function convertDocxToPaginatedHtml(
       } catch (error) {
         frame?.remove();
         frame = undefined;
-        if (!(error instanceof PageTreeInstabilityError) || attempt === 2) throw error;
+        if (!(error instanceof PageTreeInstabilityError)) throw error;
+        pageTreeRetries++;
         restoreAttemptState(state, attemptCheckpoint);
-        addWarning(state, {
-          code: "page_tree_retry",
-          severity: "warning",
-          phase: "page_tree_stability",
-          message: "The finalized page tree changed during its quiet interval and was rebuilt from pristine converted HTML.",
-          remediation: "No action is required unless repeated exports fail page-tree stability.",
-        });
+        addPageTreeRetryWarning(state);
+        if (attempt === 3) throw error;
       }
     }
     if (!finalized) {
       fail("pagination_failure", "page_tree_stability",
-        "The final page tree did not stabilize within two attempts.",
+        "The final page tree did not produce two matching stable signatures within three attempts.",
         "Remove asynchronous layout inputs or report the source document to Docxodus.");
     }
     frame = finalized.frame;

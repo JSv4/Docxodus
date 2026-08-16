@@ -440,23 +440,29 @@ Issue #441 implements a single deadline across the rendering phases:
 8. `page_tree_stability`
 9. `pdf_print`
 
-Fonts await `document.fonts.ready`; images await `decode()`. Current charts are synchronously
-generated inline SVG, so readiness validates their complete SVG tree and referenced resources;
-future asynchronous producers must register promises with the same barrier. Pagination always
+The coordinator explicitly loads every computed font family/sample and then awaits
+`document.fonts.ready`; images decode in parallel and produce structured complete/failed resource
+outcomes. Chart/SVG producers use `data-docxodus-materialization`, `-state`, and `-id` attributes;
+the barrier waits for all `pending` producers and validates the resulting SVG. Pagination returns
+an explicit ready result with page count and inventory diagnostics. Pagination always
 begins from pristine converted HTML. After pagination, the materializer creates and attaches the
 sanitized fixed page tree described above before the final ResizeObserver, mutation-counter, and
 geometry checks. Those signals must remain unchanged for two animation frames and at least a 100 ms
 quiet interval. If any resource, cleanup, final-style, or layout signal changes the page-tree
 signature, the materializer discards the mutated document, recreates it from pristine HTML, and
-paginates again. It returns only after two bounded attempts produce the same sanitized page-tree
-signature; only then does it measure a fresh PageMap, serialize, and perform the offline reopen
-check. Otherwise it fails `pagination_failure`. This prevents cleanup or readiness from making
+paginates again. It allows at most three attempts and returns only after two consecutive stable
+attempts produce the same sanitized page-tree signature; only then does it measure a fresh PageMap
+and serialize.
+The Node PDF path re-runs the font, image, graphic, and stable-tree barriers in the exact reopened
+document Chromium prints and verifies that its page count is unchanged. Otherwise export fails
+with the exact phase and pending resources. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
 The production path performs synchronous WASM conversion inside the existing dedicated worker and
 owns the render page/context. Its total deadline can therefore terminate the worker or close the
-owned context. A Promise race on the browser main thread is not considered cancellation. Timeout
-errors name the active phase and pending resources.
+owned context. Every browser phase also owns an abort signal that disconnects observers and cancels
+timed waits. Progress crosses the browser/Node boundary so the outer watchdog reports the active
+phase and its current pending resources instead of masking it as a generic Node timeout.
 
 Warnings use stable codes, severity, phase, source/part when known, message, and remediation. The
 render report records requested and resolved fonts, substitutions, missing fonts, image/chart/SVG

@@ -116,12 +116,31 @@ export interface PageInfo {
  * Result of pagination operation.
  */
 export interface PaginationResult {
+  /** Explicit completion result consumed by deterministic export barriers. */
+  readiness: PaginationReadyResult;
   /** Total number of pages */
   totalPages: number;
   /** Array of page information */
   pages: PageInfo[];
   /** Present only when the caller supplied an exact layoutToken. */
   pageMap?: PageMap;
+}
+
+export interface PaginationDiagnostic {
+  code:
+    | "sections_processed"
+    | "page_runs_processed"
+    | "source_anchors_inventoried"
+    | "note_references_inventoried";
+  severity: "info";
+  message: string;
+  count: number;
+}
+
+export interface PaginationReadyResult {
+  status: "ready";
+  pageCount: number;
+  diagnostics: PaginationDiagnostic[];
 }
 
 export type PageMapMode = "paginated" | "continuous";
@@ -640,18 +659,48 @@ export class PaginationEngine {
     this.transferVisibleFragmentTargets();
     this.lastPages = pages;
 
-      const result = {
-        totalPages: pages.length,
-        pages,
-        pageMap: this.layoutToken
-          ? this.materializePageMap(
-              this.layoutToken.documentVersion,
-              this.layoutToken.rendererFingerprint,
-            )
-          : undefined,
-      };
-      this.state = "complete";
-      return result;
+    const result = {
+      readiness: {
+        status: "ready" as const,
+        pageCount: pages.length,
+        diagnostics: [
+          {
+            code: "sections_processed" as const,
+            severity: "info" as const,
+            message: "Document sections processed by the paginator.",
+            count: sectionsToProcess.length,
+          },
+          {
+            code: "page_runs_processed" as const,
+            severity: "info" as const,
+            message: "Physical page runs processed after continuous-section grouping.",
+            count: runs.length,
+          },
+          {
+            code: "source_anchors_inventoried" as const,
+            severity: "info" as const,
+            message: "Canonical source anchors inventoried for PageMap completeness.",
+            count: this.expectedPageMapAnchorIds.size,
+          },
+          {
+            code: "note_references_inventoried" as const,
+            severity: "info" as const,
+            message: "Footnote and margin-comment references inventoried before layout.",
+            count: referencedFootnoteIds.size + referencedCommentIds.size,
+          },
+        ],
+      },
+      totalPages: pages.length,
+      pages,
+      pageMap: this.layoutToken
+        ? this.materializePageMap(
+            this.layoutToken.documentVersion,
+            this.layoutToken.rendererFingerprint,
+          )
+        : undefined,
+    };
+    this.state = "complete";
+    return result;
     } catch (error) {
       this.state = "failed";
       throw error;
