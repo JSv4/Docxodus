@@ -561,6 +561,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
   const outputRoot = initializeOutputRoot();
   const corpus = selectedCorpus();
   const startedAt = new Date().toISOString();
+  // Capture the source identity before any benchmark-owned write. Record updates intentionally
+  // dirty the repository at the end of a successful run; recomputing status while writing the
+  // final artifact would therefore mislabel a verified clean source as dirty.
+  const sourceCommit = commandVersion('git', ['rev-parse', 'HEAD']);
+  const sourceWorkingTreeDirty = commandVersion('git', ['status', '--porcelain']).length > 0;
   const cases: PdfParityCaseResult[] = [];
   let phase = 'artifact-initialization';
   let environment: Record<string, unknown> = {};
@@ -584,8 +589,8 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       schemaVersion: 1,
       measurementPipeline: 'generated-pdf-v1',
       generatedAt: state.updatedAt,
-      gitCommit: commandVersion('git', ['rev-parse', 'HEAD']),
-      workingTreeDirty: commandVersion('git', ['status', '--porcelain']).length > 0,
+      gitCommit: sourceCommit,
+      workingTreeDirty: sourceWorkingTreeDirty,
       rasterContract: {
         ...PDF_RASTER_CONTRACT,
         sha256: PDF_RASTER_CONTRACT_SHA256,
@@ -884,6 +889,16 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         throw new Error('Refusing to write a partial generated-PDF ratchet record; unset the filter.');
       }
       assertRecordUpdateProvenance(summary);
+      const finalSourceCommit = commandVersion('git', ['rev-parse', 'HEAD']);
+      const finalSourceWorkingTreeDirty = commandVersion('git', ['status', '--porcelain']).length > 0;
+      assertRecordUpdateProvenance({
+        ...summary,
+        gitCommit: finalSourceCommit,
+        workingTreeDirty: finalSourceWorkingTreeDirty,
+      });
+      if (finalSourceCommit !== summary.gitCommit) {
+        throw new Error('Refusing to refresh a parity ratchet after HEAD changed during the benchmark.');
+      }
       const record = buildRecord(summary, new Date().toISOString().slice(0, 10));
       record.description = 'Generated-PDF visual-fidelity regression ratchet (issue #443). '
         + 'Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and '
