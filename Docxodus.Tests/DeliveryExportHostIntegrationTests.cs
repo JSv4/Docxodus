@@ -221,18 +221,42 @@ public sealed class DeliveryExportHostIntegrationTests
             EmitMarkdownPatch = false,
             CaptureInitialProjection = false,
         });
-        var anchor = session.Project().AnchorIndex.Keys.First(value =>
-            value.StartsWith("p:body:", StringComparison.Ordinal));
+        var bodyAnchors = session.Project().AnchorIndex.Keys.Where(value =>
+                value.StartsWith("p:body:", StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (bodyAnchors.Length != 2)
+            throw new InvalidOperationException("The delivery fixture requires two body paragraphs.");
+        var commentHost = bodyAnchors[0];
+        var anchor = bodyAnchors[1];
+        var rootComment = session.AddComment(
+            commentHost,
+            null,
+            "Reviewer One",
+            "Please verify the delivery profile matrix.",
+            initials: "R1");
+        if (!rootComment.Success)
+            throw new InvalidOperationException(rootComment.Error?.Message
+                ?? "The root comment fixture was not created.");
+        var commentAnchor = rootComment.Created.First(created => created.Kind == "cmt").Id;
+        var reply = session.AddCommentReply(
+            commentAnchor,
+            "Reviewer Two",
+            "Verified across the retained cohorts.",
+            initials: "R2");
+        if (!reply.Success)
+            throw new InvalidOperationException(reply.Error?.Message
+                ?? "The reply comment fixture was not created.");
+        var resolved = session.SetCommentResolved(commentAnchor, true);
+        if (!resolved.Success)
+            throw new InvalidOperationException(resolved.Error?.Message
+                ?? "The comment-thread fixture was not resolved.");
+        var comments = session.ListComments();
+        if (comments.Count != 2 || comments.Any(comment => comment.Resolved != true))
+            throw new InvalidOperationException(
+                "The comment-thread fixture did not retain its resolved root and reply.");
         var baseline = session.Save(persistAnchorIds: false);
         var beforeManifest = PackageManifestGenerator.Generate(baseline);
-        var normalized = DeliveryNormalizedOperation.Create(
-            "docx_edit",
-            "replace_text",
-            JsonSerializer.Serialize(new
-            {
-                anchorId = anchor,
-                markdown = "Production delivery render integration.",
-            }));
         var mutation = session.ExecuteBatch(new[]
         {
             new MutationBatchStep(
@@ -245,6 +269,14 @@ public sealed class DeliveryExportHostIntegrationTests
                 ?? "The tracked fixture mutation failed.");
         var working = session.Save(persistAnchorIds: false);
         var afterManifest = PackageManifestGenerator.Generate(working);
+        var normalized = DeliveryNormalizedOperation.Create(
+            "docx_edit",
+            "replace_text",
+            JsonSerializer.Serialize(new
+            {
+                anchorId = anchor,
+                markdown = "Production delivery render integration.",
+            }));
         var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
             mutation, beforeManifest, afterManifest, new[] { normalized });
         var acceptOperation = DeliveryNormalizedOperation.Create(
