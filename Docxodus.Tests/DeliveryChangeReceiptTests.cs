@@ -350,8 +350,12 @@ public class DeliveryChangeReceiptTests
             edit.AfterManifest, edit.Result.ResultVersion);
         var htmlBytes = Encoding.UTF8.GetBytes("<main>Changed for delivery.</main>");
         var pdfBytes = Encoding.ASCII.GetBytes("%PDF-1.7\nreceipt pagination fixture\n%%EOF");
-        var validationBytes = Encoding.UTF8.GetBytes("{\"valid\":true}");
-        var reversibilityBytes = Encoding.UTF8.GetBytes("{\"roundTrip\":\"verified\"}");
+        var validation = DeliverableVerifier.VerifyDeliverable(
+            edit.BeforeBytes, edit.AfterBytes);
+        var validationBytes = validation.ToCanonicalUtf8Bytes();
+        var reversibility = RedlineReversibilityVerifier.Prove(
+            edit.BeforeBytes, edit.AfterBytes, redlineBytes).Proof;
+        var reversibilityBytes = Encoding.UTF8.GetBytes(reversibility.ToCanonicalJson());
         const string renderer = "chromium-140|fonts-v3|pagination-v1";
         var semanticBytes = SemanticChanges(
             edit.BeforeBytes, edit.AfterBytes).ToCanonicalUtf8Bytes();
@@ -395,18 +399,18 @@ public class DeliveryChangeReceiptTests
         builder.AddEvidence(new DeliveryEvidenceReference
         {
             Kind = DeliveryEvidenceKind.ValidationResult,
-            Schema = "https://docxodus.dev/schemas/verification/validation-result/v1",
+            Schema = DeliverableVerificationResult.SchemaId,
             Digest = Digest(validationBytes),
             ArtifactId = "validation",
-            Summary = "Package validation passed.",
+            Summary = $"Deliverable verification decision: {validation.Decision}.",
         });
         builder.AddEvidence(new DeliveryEvidenceReference
         {
             Kind = DeliveryEvidenceKind.RedlineReversibility,
-            Schema = "https://docxodus.dev/schemas/verification/redline-proof/v1",
+            Schema = RedlineReversibilityProof.SchemaId,
             Digest = Digest(reversibilityBytes),
             ArtifactId = "reversibility",
-            Summary = "Redline reversibility verified.",
+            Summary = $"Redline reversibility success: {reversibility.Success}.",
         });
         builder.AddPageCitation(new DeliveryPageCitationInput
         {
@@ -443,6 +447,13 @@ public class DeliveryChangeReceiptTests
                 && evidence.Schema == SemanticChangeSet.CurrentSchema);
         Assert.Contains(receipt.Payload.Artifacts,
             artifact => artifact.Role == DeliveryArtifactRole.ReviewDocx);
+        Assert.Contains(receipt.Payload.Evidence,
+            evidence => evidence.Schema == DeliverableVerificationResult.SchemaId
+                && evidence.Digest == Digest(validation.ToCanonicalUtf8Bytes()));
+        Assert.Contains(receipt.Payload.Evidence,
+            evidence => evidence.Schema == RedlineReversibilityProof.SchemaId
+                && evidence.Digest == Digest(Encoding.UTF8.GetBytes(
+                    reversibility.ToCanonicalJson())));
     }
 
     [Fact]
@@ -1795,6 +1806,234 @@ public class DeliveryChangeReceiptTests
             Assert.Throws<DeliveryReceiptValidationException>(() =>
                 DeliverySemanticChangeSetAdapter.InspectExact(
                     semanticBytes, semanticLimits)).Code);
+    }
+
+    [Fact]
+    public void DCR030_PackageChanges_ProjectTheSharedPackageDeltaExactly()
+    {
+        var edit = SingleEdit("Shared package delta projection.");
+        var shared = PackageDelta.Compare(edit.BeforeManifest, edit.AfterManifest);
+        var projected = DeliveryPackageManifestAdapter.Compare(
+            edit.BeforeManifest, edit.AfterManifest);
+
+        Assert.Equal(shared.Count, projected.Count);
+        for (int index = 0; index < shared.Count; index++)
+        {
+            var expected = shared[index];
+            var actual = projected[index];
+            Assert.Equal(expected.Kind switch
+            {
+                PackageDeltaChangeKind.EntryAdded => DeliveryPackageChangeKind.PartAdded,
+                PackageDeltaChangeKind.EntryRemoved => DeliveryPackageChangeKind.PartRemoved,
+                PackageDeltaChangeKind.EntryModified => DeliveryPackageChangeKind.PartModified,
+                PackageDeltaChangeKind.RelationshipAdded =>
+                    DeliveryPackageChangeKind.RelationshipAdded,
+                PackageDeltaChangeKind.RelationshipRemoved =>
+                    DeliveryPackageChangeKind.RelationshipRemoved,
+                PackageDeltaChangeKind.RelationshipModified =>
+                    DeliveryPackageChangeKind.RelationshipModified,
+                _ => throw new ArgumentOutOfRangeException(),
+            }, actual.Kind);
+            Assert.Equal(expected.Location, actual.Location);
+            Assert.Equal(expected.BeforeValue, actual.Before);
+            Assert.Equal(expected.AfterValue, actual.After);
+        }
+    }
+
+    [Fact]
+    public void DCR031_PackageChangeVerification_UsesSharedTargetAwareOrdering()
+    {
+        var edit = SingleEdit("Target-aware package change order.");
+        var duplicateRelationships = new[]
+        {
+            new PackageRelationship
+            {
+                OwnerUri = "/word/document.xml",
+                Id = "rDuplicate",
+                Type = "a-type",
+                Target = "z.xml",
+                TargetMode = "Internal",
+                ResolvedTargetUri = "/word/z.xml",
+                IsTargetPresent = false,
+            },
+            new PackageRelationship
+            {
+                OwnerUri = "/word/document.xml",
+                Id = "rDuplicate",
+                Type = "z-type",
+                Target = "a.xml",
+                TargetMode = "Internal",
+                ResolvedTargetUri = "/word/a.xml",
+                IsTargetPresent = false,
+            },
+        };
+        var sourceManifest = edit.BeforeManifest with
+        {
+            Relationships = edit.BeforeManifest.Relationships
+                .Concat(duplicateRelationships).ToArray(),
+        };
+        var builder = new DeliveryChangeReceiptBuilder(
+            sourceManifest, edit.Result.BaseVersion)
+            .SetDeliveredDocument(edit.AfterManifest, edit.Result.ResultVersion);
+        AddCleanDocx(builder, edit.AfterBytes, edit.AfterManifest, edit.Result.ResultVersion);
+        builder.AddSemanticChangeSet(DeliverySemanticChangeSetInput.ForSourceToDelivered(
+            SemanticChanges(edit.BeforeBytes, edit.AfterBytes)));
+        var entryId = builder.AddTransaction(edit.Contribution);
+        AddTransactionSemantic(
+            builder, entryId, edit.BeforeBytes, edit.AfterBytes,
+            "semantic-source-to-delivered");
+
+        var receipt = builder.Build();
+        var duplicateChanges = receipt.Payload.PackageChanges.Where(change =>
+            change.Location.RelationshipId == "rDuplicate").ToArray();
+
+        Assert.Equal(
+            new[] { "/word/a.xml", "/word/z.xml" },
+            duplicateChanges.Select(change => change.Location.TargetUri));
+        Assert.True(DeliveryChangeReceiptVerifier.Verify(
+            receipt, RequiredArtifactBytes(edit)).IsValid);
+    }
+
+    [Fact]
+    public void DCR032_RetryIdentity_RejectsDifferentResultEvidence()
+    {
+        var sourceBytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var manifest = Manifest(sourceBytes);
+        var operation = DeliveryNormalizedOperation.Create("docx_edit", "replace_text");
+        var identity = new DeliveryTransactionIdentity
+        {
+            TransactionId = "delivery-conflicting-result",
+            RequestFingerprint = Fingerprint("same retry request"),
+        };
+        MutationBatchResult FailedResult(string message)
+        {
+            var error = new EditError(EditErrorCode.PreconditionFailed, message);
+            return new MutationBatchResult
+            {
+                Mode = MutationBatchMode.Atomic,
+                Success = false,
+                RolledBack = true,
+                BaseVersion = 7,
+                ResultVersion = 7,
+                Steps = new[]
+                {
+                    new MutationBatchStepResult(0, operation.Tool, operation.Action,
+                        new[] { new EditResult { Success = false, Error = error } }, true),
+                },
+                Failure = new MutationBatchFailure(
+                    0, operation.Tool, operation.Action, error, true),
+            };
+        }
+        DeliveryTransactionContribution Contribution(string message) =>
+            DeliveryTransactionContribution.FromMutationBatchResult(
+                FailedResult(message), manifest, manifest, new[] { operation }, identity);
+        var builder = new DeliveryChangeReceiptBuilder(manifest, 7);
+
+        builder.AddTransaction(Contribution("first failure evidence"));
+        var error = Assert.Throws<DeliveryReceiptValidationException>(() =>
+            builder.AddTransaction(Contribution("different failure evidence")));
+
+        Assert.Equal("retry_result_conflict", error.Code);
+    }
+
+    [Fact]
+    public void DCR033_AuthoredChanges_DisambiguateDuplicateRevisionIdsAcrossParts()
+    {
+        var edit = SingleEdit("Duplicate revision identity.", tracked: true);
+        var revision = edit.Result.RevisionChanges.Added.First();
+        var duplicate = revision with
+        {
+            PartUri = "/word/header1.xml",
+            Scope = "hdr1",
+        };
+        var result = edit.Result with
+        {
+            RevisionChanges = new MutationBatchChangeSet<RevisionListEntry>(
+                new[] { revision, duplicate },
+                Array.Empty<RevisionListEntry>(),
+                Array.Empty<RevisionListEntry>()),
+        };
+        var operation = DeliveryNormalizedOperation.Create(
+            "docx_edit", "replace_text",
+            JsonSerializer.Serialize(new
+            {
+                anchorId = edit.AnchorId,
+                markdown = "Duplicate revision identity.",
+            }));
+        var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            result, edit.BeforeManifest, edit.AfterManifest, new[] { operation });
+        var builder = Builder(edit);
+        var entryId = builder.AddTransaction(contribution);
+        AddTransactionSemantic(
+            builder, entryId, edit.BeforeBytes, edit.AfterBytes,
+            "semantic-source-to-delivered");
+
+        var receipt = builder.Build();
+        var duplicateIds = Assert.Single(receipt.Payload.Transactions).AuthoredChanges
+            .Where(change => change.EntityKind == DeliveryAuthoredEntityKind.Revision
+                && change.EntityId == revision.Id)
+            .ToArray();
+
+        Assert.Equal(2, duplicateIds.Length);
+        Assert.Equal(
+            new[] { revision.PartUri, duplicate.PartUri }.OrderBy(value => value),
+            duplicateIds.Select(change => change.PartUri));
+        Assert.True(DeliveryChangeReceiptVerifier.Verify(
+            receipt, RequiredArtifactBytes(edit)).IsValid);
+    }
+
+    [Fact]
+    public void DCR034_DistinctNoOpTransactions_HaveDistinctEntryIdentities()
+    {
+        var documentBytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var manifest = Manifest(documentBytes);
+        var operation = DeliveryNormalizedOperation.Create("docx_edit", "no_op");
+        var result = new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = true,
+            RolledBack = false,
+            BaseVersion = 7,
+            ResultVersion = 7,
+            Steps = new[]
+            {
+                new MutationBatchStepResult(
+                    0, operation.Tool, operation.Action, Array.Empty<EditResult>(), false),
+            },
+        };
+        DeliveryTransactionContribution Contribution(string? transactionId) =>
+            DeliveryTransactionContribution.FromMutationBatchResult(
+                result, manifest, manifest, new[] { operation },
+                transactionId is null
+                    ? null
+                    : new DeliveryTransactionIdentity
+                    {
+                        TransactionId = transactionId,
+                        RequestFingerprint = Fingerprint("shared no-op request"),
+                    });
+        var builder = new DeliveryChangeReceiptBuilder(manifest, 7)
+            .SetDeliveredDocument(manifest, 7);
+        AddCleanDocx(builder, documentBytes, manifest, 7);
+        var emptySemantic = new SemanticChangeSet(Array.Empty<SemanticChange>());
+        builder.AddSemanticChangeSet(
+            DeliverySemanticChangeSetInput.ForSourceToDelivered(emptySemantic));
+
+        var entryIds = new[]
+        {
+            builder.AddTransaction(Contribution("delivery-no-op-a")),
+            builder.AddTransaction(Contribution("delivery-no-op-b")),
+            builder.AddTransaction(Contribution(null)),
+            builder.AddTransaction(Contribution(null)),
+        };
+        var receipt = builder.Build();
+
+        Assert.Equal(entryIds.Length, entryIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(entryIds, receipt.Payload.Transactions.Select(entry => entry.EntryId));
+        Assert.True(DeliveryChangeReceiptVerifier.Verify(receipt, new Dictionary<string, byte[]>
+        {
+            ["clean-docx"] = documentBytes,
+            ["semantic-source-to-delivered"] = emptySemantic.ToCanonicalUtf8Bytes(),
+        }).IsValid);
     }
 
     private static DeliveryChangeReceipt BuildWithProfile(

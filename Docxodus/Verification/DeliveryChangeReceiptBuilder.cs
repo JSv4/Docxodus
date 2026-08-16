@@ -96,11 +96,25 @@ public sealed class DeliveryChangeReceiptBuilder
                     "retry_result_conflict",
                     $"Transaction id '{identity.TransactionId}' no longer identifies the original result.");
             }
+            if (!TransactionEvidenceEquals(prior, entry))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "retry_result_conflict",
+                    $"Transaction id '{identity.TransactionId}' returned different result evidence.");
+            }
             return prior.EntryId;
         }
 
         if (_entriesById.TryGetValue(entry.EntryId, out var duplicate))
+        {
+            if (!TransactionEvidenceEquals(duplicate, entry))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "retry_result_conflict",
+                    $"Transaction entry '{entry.EntryId}' has conflicting result evidence.");
+            }
             return duplicate.EntryId;
+        }
 
         if (_transactions.Count >= _limits.MaxTransactions)
         {
@@ -325,7 +339,9 @@ public sealed class DeliveryChangeReceiptBuilder
             contribution.BeforeDocument,
             contribution.AfterDocument,
             result.BaseVersion,
-            result.ResultVersion);
+            result.ResultVersion,
+            contribution.Identity?.TransactionId,
+            sequence);
 
         var stepsByIndex = result.Steps.ToDictionary(step => step.Index);
         var operations = contribution.Operations.Select((operation, index) =>
@@ -339,6 +355,9 @@ public sealed class DeliveryChangeReceiptBuilder
                 value.EntityKind,
                 value.ChangeKind,
                 value.EntityId,
+                value.PartUri,
+                value.Scope,
+                SourceDigest = value.SourceDigest.Value,
             }).Any(group => group.Count() != 1))
         {
             throw new DeliveryReceiptValidationException(
@@ -674,7 +693,10 @@ public sealed class DeliveryChangeReceiptBuilder
         return changes
             .OrderBy(change => change.EntityKind)
             .ThenBy(change => change.ChangeKind)
-            .ThenBy(change => change.EntityId, StringComparer.Ordinal);
+            .ThenBy(change => change.EntityId, StringComparer.Ordinal)
+            .ThenBy(change => change.PartUri, StringComparer.Ordinal)
+            .ThenBy(change => change.Scope, StringComparer.Ordinal)
+            .ThenBy(change => change.SourceDigest.Value, StringComparer.Ordinal);
     }
 
     private static void AddAuthoredChanges<T>(
@@ -1427,7 +1449,9 @@ public sealed class DeliveryChangeReceiptBuilder
         DeliveryDocumentIdentity before,
         DeliveryDocumentIdentity after,
         long baseVersion,
-        long resultVersion)
+        long resultVersion,
+        string? transactionId,
+        long sequence)
     {
         var identity = new
         {
@@ -1436,9 +1460,24 @@ public sealed class DeliveryChangeReceiptBuilder
             beforePackage = before.RawPackageBytesDigest,
             requestFingerprint,
             resultVersion,
+            transactionId,
+            transactionSequence = transactionId is null ? sequence : (long?)null,
         };
         return DeliveryReceiptCanonicalJson.DigestToken(
             DeliveryReceiptCanonicalJson.SerializeCanonical(identity));
+    }
+
+    private bool TransactionEvidenceEquals(
+        DeliveryTransactionEntry left,
+        DeliveryTransactionEntry right)
+    {
+        var leftBytes = DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
+            left with { Sequence = 0 }, _limits, _limits.MaxReceiptJsonBytes,
+            "receipt_resource_limit");
+        var rightBytes = DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
+            right with { Sequence = 0 }, _limits, _limits.MaxReceiptJsonBytes,
+            "receipt_resource_limit");
+        return leftBytes.AsSpan().SequenceEqual(rightBytes);
     }
 
     private void ValidateContributionResources(DeliveryTransactionContribution contribution)
