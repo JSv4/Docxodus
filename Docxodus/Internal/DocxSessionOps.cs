@@ -130,6 +130,10 @@ internal static class DocxSessionOps
     public static string GetSemanticChanges(int handle) =>
         SessionRegistry.Get(handle).GetSemanticChangesJson();
 
+    /// <summary>Run the canonical deliverable-verification policy on the current logical package.</summary>
+    public static string VerifyDeliverable(int handle) =>
+        SessionRegistry.Get(handle).VerifyDeliverableJson();
+
     /// <summary>
     /// Render a preview shadow to the SAME complete-document profile
     /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
