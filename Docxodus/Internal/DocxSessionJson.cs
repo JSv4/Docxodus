@@ -991,6 +991,33 @@ internal static class DocxSessionJson
         return sb.Append('}').ToString();
     }
 
+    /// <summary>Strict canonical JSON form used to digest and bind portable PageMap artifacts.</summary>
+    public static string SerializePageMap(PageMap pageMap)
+    {
+        ArgumentNullException.ThrowIfNull(pageMap);
+        var sb = new StringBuilder(512)
+            .Append("{\"schemaVersion\":").Append(pageMap.SchemaVersion)
+            .Append(",\"mode\":").Append(JsonString(
+                pageMap.Mode == PageMapMode.Paginated ? "paginated" : "continuous"))
+            .Append(",\"availability\":")
+            .Append(JsonString(PageMapAvailabilityString(pageMap.Availability)))
+            .Append(",\"documentVersion\":").Append(pageMap.DocumentVersion)
+            .Append(",\"rendererFingerprint\":").Append(JsonString(pageMap.RendererFingerprint))
+            .Append(",\"pages\":[");
+        for (int i = 0; i < pageMap.Pages.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapPage(sb, pageMap.Pages[i]);
+        }
+        sb.Append("],\"fragments\":[");
+        for (int i = 0; i < pageMap.Fragments.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            AppendPageMapFragment(sb, pageMap.Fragments[i]);
+        }
+        return sb.Append("]}").ToString();
+    }
+
     public static string SerializePageMapStatus(PageMapStatus status)
     {
         var sb = new StringBuilder("{\"availability\":")

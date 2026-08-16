@@ -125,8 +125,38 @@ public sealed record DeliverableVerificationOptions
     /// <summary>Whether unresolved placeholders block standard-mode delivery. They are always reported.</summary>
     public bool RequireNoPlaceholders { get; init; } = true;
 
+    /// <summary>
+    /// Opt in to detecting broad square-bracket alternatives such as <c>[Buyer/Seller]</c>.
+    /// These findings are advisory because ordinary legal citations also use square brackets.
+    /// </summary>
+    public bool DetectBracketedAlternativeClauses { get; init; }
+
+    /// <summary>
+    /// Exact, case-sensitive standalone editorial markers to scan for. Empty by default so words
+    /// in other languages (for example Spanish <c>todo</c>) are not treated as template state.
+    /// </summary>
+    public IReadOnlyList<string> EditorialMarkers { get; init; } = Array.Empty<string>();
+
+    /// <summary>Exact additional placeholder tokens to report as high-confidence template state.</summary>
+    public IReadOnlyList<string> PlaceholderTokens { get; init; } = Array.Empty<string>();
+
     /// <summary>Maximum structured findings retained across every detector.</summary>
     public int MaxFindings { get; init; } = 10_000;
+
+    /// <summary>Maximum XML elements visited by bounded semantic detectors per package.</summary>
+    public int MaxDetectorNodes { get; init; } = 1_000_000;
+
+    /// <summary>Maximum relationships traversed by bounded semantic detectors per package.</summary>
+    public int MaxDetectorRelationships { get; init; } = 100_000;
+
+    /// <summary>Maximum text characters inspected by workflow detectors per package.</summary>
+    public long MaxDetectorTextCharacters { get; init; } = 16L * 1024 * 1024;
+
+    /// <summary>Maximum regex/token matches inspected by workflow detectors per package.</summary>
+    public int MaxDetectorRegexMatches { get; init; } = 100_000;
+
+    /// <summary>Maximum miscellaneous detector operations per package.</summary>
+    public long MaxDetectorSteps { get; init; } = 2_000_000;
 
     /// <summary>Maximum bytes accepted for one companion artifact.</summary>
     public long MaxCompanionArtifactBytes { get; init; } = 256L * 1024 * 1024;
@@ -145,12 +175,28 @@ public sealed record DeliverableVerificationOptions
             throw new ArgumentOutOfRangeException(nameof(OpenXmlVersion));
         if (MaxFindings <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxFindings));
+        if (MaxDetectorNodes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDetectorNodes));
+        if (MaxDetectorRelationships <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDetectorRelationships));
+        if (MaxDetectorTextCharacters <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDetectorTextCharacters));
+        if (MaxDetectorRegexMatches <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDetectorRegexMatches));
+        if (MaxDetectorSteps <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDetectorSteps));
         if (MaxCompanionArtifactBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxCompanionArtifactBytes));
         if (MaxTotalCompanionArtifactBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTotalCompanionArtifactBytes));
         if (PackageManifestOptions is null)
             throw new ArgumentNullException(nameof(PackageManifestOptions));
+        if (EditorialMarkers is null || EditorialMarkers.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("EditorialMarkers cannot be null or contain blank values.",
+                nameof(EditorialMarkers));
+        if (PlaceholderTokens is null || PlaceholderTokens.Any(string.IsNullOrEmpty))
+            throw new ArgumentException("PlaceholderTokens cannot be null or contain empty values.",
+                nameof(PlaceholderTokens));
         PackageManifestOptions.Validate();
     }
 }
@@ -219,6 +265,19 @@ public sealed record DeliverableVerificationRequest
 
     public IReadOnlyList<DeliverableCompanionArtifactInput> CompanionArtifacts { get; init; } =
         Array.Empty<DeliverableCompanionArtifactInput>();
+}
+
+/// <summary>
+/// One immutable delivery snapshot and the verification report produced from those exact bytes.
+/// This is the preferred session-level handoff when the verified package will be written or sent.
+/// </summary>
+public sealed record VerifiedDeliverable
+{
+    /// <summary>Normal clean-save bytes, with internal projector anchor ids removed.</summary>
+    required public byte[] DeliverableBytes { get; init; }
+
+    /// <summary>Verification report whose raw package digest covers <see cref="DeliverableBytes"/>.</summary>
+    required public DeliverableVerificationResult Report { get; init; }
 }
 
 /// <summary>Digest identity of one package inspected by the verification run.</summary>

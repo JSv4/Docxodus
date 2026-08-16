@@ -63,6 +63,12 @@ public static class DeliverableVerifier
         ArgumentNullException.ThrowIfNull(request.DeliverableBytes);
         options ??= new DeliverableVerificationOptions();
         options.Validate();
+        options = options with
+        {
+            PackageManifestOptions = options.PackageManifestOptions with { },
+            EditorialMarkers = options.EditorialMarkers.ToArray(),
+            PlaceholderTokens = options.PlaceholderTokens.ToArray(),
+        };
         ValidateRequest(request);
 
         // Snapshot every caller-owned collection/byte array before any inspection. The manifest,
@@ -88,7 +94,7 @@ public static class DeliverableVerifier
             ? deliverable.Checks.ToList()
             : baseline.Checks.Concat(deliverable.Checks).ToList();
 
-        var artifactMetadata = InspectArtifacts(
+        var artifactMetadata = DeliverableArtifactInspector.Inspect(
             artifacts,
             deliverable.Inspection.Manifest.RawPackageBytesDigest,
             options,
@@ -104,7 +110,8 @@ public static class DeliverableVerifier
         bool packageDeltaCompleted = false;
         if (baseline is not null)
         {
-            if (baseline.Inspection.Manifest.IsValid && deliverable.Inspection.Manifest.IsValid)
+            if (CanContinueBoundedPackageInspection(baseline.Inspection)
+                && CanContinueBoundedPackageInspection(deliverable.Inspection))
             {
                 packageChanges = ProjectPackageChanges(PackageDelta.Compare(
                     baseline.Inspection.Manifest, deliverable.Inspection.Manifest));
@@ -121,7 +128,8 @@ public static class DeliverableVerifier
                 checks.Add(Skipped("package_delta", "baseline or deliverable manifest is invalid"));
                 analysisCompleted = false;
             }
-            if (CanOpenAsWord(baseline.Inspection) && CanOpenAsWord(deliverable.Inspection))
+            if (CanContinueBoundedWordInspection(baseline.Inspection)
+                && CanContinueBoundedWordInspection(deliverable.Inspection))
             {
                 int before = observations.Count;
                 try
@@ -284,14 +292,27 @@ public static class DeliverableVerifier
             },
         };
         bool completed = true;
-        if (CanOpenAsWord(inspection))
+        if (CanContinueBoundedWordInspection(inspection))
         {
+            var budget = new DeliverableInspectionBudget(options);
+            var graph = WordprocessingInspectionGraph.Build(inspection, budget);
             var openXml = OpenXmlValidationInspector.Inspect(
                 bytes, options.OpenXmlVersion, observations, options.MaxFindings);
             var closure = WordprocessingClosureInspector.Inspect(
-                inspection, observations, options.MaxFindings);
+                inspection, graph, observations, options.MaxFindings, budget);
             var session = DeliverableSessionInspector.Inspect(
-                bytes, observations, options.MaxFindings);
+                graph, options, observations, budget);
+            if (budget.Exhausted)
+                AddObservation(observations, options.MaxFindings,
+                    DeliverableFindingObservation.Create(
+                        "verification.resource_budget_exceeded",
+                        DeliverableFindingCategory.Structure,
+                        VerificationFindingSeverity.Error,
+                        $"Semantic detector resource budget was exceeded ({budget.ExhaustedResource}).",
+                        "/",
+                        "Reduce document complexity or deliberately raise the bounded detector policy.",
+                        new ChangeLocation { PropertyPath = "detectorBudget/" + budget.ExhaustedResource },
+                        subjectKey: budget.ExhaustedResource));
             checks.Add(Prefix(openXml, prefix));
             checks.Add(Prefix(closure, prefix));
             checks.Add(Prefix(session, prefix));
@@ -317,15 +338,43 @@ public static class DeliverableVerifier
         };
     }
 
-    private static bool CanOpenAsWord(PackageManifestInspection inspection)
+    private static bool CanContinueBoundedWordInspection(PackageManifestInspection inspection)
     {
         var uri = inspection.Manifest.Facts.MainDocumentUri;
-        return inspection.Manifest.IsValid
-            && inspection.Manifest.PackageKind == "opc"
+        return CanContinueBoundedPackageInspection(inspection)
             && uri is not null
-            && inspection.Entries.Any(entry =>
+            && inspection.Entries.Count(entry =>
                 string.Equals(entry.Uri, uri, StringComparison.OrdinalIgnoreCase)
-                && entry.Xml?.Root is not null);
+                && entry.Xml?.Root is not null) == 1;
+    }
+
+    private static bool CanContinueBoundedPackageInspection(PackageManifestInspection inspection)
+    {
+        if (inspection.Manifest.PackageKind != "opc"
+            || inspection.Manifest.OrderedOpcContentDigest is null
+            || inspection.Entries.Any(entry => !entry.PayloadWasRead
+                || entry.ManifestEntry.IsEncrypted != false))
+            return false;
+        var unsafeCodes = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "malformed_package",
+            "entry_count_limit_exceeded",
+            "entry_size_limit_exceeded",
+            "entry_expansion_limit_exceeded",
+            "total_expansion_limit_exceeded",
+            "compression_ratio_limit_exceeded",
+            "xml_size_limit_exceeded",
+            "entry_uri_limit_exceeded",
+            "unsafe_entry_path",
+            "unsupported_ole_encryption",
+            "unsupported_zip_encryption",
+            "zip_encryption_detection_unavailable",
+            "malformed_entry",
+            "unreadable_entry",
+            "content_types_unreadable",
+            "relationship_part_unreadable",
+        };
+        return !inspection.Manifest.Findings.Any(finding => unsafeCodes.Contains(finding.Code));
     }
 
     private static DeliverableFindingObservation ManifestObservation(VerificationFinding finding)
@@ -359,165 +408,6 @@ public static class DeliverableVerifier
         return "Repair or recreate the implicated package entry before delivery.";
     }
 
-    private static IReadOnlyList<DeliverableArtifactMetadata> InspectArtifacts(
-        IReadOnlyList<DeliverableCompanionArtifactInput> artifacts,
-        VerificationDigest packageDigest,
-        DeliverableVerificationOptions options,
-        ICollection<DeliverableFindingObservation> observations,
-        out DeliverableCheckResult check)
-    {
-        int before = observations.Count;
-        long total = 0;
-        bool bounded = true;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var metadata = new List<DeliverableArtifactMetadata>(artifacts.Count);
-        foreach (var artifact in artifacts.OrderBy(artifact => artifact.ArtifactId, StringComparer.Ordinal))
-        {
-            if (!seen.Add(artifact.ArtifactId))
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.id_duplicate", VerificationFindingSeverity.Error,
-                    "Companion artifact ids must be unique.", "Assign a unique stable artifact id.");
-            if (string.IsNullOrWhiteSpace(artifact.ArtifactId))
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.id_missing", VerificationFindingSeverity.Error,
-                    "A companion artifact has no id.", "Assign a non-empty stable artifact id.");
-            if (string.IsNullOrWhiteSpace(artifact.MediaType))
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.media_type_missing", VerificationFindingSeverity.Error,
-                    "A companion artifact has no media type.", "Supply the artifact's MIME media type.");
-
-            VerificationDigest? digest = null;
-            long? length = null;
-            if (artifact.Availability == DeliverableArtifactAvailability.Available)
-            {
-                if (artifact.Bytes is null)
-                {
-                    ArtifactFinding(observations, options.MaxFindings, artifact,
-                        "artifact.bytes_missing", VerificationFindingSeverity.Error,
-                        "An available companion artifact has no bytes.",
-                        "Supply the artifact bytes or mark the artifact unavailable with a reason.");
-                }
-                else
-                {
-                    length = artifact.Bytes.LongLength;
-                    if (length > options.MaxCompanionArtifactBytes
-                        || length > options.MaxTotalCompanionArtifactBytes - total)
-                    {
-                        bounded = false;
-                        ArtifactFinding(observations, options.MaxFindings, artifact,
-                            "artifact.size_limit_exceeded", VerificationFindingSeverity.Error,
-                            "Companion artifact bytes exceed the configured verification budget.",
-                            "Reduce the artifact or deliberately raise the bounded artifact policy.");
-                    }
-                    else
-                    {
-                        total += length.Value;
-                        digest = DeliverableVerificationIdentity.Digest(artifact.Bytes);
-                    }
-                }
-            }
-            else
-            {
-                if (artifact.Bytes is not null)
-                    ArtifactFinding(observations, options.MaxFindings, artifact,
-                        "artifact.unavailable_has_bytes", VerificationFindingSeverity.Warning,
-                        "An unavailable artifact also supplied bytes; the bytes were ignored.",
-                        "Mark the artifact available or omit its bytes.");
-                if (string.IsNullOrWhiteSpace(artifact.UnavailableReason))
-                    ArtifactFinding(observations, options.MaxFindings, artifact,
-                        "artifact.unavailable_reason_missing", VerificationFindingSeverity.Warning,
-                        "An unavailable artifact has no reason.",
-                        "Record why the artifact could not be produced.");
-            }
-
-            if (artifact.SourcePackageDigest is null)
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.source_digest_missing", VerificationFindingSeverity.Warning,
-                    "The companion artifact is not bound to source package bytes.",
-                    "Record the exact delivered package SHA-256 as sourcePackageDigest.");
-            else if (!DeliverableVerificationIdentity.DigestEquals(
-                         artifact.SourcePackageDigest, packageDigest))
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.source_digest_mismatch", VerificationFindingSeverity.Error,
-                    "The companion artifact names a different source package digest.",
-                    "Regenerate the artifact from the delivered package or correct the binding.");
-
-            if (artifact.PageCount is < 0)
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.page_count_invalid", VerificationFindingSeverity.Error,
-                    "Companion artifact pageCount cannot be negative.",
-                    "Supply a non-negative page count or omit it.");
-            if (artifact.Role is DeliverableArtifactRole.Pdf or DeliverableArtifactRole.PageMap
-                && string.IsNullOrWhiteSpace(artifact.RendererFingerprint))
-                ArtifactFinding(observations, options.MaxFindings, artifact,
-                    "artifact.renderer_fingerprint_missing", VerificationFindingSeverity.Warning,
-                    "Layout-dependent evidence has no renderer fingerprint.",
-                    "Record the renderer name/version/configuration used to produce this artifact.");
-
-            foreach (var diagnostic in artifact.RenderDiagnostics
-                         .OrderBy(diagnostic => diagnostic.Kind)
-                         .ThenBy(diagnostic => diagnostic.OwningPartUri, StringComparer.Ordinal)
-                         .ThenBy(diagnostic => diagnostic.AnchorId, StringComparer.Ordinal)
-                         .ThenBy(diagnostic => diagnostic.FontName, StringComparer.Ordinal)
-                         .ThenBy(diagnostic => diagnostic.SubstitutedFontName, StringComparer.Ordinal)
-                         .ThenBy(diagnostic => diagnostic.Message, StringComparer.Ordinal))
-            {
-                var code = diagnostic.Kind switch
-                {
-                    DeliverableRenderDiagnosticKind.MissingFont => "render.missing_font",
-                    DeliverableRenderDiagnosticKind.FontSubstitution => "render.font_substitution",
-                    DeliverableRenderDiagnosticKind.UnsupportedContent => "render.unsupported_content",
-                    _ => "render.warning",
-                };
-                var owner = string.IsNullOrWhiteSpace(diagnostic.OwningPartUri)
-                    ? "/"
-                    : diagnostic.OwningPartUri!;
-                AddObservation(observations, options.MaxFindings,
-                    DeliverableFindingObservation.Create(
-                        code, DeliverableFindingCategory.Render, diagnostic.Severity,
-                        string.IsNullOrWhiteSpace(diagnostic.Message)
-                            ? "The renderer supplied a diagnostic without explanatory text."
-                            : diagnostic.Message,
-                        owner,
-                        string.IsNullOrWhiteSpace(diagnostic.Remediation)
-                            ? "Review the renderer diagnostic and correct or approve the visual result."
-                            : diagnostic.Remediation,
-                        new ChangeLocation
-                        {
-                            EntryUri = owner == "/" ? null : owner,
-                            PropertyPath = "artifacts/" + artifact.ArtifactId,
-                        },
-                        diagnostic.AnchorId,
-                        subjectKey: string.Join("\u001f", artifact.ArtifactId, diagnostic.Kind,
-                            diagnostic.FontName, diagnostic.SubstitutedFontName)));
-            }
-
-            metadata.Add(new DeliverableArtifactMetadata
-            {
-                ArtifactId = artifact.ArtifactId,
-                Role = artifact.Role,
-                MediaType = artifact.MediaType,
-                Availability = artifact.Availability,
-                ByteLength = length,
-                Digest = digest,
-                UnavailableReason = artifact.UnavailableReason,
-                PageCount = artifact.PageCount,
-                RendererFingerprint = artifact.RendererFingerprint,
-                SourcePackageDigest = NormalizeDigest(artifact.SourcePackageDigest),
-                PageMapDigest = NormalizeDigest(artifact.PageMapDigest),
-                RenderDiagnosticCount = artifact.RenderDiagnostics.Count,
-            });
-        }
-
-        check = new DeliverableCheckResult
-        {
-            Check = "companion_artifacts",
-            Status = bounded ? DeliverableCheckStatus.Completed : DeliverableCheckStatus.UnavailableEvidence,
-            FindingCount = observations.Count - before,
-            Diagnostic = bounded ? null : "artifact byte budget exceeded",
-        };
-        return metadata;
-    }
 
     private static void CheckExpectedSemanticChanges(
         SemanticChangeSet actual,
@@ -704,13 +594,7 @@ public static class DeliverableVerifier
 
     private static IEnumerable<DeliverableFindingObservation> OrderedObservations(
         IEnumerable<DeliverableFindingObservation> observations) => observations
-        .OrderBy(item => item.Code, StringComparer.Ordinal)
-        .ThenBy(item => item.OwningPartUri, StringComparer.Ordinal)
-        .ThenBy(item => DeliverableVerificationIdentity.LocationKey(item.Location), StringComparer.Ordinal)
-        .ThenBy(item => item.Scope, StringComparer.Ordinal)
-        .ThenBy(item => item.XPath, StringComparer.Ordinal)
-        .ThenBy(item => item.Message, StringComparer.Ordinal)
-        .ThenBy(item => item.Remediation, StringComparer.Ordinal);
+        .OrderBy(item => item.OccurrenceKey, StringComparer.Ordinal);
 
     private static DeliverableFinding Materialize(
         DeliverableFindingObservation observation,
@@ -751,7 +635,11 @@ public static class DeliverableVerifier
             return !(observation.Category == DeliverableFindingCategory.OpenXml
                      && disposition == DeliverableFindingDisposition.PreExisting);
         return options.RequireNoPlaceholders
-            && observation.Category == DeliverableFindingCategory.Workflow;
+            && observation.Category == DeliverableFindingCategory.Workflow
+            && observation.Code is "workflow.placeholder_remaining"
+                or "workflow.blank_run_remaining"
+                or "workflow.content_control_placeholder"
+                or "workflow.editorial_marker";
     }
 
     private static DeliverableVerificationDecision Decide(
@@ -797,19 +685,6 @@ public static class DeliverableVerifier
         OrderedOpcContentDigest = manifest.OrderedOpcContentDigest,
         NormalizedSemanticDigest = manifest.NormalizedSemanticDigest,
     };
-
-    private static void ArtifactFinding(
-        ICollection<DeliverableFindingObservation> observations,
-        int maximumFindings,
-        DeliverableCompanionArtifactInput artifact,
-        string code,
-        VerificationFindingSeverity severity,
-        string message,
-        string remediation) => AddObservation(observations, maximumFindings,
-        DeliverableFindingObservation.Create(
-            code, DeliverableFindingCategory.Artifact, severity, message, "/", remediation,
-            new ChangeLocation { PropertyPath = "artifacts/" + artifact.ArtifactId },
-            subjectKey: artifact.ArtifactId));
 
     private static void AddObservation(
         ICollection<DeliverableFindingObservation> observations,
@@ -893,11 +768,4 @@ public static class DeliverableVerifier
                 parameterName);
     }
 
-    private static VerificationDigest? NormalizeDigest(VerificationDigest? digest) => digest is null
-        ? null
-        : new VerificationDigest
-        {
-            Algorithm = "SHA-256",
-            Value = digest.Value.ToLowerInvariant(),
-        };
 }
