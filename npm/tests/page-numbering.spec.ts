@@ -372,4 +372,62 @@ test.describe('Paginated preview substitutes real page numbers', () => {
       Array.from({ length: res.totalPages }, (_, i) => 'ABCDEFGHIJ'[i]),
     );
   });
+
+  test('numbering and odd/even stories continue logically across section boundaries', async ({
+    page,
+  }) => {
+    await page.setContent(`
+      <style>
+        #staging { font: 16px/16px Arial; }
+        .body { height: 20pt; margin: 0; }
+      </style>
+      <div id="staging">
+        <div id="pagination-hf-registry" style="display:none">
+          <div data-section="0" data-hf-type="footer-default">S0 odd <span data-field="PAGE">1</span></div>
+          <div data-section="0" data-hf-type="footer-even">S0 even <span data-field="PAGE">1</span></div>
+          <div data-section="1" data-hf-type="footer-default">S1 odd <span data-field="PAGE">1</span></div>
+          <div data-section="1" data-hf-type="footer-even">S1 even <span data-field="PAGE">1</span></div>
+        </div>
+        <div data-section-index="0" data-page-num-start="10"
+             data-page-width="122" data-page-height="122"
+             data-content-width="100" data-content-height="60"
+             data-margin-top="1" data-margin-right="1"
+             data-margin-bottom="1" data-margin-left="1">
+          <p class="body">section zero first</p>
+          <div data-page-break="true"></div>
+          <p class="body">section zero second</p>
+        </div>
+        <div data-section-index="1"
+             data-page-width="122" data-page-height="122"
+             data-content-width="100" data-content-height="60"
+             data-margin-top="1" data-margin-right="1"
+             data-margin-bottom="1" data-margin-left="1">
+          <p class="body">section one</p>
+        </div>
+      </div>
+      <div id="container"></div>`);
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+
+    const result = await page.evaluate(() => {
+      const staging = document.getElementById('staging') as HTMLElement;
+      const container = document.getElementById('container') as HTMLElement;
+      const { PaginationEngine } = (window as any).DocxodusPagination;
+      new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+      return Array.from(container.querySelectorAll<HTMLElement>('.page-box')).map((box) => ({
+        physical: Number(box.dataset.pageNumber),
+        section: Number(box.dataset.sectionIndex),
+        displayed: Number(box.dataset.displayedPageNumber),
+        footer: (box.querySelector<HTMLElement>('.page-footer')?.innerText || '')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      }));
+    });
+
+    expect(result).toEqual([
+      { physical: 1, section: 0, displayed: 10, footer: 'S0 even 10' },
+      { physical: 2, section: 0, displayed: 11, footer: 'S0 odd 11' },
+      // Section 1 omits w:start: continue 12, and select the even story despite physical page 3.
+      { physical: 3, section: 1, displayed: 12, footer: 'S1 even 12' },
+    ]);
+  });
 });

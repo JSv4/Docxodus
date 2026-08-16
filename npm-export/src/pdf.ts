@@ -120,8 +120,9 @@ export async function verifyPdf(
         exportError(
           "output_verification_failure",
           "output_verification",
-          `PDF page ${index + 1} ${boxName} is ${box.width}×${box.height}pt; `
-            + `finalized layout requires ${expected.width}×${expected.height}pt.`,
+          `PDF page ${index + 1} ${boxName} is `
+            + `[${box.x}, ${box.y}, ${box.width}, ${box.height}]pt; finalized layout requires `
+            + `[0, 0, ${expected.width}, ${expected.height}]pt.`,
           "Use CSS page-size printing with zero browser margins.",
         );
       }
