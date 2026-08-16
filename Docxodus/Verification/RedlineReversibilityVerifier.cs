@@ -790,7 +790,7 @@ public static class RedlineReversibilityVerifier
             outputBytes);
     }
 
-    private static IReadOnlyList<RedlineRevisionClassification> Classify(
+    internal static IReadOnlyList<RedlineRevisionClassification> Classify(
         IReadOnlyList<RevisionListEntry> baselineEntries,
         IReadOnlyList<RevisionListEntry> finalEntries,
         IReadOnlyList<RevisionListEntry> redlineEntries,
@@ -1154,7 +1154,7 @@ public static class RedlineReversibilityVerifier
         }
     }
 
-    private static RedlineRevisionIdentity ToIdentity(RevisionListEntry entry) => new()
+    internal static RedlineRevisionIdentity ToIdentity(RevisionListEntry entry) => new()
     {
         Id = entry.Id,
         PartUri = entry.PartUri,
@@ -1183,6 +1183,25 @@ public static class RedlineReversibilityVerifier
         && string.Equals(left.Date, right.Date, StringComparison.Ordinal)
         && string.Equals(left.DateUtc, right.DateUtc, StringComparison.Ordinal)
         && left.ResolutionStatus == right.ResolutionStatus;
+
+    internal static bool IdentityEquivalent(
+        RedlineRevisionIdentity left,
+        RedlineRevisionIdentity right) =>
+        string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+        && string.Equals(left.PartUri, right.PartUri, StringComparison.Ordinal)
+        && string.Equals(left.Scope, right.Scope, StringComparison.Ordinal)
+        && string.Equals(left.Type, right.Type, StringComparison.Ordinal)
+        && left.Family == right.Family
+        && left.ConstituentIds.SequenceEqual(right.ConstituentIds, StringComparer.Ordinal)
+        && left.ConstituentKeys.SequenceEqual(right.ConstituentKeys, StringComparer.Ordinal)
+        && string.Equals(left.Author, right.Author, StringComparison.Ordinal)
+        && string.Equals(left.Date, right.Date, StringComparison.Ordinal)
+        && string.Equals(left.DateUtc, right.DateUtc, StringComparison.Ordinal)
+        && string.Equals(left.Text, right.Text, StringComparison.Ordinal)
+        && string.Equals(left.AnchorId, right.AnchorId, StringComparison.Ordinal)
+        && left.AffectedAnchorIds.SequenceEqual(right.AffectedAnchorIds, StringComparer.Ordinal)
+        && left.ResolutionStatus == right.ResolutionStatus
+        && Equals(left.Diagnostic, right.Diagnostic);
 
     private static bool RevisionOwnershipPreserved(
         RedlineRevisionIdentity expected,
@@ -1259,14 +1278,14 @@ public static class RedlineReversibilityVerifier
         }
     }
 
-    private static bool RevisionOverlaps(
+    internal static bool RevisionOverlaps(
         RedlineRevisionIdentity baseline,
         RedlineRevisionIdentity redline) =>
         string.Equals(baseline.PartUri, redline.PartUri, StringComparison.Ordinal)
         && baseline.ConstituentKeys.Intersect(
             redline.ConstituentKeys, StringComparer.Ordinal).Any();
 
-    private static string RevisionSortKey(RedlineRevisionIdentity item) =>
+    internal static string RevisionSortKey(RedlineRevisionIdentity item) =>
         item.PartUri + "\n" + item.Family + "\n" + item.Id;
 
     private static RedlineProofFinding DuplicateIdentityFinding(
