@@ -7943,9 +7943,14 @@ namespace Docxodus
                 // W.yearShort
                 if (element.Name == W.p)
                 {
-                    // Translate empty paragraphs to paragraphs having one run with
-                    // a normal space. A non-breaking space, i.e., \x00A0, is not
-                    // required if we use appropriate CSS.
+                    // Translate empty paragraphs to paragraphs having one run with a
+                    // non-breaking space. A normal space is eligible for the converter's
+                    // leading/trailing-whitespace suppression and can arrive in the browser as
+                    // an empty span. That removes the paragraph-mark line box entirely, leaves
+                    // a canonical paragraph anchor with zero geometry, and makes the strict
+                    // PageMap fail otherwise-valid documents (notably signature-table spacers).
+                    // NBSP is confined to this synthesized empty-paragraph placeholder; ordinary
+                    // run whitespace still uses pre-wrap without layout-changing substitution.
                     bool hasContent = element
                         .Elements()
                         .Where(e => e.Name != W.pPr)
@@ -7963,7 +7968,7 @@ namespace Docxodus
                             e.Name == W.separator ||
                             e.Name == W.softHyphen ||
                             e.Name == W.sym ||
-                            e.Name == W.t ||
+                            (e.Name == W.t && e.Value.Length != 0) ||
                             e.Name == W.tab ||
                             e.Name == W.yearLong ||
                             e.Name == W.yearShort
@@ -7975,7 +7980,7 @@ namespace Docxodus
                             element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)),
                             new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
-                                new XElement(W.t, " ")));
+                                new XElement(W.t, "\u00A0")));
                 }
 
                 return new XElement(element.Name,

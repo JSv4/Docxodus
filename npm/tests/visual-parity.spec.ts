@@ -40,6 +40,7 @@ import {
 import { decodePng, encodePng } from './visual-parity/png.js';
 import {
   RATCHET_RECORD_FILE,
+  assertRecordUpdateProvenance,
   buildRecord,
   compareToRecord,
   readRecord,
@@ -501,6 +502,7 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
       throw new Error('Refusing to write a partial ratchet record: unset ' +
         'DOCXODUS_VISUAL_PARITY_FILTER so every case is measured in the same run.');
     }
+    assertRecordUpdateProvenance(summary);
     const record = buildRecord(summary, new Date().toISOString().slice(0, 10));
     writeFileSync(RATCHET_RECORD_FILE, serializeRecord(record));
     console.log(`Ratchet record refreshed: ${RATCHET_RECORD_FILE}`);

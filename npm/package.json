@@ -67,6 +67,7 @@
     "test": "playwright test",
     "test:arcade:libreoffice": "npm run pretest && DOCXODUS_LO_PARITY=1 playwright test demo-arcade-libreoffice.spec.ts --project=chromium",
     "test:visual-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 playwright test visual-parity.spec.ts visual-parity-reductions.spec.ts --project=chromium --reporter=line",
+    "test:generated-pdf-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 DOCXODUS_GENERATED_PDF_PARITY=1 playwright test generated-pdf-parity.spec.ts --project=chromium --reporter=line",
     "capture:word-reference": "mkdir -p dist/wasm && playwright test word-reference-capture.spec.ts --project=chromium --reporter=line",
     "test:ui": "playwright test --ui",
     "demo": "npm run build && npm run demo:serve",
@@ -120,6 +121,8 @@
     "@types/node": "^20.10.0",
     "@types/react": "^19.2.7",
     "esbuild": "^0.28.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.2.108",
     "typescript": "^5.3.0"
   },
   "dependencies": {

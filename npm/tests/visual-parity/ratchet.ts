@@ -110,10 +110,14 @@ export interface RatchetSummaryCase {
   severity: VisualSeverity;
   pages: { ssim: number; tolerantInkF1: number }[];
   error?: string;
+  /** Generated-PDF hard signals. Browser-page summaries omit these fields. */
+  physicalGeometryPassed?: boolean;
+  semanticChecksPassed?: boolean;
 }
 
 export interface RatchetSummary {
   gitCommit?: string;
+  workingTreeDirty?: boolean;
   environment: {
     chromium?: string;
     libreoffice?: string;
@@ -136,7 +140,8 @@ export interface RatchetOptions {
 export interface RatchetFinding {
   caseId: string;
   /** The signal that moved, so the failure names both the case and what got worse. */
-  signal: 'severity' | 'ssim' | 'inkF1' | 'pages' | 'error' | 'missing' | 'unrecorded';
+  signal: 'severity' | 'ssim' | 'inkF1' | 'pages' | 'error' | 'physicalGeometry'
+    | 'semantics' | 'missing' | 'unrecorded';
   recorded: string;
   measured: string;
   detail: string;
@@ -231,6 +236,21 @@ export function buildRecord(summary: RatchetSummary, recordedAt: string): Ratche
     tolerance: { ssim: RATCHET_TOLERANCE.ssim, inkF1: RATCHET_TOLERANCE.inkF1 },
     cases: [...summary.cases].sort((a, b) => a.id.localeCompare(b.id)).map(recordCase),
   };
+}
+
+/**
+ * A committed record must identify the exact clean tree that produced it. Keeping this check
+ * outside `buildRecord` preserves that function as a pure formatter for synthetic unit tests,
+ * while both benchmark update paths call it before writing repository state.
+ */
+export function assertRecordUpdateProvenance(summary: RatchetSummary): void {
+  if (summary.workingTreeDirty !== false) {
+    throw new Error('Refusing to refresh a parity ratchet from a dirty or unverified worktree; '
+      + 'commit the implementation and rerun the complete benchmark.');
+  }
+  if (!/^[0-9a-f]{40}$/.test(summary.gitCommit ?? '')) {
+    throw new Error('Refusing to refresh a parity ratchet without the exact 40-character source commit.');
+  }
 }
 
 /** Stable, human-readable serialization; the record is reviewed as a diff. */
@@ -384,6 +404,26 @@ function compareCase(
       detail: `${recorded.id}: page count changed from ` +
         `${recorded.pages.docxodus}/${recorded.pages.libreoffice} (Docxodus/LibreOffice) to ` +
         `${measured.docxodusPages}/${measured.libreofficePages}`,
+    });
+  }
+
+  if (measured.physicalGeometryPassed === false) {
+    findings.push({
+      caseId: recorded.id,
+      signal: 'physicalGeometry',
+      recorded: 'passed',
+      measured: 'failed',
+      detail: `${recorded.id}: physical PDF geometry failed its absolute contract`,
+    });
+  }
+
+  if (measured.semanticChecksPassed === false) {
+    findings.push({
+      caseId: recorded.id,
+      signal: 'semantics',
+      recorded: 'passed',
+      measured: 'failed',
+      detail: `${recorded.id}: selectable-text or hyperlink semantics failed`,
     });
   }
 

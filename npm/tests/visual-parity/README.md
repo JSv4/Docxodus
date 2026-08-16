@@ -1,11 +1,16 @@
-# LibreOffice pixel-parity benchmark
+# PDF visual-fidelity benchmark
 
 This opt-in benchmark renders a small, stratified set of repository-tracked DOCX fixtures through
-Docxodus and LibreOffice, rasterizes every page at 96 DPI, and writes page images, heatmaps, and
-machine-readable metrics outside the repository.
+Docxodus and LibreOffice. The release-gating path tests the artifact users receive: it invokes the
+supported `@docxodus/export` API, writes a Docxodus PDF, writes the LibreOffice reference PDF, and
+rasterizes both PDFs through the same Poppler command at 96 DPI before computing page metrics.
+It also checks physical PDF geometry, selectable text, and supported link annotations independently
+of the raster comparison.
 
-It extends the single-frame arcade interoperability test into a document-wide diagnostic. It is not
-part of the normal browser suite because LibreOffice and Poppler are host tools.
+The earlier browser-page-to-LibreOffice benchmark remains available as a separate diagnostic and
+keeps its existing ratchet history. The generated-PDF run has a distinct pipeline identity and
+artifact root so a PDF regression cannot be confused with movement in browser screenshot capture.
+Neither run is part of the normal browser suite because LibreOffice and Poppler are host tools.
 
 The initial measured findings and prioritized renderer gaps are recorded in [BASELINE.md](BASELINE.md).
 
@@ -18,16 +23,48 @@ and untracked files are rejected before either renderer starts. The benchmark re
 fixtures in place. It does not copy a third-party corpus or any ignored/untracked harness into the
 repository.
 
-Generated PNGs, overlays, and JSON must be written outside the checkout. The runner rejects an
-output directory inside the repository, even if that directory is ignored, and rejects a non-empty
-output directory so stale pages cannot contaminate a rerun.
+Generated PDFs, PNGs, overlays, and JSON must be written outside the checkout. The runners reject
+an output directory inside the repository, even if that directory is ignored. A local run starts
+with a new empty directory so stale pages cannot contaminate it. CI initializes only the generated-
+PDF root with a recognized `ci-context.json` and pending `index.html`; the generated-PDF runner owns
+the remaining contents and replaces the pending viewer as evidence becomes available.
+
+## PDF-to-PDF measurement flow
+
+For every selected corpus entry, the generated-PDF runner performs one ordered, bounded flow:
+
+1. Verify that the fixture is a regular Git-tracked file whose worktree bytes equal `HEAD`.
+2. Convert those bytes with the public `@docxodus/export` API and its package-owned pinned Chromium,
+   requesting the explicit revision and comment profiles declared by the case.
+3. Export the same comparison fixture to a reference PDF with the contracted LibreOffice build and
+   a fresh user profile.
+4. Preserve both original PDFs and record their SHA-256 digests. PDF byte identity is diagnostic,
+   not a cross-run promise, because Chromium records volatile PDF metadata.
+5. Parse both PDFs before rasterization. Page count and every MediaBox/CropBox origin and physical
+   dimension are recorded in points and remain hard signals separate from image similarity.
+6. Rasterize both PDFs with the same `pdftoppm` executable, DPI, page-box choice, antialiasing, and
+   color-mode argument vector. The complete argument contract and Poppler version are recorded in
+   the report; no engine receives a renderer-specific raster option.
+7. Compare paired pages for SSIM, perceptual color difference, tolerant ink precision/recall/F1,
+   and a reviewable overlay. Each PDF, page raster, and overlay carries a SHA-256 digest.
+8. Extract selectable text and link annotations independently of the raster. Expected visible and
+   hidden text follows the case's revision/comment profile; supported external targets must match,
+   and every internal destination must resolve to a page in the generated PDF.
+
+A page-count mismatch, out-of-contract physical page, semantic extraction failure, unresolved link,
+or conversion error is severe regardless of a visually white or similar page. Pixel severity and
+the reviewed disposition contract below decide whether a remaining visual difference gates strict
+mode.
 
 ## Deterministic rendering contract
 
-- Docxodus uses Chromium at device scale 1 and pagination scale 1: one CSS pixel equals one 96-DPI
-  raster pixel.
-- LibreOffice exports PDF from a fresh per-document user profile. Poppler rasterizes the PDF at
-  exactly 96 DPI.
+- The generated-PDF run uses the supported Node API and the exact Chromium revision owned by
+  `@docxodus/export`; its render report records the production renderer/font fingerprint. The
+  separate browser-page benchmark continues to use Chromium at device scale 1 and pagination
+  scale 1.
+- LibreOffice exports PDF from a fresh per-document user profile. The generated and reference PDFs
+  are rasterized by the same Poppler executable at exactly 96 DPI and under one recorded color and
+  antialiasing contract.
 - Both processes use `C.UTF-8`, UTC, and the **font-substitution contract** below instead of the
   host's default fontconfig, so line wraps cannot drift with whatever fonts a host happens to
   carry. The summary records the Chromium, LibreOffice, and Poppler versions plus every contract
@@ -36,10 +73,14 @@ output directory so stale pages cannot contaminate a rerun.
   rendered. LibreOffice's headless PDF filter follows the file's saved redline-display state and
   provides no final-view switch, so manifest cases marked `revisionMode: 'accepted'` are accepted
   once into a temporary DOCX outside the checkout; both engines then render those identical bytes.
-  Comments and Docxodus annotations are disabled; headers, footers, footnotes, and endnotes are
-  enabled.
-- Chromium waits for `document.fonts.ready`, every image load, and two animation frames. Animations,
-  transitions, carets, page shadows, page labels, and page gaps are disabled.
+  Each generated-PDF case records its explicit revision/comment profile. The older browser-page
+  diagnostic keeps comments and Docxodus annotations disabled. Headers, footers, footnotes, and
+  endnotes remain enabled.
+- Generated PDF printing crosses the production readiness barriers for fonts, images, charts/SVG,
+  pagination, running stories, and stable page geometry, then repeats them after reopening the exact
+  serialized standalone document. The browser-page diagnostic separately waits for
+  `document.fonts.ready`, every image load, and two animation frames. Animations, transitions,
+  carets, page shadows, page labels, and page gaps are disabled in diagnostic capture.
 - Pages are paired by one-based page index. Page count and page dimensions remain independent hard
   signals. A bounded translation search of only ±2 pixels normalizes raster-origin rounding; the
   chosen offset is always reported.
@@ -105,6 +146,31 @@ carries whatever the runner image's Ubuntu shipped — 24.2 on 24.04). The pure 
 the committed record's fingerprint, and the CI pin cannot drift apart, on every pull request,
 without LibreOffice installed.
 
+The repository currently contains no TDF-published checksum for that archive, so the workflow does
+not pretend to verify one. A checksum must be added only from an authoritative TDF checksum source
+and reviewed with the version bump; it must never be inferred from a locally downloaded archive.
+
+## Required tools and version identity
+
+The measurement surface intentionally names every external component:
+
+| Component | Contract used by CI |
+|---|---|
+| Node.js | 22; the export package itself requires at least 22.13 |
+| .NET / WASM tools | .NET 10.0.x plus the `wasm-tools` workload |
+| Docxodus Chromium | `@playwright/browser-chromium` 1.57.0 from `npm-export/package-lock.json` |
+| PDF parsing | `pdf-lib` 1.17.1 and `pdfjs-dist` 6.2.108 |
+| LibreOffice | exact known-good build 25.8.7.3; accepted fingerprint 25.8 |
+| Poppler | `pdftoppm` and `pdftotext` from the same `poppler-utils` install |
+| Font discovery | Fontconfig `fc-match` plus Carlito, Caladea, and Liberation contract fonts |
+
+`npm ci` makes JavaScript package versions exact through the committed lockfiles. Poppler comes from
+the CI runner's apt repository, so its major/minor is part of the ratchet environment fingerprint;
+a runner-image change fails as `environment-changed` instead of being attributed to Docxodus.
+Reproducing an existing recorded number requires the Poppler fingerprint in `ratchet.json`, not
+merely any `pdftoppm` binary. Reports retain the full version banners and measurement arguments so
+an artifact can be recreated without guessing which tools were used.
+
 Known cross-version rendering differences the corpus is sensitive to (each new finding joins
 `KNOWN_LIBREOFFICE_VERSION_DIFFERENCES` so the failure message teaches it):
 
@@ -119,9 +185,11 @@ Every paired page reports:
 - exact RGB diff ratio (diagnostic only; antialiasing makes it unsuitable as a gate);
 - CIE Lab ΔE76 mean and the ratio above ΔE 2.3, a conventional just-noticeable threshold;
 - block SSIM over 8×8 luminance windows;
-- ink F1 after a two-pixel dilation, which tolerates glyph antialiasing without tolerating displaced
-  layout;
-- page width/height deltas and the bounded alignment offset.
+- ink precision, recall, and F1 after a two-pixel dilation, which tolerate glyph antialiasing
+  without tolerating missing, extra, or displaced layout;
+- raster width/height deltas and the bounded alignment offset; and
+- for the generated-PDF path, MediaBox/CropBox origins and dimensions in PDF points before either
+  artifact is rasterized.
 
 Severity is assigned by the worst signal:
 
@@ -132,10 +200,13 @@ Severity is assigned by the worst signal:
 | major | ≥ 0.85 | ≥ 0.75 | ≤ 0.15 | ≤ 1 px |
 | severe | below major | below major | above major | > 1 px |
 
-A page-count mismatch is always severe. `DOCXODUS_VISUAL_PARITY_STRICT=1` turns renderer-attributable
-severe cases into a failing gate (see the disposition contract below). This keeps the baseline useful
-while known environment deltas and reference deviations are tracked without blocking. Independently
-of strict mode, every run compares itself against the committed regression record described next.
+A page-count mismatch is always severe. The generated-PDF path unconditionally fails conversion,
+page-count, MediaBox/CropBox, selectable-text, and hyperlink-contract errors; raster similarity or a
+reviewed disposition cannot excuse a broken hard signal. `DOCXODUS_VISUAL_PARITY_STRICT=1`
+additionally turns renderer-attributable severe raster cases into a failing gate (see the disposition
+contract below). This keeps the baseline useful while known environment deltas and reference
+deviations are tracked without waiving PDF correctness. Independently of strict mode, every run
+compares itself against the committed regression record described next.
 
 ## Regression ratchet
 
@@ -156,6 +227,8 @@ artifact expired in 14 days and nothing compared one run to the next.
 | mean SSIM | falls more than `tolerance.ssim` (0.0005) below the record |
 | worst ink F1 | falls more than `tolerance.inkF1` (0.001) below the record |
 | conversion | the case errors where the record has none |
+| physical geometry | a generated PDF fails the absolute MediaBox/CropBox contract |
+| semantics | generated-PDF selectable text or supported hyperlink targets fail |
 | coverage | a recorded case is missing, or a measured case is unrecorded |
 
 The tolerances are tight because within one environment the benchmark is *deterministic* — two
@@ -182,8 +255,10 @@ DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 \
 npm run test:visual-parity
 ```
 
-The update path refuses a filtered run, so a partial record cannot be committed. A passing run
-still lists every improvement it measured, so a stale record announces itself. Set
+The update path refuses a filtered run and any dirty or unverified worktree. Commit the
+implementation first, then generate the record from that exact clean commit so `sourceCommit`
+identifies reproducible source rather than merely the base of local edits. A passing run still lists
+every improvement it measured, so a stale record announces itself. Set
 `DOCXODUS_VISUAL_PARITY_RATCHET=0` to observe without gating; the comparison is reported either
 way. A filtered run compares only the cases it measured.
 
@@ -240,7 +315,8 @@ contract above; a bare `libreoffice-core` install fails every case with "source 
 be loaded", and an out-of-contract version fails at run start with install guidance),
 `poppler-utils` (`pdftoppm`/`pdftotext`), the contract fonts (`fonts-crosextra-carlito`,
 `fonts-crosextra-caladea`, `fonts-liberation2` — the run fails with install instructions when
-missing), Chromium installed for Playwright, and the repository's npm dependencies.
+missing), Fontconfig (`fc-match`), .NET 10 with the `wasm-tools` workload, and the repository's two
+npm package dependency sets.
 
 When your distro does not package the contract minor, use the TDF archive build named in the
 failure message — but TDF-packaged builds bundle their own Caladea/Carlito/Liberation copies
@@ -248,25 +324,62 @@ under `share/fonts/truetype/`, which silently override the font contract inside 
 only. Remove the bundled duplicates so both engines resolve the same system fonts (the wrapping
 probe fails naming the family if you forget — see the issue-#400 baseline entry).
 
+Install and build the exact locked packages from the repository root. The companion's normal
+install fetches its pinned Chromium revision; do not use `--ignore-scripts` for this benchmark.
+
 ```bash
-cd npm
-npm run build
-DOCXODUS_VISUAL_PARITY_OUTPUT=/tmp/docxodus-visual-parity npm run test:visual-parity
+npm --prefix npm ci
+npm --prefix npm run build
+npm --prefix npm-export ci
+npm --prefix npm-export run build
+npm --prefix npm exec -- playwright install --with-deps chromium
+```
+
+Run the PDF release gate into a fresh directory:
+
+```bash
+DOCXODUS_PARITY_OUTPUT="$(mktemp -d)"
+DOCXODUS_GENERATED_PDF_PARITY_OUTPUT="$DOCXODUS_PARITY_OUTPUT" \
+  npm --prefix npm run test:generated-pdf-parity
+echo "Artifact viewer: $DOCXODUS_PARITY_OUTPUT/index.html"
+```
+
+The older browser-page diagnostic remains independently reproducible:
+
+```bash
+DOCXODUS_BROWSER_PARITY_OUTPUT="$(mktemp -d)"
+DOCXODUS_VISUAL_PARITY_OUTPUT="$DOCXODUS_BROWSER_PARITY_OUTPUT" \
+  npm --prefix npm run test:visual-parity
 ```
 
 Run selected manifest IDs:
 
 ```bash
-DOCXODUS_VISUAL_PARITY_FILTER=text-formatting,merged-table \
-DOCXODUS_VISUAL_PARITY_OUTPUT=/tmp/docxodus-visual-parity \
-npm run test:visual-parity
+DOCXODUS_GENERATED_PDF_PARITY_FILTER=pdf-footnote,pdf-chart \
+DOCXODUS_GENERATED_PDF_PARITY_OUTPUT="$(mktemp -d)" \
+  npm --prefix npm run test:generated-pdf-parity
 ```
 
-The output contains `summary.json` plus one directory per case. Each case contains the two engine
-PNGs, a red perceptual-difference heatmap, and `metrics.json`. Artifact paths inside JSON are relative
-to the output root so an uploaded report remains portable. Every artifact also carries a SHA-256
-digest, and the summary records whether the source worktree was dirty, so repeated runs can be
-compared without trusting filenames or silently mixing source states.
+## Artifacts and failure retention
+
+Open `index.html` first. It links the run context and summary, both original PDFs, side-by-side page
+rasters, red perceptual-difference overlays, physical geometry, selectable-text/link evidence, and
+per-case metrics. Artifact paths inside JSON are relative to the output root so the downloaded
+directory remains portable. Source, PDF, raster, and overlay evidence carries SHA-256 digests, and
+the summary records the source commit and whether the worktree was dirty.
+
+The generated-PDF runner writes progress incrementally. A failed case retains all PDFs and page
+evidence produced before the failure and receives structured failure evidence rather than being
+deleted. Pull-request, manual, and scheduled CI create `ci-context.json` and a pending viewer before installing external tools, so even
+an apt, LibreOffice, npm, build, or run-start failure leaves a viewable artifact that names the
+commit and workflow run. `.github/workflows/visual-parity.yml` uploads this root with `if: always()`,
+retains it for 14 days, and treats a missing artifact root as an error. The browser-page report is
+uploaded separately, also on failure; one benchmark cannot suppress the other's evidence.
+
+The generated-PDF test runs even when the preceding browser-page benchmark fails, unless the job was
+explicitly cancelled. Both failures still contribute to the job result. A timeout may interrupt the
+currently active case, but the initialized viewer and every previously finalized case remain in the
+artifact.
 
 ## Triage rules
 
