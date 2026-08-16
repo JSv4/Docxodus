@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
+  spill pages to the section that supplies their body while preserving predecessor-owned stories
+  on the shared page, carries section-specific header/footer distances and logical page numbering,
+  selects odd/even stories from the displayed page number, and promotes a continuous break after a
+  pre-break footnote. PDF verification checks zero-origin MediaBox/CropBox coordinates as well as
+  dimensions. A generated six-page Letter/A4 portrait/landscape fixture proves explicit,
+  next-page, continuous, two-column, header/footer, footnote, and page-field sequencing through the
+  production Node renderer, including an 80% screen-zoom reprint with unchanged physical boxes.
 - **Deterministic delivery change receipts (#458).** Added a versioned, canonical JSON
   receipt that binds source/delivered package identities to every supplied mutation transaction,
   normalized requests, explicit undo/redo lineage, requested/derived/unexpected package-change

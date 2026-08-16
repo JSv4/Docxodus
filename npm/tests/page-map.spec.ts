@@ -290,7 +290,7 @@ test.describe('PageMap materialization and citation navigation', () => {
     expect(message).toContain('source anchor p:body:dropped has no measurable fragment');
   });
 
-  test('excludes explicit, hidden, and aria-hidden source subtrees from page clones and the map', async ({ page }) => {
+  test('excludes explicit breaks, hidden, and aria-hidden source subtrees from the map', async ({ page }) => {
     await page.setContent('<div id="viewer"></div>');
     await addBundle(page);
     const result = await page.evaluate((html) => {
@@ -314,13 +314,30 @@ test.describe('PageMap materialization and citation navigation', () => {
         <p data-page-map-exclude="true" data-source-anchor-id="p:body:explicit">explicit</p>
         <div hidden><p data-source-anchor-id="p:body:hidden">hidden</p></div>
         <div aria-hidden="true"><p data-source-anchor-id="p:body:aria">aria</p></div>
+        <p data-source-anchor-id="p:body:break-carrier"></p>
+        <div class="page-break" data-page-break="true"></div>
+        <p data-source-anchor-id="p:body:after-break" style="height:18pt;margin:0">after</p>
+        <p data-source-anchor-id="p:body:styled-break-carrier"
+           style="height:18pt;margin:0;background:white"></p>
+        <div class="page-break" data-page-break="true"></div>
+        <p data-source-anchor-id="p:body:after-styled-break"
+           style="height:18pt;margin:0">after styled</p>
       </div>`));
 
-    expect(result.anchors).toEqual(['p:body:visible']);
+    expect(result.anchors).toEqual([
+      'p:body:visible',
+      'p:body:after-break',
+      'p:body:styled-break-carrier',
+      'p:body:after-styled-break',
+    ]);
     expect(result.pageSources).toContain('p:body:visible');
     expect(result.pageSources).toContain('p:body:explicit');
     expect(result.pageSources).toContain('p:body:hidden');
     expect(result.pageSources).toContain('p:body:aria');
+    expect(result.pageSources).toContain('p:body:break-carrier');
+    expect(result.pageSources).toContain('p:body:after-break');
+    expect(result.pageSources).toContain('p:body:styled-break-carrier');
+    expect(result.pageSources).toContain('p:body:after-styled-break');
   });
 
   test('clips fragment geometry to the visible overflow band, not only the page box', async ({ page }) => {
