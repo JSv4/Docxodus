@@ -532,6 +532,9 @@ public class HtmlConversionOpsTests
 
         Assert.Equal(expectedChartType, (string?)svg.Attribute("data-chart-type"));
         Assert.Equal("Generated chart", (string?)svg.Attribute("aria-label"));
+        Assert.Equal("chart", (string?)svg.Attribute("data-docxodus-materialization"));
+        Assert.Equal("complete", (string?)svg.Attribute("data-docxodus-materialization-state"));
+        Assert.Equal("Generated chart", (string?)svg.Attribute("data-docxodus-materialization-id"));
         Assert.Contains("width: 432pt", (string?)svg.Attribute("style"));
         Assert.Contains("height: 252pt", (string?)svg.Attribute("style"));
         Assert.Equal(6, bars.Count);

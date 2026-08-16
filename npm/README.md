@@ -655,7 +655,10 @@ console.log(result.pageCount, result.pageMap, result.renderReport);
 
 The exporter copies caller bytes before its first asynchronous boundary, verifies them with the
 package manifest API, performs layout in an attached script-disabled frame, embeds or removes every
-automatic resource, and reopens the serialized result to verify page count and physical geometry.
+automatic resource, and reopens the serialized result to verify fonts, decoded images, chart/SVG
+completion, stable page count, and physical geometry. Readiness uses one bounded deadline and names
+the exact phase and pending resources on timeout; pagination reports its page count and diagnostics
+explicitly, and two matching stable-tree signatures are required before publication.
 External HTTPS/mail/tel links remain user-activated links and are inventoried in the report; the
 exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
 resources instead of returning a nominally complete artifact.

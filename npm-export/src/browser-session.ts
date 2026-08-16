@@ -73,6 +73,27 @@ interface BridgeResponse {
   error?: BrowserMaterializationFailure;
 }
 
+interface ReadinessProgress {
+  phase: ExportPhase;
+  status: "pending" | "complete" | "failed";
+  pending: string[];
+}
+
+interface PdfActivationResponse {
+  ok: boolean;
+  readiness?: {
+    pageCount: number;
+    signature: string;
+    quietIntervalMs: number;
+    animationFrames: number;
+  };
+  error?: {
+    phase: ExportPhase;
+    message: string;
+    pending: string[];
+  };
+}
+
 export interface OwnedExportBrowserSession {
   browser: Browser;
   close(): Promise<void>;
@@ -91,7 +112,7 @@ interface HostOwnedBrowserIdentity {
 
 const HOST_OWNED_BROWSERS = new WeakMap<Browser, HostOwnedBrowserIdentity>();
 
-function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print", pending: string) {
+function timeoutError(phase: ExportPhase, pending: string) {
   return new DocxodusExportError(
     "readiness_timeout",
     phase,
@@ -127,6 +148,7 @@ async function bounded<T>(
   pending: string,
   signal: AbortSignal | undefined,
   operation: () => Promise<T>,
+  readinessProgress?: () => ReadinessProgress | undefined,
 ): Promise<T> {
   if (signal?.aborted) throw cancellationError(phase, pending);
   const timeoutMs = remaining(deadline, phase);
@@ -137,7 +159,11 @@ async function bounded<T>(
     contenders.push(new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           void context?.close().catch(() => undefined);
-          reject(timeoutError(phase, pending));
+          const progress = readinessProgress?.();
+          reject(timeoutError(
+            progress?.phase ?? phase,
+            progress && progress.pending.length > 0 ? progress.pending.join(", ") : pending,
+          ));
         }, timeoutMs);
       }));
     if (signal) {
@@ -738,6 +764,7 @@ export async function renderInBrowser(
   let primaryError: unknown;
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
+  let lastReadinessProgress: ReadinessProgress | undefined;
 
   try {
     launch = await launchBrowser(runtime, deadline, signal);
@@ -851,6 +878,20 @@ export async function renderInBrowser(
       recordDenied(download.url(), "GET", "download");
       void download.cancel();
     });
+    await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
+      const progress = value as Partial<ReadinessProgress>;
+      if (typeof progress.phase === "string"
+        && (progress.status === "pending" || progress.status === "complete" || progress.status === "failed")
+        && Array.isArray(progress.pending)
+        && progress.pending.every((entry) => typeof entry === "string")) {
+        lastReadinessProgress = {
+          phase: progress.phase as ExportPhase,
+          status: progress.status,
+          pending: [...progress.pending],
+        };
+        currentPhase = lastReadinessProgress.phase;
+      }
+    });
     page.setDefaultTimeout(remaining(deadline, "wasm_initialization"));
     await bounded(context, deadline, "wasm_initialization", "browser materializer bootstrap", signal, async () => {
       await page.goto(`${origin}/index.html`, { waitUntil: "load" });
@@ -878,10 +919,16 @@ export async function renderInBrowser(
         return bridge.render(inputUrl, options, wantsHtml, wantsPdf);
       }, {
         inputUrl: `${origin}${inputPath}`,
-        options: browserOptions,
+        options: {
+          ...browserOptions,
+          // Let the in-browser coordinator publish its exact phase/pending report
+          // before the hard Node watchdog closes the context.
+          timeoutMs: Math.max(1, remaining(deadline, "wasm_initialization") - 250),
+        },
         wantsHtml: includeHtml,
         wantsPdf: includePdf,
       }),
+      () => lastReadinessProgress,
     );
     if (!bridgeResponse.ok || !bridgeResponse.result) {
       throw fromBrowserFailure(bridgeResponse.error ?? {});

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic print-readiness barrier (#441).** Browser and Node PDF export now coordinate
+  explicit font loading, parallel image decoding, chart/SVG completion signals, paginator-ready
+  diagnostics, and a mutation/resize-observed page-tree quiet interval under one deadline. Two
+  consecutive matching stable signatures are required within three pristine-tree attempts, and the
+  serialized document is checked again immediately before Chromium prints it. Timeouts retain
+  their exact phase and pending resources; corrupt images follow structured warn/strict policy; delayed
+  resource, stable-geometry, and timeout evidence is published with the test artifacts.
 - **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
   spill pages to the section that supplies their body while preserving predecessor-owned stories
   on the shared page, carries section-specific header/footer distances and logical page numbering,
