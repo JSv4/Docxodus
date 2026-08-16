@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Verified, atomic delivery bundles (#465).** Added one `DeliveryBundleService` orchestration
+  contract for explicit baseline/working/final identities, separate pre-existing and generated
+  revision policies, native review/final reversibility proofs, DOCX and evidence artifacts,
+  comprehensive validation, authoritative #458 receipt composition, and injected render outputs.
+  Its canonical manifest inventories every requested or implicit artifact with hashes, sizes,
+  MIME types, render metadata, explicit unavailability, and typed relationships; an independent
+  verifier checks separately supplied bytes. Fresh-directory publication stages, rereads, verifies,
+  and atomically renames the complete bundle without replacing an existing target. The same
+  implementation is exposed through .NET, the `docxodus-deliver` CLI, and MCP
+  `docxodus_deliver`. Production standalone paginated HTML/PDF remains truthfully unavailable until
+  the epic #434 renderer adapter exists. See
+  [`docs/architecture/delivery_bundle.md`](docs/architecture/delivery_bundle.md) and the
+  [`delivery-bundle-manifest-v1` schema](docs/schemas/delivery-bundle-manifest-v1.schema.json).
 - **Deterministic delivery change receipts (#458).** Added a versioned, canonical JSON
   receipt that binds source/delivered package identities to every supplied mutation transaction,
   normalized requests, explicit undo/redo lineage, requested/derived/unexpected package-change

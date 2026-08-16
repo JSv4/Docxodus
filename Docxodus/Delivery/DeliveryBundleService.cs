@@ -166,7 +166,7 @@ public sealed class DeliveryBundleService
         }
 
         EnforceRequiredAvailability(outputs.Values, options.ReturnIncompleteBundle);
-        var relationships = BuildRelationships(plans, outputs.Values);
+        var relationships = BuildRelationships(plans, outputs.Values, renderStates);
         return DeliveryBundle.Create(
             materializedRequest,
             outputs.Values,
@@ -632,7 +632,8 @@ public sealed class DeliveryBundleService
 
     private static IReadOnlyList<DeliveryArtifactRelationship> BuildRelationships(
         IReadOnlyList<ArtifactPlan> plans,
-        IEnumerable<DeliveryBundleArtifactInput> outputs)
+        IEnumerable<DeliveryBundleArtifactInput> outputs,
+        IReadOnlyList<RenderState> renderStates)
     {
         var availableIds = outputs.Select(value => value.ArtifactId)
             .ToHashSet(StringComparer.Ordinal);
@@ -693,6 +694,48 @@ public sealed class DeliveryBundleService
                 _ => null,
             };
             Add(render, DeliveryArtifactRelationshipKind.RenderedFrom, source);
+        }
+        var pageMaps = renderStates.Where(state =>
+                state.Plan.Request.Kind == DeliveryArtifactKind.PageMap
+                && state.Output.Availability == DeliveryArtifactAvailability.Available)
+            .Select(state => new
+            {
+                State = state,
+                Bytes = state.Output.CopyBytes(),
+            })
+            .Where(candidate => candidate.Bytes is not null)
+            .Select(candidate => new
+            {
+                candidate.State,
+                Digest = DeliveryBundleCanonicalJson.Digest(candidate.Bytes!),
+            })
+            .ToArray();
+        var layouts = renderStates.Where(state =>
+                (state.Plan.Request.Kind is DeliveryArtifactKind.StandaloneHtml
+                    or DeliveryArtifactKind.FinalPdf or DeliveryArtifactKind.ReviewPdf)
+                && state.Output.Availability == DeliveryArtifactAvailability.Available)
+            .Select(state => new
+            {
+                State = state,
+                PageMapBytes = state.Result?.CopyPageMapBytes(),
+            })
+            .Where(layout => layout.PageMapBytes is not null)
+            .OrderBy(layout => layout.State.Plan.Request.ArtifactId, StringComparer.Ordinal);
+        foreach (var layout in layouts)
+        {
+            var digest = DeliveryBundleCanonicalJson.Digest(
+                layout.PageMapBytes!);
+            foreach (var pageMap in pageMaps.Where(candidate =>
+                         candidate.Digest == digest
+                         && candidate.State.SourceDigest == layout.State.SourceDigest
+                         && string.Equals(
+                             candidate.State.Result?.RendererFingerprint,
+                             layout.State.Result!.RendererFingerprint,
+                             StringComparison.Ordinal)))
+            {
+                Add(layout.State.Plan, DeliveryArtifactRelationshipKind.UsesPageMap,
+                    pageMap.State.Plan);
+            }
         }
         return relationships;
     }

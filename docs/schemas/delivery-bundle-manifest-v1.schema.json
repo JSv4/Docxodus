@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/delivery/delivery-bundle-manifest/v1",
+  "title": "Docxodus delivery bundle manifest v1",
+  "description": "The canonical, digest-covered inventory emitted by DeliveryBundleService.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "manifestDigest"],
+  "properties": {
+    "payload": { "$ref": "#/$defs/payload" },
+    "manifestDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "schemaVersion",
+        "status",
+        "revisionPolicy",
+        "baselineDocument",
+        "workingDocument",
+        "finalDocument",
+        "artifacts",
+        "relationships"
+      ],
+      "properties": {
+        "schema": {
+          "const": "https://docxodus.dev/schemas/delivery/delivery-bundle-manifest/v1"
+        },
+        "schemaVersion": { "const": 1 },
+        "status": { "enum": ["complete", "incomplete", "failed"] },
+        "revisionPolicy": { "$ref": "#/$defs/revisionPolicy" },
+        "baselineDocument": { "$ref": "#/$defs/documentIdentity" },
+        "workingDocument": { "$ref": "#/$defs/documentIdentity" },
+        "finalDocument": { "$ref": "#/$defs/documentIdentity" },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "relationships": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/relationship" }
+        }
+      }
+    },
+    "revisionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preExistingRevisions", "generatedRevisions"],
+      "properties": {
+        "preExistingRevisions": { "$ref": "#/$defs/revisionDisposition" },
+        "generatedRevisions": { "$ref": "#/$defs/revisionDisposition" }
+      }
+    },
+    "revisionDisposition": {
+      "enum": ["preserve", "accept", "reject"]
+    },
+    "documentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "documentVersion", "byteLength", "digest"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "documentVersion": { "type": "integer", "minimum": 0 },
+        "byteLength": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "kind",
+        "provenance",
+        "requiredness",
+        "availability",
+        "relativePath",
+        "mediaType",
+        "byteLength",
+        "digest",
+        "unavailableReason",
+        "render"
+      ],
+      "properties": {
+        "artifactId": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": {
+          "enum": [
+            "baselineDocx",
+            "policyBaselineDocx",
+            "workingDocx",
+            "reviewDocx",
+            "finalDocx",
+            "standaloneHtml",
+            "finalPdf",
+            "reviewPdf",
+            "pageMap",
+            "renderReport",
+            "baselinePackageManifest",
+            "finalPackageManifest",
+            "semanticDelta",
+            "packageDelta",
+            "validationReport",
+            "reversibilityProof",
+            "changeReceipt"
+          ]
+        },
+        "provenance": { "enum": ["requested", "implicit"] },
+        "requiredness": { "enum": ["required", "optional"] },
+        "availability": { "enum": ["available", "unavailable"] },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\]+$"
+        },
+        "mediaType": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "byteLength": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "unavailableReason": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 4096 },
+            { "type": "null" }
+          ]
+        },
+        "render": {
+          "oneOf": [
+            { "$ref": "#/$defs/renderMetadata" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "availability": { "const": "available" } },
+            "required": ["availability"]
+          },
+          "then": {
+            "properties": {
+              "byteLength": { "type": "integer", "minimum": 1 },
+              "digest": { "$ref": "#/$defs/digest" },
+              "unavailableReason": { "type": "null" }
+            }
+          },
+          "else": {
+            "properties": {
+              "byteLength": { "type": "null" },
+              "digest": { "type": "null" },
+              "unavailableReason": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            }
+          }
+        }
+      ]
+    },
+    "renderMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewProfile",
+        "commentProfile",
+        "rendererFingerprint",
+        "pageCount",
+        "warnings"
+      ],
+      "properties": {
+        "reviewProfile": { "enum": ["final", "original", "markup"] },
+        "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
+        "rendererFingerprint": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 4096 },
+            { "type": "null" }
+          ]
+        },
+        "pageCount": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "type": "string", "maxLength": 4096 }
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationshipId", "kind", "fromArtifactId", "toArtifactId"],
+      "properties": {
+        "relationshipId": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": {
+          "enum": [
+            "derivedFrom",
+            "describes",
+            "validates",
+            "proves",
+            "usesPageMap",
+            "renderedFrom",
+            "receiptFor"
+          ]
+        },
+        "fromArtifactId": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "toArtifactId": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "const": "SHA-256" },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

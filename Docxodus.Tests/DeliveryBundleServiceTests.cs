@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Docxodus.Delivery;
+using Docxodus.Internal;
 using Docxodus.Verification;
 using Xunit;
 using BundleArtifactAvailability = Docxodus.Delivery.DeliveryArtifactAvailability;
@@ -60,6 +61,86 @@ public sealed class DeliveryBundleServiceTests
         Assert.Equal(original, bundle.GetArtifactBytes("final-docx"));
         Assert.Equal(edit.BeforeBytes, request.Baseline.Bytes);
         Assert.Equal(edit.AfterBytes, request.Working.Bytes);
+    }
+
+    [Fact]
+    public async Task BuildAsync_EveryArtifactKind_FormsOneVerifiedPublishedBundle()
+    {
+        var fixture = TrackedEditAndAcceptance();
+        var requests = Enum.GetValues<DeliveryArtifactKind>()
+            .Select(kind => kind switch
+            {
+                DeliveryArtifactKind.StandaloneHtml => RenderArtifact(
+                    "standalone-html", kind, DeliveryArtifactRequiredness.Required,
+                    DeliveryReviewProfile.Final),
+                DeliveryArtifactKind.FinalPdf => RenderArtifact(
+                    "final-pdf", kind, DeliveryArtifactRequiredness.Required,
+                    DeliveryReviewProfile.Final),
+                DeliveryArtifactKind.ReviewPdf => RenderArtifact(
+                    "review-pdf", kind, DeliveryArtifactRequiredness.Required,
+                    DeliveryReviewProfile.Markup),
+                DeliveryArtifactKind.PageMap => RenderArtifact(
+                    "page-map", kind, DeliveryArtifactRequiredness.Required,
+                    DeliveryReviewProfile.Final),
+                DeliveryArtifactKind.RenderReport => RenderArtifact(
+                    "render-report", kind, DeliveryArtifactRequiredness.Required,
+                    DeliveryReviewProfile.Final),
+                _ => new DeliveryArtifactRequest
+                {
+                    ArtifactId = Kebab(kind),
+                    Kind = kind,
+                    Requiredness = DeliveryArtifactRequiredness.Required,
+                },
+            })
+            .ToArray();
+        var request = new DeliveryBundleBuildRequest(
+            new DeliveryDocumentSnapshot(
+                "baseline", fixture.FirstResult.BaseVersion, fixture.BaselineBytes),
+            new DeliveryDocumentSnapshot(
+                "working", fixture.FirstResult.ResultVersion, fixture.WorkingBytes),
+            "final",
+            fixture.SecondResult.ResultVersion,
+            new DeliveryBundleRevisionPolicy
+            {
+                PreExistingRevisions = DeliveryRevisionPolicy.Preserve,
+                GeneratedRevisions = DeliveryRevisionPolicy.Accept,
+            },
+            requests,
+            new DeliveryReceiptContext(new[]
+            {
+                new DeliveryReceiptTransactionEvidence(
+                    fixture.FirstContribution,
+                    new DeliveryDocumentSnapshot(
+                        "first-before", fixture.FirstResult.BaseVersion, fixture.BaselineBytes),
+                    new DeliveryDocumentSnapshot(
+                        "first-after", fixture.FirstResult.ResultVersion, fixture.WorkingBytes)),
+                new DeliveryReceiptTransactionEvidence(
+                    fixture.SecondContribution,
+                    new DeliveryDocumentSnapshot(
+                        "second-before", fixture.SecondResult.BaseVersion, fixture.WorkingBytes),
+                    new DeliveryDocumentSnapshot(
+                        "second-after", fixture.SecondResult.ResultVersion, fixture.FinalBytes)),
+            }));
+
+        var bundle = await new DeliveryBundleService(new CapturingRenderer()).BuildAsync(request);
+
+        Assert.Equal(DeliveryBundleStatus.Complete, bundle.Manifest.Payload.Status);
+        Assert.True(bundle.Verification.IsValid,
+            string.Join(Environment.NewLine, bundle.Verification.Findings));
+        Assert.Equal(
+            Enum.GetValues<DeliveryArtifactKind>().Order(),
+            bundle.Manifest.Payload.Artifacts.Select(value => value.Kind).Distinct().Order());
+        Assert.All(bundle.Manifest.Payload.Artifacts,
+            artifact => Assert.Equal(BundleArtifactAvailability.Available,
+                artifact.Availability));
+        Assert.Contains(bundle.Manifest.Payload.Relationships, relationship =>
+            relationship.Kind == DeliveryArtifactRelationshipKind.UsesPageMap);
+
+        using var temporary = new TemporaryDirectory();
+        var published = Path.Combine(temporary.Path, "every-artifact-bundle");
+        DeliveryBundleDirectoryPublisher.Publish(bundle, published);
+        AssertPublishedBundleReopens(bundle, published);
+        WritePersistentGallery(bundle, "DOCXODUS_DELIVERY_ALL_ARTIFACT_DIR");
     }
 
     [Fact]
@@ -143,7 +224,7 @@ public sealed class DeliveryBundleServiceTests
             var artifact = Assert.Single(bundle.Manifest.Payload.Artifacts,
                 value => value.ArtifactId == artifactId);
             Assert.Equal("test-renderer|engine-1|fonts-1", artifact.Render?.RendererFingerprint);
-            Assert.Equal(2, artifact.Render?.PageCount);
+            Assert.Equal(1, artifact.Render?.PageCount);
             Assert.Equal(new[] { "fixture diagnostic" }, artifact.Render?.Warnings);
         }
         Assert.Contains(bundle.Manifest.Payload.Artifacts, artifact =>
@@ -317,6 +398,68 @@ public sealed class DeliveryBundleServiceTests
         return new EditFixture(beforeBytes, afterBytes, result, contribution);
     }
 
+    private static AcceptedEditFixture TrackedEditAndAcceptance()
+    {
+        var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = new DocxSession(source, new DocxSessionSettings
+        {
+            PersistAnchorIds = false,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Delivery Service Test",
+            EmitMarkdownPatch = false,
+            CaptureInitialProjection = false,
+        });
+        var anchor = session.Project().AnchorIndex.Keys.First(id =>
+            id.StartsWith("p:body:", StringComparison.Ordinal));
+        var baseline = session.Save(persistAnchorIds: false);
+        var baselineManifest = PackageManifestGenerator.Generate(baseline);
+        var editOperation = DeliveryNormalizedOperation.Create(
+            "docx_edit",
+            "replace_text",
+            JsonSerializer.Serialize(new
+            {
+                anchorId = anchor,
+                markdown = "Every-artifact tracked edit.",
+            }));
+        var first = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep(
+                "docx_edit",
+                "replace_text",
+                value => value.ReplaceText(anchor, "Every-artifact tracked edit.")),
+        });
+        Assert.True(first.Success,
+            first.Failure is null ? "tracked batch failed" : first.Failure.Error.Message);
+        var working = session.Save(persistAnchorIds: false);
+        var workingManifest = PackageManifestGenerator.Generate(working);
+        var firstContribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            first, baselineManifest, workingManifest, new[] { editOperation });
+
+        var acceptOperation = DeliveryNormalizedOperation.Create(
+            "docxodus_track_changes", "accept_all");
+        var second = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep(
+                "docxodus_track_changes",
+                "accept_all",
+                value => value.AcceptAllRevisions()),
+        });
+        Assert.True(second.Success,
+            second.Failure is null ? "accept batch failed" : second.Failure.Error.Message);
+        var final = session.Save(persistAnchorIds: false);
+        var finalManifest = PackageManifestGenerator.Generate(final);
+        var secondContribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            second, workingManifest, finalManifest, new[] { acceptOperation });
+        return new AcceptedEditFixture(
+            baseline,
+            working,
+            final,
+            first,
+            second,
+            firstContribution,
+            secondContribution);
+    }
+
     private static void AssertPublishedBundleReopens(DeliveryBundle bundle, string directory)
     {
         var manifestBytes = File.ReadAllBytes(
@@ -335,10 +478,11 @@ public sealed class DeliveryBundleServiceTests
             string.Join(Environment.NewLine, verification.Findings));
     }
 
-    private static void WritePersistentGallery(DeliveryBundle bundle)
+    private static void WritePersistentGallery(
+        DeliveryBundle bundle,
+        string environmentVariable = "DOCXODUS_DELIVERY_BUNDLE_ARTIFACT_DIR")
     {
-        var root = Environment.GetEnvironmentVariable(
-            "DOCXODUS_DELIVERY_BUNDLE_ARTIFACT_DIR");
+        var root = Environment.GetEnvironmentVariable(environmentVariable);
         if (string.IsNullOrWhiteSpace(root))
             return;
 
@@ -362,6 +506,13 @@ public sealed class DeliveryBundleServiceTests
             + "<h1>Docxodus #465 delivery-bundle evidence</h1>"
             + $"<p>Status: <strong>{bundle.Manifest.Payload.Status}</strong>; independent verification: "
             + $"<strong>{bundle.Verification.IsValid}</strong>.</p>"
+            + (bundle.Manifest.Payload.Artifacts.Any(artifact =>
+                    artifact.Render?.RendererFingerprint?.StartsWith(
+                        "test-renderer|", StringComparison.Ordinal) == true)
+                ? "<p><strong>Rendering note:</strong> HTML, PDF, PageMap, and render-report "
+                    + "outputs are deterministic test-adapter fixtures proving orchestration and "
+                    + "verification. Production rendering remains gated by epic #434.</p>"
+                : string.Empty)
             + $"<p>Manifest digest: <code>{Html(bundle.Manifest.ManifestDigest.Value)}</code>. "
             + "<a href=\"bundle/bundle-manifest.json\">View canonical manifest</a></p>"
             + "<table><thead><tr><th>ID</th><th>Kind</th><th>Provenance</th>"
@@ -379,6 +530,21 @@ public sealed class DeliveryBundleServiceTests
 
     private static string Sha256(byte[] bytes) => Convert.ToHexString(
         SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static string Kebab<T>(T value)
+        where T : struct, Enum
+    {
+        var name = value.ToString();
+        var builder = new StringBuilder(name.Length + 8);
+        for (var index = 0; index < name.Length; index++)
+        {
+            var character = name[index];
+            if (index > 0 && char.IsUpper(character))
+                builder.Append('-');
+            builder.Append(char.ToLowerInvariant(character));
+        }
+        return builder.ToString();
+    }
 
     private sealed class CapturingRenderer : IDeliveryArtifactRenderer
     {
@@ -405,17 +571,30 @@ public sealed class DeliveryBundleServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             _requests.Add(request);
-            var bytes = request.Kind == DeliveryArtifactKind.StandaloneHtml
-                ? Encoding.UTF8.GetBytes($"<!doctype html><p>{request.ArtifactId}</p>")
-                : Encoding.ASCII.GetBytes($"%PDF-1.7\n{request.ArtifactId}\n%%EOF");
+            var pageMap = PageMapBytes(request.SourceDocumentVersion);
+            var bytes = request.Kind switch
+            {
+                DeliveryArtifactKind.StandaloneHtml => Encoding.UTF8.GetBytes(
+                    $"<!doctype html><html><body><p>{request.ArtifactId}</p></body></html>"),
+                DeliveryArtifactKind.FinalPdf or DeliveryArtifactKind.ReviewPdf =>
+                    MinimalPdfBytes(),
+                DeliveryArtifactKind.PageMap => pageMap,
+                DeliveryArtifactKind.RenderReport => Encoding.UTF8.GetBytes(
+                    "{\"schema\":\"docxodus.test.render-report/v1\",\"valid\":true}"),
+                _ => throw new ArgumentOutOfRangeException(nameof(request)),
+            };
             return ValueTask.FromResult(DeliveryRenderResult.Available(
                 bytes,
-                request.Kind == DeliveryArtifactKind.StandaloneHtml
-                    ? "text/html"
-                    : "application/pdf",
+                request.Kind switch
+                {
+                    DeliveryArtifactKind.StandaloneHtml => "text/html",
+                    DeliveryArtifactKind.FinalPdf or DeliveryArtifactKind.ReviewPdf =>
+                        "application/pdf",
+                    _ => "application/json",
+                },
                 "test-renderer|engine-1|fonts-1",
-                pageCount: 2,
-                pageMapBytes: Encoding.UTF8.GetBytes("{\"pages\":[1,2]}"),
+                pageCount: 1,
+                pageMapBytes: pageMap,
                 renderReportBytes: Encoding.UTF8.GetBytes("{\"valid\":true}"),
                 diagnostics: new[]
                 {
@@ -426,6 +605,50 @@ public sealed class DeliveryBundleServiceTests
                     },
                 }));
         }
+
+        private static byte[] PageMapBytes(long documentVersion)
+        {
+            var map = new PageMap
+            {
+                Mode = PageMapMode.Paginated,
+                Availability = PageMapAvailability.Available,
+                DocumentVersion = documentVersion,
+                RendererFingerprint = "test-renderer|engine-1|fonts-1",
+                Pages = new[]
+                {
+                    new PageMapPage
+                    {
+                        PageNumber = 1,
+                        PageInSection = 1,
+                        Width = 612,
+                        Height = 792,
+                        SectionIndex = 0,
+                        PageName = "page-1",
+                    },
+                },
+                Fragments = new[]
+                {
+                    new PageMapFragment
+                    {
+                        FragmentId = "fixture:p1:0",
+                        AnchorId = "fixture",
+                        FragmentIndex = 0,
+                        PageNumber = 1,
+                        Geometry = new PageMapRect(72, 72, 200, 20),
+                        Story = PageMapStory.Body,
+                    },
+                },
+            };
+            return Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map));
+        }
+
+        private static byte[] MinimalPdfBytes() => Encoding.ASCII.GetBytes(
+            "%PDF-1.4\n"
+            + "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+            + "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n"
+            + "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n"
+            + "xref\n0 4\n0000000000 65535 f \n"
+            + "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
     }
 
     private sealed class TemporaryDirectory : IDisposable
@@ -452,4 +675,13 @@ public sealed class DeliveryBundleServiceTests
         byte[] AfterBytes,
         MutationBatchResult Result,
         DeliveryTransactionContribution Contribution);
+
+    private sealed record AcceptedEditFixture(
+        byte[] BaselineBytes,
+        byte[] WorkingBytes,
+        byte[] FinalBytes,
+        MutationBatchResult FirstResult,
+        MutationBatchResult SecondResult,
+        DeliveryTransactionContribution FirstContribution,
+        DeliveryTransactionContribution SecondContribution);
 }

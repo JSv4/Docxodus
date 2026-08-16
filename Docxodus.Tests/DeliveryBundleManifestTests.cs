@@ -3,6 +3,7 @@
 
 #nullable enable
 
+using System.Text.Json;
 using Docxodus.Delivery;
 using Docxodus.Verification;
 using Xunit;
@@ -223,6 +224,34 @@ public class DeliveryBundleManifestTests
                 && value.Status == DeliveryBundleArtifactVerificationStatus.ResourceLimit);
     }
 
+    [Fact]
+    public void DBM006_PublishedV1SchemaTracksTheClosedWireVocabulary()
+    {
+        var schemaPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../docs/schemas/delivery-bundle-manifest-v1.schema.json"));
+        using var schema = JsonDocument.Parse(File.ReadAllBytes(schemaPath));
+        var root = schema.RootElement;
+
+        Assert.Equal("https://json-schema.org/draft/2020-12/schema",
+            root.GetProperty("$schema").GetString());
+        Assert.Equal(DeliveryBundleManifestPayload.SchemaId,
+            root.GetProperty("$id").GetString());
+        var definitions = root.GetProperty("$defs");
+        Assert.Equal(DeliveryBundleManifestPayload.SchemaId,
+            definitions.GetProperty("payload").GetProperty("properties")
+                .GetProperty("schema").GetProperty("const").GetString());
+        Assert.Equal(1, definitions.GetProperty("payload").GetProperty("properties")
+            .GetProperty("schemaVersion").GetProperty("const").GetInt32());
+        Assert.Equal(CamelNames<DeliveryArtifactKind>(),
+            EnumValues(definitions, "artifact", "kind"));
+        Assert.Equal(CamelNames<DeliveryArtifactRelationshipKind>(),
+            EnumValues(definitions, "relationship", "kind"));
+        Assert.Equal(CamelNames<DeliveryRevisionPolicy>(),
+            definitions.GetProperty("revisionDisposition").GetProperty("enum")
+                .EnumerateArray().Select(value => value.GetString()));
+    }
+
     private static DeliveryBundleManifest MinimalManifest(
         byte[] finalBytes,
         bool includeUnavailable = false)
@@ -287,6 +316,17 @@ public class DeliveryBundleManifestTests
             new DeliveryDocumentSnapshot("final", 3, new byte[] { 3 }));
 
     private static byte[] MinimalPdf() => "%PDF-1.7\n%%EOF"u8.ToArray();
+
+    private static IEnumerable<string?> EnumValues(
+        JsonElement definitions,
+        string definition,
+        string property) => definitions.GetProperty(definition).GetProperty("properties")
+            .GetProperty(property).GetProperty("enum").EnumerateArray()
+            .Select(value => value.GetString());
+
+    private static IEnumerable<string> CamelNames<T>()
+        where T : struct, Enum => Enum.GetValues<T>()
+            .Select(value => JsonNamingPolicy.CamelCase.ConvertName(value.ToString()));
 
     private const string DocxMediaType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
