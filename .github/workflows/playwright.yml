@@ -11,7 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The full single-worker WASM matrix plus the pinned-Chromium export suite now exceeds the
+    # former 25-minute ceiling on hosted runners. Keep a bounded cushion so assertion failures
+    # still surface instead of the job being canceled before export artifacts are produced.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
