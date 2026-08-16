@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.",
   "recordedAt": "2026-08-16",
-  "sourceCommit": "14765be7870dffd346c210a351e3e1d2a066e15c",
+  "sourceCommit": "ab1b4177b965aca10c611dffdd4b6409e63f2118",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
