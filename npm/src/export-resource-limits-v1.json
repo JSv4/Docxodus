@@ -12,7 +12,13 @@
     "finalPages": 10000,
     "domNodes": 1000000,
     "automaticResources": 10000,
-    "automaticResourceBytes": 268435456
+    "automaticResourceBytes": 268435456,
+    "fontDirectoryEntries": 10000,
+    "fontFiles": 1000,
+    "fontFileBytes": 33554432,
+    "fontTotalBytes": 134217728,
+    "fontRequests": 4096,
+    "fontSampleCodePoints": 65536
   },
   "hardCeilings": {
     "compressedDocxBytes": 104857600,
@@ -24,7 +30,13 @@
     "finalPages": 100000,
     "domNodes": 2000000,
     "automaticResources": 100000,
-    "automaticResourceBytes": 536870912
+    "automaticResourceBytes": 536870912,
+    "fontDirectoryEntries": 100000,
+    "fontFiles": 10000,
+    "fontFileBytes": 67108864,
+    "fontTotalBytes": 536870912,
+    "fontRequests": 16384,
+    "fontSampleCodePoints": 262144
   },
   "timeoutMs": {
     "default": 120000,

@@ -65,6 +65,68 @@
         "count": { "type": "integer", "minimum": 0 }
       }
     },
+    "fontLicenseEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity", "noSubsetting"],
+      "properties": {
+        "kind": { "enum": ["installable", "previewPrint", "editable", "attested"] },
+        "identity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "noSubsetting": { "type": "boolean" }
+      }
+    },
+    "fontResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId", "requestedFamily", "requestedFamilies", "requestedStyle",
+        "requestedWeight", "requestedStretch", "sampleCodePointCount", "sampleDigest",
+        "status", "source"
+      ],
+      "properties": {
+        "requestId": { "type": "string", "minLength": 1 },
+        "requestedFamily": { "type": "string", "minLength": 1 },
+        "requestedFamilies": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "requestedStyle": { "enum": ["normal", "italic", "oblique"] },
+        "requestedWeight": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "requestedStretch": { "type": "number", "minimum": 50, "maximum": 200 },
+        "sampleCodePointCount": { "type": "integer", "minimum": 0 },
+        "sampleDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "resolvedFamily": { "type": "string", "minLength": 1 },
+        "resolvedFace": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["resolved", "substituted", "missing", "load_failed", "unverified"]
+        },
+        "source": { "enum": ["browser", "configured", "attested"] },
+        "format": { "enum": ["ttf", "otf", "woff", "woff2"] },
+        "fileSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "version": { "type": "string", "minLength": 1 },
+        "faceMatch": { "enum": ["exact", "synthesized"] },
+        "metricCompatible": { "type": "boolean" },
+        "glyphCoverage": { "enum": ["complete", "partial", "unverified"] },
+        "missingCodePointCount": { "type": "integer", "minimum": 0 },
+        "browserFallbackAvailable": { "type": "boolean" },
+        "licenseEvidence": { "$ref": "#/$defs/fontLicenseEvidence" }
+      }
+    },
+    "fontIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolverContract", "substitutionContractVersion", "substitutionContractDigest",
+        "resolutionDigest"
+      ],
+      "properties": {
+        "resolverContract": { "const": "https://docxodus.dev/contracts/font-resolver/v1" },
+        "substitutionContractVersion": { "const": 1 },
+        "substitutionContractDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "resolutionDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "bindings": {
       "type": "object",
       "additionalProperties": false,
@@ -133,18 +195,9 @@
       },
       "fonts": {
         "type": "array",
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["requestedFamily", "status", "source"],
-          "properties": {
-            "requestedFamily": { "type": "string", "minLength": 1 },
-            "resolvedFamily": { "type": "string", "minLength": 1 },
-            "status": { "enum": ["resolved", "substituted", "missing", "unverified"] },
-            "source": { "enum": ["browser", "embedded", "configured"] }
-          }
-        }
+        "items": { "$ref": "#/$defs/fontResolution" }
       },
+      "fontIdentity": { "$ref": "#/$defs/fontIdentity" },
       "resources": {
         "type": "array",
         "items": {
@@ -183,8 +236,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
-        "unsupportedContent", "warnings", "status", "environment", "pages", "bindings"
+        "schema", "schemaVersion", "source", "options", "readiness", "fontIdentity", "fonts",
+        "resources", "unsupportedContent", "warnings", "status", "environment", "pages",
+        "bindings"
       ],
       "properties": {
         "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
@@ -193,6 +247,7 @@
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },
         "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "fontIdentity": { "$ref": "#/$defs/baseProperties/fontIdentity" },
         "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
         "resources": { "$ref": "#/$defs/baseProperties/resources" },
         "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },
@@ -225,6 +280,7 @@
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },
         "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "fontIdentity": { "$ref": "#/$defs/baseProperties/fontIdentity" },
         "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
         "resources": { "$ref": "#/$defs/baseProperties/resources" },
         "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },

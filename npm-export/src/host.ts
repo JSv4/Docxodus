@@ -1,27 +1,41 @@
 #!/usr/bin/env node
 import { once } from "node:events";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   renderDocxArtifacts,
   DocxodusExportError,
   type RenderBatchOptions,
 } from "./index.js";
+import type { FontLicenseAttestation } from "./contracts.js";
 import { openOwnedExportBrowserSession } from "./browser-session.js";
-import { DEFAULT_EXPORT_TIMEOUT_MS } from "docxodus/export-browser";
+import { discoverFontCatalog } from "./fonts/index.js";
+import {
+  DEFAULT_EXPORT_RESOURCE_LIMITS,
+  DEFAULT_EXPORT_TIMEOUT_MS,
+} from "docxodus/export-browser";
 
 const MAX_FRAME_BYTES = 536_870_912;
+const MAX_FONT_POLICY_BYTES = 1_048_576;
 
 interface HostBatchRequest {
   id: string;
   documentBase64: string;
   options: Omit<
     RenderBatchOptions,
-    "browser" | "browserExecutablePath" | "fontDirectories"
+    "browser" | "browserExecutablePath" | "fontDirectories" | "fontLicenseAttestations"
   >;
 }
 
 interface HostRequest {
   schemaVersion: 1;
   batches: HostBatchRequest[];
+}
+
+interface HostFontPolicy {
+  schemaVersion: 1;
+  fontDirectories: readonly string[];
+  fontLicenseAttestations: readonly FontLicenseAttestation[];
 }
 
 async function readFrame(): Promise<Buffer> {
@@ -86,13 +100,73 @@ function validateRequest(value: unknown): HostRequest {
       "strictFonts",
       "timeoutMs",
       "limits",
-      "fontLicenseAttestations",
       "environmentAttestation",
     ], `Batch ${index} options`);
     if (seen.has(batch.id)) throw new Error(`Duplicate batch id: ${batch.id}`);
     seen.add(batch.id);
   }
   return request as HostRequest;
+}
+
+async function loadHostFontPolicy(path: string | undefined): Promise<HostFontPolicy> {
+  if (path === undefined) {
+    return Object.freeze({
+      schemaVersion: 1 as const,
+      fontDirectories: Object.freeze([]),
+      fontLicenseAttestations: Object.freeze([]),
+    });
+  }
+  if (path.trim() === "" || /[\u0000-\u001f\u007f]/u.test(path)) {
+    throw new Error("DOCXODUS_FONT_POLICY_PATH must name one policy file.");
+  }
+  const policyPath = resolve(path);
+  let bytes: Buffer;
+  try {
+    const metadata = await stat(policyPath);
+    if (!metadata.isFile() || metadata.size === 0 || metadata.size > MAX_FONT_POLICY_BYTES) {
+      throw new Error("invalid policy file");
+    }
+    bytes = await readFile(policyPath);
+  } catch {
+    throw new Error("The configured host font policy is not a readable bounded regular file.");
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_FONT_POLICY_BYTES) {
+    throw new Error("The configured host font policy exceeds its byte limit.");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("The configured host font policy is not valid JSON.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("The configured host font policy must be an object.");
+  }
+  const record = value as Record<string, unknown>;
+  exactKeys(record, ["schemaVersion", "fontDirectories", "fontLicenseAttestations"],
+    "The host font policy");
+  if (record.schemaVersion !== 1 || !Array.isArray(record.fontDirectories)
+    || !Array.isArray(record.fontLicenseAttestations)) {
+    throw new Error("The host font policy must use schemaVersion 1 and both documented arrays.");
+  }
+  if (!record.fontDirectories.every((entry) => typeof entry === "string" && entry.trim() !== "")) {
+    throw new Error("The host font policy contains an invalid font directory.");
+  }
+  if (!record.fontLicenseAttestations.every((entry) =>
+    entry !== null && typeof entry === "object" && !Array.isArray(entry))) {
+    throw new Error("The host font policy contains an invalid font-license attestation.");
+  }
+  if (record.fontLicenseAttestations.length > 0 && record.fontDirectories.length === 0) {
+    throw new Error("The host font policy cannot attach attestations without a font directory.");
+  }
+  const policyDirectory = dirname(policyPath);
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    fontDirectories: Object.freeze(record.fontDirectories.map((entry) =>
+      resolve(policyDirectory, entry as string))),
+    fontLicenseAttestations: Object.freeze(record.fontLicenseAttestations.map((entry) =>
+      Object.freeze({ ...(entry as FontLicenseAttestation) }))),
+  });
 }
 
 function decodeCanonicalBase64(value: string): Uint8Array {
@@ -120,6 +194,14 @@ async function main(): Promise<void> {
   let session: Awaited<ReturnType<typeof openOwnedExportBrowserSession>> | undefined;
   try {
     const request = validateRequest(JSON.parse((await readFrame()).toString("utf8")));
+    const fontPolicy = await loadHostFontPolicy(process.env.DOCXODUS_FONT_POLICY_PATH);
+    if (fontPolicy.fontDirectories.length > 0) {
+      await discoverFontCatalog(
+        fontPolicy.fontDirectories,
+        fontPolicy.fontLicenseAttestations,
+        DEFAULT_EXPORT_RESOURCE_LIMITS,
+      );
+    }
     if (request.batches.length > 0) {
       session = await openOwnedExportBrowserSession(
         process.env.DOCXODUS_CHROMIUM_PATH,
@@ -132,6 +214,8 @@ async function main(): Promise<void> {
         const source = decodeCanonicalBase64(batch.documentBase64);
         const result = await renderDocxArtifacts(source, {
           ...batch.options,
+          fontDirectories: fontPolicy.fontDirectories,
+          fontLicenseAttestations: fontPolicy.fontLicenseAttestations,
           browser: session?.browser,
         });
         batches.push({

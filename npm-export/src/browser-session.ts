@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import type { PaginatedHtmlOptions } from "docxodus/export-browser";
+import type { FontResolverRequest, PaginatedHtmlOptions } from "docxodus/export-browser";
 import { loadVerifiedAssetGraph } from "./assets.js";
 import { sha256 } from "./canonical.js";
 import type {
@@ -12,6 +12,7 @@ import type {
   BrowserMaterializationSuccess,
   ExportPhase,
   NodeExportRuntime,
+  ValidatedNodeExportRuntime,
 } from "./contracts.js";
 import {
   attachFailedReport,
@@ -31,6 +32,13 @@ const LAUNCH_FLAGS = Object.freeze([
   "--no-first-run",
 ]);
 
+interface ManagedBrowserIdentity {
+  launchMode: "explicit" | "pinned";
+  executableDigest: string;
+}
+
+const MANAGED_BROWSERS = new WeakMap<Browser, ManagedBrowserIdentity>();
+
 export interface RequestLogEntry {
   url: string;
   method: string;
@@ -39,6 +47,7 @@ export interface RequestLogEntry {
 }
 
 export interface BrowserRuntimeIdentity {
+  chromiumProduct: "chromium";
   browserVersion: string;
   executableDigest?: string;
   launchMode: "injected" | "explicit" | "pinned";
@@ -61,6 +70,12 @@ interface BridgeResponse {
   ok: boolean;
   result?: BrowserMaterializationSuccess;
   error?: BrowserMaterializationFailure;
+}
+
+interface FontBindingResponse {
+  ok: boolean;
+  result?: unknown;
+  error?: Record<string, unknown>;
 }
 
 interface ReadinessProgress {
@@ -178,7 +193,15 @@ async function launchBrowser(
         "Inject a connected Playwright Chromium Browser instance.",
       );
     }
-    return { browser: runtime.browser, owned: false, launchMode: "injected" };
+    const managed = MANAGED_BROWSERS.get(runtime.browser);
+    return managed
+      ? {
+        browser: runtime.browser,
+        owned: false,
+        launchMode: managed.launchMode,
+        executableDigest: managed.executableDigest,
+      }
+      : { browser: runtime.browser, owned: false, launchMode: "injected" };
   }
 
   let temporaryDirectory: string;
@@ -246,11 +269,16 @@ export async function openOwnedExportBrowserSession(
     );
   }
   let closed = false;
+  MANAGED_BROWSERS.set(launch.browser, {
+    launchMode: launch.launchMode as "explicit" | "pinned",
+    executableDigest: launch.executableDigest!,
+  });
   return {
     browser: launch.browser,
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      MANAGED_BROWSERS.delete(launch.browser);
       const failures: unknown[] = [];
       await launch.browser.close().catch((error) => failures.push(error));
       await rm(launch.temporaryDirectory!, { recursive: true, force: true })
@@ -309,8 +337,8 @@ async function activateFinalDocument(
 
 export async function renderInBrowser(
   sourceBytes: Uint8Array,
-  browserOptions: Omit<PaginatedHtmlOptions, "wasmBasePath">,
-  runtime: NodeExportRuntime,
+  browserOptions: Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver">,
+  runtime: ValidatedNodeExportRuntime,
   includeHtml: boolean,
   includePdf: boolean,
   deadline: number,
@@ -343,6 +371,7 @@ export async function renderInBrowser(
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
   let lastReadinessProgress: ReadinessProgress | undefined;
+  const fontAbortController = new AbortController();
 
   try {
     launch = await launchBrowser(runtime, deadline);
@@ -426,6 +455,30 @@ export async function renderInBrowser(
     });
 
     const page = await context.newPage();
+    if (runtime.fontResolver) {
+      await page.exposeBinding("__docxodusResolveFonts", async (
+        _source,
+        request: FontResolverRequest,
+      ): Promise<FontBindingResponse> => {
+        try {
+          return {
+            ok: true,
+            result: await runtime.fontResolver!(request, fontAbortController.signal),
+          };
+        } catch (error) {
+          const normalized = error instanceof DocxodusExportError
+            ? error
+            : new DocxodusExportError(
+              "resource_policy_failure",
+              "font_loading",
+              "The configured font resolver failed.",
+              "Inspect the configured font directories and attestations.",
+              { cause: error },
+            );
+          return { ok: false, error: normalized.toJSON() };
+        }
+      });
+    }
     await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
       const progress = value as Partial<ReadinessProgress>;
       if (typeof progress.phase === "string"
@@ -542,10 +595,11 @@ export async function renderInBrowser(
       pdf,
       requestLog,
       runtime: {
+        chromiumProduct: launch.browser.browserType().name() as "chromium",
         browserVersion: launch.browser.version(),
         executableDigest: launch.executableDigest,
         launchMode: launch.launchMode,
-        launchFlags: launch.owned ? LAUNCH_FLAGS : [],
+        launchFlags: launch.launchMode === "injected" ? [] : LAUNCH_FLAGS,
         playwrightVersion: PLAYWRIGHT_VERSION,
         assetManifestDigest: graph.manifestDigest,
         packageVersion: graph.packageVersion,
@@ -571,6 +625,7 @@ export async function renderInBrowser(
       );
     primaryError = attachFailedReport(normalized, materialization?.renderReport);
   } finally {
+    fontAbortController.abort(new Error("The browser render context has closed."));
     const cleanupFailures: unknown[] = [];
     await context?.close().catch((error) => cleanupFailures.push(error));
     if (launch?.owned) {

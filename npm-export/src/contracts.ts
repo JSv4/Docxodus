@@ -7,6 +7,8 @@ import type {
   ExportPhase,
   ExportResourceLimits,
   FailedRenderReport,
+  FontFaceStyle,
+  FontResolver,
   PaginatedHtmlOptions,
   PaginatedHtmlResult,
   PaginatedRenderMetadata,
@@ -32,6 +34,8 @@ export type {
 } from "docxodus/export-browser";
 
 export interface FontLicenseAttestation {
+  schemaVersion: 1;
+  usage: "standalone-document-font-embedding";
   fileSha256: string;
   embeddingPermitted: true;
   basis: string;
@@ -45,8 +49,10 @@ export interface RenderEnvironmentAttestation {
   launchFlags: readonly string[];
   hostFonts: ReadonlyArray<{
     family: string;
-    style: string;
+    postscriptName: string;
+    style: FontFaceStyle;
     weight: number;
+    stretch: number;
     fileSha256: string;
     version: string;
   }>;
@@ -59,12 +65,22 @@ export interface NodeExportRuntime {
   /** Explicit Chromium executable used when `browser` is omitted. */
   browserExecutablePath?: string;
   /** Reserved for the verified font runtime delivered by issue #442. */
-  fontDirectories?: string[];
-  fontLicenseAttestations?: FontLicenseAttestation[];
+  fontDirectories?: readonly string[];
+  fontLicenseAttestations?: readonly FontLicenseAttestation[];
   environmentAttestation?: RenderEnvironmentAttestation;
 }
 
-export type NodeExportOptions = Omit<PaginatedHtmlOptions, "wasmBasePath"> & NodeExportRuntime;
+/** Validated internal runtime. Resolver functions never enter the public Node option surface. */
+export interface ValidatedNodeExportRuntime extends NodeExportRuntime {
+  fontDirectories: readonly string[];
+  fontLicenseAttestations: readonly FontLicenseAttestation[];
+  fontResolver?: FontResolver;
+  /** Internal eager catalog validation used before Chromium launch. */
+  prepareFonts?: (signal?: AbortSignal) => Promise<void>;
+}
+
+export type NodeExportOptions = Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver">
+  & NodeExportRuntime;
 export type RenderOutput = "html" | "pdf";
 
 export interface PdfExportResult extends PaginatedRenderMetadata {

@@ -3,6 +3,8 @@
  * materialization and the final document reopened for Chromium printing.
  */
 
+import { documentFontReadinessCandidates } from "./font-runtime.js";
+
 export type PrintReadinessPhase =
   | "font_loading"
   | "image_decoding"
@@ -120,36 +122,8 @@ function graphicResource(element: Element, index: number): string {
     || `${graphicKind(element)}-${index + 1}`;
 }
 
-function fontCandidates(
-  document: Document,
-): Array<{ family: string; specification: string; sample: string }> {
-  const view = document.defaultView;
-  if (!view) throw new Error("render document has no defaultView");
-  const candidates = new Map<string, { family: string; specification: string; sample: string }>();
-  const walker = document.createTreeWalker(document.body, 4 /* NodeFilter.SHOW_TEXT */);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const element = node.parentElement;
-    const sample = node.textContent?.trim();
-    if (!element || !sample || element.closest("script, style, template, noscript")) continue;
-    const style = view.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden"
-      || style.contentVisibility === "hidden") continue;
-    const family = style.fontFamily.trim();
-    if (!family) continue;
-    const specification = `${style.fontStyle || "normal"} ${style.fontWeight || "400"} ${style.fontSize || "12px"} ${family}`;
-    const existing = candidates.get(specification);
-    if (existing) {
-      existing.sample = `${existing.sample}${sample}`.slice(0, 256);
-    } else {
-      candidates.set(specification, { family, specification, sample: sample.slice(0, 256) });
-    }
-  }
-  return Array.from(candidates.values()).sort((left, right) =>
-    left.specification < right.specification ? -1 : left.specification > right.specification ? 1 : 0);
-}
-
 export function documentFontReadiness(document: Document): PrintReadinessTask<FontReadinessProbe[]> {
-  const candidates = fontCandidates(document);
+  const candidates = documentFontReadinessCandidates(document);
   const labels = uniqueResourceLabels(candidates.map(({ family }) => family));
   const pending = new Set(labels);
   let fontSetReady = document.fonts !== undefined;

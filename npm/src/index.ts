@@ -266,6 +266,35 @@ export type {
   UnsupportedContentPolicy,
 } from "./export-browser.js";
 
+export {
+  fontFamilyKey,
+  FONT_RESOLVER_CONTRACT_ID,
+  FONT_RESOLVER_SCHEMA_VERSION,
+  FONT_SUBSTITUTION_CONTRACT,
+  FONT_SUBSTITUTION_CONTRACT_MATERIAL,
+  FONT_SUBSTITUTION_CONTRACT_VERSION,
+  normalizeFontFamilyName,
+} from "./font-contract.js";
+export type {
+  FontConfigurationIdentity,
+  FontEmbeddingKind,
+  FontFaceMatch,
+  FontFaceStyle,
+  FontFileFormat,
+  FontGlyphCoverage,
+  FontLicenseEvidence,
+  FontMediaType,
+  FontRequest,
+  FontResolutionSource,
+  FontResolutionStatus,
+  FontResolver,
+  FontResolverFace,
+  FontResolverOutcome,
+  FontResolverRequest,
+  FontResolverResponse,
+  FontSubstitutionEntry,
+} from "./font-contract.js";
+
 // Page geometry is the document's own page setup (w:sectPr), read off the section wrappers
 // the converter stamps in every render mode, plus the fit-to-width zoom a view applies to it.
 export {

@@ -130,6 +130,8 @@ Issue #439 adds the Node-only surface:
 
 ```ts
 interface FontLicenseAttestation {
+  schemaVersion: 1;
+  usage: "standalone-document-font-embedding";
   fileSha256: string;
   embeddingPermitted: true;
   basis: string;
@@ -140,11 +142,13 @@ interface RenderEnvironmentAttestation {
   chromiumProduct: string;
   chromiumBuild: string;
   executableSha256?: string;
-  launchFlags: string[];
-  hostFonts: Array<{
+  launchFlags: readonly string[];
+  hostFonts: ReadonlyArray<{
     family: string;
+    postscriptName: string;
     style: string;
     weight: number;
+    stretch: number;
     fileSha256: string;
     version: string;
   }>;
@@ -154,8 +158,8 @@ interface RenderEnvironmentAttestation {
 interface NodeExportRuntime {
   browser?: Browser;                 // caller-owned; never closed by Docxodus
   browserExecutablePath?: string;    // Docxodus launches and owns this browser
-  fontDirectories?: string[];
-  fontLicenseAttestations?: FontLicenseAttestation[];
+  fontDirectories?: readonly string[];
+  fontLicenseAttestations?: readonly FontLicenseAttestation[];
   environmentAttestation?: RenderEnvironmentAttestation;
 }
 
@@ -326,6 +330,11 @@ the adapter never starts one Node process per key or artifact. The host rejects 
 or extra ids. Export error code, phase, severity, pending resources, part/anchor, remediation, and
 safe detail cross this frame unchanged. PR #499 extends its current renderer diagnostic model to
 retain those fields through .NET, CLI, MCP, validation evidence, and failure reports.
+Executable and font-filesystem authority stays outside the frame. `DOCXODUS_FONT_POLICY_PATH`
+names one bounded schema-v1 JSON policy containing ordered `fontDirectories` and
+`fontLicenseAttestations`; relative directories resolve from that policy file, it is read once at
+host startup, and the same policy is applied to every batch. Batch payloads cannot name executable
+paths, font roots, or embedding-rights attestations.
 
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive
@@ -367,7 +376,10 @@ strict-font, timeout, and browser-executable flags map directly to the public AP
 environment attestations are canonical JSON files conforming to the public types above; unknown
 fields, duplicate font digests, or incomplete required facts fail validation rather than being
 ignored. The CLI parses these files into the corresponding Node API fields; it does not invent a
-second policy shape.
+second policy shape. Font-directory order is significant: an earlier root has precedence over a
+later root. Traversal within each root is lexical and deterministic; duplicate bytes are collapsed,
+while distinct files claiming the same family/style/weight/stretch within one root are ambiguous
+and fail before browser launch.
 
 Input and output paths must differ. Before rendering, the path layer rejects duplicate destinations,
 existing destinations, and input/output aliases after absolute normalization, existing-path file-id
@@ -467,17 +479,56 @@ phase and its current pending resources instead of masking it as a generic Node 
 Warnings use stable codes, severity, phase, source/part when known, message, and remediation. The
 render report records requested and resolved fonts, substitutions, missing fonts, image/chart/SVG
 outcomes, unsupported placeholders, external links, page metadata, readiness timings, and any
-policy decision. Missing or substituted fonts warn by default and fail under `strictFonts`.
+policy decision. Default mode warns for substituted, missing, load-failed, synthesized, partially
+covered, or browser-unverified fonts. `strictFonts` fails every non-exact, synthesized, partial, or
+unverified result in `font_loading`. A face without legal embedding evidence is a policy failure in
+both modes.
 
-The Node adapter discovers TTF, OTF, WOFF, and WOFF2 files in each explicit font directory, reads
-their family/face metadata, hashes them, and injects license-permitted files as local webfonts into
-the isolated page. That works for owned and caller-owned browsers on all supported hosts. System
-fonts may be used when no directory supplies a family, but an exact file/version must come from a
-caller environment attestation or the render is marked `font_environment_unverified`; strict mode
-rejects it. OOXML embedded fonts are not exported until de-obfuscation and embedding-license policy
-is implemented. For TTF/OTF, OS/2 `fsType` restricted-license bits forbid injection. WOFF/WOFF2 or
-caller-supplied files whose embedding rights cannot be derived require an explicit caller licensing
-attestation recorded in the report; absence is a policy error, not assumed permission.
+After profile projection and before pagination, the browser inventories every final text-bearing
+node. Requests are deduplicated by ordered family stack, style, numeric weight, percentage stretch,
+and a bounded sorted set of Unicode scalar samples. The Node adapter discovers TTF, OTF, WOFF, and
+WOFF2 files in each explicit font directory, snapshots each file once, reads family/face and glyph
+metadata from those bytes, hashes them, and injects license-permitted faces as data webfonts into
+the isolated page. Generated `@font-face` rules remain in standalone HTML so the reopened PDF check
+uses the same bytes. This works for owned and caller-owned browsers on supported hosts.
+
+An exact configured family wins; otherwise the browser-portable substitution contract is applied.
+Earlier explicit directories win across directory boundaries. Within one directory, conflicting
+files for the same family/style/weight/stretch are rejected; byte-identical files are deduplicated.
+Each root is resolved once and traversed iteratively in lexical order. Symlinks and non-regular
+files are rejected, and directory entries, font count, per-file bytes, total bytes, requests, and
+sample code points are bounded by the shared resource contract.
+
+A configured face is exposed under a deterministic synthetic family keyed by the path-free font
+configuration identity. CSS places that family first while retaining the original family stack as
+a non-strict fallback. Multiple faces retain explicit style/weight/stretch descriptors and parser-
+verified glyph coverage. A browser's `document.fonts.check()` proves availability only; it cannot
+prove an exact system file. System fonts therefore remain `browserObserved` unless a caller
+attestation covers their exact family, PostScript face, style, weight, stretch, version, and file
+digest. An injected browser is at most `callerAttested`; an owned browser with verified runtime and
+configured font bytes may be `nodeVerified`.
+
+The browser-level `FontResolver` is executable caller code and therefore a trusted policy
+authority for face selection, embedding-license evidence, and declared glyph coverage. The
+coordinator independently validates the response vocabulary, bounds, byte digest, and actual font
+decode/load result; it does not claim to re-derive licensing or font-table coverage from arbitrary
+browser-supplied resolver records. Node callers that need Docxodus-owned verification use the
+companion package's filesystem resolver instead.
+
+OOXML embedded fonts are not exported until de-obfuscation and embedding-license policy is
+implemented; their package-manifest records produce structured unsupported diagnostics without a
+second ZIP scan. For TTF/OTF, `OS/2.fsType` restricted or bitmap-only flags forbid injection.
+Installable, preview/print, and editable permissions are recorded, and no subsetting is performed.
+WOFF/WOFF2, or any format whose rights cannot be derived, requires an affirmative caller
+schema-v1 attestation with usage `standalone-document-font-embedding`, bound to the exact lowercase
+SHA-256. The `basis` and optional `attester` are bounded printable evidence strings. An attestation
+cannot override an explicit restriction.
+
+Absolute paths never enter browser requests, generated CSS family names, standalone metadata,
+reports, errors, or fingerprints. The canonical `fontIdentity.resolutionDigest` instead covers the
+substitution-contract identity, ordered requests, selected face metadata/digests, resolution
+decisions, and license-evidence identities. Base64 bytes and paths are excluded. This digest and the
+path-free resolution records participate in the renderer fingerprint.
 
 ## Error taxonomy and limits
 
@@ -511,6 +562,12 @@ interface ExportResourceLimits {
   domNodes: number;
   automaticResources: number;
   automaticResourceBytes: number;
+  fontDirectoryEntries: number;
+  fontFiles: number;
+  fontFileBytes: number;
+  fontTotalBytes: number;
+  fontRequests: number;
+  fontSampleCodePoints: number;
 }
 ```
 
@@ -526,6 +583,9 @@ hard ceiling:
 | Final pages | 10,000 | 100,000 |
 | DOM nodes | 1,000,000 | 2,000,000 |
 | Automatic resources / aggregate bytes | 10,000 / 256 MiB | 100,000 / 512 MiB |
+| Font directory entries / files | 10,000 / 1,000 | 100,000 / 10,000 |
+| Font bytes per file / aggregate | 32 MiB / 128 MiB | 64 MiB / 512 MiB |
+| Font requests / sampled code points | 4,096 / 65,536 | 16,384 / 262,144 |
 | Total deadline | 120 seconds | 10 minutes |
 
 The checked-in export-limits v1 contract is the single source for the TypeScript options, WASM
@@ -562,6 +622,43 @@ interface RenderWarning {
   resource?: string;
 }
 
+interface FontLicenseEvidence {
+  kind: "installable" | "previewPrint" | "editable" | "attested";
+  identity: string; // lowercase SHA-256 of canonical, path-free evidence
+  noSubsetting: boolean;
+}
+
+interface FontResolution {
+  requestId: string;
+  requestedFamily: string;
+  requestedFamilies: string[];
+  requestedStyle: "normal" | "italic" | "oblique";
+  requestedWeight: number;
+  requestedStretch: number;
+  sampleCodePointCount: number;
+  sampleDigest: string;
+  resolvedFamily?: string;
+  resolvedFace?: string;
+  status: "resolved" | "substituted" | "missing" | "load_failed" | "unverified";
+  source: "browser" | "configured" | "attested";
+  format?: "ttf" | "otf" | "woff" | "woff2";
+  fileSha256?: string;
+  version?: string;
+  faceMatch?: "exact" | "synthesized";
+  metricCompatible?: boolean;
+  glyphCoverage?: "complete" | "partial" | "unverified";
+  missingCodePointCount?: number;
+  browserFallbackAvailable?: boolean;
+  licenseEvidence?: FontLicenseEvidence;
+}
+
+interface FontConfigurationIdentity {
+  resolverContract: "https://docxodus.dev/contracts/font-resolver/v1";
+  substitutionContractVersion: 1;
+  substitutionContractDigest: string;
+  resolutionDigest: string;
+}
+
 interface RenderReportBase {
   schema: "https://docxodus.dev/schemas/render/render-report/v1";
   schemaVersion: 1;
@@ -578,6 +675,7 @@ interface RenderReportBase {
     elapsedMs: number;
     pending: string[];
   }>;
+  fontIdentity?: FontConfigurationIdentity;
   fonts: FontResolution[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
@@ -586,6 +684,7 @@ interface RenderReportBase {
 
 interface CompleteRenderReport extends RenderReportBase {
   status: "complete";
+  fontIdentity: FontConfigurationIdentity;
   environment: {
     rendererFingerprint: string;
     verification: "nodeVerified" | "browserObserved" | "callerAttested";
@@ -660,6 +759,21 @@ explicit `browserObserved` verification level. Attested injected environments ar
 fields. A caller reproduces a render with the same source bytes, layout options, exact runtime from
 the fingerprint, and reported font configuration. Any change in those inputs is visible even when
 output bytes happen to match.
+
+## Verification artifacts
+
+The Node export suite writes a self-contained `npm-export/test-artifacts/view-artifacts.html` index
+after its scenarios complete. The #442 section links exact-match, substitution, missing,
+load-failure, and metric-difference HTML/PDF/PageMap/report evidence, screenshots, a canonical
+path-free font manifest, and the compared fingerprints. The index uses relative links so the
+uploaded directory remains directly browsable after download. Artifact generation is best-effort
+per scenario: evidence completed before a later failure remains linked alongside the structured
+failure report.
+
+The Playwright workflow runs export tests before the broader browser matrix and uploads
+`npm-export/test-artifacts/`, `npm/test-results/`, and the Playwright report under `if: always()`.
+This makes the edit evidence available when tests complete successfully and keeps it available when
+an unrelated later gate fails.
 
 ## Supported fidelity
 

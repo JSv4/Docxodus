@@ -664,9 +664,12 @@ exporter never follows them. `unsupportedContent: 'strict'` rejects visible plac
 resources instead of returning a nominally complete artifact.
 
 The browser surface currently supports `final` and `markup` revision profiles. `original` fails
-explicitly until the shared revision projection in issue #444 lands. Likewise, `strictFonts: true`
-fails until issue #442 supplies attestable font resolution. The normal browser result is labelled
-`browserObserved`; it is not presented as a verified host-font environment.
+explicitly until the shared revision projection in issue #444 lands. Browser callers may supply a
+`fontResolver` that returns immutable font bytes and canonical resolution records; it is a trusted
+policy authority for face selection, license evidence, and glyph-coverage claims. Docxodus checks
+the response schema, byte length/digest, and actual browser decoding/loading, but cannot
+independently prove those caller declarations. Without a resolver, the normal result is labelled
+`browserObserved` and cannot satisfy `strictFonts: true`.
 
 By default the worker loads from `dist/wasm/` beside the package entry point. A deployment that
 hosts those files elsewhere may pass `wasmBasePath`. `docxodus/export-assets.json` is the closed,

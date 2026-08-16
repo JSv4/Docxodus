@@ -33,6 +33,7 @@ try {
   );
   assert.equal(packageJson.dependencies['playwright-core'], '1.57.0');
   assert.equal(packageJson.dependencies['@playwright/browser-chromium'], '1.57.0');
+  assert.equal(packageJson.dependencies.fontkit, '2.0.4');
   assert.equal(packageJson.dependencies['pdf-lib'], '1.17.1');
   assert.equal(packageJson.peerDependencies.docxodus, packageJson.version,
     'the published companion must require the exact matching docxodus version');
@@ -46,12 +47,14 @@ try {
     'dist/index.d.ts',
     'dist/cli.js',
     'dist/host.js',
+    'dist/fonts/index.js',
   ]) {
     assert.ok(paths.includes(required), `package is missing required file: ${required}`);
   }
   const unexpected = paths.filter((path) => {
     if (path === 'LICENSE' || path === 'README.md' || path === 'package.json') return false;
     if (/^dist\/[^/]+\.(?:js|d\.ts)(?:\.map)?$/.test(path)) return false;
+    if (/^dist\/fonts\/(?:discovery|index|resolver)\.(?:js|d\.ts)(?:\.map)?$/.test(path)) return false;
     return true;
   });
   assert.deepEqual(unexpected, [], `package contains undeclared files:\n${unexpected.join('\n')}`);
