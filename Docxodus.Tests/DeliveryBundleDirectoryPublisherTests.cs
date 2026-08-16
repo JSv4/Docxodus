@@ -239,18 +239,12 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     {
         using var temporary = new TemporaryDirectory();
         var target = Path.Combine(temporary.Path, "delivery");
-        using var ready = new Barrier(2);
-        var injector = new CallbackFaultInjector(context =>
-        {
-            if (context.Checkpoint == DeliveryBundleDirectoryPublisherCheckpoint.BeforeCommit)
-                Assert.True(ready.SignalAndWait(TimeSpan.FromSeconds(15)));
-        });
 
         var attempts = Enumerable.Range(0, 2).Select(_ => Task.Run(() =>
         {
             try
             {
-                DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector);
+                DeliveryBundleDirectoryPublisher.Publish(Source(), target);
                 return (Exception?)null;
             }
             catch (Exception exception)
@@ -537,6 +531,9 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     {
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(parent), path =>
             Path.GetFileName(path).Contains(".docxodus-stage-", StringComparison.Ordinal));
+        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(parent), path =>
+            Path.GetFileName(path).StartsWith(
+                ".docxodus-delivery-publish-", StringComparison.Ordinal));
     }
 
     private static bool PathEntryExists(string path)

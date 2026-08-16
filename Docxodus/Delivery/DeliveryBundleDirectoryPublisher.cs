@@ -5,6 +5,7 @@
 
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Docxodus.Delivery;
 
@@ -124,6 +125,8 @@ public static class DeliveryBundleDirectoryPublisher
         var parent = Path.GetDirectoryName(target)!;
         var snapshot = SnapshotAndValidate(bundle);
         var injector = faultInjector ?? NoDeliveryBundleDirectoryPublisherFaultInjector.Instance;
+        using var publicationLease = AcquirePublicationLease(target, parent);
+        EnsureTargetStillAvailable(target, parent);
 
         string? stage = null;
         var stageOwned = false;
@@ -244,6 +247,43 @@ public static class DeliveryBundleDirectoryPublisher
     {
         if (PathEntryExists(target))
             throw new IOException($"Delivery target already exists: '{target}'.");
+    }
+
+    private static FileStream AcquirePublicationLease(string target, string parent)
+    {
+        var targetDigest = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(target)))
+            .ToLowerInvariant()[..24];
+        var path = Path.Combine(
+            parent, $".docxodus-delivery-publish-{targetDigest}.lock");
+        FileStream lease;
+        try
+        {
+            lease = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 32,
+                FileOptions.WriteThrough | FileOptions.DeleteOnClose);
+        }
+        catch (IOException exception)
+        {
+            throw new IOException(
+                $"Another publisher already owns the delivery target commit lease: '{target}'.",
+                exception);
+        }
+        try
+        {
+            lease.Write(RandomNumberGenerator.GetBytes(32));
+            lease.Flush(flushToDisk: true);
+            return lease;
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
     }
 
     private static DeliveryBundleDirectoryPublicationSnapshot SnapshotAndValidate(
