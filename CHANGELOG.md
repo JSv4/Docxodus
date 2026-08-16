@@ -377,17 +377,17 @@ All notable changes to this project will be documented in this file.
   recompile.
 
 ### Changed
-- **A footnote too long for its page now keeps flowing instead of being clipped.**
-  Browser pagination reserves at most 60% of the body height for the note band; a
-  note whose tail did not fit there used to be handed to the next page whole and
-  drawn past the band's bottom edge, so the overflow was in the DOM but not on the
-  page — and therefore missing from the `PageMap` a citation resolves against. The
-  tail is now partitioned at whole-paragraph boundaries and drained across as many
-  note areas as it needs, opening note-only pages after the last body block when
-  the document runs out of pages first. A note is still never split below one
-  paragraph, so an indivisible oversized paragraph keeps the established clipped
-  fallback. Documents whose notes always fit paginate unchanged; a document with a
-  note longer than one page's band gains pages it previously dropped content on.
+- **A footnote too long for its page now keeps flowing instead of being clipped
+  (#489).** Browser pagination reserves at most 60% of the body height for the note
+  band. Continuations were already partitioned at whole-paragraph boundaries, but
+  one ordinary paragraph taller than the band was still drawn past its clipped
+  bottom on every attempt. Footnote paragraphs now reuse the conservative DOM Range
+  fragmenter used by body flow, measured inside the exact initial-note or
+  continuation wrapper, and drain across as many note areas as needed. Every
+  fragment keeps its canonical source anchor for `PageMap` citations. Content with
+  unsafe or indivisible layout retains the visible clipped fallback for that one
+  element, while later sibling paragraphs continue instead of disappearing inside
+  the same clipped band. Documents whose notes fit paginate unchanged.
 - **The GitHub Pages landing page serves THE DOCX ARCADE on a phone, keeps its
   navigation, and gives the arcade thumb controls** — three fixes to the same
   problem, that the demo's mobile visit was its worst one:
