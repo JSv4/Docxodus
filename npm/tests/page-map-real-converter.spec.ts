@@ -18,7 +18,9 @@ interface RealPaginationResult {
   htmlCanonicalCount: number;
   pages: number;
   fragments: Array<{
+    fragmentId: string;
     anchorId: string;
+    fragmentIndex: number;
     pageNumber: number;
     story: string;
     inTableCell: boolean;
@@ -35,6 +37,13 @@ interface RealPaginationResult {
   endnoteReferenceResolves: boolean;
   endnoteLinkTargetsUnique: boolean;
   endnoteMarkerText: string | null;
+  visibleFootnoteText: string;
+  clippedFootnoteParagraphs: Array<{
+    anchorId: string | null;
+    pageNumber: number;
+    paragraphBottom: number;
+    bandBottom: number;
+  }>;
 }
 
 async function convertPaginateAndRegister(
@@ -67,6 +76,32 @@ async function convertPaginateAndRegister(
       layoutToken: { documentVersion: 0, rendererFingerprint: fingerprint },
     });
     const pagination = engine.paginate();
+    const footnoteBands = Array.from(
+      container.querySelectorAll<HTMLElement>('.page-footnotes'),
+    );
+    const visibleFootnoteText = footnoteBands.map((band) => {
+      const clone = band.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('.footnote-number').forEach((number) => number.remove());
+      clone.querySelectorAll('p').forEach((paragraph) => paragraph.after(' '));
+      return clone.textContent ?? '';
+    }).join(' ').replace(/\s+/g, ' ').trim();
+    const clippedFootnoteParagraphs = footnoteBands.flatMap((band) => {
+      const bandRect = band.getBoundingClientRect();
+      const pageNumber = Number(
+        band.closest<HTMLElement>('.page-box')?.dataset.pageNumber ?? '0',
+      );
+      return Array.from(band.querySelectorAll<HTMLElement>('p'))
+        .filter((paragraph) => {
+          const rect = paragraph.getBoundingClientRect();
+          return rect.top < bandRect.top - 1 || rect.bottom > bandRect.bottom + 1;
+        })
+        .map((paragraph) => ({
+          anchorId: paragraph.dataset.sourceAnchorId ?? null,
+          pageNumber,
+          paragraphBottom: paragraph.getBoundingClientRect().bottom,
+          bandBottom: bandRect.bottom,
+        }));
+    });
 
     const bridge = D.DocxSessionBridge;
     const handle = bridge.OpenSession(bin, '');
@@ -113,6 +148,8 @@ async function convertPaginateAndRegister(
       endnoteTargetCount: document.querySelectorAll('#en-1').length,
       endnoteMarkerText: container.querySelector<HTMLElement>('#en-1')?.textContent?.trim()
         ?? null,
+      visibleFootnoteText,
+      clippedFootnoteParagraphs,
     };
   }, {
     bytes: Array.from(docx),
@@ -203,6 +240,75 @@ test.describe('Real converter PageMap pipeline', () => {
       && fragment.geometry.y >= 0
       && fragment.geometry.width > 0
       && fragment.geometry.height > 0)).toBe(true);
+  });
+
+  test('one long real footnote paragraph has contiguous PageMap fragments', async ({
+    page,
+  }, testInfo) => {
+    let result: RealPaginationResult | undefined;
+    let failure: { name?: string; message: string; stack?: string } | undefined;
+    try {
+      result = await convertPaginateAndRegister(
+        page,
+        generateFootnoteDocx(1, 1, 1, 600),
+        -1,
+        true,
+        'real-long-footnote-paragraph-v1',
+      );
+      const paragraphs = result.fragments.filter((fragment) =>
+        fragment.story === 'footnote' && fragment.anchorId.startsWith('p:fn:'));
+      const expectedText = Array.from(
+        { length: 600 },
+        (_, index) => `footnote-1-1-${index + 1}`,
+      ).join(' ');
+
+      expect(result.registration.success, JSON.stringify(result.registration)).toBe(true);
+      expect(result.pages).toBeGreaterThan(1);
+      expect(paragraphs.length).toBeGreaterThan(1);
+      expect(new Set(paragraphs.map((fragment) => fragment.anchorId)).size).toBe(1);
+      expect(new Set(paragraphs.map((fragment) => fragment.pageNumber)).size).toBeGreaterThan(1);
+      expect(paragraphs.map((fragment) => fragment.fragmentIndex))
+        .toEqual(paragraphs.map((_, index) => index));
+      expect(new Set(paragraphs.map((fragment) => fragment.fragmentId)).size)
+        .toBe(paragraphs.length);
+      expect(paragraphs.every((fragment) =>
+        fragment.geometry.x >= 0
+        && fragment.geometry.y >= 0
+        && fragment.geometry.width > 0
+        && fragment.geometry.height > 0)).toBe(true);
+      expect(result.visibleFootnoteText).toBe(expectedText);
+      expect(result.clippedFootnoteParagraphs).toEqual([]);
+    } catch (error) {
+      failure = error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) };
+      throw error;
+    } finally {
+      const captureWarnings: string[] = [];
+      try {
+        await testInfo.attach('issue-489-real-long-footnote.html', {
+          body: Buffer.from(await page.content()),
+          contentType: 'text/html',
+        });
+      } catch (error) {
+        captureWarnings.push(`HTML capture failed: ${String(error)}`);
+      }
+      try {
+        const host = page.locator('.real-page-map-host');
+        if (await host.count()) {
+          await testInfo.attach('issue-489-real-long-footnote.png', {
+            body: await host.screenshot(),
+            contentType: 'image/png',
+          });
+        }
+      } catch (error) {
+        captureWarnings.push(`screenshot capture failed: ${String(error)}`);
+      }
+      await testInfo.attach('issue-489-real-long-footnote.json', {
+        body: Buffer.from(JSON.stringify({ result, failure, captureWarnings }, null, 2)),
+        contentType: 'application/json',
+      });
+    }
   });
 
   test('one long real endnote paragraph fragments across final flow pages', async ({ page }) => {
