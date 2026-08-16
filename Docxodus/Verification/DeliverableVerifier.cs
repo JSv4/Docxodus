@@ -4,8 +4,6 @@
 #nullable enable
 
 using System.Globalization;
-using System.Xml;
-
 namespace Docxodus.Verification;
 
 /// <summary>
@@ -150,10 +148,7 @@ public static class DeliverableVerifier
                         FindingCount = observations.Count - before,
                     });
                 }
-                catch (Exception exception) when (exception is InvalidDataException or IOException
-                    or ArgumentException or FormatException or InvalidOperationException
-                    or PowerToolsDocumentException
-                    or XmlException)
+                catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                 {
                     AddObservation(observations, options.MaxFindings,
                         DeliverableFindingObservation.Create(
@@ -294,31 +289,52 @@ public static class DeliverableVerifier
         bool completed = true;
         if (CanContinueBoundedWordInspection(inspection))
         {
-            var budget = new DeliverableInspectionBudget(options);
-            var graph = WordprocessingInspectionGraph.Build(inspection, budget);
-            var openXml = OpenXmlValidationInspector.Inspect(
-                bytes, options.OpenXmlVersion, observations, options.MaxFindings);
-            var closure = WordprocessingClosureInspector.Inspect(
-                inspection, graph, observations, options.MaxFindings, budget);
-            var session = DeliverableSessionInspector.Inspect(
-                graph, options, observations, budget);
-            if (budget.Exhausted)
-                AddObservation(observations, options.MaxFindings,
-                    DeliverableFindingObservation.Create(
-                        "verification.resource_budget_exceeded",
-                        DeliverableFindingCategory.Structure,
-                        VerificationFindingSeverity.Error,
-                        $"Semantic detector resource budget was exceeded ({budget.ExhaustedResource}).",
-                        "/",
-                        "Reduce document complexity or deliberately raise the bounded detector policy.",
-                        new ChangeLocation { PropertyPath = "detectorBudget/" + budget.ExhaustedResource },
-                        subjectKey: budget.ExhaustedResource));
-            checks.Add(Prefix(openXml, prefix));
-            checks.Add(Prefix(closure, prefix));
-            checks.Add(Prefix(session, prefix));
-            completed = openXml.Status == DeliverableCheckStatus.Completed
-                && closure.Status == DeliverableCheckStatus.Completed
-                && session.Status == DeliverableCheckStatus.Completed;
+            if (observations.Count >= options.MaxFindings)
+            {
+                const string diagnostic = "finding limit reached before downstream inspection";
+                checks.Add(Prefix(Unavailable("open_xml", diagnostic), prefix));
+                checks.Add(Prefix(Unavailable("wordprocessing_closure", diagnostic), prefix));
+                checks.Add(Prefix(Unavailable("workflow_and_revision_registry", diagnostic), prefix));
+                completed = false;
+            }
+            else
+            {
+                var openXml = OpenXmlValidationInspector.Inspect(
+                    bytes, options.OpenXmlVersion, observations, options.MaxFindings);
+                checks.Add(Prefix(openXml, prefix));
+                if (observations.Count >= options.MaxFindings)
+                {
+                    const string diagnostic = "finding limit reached before downstream inspection";
+                    checks.Add(Prefix(Unavailable("wordprocessing_closure", diagnostic), prefix));
+                    checks.Add(Prefix(Unavailable("workflow_and_revision_registry", diagnostic), prefix));
+                    completed = false;
+                }
+                else
+                {
+                    var budget = new DeliverableInspectionBudget(options);
+                    var graph = WordprocessingInspectionGraph.Build(inspection, budget);
+                    var closure = WordprocessingClosureInspector.Inspect(
+                        inspection, graph, observations, options.MaxFindings, budget);
+                    var session = DeliverableSessionInspector.Inspect(
+                        graph, options, observations, budget);
+                    if (budget.Exhausted)
+                        AddObservation(observations, options.MaxFindings,
+                            DeliverableFindingObservation.Create(
+                                "verification.resource_budget_exceeded",
+                                DeliverableFindingCategory.Structure,
+                                VerificationFindingSeverity.Error,
+                                $"Semantic detector resource budget was exceeded ({budget.ExhaustedResource}).",
+                                "/",
+                                "Reduce document complexity or deliberately raise the bounded detector policy.",
+                                new ChangeLocation { PropertyPath = "detectorBudget/" + budget.ExhaustedResource },
+                                subjectKey: budget.ExhaustedResource));
+                    checks.Add(Prefix(closure, prefix));
+                    checks.Add(Prefix(session, prefix));
+                    completed = openXml.Status == DeliverableCheckStatus.Completed
+                        && closure.Status == DeliverableCheckStatus.Completed
+                        && session.Status == DeliverableCheckStatus.Completed;
+                }
+            }
         }
         else
         {
@@ -701,6 +717,14 @@ public static class DeliverableVerifier
     {
         Check = check,
         Status = DeliverableCheckStatus.SkippedPrerequisiteFailed,
+        FindingCount = 0,
+        Diagnostic = diagnostic,
+    };
+
+    private static DeliverableCheckResult Unavailable(string check, string diagnostic) => new()
+    {
+        Check = check,
+        Status = DeliverableCheckStatus.UnavailableEvidence,
         FindingCount = 0,
         Diagnostic = diagnostic,
     };

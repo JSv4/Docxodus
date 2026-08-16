@@ -22,6 +22,43 @@ internal static class DeliverableArtifactInspector
         out DeliverableCheckResult check)
     {
         int before = observations.Count;
+        try
+        {
+            return InspectCore(artifacts, packageDigest, options, observations, out check);
+        }
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
+        {
+            Add(observations, options.MaxFindings, DeliverableFindingObservation.Create(
+                "artifact.inspection_unavailable",
+                DeliverableFindingCategory.Artifact,
+                VerificationFindingSeverity.Error,
+                $"Companion artifact inspection could not be completed ({exception.GetType().Name}).",
+                "/",
+                "Repair or omit the implicated companion artifact before delivery.",
+                new ChangeLocation { PropertyPath = "artifacts" },
+                subjectKey: exception.GetType().FullName));
+            check = new DeliverableCheckResult
+            {
+                Check = "companion_artifacts",
+                Status = DeliverableCheckStatus.UnavailableEvidence,
+                FindingCount = observations.Count - before,
+                Diagnostic = exception.GetType().Name,
+            };
+            return artifacts
+                .OrderBy(item => item.ArtifactId, StringComparer.Ordinal)
+                .Select(FallbackMetadata)
+                .ToArray();
+        }
+    }
+
+    private static IReadOnlyList<DeliverableArtifactMetadata> InspectCore(
+        IReadOnlyList<DeliverableCompanionArtifactInput> artifacts,
+        VerificationDigest packageDigest,
+        DeliverableVerificationOptions options,
+        ICollection<DeliverableFindingObservation> observations,
+        out DeliverableCheckResult check)
+    {
+        int before = observations.Count;
         long total = 0;
         bool bounded = true;
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -98,6 +135,23 @@ internal static class DeliverableArtifactInspector
         };
         return states.Select(state => state.Metadata()).ToArray();
     }
+
+    private static DeliverableArtifactMetadata FallbackMetadata(
+        DeliverableCompanionArtifactInput artifact) => new()
+        {
+            ArtifactId = artifact.ArtifactId,
+            Role = artifact.Role,
+            MediaType = artifact.MediaType,
+            Availability = artifact.Availability,
+            ByteLength = artifact.Bytes?.LongLength,
+            UnavailableReason = artifact.UnavailableReason,
+            PageCount = artifact.PageCount,
+            RendererFingerprint = artifact.RendererFingerprint,
+            SourcePackageDigest = Normalize(artifact.SourcePackageDigest),
+            PageMapDigest = artifact.Role == DeliverableArtifactRole.PageMap
+                ? null : Normalize(artifact.PageMapDigest),
+            RenderDiagnosticCount = artifact.RenderDiagnostics.Count,
+        };
 
     private static void InspectFormat(
         ArtifactState state,

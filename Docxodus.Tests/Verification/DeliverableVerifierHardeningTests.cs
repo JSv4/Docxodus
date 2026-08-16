@@ -251,6 +251,489 @@ public sealed class DeliverableVerifierHardeningTests
     }
 
     [Fact]
+    public void Dangling_header_reference_is_reported_when_sdk_validation_is_unavailable()
+    {
+        var package = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:t>Safe</w:t></w:r></w:p>"
+            + "<w:sectPr><w:headerReference w:type=\"default\" "
+            + "r:id=\"rIdMissingHeader\"/></w:sectPr>").DocumentByteArray;
+        DeliverableVerificationResult? result = null;
+
+        var exception = Record.Exception(() =>
+            result = DeliverableVerifier.VerifyDeliverable(package));
+
+        Assert.Null(exception);
+        Assert.NotNull(result);
+        Assert.Contains(result.Findings,
+            finding => finding.Code == "package.dangling_relationship");
+        Assert.Contains(result.Findings,
+            finding => finding.Code == "openxml.validation_unavailable");
+        Assert.Contains(result.Checks, check => check.Check == "deliverable.open_xml"
+            && check.Status == DeliverableCheckStatus.UnavailableEvidence
+            && (check.Diagnostic?.Contains("NullReferenceException", StringComparison.Ordinal) ?? false));
+        Assert.Contains(result.Checks,
+            check => check.Check == "deliverable.wordprocessing_closure"
+                && check.Status == DeliverableCheckStatus.Completed);
+        Assert.Contains(result.Checks,
+            check => check.Check == "deliverable.workflow_and_revision_registry"
+                && check.Status == DeliverableCheckStatus.Completed);
+        Assert.False(result.AnalysisCompleted);
+        Assert.Equal(DeliverableVerificationDecision.Failed, result.Decision);
+    }
+
+    [Fact]
+    public void Media_closure_requires_the_exact_office_image_relationship_type()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+        var lookalike = RewriteEntry(package, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            XNamespace ns = PackageRelationships;
+            relationships.Root!.Add(new XElement(ns + "Relationship",
+                new XAttribute("Id", "rIdLookalikeImage"),
+                new XAttribute("Type", "urn:docxodus:lookalike/image"),
+                new XAttribute("Target", "media/missing-lookalike.png")));
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        var exact = RewriteEntry(package, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdExactImage", "image", "media/missing-exact.png");
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+
+        var lookalikeResult = DeliverableVerifier.VerifyDeliverable(lookalike);
+        var exactResult = DeliverableVerifier.VerifyDeliverable(exact);
+
+        Assert.Contains(lookalikeResult.Findings,
+            finding => finding.Code == "package.missing_target");
+        Assert.DoesNotContain(lookalikeResult.Findings,
+            finding => finding.Code == "relationship.media_target_missing");
+        Assert.Contains(exactResult.Findings,
+            finding => finding.Code == "relationship.media_target_missing");
+    }
+
+    [Fact]
+    public void Finding_cap_after_openxml_skips_all_later_semantic_stages()
+    {
+        var package = RewriteEntry(IrTestDocuments.Create("{{LATER_STAGE_TOKEN}}").DocumentByteArray,
+            "word/document.xml", xml => xml.Replace(
+                "<w:p>", "<w:p w:invalidFixtureAttribute=\"true\">",
+                StringComparison.Ordinal));
+        var manifestCapped = RewriteEntry(IrTestDocuments.Create("Safe").DocumentByteArray,
+            "word/_rels/document.xml.rels", xml =>
+            {
+                var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+                XNamespace ns = PackageRelationships;
+                relationships.Root!.Add(new XElement(ns + "Relationship",
+                    new XAttribute("Id", "rIdMissingUnrelated"),
+                    new XAttribute("Type", "urn:docxodus:unrelated"),
+                    new XAttribute("Target", "missing-unrelated.bin")));
+                return relationships.ToString(SaveOptions.DisableFormatting);
+            });
+        var options = new DeliverableVerificationOptions
+        {
+            MaxFindings = 1,
+            MaxDetectorSteps = 1,
+        };
+
+        var result = DeliverableVerifier.VerifyDeliverable(package, options);
+        var manifestResult = DeliverableVerifier.VerifyDeliverable(manifestCapped, options);
+
+        Assert.Single(result.Findings);
+        Assert.Equal(DeliverableFindingCategory.OpenXml, result.Findings[0].Category);
+        Assert.Contains(result.Checks, check => check.Check == "deliverable.wordprocessing_closure"
+            && check.Status == DeliverableCheckStatus.UnavailableEvidence
+            && check.Diagnostic == "finding limit reached before downstream inspection");
+        Assert.Contains(result.Checks,
+            check => check.Check == "deliverable.workflow_and_revision_registry"
+                && check.Status == DeliverableCheckStatus.UnavailableEvidence
+                && check.Diagnostic == "finding limit reached before downstream inspection");
+        Assert.DoesNotContain(result.Checks,
+            check => check.Diagnostic?.Contains("resource budget", StringComparison.Ordinal) == true);
+        Assert.False(result.AnalysisCompleted);
+
+        Assert.Single(manifestResult.Findings);
+        Assert.Equal(DeliverableFindingCategory.Relationship, manifestResult.Findings[0].Category);
+        foreach (var checkName in new[]
+                 {
+                     "deliverable.open_xml",
+                     "deliverable.wordprocessing_closure",
+                     "deliverable.workflow_and_revision_registry",
+                 })
+            Assert.Contains(manifestResult.Checks, check => check.Check == checkName
+                && check.Status == DeliverableCheckStatus.UnavailableEvidence
+                && check.Diagnostic == "finding limit reached before downstream inspection");
+        Assert.DoesNotContain(manifestResult.Checks,
+            check => check.Diagnostic?.Contains("resource budget", StringComparison.Ordinal) == true);
+        Assert.False(manifestResult.AnalysisCompleted);
+    }
+
+    [Fact]
+    public void Closure_sink_stops_before_scanning_when_finding_cap_is_already_full()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+        var options = new DeliverableVerificationOptions
+        {
+            MaxFindings = 1,
+            MaxDetectorSteps = 1,
+        };
+        var inspection = PackageManifestGenerator.Inspect(
+            package, options.PackageManifestOptions);
+        var graph = BuildInspectionGraph(package);
+        var observations = new List<DeliverableFindingObservation>
+        {
+            DeliverableFindingObservation.Create(
+                "fixture.preexisting",
+                DeliverableFindingCategory.Package,
+                VerificationFindingSeverity.Error,
+                "Fixture finding.",
+                "/",
+                "Fixture remediation."),
+        };
+        var budget = new DeliverableInspectionBudget(options);
+
+        var check = WordprocessingClosureInspector.Inspect(
+            inspection, graph, observations, options.MaxFindings, budget);
+
+        Assert.Equal(DeliverableCheckStatus.UnavailableEvidence, check.Status);
+        Assert.Equal(0, check.FindingCount);
+        Assert.Equal("finding limit reached", check.Diagnostic);
+        Assert.False(budget.Exhausted);
+        Assert.Single(observations);
+    }
+
+    [Fact]
+    public void Detector_exception_boundary_maps_recoverable_failures_and_propagates_fatal_control_flow()
+    {
+        Assert.True(IsCaughtByDetectorBoundary(new NullReferenceException("fixture")));
+        Assert.True(IsCaughtByDetectorBoundary(new AggregateException(
+            new FormatException("first"), new InvalidOperationException("second"))));
+
+        Exception[] propagated =
+        {
+            new OperationCanceledException("fixture"),
+            new OutOfMemoryException("fixture"),
+            new AccessViolationException("fixture"),
+            new AppDomainUnloadedException("fixture"),
+            new BadImageFormatException("fixture"),
+            new InvalidProgramException("fixture"),
+            new AggregateException(new InvalidOperationException("wrapper",
+                new OutOfMemoryException("nested fixture"))),
+        };
+        foreach (var exception in propagated)
+            Assert.Throws(exception.GetType(), () => IsCaughtByDetectorBoundary(exception));
+    }
+
+    [Fact]
+    public void Numbering_definitions_require_the_main_document_relationship_role()
+    {
+        const string body = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/>"
+            + "<w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>";
+        const string numbering = "<w:abstractNum w:abstractNumId=\"1\">"
+            + "<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+            + "<w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>"
+            + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"1\"/></w:num>";
+        var decoy = IrTestDocuments.FromBodyAndHeaderXml(
+            body, "<w:p><w:r><w:t>Header</w:t></w:r></w:p>").DocumentByteArray;
+        decoy = AddEntries(decoy,
+            ("word/_rels/header1.xml.rels",
+                $"<Relationships xmlns=\"{PackageRelationships}\">"
+                + "<Relationship Id=\"rIdDecoyNumbering\" "
+                + $"Type=\"{OfficeRelationships}/numbering\" "
+                + "Target=\"numbering-decoy.xml\"/></Relationships>"),
+            ("word/numbering-decoy.xml",
+                $"<w:numbering xmlns:w=\"{IrTestDocuments.W}\">{numbering}</w:numbering>"));
+        decoy = RewriteContentTypes(decoy,
+            ("/word/numbering-decoy.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"));
+        var glossary = IrTestDocuments.FromBodyXml(body).DocumentByteArray;
+        glossary = RewriteEntry(glossary, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdGlossary", "glossaryDocument",
+                "glossary/document.xml");
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        glossary = AddEntries(glossary,
+            ("word/glossary/document.xml",
+                $"<w:glossaryDocument xmlns:w=\"{IrTestDocuments.W}\"><w:docParts/>"
+                + "</w:glossaryDocument>"),
+            ("word/glossary/_rels/document.xml.rels",
+                $"<Relationships xmlns=\"{PackageRelationships}\">"
+                + $"<Relationship Id=\"rIdGlossaryNumbering\" "
+                + $"Type=\"{OfficeRelationships}/numbering\" Target=\"numbering.xml\"/>"
+                + "</Relationships>"),
+            ("word/glossary/numbering.xml",
+                $"<w:numbering xmlns:w=\"{IrTestDocuments.W}\">{numbering}</w:numbering>"));
+        glossary = RewriteContentTypes(glossary,
+            ("/word/glossary/document.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml"),
+            ("/word/glossary/numbering.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"));
+        var valid = IrTestDocuments.FromParts(body, numberingInnerXml: numbering);
+
+        var decoyResult = DeliverableVerifier.VerifyDeliverable(decoy);
+        var glossaryResult = DeliverableVerifier.VerifyDeliverable(glossary);
+        var validResult = DeliverableVerifier.VerifyDeliverable(valid.DocumentByteArray);
+
+        Assert.Contains(decoyResult.Findings,
+            finding => finding.Code == "structure.numbering_instance_missing");
+        Assert.Equal(DeliverableVerificationDecision.Failed, decoyResult.Decision);
+        Assert.Contains(glossaryResult.Findings,
+            finding => finding.Code == "structure.numbering_instance_missing");
+        Assert.DoesNotContain(validResult.Findings,
+            finding => finding.Code == "structure.numbering_instance_missing");
+        Assert.Equal(DeliverableVerificationDecision.Passed, validResult.Decision);
+    }
+
+    [Fact]
+    public void Semantic_graph_requires_exact_content_root_and_supports_strict_relationship_roles()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+        var valid = BuildInspectionGraph(package);
+        Assert.Single(valid.StyleParts);
+        Assert.Single(valid.SettingsParts);
+
+        var wrongRoot = RewriteEntry(package, "word/styles.xml", _ =>
+            $"<w:numbering xmlns:w=\"{IrTestDocuments.W}\"/>");
+        var wrongContentType = RewriteContentType(package, "/word/settings.xml", "application/xml");
+        Assert.Empty(BuildInspectionGraph(wrongRoot).StyleParts);
+        Assert.Empty(BuildInspectionGraph(wrongContentType).SettingsParts);
+
+        var strict = RewriteEntry(package, "word/document.xml", xml =>
+            xml.Replace(IrTestDocuments.W, StrictWord, StringComparison.Ordinal));
+        strict = RewriteEntry(strict, "word/styles.xml", xml =>
+            xml.Replace(IrTestDocuments.W, StrictWord, StringComparison.Ordinal));
+        strict = RewriteEntry(strict, "word/settings.xml", xml =>
+            xml.Replace(IrTestDocuments.W, StrictWord, StringComparison.Ordinal));
+        strict = RewriteEntry(strict, "word/_rels/document.xml.rels", xml =>
+            xml.Replace(OfficeRelationships, StrictOfficeRelationships, StringComparison.Ordinal));
+        var strictGraph = BuildInspectionGraph(strict);
+
+        Assert.Single(strictGraph.StyleParts);
+        Assert.Single(strictGraph.SettingsParts);
+        Assert.Equal(StrictWord, Assert.Single(strictGraph.StoryParts).Xml!.Root!.Name.NamespaceName);
+    }
+
+    [Fact]
+    public void Singleton_cardinality_counts_exact_typed_edges_before_target_admission()
+    {
+        const string numbering = "<w:abstractNum w:abstractNumId=\"1\">"
+            + "<w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/>"
+            + "<w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>"
+            + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"1\"/></w:num>";
+        var package = IrTestDocuments.FromParts(
+            "<w:p><w:r><w:t>Safe</w:t></w:r></w:p>", numberingInnerXml: numbering)
+            .DocumentByteArray;
+        package = RewriteEntry(package, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdMissingStyles", "styles", "missing-styles.xml");
+            AddRelationship(relationships, "rIdWrongSettings", "settings", "settings-decoy.xml");
+            XNamespace ns = PackageRelationships;
+            relationships.Root!.Add(new XElement(ns + "Relationship",
+                new XAttribute("Id", "rIdExternalNumbering"),
+                new XAttribute("Type", OfficeRelationships + "/numbering"),
+                new XAttribute("Target", "https://example.invalid/numbering.xml"),
+                new XAttribute("TargetMode", "External")));
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        package = AddEntries(package,
+            ("word/settings-decoy.xml", $"<w:numbering xmlns:w=\"{IrTestDocuments.W}\"/>"));
+        package = RewriteContentTypes(package,
+            ("/word/settings-decoy.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"));
+
+        var result = DeliverableVerifier.VerifyDeliverable(package);
+
+        AssertCodes(result, "structure.styles_part_ambiguous",
+            "structure.settings_part_ambiguous", "structure.numbering_part_ambiguous");
+    }
+
+    [Fact]
+    public void Detector_relationship_budget_charges_each_retained_raw_edge_once()
+    {
+        const string body = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/>"
+            + "<w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>";
+        const string numbering = "<w:abstractNum w:abstractNumId=\"1\">"
+            + "<w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/>"
+            + "<w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>"
+            + "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"1\"/></w:num>";
+        var package = IrTestDocuments.FromParts(body, numberingInnerXml: numbering).DocumentByteArray;
+
+        var exact = DeliverableVerifier.VerifyDeliverable(package,
+            new DeliverableVerificationOptions { MaxDetectorRelationships = 3 });
+        var below = DeliverableVerifier.VerifyDeliverable(package,
+            new DeliverableVerificationOptions { MaxDetectorRelationships = 2 });
+
+        Assert.True(exact.AnalysisCompleted);
+        Assert.Equal(DeliverableVerificationDecision.Passed, exact.Decision);
+        Assert.DoesNotContain(exact.Findings,
+            finding => finding.Code == "verification.resource_budget_exceeded");
+        Assert.Contains(below.Findings,
+            finding => finding.Code == "verification.resource_budget_exceeded"
+                && finding.Location?.PropertyPath == "detectorBudget/relationships");
+        Assert.False(below.AnalysisCompleted);
+    }
+
+    [Fact]
+    public void Definitions_nested_under_the_correct_part_root_do_not_satisfy_story_references()
+    {
+        const string body = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/>"
+            + "<w:numId w:val=\"1\"/></w:numPr></w:pPr>"
+            + "<w:r><w:commentReference w:id=\"7\"/></w:r>"
+            + "<w:r><w:footnoteReference w:id=\"1\"/></w:r>"
+            + "<w:r><w:endnoteReference w:id=\"1\"/></w:r></w:p>";
+        var package = IrTestDocuments.FromBodyXml(body).DocumentByteArray;
+        package = RewriteEntry(package, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdSmuggledComments", "comments", "comments.xml");
+            AddRelationship(relationships, "rIdSmuggledFootnotes", "footnotes", "footnotes.xml");
+            AddRelationship(relationships, "rIdSmuggledEndnotes", "endnotes", "endnotes.xml");
+            AddRelationship(relationships, "rIdSmuggledNumbering", "numbering", "numbering.xml");
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        package = AddEntries(package,
+            ("word/comments.xml", $"<w:comments xmlns:w=\"{IrTestDocuments.W}\">"
+                + "<w:p><w:comment w:id=\"7\"><w:p/></w:comment></w:p></w:comments>"),
+            ("word/footnotes.xml", $"<w:footnotes xmlns:w=\"{IrTestDocuments.W}\">"
+                + "<w:customXml><w:footnote w:id=\"1\"><w:p/></w:footnote>"
+                + "</w:customXml></w:footnotes>"),
+            ("word/endnotes.xml", $"<w:endnotes xmlns:w=\"{IrTestDocuments.W}\">"
+                + "<w:customXml><w:endnote w:id=\"1\"><w:p/></w:endnote>"
+                + "</w:customXml></w:endnotes>"),
+            ("word/numbering.xml", $"<w:numbering xmlns:w=\"{IrTestDocuments.W}\">"
+                + "<w:customXml><w:abstractNum w:abstractNumId=\"1\">"
+                + "<w:lvl w:ilvl=\"0\"/></w:abstractNum><w:num w:numId=\"1\">"
+                + "<w:abstractNumId w:val=\"1\"/></w:num></w:customXml></w:numbering>"));
+        package = RewriteContentTypes(package,
+            ("/word/comments.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"),
+            ("/word/footnotes.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"),
+            ("/word/endnotes.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"),
+            ("/word/numbering.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"));
+
+        var result = DeliverableVerifier.VerifyDeliverable(package);
+
+        AssertCodes(result, "structure.comment_definition_missing",
+            "structure.footnote_definition_missing", "structure.endnote_definition_missing",
+            "structure.numbering_instance_missing");
+    }
+
+    [Fact]
+    public void Custom_xml_properties_require_the_main_item_properties_relationship_chain()
+    {
+        const string storeItemId = "{11111111-1111-1111-1111-111111111111}";
+        const string body = "<w:sdt><w:sdtPr><w:dataBinding w:storeItemID=\"" + storeItemId
+            + "\" w:xpath=\"/root\"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Bound</w:t>"
+            + "</w:r></w:p></w:sdtContent></w:sdt>";
+        const string properties = "<ds:datastoreItem ds:itemID=\"" + storeItemId
+            + "\" xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\">"
+            + "<ds:schemaRefs/></ds:datastoreItem>";
+        var decoy = IrTestDocuments.FromBodyAndHeaderXml(
+            body, "<w:p><w:r><w:t>Header</w:t></w:r></w:p>").DocumentByteArray;
+        decoy = AddEntries(decoy,
+            ("word/_rels/header1.xml.rels",
+                $"<Relationships xmlns=\"{PackageRelationships}\">"
+                + "<Relationship Id=\"rIdDecoyCustomXml\" "
+                + $"Type=\"{OfficeRelationships}/customXml\" "
+                + "Target=\"../customXml/item-decoy.xml\"/></Relationships>"),
+            ("customXml/item-decoy.xml", "<root xmlns=\"urn:docxodus:test\"/>"),
+            ("customXml/_rels/item-decoy.xml.rels",
+                $"<Relationships xmlns=\"{PackageRelationships}\">"
+                + $"<Relationship Id=\"rIdProps\" Type=\"{OfficeRelationships}/customXmlProps\" "
+                + "Target=\"itemProps-decoy.xml\"/></Relationships>"),
+            ("customXml/itemProps-decoy.xml", properties));
+        decoy = RewriteContentTypes(decoy,
+            ("/customXml/itemProps-decoy.xml",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml"));
+
+        var valid = IrTestDocuments.FromBodyXml(body).DocumentByteArray;
+        valid = RewriteEntry(valid, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            relationships.Root!.Add(new XElement(relationships.Root.Name.Namespace + "Relationship",
+                new XAttribute("Id", "rIdValidCustomXml"),
+                new XAttribute("Type", OfficeRelationships + "/customXml"),
+                new XAttribute("Target", "../customXml/item-valid.xml")));
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        valid = AddEntries(valid,
+            ("customXml/item-valid.xml", "<root xmlns=\"urn:docxodus:test\"/>"),
+            ("customXml/_rels/item-valid.xml.rels",
+                $"<Relationships xmlns=\"{PackageRelationships}\">"
+                + $"<Relationship Id=\"rIdProps\" Type=\"{OfficeRelationships}/customXmlProps\" "
+                + "Target=\"itemProps-valid.xml\"/></Relationships>"),
+            ("customXml/itemProps-valid.xml", properties));
+        valid = RewriteContentTypes(valid,
+            ("/customXml/itemProps-valid.xml",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml"));
+        var nestedId = RewriteEntry(valid, "customXml/itemProps-valid.xml", _ =>
+            "<ds:datastoreItem xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\">"
+            + $"<ds:schemaRefs><ds:schemaRef ds:itemID=\"{storeItemId}\"/>"
+            + "</ds:schemaRefs></ds:datastoreItem>");
+        var strict = RewriteEntry(valid, "word/_rels/document.xml.rels", xml =>
+            xml.Replace(OfficeRelationships, StrictOfficeRelationships, StringComparison.Ordinal));
+        strict = RewriteEntry(strict, "customXml/_rels/item-valid.xml.rels", xml =>
+            xml.Replace(OfficeRelationships, StrictOfficeRelationships, StringComparison.Ordinal));
+        strict = RewriteEntry(strict, "customXml/itemProps-valid.xml", xml =>
+            xml.Replace(TransitionalCustomXml, StrictCustomXml, StringComparison.Ordinal));
+        var missingSecondProperties = RewriteEntry(valid,
+            "customXml/_rels/item-valid.xml.rels", xml =>
+            {
+                var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+                AddRelationship(relationships, "rIdMissingProps", "customXmlProps",
+                    "itemProps-missing.xml");
+                return relationships.ToString(SaveOptions.DisableFormatting);
+            });
+        var duplicate = RewriteEntry(valid, "customXml/_rels/item-valid.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdSecondProps", "customXmlProps",
+                "itemProps-second.xml");
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        duplicate = AddEntries(duplicate,
+            ("customXml/itemProps-second.xml", properties));
+        duplicate = RewriteContentTypes(duplicate,
+            ("/customXml/itemProps-second.xml",
+                "application/vnd.openxmlformats-officedocument.customXmlProperties+xml"));
+
+        var decoyResult = DeliverableVerifier.VerifyDeliverable(decoy);
+        var validResult = DeliverableVerifier.VerifyDeliverable(valid);
+        var nestedIdResult = DeliverableVerifier.VerifyDeliverable(nestedId);
+        var strictResult = DeliverableVerifier.VerifyDeliverable(strict);
+        var missingSecondPropertiesResult =
+            DeliverableVerifier.VerifyDeliverable(missingSecondProperties);
+        var duplicateResult = DeliverableVerifier.VerifyDeliverable(duplicate);
+
+        Assert.Contains(decoyResult.Findings,
+            finding => finding.Code == "structure.content_control_store_item_missing");
+        Assert.Equal(DeliverableVerificationDecision.Failed, decoyResult.Decision);
+        Assert.DoesNotContain(validResult.Findings,
+            finding => finding.Code == "structure.content_control_store_item_missing");
+        Assert.Equal(DeliverableVerificationDecision.Passed, validResult.Decision);
+        Assert.Contains(nestedIdResult.Findings,
+            finding => finding.Code == "structure.content_control_store_item_missing");
+        Assert.Single(BuildInspectionGraph(strict).CustomXmlPropertyParts);
+        Assert.DoesNotContain(strictResult.Findings,
+            finding => finding.Code is "structure.content_control_store_item_missing"
+                or "structure.content_control_store_item_ambiguous");
+        Assert.Contains(missingSecondPropertiesResult.Findings,
+            finding => finding.Code == "structure.custom_xml_properties_part_ambiguous");
+        Assert.DoesNotContain(missingSecondPropertiesResult.Findings,
+            finding => finding.Code == "structure.content_control_store_item_missing");
+        AssertCodes(duplicateResult, "structure.custom_xml_properties_part_ambiguous",
+            "structure.custom_xml_store_item_id_duplicate",
+            "structure.content_control_store_item_ambiguous");
+    }
+
+    [Fact]
     public void Numbering_overrides_are_supported_while_duplicate_overrides_are_ambiguous()
     {
         const string body = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"8\"/>"
@@ -492,12 +975,68 @@ public sealed class DeliverableVerifierHardeningTests
             return contentTypes.ToString(SaveOptions.DisableFormatting);
         });
 
+    private static byte[] RewriteContentType(byte[] package, string partName, string contentType) =>
+        RewriteEntry(package, "[Content_Types].xml", xml =>
+        {
+            var contentTypes = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            var declaration = Assert.Single(contentTypes.Root!.Elements(), element =>
+                (string?)element.Attribute("PartName") == partName);
+            declaration.SetAttributeValue("ContentType", contentType);
+            return contentTypes.ToString(SaveOptions.DisableFormatting);
+        });
+
+    private static void AddRelationship(
+        XDocument relationships,
+        string id,
+        string role,
+        string target)
+    {
+        XNamespace ns = PackageRelationships;
+        relationships.Root!.Add(new XElement(ns + "Relationship",
+            new XAttribute("Id", id),
+            new XAttribute("Type", OfficeRelationships + "/" + role),
+            new XAttribute("Target", target)));
+    }
+
+    private static WordprocessingInspectionGraph BuildInspectionGraph(byte[] package)
+    {
+        var options = new DeliverableVerificationOptions();
+        return WordprocessingInspectionGraph.Build(
+            PackageManifestGenerator.Inspect(package, options.PackageManifestOptions),
+            new DeliverableInspectionBudget(options));
+    }
+
     private static void AssertCodes(DeliverableVerificationResult result, params string[] codes)
     {
         foreach (var code in codes)
             Assert.Contains(result.Findings, finding => finding.Code == code);
     }
 
+    private static bool IsCaughtByDetectorBoundary(Exception exception)
+    {
+        try
+        {
+            throw exception;
+        }
+        catch (Exception caught) when (DeliverableExceptionBoundary.IsRecoverable(caught))
+        {
+            return true;
+        }
+    }
+
     private static readonly DateTimeOffset FixtureTimestamp =
         new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    private const string PackageRelationships =
+        "http://schemas.openxmlformats.org/package/2006/relationships";
+    private const string OfficeRelationships =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private const string StrictOfficeRelationships =
+        "http://purl.oclc.org/ooxml/officeDocument/relationships";
+    private const string TransitionalCustomXml =
+        "http://schemas.openxmlformats.org/officeDocument/2006/customXml";
+    private const string StrictCustomXml =
+        "http://purl.oclc.org/ooxml/officeDocument/customXml";
+    private const string StrictWord =
+        "http://purl.oclc.org/ooxml/wordprocessingml/main";
 }

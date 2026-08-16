@@ -18,9 +18,6 @@ internal static class WordprocessingClosureInspector
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWord = "http://purl.oclc.org/ooxml/wordprocessingml/main";
     private const string Word2010 = "http://schemas.microsoft.com/office/word/2010/wordml";
-    private const string CustomXmlPropertiesContentType =
-        "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
-
     internal static DeliverableCheckResult Inspect(
         PackageManifestInspection inspection,
         WordprocessingInspectionGraph graph,
@@ -30,30 +27,33 @@ internal static class WordprocessingClosureInspector
     {
         int before = observations.Count;
         var sink = new FindingSink(observations, maximumFindings, budget);
-        var wordParts = graph.WordParts;
+        var storyParts = graph.StoryParts;
         try
         {
             // Count while traversing, before any detector can accidentally turn a large retained
             // XML tree into unbounded repeated work.
-            foreach (var part in wordParts)
-            foreach (var _ in part.Xml!.Root!.DescendantsAndSelf())
-                if (!budget.Node() || !budget.Step()) break;
+            if (!sink.Stopped)
+                foreach (var part in storyParts.Concat(graph.NumberingParts))
+                foreach (var _ in part.Xml!.Root!.DescendantsAndSelf())
+                    if (!budget.Node() || !budget.Step()) break;
 
+            if (!sink.Stopped) InspectSemanticMultiplicity(graph, sink);
             if (!sink.Stopped) InspectMediaClosure(graph.ReachableRelationships, sink);
-            if (!sink.Stopped) InspectBookmarks(wordParts, sink);
-            if (!sink.Stopped) InspectComments(wordParts, sink);
+            if (!sink.Stopped) InspectBookmarks(storyParts, sink);
+            if (!sink.Stopped) InspectComments(storyParts, graph.CommentParts, sink);
             if (!sink.Stopped)
-                InspectNotes(wordParts, sink, "footnote", "footnoteReference", "/word/footnotes.xml");
+                InspectNotes(storyParts, graph.FootnoteParts, sink,
+                    "footnote", "footnoteReference", "/word/footnotes.xml");
             if (!sink.Stopped)
-                InspectNotes(wordParts, sink, "endnote", "endnoteReference", "/word/endnotes.xml");
-            if (!sink.Stopped) InspectMoves(wordParts, sink);
-            if (!sink.Stopped) InspectContentControls(graph, wordParts, sink);
-            if (!sink.Stopped) InspectNumbering(wordParts, sink);
-            if (!sink.Stopped) InspectFields(wordParts, sink);
-            if (!sink.Stopped) InspectStaticRenderRisks(graph, wordParts, sink);
+                InspectNotes(storyParts, graph.EndnoteParts, sink,
+                    "endnote", "endnoteReference", "/word/endnotes.xml");
+            if (!sink.Stopped) InspectMoves(storyParts, sink);
+            if (!sink.Stopped) InspectContentControls(graph, storyParts, sink);
+            if (!sink.Stopped) InspectNumbering(storyParts, graph.NumberingParts, sink);
+            if (!sink.Stopped) InspectFields(storyParts, sink);
+            if (!sink.Stopped) InspectStaticRenderRisks(graph, storyParts, sink);
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException
-            or FormatException or OverflowException)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             sink.Add("structure.closure_inspection_unavailable",
                 DeliverableFindingCategory.Structure, VerificationFindingSeverity.Error,
@@ -75,6 +75,69 @@ internal static class WordprocessingClosureInspector
         };
     }
 
+    private static void InspectSemanticMultiplicity(
+        WordprocessingInspectionGraph graph,
+        FindingSink sink)
+    {
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Comments,
+            "comments", "structure.comments_part_ambiguous");
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Settings,
+            "settings", "structure.settings_part_ambiguous");
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Endnotes,
+            "endnotes", "structure.endnotes_part_ambiguous");
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Footnotes,
+            "footnotes", "structure.footnotes_part_ambiguous");
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Numbering,
+            "numbering", "structure.numbering_part_ambiguous");
+        ReportSingletonRole(graph, sink, WordprocessingInspectionGraph.SemanticRole.Styles,
+            "styles", "structure.styles_part_ambiguous");
+
+        foreach (var group in graph.SemanticRelationshipEdges
+                     .Where(edge => edge.OwnerRole == WordprocessingInspectionGraph.SemanticRole.CustomXml
+                         && edge.TargetRole
+                         == WordprocessingInspectionGraph.SemanticRole.CustomXmlProperties)
+                     .GroupBy(edge => edge.Relationship.OwnerUri, StringComparer.OrdinalIgnoreCase)
+                     .Where(group => group.Count() > 1))
+        foreach (var edge in group)
+            sink.Add("structure.custom_xml_properties_part_ambiguous",
+                DeliverableFindingCategory.Structure, VerificationFindingSeverity.Error,
+                $"Custom XML item '{group.Key}' owns more than one properties relationship.",
+                group.Key,
+                "Retain exactly one customXmlProps relationship for each custom XML item.",
+                new ChangeLocation
+                {
+                    OwnerUri = group.Key,
+                    RelationshipId = edge.Relationship.Id,
+                    TargetUri = edge.Relationship.ResolvedTargetUri ?? edge.Relationship.Target,
+                },
+                subject: edge.Relationship.Id);
+    }
+
+    private static void ReportSingletonRole(
+        WordprocessingInspectionGraph graph,
+        FindingSink sink,
+        WordprocessingInspectionGraph.SemanticRole role,
+        string roleName,
+        string code)
+    {
+        var edges = graph.SemanticRelationshipEdges.Where(edge =>
+            edge.OwnerRole == WordprocessingInspectionGraph.SemanticRole.MainDocument
+            && edge.TargetRole == role).ToArray();
+        if (edges.Length <= 1) return;
+        foreach (var edge in edges)
+            sink.Add(code, DeliverableFindingCategory.Structure, VerificationFindingSeverity.Error,
+                $"The main document owns more than one {roleName} relationship.",
+                edge.Relationship.OwnerUri,
+                $"Retain exactly one valid {roleName} relationship on the main document.",
+                new ChangeLocation
+                {
+                    OwnerUri = edge.Relationship.OwnerUri,
+                    RelationshipId = edge.Relationship.Id,
+                    TargetUri = edge.Relationship.ResolvedTargetUri ?? edge.Relationship.Target,
+                },
+                subject: edge.Relationship.Id);
+    }
+
     private static void InspectMediaClosure(
         IReadOnlyList<PackageRelationship> relationships,
         FindingSink sink)
@@ -82,9 +145,7 @@ internal static class WordprocessingClosureInspector
         foreach (var relationship in relationships.Where(relationship =>
                      relationship.TargetMode == "Internal"
                      && relationship.IsTargetPresent == false
-                     && (relationship.Type.EndsWith("/image", StringComparison.OrdinalIgnoreCase)
-                         || (relationship.ResolvedTargetUri ?? relationship.Target)
-                             .Contains("/media/", StringComparison.OrdinalIgnoreCase))))
+                     && OpenXmlRelationshipVocabulary.IsOfficeType(relationship.Type, "image")))
         {
             sink.Add("relationship.media_target_missing", DeliverableFindingCategory.Relationship,
                 VerificationFindingSeverity.Error,
@@ -193,17 +254,17 @@ internal static class WordprocessingClosureInspector
     }
 
     private static void InspectComments(
-        IReadOnlyList<PackageManifestInspectionEntry> parts,
+        IReadOnlyList<PackageManifestInspectionEntry> storyParts,
+        IReadOnlyList<PackageManifestInspectionEntry> commentParts,
         FindingSink sink)
     {
-        var commentParts = parts.Where(part => IsElement(part.Xml!.Root!, "comments")).ToArray();
         foreach (var part in commentParts)
-        foreach (var definition in Descendants(part, "comment")
+        foreach (var definition in DirectChildren(part, "comment")
                      .Where(element => string.IsNullOrEmpty(WordAttribute(element, "id"))))
             AddElementFinding(sink, part, definition, "structure.comment_id_missing",
                 VerificationFindingSeverity.Error, "A comment definition has no w:id.",
                 "Assign the comment a unique numeric id and update its markers.", null);
-        foreach (var part in parts)
+        foreach (var part in storyParts)
         foreach (var marker in Descendants(part, "commentReference")
                      .Concat(Descendants(part, "commentRangeStart"))
                      .Concat(Descendants(part, "commentRangeEnd"))
@@ -211,11 +272,11 @@ internal static class WordprocessingClosureInspector
             AddElementFinding(sink, part, marker, "structure.comment_marker_id_missing",
                 VerificationFindingSeverity.Error, "A comment marker has no w:id.",
                 "Assign the marker its comment definition id or remove it.", null);
-        var definitions = commentParts.SelectMany(part => Descendants(part, "comment")
+        var definitions = commentParts.SelectMany(part => DirectChildren(part, "comment")
                 .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
             .Where(item => item.Id is not null)
             .ToArray();
-        var references = parts.SelectMany(part =>
+        var references = storyParts.SelectMany(part =>
                 Descendants(part, "commentReference")
                     .Concat(Descendants(part, "commentRangeStart"))
                     .Concat(Descendants(part, "commentRangeEnd"))
@@ -270,40 +331,41 @@ internal static class WordprocessingClosureInspector
                 "Pair comment range markers within each story part and retain at least one comment reference mark.",
                 group.Key.Id);
         }
-        foreach (var part in parts)
+        foreach (var part in storyParts)
             InspectRangeNesting(part, "commentRangeStart", "commentRangeEnd",
                 "structure.comment_range_nesting_invalid", sink);
     }
 
     private static void InspectNotes(
-        IReadOnlyList<PackageManifestInspectionEntry> parts,
+        IReadOnlyList<PackageManifestInspectionEntry> storyParts,
+        IReadOnlyList<PackageManifestInspectionEntry> definitionParts,
         FindingSink sink,
         string definitionName,
         string referenceName,
         string conventionalPartUri)
     {
-        foreach (var part in parts)
-        foreach (var definition in Descendants(part, definitionName).Where(element =>
+        foreach (var part in definitionParts)
+        foreach (var definition in DirectChildren(part, definitionName).Where(element =>
                      WordAttribute(element, "type") is not ("separator" or "continuationSeparator")
                      && string.IsNullOrEmpty(WordAttribute(element, "id"))))
             AddElementFinding(sink, part, definition,
                 $"structure.{definitionName}_id_missing", VerificationFindingSeverity.Error,
                 $"A {definitionName} definition has no w:id.",
                 $"Assign the {definitionName} a unique id and update its reference.", null);
-        foreach (var part in parts)
+        foreach (var part in storyParts)
         foreach (var reference in Descendants(part, referenceName)
                      .Where(element => string.IsNullOrEmpty(WordAttribute(element, "id"))))
             AddElementFinding(sink, part, reference,
                 $"structure.{definitionName}_reference_id_missing", VerificationFindingSeverity.Error,
                 $"A {definitionName} reference has no w:id.",
                 $"Assign the reference its {definitionName} id or remove it.", null);
-        var definitions = parts.SelectMany(part => Descendants(part, definitionName)
+        var definitions = definitionParts.SelectMany(part => DirectChildren(part, definitionName)
                 .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"),
                     Type: WordAttribute(element, "type"))))
             .Where(item => item.Type is not ("separator" or "continuationSeparator"))
             .Where(item => item.Id is not null)
             .ToArray();
-        var references = parts.SelectMany(part => Descendants(part, referenceName)
+        var references = storyParts.SelectMany(part => Descendants(part, referenceName)
                 .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
             .Where(item => item.Id is not null)
             .ToArray();
@@ -402,14 +464,20 @@ internal static class WordprocessingClosureInspector
         IReadOnlyList<PackageManifestInspectionEntry> parts,
         FindingSink sink)
     {
-        var storeItemIds = graph.ReachableEntries
-            .Where(entry => string.Equals(entry.ManifestEntry.ContentType,
-                CustomXmlPropertiesContentType, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(entry => entry.Xml?.Root?.DescendantsAndSelf() ?? Enumerable.Empty<XElement>())
-            .SelectMany(element => element.Attributes())
-            .Where(attribute => attribute.Name.LocalName.Equals("itemID", StringComparison.OrdinalIgnoreCase))
-            .Select(attribute => NormalizeGuid(attribute.Value))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var storeItems = graph.CustomXmlPropertyParts
+            .Select(part => (Part: part,
+                Id: CustomXmlAttribute(part.Xml!.Root!, "itemID")))
+            .Where(item => !string.IsNullOrEmpty(item.Id))
+            .GroupBy(item => NormalizeGuid(item.Id!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        foreach (var duplicate in storeItems.Where(pair => pair.Value.Length > 1))
+        foreach (var item in duplicate.Value)
+            AddElementFinding(sink, item.Part, item.Part.Xml!.Root!,
+                "structure.custom_xml_store_item_id_duplicate",
+                VerificationFindingSeverity.Error,
+                $"Custom XML store item id '{item.Id}' is declared by multiple properties parts.",
+                "Assign each custom XML item one unique datastore item id.", duplicate.Key);
 
         foreach (var part in parts)
         {
@@ -439,12 +507,20 @@ internal static class WordprocessingClosureInspector
                 foreach (var binding in properties.Elements().Where(element => IsElement(element, "dataBinding")))
                 {
                     var storeItemId = WordAttribute(binding, "storeItemID");
-                    if (!string.IsNullOrEmpty(storeItemId)
-                        && !storeItemIds.Contains(NormalizeGuid(storeItemId)))
+                    if (string.IsNullOrEmpty(storeItemId)) continue;
+                    var normalized = NormalizeGuid(storeItemId);
+                    if (!storeItems.TryGetValue(normalized, out var matches))
                         AddElementFinding(sink, part, binding,
                             "structure.content_control_store_item_missing", VerificationFindingSeverity.Error,
                             $"Bound content control references unavailable custom XML store item '{storeItemId}'.",
                             "Restore the customXml item properties or update/remove the data binding.", storeItemId);
+                    else if (matches.Length > 1)
+                        AddElementFinding(sink, part, binding,
+                            "structure.content_control_store_item_ambiguous",
+                            VerificationFindingSeverity.Error,
+                            $"Bound content control store item '{storeItemId}' has multiple definitions.",
+                            "Retain one custom XML properties definition for this store item id.",
+                            storeItemId);
                 }
             }
 
@@ -462,20 +538,20 @@ internal static class WordprocessingClosureInspector
     }
 
     private static void InspectNumbering(
-        IReadOnlyList<PackageManifestInspectionEntry> parts,
+        IReadOnlyList<PackageManifestInspectionEntry> storyParts,
+        IReadOnlyList<PackageManifestInspectionEntry> numberingParts,
         FindingSink sink)
     {
-        var numberingParts = parts.Where(part => IsElement(part.Xml!.Root!, "numbering")).ToArray();
-        if (numberingParts.Length > 1)
-            foreach (var ambiguous in numberingParts)
-                AddElementFinding(sink, ambiguous, ambiguous.Xml!.Root!,
-                    "structure.numbering_part_ambiguous", VerificationFindingSeverity.Error,
-                    "More than one relationship-reachable numbering definition part exists.",
-                    "Retain exactly one numbering part reachable from the main document.", ambiguous.Uri);
         var numberingPart = numberingParts.FirstOrDefault();
+        var numberElements = numberingPart is null
+            ? Array.Empty<XElement>()
+            : DirectChildren(numberingPart, "num").ToArray();
+        var abstractElements = numberingPart is null
+            ? Array.Empty<XElement>()
+            : DirectChildren(numberingPart, "abstractNum").ToArray();
         var nums = numberingPart is null
             ? new Dictionary<string, (string? AbstractId, HashSet<string> OverrideLevels)>(StringComparer.Ordinal)
-            : Descendants(numberingPart, "num")
+            : numberElements
                 .Where(element => WordAttribute(element, "numId") is not null)
                 .GroupBy(element => WordAttribute(element, "numId")!, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key,
@@ -494,7 +570,7 @@ internal static class WordprocessingClosureInspector
                     StringComparer.Ordinal);
         var abstracts = numberingPart is null
             ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
-            : Descendants(numberingPart, "abstractNum")
+            : abstractElements
                 .Where(element => WordAttribute(element, "abstractNumId") is not null)
                 .GroupBy(element => WordAttribute(element, "abstractNumId")!, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key,
@@ -505,28 +581,31 @@ internal static class WordprocessingClosureInspector
 
         if (numberingPart is not null)
         {
-            foreach (var element in Descendants(numberingPart, "num")
+            foreach (var element in numberElements
                          .Where(element => string.IsNullOrEmpty(WordAttribute(element, "numId"))))
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_num_id_missing", VerificationFindingSeverity.Error,
                     "A numbering instance has no w:numId.",
                     "Assign one unique numbering instance id.", null);
-            foreach (var element in Descendants(numberingPart, "abstractNum")
+            foreach (var element in abstractElements
                          .Where(element => string.IsNullOrEmpty(WordAttribute(element, "abstractNumId"))))
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_abstract_id_missing", VerificationFindingSeverity.Error,
                     "An abstract numbering definition has no w:abstractNumId.",
                     "Assign one unique abstract numbering id.", null);
-            foreach (var element in Descendants(numberingPart, "lvl")
+            foreach (var element in numberElements.Concat(abstractElements)
+                         .SelectMany(element => element.DescendantsAndSelf())
+                         .Where(element => IsElement(element, "lvl"))
                          .Where(element => string.IsNullOrEmpty(WordAttribute(element, "ilvl"))))
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_level_id_missing", VerificationFindingSeverity.Error,
                     "A numbering level has no w:ilvl.",
                     "Assign the level an unambiguous level index.", null);
-            ReportDuplicateIds(numberingPart, "num", "numId", "structure.numbering_num_id_duplicate", sink);
-            ReportDuplicateIds(numberingPart, "abstractNum", "abstractNumId",
+            ReportDuplicateIds(numberingPart, numberElements, "numId",
+                "structure.numbering_num_id_duplicate", sink);
+            ReportDuplicateIds(numberingPart, abstractElements, "abstractNumId",
                 "structure.numbering_abstract_id_duplicate", sink);
-            foreach (var numElement in Descendants(numberingPart, "num"))
+            foreach (var numElement in numberElements)
             {
                 var numId = WordAttribute(numElement, "numId");
                 var overrides = numElement.Elements().Where(element => IsElement(element, "lvlOverride")).ToArray();
@@ -550,7 +629,7 @@ internal static class WordprocessingClosureInspector
             foreach (var num in nums)
             {
                 if (num.Value.AbstractId is not null && abstracts.ContainsKey(num.Value.AbstractId)) continue;
-                var element = Descendants(numberingPart, "num")
+                var element = numberElements
                     .First(candidate => WordAttribute(candidate, "numId") == num.Key);
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_abstract_missing", VerificationFindingSeverity.Error,
@@ -559,7 +638,7 @@ internal static class WordprocessingClosureInspector
             }
         }
 
-        foreach (var part in parts)
+        foreach (var part in storyParts)
         foreach (var numPr in Descendants(part, "numPr"))
         {
             var numId = WordAttribute(numPr.Elements().FirstOrDefault(element => IsElement(element, "numId")), "val");
@@ -674,18 +753,18 @@ internal static class WordprocessingClosureInspector
 
     private static void ReportDuplicateIds(
         PackageManifestInspectionEntry part,
-        string elementName,
+        IEnumerable<XElement> elements,
         string attributeName,
         string code,
         FindingSink sink)
     {
-        foreach (var duplicate in Descendants(part, elementName)
+        foreach (var duplicate in elements
                      .Where(element => WordAttribute(element, attributeName) is not null)
                      .GroupBy(element => WordAttribute(element, attributeName)!, StringComparer.Ordinal)
                      .Where(group => group.Count() > 1))
         foreach (var element in duplicate)
             AddElementFinding(sink, part, element, code, VerificationFindingSeverity.Error,
-                $"{elementName} id '{duplicate.Key}' is duplicated.",
+                $"{element.Name.LocalName} id '{duplicate.Key}' is duplicated.",
                 "Assign unique numbering identifiers and update dependent references.", duplicate.Key);
     }
 
@@ -745,6 +824,11 @@ internal static class WordprocessingClosureInspector
         string localName) => part.Xml!.Descendants()
         .Where(element => IsWord(element) && element.Name.LocalName == localName);
 
+    private static IEnumerable<XElement> DirectChildren(
+        PackageManifestInspectionEntry part,
+        string localName) => part.Xml!.Root!.Elements()
+        .Where(element => IsWord(element) && element.Name.LocalName == localName);
+
     private static bool IsElement(XElement element, string localName) =>
         IsWord(element) && element.Name.LocalName == localName;
 
@@ -756,6 +840,9 @@ internal static class WordprocessingClosureInspector
             attribute.Name.LocalName == localName
             && (attribute.Name.NamespaceName is TransitionalWord or StrictWord or Word2010
                 || string.IsNullOrEmpty(attribute.Name.NamespaceName)))?.Value;
+
+    private static string? CustomXmlAttribute(XElement element, string localName) =>
+        element.Attribute(XName.Get(localName, element.Name.NamespaceName))?.Value;
 
     private static string NormalizeGuid(string value) => value.Trim().Trim('{', '}');
 
@@ -777,12 +864,14 @@ internal static class WordprocessingClosureInspector
         DeliverableInspectionBudget budget)
     {
         private readonly int _maximum = Math.Max(0, maximumFindings);
-        internal bool Truncated { get; private set; }
+        internal bool Truncated { get; private set; } =
+            observations.Count >= Math.Max(0, maximumFindings);
         internal string? ForcedDiagnostic { get; private set; }
-        internal bool Stopped => Truncated || budget.Exhausted || ForcedDiagnostic is not null;
+        private bool FindingLimitReached => Truncated || observations.Count >= _maximum;
+        internal bool Stopped => FindingLimitReached || budget.Exhausted || ForcedDiagnostic is not null;
         internal string? Diagnostic => ForcedDiagnostic
             ?? (budget.Exhausted ? "resource budget exceeded: " + budget.ExhaustedResource
-                : Truncated ? "finding limit reached" : null);
+                : FindingLimitReached ? "finding limit reached" : null);
 
         internal void ForceUnavailable(string diagnostic) => ForcedDiagnostic = diagnostic;
 
