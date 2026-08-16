@@ -24,6 +24,15 @@ All notable changes to this project will be documented in this file.
   oversized input. The portable verifier detects receipt,
   record, artifact, semantic, lineage, and citation-binding tampering. See
   [`docs/architecture/delivery_change_receipt.md`](docs/architecture/delivery_change_receipt.md).
+- **Node and CLI standalone PDF export (#439).** Added the separately published
+  `@docxodus/export` companion with immutable byte and stable-file APIs, one-pass HTML/PDF batches,
+  a strict `docxodus convert` CLI, and a length-framed integration host. It drives the shared
+  hashed browser materializer through an isolated pinned-Chromium context, denies requests outside
+  the closed runtime graph, prints the finalized offline page tree with exact CSS page sizes and
+  zero margins, and parser-verifies page geometry, tags, searchable text, links, vector charts,
+  digests, and volatile PDF metadata. Typed failures retain structured reports, file publication is
+  fsynced/atomic/no-replace, caller-owned browsers remain open, and CI publishes a viewable success
+  and failure artifact gallery.
 - **Standalone paginated HTML materialization (#438).** Added the UI-free
   `docxodus/export-browser` entry point for immutable DOCX-to-offline-HTML export, with a finalized
   page-box-only tree, post-cleanup PageMap, digest-bound render report, structured warnings and
