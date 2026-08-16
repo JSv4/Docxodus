@@ -266,6 +266,27 @@ export {
   paginateHtml,
 } from "./pagination.js";
 
+export type {
+  CommentProfile,
+  CompleteRenderReport,
+  DocxodusExportErrorCode,
+  ExportPhase,
+  ExportResourceLimits,
+  FailedRenderReport,
+  FontResolution,
+  PaginatedHtmlOptions,
+  PaginatedHtmlResult,
+  PaginatedRenderMetadata,
+  ReadinessOutcome,
+  RenderReport,
+  RenderReportBase,
+  RenderWarning,
+  ResourceOutcome,
+  ReviewProfile,
+  UnsupportedContentOutcome,
+  UnsupportedContentPolicy,
+} from "./export-browser.js";
+
 // Page geometry is the document's own page setup (w:sectPr), read off the section wrappers
 // the converter stamps in every render mode, plus the fit-to-width zoom a view applies to it.
 export {

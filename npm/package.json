@@ -22,13 +22,20 @@
     "./worker": {
       "types": "./dist/worker-proxy.d.ts",
       "import": "./dist/worker-proxy.js"
-    }
+    },
+    "./export-browser": {
+      "types": "./dist/export-browser.d.ts",
+      "import": "./dist/export-browser.bundle.js"
+    },
+    "./export-assets.json": "./dist/export-assets.json",
+    "./render-report.schema.json": "./dist/render-report-v1.schema.json"
   },
   "typesVersions": {
     "*": {
       "react": ["./dist/react.d.ts"],
       "embed": ["./dist/embed.d.ts"],
-      "worker": ["./dist/worker-proxy.d.ts"]
+      "worker": ["./dist/worker-proxy.d.ts"],
+      "export-browser": ["./dist/export-browser.d.ts"]
     }
   },
   "files": [
@@ -36,6 +43,7 @@
     "dist/*.js.map",
     "dist/*.d.ts",
     "dist/*.d.ts.map",
+    "dist/*.json",
     "dist/wasm/_framework"
   ],
   "scripts": {
@@ -46,9 +54,11 @@
     "build:session-bundle": "esbuild src/session.ts --bundle --format=iife --global-name=DocxodusSession --outfile=dist/session.bundle.js",
     "build:editor-bundle": "esbuild src/ribbon.ts --bundle --format=iife --global-name=DocxodusEditor --outfile=dist/editor.bundle.js",
     "build:embed-bundle": "esbuild src/embed.ts --bundle --format=esm --outfile=dist/embed.bundle.js && esbuild src/embed.ts --bundle --format=iife --global-name=Docxodus --outfile=dist/embed.iife.js",
-    "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --outfile=dist/docxodus.worker.js && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js",
-    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:embed-bundle && npm run build:worker-bundle",
-    "pretest": "npm run test:demo-logic && npm run typecheck && cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp examples/editor.html dist/wasm/ && cp examples/embed.html dist/wasm/ && cp examples/ascii-animation.html dist/wasm/ && cp examples/ascii-animation-editor.html dist/wasm/ && cp ../docs/demo/ascii-scenes.js dist/wasm/ && mkdir -p dist/wasm/fonts && cp ../docs/demo/fonts/docxodus-canvas-mono.woff2 dist/wasm/fonts/ &&cp ../docs/demo/player.html dist/wasm/player.html && cp ../docs/demo/index.html dist/wasm/demo-index.html && cp ../docs/demo/app.html dist/wasm/demo-app.html && cp ../docs/demo/observatory.html dist/wasm/demo-observatory.html && cp ../docs/demo/arcade.html dist/wasm/demo-arcade.html && cp ../docs/demo/ascii-arcade.js dist/wasm/ && cp ../docs/demo/arcade-dock.js dist/wasm/ && cp ../docs/demo/freedoom-e1m1.js dist/wasm/ && cp ../docs/demo/docxodus-demo-guide.docx dist/wasm/docxodus-demo-guide.docx && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/editor.bundle.js dist/wasm/ && cp dist/embed.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js && npm run test:package-boundary",
+    "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --metafile=dist/docxodus.worker.meta.json --outfile=dist/docxodus.worker.js && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js",
+    "build:export-browser": "esbuild src/export-browser.ts --bundle --format=esm --metafile=dist/export-browser.meta.json --outfile=dist/export-browser.bundle.js",
+    "build:export-assets": "node scripts/generate-export-assets.mjs",
+    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:embed-bundle && npm run build:worker-bundle && npm run build:export-browser && npm run build:export-assets",
+    "pretest": "npm run test:demo-logic && npm run typecheck && cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp tests/standalone-export-harness.html dist/wasm/ && cp examples/editor.html dist/wasm/ && cp examples/embed.html dist/wasm/ && cp examples/ascii-animation.html dist/wasm/ && cp examples/ascii-animation-editor.html dist/wasm/ && cp ../docs/demo/ascii-scenes.js dist/wasm/ && mkdir -p dist/wasm/fonts && cp ../docs/demo/fonts/docxodus-canvas-mono.woff2 dist/wasm/fonts/ && cp ../docs/demo/player.html dist/wasm/player.html && cp ../docs/demo/index.html dist/wasm/demo-index.html && cp ../docs/demo/app.html dist/wasm/demo-app.html && cp ../docs/demo/observatory.html dist/wasm/demo-observatory.html && cp ../docs/demo/arcade.html dist/wasm/demo-arcade.html && cp ../docs/demo/ascii-arcade.js dist/wasm/ && cp ../docs/demo/arcade-dock.js dist/wasm/ && cp ../docs/demo/freedoom-e1m1.js dist/wasm/ && cp ../docs/demo/docxodus-demo-guide.docx dist/wasm/docxodus-demo-guide.docx && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/editor.bundle.js dist/wasm/ && cp dist/embed.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js && cp dist/export-browser.bundle.js dist/wasm/export-browser.js && cp dist/export-assets.json dist/wasm/export-assets.json && npm run test:package-boundary",
     "test:demo-logic": "node ../docs/demo/tools/ascii-arcade.test.mjs && node ../docs/demo/tools/wad2cart.test.mjs && node ../docs/demo/tools/canvas-font.test.mjs",
     "test:package-boundary": "node scripts/check-package-boundary.mjs",
     "test": "playwright test",
