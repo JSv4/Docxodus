@@ -33,14 +33,6 @@ public static class PackageManifestGenerator
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWordNamespace =
         "http://purl.oclc.org/ooxml/wordprocessingml/main";
-    private const string TransitionalOfficeRelationshipNamespace =
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    private const string StrictOfficeRelationshipNamespace =
-        "http://purl.oclc.org/ooxml/officeDocument/relationships";
-    private const string TransitionalOfficeRelationshipTypePrefix =
-        TransitionalOfficeRelationshipNamespace + "/";
-    private const string StrictOfficeRelationshipTypePrefix =
-        StrictOfficeRelationshipNamespace + "/";
     private const string Word2012Namespace =
         "http://schemas.microsoft.com/office/word/2012/wordml";
     private static readonly AsciiCaseInsensitiveComparer PartNameComparer =
@@ -917,7 +909,7 @@ public static class PackageManifestGenerator
         var people = 0;
         var annotations = 0;
         var isStrict = relationships.Any(relationship =>
-            relationship.Type.StartsWith(StrictOfficeRelationshipTypePrefix, StringComparison.Ordinal));
+            OpenXmlRelationshipVocabulary.IsStrictOfficeType(relationship.Type));
 
         foreach (var work in works.Where(work => work.Xml?.Root is not null))
         {
@@ -1883,14 +1875,13 @@ public static class PackageManifestGenerator
         or "customXmlMoveFromRangeStart" or "customXmlMoveToRangeStart";
 
     private static bool IsOfficeRelationshipNamespace(string value) =>
-        value is TransitionalOfficeRelationshipNamespace or StrictOfficeRelationshipNamespace;
+        OpenXmlRelationshipVocabulary.IsOfficeNamespace(value);
 
     private static bool IsPackageRelationshipsNamespace(string value) =>
         value == TransitionalPackageRelationshipsNamespace;
 
     private static bool IsOfficeRelationshipType(string value, string localType) =>
-        value.Equals(TransitionalOfficeRelationshipTypePrefix + localType, StringComparison.Ordinal)
-        || value.Equals(StrictOfficeRelationshipTypePrefix + localType, StringComparison.Ordinal);
+        OpenXmlRelationshipVocabulary.IsOfficeType(value, localType);
 
     private static int CountPositiveDefinitions(IEnumerable<XElement> elements, string localName) =>
         elements.Count(element => element.Name.LocalName == localName

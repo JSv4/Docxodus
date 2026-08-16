@@ -40,7 +40,7 @@ internal static class DeliverableSessionInspector
         int before = observations.Count;
         try
         {
-            foreach (var part in graph.WordParts)
+            foreach (var part in graph.StoryParts)
             {
                 if (budget.Exhausted || observations.Count >= options.MaxFindings) break;
                 InspectPart(part, options, observations, budget);
@@ -62,8 +62,7 @@ internal static class DeliverableSessionInspector
                     : truncated ? "finding limit reached" : null,
             };
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException
-            or RegexMatchTimeoutException)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             Add(observations, options.MaxFindings, DeliverableFindingObservation.Create(
                 "structure.workflow_inspection_unavailable",
@@ -243,7 +242,7 @@ internal static class DeliverableSessionInspector
         DeliverableInspectionBudget budget)
     {
         var parts = new List<RevisionRegistry.Part>();
-        foreach (var part in graph.WordParts)
+        foreach (var part in graph.StoryParts)
         {
             if (part.Xml?.Root is not { } root) continue;
             foreach (var _ in root.DescendantsAndSelf())

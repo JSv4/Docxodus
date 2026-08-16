@@ -6,7 +6,6 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
-using System.Xml;
 
 namespace Docxodus.Verification;
 
@@ -82,10 +81,7 @@ internal static class OpenXmlValidationInspector
                 Diagnostic = truncated ? profile + "; finding limit reached" : profile,
             };
         }
-        catch (Exception exception) when (exception is OpenXmlPackageException
-            or InvalidDataException or IOException or ArgumentException or FormatException
-            or NotSupportedException
-            or XmlException)
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
             if (observations.Count < maximumFindings)
                 observations.Add(DeliverableFindingObservation.Create(
