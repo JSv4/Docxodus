@@ -58,7 +58,8 @@ public sealed class DeliveryRendererCapabilities
 
     internal static bool IsRenderKind(DeliveryArtifactKind kind) => kind is
         DeliveryArtifactKind.StandaloneHtml or DeliveryArtifactKind.FinalPdf
-        or DeliveryArtifactKind.ReviewPdf;
+        or DeliveryArtifactKind.ReviewPdf or DeliveryArtifactKind.PageMap
+        or DeliveryArtifactKind.RenderReport;
 }
 
 /// <summary>One exact-source request passed to a delivery renderer.</summary>
