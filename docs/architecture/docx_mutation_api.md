@@ -1064,9 +1064,11 @@ already had a footnote engine (per-page distribution, continuations, splitting),
 render flag on activates it — notes land in a note area at the bottom of the page that cites them,
 above a separator rule, and a note too long for its page continues onto the next. Endnotes render as
 a `section.endnotes` appended after the page stack rather than on their own final page, which is a
-layout imperfection, not a correctness one: they are visible and editable. A note split across pages
-puts a *different paragraph* of the note in each half, so each half stays independently addressable
-— no two editable nodes ever share one anchor.
+layout imperfection, not a correctness one: they are visible and editable. A note can split between
+paragraphs or, for conservatively eligible text-only content, inside one paragraph. Every visible
+piece keeps the paragraph's canonical `data-source-anchor-id`, producing contiguous PageMap
+fragments, while only the leading piece retains the editable bare `data-anchor`/`id`; active editor
+identity therefore remains unique.
 
 Note content lives inside the body flow, so anything that walks "the body blocks" must exclude
 `section.footnotes`, `section.endnotes` and `.footnote-item` — the header/footer band already does
@@ -1075,7 +1077,7 @@ note leaves the bands on the last body section rather than blanking them).
 
 **Paginated mode's footnote engine.** `pagination.ts` already had per-page distribution, splitting
 and continuations; turning the render flag on exercised it against a dense real document for the
-first time and it needed four fixes, each worth knowing about because each failed *silently*:
+first time and it needed five fixes, each worth knowing about because each failed *silently*:
 
 - an unfitted note was held in a **single** continuation slot assigned once per note in a page's
   citation list, so a second unfitted note on the same page overwrote the first and it rendered
@@ -1088,11 +1090,18 @@ first time and it needed four fixes, each worth knowing about because each faile
   and note glyphs could be painted on top of each other. The content area is now shrunk to what the
   notes leave, making that impossible by construction — worst case is a clean clip — and note
   heights are measured in the `.page-footnotes` styling context they render in so the reserve
-  matches the paint.
+  matches the paint;
+- a single paragraph taller than the note band was treated as fully consumed after one clipped
+  rendering, so its invisible tail had no later page or PageMap fragment. The body paragraph's
+  conservative DOM Range fragmenter is now shared with note flow and measured in the exact initial
+  note or continuation wrapper. Unsafe/indivisible content keeps the bounded clipped fallback, but
+  only for that one element; later sibling paragraphs still drain normally.
 
 `DS340`–`DS345` pin the engine half (marker + section emitted, note paragraphs stamped, stamped
 anchors resolve through the session, edit-then-re-render, the stateless path, and reserved-note
-filtering); `npm/tests/editor-footnotes.spec.ts` pins the browser half.
+filtering); `npm/tests/editor-footnotes.spec.ts` pins the editor half, while
+`pagination-footnote-layout.spec.ts` and `page-map-real-converter.spec.ts` pin multi-page paragraph
+continuation, unclipped text preservation, and PageMap closure.
 
 **Word-reserved notes never surface as editable blocks.** `IsBoilerplateNote` now treats *any*
 typed note as reserved: ECMA-376 §17.11.17 defines the type as `normal` | `separator` |
