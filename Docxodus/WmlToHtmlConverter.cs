@@ -4313,15 +4313,22 @@ namespace Docxodus
                 }
             }
 
-            foreach (var comment in comments)
+            // Apply extended metadata only to the retained, first-owner definitions above.
+            // Iterating the raw package rows here would let a skipped duplicate w:id mutate the
+            // first definition, or let a later comment sharing w14:paraId borrow the first
+            // owner's status/thread parent. Diagnostics remain explicit, but rendered content
+            // and metadata must come from one deterministic source element.
+            foreach (var info in tracker.Comments.Values
+                .OrderBy(comment => comment.DefinitionOrder))
             {
-                var id = (int?)comment.Attribute(W.id);
-                if (id == null || !tracker.Comments.TryGetValue(id.Value, out var info))
-                    continue;
                 info.ThreadMetadataPartUri = tracker.CommentsExtendedPartUri;
 
+                var comment = info.SourceElement;
                 var paraId = (string)comment.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
-                if (string.IsNullOrEmpty(paraId) || !commentsEx.TryGetValue(paraId, out var commentEx))
+                if (string.IsNullOrEmpty(paraId)
+                    || !idByParaId.TryGetValue(paraId, out var ownerId)
+                    || ownerId != info.Id
+                    || !commentsEx.TryGetValue(paraId, out var commentEx))
                     continue;
 
                 info.Resolved = ParseCommentResolution(

@@ -155,7 +155,7 @@ public class ReviewCommentProfileTests
     [Fact]
     public void Ambiguous_comment_identities_emit_inert_diagnostics()
     {
-        var html = Render(CommentRenderMode.EndnoteStyle, renderComments: false,
+        var html = Render(CommentRenderMode.EndnoteStyle, renderComments: true,
             BuildIdentityCollisionFixture());
         var diagnostics = html.Descendants()
             .Where(element => (string?)element.Attribute("name")
@@ -166,6 +166,19 @@ public class ReviewCommentProfileTests
         Assert.Contains("duplicate_comment_id", diagnostics);
         Assert.Contains("duplicate_paragraph_id", diagnostics);
         Assert.Contains("duplicate_thread_metadata", diagnostics);
+
+        var first = ById(html, "comment-1");
+        Assert.Equal("First", (string?)first.Attribute("data-author"));
+        Assert.Equal("open", (string?)first.Attribute("data-comment-status"));
+        Assert.Null(first.Attribute("data-comment-parent-id"));
+        Assert.Contains("First.", first.Value);
+        Assert.DoesNotContain("Duplicate id.", first.Value);
+
+        var second = ById(html, "comment-2");
+        Assert.Equal("Second", (string?)second.Attribute("data-author"));
+        Assert.Equal("unknown", (string?)second.Attribute("data-comment-status"));
+        Assert.Null(second.Attribute("data-comment-parent-id"));
+        Assert.Contains("Duplicate paragraph.", second.Value);
     }
 
     [Fact]
@@ -398,6 +411,7 @@ public class ReviewCommentProfileTests
             WriteXml(document.MainDocumentPart.WordprocessingCommentsExPart!, """
                 <w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">
                   <w15:commentEx w15:paraId="AAAAAAAA" w15:done="0"/>
+                  <w15:commentEx w15:paraId="BBBBBBBB" w15:paraIdParent="AAAAAAAA" w15:done="1"/>
                   <w15:commentEx w15:paraId="AAAAAAAA" w15:done="1"/>
                 </w15:commentsEx>
                 """);

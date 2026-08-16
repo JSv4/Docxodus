@@ -511,10 +511,10 @@ internal static class RevisionOps
                 sink.Add(MakePropsUnit(child, paragraph));
                 continue;
             }
-            // pPr/trPr are handled by WalkParagraph/WalkRow; everything else (runs,
-            // hyperlinks, sdt, tbl, tc, rPr, tblPr, tblGrid, sectPr, …) recurses so
-            // nested wrappers and *PrChange elements are found wherever they live.
-            if (n == W.pPr || n == W.trPr) continue;
+            // Paragraph/row-owned pPr/trPr never reach this generic path: WalkParagraph
+            // and WalkRow exclude them after their specialized handling. Property
+            // containers can also live elsewhere (notably pPr/rPr inside styles.xml),
+            // so recurse here to keep export inventory aligned with the profile projector.
             if (child.HasElements)
                 WalkChildren(child.Elements(), ctx, paragraph, markedRow, markedRowType, sink);
         }
