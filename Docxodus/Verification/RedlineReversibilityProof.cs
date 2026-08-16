@@ -40,6 +40,14 @@ public sealed record RedlineReversibilityProofOptions
     public PackageManifestOptions PackageManifestOptions { get; init; } = new();
 
     /// <summary>
+    /// Maximum native revision elements accepted in either the baseline or redline package.
+    /// Selective resolution rebuilds the live registry after every operation, so this explicit
+    /// bound prevents adversarial revision inventories from turning both proof paths into
+    /// unbounded quadratic work. Raise it only for a reviewed, trusted workflow.
+    /// </summary>
+    public int MaxRevisionElements { get; init; } = 1_000;
+
+    /// <summary>
     /// Require identical ZIP bytes in addition to modeled and normalized whole-package equality.
     /// This is normally false because harmless ZIP timestamps, order, and compression may differ.
     /// </summary>

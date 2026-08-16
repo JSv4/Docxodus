@@ -8,6 +8,7 @@ using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus.Tests.Ir;
 using Docxodus.Verification;
 using DocxodusDiffParityFixtures;
 using Xunit;
@@ -417,6 +418,79 @@ public class RedlineReversibilityProofTests
         Assert.True(run.Proof.RejectToBaseline?.Equivalent, run.Proof.ToJson());
     }
 
+    [Fact]
+    public void RP013_RevisionElementBudget_FailsBeforePathExecution()
+    {
+        var baseline = Document("Base");
+        var intendedFinal = Document("BaseAB");
+        var redline = RewriteBody(baseline, new Paragraph(
+            RunForText("Base"),
+            new InsertedRun(RunForText("A"))
+            {
+                Id = "701",
+                Author = "Comparison Engine",
+                Date = FixedRevisionDate(),
+            },
+            new InsertedRun(RunForText("B"))
+            {
+                Id = "702",
+                Author = "Comparison Engine",
+                Date = FixedRevisionDate(),
+            }));
+
+        var run = RedlineReversibilityVerifier.Prove(
+            baseline,
+            intendedFinal,
+            redline,
+            new RedlineReversibilityProofOptions { MaxRevisionElements = 1 });
+
+        Assert.Null(run.Proof.AcceptToFinal);
+        Assert.Null(run.Proof.RejectToBaseline);
+        Assert.Null(run.AcceptedPackageBytes);
+        Assert.Null(run.RejectedPackageBytes);
+        Assert.Empty(run.Proof.RevisionClassifications);
+        var finding = Assert.Single(run.Proof.Findings,
+            item => item.Code == "revision_element_limit_exceeded");
+        Assert.Equal("redline/revisions", finding.Location?.PropertyPath);
+    }
+
+    [Fact]
+    public void RP014_UncountedRevisionMarkers_CannotBypassLiveInventoryBudget()
+    {
+        var baseline = IrTestDocuments.Create("Base").DocumentByteArray;
+        var redline = IrTestDocuments.FromBodyXml(
+            "<w:p><w:moveFromRangeStart w:id=\"701\"/>"
+            + "<w:moveFromRangeStart w:id=\"702\"/>"
+            + "<w:r><w:t>Base</w:t></w:r></w:p>").DocumentByteArray;
+
+        Assert.Equal(0, PackageManifestGenerator.Generate(redline).Facts.Revisions.Total);
+        var run = RedlineReversibilityVerifier.Prove(
+            baseline,
+            baseline,
+            redline,
+            new RedlineReversibilityProofOptions { MaxRevisionElements = 1 });
+
+        Assert.Null(run.Proof.AcceptToFinal);
+        Assert.Null(run.Proof.RejectToBaseline);
+        Assert.Empty(run.Proof.RevisionClassifications);
+        var finding = Assert.Single(run.Proof.Findings,
+            item => item.Code == "revision_inventory_limit_exceeded");
+        Assert.Equal("redline/revisionInventory", finding.Location?.PropertyPath);
+    }
+
+    [Fact]
+    public void RP015_PartialPathProjection_DoesNotLabelGeneratedAsPreExisting()
+    {
+        var preExisting = RevisionIdentity("prior");
+        var generated = RevisionIdentity("generated");
+
+        var projected = RedlineReversibilityVerifier.SelectSurvivingPreExisting(
+            new[] { preExisting },
+            new[] { generated, preExisting });
+
+        Assert.Equal(preExisting, Assert.Single(projected));
+    }
+
     private static void AssertResolutionClosure(RedlineProofPathResult path)
     {
         var accountedFor = path.ResolvedRevisionIds
@@ -453,6 +527,23 @@ public class RedlineReversibilityProofTests
         }
         Assert.True(path.ModeledSemantic.Available, proofJson);
     }
+
+    private static RedlineRevisionIdentity RevisionIdentity(string id) => new()
+    {
+        Id = id,
+        PartUri = "/word/document.xml",
+        Scope = "body",
+        Type = "insert",
+        Family = RevisionFamily.ContentInsert,
+        ConstituentIds = new[] { id },
+        Author = "Reviewer",
+        Date = null,
+        Text = id,
+        AnchorId = "p:doc:1",
+        AffectedAnchorIds = new[] { "p:doc:1" },
+        ResolutionStatus = RevisionResolutionStatus.Supported,
+        Diagnostic = null,
+    };
 
     private static byte[] Document(params string[] runs) =>
         DocumentWithReviewBody(new Paragraph(runs.Select(RunForText)));

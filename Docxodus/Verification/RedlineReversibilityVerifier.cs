@@ -26,6 +26,8 @@ public static class RedlineReversibilityVerifier
         ArgumentNullException.ThrowIfNull(redlineBytes);
         options ??= new RedlineReversibilityProofOptions();
         ArgumentNullException.ThrowIfNull(options.PackageManifestOptions);
+        if (options.MaxRevisionElements <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxRevisionElements));
 
         var baselineManifest = PackageManifestGenerator.Generate(
             baselineBytes, options.PackageManifestOptions);
@@ -53,6 +55,25 @@ public static class RedlineReversibilityVerifier
                 null);
         }
 
+        bool revisionInventoryWithinLimit = AppendRevisionLimitFinding(
+            sharedFindings, "baseline", baselineManifest, options.MaxRevisionElements);
+        revisionInventoryWithinLimit &= AppendRevisionLimitFinding(
+            sharedFindings, "redline", redlineManifest, options.MaxRevisionElements);
+        if (!revisionInventoryWithinLimit)
+        {
+            return BuildRun(
+                options,
+                baselineManifest,
+                finalManifest,
+                redlineManifest,
+                Array.Empty<RedlineRevisionClassification>(),
+                null,
+                null,
+                sharedFindings,
+                null,
+                null);
+        }
+
         IReadOnlyList<RevisionListEntry> baselineRevisions;
         IReadOnlyList<RevisionListEntry> redlineRevisions;
         try
@@ -62,13 +83,32 @@ public static class RedlineReversibilityVerifier
             using var redline = OpenProofSession(redlineBytes);
             redlineRevisions = redline.ListRevisions();
         }
-        catch (Exception ex) when (!IsFatal(ex))
+        catch (Exception ex) when (DeliverableExceptionBoundary.IsRecoverable(ex))
         {
             sharedFindings.Add(Finding(
                 "revision_inventory_failed",
                 VerificationFindingSeverity.Error,
                 $"The baseline or redline revision inventory could not be opened ({ex.GetType().Name}).",
                 remediation: "Supply a valid WordprocessingML document whose tracked-change markup is supported."));
+            return BuildRun(
+                options,
+                baselineManifest,
+                finalManifest,
+                redlineManifest,
+                Array.Empty<RedlineRevisionClassification>(),
+                null,
+                null,
+                sharedFindings,
+                null,
+                null);
+        }
+
+        bool liveInventoryWithinLimit = AppendLiveRevisionLimitFinding(
+            sharedFindings, "baseline", baselineRevisions.Count, options.MaxRevisionElements);
+        liveInventoryWithinLimit &= AppendLiveRevisionLimitFinding(
+            sharedFindings, "redline", redlineRevisions.Count, options.MaxRevisionElements);
+        if (!liveInventoryWithinLimit)
+        {
             return BuildRun(
                 options,
                 baselineManifest,
@@ -256,7 +296,7 @@ public static class RedlineReversibilityVerifier
             survivingEntries = session.ListRevisions();
             outputBytes = session.Save(persistAnchorIds: false);
         }
-        catch (Exception ex) when (!IsFatal(ex))
+        catch (Exception ex) when (DeliverableExceptionBoundary.IsRecoverable(ex))
         {
             completed = false;
             findings.Add(Finding(
@@ -272,6 +312,7 @@ public static class RedlineReversibilityVerifier
             .Select(ToIdentity)
             .OrderBy(RevisionSortKey, StringComparer.Ordinal)
             .ToArray();
+        var survivingPreExisting = SelectSurvivingPreExisting(preExisting, surviving);
         var survivingGenerated = generated.Where(requested => surviving.Any(item =>
                 string.Equals(item.Id, requested.Id, StringComparison.Ordinal)
                 || RevisionOverlaps(requested, item)))
@@ -303,7 +344,7 @@ public static class RedlineReversibilityVerifier
                     RequestedRevisionIds = requestedIds,
                     ResolvedRevisionIds = resolvedIds,
                     ImplicitlyResolvedRevisionIds = implicitlyResolvedIds,
-                    SurvivingPreExistingRevisions = surviving,
+                    SurvivingPreExistingRevisions = survivingPreExisting,
                     PreExistingRevisionsPreserved = preExistingPreserved,
                     ModeledSemantic = SemanticUnavailable(),
                     NormalizedWholePackageEquivalent = false,
@@ -441,7 +482,7 @@ public static class RedlineReversibilityVerifier
                 RequestedRevisionIds = requestedIds,
                 ResolvedRevisionIds = resolvedIds,
                 ImplicitlyResolvedRevisionIds = implicitlyResolvedIds,
-                SurvivingPreExistingRevisions = surviving,
+                SurvivingPreExistingRevisions = survivingPreExisting,
                 PreExistingRevisionsPreserved = preExistingPreserved,
                 ModeledSemantic = semantic.Comparison,
                 NormalizedWholePackageEquivalent = normalizedEquivalent,
@@ -600,27 +641,27 @@ public static class RedlineReversibilityVerifier
             item => (item.Uri, item.Occurrence), item => item);
         var actualByKey = actual.Entries.ToDictionary(
             item => (item.Uri, item.Occurrence), item => item);
-        var keys = expectedByKey.Keys.Concat(actualByKey.Keys).Distinct()
-            .OrderBy(item => item.Uri, StringComparer.Ordinal)
-            .ThenBy(item => item.Occurrence)
-            .ToArray();
         var divergences = new List<RedlinePackageDivergence>();
-        foreach (var key in keys)
+        foreach (var change in PackageDelta.Compare(expected, actual).Where(change =>
+                     change.Kind is PackageDeltaChangeKind.EntryAdded
+                         or PackageDeltaChangeKind.EntryRemoved
+                         or PackageDeltaChangeKind.EntryModified))
         {
+            var partUri = change.Location.EntryUri
+                ?? throw new InvalidOperationException(
+                    "A package entry delta must identify its entry URI.");
+            var key = (Uri: partUri, change.Occurrence);
             expectedByKey.TryGetValue(key, out var expectedEntry);
             actualByKey.TryGetValue(key, out var actualEntry);
-            var kind = expectedEntry is null
-                ? RedlinePackageDivergenceKind.Added
-                : actualEntry is null
-                    ? RedlinePackageDivergenceKind.Removed
-                    : RedlinePackageDivergenceKind.Modified;
-            if (expectedEntry is not null && actualEntry is not null
-                && string.Equals(expectedEntry.ContentType, actualEntry.ContentType, StringComparison.Ordinal)
-                && DigestEquals(expectedEntry.RawBytesDigest, actualEntry.RawBytesDigest)
-                && DigestEquals(expectedEntry.NormalizedXmlDigest, actualEntry.NormalizedXmlDigest))
-                continue;
+            var kind = change.Kind switch
+            {
+                PackageDeltaChangeKind.EntryAdded => RedlinePackageDivergenceKind.Added,
+                PackageDeltaChangeKind.EntryRemoved => RedlinePackageDivergenceKind.Removed,
+                PackageDeltaChangeKind.EntryModified => RedlinePackageDivergenceKind.Modified,
+                _ => throw new ArgumentOutOfRangeException(nameof(change), change.Kind, null),
+            };
 
-            var relevant = generated.Where(item => RevisionAppliesToPart(item, key.Uri))
+            var relevant = generated.Where(item => RevisionAppliesToPart(item, partUri))
                 .OrderBy(RevisionSortKey, StringComparer.Ordinal).ToArray();
             bool normalizedDifferent = expectedEntry is null || actualEntry is null
                 || !string.Equals(expectedEntry.ContentType, actualEntry.ContentType, StringComparison.Ordinal)
@@ -630,8 +671,8 @@ public static class RedlineReversibilityVerifier
             divergences.Add(new RedlinePackageDivergence
             {
                 Kind = kind,
-                PartUri = key.Uri,
-                Occurrence = key.Occurrence,
+                PartUri = partUri,
+                Occurrence = change.Occurrence,
                 AnchorId = relevant.Select(item => item.AnchorId)
                     .FirstOrDefault(item => item is not null),
                 ApplicableRevisionIds = relevant.Select(item => item.Id).ToArray(),
@@ -639,14 +680,17 @@ public static class RedlineReversibilityVerifier
                 ActualRawDigest = actualEntry?.RawBytesDigest,
                 ExpectedNormalizedDigest = expectedEntry?.NormalizedXmlDigest,
                 ActualNormalizedDigest = actualEntry?.NormalizedXmlDigest,
-                HasModeledSemanticChange = modeledPartUris.Contains(key.Uri),
+                HasModeledSemanticChange = modeledPartUris.Contains(partUri),
                 // A change set identifies modeled facts, not a complete residual projection for
                 // an arbitrary XML part. Even when that same part has a modeled change, retain the
                 // normalized divergence as potentially unmodeled instead of overclaiming coverage.
                 UnknownOrUnmodeled = normalizedDifferent,
             });
         }
-        return divergences;
+        return divergences
+            .OrderBy(item => item.PartUri, StringComparer.Ordinal)
+            .ThenBy(item => item.Occurrence)
+            .ToArray();
     }
 
     private static bool RevisionAppliesToPart(RedlineRevisionIdentity revision, string partUri)
@@ -763,6 +807,60 @@ public static class RedlineReversibilityVerifier
         }
     }
 
+    private static bool AppendRevisionLimitFinding(
+        List<RedlineProofFinding> target,
+        string inputName,
+        PackageManifest manifest,
+        int maximum)
+    {
+        int actual = manifest.Facts.Revisions.Total;
+        if (actual <= maximum)
+            return true;
+
+        target.Add(Finding(
+            "revision_element_limit_exceeded",
+            VerificationFindingSeverity.Error,
+            $"The {inputName} package contains "
+                + $"{actual.ToString(System.Globalization.CultureInfo.InvariantCulture)} native revision "
+                + $"element(s); the proof limit is "
+                + $"{maximum.ToString(System.Globalization.CultureInfo.InvariantCulture)}.",
+            new ChangeLocation { PropertyPath = inputName + "/revisions" },
+            remediation: "Reduce tracked-change markup or explicitly raise MaxRevisionElements for a reviewed input."));
+        return false;
+    }
+
+    private static bool AppendLiveRevisionLimitFinding(
+        List<RedlineProofFinding> target,
+        string inputName,
+        int actual,
+        int maximum)
+    {
+        if (actual <= maximum)
+            return true;
+
+        target.Add(Finding(
+            "revision_inventory_limit_exceeded",
+            VerificationFindingSeverity.Error,
+            $"The {inputName} live revision inventory contains "
+                + $"{actual.ToString(System.Globalization.CultureInfo.InvariantCulture)} entries; "
+                + $"the proof limit is "
+                + $"{maximum.ToString(System.Globalization.CultureInfo.InvariantCulture)}.",
+            new ChangeLocation { PropertyPath = inputName + "/revisionInventory" },
+            remediation: "Reduce tracked-change markup or explicitly raise MaxRevisionElements for a reviewed input."));
+        return false;
+    }
+
+    internal static IReadOnlyList<RedlineRevisionIdentity> SelectSurvivingPreExisting(
+        IReadOnlyList<RedlineRevisionIdentity> preExisting,
+        IReadOnlyList<RedlineRevisionIdentity> surviving)
+    {
+        var preExistingIds = preExisting.Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        return surviving.Where(item => preExistingIds.Contains(item.Id))
+            .OrderBy(RevisionSortKey, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static RedlineProofFinding Finding(
         string code,
         VerificationFindingSeverity severity,
@@ -867,7 +965,7 @@ public static class RedlineReversibilityVerifier
                     change.RightAnchor is not null || change.LeftAnchor is not null)
                     ?? modeledChanges.FirstOrDefault());
         }
-        catch (Exception ex) when (!IsFatal(ex))
+        catch (Exception ex) when (DeliverableExceptionBoundary.IsRecoverable(ex))
         {
             return new ModeledSemanticEvaluation(
                 SemanticUnavailable(
@@ -915,9 +1013,6 @@ public static class RedlineReversibilityVerifier
         RedlineProofDirection.AcceptToFinal => "accept-to-final",
         _ => "reject-to-baseline",
     };
-
-    private static bool IsFatal(Exception exception) => exception is
-        OutOfMemoryException or StackOverflowException or AccessViolationException;
 
     private sealed record PathEvaluation(RedlineProofPathResult Result, byte[]? OutputBytes);
 

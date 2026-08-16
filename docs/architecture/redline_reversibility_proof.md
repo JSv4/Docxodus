@@ -17,7 +17,13 @@ The operation takes three immutable byte arrays:
 - `redline`: the native tracked-change document being proved.
 
 Optional proof settings carry the shared package-inspection limits and exact-byte
-policy.
+policy. They also cap native revision elements per baseline/redline input; selective
+resolution rebuilds the live registry after each generated operation, so over-budget
+inventories fail before either path executes.
+
+The cheap manifest-fact preflight is followed by a cap on the exact live registry,
+covering malformed and unsupported marker families that are intentionally absent
+from the manifest's high-signal revision summary.
 
 The caller chooses the baseline policy before invoking the proof. For example, a
 workflow that deliberately accepted all prior revisions supplies that accepted
@@ -110,6 +116,11 @@ it does not reinterpret or flatten proof fields.
 ## Dependency boundary
 
 The implementation consumes the package manifest and shared inspection limits from
-#456 and the semantic change set from #457. It does not define another ZIP reader,
-XML normalizer, digest profile, location vocabulary, or safety policy. The delivery
-receipt from #458 consumes the proof but is not a dependency of proof generation.
+#456, the semantic change set from #457, and the policy-neutral package delta from
+#463. Redline-specific divergence evidence adapts that shared delta instead of
+defining another package comparator, and proof-stage exception filters use the same
+recoverable-exception boundary so cancellation and process-fatal exceptions propagate.
+It does not define another ZIP reader, XML normalizer, digest profile, location
+vocabulary, or package-inspection safety policy. Its one additional safety policy is
+the proof-specific revision-work cap described above. The delivery receipt from #458
+consumes the proof but is not a dependency of proof generation.

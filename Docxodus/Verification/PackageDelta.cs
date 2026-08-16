@@ -24,6 +24,12 @@ internal sealed record PackageDeltaChange
 {
     required internal PackageDeltaChangeKind Kind { get; init; }
     required internal ChangeLocation Location { get; init; }
+    /// <summary>
+    /// Zero-based occurrence within entries sharing a URI or relationships sharing an owner/ID.
+    /// Keeping this structural key explicit lets policy adapters consume the shared delta without
+    /// parsing its human-readable property path.
+    /// </summary>
+    required internal int Occurrence { get; init; }
     internal VerificationDigest? BeforeDigest { get; init; }
     internal VerificationDigest? AfterDigest { get; init; }
     internal string? BeforeValue { get; init; }
@@ -98,6 +104,7 @@ internal static class PackageDelta
             changes.Add(new PackageDeltaChange
             {
                 Kind = kind,
+                Occurrence = key.Occurrence,
                 Location = new ChangeLocation
                 {
                     EntryUri = key.Uri,
@@ -141,6 +148,7 @@ internal static class PackageDelta
             changes.Add(new PackageDeltaChange
             {
                 Kind = kind,
+                Occurrence = key.Occurrence,
                 Location = new ChangeLocation
                 {
                     OwnerUri = key.OwnerUri,
