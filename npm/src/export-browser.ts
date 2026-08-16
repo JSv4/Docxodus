@@ -97,6 +97,8 @@ export const DEFAULT_EXPORT_RESOURCE_LIMITS: Readonly<ExportResourceLimits> =
   Object.freeze({ ...LIMITS_CONTRACT.defaults });
 export const HARD_EXPORT_RESOURCE_LIMITS: Readonly<ExportResourceLimits> =
   Object.freeze({ ...LIMITS_CONTRACT.hardCeilings });
+export const DEFAULT_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.default;
+export const HARD_EXPORT_TIMEOUT_MS = LIMITS_CONTRACT.timeoutMs.hardCeiling;
 
 export interface PaginatedHtmlOptions {
   documentVersion?: number;
