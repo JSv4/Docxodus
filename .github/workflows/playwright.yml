@@ -47,11 +47,13 @@ jobs:
       - name: Install Playwright browsers
         run: cd npm && npx playwright install --with-deps chromium firefox
 
-      - name: Run Playwright tests
-        run: cd npm && npm test
-
       - name: Run Node/CLI PDF export tests
         run: cd npm-export && npm test
+
+      # Run the long editor matrix after the export evidence exists. The final upload is `always()`,
+      # so an unrelated late regression cannot suppress the HTML/PDF artifacts under review.
+      - name: Run Playwright tests
+        run: cd npm && npm test
 
       - name: Upload Playwright report and test artifacts
         uses: actions/upload-artifact@v7
