@@ -5119,6 +5119,39 @@ public sealed partial class DocxSession : IDisposable
     public string GetSemanticChangesJson(Verification.SemanticDiffOptions? options = null) =>
         GetSemanticChanges(options).ToCanonicalJson();
 
+    /// <summary>
+    /// Verify the session's current logical package. When initial-package capture is enabled, the
+    /// exact opening bytes are also used as the baseline for finding disposition and delta policy.
+    /// The checkpoint is produced from an isolated clone and does not save or mutate this session.
+    /// </summary>
+    public Verification.DeliverableVerificationResult VerifyDeliverable(
+        Verification.DeliverableVerificationOptions? options = null,
+        Verification.SemanticChangeSet? expectedSemanticChanges = null,
+        IReadOnlyList<Verification.DeliverablePackageChangeExpectation>? expectedPackageChanges = null,
+        IReadOnlyList<Verification.DeliverableCompanionArtifactInput>? companionArtifacts = null)
+    {
+        lock (_mutationGate)
+        {
+            ThrowIfDisposed();
+            return Verification.DeliverableVerifier.VerifyDeliverable(
+                new Verification.DeliverableVerificationRequest
+                {
+                    DeliverableBytes = SerializePackageCheckpoint(),
+                    BaselineBytes = _initialPackageBytes?.ToArray(),
+                    ExpectedSemanticChanges = expectedSemanticChanges,
+                    ExpectedPackageChanges = expectedPackageChanges
+                        ?? Array.Empty<Verification.DeliverablePackageChangeExpectation>(),
+                    CompanionArtifacts = companionArtifacts
+                        ?? Array.Empty<Verification.DeliverableCompanionArtifactInput>(),
+                }, options);
+        }
+    }
+
+    /// <summary>Compact canonical JSON counterpart of <see cref="VerifyDeliverable"/>.</summary>
+    public string VerifyDeliverableJson(
+        Verification.DeliverableVerificationOptions? options = null) =>
+        VerifyDeliverable(options).ToCanonicalJson();
+
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
     {
         // Key by (scope, Unid). Two reasons we cannot use Unid alone:

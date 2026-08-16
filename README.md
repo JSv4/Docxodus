@@ -67,6 +67,9 @@ cites are the final document's.
   for text, formatting, styles, numbering, tables, sections, stories, review data, relationships,
   media, and opaque package changes while suppressing serialization-only noise;
   `GetSemanticChangesJson()` emits its JSON representation.
+- **Deliverable gate.** `DeliverableVerifier.VerifyDeliverable()` combines bounded package/schema
+  validation, cross-part closure, workflow residue, baseline-aware findings, expected deltas, and
+  digest-bound renderer artifacts into one canonical pass/failed report.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
