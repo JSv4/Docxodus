@@ -211,7 +211,10 @@ internal static class Dispatcher
                 return DocxSessionOps.GetVersionJson(session.Handle);
 
             case "semantic_changes":
-                if (anchorId is not null)
+                // This read is package-wide. Reject the property itself, including null and
+                // non-string values, rather than letting OptStr turn an invalid scoped request
+                // into an apparently successful whole-document response.
+                if (args.TryGetProperty("anchorId", out _))
                     throw new McpToolException("semantic_changes is document-wide and does not accept anchorId");
                 return DocxSessionOps.GetSemanticChanges(session.Handle);
 

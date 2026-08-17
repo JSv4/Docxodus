@@ -81,6 +81,13 @@ public sealed record SemanticProperty(string Name, SemanticValue Value);
 /// </summary>
 public sealed class SemanticValue
 {
+    /// <summary>
+    /// Inclusive integer bounds for schema v1. Keeping integer values within ECMAScript's exact
+    /// range prevents canonical semantic values from changing when JSON crosses a JavaScript client.
+    /// </summary>
+    public const long MinSafeInteger = -9_007_199_254_740_991L;
+    public const long MaxSafeInteger = 9_007_199_254_740_991L;
+
     private SemanticValue(
         SemanticValueKind kind,
         string? stringValue = null,
@@ -121,8 +128,14 @@ public sealed class SemanticValue
     public static SemanticValue Boolean(bool? value) =>
         value is null ? Absent : new(SemanticValueKind.Boolean, booleanValue: value);
 
-    public static SemanticValue Integer(long? value) =>
-        value is null ? Absent : new(SemanticValueKind.Integer, integerValue: value);
+    public static SemanticValue Integer(long? value)
+    {
+        if (value is null) return Absent;
+        if (value is < MinSafeInteger or > MaxSafeInteger)
+            throw new ArgumentOutOfRangeException(nameof(value), value,
+                $"Semantic integers must be between {MinSafeInteger} and {MaxSafeInteger} inclusive.");
+        return new SemanticValue(SemanticValueKind.Integer, integerValue: value);
+    }
 
     /// <summary>
     /// Create a digest value. <paramref name="algorithm"/> names the cryptographic algorithm
@@ -201,6 +214,7 @@ public sealed class SemanticChangeSet
             .ThenBy(change => (int)change.Operation)
             .ThenBy(change => ValueSortKey(change.Before), StringComparer.Ordinal)
             .ThenBy(change => ValueSortKey(change.After), StringComparer.Ordinal)
+            .ThenBy(change => change.MoveId, StringComparer.Ordinal)
             .Select((change, index) => change with { Id = $"chg-{index + 1:D6}" })
             .ToArray();
     }

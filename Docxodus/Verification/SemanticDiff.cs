@@ -46,6 +46,24 @@ public sealed record SemanticDiffOptions
 /// </summary>
 public static class SemanticDiff
 {
+    /// <summary>
+    /// Compare raw DOCX bytes after applying the bounded package preflight, before constructing an
+    /// Open XML SDK document. Prefer this overload at byte-oriented trust boundaries.
+    /// </summary>
+    public static SemanticChangeSet Compare(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(leftBytes);
+        ArgumentNullException.ThrowIfNull(rightBytes);
+        if (leftBytes.Length == 0)
+            throw new ArgumentException("No left document data provided", nameof(leftBytes));
+        if (rightBytes.Length == 0)
+            throw new ArgumentException("No right document data provided", nameof(rightBytes));
+        return SemanticDiffEngine.Compare(leftBytes, rightBytes, options ?? new SemanticDiffOptions());
+    }
+
     public static SemanticChangeSet Compare(
         WmlDocument left,
         WmlDocument right,
@@ -55,6 +73,12 @@ public static class SemanticDiff
         ArgumentNullException.ThrowIfNull(right);
         return SemanticDiffEngine.Compare(left, right, options ?? new SemanticDiffOptions());
     }
+
+    public static string CompareJson(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions? options = null,
+        bool indented = true) => Compare(leftBytes, rightBytes, options).ToJson(indented);
 
     public static string CompareJson(
         WmlDocument left,
@@ -100,11 +124,24 @@ internal static class SemanticDiffEngine
         new OpcSemanticPackageChangeDetector();
 
     public static SemanticChangeSet Compare(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions options)
+    {
+        // This overload owns the raw-byte trust boundary: do not construct WmlDocument (whose
+        // constructor opens the OPC package to identify its document type) until inspection has
+        // enforced all declared archive and XML limits.
+        var packageChanges = PackageDetector.Compare(leftBytes, rightBytes, options);
+        var left = new WmlDocument("left.docx", leftBytes);
+        var right = new WmlDocument("right.docx", rightBytes);
+        return CompareValidated(left, right, options, packageChanges);
+    }
+
+    public static SemanticChangeSet Compare(
         WmlDocument originalLeft,
         WmlDocument originalRight,
         SemanticDiffOptions options)
     {
-        var settings = options.DiffSettings ?? new DocxDiffSettings();
         // Inspect the raw package before the Open XML SDK/IR path. This makes the declared package
         // limits an actual boundary for the default public operation instead of a late supplement
         // reached only after an untrusted archive has already been expanded.
@@ -112,6 +149,16 @@ internal static class SemanticDiffEngine
             originalLeft.DocumentByteArray,
             originalRight.DocumentByteArray,
             options);
+        return CompareValidated(originalLeft, originalRight, options, packageChanges);
+    }
+
+    private static SemanticChangeSet CompareValidated(
+        WmlDocument originalLeft,
+        WmlDocument originalRight,
+        SemanticDiffOptions options,
+        IReadOnlyList<SemanticChangeDraft> packageChanges)
+    {
+        var settings = options.DiffSettings ?? new DocxDiffSettings();
         var left = PreAccept(originalLeft, settings);
         var right = PreAccept(originalRight, settings);
         var diffSettings = settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
@@ -171,7 +218,10 @@ internal static class SemanticDiffEngine
 
         public void Project(IrEditScript script)
         {
-            ProjectOps(script.Operations, "/word/document.xml", "body", "body");
+            var bodyPart = _right.Body.PartUri?.ToString()
+                ?? _left.Body.PartUri?.ToString()
+                ?? "/word/document.xml";
+            ProjectOps(script.Operations, bodyPart, "body", "body");
 
             if (script.NoteOps is { } notes)
             {
@@ -211,6 +261,10 @@ internal static class SemanticDiffEngine
             {
                 foreach (var story in stories)
                 {
+                    var leftStory = FindStory(_left, story.IsHeader,
+                        story.LeftPartUri, story.LeftScopeName);
+                    var rightStory = FindStory(_right, story.IsHeader,
+                        story.RightPartUri, story.ScopeName);
                     var family = story.IsHeader
                         ? SemanticChangeFamily.Header
                         : SemanticChangeFamily.Footer;
@@ -221,12 +275,7 @@ internal static class SemanticDiffEngine
                         StoryOperation(story), family, part,
                         $"{(story.IsHeader ? "header" : "footer")}[section={story.SectionIndex},kind={story.Kind}]",
                         null, null, story.LeftScopeName, story.ScopeName, null,
-                        story.LeftPartUri is null
-                            ? SemanticValue.Absent
-                            : StoryValue(story.LeftPartUri, story.LeftScopeName, story.ReferenceBindings),
-                        story.RightPartUri is null
-                            ? SemanticValue.Absent
-                            : StoryValue(story.RightPartUri, story.ScopeName, story.ReferenceBindings));
+                        StoryValue(leftStory), StoryValue(rightStory));
                     ProjectOps(story.Ops, part, story.LeftScopeName, story.ScopeName);
                 }
             }
@@ -238,8 +287,11 @@ internal static class SemanticDiffEngine
             CompareNumbering();
             if (_left.ThemeFonts != _right.ThemeFonts)
             {
+                var part = _right.ThemeFonts.PartUri?.ToString()
+                    ?? _left.ThemeFonts.PartUri?.ToString()
+                    ?? "/word/theme/theme1.xml";
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.Style,
-                    "/word/theme/theme1.xml", "theme.fonts", null, null, null, null, null,
+                    part, "theme.fonts", null, null, null, null, null,
                     ThemeValue(_left.ThemeFonts), ThemeValue(_right.ThemeFonts));
             }
         }
@@ -449,6 +501,7 @@ internal static class SemanticDiffEngine
                             AnchorArray(op.Kind == IrEditOpKind.SplitBlock
                                 ? op.SplitMergeAnchors
                                 : new[] { op.RightAnchor }));
+                        ProjectSplitMergeTokenChanges(op, partUri, leftScope, rightScope);
                         break;
                     default:
                         Add(SemanticChangeOperation.Modify, SemanticChangeFamily.BlockStructure, partUri,
@@ -583,47 +636,146 @@ internal static class SemanticDiffEngine
             IrTokenDiff? tokenDiff,
             string part)
         {
+            bool visibleTextIsEqual = string.Equals(
+                PlainText(left), PlainText(right), StringComparison.Ordinal);
             if (tokenDiff is null)
             {
                 if (left.ContentHash != right.ContentHash
-                    && !string.Equals(PlainText(left), PlainText(right), StringComparison.Ordinal))
+                    && !visibleTextIsEqual)
                 {
                     Add(SemanticChangeOperation.Modify, SemanticChangeFamily.Text, part,
                         "paragraph.text", left.Anchor.ToString(), right.Anchor.ToString(),
                         left.Anchor.Scope, right.Anchor.Scope, null,
                         SemanticValue.String(PlainText(left)), SemanticValue.String(PlainText(right)));
                 }
+                CompareAtomicTokenFormats(left, right, part);
                 CompareRunFormats(left, right, part);
                 return;
             }
 
             var leftTokens = IrDiffTokenizer.Tokenize(left, _settings);
             var rightTokens = IrDiffTokenizer.Tokenize(right, _settings);
-            bool textIsEqual = string.Equals(PlainText(left), PlainText(right), StringComparison.Ordinal);
+            bool needsCharacterFormatComparison = visibleTextIsEqual
+                && tokenDiff.Ops.Any(tokenOp =>
+                    tokenOp.Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete
+                    && (HasOrdinaryToken(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd)
+                        || HasOrdinaryToken(rightTokens, tokenOp.RightStart, tokenOp.RightEnd)));
+            EmitTokenDiff(
+                leftTokens,
+                rightTokens,
+                tokenDiff,
+                part,
+                "paragraph.tokens",
+                left.Anchor.ToString(),
+                right.Anchor.ToString(),
+                left.Anchor.Scope,
+                right.Anchor.Scope,
+                emitFormatChanges: !needsCharacterFormatComparison);
+            if (needsCharacterFormatComparison)
+                CompareRunFormats(left, right, part);
+        }
+
+        private void ProjectSplitMergeTokenChanges(
+            IrEditOp op,
+            string part,
+            string? leftScope,
+            string? rightScope)
+        {
+            if (op.SplitMergeAnchors is null || op.SegmentDiffs is null
+                || op.SplitMergeAnchors.Count != op.SegmentDiffs.Count)
+                return;
+
+            if (op.Kind == IrEditOpKind.SplitBlock)
+            {
+                if (Find(_left, op.LeftAnchor) is not IrParagraph left) return;
+                var leftTokens = IrDiffTokenizer.Tokenize(left, _settings);
+                int leftOffset = 0;
+                for (int index = 0; index < op.SegmentDiffs.Count; index++)
+                {
+                    if (Find(_right, op.SplitMergeAnchors[index]) is not IrParagraph right) return;
+                    var diff = op.SegmentDiffs[index];
+                    int leftLength = diff.Ops.Sum(item => item.LeftLength);
+                    if (leftLength < 0 || leftOffset > leftTokens.Count - leftLength) return;
+                    var leftSlice = leftTokens.Skip(leftOffset).Take(leftLength).ToArray();
+                    var rightTokens = IrDiffTokenizer.Tokenize(right, _settings);
+                    EmitTokenDiff(leftSlice, rightTokens, diff, part,
+                        $"paragraph.split.segment[{index}].tokens",
+                        left.Anchor.ToString(), right.Anchor.ToString(),
+                        left.Anchor.Scope ?? leftScope, right.Anchor.Scope ?? rightScope);
+                    leftOffset += leftLength;
+                }
+                return;
+            }
+
+            if (op.Kind != IrEditOpKind.MergeBlock
+                || Find(_right, op.RightAnchor) is not IrParagraph merged)
+                return;
+            var mergedTokens = IrDiffTokenizer.Tokenize(merged, _settings);
+            int rightOffset = 0;
+            for (int index = 0; index < op.SegmentDiffs.Count; index++)
+            {
+                if (Find(_left, op.SplitMergeAnchors[index]) is not IrParagraph left) return;
+                var diff = op.SegmentDiffs[index];
+                int rightLength = diff.Ops.Sum(item => item.RightLength);
+                if (rightLength < 0 || rightOffset > mergedTokens.Count - rightLength) return;
+                var leftTokens = IrDiffTokenizer.Tokenize(left, _settings);
+                var rightSlice = mergedTokens.Skip(rightOffset).Take(rightLength).ToArray();
+                EmitTokenDiff(leftTokens, rightSlice, diff, part,
+                    $"paragraph.merge.segment[{index}].tokens",
+                    left.Anchor.ToString(), merged.Anchor.ToString(),
+                    left.Anchor.Scope ?? leftScope, merged.Anchor.Scope ?? rightScope);
+                rightOffset += rightLength;
+            }
+        }
+
+        private void EmitTokenDiff(
+            IReadOnlyList<IrDiffToken> leftTokens,
+            IReadOnlyList<IrDiffToken> rightTokens,
+            IrTokenDiff tokenDiff,
+            string part,
+            string path,
+            string? leftAnchor,
+            string? rightAnchor,
+            string? leftScope,
+            string? rightScope,
+            bool emitFormatChanges = true)
+        {
+            bool textIsEqual = string.Equals(
+                string.Concat(leftTokens.Select(token => token.Text)),
+                string.Concat(rightTokens.Select(token => token.Text)),
+                StringComparison.Ordinal);
             foreach (var tokenOp in tokenDiff.Ops)
             {
                 if (tokenOp.Kind == IrTokenOpKind.Equal) continue;
                 if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
                 {
-                    Add(SemanticChangeOperation.Modify, SemanticChangeFamily.RunFormatting, part,
-                        $"paragraph.tokens[{tokenOp.LeftStart}:{tokenOp.LeftEnd}]", left.Anchor.ToString(),
-                        right.Anchor.ToString(), left.Anchor.Scope, right.Anchor.Scope, null,
-                        TokenFormatValue(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd),
-                        TokenFormatValue(rightTokens, tokenOp.RightStart, tokenOp.RightEnd));
+                    if (emitFormatChanges)
+                    {
+                        Add(SemanticChangeOperation.Modify, SemanticChangeFamily.RunFormatting, part,
+                            $"{path}[{tokenOp.LeftStart}:{tokenOp.LeftEnd}]", leftAnchor,
+                            rightAnchor, leftScope, rightScope, null,
+                            TokenFormatValue(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd),
+                            TokenFormatValue(rightTokens, tokenOp.RightStart, tokenOp.RightEnd));
+                    }
                     continue;
                 }
 
                 // Relationship or structural-carrier edits can make the token differ report a
                 // delete+insert even though the user-visible text is unchanged. The corresponding
                 // hyperlink/field/content-control family records the real semantic change.
-                if (textIsEqual) continue;
+                // Zero-width atomic tokens are different: break kinds, note references, images,
+                // and opaque carriers have no PlainText but are semantic content in their own right.
+                if (textIsEqual
+                    && !HasAtomicToken(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd)
+                    && !HasAtomicToken(rightTokens, tokenOp.RightStart, tokenOp.RightEnd))
+                    continue;
 
                 var operation = tokenOp.Kind == IrTokenOpKind.Insert
                     ? SemanticChangeOperation.Insert
                     : SemanticChangeOperation.Delete;
                 Add(operation, SemanticChangeFamily.Text, part,
-                    $"paragraph.tokens[{tokenOp.LeftStart}:{tokenOp.LeftEnd}|{tokenOp.RightStart}:{tokenOp.RightEnd}]",
-                    left.Anchor.ToString(), right.Anchor.ToString(), left.Anchor.Scope, right.Anchor.Scope, null,
+                    $"{path}[{tokenOp.LeftStart}:{tokenOp.LeftEnd}|{tokenOp.RightStart}:{tokenOp.RightEnd}]",
+                    leftAnchor, rightAnchor, leftScope, rightScope, null,
                     tokenOp.Kind == IrTokenOpKind.Insert
                         ? SemanticValue.Absent
                         : TokenTextValue(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd),
@@ -633,22 +785,116 @@ internal static class SemanticDiffEngine
             }
         }
 
+        private static bool HasAtomicToken(
+            IReadOnlyList<IrDiffToken> tokens,
+            int start,
+            int end) => tokens.Skip(start).Take(end - start)
+                .Any(token => token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator));
+
+        private static bool HasOrdinaryToken(
+            IReadOnlyList<IrDiffToken> tokens,
+            int start,
+            int end) => tokens.Skip(start).Take(end - start)
+                .Any(token => token.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator);
+
+        private void CompareAtomicTokenFormats(IrParagraph left, IrParagraph right, string part)
+        {
+            var leftTokens = IrDiffTokenizer.Tokenize(left, _settings);
+            var rightTokens = IrDiffTokenizer.Tokenize(right, _settings);
+            var diff = IrTokenDiffer.Diff(leftTokens, rightTokens, _settings);
+            foreach (var op in diff.Ops.Where(item => item.Kind == IrTokenOpKind.FormatChanged))
+            {
+                for (int offset = 0; offset < op.LeftLength; offset++)
+                {
+                    int leftIndex = op.LeftStart + offset;
+                    int rightIndex = op.RightStart + offset;
+                    var leftToken = leftTokens[leftIndex];
+                    var rightToken = rightTokens[rightIndex];
+                    if (leftToken.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator
+                        || rightToken.Kind is IrDiffTokenKind.Word or IrDiffTokenKind.Separator)
+                        continue;
+
+                    Add(SemanticChangeOperation.Modify, SemanticChangeFamily.RunFormatting, part,
+                        $"paragraph.atomic_tokens[{leftIndex}:{rightIndex}].format",
+                        left.Anchor.ToString(), right.Anchor.ToString(),
+                        left.Anchor.Scope, right.Anchor.Scope, null,
+                        RunFormatValue(leftToken.Format), RunFormatValue(rightToken.Format));
+                }
+            }
+        }
+
         private void CompareRunFormats(IrParagraph left, IrParagraph right, string part)
         {
             var leftRuns = FlattenInlines(left.Inlines).OfType<IrTextRun>().ToArray();
             var rightRuns = FlattenInlines(right.Inlines).OfType<IrTextRun>().ToArray();
-            int common = Math.Min(leftRuns.Length, rightRuns.Length);
-            for (int index = 0; index < common; index++)
+            if (!string.Equals(
+                    string.Concat(leftRuns.Select(run => run.Text)),
+                    string.Concat(rightRuns.Select(run => run.Text)),
+                    StringComparison.Ordinal))
+                return;
+
+            var leftSpans = RunFormatSpans(leftRuns);
+            var rightSpans = RunFormatSpans(rightRuns);
+            int leftIndex = 0;
+            int rightIndex = 0;
+            var deltas = new List<RunFormatDelta>();
+            while (leftIndex < leftSpans.Count && rightIndex < rightSpans.Count)
             {
-                if (leftRuns[index].Text == rightRuns[index].Text
-                    && leftRuns[index].Format != rightRuns[index].Format)
+                var leftSpan = leftSpans[leftIndex];
+                var rightSpan = rightSpans[rightIndex];
+                int start = Math.Max(leftSpan.Start, rightSpan.Start);
+                int end = Math.Min(leftSpan.End, rightSpan.End);
+                if (start < end && !IrModeledFormat.RunFormatEqual(
+                        leftSpan.Format, rightSpan.Format, _settings.FormatComparison))
                 {
-                    Add(SemanticChangeOperation.Modify, SemanticChangeFamily.RunFormatting, part,
-                        $"paragraph.run[{index}].format", left.Anchor.ToString(), right.Anchor.ToString(),
-                        left.Anchor.Scope, right.Anchor.Scope, null,
-                        RunFormatValue(leftRuns[index].Format), RunFormatValue(rightRuns[index].Format));
+                    var delta = new RunFormatDelta(start, end, leftSpan.Format, rightSpan.Format);
+                    if (deltas.Count > 0
+                        && deltas[^1].End == delta.Start
+                        && deltas[^1].Before == delta.Before
+                        && deltas[^1].After == delta.After)
+                    {
+                        deltas[^1] = deltas[^1] with { End = delta.End };
+                    }
+                    else
+                    {
+                        deltas.Add(delta);
+                    }
                 }
+
+                if (leftSpan.End == end) leftIndex++;
+                if (rightSpan.End == end) rightIndex++;
             }
+
+            foreach (var delta in deltas)
+            {
+                Add(SemanticChangeOperation.Modify, SemanticChangeFamily.RunFormatting, part,
+                    $"paragraph.characters[{delta.Start}:{delta.End}].format",
+                    left.Anchor.ToString(), right.Anchor.ToString(),
+                    left.Anchor.Scope, right.Anchor.Scope, null,
+                    RunFormatValue(delta.Before), RunFormatValue(delta.After));
+            }
+        }
+
+        private static IReadOnlyList<RunFormatSpan> RunFormatSpans(
+            IReadOnlyList<IrTextRun> runs)
+        {
+            var spans = new List<RunFormatSpan>();
+            int offset = 0;
+            foreach (var run in runs)
+            {
+                int end = offset + run.Text.Length;
+                if (offset < end)
+                {
+                    if (spans.Count > 0
+                        && spans[^1].End == offset
+                        && spans[^1].Format == run.Format)
+                        spans[^1] = spans[^1] with { End = end };
+                    else
+                        spans.Add(new RunFormatSpan(offset, end, run.Format));
+                }
+                offset = end;
+            }
+            return spans;
         }
 
         private void CompareInlineFeatures(IrParagraph left, IrParagraph right, string part)
@@ -660,25 +906,14 @@ internal static class SemanticDiffEngine
             var unmatchedLeft = new HashSet<int>(Enumerable.Range(0, leftFeatures.Length));
             var unmatchedRight = new HashSet<int>(Enumerable.Range(0, rightFeatures.Length));
 
-            // Preserve an ordered exact-match spine. A feature inserted at the front therefore
-            // produces one insertion instead of modifying every following hyperlink/image/field.
-            var rightPositions = Enumerable.Range(0, rightKeys.Length)
-                .GroupBy(index => rightKeys[index], StringComparer.Ordinal)
-                .ToDictionary(
-                    group => group.Key,
-                    group => new SortedSet<int>(group),
-                    StringComparer.Ordinal);
-            int nextRight = 0;
-            for (int leftIndex = 0; leftIndex < leftKeys.Length; leftIndex++)
+            // Preserve a longest ordered exact-match spine. A greedy first match can badly
+            // misattribute a rotation (A,B,C -> B,C,A) as movement of B and C instead of A.
+            // The bounded LCS gives the minimal residue for ordinary paragraphs; exceptionally
+            // feature-dense inputs use the deterministic linear-memory greedy fallback below.
+            foreach (var (leftIndex, rightIndex) in ExactFeatureSpine(leftKeys, rightKeys))
             {
-                if (!rightPositions.TryGetValue(leftKeys[leftIndex], out var candidates)) continue;
-                var tail = candidates.GetViewBetween(nextRight, int.MaxValue);
-                if (tail.Count == 0) continue;
-                int rightIndex = tail.Min;
-                candidates.Remove(rightIndex);
                 unmatchedLeft.Remove(leftIndex);
                 unmatchedRight.Remove(rightIndex);
-                nextRight = rightIndex + 1;
             }
 
             foreach (var family in leftFeatures.Select(feature => feature.Family)
@@ -727,6 +962,75 @@ internal static class SemanticDiffEngine
             foreach (int index in unmatchedRight.OrderBy(index => index))
                 EmitInlineFeature(SemanticChangeOperation.Insert, rightFeatures[index], index,
                     left, right, part);
+        }
+
+        private static IReadOnlyList<(int Left, int Right)> ExactFeatureSpine(
+            IReadOnlyList<string> left,
+            IReadOnlyList<string> right)
+        {
+            const long cellLimit = 1_000_000;
+            if ((long)left.Count * right.Count > cellLimit)
+                return GreedyFeatureSpine(left, right);
+
+            var lengths = new int[left.Count + 1, right.Count + 1];
+            for (int leftIndex = left.Count - 1; leftIndex >= 0; leftIndex--)
+            {
+                for (int rightIndex = right.Count - 1; rightIndex >= 0; rightIndex--)
+                {
+                    lengths[leftIndex, rightIndex] = string.Equals(
+                        left[leftIndex], right[rightIndex], StringComparison.Ordinal)
+                        ? lengths[leftIndex + 1, rightIndex + 1] + 1
+                        : Math.Max(
+                            lengths[leftIndex + 1, rightIndex],
+                            lengths[leftIndex, rightIndex + 1]);
+                }
+            }
+
+            var result = new List<(int Left, int Right)>();
+            int li = 0;
+            int ri = 0;
+            while (li < left.Count && ri < right.Count)
+            {
+                if (string.Equals(left[li], right[ri], StringComparison.Ordinal)
+                    && lengths[li, ri] == lengths[li + 1, ri + 1] + 1)
+                {
+                    result.Add((li++, ri++));
+                }
+                else if (lengths[li + 1, ri] >= lengths[li, ri + 1])
+                {
+                    li++;
+                }
+                else
+                {
+                    ri++;
+                }
+            }
+            return result;
+        }
+
+        private static IReadOnlyList<(int Left, int Right)> GreedyFeatureSpine(
+            IReadOnlyList<string> left,
+            IReadOnlyList<string> right)
+        {
+            var rightPositions = Enumerable.Range(0, right.Count)
+                .GroupBy(index => right[index], StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new SortedSet<int>(group),
+                    StringComparer.Ordinal);
+            var result = new List<(int Left, int Right)>();
+            int nextRight = 0;
+            for (int leftIndex = 0; leftIndex < left.Count; leftIndex++)
+            {
+                if (!rightPositions.TryGetValue(left[leftIndex], out var candidates)) continue;
+                var tail = candidates.GetViewBetween(nextRight, int.MaxValue);
+                if (tail.Count == 0) continue;
+                int rightIndex = tail.Min;
+                candidates.Remove(rightIndex);
+                result.Add((leftIndex, rightIndex));
+                nextRight = rightIndex + 1;
+            }
+            return result;
         }
 
         private void EmitInlineFeature(
@@ -926,9 +1230,12 @@ internal static class SemanticDiffEngine
             if (Equals(left, right)) return;
             var beforeSection = SectionValue(left);
             var afterSection = SectionValue(right);
+            var operation = left is null ? SemanticChangeOperation.Insert
+                : right is null ? SemanticChangeOperation.Delete
+                : SemanticChangeOperation.Modify;
             if (ValueKey(beforeSection) != ValueKey(afterSection))
             {
-                Add(SemanticChangeOperation.Modify, SemanticChangeFamily.Section, part,
+                Add(operation, SemanticChangeFamily.Section, part,
                     "section", leftAnchor, rightAnchor, leftScope, rightScope, null,
                     beforeSection, afterSection);
             }
@@ -936,7 +1243,7 @@ internal static class SemanticDiffEngine
             var afterPage = PageSetupValue(right);
             if (ValueKey(beforePage) != ValueKey(afterPage))
             {
-                Add(SemanticChangeOperation.Modify, SemanticChangeFamily.PageSetup, part,
+                Add(operation, SemanticChangeFamily.PageSetup, part,
                     "section.page_setup", leftAnchor, rightAnchor, leftScope, rightScope, null,
                     beforePage, afterPage);
             }
@@ -944,6 +1251,9 @@ internal static class SemanticDiffEngine
 
         private void CompareStyles()
         {
+            var part = _right.Styles.PartUri?.ToString()
+                ?? _left.Styles.PartUri?.ToString()
+                ?? "/word/styles.xml";
             var ids = _left.Styles.Styles.Keys
                 .Concat(_right.Styles.Styles.Keys)
                 .Distinct(StringComparer.Ordinal)
@@ -955,13 +1265,16 @@ internal static class SemanticDiffEngine
                 var before = StyleValue(left);
                 var after = StyleValue(right);
                 if (ValueKey(before) == ValueKey(after)) continue;
-                Add(Operation(left, right), SemanticChangeFamily.Style, "/word/styles.xml",
+                Add(Operation(left, right), SemanticChangeFamily.Style, part,
                     $"style[{id}]", null, null, null, null, null, before, after);
             }
         }
 
         private void CompareNumbering()
         {
+            var part = _right.Numbering.PartUri?.ToString()
+                ?? _left.Numbering.PartUri?.ToString()
+                ?? "/word/numbering.xml";
             var numIds = _left.Numbering.Nums.Keys.Concat(_right.Numbering.Nums.Keys)
                 .Distinct().OrderBy(id => id);
             foreach (var id in numIds)
@@ -971,7 +1284,7 @@ internal static class SemanticDiffEngine
                 var before = NumValue(left);
                 var after = NumValue(right);
                 if (ValueKey(before) == ValueKey(after)) continue;
-                Add(Operation(left, right), SemanticChangeFamily.Numbering, "/word/numbering.xml",
+                Add(Operation(left, right), SemanticChangeFamily.Numbering, part,
                     $"numbering.instance[{id}]", null, null, null, null, null, before, after);
             }
             var abstractIds = _left.Numbering.AbstractNums.Keys.Concat(_right.Numbering.AbstractNums.Keys)
@@ -983,7 +1296,7 @@ internal static class SemanticDiffEngine
                 var before = AbstractNumValue(left);
                 var after = AbstractNumValue(right);
                 if (ValueKey(before) == ValueKey(after)) continue;
-                Add(Operation(left, right), SemanticChangeFamily.Numbering, "/word/numbering.xml",
+                Add(Operation(left, right), SemanticChangeFamily.Numbering, part,
                     $"numbering.abstract[{id}]", null, null, null, null, null, before, after);
             }
         }
@@ -1019,6 +1332,32 @@ internal static class SemanticDiffEngine
                         lp is null ? SemanticValue.Absent : ListValue(lp),
                         rp is null ? SemanticValue.Absent : ListValue(rp));
                 }
+                if (lp is not null)
+                {
+                    foreach (var span in RunFormatSpans(
+                        FlattenInlines(lp.Inlines).OfType<IrTextRun>().ToArray()))
+                    {
+                        Add(SemanticChangeOperation.Delete, SemanticChangeFamily.RunFormatting,
+                            part, $"paragraph.characters[{span.Start}:{span.End}].format",
+                            lp.Anchor.ToString(), null, lp.Anchor.Scope, null, null,
+                            RunFormatValue(span.Format), SemanticValue.Absent);
+                    }
+                }
+                if (rp is not null)
+                {
+                    foreach (var span in RunFormatSpans(
+                        FlattenInlines(rp.Inlines).OfType<IrTextRun>().ToArray()))
+                    {
+                        Add(SemanticChangeOperation.Insert, SemanticChangeFamily.RunFormatting,
+                            part, $"paragraph.characters[{span.Start}:{span.End}].format",
+                            null, rp.Anchor.ToString(), null, rp.Anchor.Scope, null,
+                            SemanticValue.Absent, RunFormatValue(span.Format));
+                    }
+                }
+                if (lp?.InlineSectionFormat is not null || rp?.InlineSectionFormat is not null)
+                    CompareSection(lp?.InlineSectionFormat, rp?.InlineSectionFormat, part,
+                        lp?.Anchor.ToString(), rp?.Anchor.ToString(),
+                        lp?.Anchor.Scope ?? leftScope, rp?.Anchor.Scope ?? rightScope);
                 var leftFeatures = lp is null ? Array.Empty<InlineFeature>() : InlineFeatures(lp.Inlines).ToArray();
                 var rightFeatures = rp is null ? Array.Empty<InlineFeature>() : InlineFeatures(rp.Inlines).ToArray();
                 foreach (var feature in leftFeatures)
@@ -1029,6 +1368,18 @@ internal static class SemanticDiffEngine
                     Add(SemanticChangeOperation.Insert, feature.Family, part, $"paragraph.{feature.Path}",
                         null, rp?.Anchor.ToString(), null, rp?.Anchor.Scope, null,
                         SemanticValue.Absent, feature.Value);
+                return;
+            }
+
+            if (left is IrOpaqueBlock || right is IrOpaqueBlock)
+            {
+                var opaqueLeft = left as IrOpaqueBlock;
+                var opaqueRight = right as IrOpaqueBlock;
+                Add(Operation(opaqueLeft, opaqueRight), SemanticChangeFamily.OpaquePackagePart,
+                    part, "block.opaque", opaqueLeft?.Anchor.ToString(),
+                    opaqueRight?.Anchor.ToString(), opaqueLeft?.Anchor.Scope ?? leftScope,
+                    opaqueRight?.Anchor.Scope ?? rightScope, null,
+                    BlockValue(opaqueLeft), BlockValue(opaqueRight));
                 return;
             }
 
@@ -1152,15 +1503,38 @@ internal static class SemanticDiffEngine
             string? rightScope,
             string? moveId,
             SemanticValue before,
-            SemanticValue after) => _changes.Add(new SemanticChangeDraft(
+            SemanticValue after)
+        {
+            // Some edit-script entries exist only to reconcile transient identifiers or renderer
+            // topology. They are useful to the redline pipeline, but they are not semantic Modify
+            // records when their canonical values are identical. Callers still project nested ops.
+            if (operation == SemanticChangeOperation.Modify && SemanticValuesEqual(before, after))
+                return;
+
+            _changes.Add(new SemanticChangeDraft(
                 operation, family, NormalizePartUri(partUri), path,
                 leftAnchor, rightAnchor, leftScope, rightScope, moveId, before, after));
+        }
 
         private static IrBlock? Find(IrDocument document, string? anchor) =>
             anchor is not null && document.AnchorIndex.TryGetValue(anchor, out var block) ? block : null;
 
         private static IrRow? FindRow(IrTable table, string? anchor) =>
             anchor is null ? null : table.Rows.FirstOrDefault(row => row.Anchor.ToString() == anchor);
+
+        private static IrHeaderFooter? FindStory(
+            IrDocument document,
+            bool isHeader,
+            Uri? partUri,
+            string? scopeName)
+        {
+            if (partUri is null) return null;
+            var stories = isHeader ? document.Headers : document.Footers;
+            return stories.FirstOrDefault(story =>
+                    story.Scope.PartUri == partUri
+                    && (scopeName is null || story.ScopeName == scopeName))
+                ?? stories.FirstOrDefault(story => story.Scope.PartUri == partUri);
+        }
 
         private static SemanticChangeOperation NoteOperation(IrScope? left, IrScope? right) =>
             Operation(left, right);
@@ -1170,6 +1544,14 @@ internal static class SemanticDiffEngine
             : story.RightPartUri is null ? SemanticChangeOperation.Delete
             : SemanticChangeOperation.Modify;
     }
+
+    private sealed record RunFormatSpan(int Start, int End, IrRunFormat Format);
+
+    private sealed record RunFormatDelta(
+        int Start,
+        int End,
+        IrRunFormat Before,
+        IrRunFormat After);
 
     private sealed record InlineFeature(
         SemanticChangeFamily Family,
@@ -1271,18 +1653,15 @@ internal static class SemanticDiffEngine
             ("partUri", SemanticValue.String(scope.PartUri?.ToString())),
             ("blocks", SemanticValue.Array(scope.Blocks.Select(BlockValue))));
 
-    private static SemanticValue StoryValue(
-        Uri? partUri,
-        string? scope,
-        IReadOnlyList<IrHeaderFooterBinding>? bindings) => partUri is null && scope is null
-            ? SemanticValue.Absent
-            : Obj(
-                ("partUri", SemanticValue.String(partUri?.ToString())),
-                ("scope", SemanticValue.String(scope)),
-                ("bindings", SemanticValue.Array((bindings ?? Array.Empty<IrHeaderFooterBinding>())
-                    .Select(binding => Obj(
-                        ("sectionIndex", SemanticValue.Integer(binding.SectionIndex)),
-                        ("kind", SemanticValue.String(binding.Kind.ToString().ToLowerInvariant())))))));
+    private static SemanticValue StoryValue(IrHeaderFooter? story) => story is null
+        ? SemanticValue.Absent
+        : Obj(
+            ("partUri", SemanticValue.String(story.Scope.PartUri?.ToString())),
+            ("scope", SemanticValue.String(story.ScopeName)),
+            ("blocks", SemanticValue.Array(story.Scope.Blocks.Select(BlockValue))),
+            ("bindings", SemanticValue.Array(story.References.Select(binding => Obj(
+                ("sectionIndex", SemanticValue.Integer(binding.SectionIndex)),
+                ("kind", SemanticValue.String(binding.Kind.ToString().ToLowerInvariant())))))));
 
     private static SemanticValue RowValue(IrRow? row) => row is null
         ? SemanticValue.Absent
@@ -1360,7 +1739,12 @@ internal static class SemanticDiffEngine
             ("text", SemanticValue.String(string.Concat(tokens.Skip(start).Take(end - start)
                 .Select(token => token.Text)))),
             ("tokenKinds", SemanticValue.Array(tokens.Skip(start).Take(end - start)
-                .Select(token => SemanticValue.String(token.Kind.ToString().ToLowerInvariant())))));
+                .Select(token => SemanticValue.String(token.Kind.ToString().ToLowerInvariant())))),
+            ("atomicIdentities", SemanticValue.Array(tokens.Skip(start).Take(end - start)
+                .Where(token => token.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator))
+                .Select(token => Obj(
+                    ("kind", SemanticValue.String(token.Kind.ToString().ToLowerInvariant())),
+                    ("identity", SemanticValue.String(token.MatchKey.TrimStart('\u0001'))))))));
 
     private static SemanticValue ListValue(IrParagraph paragraph) => paragraph.List is null
         ? Obj(
@@ -1567,6 +1951,36 @@ internal static class SemanticDiffEngine
                 ? (XNode?)XElement.Parse(CanonicalXml(child), LoadOptions.PreserveWhitespace)
                 : node is XText text ? new XText(text.Value) : null))
             .ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static bool SemanticValuesEqual(SemanticValue left, SemanticValue right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.Kind != right.Kind
+            || left.StringValue != right.StringValue
+            || left.BooleanValue != right.BooleanValue
+            || left.IntegerValue != right.IntegerValue
+            || left.DigestAlgorithm != right.DigestAlgorithm
+            || left.DigestProfile != right.DigestProfile
+            || left.DigestValue != right.DigestValue
+            || left.Properties.Count != right.Properties.Count
+            || left.Items.Count != right.Items.Count)
+            return false;
+
+        for (int index = 0; index < left.Properties.Count; index++)
+        {
+            var leftProperty = left.Properties[index];
+            var rightProperty = right.Properties[index];
+            if (leftProperty.Name != rightProperty.Name
+                || !SemanticValuesEqual(leftProperty.Value, rightProperty.Value))
+                return false;
+        }
+
+        for (int index = 0; index < left.Items.Count; index++)
+            if (!SemanticValuesEqual(left.Items[index], right.Items[index]))
+                return false;
+
+        return true;
     }
 
     private static string ValueKey(SemanticValue value)

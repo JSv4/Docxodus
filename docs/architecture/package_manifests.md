@@ -175,8 +175,10 @@ A null lower-level digest means the comparison is unavailable, not unequal.
 ## Normative XML normalization
 
 Schema v1 parses with DTD processing prohibited, no external resolver, preserved comments,
-processing instructions, and whitespace, and a configured character ceiling. Its digest token
-stream applies these rules:
+processing instructions, and whitespace, a configured character ceiling, and a fixed maximum
+element depth of 256. The depth ceiling applies again at digest entry points so a caller-supplied
+tree cannot reach recursive normalization with adversarial nesting. Its digest token stream applies
+these rules:
 
 - XML declarations, BOM/encoding choice, namespace-prefix spelling *in element and attribute
   names*, and namespace-declaration placement are ignored. Namespace prefixes in the recognized

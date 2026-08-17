@@ -173,7 +173,16 @@ public static class DocxDiff
         SemanticDiff.Compare(left, right, options);
 
     /// <summary>
-    /// JSON counterpart of <see cref="GetSemanticChanges"/>. Field order, change order, and generated
+    /// Raw-byte counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// The bounded package preflight runs before either byte array is opened by the Open XML SDK.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        byte[] leftBytes, byte[] rightBytes, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(leftBytes, rightBytes, options);
+
+    /// <summary>
+    /// JSON counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// Field order, change order, and generated
     /// change ids are deterministic for semantically identical inputs.
     /// </summary>
     public static string GetSemanticChangesJson(
@@ -182,6 +191,14 @@ public static class DocxDiff
         SemanticDiffOptions? options = null,
         bool indented = true) =>
         SemanticDiff.CompareJson(left, right, options, indented);
+
+    /// <summary>JSON counterpart of the raw-byte <see cref="GetSemanticChanges(byte[],byte[],SemanticDiffOptions?)"/>.</summary>
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(leftBytes, rightBytes, options, indented);
 
     /// <summary>
     /// Consolidate the edits of N reviewers — each an independently revised copy of the SAME

@@ -604,7 +604,10 @@ export type SemanticChangeFamily =
   | "annotation"
   | "opaque_package_part";
 
-/** Closed typed value used in {@link SemanticChange.before} and `after`. */
+/**
+ * Closed typed value used in {@link SemanticChange.before} and `after`.
+ * Schema v1 integers stay within `Number.MIN_SAFE_INTEGER..Number.MAX_SAFE_INTEGER`.
+ */
 export type SemanticValue =
   | { kind: "absent" }
   | { kind: "string"; value: string }
@@ -3648,12 +3651,14 @@ export type WorkerRequestType =
   | "convertDocxToHtml"
   | "compareDocuments"
   | "compareDocumentsToHtml"
+  | "getSemanticChanges"
   | "getRevisions"
   | "getDocumentMetadata"
   | "getVersion"
   | "prepare"
   | "sessionOpen"
   | "sessionGetPackageManifest"
+  | "sessionGetSemanticChanges"
   | "sessionClose"
   | "sessionAddAnnotation"
   | "sessionRemoveAnnotation"
@@ -3722,6 +3727,14 @@ export interface WorkerCompareToHtmlRequest extends WorkerRequestBase {
   options?: CompareOptions;
 }
 
+/** Compare two packages into the stable, versioned semantic-change schema. */
+export interface WorkerGetSemanticChangesRequest extends WorkerRequestBase {
+  type: "getSemanticChanges";
+  leftBytes: Uint8Array;
+  rightBytes: Uint8Array;
+  settings?: DocxDiffSettings;
+}
+
 /**
  * Get revisions from a document request.
  */
@@ -3771,6 +3784,12 @@ export interface WorkerSessionOpenRequest extends WorkerRequestBase {
 /** Generate a manifest from the current logical checkpoint of a worker session. */
 export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
   type: "sessionGetPackageManifest";
+  handle: number;
+}
+
+/** Compare a worker session's current checkpoint with its opening package. */
+export interface WorkerSessionGetSemanticChangesRequest extends WorkerRequestBase {
+  type: "sessionGetSemanticChanges";
   handle: number;
 }
 
@@ -3835,12 +3854,14 @@ export type WorkerRequest =
   | WorkerConvertRequest
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
+  | WorkerGetSemanticChangesRequest
   | WorkerGetRevisionsRequest
   | WorkerGetDocumentMetadataRequest
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
   | WorkerSessionOpenRequest
   | WorkerSessionGetPackageManifestRequest
+  | WorkerSessionGetSemanticChangesRequest
   | WorkerSessionCloseRequest
   | WorkerSessionAddAnnotationRequest
   | WorkerSessionRemoveAnnotationRequest
@@ -3898,6 +3919,12 @@ export interface WorkerCompareToHtmlResponse extends WorkerResponseBase {
   html?: string;
 }
 
+/** Response containing the public semantic-change schema. */
+export interface WorkerGetSemanticChangesResponse extends WorkerResponseBase {
+  type: "getSemanticChanges";
+  semanticChanges?: SemanticChangeSet;
+}
+
 /**
  * Response from getRevisions request.
  */
@@ -3947,6 +3974,12 @@ export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseB
   manifest?: PackageManifest;
 }
 
+/** Response containing a session's public semantic-change schema. */
+export interface WorkerSessionGetSemanticChangesResponse extends WorkerResponseBase {
+  type: "sessionGetSemanticChanges";
+  semanticChanges?: SemanticChangeSet;
+}
+
 /**
  * Response from sessionClose request.
  */
@@ -3977,12 +4010,14 @@ export type WorkerResponse =
   | WorkerConvertResponse
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
+  | WorkerGetSemanticChangesResponse
   | WorkerGetRevisionsResponse
   | WorkerGetDocumentMetadataResponse
   | WorkerGetVersionResponse
   | WorkerPrepareResponse
   | WorkerSessionOpenResponse
   | WorkerSessionGetPackageManifestResponse
+  | WorkerSessionGetSemanticChangesResponse
   | WorkerSessionCloseResponse
   | WorkerSessionEditResponse;
 

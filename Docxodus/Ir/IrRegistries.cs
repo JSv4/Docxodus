@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Xml.Linq;
 
@@ -44,6 +45,8 @@ internal sealed record IrStyleRegistry(
     XElement? DocDefaultsPPr,
     XElement? DocDefaultsRPr)
 {
+    public Uri? PartUri { get; init; }
+
     public static readonly IrStyleRegistry Empty =
         new(new Dictionary<string, IrStyle>(), null, null, null);
 }
@@ -79,6 +82,8 @@ internal sealed record IrNumberingRegistry(
     IReadOnlyDictionary<int, IrNum> Nums,
     IReadOnlyDictionary<int, IrAbstractNum> AbstractNums)
 {
+    public Uri? PartUri { get; init; }
+
     public static readonly IrNumberingRegistry Empty =
         new(new Dictionary<int, IrNum>(), new Dictionary<int, IrAbstractNum>());
 }
@@ -89,5 +94,7 @@ internal sealed record IrNumberingRegistry(
 /// </summary>
 internal sealed record IrThemeFonts(string? MajorAscii, string? MinorAscii)
 {
+    public Uri? PartUri { get; init; }
+
     public static readonly IrThemeFonts Empty = new(null, null);
 }

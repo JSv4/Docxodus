@@ -32,15 +32,18 @@ supplement by default, and exposes its shared `PackageManifestOptions` as
 `PackageOptions`. The semantic defaults are 10,000 ZIP entries, 64 MiB of
 decompressed data per entry and per parsed XML part, 256 MiB of aggregate
 decompressed data, a 1,000:1 maximum compression ratio, and 2,048 decoded
-characters per package-part URI. Integer and byte bounds must be positive; the
+characters per canonical package URI. XML nesting is capped at 256 elements before
+recursive normalization. Integer and byte bounds must be positive; the
 ratio must also be finite. Entry
 names reject backslashes, control characters, malformed escaping, traversal, and
-case-insensitive duplicates after URI decoding. Relationship parts reject duplicate
+ASCII-case-insensitive duplicates after canonical package-URI decoding. Relationship parts reject duplicate
 relationship ids. Declared ZIP sizes provide early rejection, while per-entry and
 aggregate byte budgets are also enforced against the actual decompressed streams.
-The manifest preflight runs before revision pre-acceptance and Open XML SDK/IR
-parsing even when `IncludePackageChanges` is `false`; disabling the supplement
-does not disable validation.
+The raw-byte overloads and byte-oriented bridges run manifest preflight before
+constructing a `WmlDocument`, revision pre-acceptance, or Open XML SDK/IR parsing,
+even when `IncludePackageChanges` is `false`; disabling the supplement does not
+disable validation. The `WmlDocument` overload also preflights before semantic IR
+parsing, but the caller has necessarily opened the bytes while constructing that object.
 
 The session baseline is controlled by
 `DocxSessionSettings.CaptureInitialProjection` (default `true`). Enabling it now
@@ -55,8 +58,14 @@ Equivalent surfaces are available as:
 |---|---|---|
 | WASM bridge | `DocxDiffBridge.GetSemanticChangesJson` | `DocxSessionBridge.GetSemanticChanges` |
 | npm | `docxDiffGetSemanticChanges(left, right, settings?)` | `session.getSemanticChanges()` |
+| npm Web Worker | `worker.getSemanticChanges(left, right, settings?)` | `workerSession.getSemanticChanges()` |
 | Python | `docx_diff_get_semantic_changes(left, right, settings=None)` | `session.get_semantic_changes()` |
 | MCP | — | `docxodus_get_content` with `format: "semantic_changes"` |
+
+The byte-oriented transports accept the existing `DocxDiffSettings` comparison controls but keep
+the package supplement enabled and enforce the documented default preflight policy. Call the .NET
+API with `SemanticDiffOptions` when an application needs custom package limits or explicitly wants
+to omit the package-level supplement.
 
 The MCP form is document-wide and rejects `anchorId` instead of silently
 returning a partial schema.
@@ -86,7 +95,10 @@ The v1 family vocabulary is:
 
 Before/after data is a closed union: `absent`, `string`, `boolean`, `integer`,
 `digest`, `object`, or `array`. Object members are ordinally sorted; arrays keep
-their semantic order. Digest values separate the cryptographic algorithm from
+their semantic order. Version 1 integers are restricted to the inclusive
+ECMAScript-safe range −9,007,199,254,740,991 through 9,007,199,254,740,991 so a
+canonical value crosses .NET, Python, and JavaScript JSON clients without rounding.
+Digest values separate the cryptographic algorithm from
 the normalization domain, for example:
 
 ```json

@@ -59,6 +59,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         var left = Read(leftInspection);
         var right = Read(rightInspection);
         var result = new List<SemanticChangeDraft>();
+        CompareEntities(left.ContentTypes, right.ContentTypes, result);
         CompareEntities(left.Relationships, right.Relationships, result);
         CompareEntities(left.RelationshipBindings, right.RelationshipBindings, result);
         CompareEntities(left.Media, right.Media, result);
@@ -110,28 +111,44 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 entry.RawBytesDigest));
         }
 
-        var relationshipData = ReadRelationships(inspection.Manifest.Relationships);
+        var relationshipData = ReadRelationships(inspection.Manifest.Relationships, parts);
+
+        // Relationship bindings, bookmarks, and revisions all use the nearest deterministic Word
+        // anchor as their stable location axis. Assign those anchors before reading any of them so
+        // inserting an unrelated preceding block cannot turn unchanged package facts into moves.
+        foreach (var part in parts.Values
+            .Where(item => item.Xml?.Root is not null && IsWordStoryPart(item)))
+            UnidHelper.AssignToAllElementsDeterministic(part.Xml!.Root!);
+
         var relationshipBindings = ReadRelationshipBindings(parts, relationshipData.ByOwnerAndId);
         var bookmarks = new List<Entity>();
         var revisions = new List<Entity>();
         var annotations = new List<Entity>();
+        var storyResiduals = new List<Entity>();
         foreach (var part in parts.Values.OrderBy(item => item.Name, StringComparer.Ordinal))
         {
             if (part.Xml?.Root is null) continue;
             var partUri = PartUri(part.Name);
-            if (IsWordStoryPart(part.Name))
+            if (IsWordStoryPart(part))
             {
-                UnidHelper.AssignToAllElementsDeterministic(part.Xml.Root);
                 bookmarks.AddRange(ReadBookmarks(part, partUri));
-                revisions.AddRange(ReadRevisions(part, partUri));
+                revisions.AddRange(ReadRevisions(
+                    part, partUri, relationshipData.ByOwnerAndId));
+                var residual = StoryEnvelopeEntity(
+                    part, partUri, relationshipData.ByOwnerAndId);
+                if (residual is not null) storyResiduals.Add(residual);
+                var extensionResidual = StoryExtensionEntity(
+                    part, partUri, relationshipData.ByOwnerAndId);
+                if (extensionResidual is not null) storyResiduals.Add(extensionResidual);
             }
             if (part.Xml.Root.Name.NamespaceName == AnnotationNamespace
                 && part.Xml.Root.Name.LocalName == "annotations")
-                annotations.AddRange(ReadAnnotations(part, partUri));
+                annotations.AddRange(ReadAnnotations(
+                    part, partUri, relationshipData.ByOwnerAndId));
         }
 
         var media = parts.Values
-            .Where(part => IsMediaPart(part.Name))
+            .Where(IsMediaPart)
             .OrderBy(part => part.Name, StringComparer.Ordinal)
             .Select(part =>
             {
@@ -157,8 +174,77 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             })
             .ToArray();
 
+        // Content-type declarations are package semantics even for otherwise recognized story
+        // parts. Comparing both the resolved per-entry role and the canonical declaration set
+        // covers role/MIME changes plus unused declarations without depending on XML order.
+        var contentTypes = inspection.Manifest.Entries
+            .Where(entry =>
+            {
+                if (entry.Uri.EndsWith("/", StringComparison.Ordinal)) return false;
+                if (!parts.TryGetValue(entry.Uri.TrimStart('/'), out var part)) return false;
+                return IsWordStoryPart(part)
+                    || part.Xml?.Root?.Name is
+                        { NamespaceName: AnnotationNamespace, LocalName: "annotations" };
+            })
+            .OrderBy(entry => entry.Uri, StringComparer.Ordinal)
+            .Select(entry =>
+            {
+                var part = parts[entry.Uri.TrimStart('/')];
+                var contentType = CanonicalContentType(entry.ContentType);
+                var value = ValueObj(("contentType", SemanticValue.String(contentType)));
+                var key = "content-type:resolved:" + entry.Uri;
+                return new Entity(
+                    key,
+                    SemanticChangeFamily.OpaquePackagePart,
+                    new ChangeLocation
+                    {
+                        EntryUri = entry.Uri,
+                        PropertyPath = "package.content_type",
+                    },
+                    null,
+                    ScopeForPart(part),
+                    value,
+                    ValueFingerprint(value),
+                    entry.Uri,
+                    key);
+            })
+            .Concat(inspection.Manifest.ContentTypes
+                .Where(declaration => !ContentTypeDeclarationIsUsed(
+                    declaration, inspection.Manifest.Entries))
+                .OrderBy(declaration => declaration.Kind, StringComparer.Ordinal)
+                .ThenBy(declaration => declaration.Key, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(declaration => declaration.ContentType, StringComparer.OrdinalIgnoreCase)
+                .Select(declaration =>
+                {
+                    var canonicalKey = declaration.Kind == "default"
+                        ? declaration.Key.ToLowerInvariant()
+                        : declaration.Key;
+                    var groupKey = string.Join(":",
+                        "content-type", "declaration", declaration.Kind, canonicalKey);
+                    var value = ValueObj(
+                        ("kind", SemanticValue.String(declaration.Kind)),
+                        ("key", SemanticValue.String(canonicalKey)),
+                        ("contentType", SemanticValue.String(
+                            CanonicalContentType(declaration.ContentType))));
+                    return new Entity(
+                        groupKey,
+                        SemanticChangeFamily.OpaquePackagePart,
+                        new ChangeLocation
+                        {
+                            EntryUri = "/[Content_Types].xml",
+                            PropertyPath = $"package.content_type.declaration[{declaration.Kind}:{canonicalKey}]",
+                        },
+                        null,
+                        null,
+                        value,
+                        ValueFingerprint(value),
+                        groupKey,
+                        groupKey);
+                }))
+            .ToArray();
+
         var registryParts = parts.Values
-            .Where(part => IsRegistryPart(part.Name))
+            .Where(IsRegistryPart)
             .OrderBy(part => part.Name, StringComparer.Ordinal)
             .Select(part => RegistryEntity(part, relationshipData.ByOwnerAndId))
             .ToArray();
@@ -209,9 +295,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     value,
                     ValueFingerprint(identity));
             })
+            .Concat(storyResiduals)
             .ToArray();
 
         return new PackageSnapshot(
+            contentTypes,
             relationshipData.Inventory.ToArray(),
             relationshipBindings,
             media,
@@ -223,7 +311,8 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
     }
 
     private static RelationshipReadResult ReadRelationships(
-        IReadOnlyList<PackageRelationship> relationships)
+        IReadOnlyList<PackageRelationship> relationships,
+        IReadOnlyDictionary<string, Part> parts)
     {
         var entities = new List<Entity>();
         var definitions = new Dictionary<(string Owner, string Id), RelationshipInfo>();
@@ -247,6 +336,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     $"Valid manifest repeats relationship '{relationship.Id}' for " +
                     $"'{relationship.OwnerUri}'.");
             var fingerprint = RelationshipFingerprint(info);
+            parts.TryGetValue(relationship.OwnerUri.TrimStart('/'), out var ownerPart);
             entities.Add(new Entity(
                 $"relationship:{relationship.OwnerUri}:{relationship.Id}",
                 SemanticChangeFamily.Relationship,
@@ -259,7 +349,9 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     PropertyPath = "relationship",
                 },
                 null,
-                ScopeForPart(relationship.OwnerUri),
+                ownerPart is null
+                    ? ScopeForPart(relationship.OwnerUri)
+                    : ScopeForPart(ownerPart),
                 RelationshipValue(info),
                 fingerprint));
         }
@@ -283,10 +375,17 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 .Where(IsOfficeRelationshipAttribute))
             {
                 var element = attribute.Parent!;
-                var elementPath = ElementPath(root, element);
+                var anchorElement = NearestAnchorElement(element);
+                var elementPath = anchorElement is null
+                    ? ElementPath(root, element)
+                    : RelativeElementPath(anchorElement, element);
                 var attributeName = ExpandedName(attribute.Name);
-                var key = $"relationship-binding:{owner}:{elementPath}:{attributeName}";
-                var anchor = NearestAnchor(element, part.Name);
+                var anchor = AnchorFor(anchorElement, part);
+                var locationKey = string.Join("\u001f",
+                    anchor ?? ScopeForPart(part) ?? owner,
+                    elementPath,
+                    attributeName);
+                var key = $"relationship-binding:{owner}:{locationKey}";
                 RelationshipInfo? relationship = null;
                 definitions.TryGetValue((owner, attribute.Value), out relationship);
                 var value = relationship is null
@@ -312,10 +411,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                         PropertyPath = $"relationship.binding[{elementPath}]",
                     },
                     anchor,
-                    ScopeForPart(owner),
+                    ScopeForPart(part),
                     value,
                     ValueFingerprint(value),
-                    key));
+                    locationKey,
+                    "relationship.binding:" + attributeName));
             }
         }
         return entities;
@@ -343,8 +443,8 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         var endsById = root.Descendants()
             .Where(element => element.Name.LocalName == "bookmarkEnd"
                 && IsWordNamespace(element.Name.NamespaceName))
-            .Where(element => Attr(element, "id") is not null)
-            .GroupBy(element => Attr(element, "id")!, StringComparer.Ordinal)
+            .Where(element => WordAttr(element, "id") is not null)
+            .GroupBy(element => WordAttr(element, "id")!, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
                 group => new Queue<XElement>(group),
@@ -353,35 +453,41 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             .Where(element => element.Name.LocalName == "bookmarkStart"
                 && IsWordNamespace(element.Name.NamespaceName))
             .ToArray();
-        var grouped = starts.GroupBy(element => Attr(element, "name") ?? string.Empty)
+        var grouped = starts.GroupBy(element => WordAttr(element, "name") ?? string.Empty)
             .OrderBy(group => group.Key, StringComparer.Ordinal);
         foreach (var group in grouped)
         {
             int ordinal = 0;
             foreach (var bookmark in group)
             {
-                var anchor = NearestAnchor(bookmark, part.Name);
-                var name = Attr(bookmark, "name") ?? string.Empty;
-                var nativeId = Attr(bookmark, "id");
+                var anchorElement = NearestAnchorElement(bookmark);
+                var anchor = AnchorFor(anchorElement, part);
+                var name = WordAttr(bookmark, "name") ?? string.Empty;
+                var nativeId = WordAttr(bookmark, "id");
                 XElement? end = null;
                 if (nativeId is not null && endsById.TryGetValue(nativeId, out var candidates)
                     && candidates.Count > 0)
                     end = candidates.Dequeue();
-                var endAnchor = end is null ? null : NearestAnchor(end, part.Name);
-                var startPath = ElementPath(root, bookmark);
-                var endPath = end is null ? null : ElementPath(root, end);
+                var endAnchorElement = end is null ? null : NearestAnchorElement(end);
+                var endAnchor = AnchorFor(endAnchorElement, part);
+                var startPath = anchorElement is null
+                    ? ElementPath(root, bookmark)
+                    : RelativeElementPath(anchorElement, bookmark);
+                var endPath = end is null ? null
+                    : endAnchorElement is null ? ElementPath(root, end)
+                    : RelativeElementPath(endAnchorElement, end);
                 var value = ValueObj(
                     ("name", SemanticValue.String(name)),
-                    ("columnFirst", SemanticValue.Integer(ParseLong(Attr(bookmark, "colFirst")))),
-                    ("columnLast", SemanticValue.Integer(ParseLong(Attr(bookmark, "colLast")))),
+                    ("columnFirst", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colFirst")))),
+                    ("columnLast", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colLast")))),
                     ("startAnchor", SemanticValue.String(anchor)),
                     ("endAnchor", SemanticValue.String(endAnchor)),
                     ("startPath", SemanticValue.String(startPath)),
                     ("endPath", SemanticValue.String(endPath)));
                 var fingerprint = ValueFingerprint(ValueObj(
                     ("name", SemanticValue.String(name)),
-                    ("columnFirst", SemanticValue.Integer(ParseLong(Attr(bookmark, "colFirst")))),
-                    ("columnLast", SemanticValue.Integer(ParseLong(Attr(bookmark, "colLast"))))));
+                    ("columnFirst", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colFirst")))),
+                    ("columnLast", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colLast"))))));
                 yield return new Entity(
                     $"bookmark:{partUri}:{name}:{ordinal++}",
                     SemanticChangeFamily.Bookmark,
@@ -391,15 +497,19 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                         PropertyPath = "bookmark",
                     },
                     anchor,
-                    ScopeForPart(partUri),
+                    ScopeForPart(part),
                     value,
                     fingerprint,
-                    string.Join("\u001f", startPath, endPath));
+                    string.Join("\u001f", anchor, startPath, endAnchor, endPath),
+                    "bookmark");
             }
         }
     }
 
-    private static IEnumerable<Entity> ReadRevisions(Part part, string partUri)
+    private static IEnumerable<Entity> ReadRevisions(
+        Part part,
+        string partUri,
+        IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> relationships)
     {
         var root = part.Xml!.Root!;
         var revisions = root.Descendants()
@@ -410,21 +520,26 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         foreach (var revision in revisions)
         {
             var kind = revision.Name.LocalName;
-            var nativeId = Attr(revision, "id");
+            var nativeId = WordAttr(revision, "id");
             var identity = nativeId is null ? kind : kind + ":" + nativeId;
             ordinals.TryGetValue(identity, out var ordinal);
             ordinals[identity] = ordinal + 1;
-            var anchor = NearestAnchor(revision, part.Name);
-            var structuralPath = ElementPath(root, revision);
+            var anchorElement = NearestAnchorElement(revision);
+            var anchor = AnchorFor(anchorElement, part);
+            var structuralPath = anchorElement is null
+                ? ElementPath(root, revision)
+                : RelativeElementPath(anchorElement, revision);
             var normalizedRevision = XmlSemanticNormalizer.Digest(
                 revision,
                 partUri,
                 ignoreFormattingWhitespace: true,
-                includeAttribute: IncludeRevisionAttribute);
+                includeAttribute: IncludeRevisionAttribute,
+                attributeValueNormalizer: RelationshipAttributeNormalizer(
+                    partUri, relationships));
             var value = ValueObj(
                 ("kind", SemanticValue.String(kind)),
-                ("author", SemanticValue.String(Attr(revision, "author"))),
-                ("date", SemanticValue.String(Attr(revision, "date"))),
+                ("author", SemanticValue.String(WordAttr(revision, "author"))),
+                ("date", SemanticValue.String(WordAttr(revision, "date"))),
                 ("text", SemanticValue.String(string.Concat(revision.DescendantsAndSelf()
                     .Where(element => element.Name.LocalName is "t" or "delText" or "instrText" or "delInstrText")
                     .Select(element => element.Value)))),
@@ -441,37 +556,43 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     PropertyPath = "revision",
                 },
                 anchor,
-                ScopeForPart(partUri),
+                ScopeForPart(part),
                 value,
                 ValueFingerprint(value),
-                structuralPath);
+                string.Join("\u001f", anchor, structuralPath),
+                "revision:" + kind);
         }
     }
 
-    private static IEnumerable<Entity> ReadAnnotations(Part part, string partUri)
+    private static IEnumerable<Entity> ReadAnnotations(
+        Part part,
+        string partUri,
+        IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> relationships)
     {
         foreach (var annotation in part.Xml!.Root!.Elements()
             .Where(element => element.Name.NamespaceName == AnnotationNamespace
                 && element.Name.LocalName == "annotation")
-            .OrderBy(element => Attr(element, "id"), StringComparer.Ordinal))
+            .OrderBy(element => UnqualifiedAttr(element, "id"), StringComparer.Ordinal))
         {
-            var id = Attr(annotation, "id") ?? string.Empty;
+            var id = UnqualifiedAttr(annotation, "id") ?? string.Empty;
             var bookmarkName = annotation.Descendants()
                 .FirstOrDefault(element => element.Name.NamespaceName == AnnotationNamespace
                     && element.Name.LocalName == "range")?
-                .Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "bookmarkName")?.Value;
+                .Attribute("bookmarkName")?.Value;
             var normalized = XmlSemanticNormalizer.Digest(
                 annotation,
                 partUri,
                 ignoreFormattingWhitespace: false,
-                includeAttribute: ExcludeGeneratedUnid);
+                includeAttribute: ExcludeGeneratedUnid,
+                attributeValueNormalizer: RelationshipAttributeNormalizer(
+                    partUri, relationships));
             var value = ValueObj(
                 ("id", SemanticValue.String(id)),
-                ("labelId", SemanticValue.String(Attr(annotation, "labelId"))),
-                ("label", SemanticValue.String(Attr(annotation, "label"))),
-                ("color", SemanticValue.String(Attr(annotation, "color"))),
-                ("author", SemanticValue.String(Attr(annotation, "author"))),
-                ("created", SemanticValue.String(Attr(annotation, "created"))),
+                ("labelId", SemanticValue.String(UnqualifiedAttr(annotation, "labelId"))),
+                ("label", SemanticValue.String(UnqualifiedAttr(annotation, "label"))),
+                ("color", SemanticValue.String(UnqualifiedAttr(annotation, "color"))),
+                ("author", SemanticValue.String(UnqualifiedAttr(annotation, "author"))),
+                ("created", SemanticValue.String(UnqualifiedAttr(annotation, "created"))),
                 ("bookmarkName", SemanticValue.String(bookmarkName)),
                 ("normalizedDigest", SemanticValue.Digest(
                     normalized.Algorithm,
@@ -489,9 +610,245 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 null,
                 value,
                 normalized.Value,
-                $"{partUri}\u001f{id}");
+                $"{partUri}\u001f{id}",
+                "annotation");
         }
+
+        var root = part.Xml.Root!;
+        var envelope = ResidualEnvelope(root, node =>
+            node is XElement element
+            && element.Name.NamespaceName == AnnotationNamespace
+            && element.Name.LocalName == "annotation");
+        var envelopeDigest = XmlSemanticNormalizer.Digest(
+            ResidualDocument(part.Xml, root, envelope),
+            partUri,
+            ignoreFormattingWhitespace: true,
+            includeAttribute: ExcludeGeneratedUnid,
+            attributeValueNormalizer: RelationshipAttributeNormalizer(
+                partUri, relationships));
+        var envelopeValue = ValueObj(("normalizedDigest", SemanticValue.Digest(
+            envelopeDigest.Algorithm,
+            envelopeDigest.Value,
+            "docxodus-annotation-envelope-v1")));
+        yield return new Entity(
+            "annotation-envelope:" + partUri,
+            SemanticChangeFamily.Annotation,
+            new ChangeLocation
+            {
+                EntryUri = partUri,
+                PropertyPath = "annotation.registry.package",
+            },
+            null,
+            null,
+            envelopeValue,
+            envelopeDigest.Value,
+            partUri,
+            "annotation.registry.package");
     }
+
+    private static Entity? StoryEnvelopeEntity(
+        Part part,
+        string partUri,
+        IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> relationships)
+    {
+        var root = part.Xml!.Root!;
+        bool IsModeledRootChild(XNode node)
+        {
+            if (node is not XElement element) return false;
+            if (!IsWordNamespace(element.Name.NamespaceName)) return false;
+            return root.Name.LocalName switch
+            {
+                "document" => element.Name.LocalName == "body",
+                "footnotes" => element.Name.LocalName == "footnote",
+                "endnotes" => element.Name.LocalName == "endnote",
+                "comments" => element.Name.LocalName == "comment",
+                // Header/footer direct elements are all fed through the IR block reader, whose
+                // opaque block type retains extension elements.
+                "hdr" or "ftr" => true,
+                _ => false,
+            };
+        }
+
+        bool hasSemanticEnvelope = root.Attributes().Any(attribute =>
+                !attribute.IsNamespaceDeclaration && ExcludeGeneratedUnid(attribute))
+            || root.Nodes().Any(node => IsMeaningfulResidualNode(
+                node, IsModeledRootChild))
+            || part.Xml.Nodes().Any(node => node != root
+                && IsMeaningfulResidualNode(node, _ => false));
+        if (!hasSemanticEnvelope) return null;
+
+        var envelope = ResidualEnvelope(root, IsModeledRootChild);
+        var normalized = XmlSemanticNormalizer.Digest(
+            ResidualDocument(part.Xml, root, envelope),
+            partUri,
+            ignoreFormattingWhitespace: true,
+            includeAttribute: ExcludeGeneratedUnid,
+            attributeValueNormalizer: RelationshipAttributeNormalizer(
+                partUri, relationships));
+        var value = ValueObj(("normalizedDigest", SemanticValue.Digest(
+            normalized.Algorithm,
+            normalized.Value,
+            "word-story-envelope-v1")));
+        return new Entity(
+            "story-envelope:" + partUri,
+            SemanticChangeFamily.OpaquePackagePart,
+            new ChangeLocation
+            {
+                EntryUri = partUri,
+                PropertyPath = "story.envelope.package",
+            },
+            null,
+            ScopeForPart(part),
+            value,
+            normalized.Value,
+            partUri,
+            "story.envelope.package");
+    }
+
+    private static Entity? StoryExtensionEntity(
+        Part part,
+        string partUri,
+        IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> relationships)
+    {
+        var root = part.Xml!.Root!;
+        var residualNamespace = XNamespace.Get("urn:docxodus:semantic-story-residual:v1");
+        var records = new List<XElement>();
+
+        // The IR is intentionally total for unknown elements, but attributes and XML node kinds
+        // attached to otherwise modeled Word paragraphs/runs are not necessarily represented by a
+        // typed IR field. Keep only those residual facts here: hashing modeled text/properties again
+        // would create a noisy opaque change alongside every ordinary edit.
+        foreach (var element in root.Descendants())
+        {
+            var extensionAttributes = element.Attributes()
+                .Where(IsStoryExtensionAttribute)
+                .ToArray();
+            var semanticNodes = element.Nodes()
+                .Select((node, position) => (Node: node, Position: position))
+                .Where(item => item.Node is XComment or XProcessingInstruction)
+                .ToArray();
+            if (extensionAttributes.Length == 0 && semanticNodes.Length == 0) continue;
+
+            var anchorElement = NearestAnchorElement(element);
+            var anchor = AnchorFor(anchorElement, part);
+            var path = anchorElement is null
+                ? ElementPath(root, element)
+                : RelativeElementPath(anchorElement, element);
+
+            foreach (var attribute in extensionAttributes)
+            {
+                var source = new XElement(
+                    element.Name,
+                    InScopeNamespaceDeclarations(element),
+                    new XAttribute(attribute));
+                records.Add(new XElement(
+                    residualNamespace + "attribute",
+                    new XAttribute("anchor", anchor ?? ScopeForPart(part) ?? partUri),
+                    new XAttribute("path", path),
+                    new XAttribute("name", ExpandedName(attribute.Name)),
+                    source));
+            }
+
+            foreach (var (node, position) in semanticNodes)
+            {
+                records.Add(new XElement(
+                    residualNamespace + "node",
+                    new XAttribute("anchor", anchor ?? ScopeForPart(part) ?? partUri),
+                    new XAttribute("path", path),
+                    new XAttribute("ordinal", position),
+                    CloneNode(node)));
+            }
+        }
+
+        if (records.Count == 0) return null;
+        var orderedRecords = records
+            .OrderBy(record => record.Name.LocalName, StringComparer.Ordinal)
+            .ThenBy(record => (string?)record.Attribute("anchor"), StringComparer.Ordinal)
+            .ThenBy(record => (string?)record.Attribute("path"), StringComparer.Ordinal)
+            .ThenBy(record => (string?)record.Attribute("name"), StringComparer.Ordinal)
+            .ThenBy(record => (int?)record.Attribute("ordinal"))
+            .ToArray();
+        var normalized = XmlSemanticNormalizer.Digest(
+            new XDocument(new XElement(residualNamespace + "story", orderedRecords)),
+            partUri,
+            ignoreFormattingWhitespace: false,
+            includeAttribute: ExcludeGeneratedUnid,
+            attributeValueNormalizer: RelationshipAttributeNormalizer(
+                partUri, relationships));
+        var value = ValueObj(("normalizedDigest", SemanticValue.Digest(
+            normalized.Algorithm,
+            normalized.Value,
+            "word-story-extension-residual-v1")));
+        return new Entity(
+            "story-extensions:" + partUri,
+            SemanticChangeFamily.OpaquePackagePart,
+            new ChangeLocation
+            {
+                EntryUri = partUri,
+                PropertyPath = "story.extensions.package",
+            },
+            null,
+            ScopeForPart(part),
+            value,
+            normalized.Value,
+            partUri,
+            "story.extensions.package");
+    }
+
+    private static bool IsStoryExtensionAttribute(XAttribute attribute)
+    {
+        if (attribute.IsNamespaceDeclaration || !ExcludeGeneratedUnid(attribute)) return false;
+        var namespaceName = attribute.Name.NamespaceName;
+        return namespaceName.Length > 0
+            && !IsWordNamespace(namespaceName)
+            && namespaceName != OfficeRelationshipNamespace
+            && namespaceName != StrictOfficeRelationshipNamespace
+            && namespaceName != XNamespace.Xml.NamespaceName;
+    }
+
+    private static IEnumerable<XAttribute> InScopeNamespaceDeclarations(XElement element)
+    {
+        var declarations = new Dictionary<XName, string>();
+        foreach (var ancestor in element.AncestorsAndSelf().Reverse())
+        {
+            foreach (var attribute in ancestor.Attributes().Where(item => item.IsNamespaceDeclaration))
+                declarations[attribute.Name] = attribute.Value;
+        }
+        return declarations
+            .OrderBy(item => item.Key.NamespaceName, StringComparer.Ordinal)
+            .ThenBy(item => item.Key.LocalName, StringComparer.Ordinal)
+            .Select(item => new XAttribute(item.Key, item.Value));
+    }
+
+    private static XElement ResidualEnvelope(
+        XElement root,
+        Func<XNode, bool> excludeNode) => new(
+            root.Name,
+            root.Attributes().Select(attribute => new XAttribute(attribute)),
+            root.Nodes().Where(node => !excludeNode(node)).Select(CloneNode));
+
+    private static XDocument ResidualDocument(
+        XDocument source,
+        XElement sourceRoot,
+        XElement residualRoot) => new(
+            source.Nodes().Select(node => node == sourceRoot ? residualRoot : CloneNode(node)));
+
+    private static bool IsMeaningfulResidualNode(
+        XNode node,
+        Func<XNode, bool> excludeNode) => !excludeNode(node)
+            && (node is not XText text || !string.IsNullOrWhiteSpace(text.Value));
+
+    private static XNode CloneNode(XNode node) => node switch
+    {
+        XElement element => new XElement(element),
+        XComment comment => new XComment(comment.Value),
+        XProcessingInstruction instruction =>
+            new XProcessingInstruction(instruction.Target, instruction.Data),
+        XCData cdata => new XCData(cdata.Value),
+        XText text => new XText(text.Value),
+        _ => throw new InvalidDataException(
+            $"Unsupported XML node type '{node.NodeType}' in semantic residual."),
+    };
 
     private static void CompareEntities(
         IReadOnlyList<Entity> left,
@@ -643,7 +1000,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         "\u001f",
         ((int)entity.Family).ToString(System.Globalization.CultureInfo.InvariantCulture),
         entity.Location.EntryUri ?? entity.Location.OwnerUri ?? string.Empty,
-        entity.Location.PropertyPath ?? string.Empty);
+        entity.GroupKey ?? entity.Location.PropertyPath ?? string.Empty);
 
     private static bool ExcludeGeneratedUnid(XAttribute attribute) =>
         attribute.Name != PtOpenXml.Unid;
@@ -668,12 +1025,12 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         IReadOnlyDictionary<(string Owner, string Id), RelationshipInfo> relationships)
     {
         var partUri = PartUri(part.Name);
-        var family = part.Name == "word/numbering.xml"
+        var family = IsNumberingRegistryPart(part)
             ? SemanticChangeFamily.Numbering
             : SemanticChangeFamily.Style;
-        var path = part.Name == "word/numbering.xml"
+        var path = IsNumberingRegistryPart(part)
             ? "numbering.registry.package"
-            : part.Name.StartsWith("word/theme/", StringComparison.Ordinal)
+            : IsThemeRegistryPart(part)
                 ? "theme.registry.package"
                 : "style.registry.package";
         var normalized = part.Xml is null
@@ -728,29 +1085,82 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         var name = part.Name;
         if (name == "[Content_Types].xml" || name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
             return false;
-        if (IsMediaPart(name) || IsWordStoryPart(name)) return false;
-        if (IsRegistryPart(name)) return false;
+        if (IsMediaPart(part) || IsWordStoryPart(part)) return false;
+        if (IsRegistryPart(part)) return false;
         if (part.Xml?.Root?.Name is { NamespaceName: AnnotationNamespace, LocalName: "annotations" })
             return false;
         return true;
     }
 
-    private static bool IsRegistryPart(string name) =>
-        name is "word/styles.xml" or "word/numbering.xml"
-        || name.StartsWith("word/theme/", StringComparison.Ordinal);
+    private static bool IsRegistryPart(Part part)
+    {
+        var name = part.Name;
+        var contentType = ContentTypeEssence(part);
+        return name is "word/styles.xml" or "word/numbering.xml"
+            || name.StartsWith("word/theme/", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.styles+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.numbering+xml", StringComparison.Ordinal)
+            || contentType.Contains("officedocument.theme+xml", StringComparison.Ordinal);
+    }
 
-    private static bool IsWordStoryPart(string name) =>
-        name == "word/document.xml"
-        || name == "word/footnotes.xml"
-        || name == "word/endnotes.xml"
-        || name == "word/comments.xml"
-        || (name.StartsWith("word/header", StringComparison.Ordinal) && name.EndsWith(".xml", StringComparison.Ordinal))
-        || (name.StartsWith("word/footer", StringComparison.Ordinal) && name.EndsWith(".xml", StringComparison.Ordinal));
+    private static bool IsNumberingRegistryPart(Part part) =>
+        part.Name == "word/numbering.xml"
+        || ContentTypeEssence(part).Contains(
+            "wordprocessingml.numbering+xml", StringComparison.Ordinal);
 
-    private static bool IsMediaPart(string name) =>
-        name.StartsWith("media/", StringComparison.Ordinal)
-        || name.Contains("/media/", StringComparison.Ordinal)
-        || name.StartsWith("word/embeddings/", StringComparison.Ordinal);
+    private static bool IsThemeRegistryPart(Part part) =>
+        part.Name.StartsWith("word/theme/", StringComparison.Ordinal)
+        || ContentTypeEssence(part).Contains(
+            "officedocument.theme+xml", StringComparison.Ordinal);
+
+    private static bool IsWordStoryPart(Part part)
+    {
+        var name = part.Name;
+        if (name == "word/document.xml"
+            || name == "word/footnotes.xml"
+            || name == "word/endnotes.xml"
+            || name == "word/comments.xml"
+            || (name.StartsWith("word/header", StringComparison.Ordinal)
+                && name.EndsWith(".xml", StringComparison.Ordinal))
+            || (name.StartsWith("word/footer", StringComparison.Ordinal)
+                && name.EndsWith(".xml", StringComparison.Ordinal)))
+            return true;
+
+        var contentType = ContentTypeEssence(part);
+        return contentType.Contains("wordprocessingml.document.main+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.header+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.footer+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.footnotes+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.endnotes+xml", StringComparison.Ordinal)
+            || contentType.Contains("wordprocessingml.comments+xml", StringComparison.Ordinal)
+            || contentType.Contains("ms-word.document.macroenabled.main+xml", StringComparison.Ordinal)
+            || contentType.Contains("ms-word.template.macroenabledtemplate.main+xml", StringComparison.Ordinal);
+    }
+
+    private static bool IsMediaPart(Part part)
+    {
+        var contentType = ContentTypeEssence(part);
+        if (contentType.StartsWith("image/", StringComparison.Ordinal)
+            || contentType.StartsWith("audio/", StringComparison.Ordinal)
+            || contentType.StartsWith("video/", StringComparison.Ordinal))
+            return true;
+        if (IsXmlContentType(contentType)) return false;
+        var name = part.Name;
+        return name.StartsWith("media/", StringComparison.Ordinal)
+            || name.Contains("/media/", StringComparison.Ordinal)
+            || name.StartsWith("word/embeddings/", StringComparison.Ordinal);
+    }
+
+    private static string ContentTypeEssence(Part part)
+    {
+        var value = part.ContentType ?? string.Empty;
+        var semicolon = value.IndexOf(';');
+        return (semicolon < 0 ? value : value[..semicolon]).ToLowerInvariant();
+    }
+
+    private static bool IsXmlContentType(string contentType) =>
+        contentType is "application/xml" or "text/xml"
+        || contentType.EndsWith("+xml", StringComparison.Ordinal);
 
     private static bool IsWordNamespace(string value) =>
         value == WordNamespace || value == StrictWordNamespace;
@@ -770,10 +1180,27 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         return "/" + string.Join("/", segments);
     }
 
+    private static string RelativeElementPath(XElement anchor, XElement element)
+    {
+        if (anchor == element) return ".";
+        var segments = new Stack<string>();
+        XElement? current = element;
+        while (current is not null && current != anchor)
+        {
+            int ordinal = current.ElementsBeforeSelf()
+                .Count(sibling => sibling.Name == current.Name) + 1;
+            segments.Push($"{ExpandedName(current.Name)}[{ordinal}]");
+            current = current.Parent;
+        }
+        return current == anchor
+            ? "./" + string.Join("/", segments)
+            : ElementPath(anchor.Document?.Root ?? anchor, element);
+    }
+
     private static string ExpandedName(XName name) =>
         $"{{{name.NamespaceName}}}{name.LocalName}";
 
-    private static string? NearestAnchor(XElement element, string entryName)
+    private static XElement? NearestAnchorElement(XElement element)
     {
         foreach (var candidate in element.AncestorsAndSelf())
         {
@@ -790,8 +1217,44 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             if (kind is null) continue;
             var unid = (string?)candidate.Attribute(PtOpenXml.Unid);
             if (string.IsNullOrWhiteSpace(unid)) continue;
-            return $"{kind}:{ScopeForPart(PartUri(entryName))}:{unid}";
+            return candidate;
         }
+        return null;
+    }
+
+    private static string? AnchorFor(XElement? element, Part part)
+    {
+        if (element is null) return null;
+        string? kind = element.Name.LocalName switch
+        {
+            "p" => "p",
+            "tbl" => "tbl",
+            "tr" => "tr",
+            "tc" => "tc",
+            "sdt" => "sdt",
+            "sectPr" => "sec",
+            _ => null,
+        };
+        var unid = (string?)element.Attribute(PtOpenXml.Unid);
+        return kind is null || string.IsNullOrWhiteSpace(unid)
+            ? null
+            : $"{kind}:{ScopeForPart(part)}:{unid}";
+    }
+
+    private static string? ScopeForPart(Part part)
+    {
+        var pathScope = ScopeForPart(PartUri(part.Name));
+        if (pathScope is not null) return pathScope;
+        var contentType = ContentTypeEssence(part);
+        if (contentType.Contains("wordprocessingml.document.main+xml", StringComparison.Ordinal)
+            || contentType.Contains("ms-word.document.macroenabled.main+xml", StringComparison.Ordinal)
+            || contentType.Contains("ms-word.template.macroenabledtemplate.main+xml", StringComparison.Ordinal))
+            return "body";
+        if (contentType.Contains("wordprocessingml.footnotes+xml", StringComparison.Ordinal)) return "fn";
+        if (contentType.Contains("wordprocessingml.endnotes+xml", StringComparison.Ordinal)) return "en";
+        if (contentType.Contains("wordprocessingml.comments+xml", StringComparison.Ordinal)) return "cmt";
+        if (contentType.Contains("wordprocessingml.header+xml", StringComparison.Ordinal)) return "hdr";
+        if (contentType.Contains("wordprocessingml.footer+xml", StringComparison.Ordinal)) return "ftr";
         return null;
     }
 
@@ -811,8 +1274,13 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
 
     private static string Digits(string value) => new(value.Where(char.IsDigit).ToArray());
 
-    private static string? Attr(XElement element, string localName) =>
-        element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == localName)?.Value;
+    private static string? WordAttr(XElement element, string localName) =>
+        IsWordNamespace(element.Name.NamespaceName)
+            ? (string?)element.Attribute(XName.Get(localName, element.Name.NamespaceName))
+            : null;
+
+    private static string? UnqualifiedAttr(XElement element, string localName) =>
+        (string?)element.Attribute(XName.Get(localName));
 
     private static string PartUri(string entryName) =>
         entryName.StartsWith("/", StringComparison.Ordinal) ? entryName : "/" + entryName;
@@ -862,6 +1330,31 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         };
     }
 
+    private static string? CanonicalContentType(string? value)
+    {
+        if (value is null) return null;
+        // MIME type/subtype casing is insensitive, but parameter values are not generally so.
+        // Preserve the validated parameter suffix verbatim rather than hiding a meaningful value
+        // change (for example, a case-sensitive profile or boundary token).
+        int parameter = value.IndexOf(';');
+        return parameter < 0
+            ? value.ToLowerInvariant()
+            : value[..parameter].ToLowerInvariant() + value[parameter..];
+    }
+
+    private static bool ContentTypeDeclarationIsUsed(
+        PackageContentTypeDeclaration declaration,
+        IReadOnlyList<PackageManifestEntry> entries)
+    {
+        if (declaration.Kind == "override")
+            return entries.Any(entry => string.Equals(
+                entry.Uri, declaration.Key, StringComparison.OrdinalIgnoreCase));
+        return entries.Any(entry => string.Equals(
+            Path.GetExtension(entry.Uri).TrimStart('.'),
+            declaration.Key,
+            StringComparison.OrdinalIgnoreCase));
+    }
+
     private sealed record Part(
         string Name,
         XDocument? Xml,
@@ -888,9 +1381,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         string? Scope,
         SemanticValue Value,
         string Fingerprint,
-        string? LocationKey = null);
+        string? LocationKey = null,
+        string? GroupKey = null);
 
     private sealed record PackageSnapshot(
+        IReadOnlyList<Entity> ContentTypes,
         IReadOnlyList<Entity> Relationships,
         IReadOnlyList<Entity> RelationshipBindings,
         IReadOnlyList<Entity> Media,

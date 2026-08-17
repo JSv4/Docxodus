@@ -17,10 +17,12 @@ import type {
   WorkerGeneratePackageManifestRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
+  WorkerGetSemanticChangesRequest,
   WorkerGetRevisionsRequest,
   WorkerGetDocumentMetadataRequest,
   WorkerSessionOpenRequest,
   WorkerSessionGetPackageManifestRequest,
+  WorkerSessionGetSemanticChangesRequest,
   WorkerSessionCloseRequest,
   WorkerSessionAddAnnotationRequest,
   WorkerSessionRemoveAnnotationRequest,
@@ -37,6 +39,7 @@ import type {
   CommentRenderMode,
   EditResult,
   PackageManifest,
+  SemanticChangeSet,
 } from "./types.js";
 import { ComparisonEngine } from "./types.js";
 
@@ -110,7 +113,15 @@ function ensureInitialized(): DocxodusWasmExports {
  * Check if a result string is an error response.
  */
 function isErrorResponse(result: string): boolean {
-  return result.startsWith("{") && result.includes('"Error"');
+  try {
+    const parsed: unknown = JSON.parse(result);
+    return parsed !== null
+      && typeof parsed === "object"
+      && !Array.isArray(parsed)
+      && "Error" in parsed;
+  } catch {
+    return false;
+  }
 }
 
 function handleGeneratePackageManifest(
@@ -121,6 +132,23 @@ function handleGeneratePackageManifest(
       request.documentBytes
     );
     return { manifest: JSON.parse(json) as PackageManifest };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/** Compare two byte payloads without blocking the browser's main thread. */
+function handleGetSemanticChanges(
+  request: WorkerGetSemanticChangesRequest
+): { semanticChanges?: SemanticChangeSet; error?: string } {
+  try {
+    const json = ensureInitialized().DocxDiffBridge.GetSemanticChangesJson(
+      request.leftBytes,
+      request.rightBytes,
+      request.settings ? JSON.stringify(request.settings) : ""
+    );
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { semanticChanges: JSON.parse(json) as SemanticChangeSet };
   } catch (error) {
     return { error: String(error) };
   }
@@ -451,6 +479,19 @@ function handleSessionGetPackageManifest(
   }
 }
 
+/** Compare a live worker session's logical checkpoint with its opening package. */
+function handleSessionGetSemanticChanges(
+  request: WorkerSessionGetSemanticChangesRequest
+): { semanticChanges?: SemanticChangeSet; error?: string } {
+  try {
+    const json = ensureInitialized().DocxSessionBridge.GetSemanticChanges(request.handle);
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { semanticChanges: JSON.parse(json) as SemanticChangeSet };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 /**
  * Handle sessionClose request.
  */
@@ -686,6 +727,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
         break;
       }
 
+      case "getSemanticChanges": {
+        const result = handleGetSemanticChanges(
+          request as WorkerGetSemanticChangesRequest
+        );
+        response = {
+          id: request.id,
+          type: "getSemanticChanges",
+          success: !result.error,
+          semanticChanges: result.semanticChanges,
+          error: result.error,
+        };
+        break;
+      }
+
       case "getRevisions": {
         const getRevisionsRequest = request as WorkerGetRevisionsRequest;
         const result = handleGetRevisions(getRevisionsRequest);
@@ -757,6 +812,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "sessionGetPackageManifest",
           success: !result.error,
           manifest: result.manifest,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionGetSemanticChanges": {
+        const result = handleSessionGetSemanticChanges(
+          request as WorkerSessionGetSemanticChangesRequest
+        );
+        response = {
+          id: request.id,
+          type: "sessionGetSemanticChanges",
+          success: !result.error,
+          semanticChanges: result.semanticChanges,
           error: result.error,
         };
         break;

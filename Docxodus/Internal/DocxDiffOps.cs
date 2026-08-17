@@ -12,10 +12,10 @@ namespace Docxodus.Internal;
 /// <summary>
 /// Single owner of the <see cref="DocxDiff"/> wire contract. Both the WASM
 /// bridge (<c>DocxDiffBridge</c>) and the stdio Python host
-/// (<c>tools/python-host</c> dispatcher) route the three diff entry points —
-/// Compare, GetRevisions, GetEditScriptJson — through here, so the JSON shapes
-/// for settings (in) and revisions (out) live in exactly one place. This
-/// mirrors the role <see cref="HtmlConversionOps"/> plays for HTML conversion.
+/// (<c>tools/python-host</c> dispatcher) route the shared diff entry points —
+/// Compare, GetRevisions, GetEditScriptJson, and GetSemanticChangesJson — through
+/// here, so the JSON shapes for settings (in) and revisions (out) live in exactly
+/// one place. This mirrors the role <see cref="HtmlConversionOps"/> plays for HTML conversion.
 ///
 /// <para>Settings arrive as a JSON object (the transport mirror of
 /// <see cref="DocxDiffSettings"/>); every field is optional and an omitted
@@ -54,10 +54,10 @@ internal static class DocxDiffOps
     public static string GetSemanticChangesJson(
         byte[] leftBytes, byte[] rightBytes, string? settingsJson)
     {
-        var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
-        return DocxDiff.GetSemanticChangesJson(
-            left,
-            right,
+        var settings = ParseSettings(settingsJson);
+        return SemanticDiff.CompareJson(
+            leftBytes,
+            rightBytes,
             new SemanticDiffOptions { DiffSettings = settings },
             indented: false);
     }

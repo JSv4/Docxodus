@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/Open-Source-Legal/Docxodus/main/docs/schemas/semantic-changes-v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/schemas/semantic-changes-v1.schema.json",
   "title": "Docxodus semantic change set v1",
   "description": "The stable JSON representation emitted by SemanticChangeSet.ToJson().",
   "type": "object",
@@ -213,8 +213,8 @@
         },
         "value": {
           "type": "integer",
-          "minimum": -9223372036854775808,
-          "maximum": 9223372036854775807
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         }
       }
     },

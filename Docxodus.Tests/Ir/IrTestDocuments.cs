@@ -302,6 +302,75 @@ internal static class IrTestDocuments
     private const string RNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     /// <summary>
+    /// A single package containing body, header, footer, footnote, endnote, and comment scopes.
+    /// This is deliberately a mixed-part fixture: one comparison can prove that independent edits
+    /// retain their owning part and scope rather than relying on separate single-feature packages.
+    /// </summary>
+    internal static WmlDocument WithMixedReviewParts(
+        string headerText,
+        string footerText,
+        string footnoteText,
+        string endnoteText,
+        string commentText,
+        string bodyText = "Comment target")
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var headerPart = main.AddNewPart<HeaderPart>();
+            var headerId = main.GetIdOfPart(headerPart);
+            WritePartXml(headerPart,
+                $"<w:hdr xmlns:w=\"{W}\"><w:p><w:r><w:t>{Escape(headerText)}</w:t></w:r></w:p></w:hdr>");
+
+            var footerPart = main.AddNewPart<FooterPart>();
+            var footerId = main.GetIdOfPart(footerPart);
+            WritePartXml(footerPart,
+                $"<w:ftr xmlns:w=\"{W}\"><w:p><w:r><w:t>{Escape(footerText)}</w:t></w:r></w:p></w:ftr>");
+
+            var footnotesPart = main.AddNewPart<FootnotesPart>();
+            WritePartXml(footnotesPart,
+                $"<w:footnotes xmlns:w=\"{W}\">" +
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
+                $"<w:footnote w:id=\"1\"><w:p><w:r><w:t>{Escape(footnoteText)}</w:t></w:r></w:p></w:footnote>" +
+                "</w:footnotes>");
+
+            var endnotesPart = main.AddNewPart<EndnotesPart>();
+            WritePartXml(endnotesPart,
+                $"<w:endnotes xmlns:w=\"{W}\">" +
+                "<w:endnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>" +
+                "<w:endnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>" +
+                $"<w:endnote w:id=\"1\"><w:p><w:r><w:t>{Escape(endnoteText)}</w:t></w:r></w:p></w:endnote>" +
+                "</w:endnotes>");
+
+            var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+            WritePartXml(commentsPart,
+                $"<w:comments xmlns:w=\"{W}\"><w:comment w:id=\"0\" w:author=\"Reviewer\" " +
+                "w:initials=\"R\" w:date=\"2026-01-01T00:00:00Z\">" +
+                $"<w:p><w:r><w:t>{Escape(commentText)}</w:t></w:r></w:p>" +
+                "</w:comment></w:comments>");
+
+            var bodyXml =
+                $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{RNs}\"><w:body>" +
+                "<w:p><w:commentRangeStart w:id=\"0\"/>" +
+                $"<w:r><w:t>{Escape(bodyText)}</w:t></w:r>" +
+                "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>" +
+                "<w:r><w:footnoteReference w:id=\"1\"/></w:r>" +
+                "<w:r><w:endnoteReference w:id=\"1\"/></w:r></w:p>" +
+                "<w:sectPr>" +
+                $"<w:headerReference w:type=\"default\" r:id=\"{headerId}\"/>" +
+                $"<w:footerReference w:type=\"default\" r:id=\"{footerId}\"/>" +
+                "</w:sectPr></w:body></w:document>";
+            WritePartXml(main, bodyXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
     /// A document with one header part and one footer part, each holding a single text paragraph, and
     /// a body section that references both (default type). Used for header/footer scope parity tests.
     /// </summary>

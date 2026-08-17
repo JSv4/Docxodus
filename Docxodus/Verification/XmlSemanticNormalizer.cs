@@ -11,6 +11,13 @@ using System.Xml.Linq;
 
 namespace Docxodus.Verification;
 
+internal sealed class XmlDepthLimitException : XmlException
+{
+    public XmlDepthLimitException(string message) : base(message)
+    {
+    }
+}
+
 /// <summary>
 /// XML infoset normalizer used by package-manifest schema v1.
 ///
@@ -26,6 +33,11 @@ namespace Docxodus.Verification;
 /// </summary>
 internal static class XmlSemanticNormalizer
 {
+    // Recursive canonical emission must have a process-safe structural bound independent of the
+    // byte/character ceilings. 256 is far above normal OPC/OOXML nesting while keeping hostile
+    // documents comfortably below the runtime stack limit.
+    internal const int MaxElementDepth = 256;
+
     private const string ContentTypesUri = "/[Content_Types].xml";
     private const string XmlSchemaInstanceNamespace =
         "http://www.w3.org/2001/XMLSchema-instance";
@@ -50,7 +62,9 @@ internal static class XmlSemanticNormalizer
         };
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = XmlReader.Create(stream, settings);
-        return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        EnsureBoundedDepth(document);
+        return document;
     }
 
     internal static VerificationDigest Digest(
@@ -60,6 +74,7 @@ internal static class XmlSemanticNormalizer
         Func<XAttribute, bool>? includeAttribute = null,
         Func<XAttribute, string>? attributeValueNormalizer = null)
     {
+        EnsureBoundedDepth(document);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         WriteByte(hash, (byte)'D');
         // XML permits only production-S whitespace outside the document element. It is document
@@ -81,12 +96,43 @@ internal static class XmlSemanticNormalizer
         string entryUri,
         bool ignoreFormattingWhitespace,
         Func<XAttribute, bool>? includeAttribute = null,
-        Func<XAttribute, string>? attributeValueNormalizer = null) => Digest(
-            new XDocument(new XElement(element)),
-            entryUri,
-            ignoreFormattingWhitespace,
-            includeAttribute,
-            attributeValueNormalizer);
+        Func<XAttribute, string>? attributeValueNormalizer = null)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        EnsureBoundedDepth(element);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        WriteByte(hash, (byte)'D');
+        // Hash the attached element directly. Cloning it into a new XDocument discards namespace
+        // bindings inherited from ancestors, making equivalent xsi:type/mc prefix spellings differ.
+        WriteElement(hash, element, entryUri, ignoreFormattingWhitespace,
+            includeAttribute, attributeValueNormalizer,
+            isDocumentRoot: true, inheritedPreserveSpace: false);
+        return new VerificationDigest
+        {
+            Algorithm = "SHA-256",
+            Value = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(),
+        };
+    }
+
+    private static void EnsureBoundedDepth(XContainer container)
+    {
+        var pending = new Stack<(XElement Element, int Depth)>();
+        if (container is XElement element)
+            pending.Push((element, 1));
+        else
+            foreach (var root in container.Elements())
+                pending.Push((root, 1));
+
+        while (pending.Count > 0)
+        {
+            var (current, depth) = pending.Pop();
+            if (depth > MaxElementDepth)
+                throw new XmlDepthLimitException(
+                    $"XML element nesting exceeds the {MaxElementDepth} level safety limit.");
+            foreach (var child in current.Elements())
+                pending.Push((child, depth + 1));
+        }
+    }
 
     private static void WriteNode(
         IncrementalHash hash,
