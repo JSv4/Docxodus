@@ -56,10 +56,17 @@ export function generateFootnoteDocx(
   bodyLines = 5,
   paragraphsPerNote = 1,
   wordsPerParagraph = 0,
+  separatorStories: {
+    normalText?: string;
+    continuationText?: string;
+  } = {},
 ): Uint8Array {
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
     bodyParagraph(i, i < noteCount ? i + 1 : null)).join('');
+
+  const separatorRun = (marker: 'separator' | 'continuationSeparator', text?: string) =>
+    `<w:p><w:r><w:${marker}/>${text ? `<w:t xml:space="preserve"> ${text}</w:t>` : ''}</w:r></w:p>`;
 
   return storedZip([
     {
@@ -111,8 +118,12 @@ export function generateFootnoteDocx(
       name: 'word/footnotes.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="${W_NS}">
-  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
-  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="separator" w:id="-1">${separatorRun(
+    'separator', separatorStories.normalText,
+  )}</w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0">${separatorRun(
+    'continuationSeparator', separatorStories.continuationText,
+  )}</w:footnote>
   ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordsPerParagraph)).join('\n  ')}
 </w:footnotes>`),
     },

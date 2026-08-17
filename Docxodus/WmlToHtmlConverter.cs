@@ -1914,6 +1914,14 @@ namespace Docxodus
             sb.AppendLine("    margin: 0 0 3pt 0;");
             sb.AppendLine("    opacity: 0.6;");
             sb.AppendLine("}");
+            // A continuation separator spans the text column; Word's ordinary
+            // separator remains the calibrated two-inch rule above. Both the
+            // converter-produced story wrapper and the paginator fallback carry
+            // the same kind attribute so measurement and paint select one rule.
+            sb.AppendLine($".{prefix}footnotes [data-footnote-separator=\"continuation\"] > hr,");
+            sb.AppendLine($".{prefix}footnotes > hr[data-footnote-separator=\"continuation\"] {{");
+            sb.AppendLine("    width: 100%;");
+            sb.AppendLine("}");
 
             // Individual footnote item (in registry and on page). Word stacks notes with no
             // spacing of its own — any inter-note gap belongs to the FootnoteText paragraph's
@@ -3682,6 +3690,78 @@ namespace Docxodus
             return li;
         }
 
+        private static XElement RenderPaginatedFootnoteSeparator(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement source,
+            string kind)
+        {
+            if (source == null)
+                return null;
+
+            var markerName = kind == "continuation"
+                ? W.continuationSeparator
+                : W.separator;
+            var hasAuthoredContent = source.Descendants().Any(e =>
+                !e.AncestorsAndSelf().Any(ancestor =>
+                    ancestor.Name == W.pPr || ancestor.Name == W.rPr) &&
+                e.Name != W.p && e.Name != W.r &&
+                e.Name != W.separator && e.Name != W.continuationSeparator &&
+                e.Name != W.footnoteRef && e.Name != W.endnoteRef);
+
+            var story = new XElement(Xhtml.div,
+                new XAttribute("class", $"footnote-separator-story footnote-separator-{kind}"),
+                new XAttribute("data-footnote-separator", kind));
+
+            // The ordinary run transform intentionally ignores this Word-only
+            // control. Keep an authored mark explicit, but do not invent one for
+            // an intentionally empty/custom text-only reserved story. Only an
+            // absent definition causes the paginator's typed fallback rule.
+            if (source.Descendants(markerName).Any())
+            {
+                story.Add(new XElement(Xhtml.hr,
+                    new XAttribute("data-footnote-separator-rule", markerName.LocalName)));
+            }
+
+            if (hasAuthoredContent)
+            {
+                story.Add(source.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)));
+            }
+            SanitizeRepeatedFootnoteSeparator(story);
+            return story;
+        }
+
+        /// <summary>
+        /// A separator story is repeated on multiple physical pages. Source and
+        /// editor identities therefore cannot survive on its presentation clones:
+        /// duplicate ids/local targets would be ambiguous and canonical anchor
+        /// metadata would incorrectly admit the decoration into PageMap.
+        /// </summary>
+        private static void SanitizeRepeatedFootnoteSeparator(XElement story)
+        {
+            var repeatedElements = story.DescendantsAndSelf().ToList();
+            foreach (var element in repeatedElements)
+            {
+                foreach (var attributeName in new[]
+                {
+                    "id", "name", "data-anchor", "data-committed-text",
+                    "data-source-anchor-id", "data-page-fragment-id", "data-fragment-index",
+                    "data-footnote-id", "data-comment-id",
+                })
+                {
+                    element.Attributes()
+                        .Where(attribute => attribute.Name.LocalName == attributeName)
+                        .Remove();
+                }
+                var href = element.Attributes()
+                    .FirstOrDefault(attribute => attribute.Name.LocalName == "href");
+                if (href != null && href.Value.StartsWith("#", StringComparison.Ordinal))
+                    href.Remove();
+                element.SetAttributeValue("contenteditable", "false");
+            }
+        }
+
         /// <summary>
         /// Renders a footnote registry for paginated mode.
         /// In paginated mode, footnotes are stored in a hidden registry and distributed
@@ -3697,12 +3777,10 @@ namespace Docxodus
 
             var footnotesXDoc = footnotesPart.GetXDocument();
             var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
-                .Where(fn =>
-                {
-                    var typeAttr = (string)fn.Attribute(W.type);
-                    // Skip separator and continuationSeparator footnotes
-                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
-                })
+                // Every typed non-normal definition is page-rendering boilerplate;
+                // continuationNotice can carry a positive id in real documents and
+                // must not leak into the user-note registry.
+                .Where(fn => !WmlToMarkdownConverter.IsBoilerplateNote(fn))
                 .ToDictionary(fn => (string)fn.Attribute(W.id), fn => fn);
 
             if (allFootnotes == null || !allFootnotes.Any())
@@ -3728,6 +3806,19 @@ namespace Docxodus
             var registry = new XElement(Xhtml.div,
                 new XAttribute("id", "pagination-footnote-registry"),
                 new XAttribute("style", "display:none"));
+
+            var normalSeparator = footnotesXDoc.Root?.Elements(W.footnote)
+                .FirstOrDefault(fn => (string)fn.Attribute(W.type) == "separator");
+            var continuationSeparator = footnotesXDoc.Root?.Elements(W.footnote)
+                .FirstOrDefault(fn => (string)fn.Attribute(W.type) == "continuationSeparator");
+            var renderedNormalSeparator = RenderPaginatedFootnoteSeparator(
+                wordDoc, settings, normalSeparator, "normal");
+            var renderedContinuationSeparator = RenderPaginatedFootnoteSeparator(
+                wordDoc, settings, continuationSeparator, "continuation");
+            if (renderedNormalSeparator != null)
+                registry.Add(renderedNormalSeparator);
+            if (renderedContinuationSeparator != null)
+                registry.Add(renderedContinuationSeparator);
 
             foreach (var fn in orderedFootnotes)
             {

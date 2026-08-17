@@ -2403,7 +2403,7 @@ function assertNoClippedContent(document: Document): void {
     if (hasVisibleOverflow) {
       fail("pagination_failure", "running_story_placement",
         "A footnote continuation is clipped in the final page tree.",
-        "Split the oversized footnote paragraph; full continuation support is tracked by issue #489.");
+        "Report the unsupported note structure; eligible text paragraphs are continued losslessly.");
     }
   }
   for (const content of Array.from(document.querySelectorAll<HTMLElement>(".page-content"))) {

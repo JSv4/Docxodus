@@ -416,6 +416,88 @@ test.describe('standalone paginated HTML', () => {
     expect(linkAudit.fragmentsResolve).toBe(true);
   });
 
+  test('exports a converter-produced multi-page footnote losslessly and deterministically', async ({
+    page,
+    context,
+  }) => {
+    const source = generateFootnoteDocx(1, 1, 1, 600, {
+      normalText: 'NORMAL-SEPARATOR-STORY',
+      continuationText: 'CONTINUATION-SEPARATOR-STORY',
+    });
+    const first = await convert(page, source);
+    const second = await convert(page, source);
+
+    expect(first.pageCount).toBeGreaterThan(2);
+    expect(second.html).toBe(first.html);
+    expect(canonical(second.pageMap)).toBe(canonical(first.pageMap));
+    expect(second.renderReport.bindings).toEqual(first.renderReport.bindings);
+    expect(first.renderReport.pages).toEqual(first.pageMap.pages);
+
+    const audit = await page.evaluate((html) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const ids = Array.from(parsed.querySelectorAll<HTMLElement>('[id]'), (element) => element.id);
+      const noteBands = Array.from(parsed.querySelectorAll<HTMLElement>('.page-footnotes'));
+      return {
+        notePages: noteBands.length,
+        noteText: noteBands.map((band) => band.textContent ?? '').join(' ')
+          .replace(/\s+/g, ' ').trim(),
+        separators: parsed.querySelectorAll(
+          '.page-footnotes > [data-footnote-separator]',
+        ).length,
+        separatorKinds: noteBands.map((band) =>
+          band.firstElementChild?.getAttribute('data-footnote-separator') ?? ''),
+        separatorText: noteBands.map((band) =>
+          band.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? ''),
+        numbers: parsed.querySelectorAll('.page-footnotes .footnote-number').length,
+        uniqueIds: new Set(ids).size === ids.length,
+        continuationIds: Array.from(
+          parsed.querySelectorAll<HTMLElement>('.footnote-continuation'),
+          (element) => element.dataset.footnoteId,
+        ),
+      };
+    }, first.html);
+    expect(audit.notePages).toBe(first.pageCount);
+    expect(audit.separators).toBe(audit.notePages);
+    expect(audit.separatorKinds).toEqual([
+      'normal',
+      ...Array.from({ length: audit.notePages - 1 }, () => 'continuation'),
+    ]);
+    expect(audit.separatorText[0]).toContain('NORMAL-SEPARATOR-STORY');
+    expect(audit.separatorText.slice(1).every((text) =>
+      text.includes('CONTINUATION-SEPARATOR-STORY')
+      && !text.includes('NORMAL-SEPARATOR-STORY'))).toBe(true);
+    expect(audit.numbers).toBe(1);
+    expect(audit.uniqueIds).toBe(true);
+    expect(audit.continuationIds.length).toBeGreaterThan(1);
+    expect(audit.continuationIds.every((id) => id === '1')).toBe(true);
+    for (const index of [1, 2, 150, 300, 450, 599, 600]) {
+      const token = `footnote-1-1-${index}`;
+      expect(audit.noteText.match(new RegExp(`\\b${token}\\b`, 'g'))).toHaveLength(1);
+    }
+
+    const fragments = first.pageMap.fragments as Array<{
+      story?: string;
+      anchorId?: string;
+      pageNumber?: number;
+      fragmentIndex?: number;
+    }>;
+    const paragraphFragments = fragments.filter((fragment) =>
+      fragment.story === 'footnote' && fragment.anchorId?.startsWith('p:fn:'));
+    expect(paragraphFragments.length).toBeGreaterThan(2);
+    expect(new Set(paragraphFragments.map((fragment) => fragment.pageNumber)).size)
+      .toBeGreaterThan(2);
+    expect(paragraphFragments.map((fragment) => fragment.fragmentIndex))
+      .toEqual(paragraphFragments.map((_, index) => index));
+
+    const offline = await context.newPage();
+    const requests: string[] = [];
+    offline.on('request', (request) => requests.push(request.url()));
+    await offline.setContent(first.html, { waitUntil: 'load' });
+    expect(await offline.locator('.page-box').count()).toBe(first.pageCount);
+    expect(requests).toEqual([]);
+    await offline.close();
+  });
+
   test('applies each review profile exactly once and proves already-applied input', async ({ page }) => {
     const source = generateTrackedRevisionDocx();
     const sourceDigest = digest(source);
@@ -579,33 +661,53 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
     const loaded = new Promise<void>((resolve) => frame.addEventListener('load', () => resolve(), { once: true }));
     frame.srcdoc = `<!doctype html><style>
       body{margin:0}.page-box{box-sizing:border-box;background:white}.page-container{display:flex}
-      table{border-collapse:collapse}td{height:20pt}
-    </style><div id="staging"><section data-section-index="0" data-page-width="612"
+      table{border-collapse:collapse}td{height:20pt}.body{height:20pt;margin:0}
+      .page-footnotes{font:10pt/10pt Arial}.page-footnotes hr{height:1px;margin:0 0 3pt;border:0}
+      .footnote-item,.footnote-content p,.footnote-continuation p{margin:0}
+    </style><div id="staging">
+      <div id="pagination-footnote-registry"><div class="footnote-item" data-footnote-id="realm-note">
+        <span class="footnote-number">1</span><span class="footnote-content"><p>${
+          Array.from({ length: 240 }, (_, index) => `realm-${index}`).join(' ')
+        }</p></span></div></div>
+      <section data-section-index="0" data-page-width="612"
       data-page-height="792" data-content-width="468" data-content-height="648"
       data-margin-top="72" data-margin-right="72" data-margin-bottom="72" data-margin-left="72">
+      <p class="body">foreign realm note <sup data-footnote-id="realm-note">1</sup></p>
       <div><table><tbody>${'<tr><td>row</td></tr>'.repeat(45)}</tbody></table></div>
     </section></div><div id="pages" class="page-container"></div>`;
     document.body.appendChild(frame);
     await loaded;
     try {
       const foreign = frame.contentDocument!;
-      const engine = new (window as any).DocxodusPagination.PaginationEngine(
-        foreign.getElementById('staging'),
-        foreign.getElementById('pages'),
-        { scale: 0.8, showPageNumbers: false, pageGap: 0 },
-      );
-      const pagination = engine.paginate();
-      let secondCall = '';
-      try { engine.paginate(); } catch (error) { secondCall = String(error); }
-      const first = foreign.querySelector<HTMLElement>('.page-box')!;
-      return {
-        pages: pagination.totalPages,
-        width: first.getBoundingClientRect().width,
-        authoredWidth: first.style.width,
-        zoom: first.style.zoom,
-        transform: first.style.transform,
-        secondCall,
-      };
+      const hostCreateElement = document.createElement;
+      document.createElement = (() => {
+        throw new Error('host document.createElement must not be used');
+      }) as typeof document.createElement;
+      try {
+        const engine = new (window as any).DocxodusPagination.PaginationEngine(
+          foreign.getElementById('staging'),
+          foreign.getElementById('pages'),
+          { scale: 0.8, showPageNumbers: false, pageGap: 0 },
+        );
+        const pagination = engine.paginate();
+        let secondCall = '';
+        try { engine.paginate(); } catch (error) { secondCall = String(error); }
+        const first = foreign.querySelector<HTMLElement>('.page-box')!;
+        const noteText = Array.from(foreign.querySelectorAll<HTMLElement>('.page-footnotes'))
+          .map((band) => band.textContent ?? '').join(' ').replace(/\s+/g, ' ').trim();
+        return {
+          pages: pagination.totalPages,
+          width: first.getBoundingClientRect().width,
+          authoredWidth: first.style.width,
+          zoom: first.style.zoom,
+          transform: first.style.transform,
+          secondCall,
+          notePages: foreign.querySelectorAll('.page-footnotes').length,
+          noteText,
+        };
+      } finally {
+        document.createElement = hostCreateElement;
+      }
     } finally {
       frame.remove();
     }
@@ -617,4 +719,7 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
   expect(Number(result.zoom)).toBeCloseTo(0.8, 5);
   expect(result.transform).toBe('');
   expect(result.secondCall).toContain('one-shot');
+  expect(result.notePages).toBeGreaterThan(1);
+  expect(result.noteText).toContain('realm-0');
+  expect(result.noteText).toContain('realm-239');
 });
