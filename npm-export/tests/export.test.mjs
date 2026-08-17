@@ -88,6 +88,14 @@ async function inspectPdf(bytes) {
     pages.push({
       pageNumber,
       text: pageText,
+      textRuns: content.items
+        .filter((item) => "str" in item && item.str.trim().length > 0)
+        .map((item) => ({
+          text: item.str,
+          transform: [...item.transform],
+          width: item.width,
+          height: item.height,
+        })),
       mediaBox: geometryPages[pageNumber - 1].getMediaBox(),
       cropBox: geometryPages[pageNumber - 1].getCropBox(),
       links: pageLinks.map(({ url, unsafeUrl, dest }) => ({ url, unsafeUrl, dest })),
@@ -122,6 +130,56 @@ function assertPdfBoxes(inspection, expectedPages, tolerance = 0.5) {
         Math.abs(box.height - expected.height) <= tolerance,
         `page ${index + 1} ${name} height ${box.height} != ${expected.height}`,
       );
+    }
+  }
+}
+
+function assertEquivalentPdfBoxes(actual, expected, tolerance = 0.5) {
+  assert.equal(actual.pageCount, expected.pageCount);
+  for (let index = 0; index < actual.pages.length; index++) {
+    for (const boxName of ["mediaBox", "cropBox"]) {
+      for (const coordinate of ["x", "y", "width", "height"]) {
+        const actualValue = actual.pages[index][boxName][coordinate];
+        const expectedValue = expected.pages[index][boxName][coordinate];
+        assert.ok(
+          Math.abs(actualValue - expectedValue) <= tolerance,
+          `page ${index + 1} ${boxName}.${coordinate} ${actualValue} != ${expectedValue}`,
+        );
+      }
+    }
+  }
+}
+
+function assertEquivalentPdfTextGeometry(actual, expected, tolerance = 0.25) {
+  assert.equal(actual.pageCount, expected.pageCount);
+  for (let pageIndex = 0; pageIndex < actual.pages.length; pageIndex++) {
+    const actualRuns = actual.pages[pageIndex].textRuns;
+    const expectedRuns = expected.pages[pageIndex].textRuns;
+    assert.equal(
+      actualRuns.length,
+      expectedRuns.length,
+      `page ${pageIndex + 1} text-run count changed`,
+    );
+    for (let runIndex = 0; runIndex < actualRuns.length; runIndex++) {
+      const actualRun = actualRuns[runIndex];
+      const expectedRun = expectedRuns[runIndex];
+      assert.equal(
+        actualRun.text,
+        expectedRun.text,
+        `page ${pageIndex + 1} text run ${runIndex + 1} changed`,
+      );
+      for (let component = 0; component < actualRun.transform.length; component++) {
+        assert.ok(
+          Math.abs(actualRun.transform[component] - expectedRun.transform[component]) <= tolerance,
+          `page ${pageIndex + 1} text run ${runIndex + 1} transform[${component}] changed`,
+        );
+      }
+      for (const dimension of ["width", "height"]) {
+        assert.ok(
+          Math.abs(actualRun[dimension] - expectedRun[dimension]) <= tolerance,
+          `page ${pageIndex + 1} text run ${runIndex + 1} ${dimension} changed`,
+        );
+      }
     }
   }
 }
@@ -411,12 +469,9 @@ describe("@docxodus/export", { concurrency: false }, () => {
       })),
       expectedPages,
     );
-    assert.deepEqual(result.renderReport.pages, expectedPages.map((page) => ({
-      pageNumber: page.pageNumber,
-      width: page.width,
-      height: page.height,
-      sectionIndex: page.sectionIndex,
-    })));
+    // The report inventory is the complete PageMap page contract, including pageInSection and
+    // pageName; comparing projections here previously made this success test fail by construction.
+    assert.deepEqual(result.renderReport.pages, result.pageMap.pages);
     assert.match(result.html, /column-count:\s*2/i);
 
     const normalInspection = await inspectPdf(result.pdf);
@@ -430,11 +485,38 @@ describe("@docxodus/export", { concurrency: false }, () => {
       ["HEADER-S3", "BODY-S3 TWO COLUMN SPILL PAGE", "FOOTER-S3 PAGE 12"],
       ["HEADER-S4", "BODY-S4 LETTER PORTRAIT FINAL", "FOOTER-S4 PAGE 13"],
     ];
+    const expectedTokenPages = new Map();
+    expectedText.forEach((tokens, pageIndex) => {
+      tokens.forEach((token) => {
+        const owners = expectedTokenPages.get(token) ?? new Set();
+        owners.add(pageIndex);
+        expectedTokenPages.set(token, owners);
+      });
+    });
     expectedText.forEach((tokens, index) => {
-      tokens.forEach((token) => assert.ok(
-        pageText[index].includes(token),
-        `page ${index + 1} is missing ${JSON.stringify(token)}: ${pageText[index]}`,
-      ));
+      let precedingTokenIndex = -1;
+      tokens.forEach((token) => {
+        const tokenIndex = pageText[index].indexOf(token);
+        assert.ok(
+          tokenIndex > precedingTokenIndex,
+          `page ${index + 1} token ${JSON.stringify(token)} is missing or out of order: ${pageText[index]}`,
+        );
+        assert.equal(
+          pageText[index].indexOf(token, tokenIndex + token.length),
+          -1,
+          `page ${index + 1} repeats ${JSON.stringify(token)}: ${pageText[index]}`,
+        );
+        pageText.forEach((otherPageText, otherPageIndex) => {
+          if (!expectedTokenPages.get(token).has(otherPageIndex)) {
+            assert.equal(
+              otherPageText.includes(token),
+              false,
+              `${JSON.stringify(token)} leaked from page ${index + 1} to page ${otherPageIndex + 1}`,
+            );
+          }
+        });
+        precedingTokenIndex = tokenIndex;
+      });
     });
     assert.equal(pageText[3].includes("HEADER-S3"), false);
     assert.equal(pageText[3].includes("FOOTER-S3"), false);
@@ -444,17 +526,108 @@ describe("@docxodus/export", { concurrency: false }, () => {
     const requests = [];
     scaledPage.on("request", (request) => requests.push(request.url()));
     await scaledPage.setContent(result.html, { waitUntil: "load" });
-    const screenScales = await scaledPage.locator(".page-box").evaluateAll((nodes) => nodes.map((node) => {
-      // Match the paginator's real Chromium viewer path: scale is an inline `zoom`, while the
-      // standalone print contract resets it with an author-level `!important` rule.
-      node.style.zoom = "0.8";
-      return getComputedStyle(node).zoom;
-    }));
-    assert.deepEqual(screenScales, Array(expectedPages.length).fill("0.8"));
+    await scaledPage.evaluate(async () => { await document.fonts.ready; });
+    const screenScales = await scaledPage.locator(".page-box").evaluateAll((nodes) =>
+      nodes.map((node, index) => {
+        // Alternate the two real viewer paths so every sheet remains at an effective 80% scale:
+        // Chromium's inline zoom and the transform fallback with compensating margins. Print CSS
+        // must neutralize both paths.
+        if (index % 2 === 0) {
+          node.style.zoom = "0.8";
+        } else {
+          node.style.transform = "scale(0.8)";
+          node.style.transformOrigin = "top left";
+          node.style.marginRight = "-100px";
+          node.style.marginBottom = "-100px";
+        }
+        const style = getComputedStyle(node);
+        return {
+          zoom: style.zoom,
+          transform: style.transform,
+          transformOrigin: style.transformOrigin,
+          marginRight: style.marginRight,
+          marginBottom: style.marginBottom,
+        };
+      }));
+    for (const [index, scale] of screenScales.entries()) {
+      if (index % 2 === 0) {
+        assert.equal(scale.zoom, "0.8");
+        assert.equal(scale.transform, "none");
+        assert.equal(scale.marginRight, "0px");
+        assert.equal(scale.marginBottom, "0px");
+      } else {
+        assert.equal(scale.zoom, "1");
+        assert.match(scale.transform, /^matrix\(0\.8, 0, 0, 0\.8, 0, 0\)$/);
+        assert.equal(scale.transformOrigin, "0px 0px");
+        assert.equal(scale.marginRight, "-100px");
+        assert.equal(scale.marginBottom, "-100px");
+      }
+    }
     const columnContainers = await scaledPage.locator(".page-content > div").evaluateAll((nodes) =>
       nodes.filter((node) => getComputedStyle(node).columnCount === "2").length);
     assert.ok(columnContainers >= 2);
     const screenshot = await scaledPage.screenshot({ fullPage: true });
+    await scaledPage.emulateMedia({ media: "print" });
+    const printAudit = await scaledPage.evaluate((pageMap) => {
+      const pages = Array.from(document.querySelectorAll(".page-box"));
+      return {
+        pages: pages.map((page) => {
+          const style = getComputedStyle(page);
+          const rect = page.getBoundingClientRect();
+          return {
+            zoom: style.zoom,
+            transform: style.transform,
+            marginTop: style.marginTop,
+            marginRight: style.marginRight,
+            marginBottom: style.marginBottom,
+            marginLeft: style.marginLeft,
+            widthPt: rect.width * 72 / 96,
+            heightPt: rect.height * 72 / 96,
+          };
+        }),
+        fragments: pageMap.fragments.map((expected) => {
+          const element = document.querySelector(
+            `[data-page-fragment-id="${CSS.escape(expected.fragmentId)}"]`,
+          );
+          const page = element?.closest(".page-box");
+          if (!element || !page) return { fragmentId: expected.fragmentId, missing: true };
+          const pageRect = page.getBoundingClientRect();
+          const rect = element.getBoundingClientRect();
+          const pageContract = pageMap.pages[expected.pageNumber - 1];
+          const xRatio = pageContract.width / pageRect.width;
+          const yRatio = pageContract.height / pageRect.height;
+          return {
+            fragmentId: expected.fragmentId,
+            missing: false,
+            geometry: {
+              x: (rect.left - pageRect.left) * xRatio,
+              y: (rect.top - pageRect.top) * yRatio,
+              width: rect.width * xRatio,
+              height: rect.height * yRatio,
+            },
+          };
+        }),
+      };
+    }, result.pageMap);
+    printAudit.pages.forEach((page, index) => {
+      assert.equal(page.zoom, "1", `page ${index + 1} retained viewer zoom in print`);
+      assert.equal(page.transform, "none", `page ${index + 1} retained viewer transform in print`);
+      for (const margin of ["marginTop", "marginRight", "marginBottom", "marginLeft"]) {
+        assert.equal(page[margin], "0px", `page ${index + 1} retained ${margin} in print`);
+      }
+      assert.ok(Math.abs(page.widthPt - expectedPages[index].width) <= 0.1);
+      assert.ok(Math.abs(page.heightPt - expectedPages[index].height) <= 0.1);
+    });
+    printAudit.fragments.forEach((actual, index) => {
+      const expected = result.pageMap.fragments[index];
+      assert.equal(actual.missing, false, `print tree lost ${expected.fragmentId}`);
+      for (const coordinate of ["x", "y", "width", "height"]) {
+        assert.ok(
+          Math.abs(actual.geometry[coordinate] - expected.geometry[coordinate]) <= 0.1,
+          `${expected.fragmentId} print ${coordinate} changed`,
+        );
+      }
+    });
     const scaledPdf = await scaledPage.pdf({
       printBackground: true,
       preferCSSPageSize: true,
@@ -469,10 +642,8 @@ describe("@docxodus/export", { concurrency: false }, () => {
 
     const scaledInspection = await inspectPdf(scaledPdf);
     assertPdfBoxes(scaledInspection, expectedPages);
-    assert.deepEqual(
-      scaledInspection.pages.map(({ mediaBox, cropBox }) => ({ mediaBox, cropBox })),
-      normalInspection.pages.map(({ mediaBox, cropBox }) => ({ mediaBox, cropBox })),
-    );
+    assertEquivalentPdfBoxes(scaledInspection, normalInspection);
+    assertEquivalentPdfTextGeometry(scaledInspection, normalInspection);
 
     await writeFile(join(successArtifacts, "mixed-sections.docx"), source);
     await writeFile(join(successArtifacts, "mixed-sections.html"), result.html);
@@ -485,6 +656,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
       normal: normalInspection,
       scaled: scaledInspection,
       screenScales,
+      printAudit,
       offlineRequests: requests,
       columnContainers,
     });

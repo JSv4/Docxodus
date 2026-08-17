@@ -60,11 +60,12 @@ Any request outside that closed graph fails the operation.
 
 PDF printing reopens the finalized snapshot in a second script-disabled isolated context, enables
 backgrounds, uses CSS page sizes, applies zero browser margins, preserves DOM text/links/vector
-content, and verifies the exact PageMap plus every page MediaBox/CropBox with a real PDF parser. Reports
-record the exact PDF SHA-256 and Chromium's volatile metadata; PDF byte identity is intentionally
-not claimed across runs. Mixed portrait/landscape and Letter/A4 sections retain their per-page CSS
-size; screen zoom/transforms are removed by the print contract and cannot change physical PDF
-geometry.
+content, and verifies the exact PageMap plus every page's effective inherited MediaBox/CropBox,
+rotation, and `UserUnit` with a real PDF parser. Reports record the exact PDF SHA-256 and Chromium's
+volatile metadata; PDF byte identity is intentionally not claimed across runs. Mixed
+portrait/landscape and Letter/A4 sections retain their per-page CSS size; screen zoom/transforms
+and their compensation margins are removed by the print contract and cannot change physical PDF
+geometry or content placement.
 
 ## CLI
 

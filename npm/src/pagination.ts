@@ -324,6 +324,11 @@ export interface PaginationOptions {
    * otherwise pay the whole forced-layout pass twice and discard the first result. Default: false.
    */
   deferFragmentIdentities?: boolean;
+  /**
+   * Incremental admission check invoked immediately before each physical page is allocated.
+   * Export callers use this to enforce `finalPages` without constructing an over-limit DOM first.
+   */
+  checkPageCount?: (prospectivePageCount: number) => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -392,10 +397,13 @@ export class PaginationEngine {
   private fragmentParagraphs: boolean;
   private deferFragmentIdentities: boolean;
   private cancellationCheckpoint?: () => void;
+  private pageCountCheckpoint?: (prospectivePageCount: number) => void;
+  private createdPageCount = 0;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private commentMarginRegistry: Map<string, HTMLElement>;
+  private footnoteLayoutLikeWord8 = false;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
   /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
@@ -453,6 +461,7 @@ export class PaginationEngine {
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
     this.deferFragmentIdentities = options.deferFragmentIdentities ?? false;
     this.cancellationCheckpoint = options.checkCancellation;
+    this.pageCountCheckpoint = options.checkPageCount;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -490,6 +499,8 @@ export class PaginationEngine {
     // Parse the margin-comment registry if present. Its entries are cloned into
     // the side substrate of pages that contain the corresponding range marker.
     this.commentMarginRegistry = this.parseCommentMarginRegistry();
+    this.footnoteLayoutLikeWord8 =
+      this.stagingElement.dataset.footnoteLayoutLikeWord8 === "true";
 
     // Find all section containers
     const sections = this.stagingElement.querySelectorAll<HTMLElement>(
@@ -548,6 +559,7 @@ export class PaginationEngine {
     interface PageRun {
       sections: HTMLElement[];
       sectionIndex: number;
+      sectionType: string;
       dims: PageDimensions;
       sectionDimensions: Map<number, PageDimensions>;
     }
@@ -571,6 +583,7 @@ export class PaginationEngine {
         runs.push({
           sections: [section],
           sectionIndex,
+          sectionType: section.dataset.sectionType ?? "nextPage",
           dims,
           sectionDimensions: new Map([[sectionIndex, dims]]),
         });
@@ -579,6 +592,39 @@ export class PaginationEngine {
 
     for (const run of runs) {
       this.checkpoint();
+      // Odd/even section breaks begin the new section on the requested physical side. When the
+      // following page has the opposite parity, Word inserts one intentionally blank filler page.
+      // It belongs to the preceding section, advances physical/logical numbering, retains that
+      // section's paper geometry, and carries no running story.
+      const needsParityFiller = pages.length > 0
+        && ((run.sectionType === "oddPage" && pageNumber % 2 === 0)
+          || (run.sectionType === "evenPage" && pageNumber % 2 === 1));
+      if (needsParityFiller) {
+        const precedingPage = pages[pages.length - 1];
+        const precedingPageInSection = parseInt(
+          precedingPage.element.dataset.pageInSection ?? "1",
+          10,
+        );
+        const precedingDisplayedPageNumber = parseInt(
+          precedingPage.element.dataset.displayedPageNumber ?? String(precedingPage.pageNumber),
+          10,
+        );
+        const filler = this.createPage(
+          precedingPage.dimensions,
+          pageNumber,
+          precedingPage.sectionIndex,
+          precedingDisplayedPageNumber + 1,
+          [],
+          precedingPageInSection + 1,
+          [],
+          0,
+          null,
+          undefined,
+          true,
+        );
+        pages.push(filler);
+        pageNumber++;
+      }
       // Make staging visible for measurement
       this.stagingElement.style.visibility = "hidden";
       this.stagingElement.style.position = "absolute";
@@ -631,13 +677,10 @@ export class PaginationEngine {
     // from registry sources, not presentation clones, so a failed clone remains detectable.
     for (const page of pages) {
       this.checkpoint();
+      if (page.element.dataset.sectionFiller === "true") continue;
       const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
-      const displayedPageNumber = parseInt(
-        page.element.dataset.displayedPageNumber || String(page.pageNumber),
-        10,
-      );
-      const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
-      const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
+      const header = this.selectHeader(page.sectionIndex, pageInSection);
+      const footer = this.selectFooter(page.sectionIndex, pageInSection);
       if (header) this.collectExpectedSourceAnchors(header, this.expectedPageMapAnchorIds);
       if (footer) this.collectExpectedSourceAnchors(footer, this.expectedPageMapAnchorIds);
     }
@@ -1516,9 +1559,9 @@ export class PaginationEngine {
    */
   private smallestEffectiveContentHeight(dims: PageDimensions, sectionIndex: number): number {
     return Math.min(
-      this.getPageBands(dims, sectionIndex, 1, 1).bodyHeight,
-      this.getPageBands(dims, sectionIndex, 2, 1).bodyHeight,
-      this.getPageBands(dims, sectionIndex, 2, 2).bodyHeight
+      this.getPageBands(dims, sectionIndex, 1).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 2).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 3).bodyHeight
     );
   }
 
@@ -2439,13 +2482,10 @@ export class PaginationEngine {
     pageBox.appendChild(footnotesDiv);
   }
 
-  /**
-   * Selects the appropriate header for a page based on section, page position, and page number.
-   */
+  /** Select the section's first/odd/even header from its one-based page position. */
   private selectHeader(
     sectionIndex: number,
     pageInSection: number,
-    displayedPageNumber: number
   ): HTMLElement | undefined {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     if (!sectionHf) return undefined;
@@ -2455,8 +2495,9 @@ export class PaginationEngine {
       return sectionHf.headerFirst;
     }
 
-    // Even pages use even header if available
-    if (displayedPageNumber % 2 === 0 && sectionHf.headerEven) {
+    // OOXML counts odd/even pages from one inside each section, independently of a PAGE-field
+    // restart or format. The displayed page number is deliberately irrelevant here.
+    if (pageInSection % 2 === 0 && sectionHf.headerEven) {
       return sectionHf.headerEven;
     }
 
@@ -2464,13 +2505,10 @@ export class PaginationEngine {
     return sectionHf.headerDefault;
   }
 
-  /**
-   * Selects the appropriate footer for a page based on section, page position, and page number.
-   */
+  /** Select the section's first/odd/even footer from its one-based page position. */
   private selectFooter(
     sectionIndex: number,
     pageInSection: number,
-    displayedPageNumber: number
   ): HTMLElement | undefined {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     if (!sectionHf) return undefined;
@@ -2480,8 +2518,7 @@ export class PaginationEngine {
       return sectionHf.footerFirst;
     }
 
-    // Even pages use even footer if available
-    if (displayedPageNumber % 2 === 0 && sectionHf.footerEven) {
+    if (pageInSection % 2 === 0 && sectionHf.footerEven) {
       return sectionHf.footerEven;
     }
 
@@ -2503,7 +2540,6 @@ export class PaginationEngine {
     dims: PageDimensions,
     sectionIndex: number,
     pageInSection: number,
-    displayedPageNumber: number
   ): PageBands {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     return resolvePageBands(
@@ -2512,15 +2548,13 @@ export class PaginationEngine {
         sectionHf?.headerFirstHeight,
         sectionHf?.headerEvenHeight,
         sectionHf?.headerDefaultHeight,
-        pageInSection,
-        displayedPageNumber
+        pageInSection
       ),
       this.selectStoryHeight(
         sectionHf?.footerFirstHeight,
         sectionHf?.footerEvenHeight,
         sectionHf?.footerDefaultHeight,
-        pageInSection,
-        displayedPageNumber
+        pageInSection
       )
     );
   }
@@ -2534,10 +2568,9 @@ export class PaginationEngine {
     even: number | undefined,
     fallback: number | undefined,
     pageInSection: number,
-    displayedPageNumber: number
   ): number {
     if (pageInSection === 1 && first != null) return first;
-    if (displayedPageNumber % 2 === 0 && even != null) return even;
+    if (pageInSection % 2 === 0 && even != null) return even;
     return fallback ?? 0;
   }
 
@@ -2597,7 +2630,6 @@ export class PaginationEngine {
     // A continuous section can begin on a page owned by its predecessor. That shared physical
     // page is still page 1 of the later section, so its first independently owned page is page 2.
     const sectionStartPages = new Map<number, number>([[sectionIndex, startPageNumber]]);
-    const encounteredSectionBoundaries = new Set<number>([sectionIndex]);
     const pageInSection = (owner = pageSectionIndex, physicalPage = pageNumber) =>
       physicalPage - (sectionStartPages.get(owner) ?? physicalPage) + 1;
     const dimensionsFor = (owner = pageSectionIndex) =>
@@ -2630,7 +2662,7 @@ export class PaginationEngine {
 
     // Get effective content height for first page (accounts for header/footer sizes)
     let { bodyHeight: effectiveContentHeight } = this.getPageBands(
-      dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber()
+      dimensionsFor(), pageSectionIndex, pageInSection()
     );
     let remainingHeight = effectiveContentHeight;
 
@@ -2666,7 +2698,6 @@ export class PaginationEngine {
         dimensionsFor(owner),
         owner,
         pageInSection(owner),
-        displayedPageNumber(owner),
       );
       effectiveContentHeight = bands.bodyHeight;
       remainingHeight = effectiveContentHeight;
@@ -2697,7 +2728,6 @@ export class PaginationEngine {
         ownedDimensions,
         pageSectionIndex,
         ownedPageInSection,
-        ownedDisplayedPageNumber,
       );
       const maxFootnoteHeight = pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
       if (currentContinuation && currentContinuation.remainingElements.length > 0) {
@@ -2799,7 +2829,6 @@ export class PaginationEngine {
         dimensionsFor(),
         pageSectionIndex,
         pageInSection(),
-        displayedPageNumber(),
       );
       effectiveContentHeight = newBands.bodyHeight;
       remainingHeight = effectiveContentHeight;
@@ -2840,15 +2869,16 @@ export class PaginationEngine {
     for (let i = 0; i < blocks.length; i++) {
       this.checkpoint();
       const block = blocks[i];
+      const allBlockFootnoteIds = this.extractFootnoteRefs(block.element);
 
-      if (!encounteredSectionBoundaries.has(block.sectionIndex)) {
-        // Word normally lets a same-box continuous section begin on its predecessor's page. Its
-        // compatibility layout promotes that boundary to a new page when the preceding portion
-        // of the page carries a footnote, preventing two sections from sharing one footnote area.
-        if (block.sectionIndex !== pageSectionIndex && currentPageHasFootnoteReference) {
-          finishPage(block.sectionIndex);
-        }
-        encounteredSectionBoundaries.add(block.sectionIndex);
+      // Word normally lets a same-box continuous section begin on its predecessor's page. By
+      // default, a footnote reference before that boundary promotes it to a page break. The
+      // footnoteLayoutLikeWW8 compatibility switch permits post-break paragraphs without their own
+      // references to remain on the shared page; keep checking until the page turns so a later
+      // referenced paragraph still begins on a fresh page.
+      if (block.sectionIndex !== pageSectionIndex && currentPageHasFootnoteReference
+        && (!this.footnoteLayoutLikeWord8 || allBlockFootnoteIds.length > 0)) {
+        finishPage(block.sectionIndex);
       }
 
       const pageIsEmpty = currentContent.length === 0
@@ -2863,7 +2893,6 @@ export class PaginationEngine {
         blockDimensions,
         block.sectionIndex,
         nextBlockPageInSection,
-        displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
       ).bodyHeight;
 
       // Handle explicit page breaks
@@ -2927,11 +2956,6 @@ export class PaginationEngine {
               dimensionsFor(block.sectionIndex),
               block.sectionIndex,
               pageInSection(block.sectionIndex, pageNumber + 1),
-              displayedPageNumber(
-                block.sectionIndex,
-                pageInSection(block.sectionIndex, pageNumber + 1),
-                pageNumber + 1,
-              )
             );
             const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
               keepChain,
@@ -2959,7 +2983,6 @@ export class PaginationEngine {
       }
 
       // Extract footnote references from this block
-      const allBlockFootnoteIds = this.extractFootnoteRefs(block.element);
       // Only count new footnotes (not already on this page)
       const newFootnoteIds = this.collectNewFootnoteIds([block], currentFootnoteIds);
 
@@ -3522,8 +3545,12 @@ export class PaginationEngine {
     footnoteIds: string[] = [],
     footnoteHeight: number = 0,
     continuation?: FootnoteContinuation | null,
-    partialFootnotes?: PartialFootnote[]
+    partialFootnotes?: PartialFootnote[],
+    isSectionFiller = false,
   ): PageInfo {
+    const prospectivePageCount = this.createdPageCount + 1;
+    this.pageCountCheckpoint?.(prospectivePageCount);
+    this.createdPageCount = prospectivePageCount;
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
     const pageBox = this.document.createElement("div");
@@ -3556,15 +3583,18 @@ export class PaginationEngine {
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
     pageBox.dataset.displayedPageNumber = String(displayedPageNumber);
+    if (isSectionFiller) pageBox.dataset.sectionFiller = "true";
     // Needed by substitutePageNumberFields: a section that restarts numbering counts from its own
     // first page, not from the document's.
     pageBox.dataset.pageInSection = String(pageInSection);
 
     // Where the three bands sit on this page (no re-measurement needed)
-    const bands = this.getPageBands(dims, sectionIndex, pageInSection, displayedPageNumber);
+    const bands = this.getPageBands(dims, sectionIndex, pageInSection);
 
     // Add header if available for this section/page
-    const headerSource = this.selectHeader(sectionIndex, pageInSection, displayedPageNumber);
+    const headerSource = isSectionFiller
+      ? undefined
+      : this.selectHeader(sectionIndex, pageInSection);
 
     if (headerSource) {
       const headerDiv = this.document.createElement("div");
@@ -3647,13 +3677,15 @@ export class PaginationEngine {
 
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
-    if (footnoteIds.length > 0 || hasContinuation) {
+    if (!isSectionFiller && (footnoteIds.length > 0 || hasContinuation)) {
       this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes);
 
     }
 
     // Add footer if available for this section/page
-    const footerSource = this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
+    const footerSource = isSectionFiller
+      ? undefined
+      : this.selectFooter(sectionIndex, pageInSection);
     if (footerSource) {
       const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
@@ -3680,7 +3712,7 @@ export class PaginationEngine {
     }
 
     // Add page number (will be hidden by CSS if document has footer)
-    if (this.showPageNumbers) {
+    if (this.showPageNumbers && !isSectionFiller) {
       const pageNum = this.document.createElement("div");
       pageNum.className = `${this.cssPrefix}number`;
       pageNum.textContent = String(pageNumber);

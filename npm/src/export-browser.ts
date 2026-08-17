@@ -3255,6 +3255,14 @@ export async function convertDocxToPaginatedHtml(
                 { detail: "cooperative pagination checkpoint", pending: ["page layout"] });
             }
           },
+          checkPageCount: (prospectivePageCount) => {
+            enforceLimit(
+              prospectivePageCount,
+              options.limits.finalPages,
+              "finalPages",
+              "pagination",
+            );
+          },
         });
         const pagination = await runPhase(state, "pagination", ["page layout"], () => engine.paginate());
         enforceLimit(pagination.totalPages, options.limits.finalPages, "finalPages", "pagination");

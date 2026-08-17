@@ -276,8 +276,12 @@ test.describe('PageMap materialization and citation navigation', () => {
         layoutToken: { documentVersion: 0, rendererFingerprint: 'dropped-source-v1' },
       });
       const originalMeasureBlocks = engine.measureBlocks.bind(engine);
-      engine.measureBlocks = (section: HTMLElement, dimensions: unknown) =>
-        originalMeasureBlocks(section, dimensions)
+      engine.measureBlocks = (
+        section: HTMLElement,
+        dimensions: unknown,
+        sectionIndex: number,
+      ) =>
+        originalMeasureBlocks(section, dimensions, sectionIndex)
           .filter((block: any) => block.element.dataset.dropFromFlow !== 'true');
       try {
         engine.paginate();

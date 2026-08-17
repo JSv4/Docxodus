@@ -72,11 +72,15 @@ function sectionProperties(index, width, height, options = {}) {
   const numbering = options.start === undefined
     ? ""
     : `<w:pgNumType w:start="${options.start}" w:fmt="decimal"/>`;
-  return `${type}<w:headerReference w:type="default" r:id="rId${10 + index * 2}"/>`
+  // CT_SectPr is ordered: story references, type, page size/margins, numbering, then columns.
+  // Keeping generated fixtures schema-valid prevents a tolerant converter from masking an invalid
+  // section sequence that Word or another conforming consumer may repair differently.
+  return `<w:headerReference w:type="default" r:id="rId${10 + index * 2}"/>`
     + `<w:footerReference w:type="default" r:id="rId${11 + index * 2}"/>`
+    + type
     + `<w:pgSz w:w="${width}" w:h="${height}"${width > height ? ' w:orient="landscape"' : ""}/>`
     + `<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" `
-    + `w:header="720" w:footer="720" w:gutter="0"/>${columns}${numbering}`;
+    + `w:header="720" w:footer="720" w:gutter="0"/>${numbering}${columns}`;
 }
 
 function sectionParagraph(text, extraRuns, index, width, height, options) {
