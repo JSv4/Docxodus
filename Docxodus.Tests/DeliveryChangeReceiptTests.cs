@@ -469,6 +469,24 @@ public class DeliveryChangeReceiptTests
             evidence => evidence.Schema == RedlineReversibilityProof.SchemaId
                 && evidence.Digest == Digest(Encoding.UTF8.GetBytes(
                     reversibility.ToCanonicalJson())));
+
+        using var receiptJson = JsonDocument.Parse(receipt.ToJson());
+        var proofReference = receiptJson.RootElement.GetProperty("payload")
+            .GetProperty("evidence").EnumerateArray().Single(evidence =>
+                evidence.GetProperty("schema").GetString() == RedlineReversibilityProof.SchemaId);
+        Assert.Equal(
+            new[] { "artifactId", "digest", "kind", "schema", "summary" },
+            proofReference.EnumerateObject().Select(property => property.Name)
+                .OrderBy(name => name, StringComparer.Ordinal));
+
+        var tamperedArtifacts = artifacts.ToDictionary(
+            item => item.Key, item => item.Value.ToArray(), StringComparer.Ordinal);
+        tamperedArtifacts["reversibility"][0] ^= 0x01;
+        var tampered = DeliveryChangeReceiptVerifier.Verify(receipt, tamperedArtifacts);
+        Assert.False(tampered.IsValid);
+        Assert.Equal(DeliveryArtifactVerificationStatus.DigestMismatch,
+            Assert.Single(tampered.Artifacts,
+                artifact => artifact.ArtifactId == "reversibility").Status);
     }
 
     [Fact]

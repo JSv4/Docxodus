@@ -790,7 +790,119 @@ public static class RedlineReversibilityVerifier
             outputBytes);
     }
 
+    /// <summary>
+    /// Classify an edited package's revisions against its baseline for delivery-policy
+    /// processing. Unlike proof classification, policy ownership must retain the complete live
+    /// revision identity: a revision whose stable id or native constituents were reused with
+    /// changed metadata/content is a conflict, not a pre-existing revision to resolve silently.
+    /// </summary>
     internal static IReadOnlyList<RedlineRevisionClassification> Classify(
+        IReadOnlyList<RevisionListEntry> baselineEntries,
+        IReadOnlyList<RevisionListEntry> editedEntries,
+        List<RedlineProofFinding> findings)
+    {
+        var baseline = baselineEntries.Select(ToIdentity)
+            .OrderBy(RevisionSortKey, StringComparer.Ordinal).ToArray();
+        var edited = editedEntries.Select(ToIdentity)
+            .OrderBy(RevisionSortKey, StringComparer.Ordinal).ToArray();
+        var baselineById = baseline.GroupBy(item => item.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var editedById = edited.GroupBy(item => item.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+
+        foreach (var duplicate in baselineById.Where(item => item.Value.Length != 1))
+            findings.Add(DuplicateIdentityFinding("baseline", duplicate.Key, duplicate.Value));
+        foreach (var duplicate in editedById.Where(item => item.Value.Length != 1))
+            findings.Add(DuplicateIdentityFinding("edited", duplicate.Key, duplicate.Value));
+
+        var results = new List<RedlineRevisionClassification>();
+        var matchedBaselineIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var editedRevision in edited)
+        {
+            if (editedById[editedRevision.Id].Length != 1)
+            {
+                results.Add(new RedlineRevisionClassification
+                {
+                    Disposition = RedlineRevisionDisposition.Conflicted,
+                    Redline = editedRevision,
+                    Reason = "The edited document contains a duplicate stable revision identity.",
+                });
+                continue;
+            }
+
+            if (baselineById.TryGetValue(editedRevision.Id, out var sameId)
+                && sameId.Length == 1)
+            {
+                var baselineRevision = sameId[0];
+                matchedBaselineIds.Add(baselineRevision.Id);
+                bool unchanged = IdentityEquivalent(baselineRevision, editedRevision);
+                results.Add(new RedlineRevisionClassification
+                {
+                    Disposition = unchanged
+                        ? RedlineRevisionDisposition.PreExisting
+                        : RedlineRevisionDisposition.Conflicted,
+                    Baseline = baselineRevision,
+                    Redline = editedRevision,
+                    Reason = unchanged
+                        ? "The complete part-qualified native revision identity is unchanged from the baseline."
+                        : "A baseline revision reused its stable ID but changed identity or location.",
+                });
+                if (!unchanged)
+                    findings.Add(RevisionConflictFinding(baselineRevision, editedRevision));
+                continue;
+            }
+
+            var overlaps = baseline.Where(item => RevisionOverlaps(item, editedRevision)).ToArray();
+            if (overlaps.Length > 0)
+            {
+                foreach (var overlap in overlaps)
+                    matchedBaselineIds.Add(overlap.Id);
+                results.Add(new RedlineRevisionClassification
+                {
+                    Disposition = RedlineRevisionDisposition.Conflicted,
+                    Baseline = overlaps[0],
+                    Redline = editedRevision,
+                    Reason = "The edited revision overlaps native constituents owned by baseline review markup.",
+                });
+                findings.Add(RevisionConflictFinding(overlaps[0], editedRevision));
+                continue;
+            }
+
+            results.Add(new RedlineRevisionClassification
+            {
+                Disposition = RedlineRevisionDisposition.Generated,
+                Redline = editedRevision,
+                Reason = "The complete part-qualified native revision identity is absent from the baseline.",
+            });
+        }
+
+        foreach (var missing in baseline.Where(item => !matchedBaselineIds.Contains(item.Id)))
+        {
+            results.Add(new RedlineRevisionClassification
+            {
+                Disposition = RedlineRevisionDisposition.Conflicted,
+                Baseline = missing,
+                Reason = "A pre-existing baseline revision is missing from the edited document.",
+            });
+            findings.Add(Finding(
+                "preexisting_revision_missing_from_edited",
+                VerificationFindingSeverity.Error,
+                $"Baseline revision '{missing.Id}' is absent from the edited document.",
+                new ChangeLocation { EntryUri = missing.PartUri },
+                missing.AnchorId,
+                new[] { missing.Id },
+                "Preserve or explicitly resolve baseline review state before delivery."));
+        }
+
+        return results
+            .OrderBy(item => item.Redline?.PartUri ?? item.Baseline?.PartUri,
+                StringComparer.Ordinal)
+            .ThenBy(item => item.Redline?.Id ?? item.Baseline?.Id,
+                StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<RedlineRevisionClassification> Classify(
         IReadOnlyList<RevisionListEntry> baselineEntries,
         IReadOnlyList<RevisionListEntry> finalEntries,
         IReadOnlyList<RevisionListEntry> redlineEntries,

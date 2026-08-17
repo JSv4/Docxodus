@@ -43,6 +43,21 @@ internal interface IDocumentStore
     /// <exception cref="McpToolException">The location does not exist or cannot be read.</exception>
     byte[] Read(string resolvedLocation);
 
+    /// <summary>
+    /// Read with a caller-owned byte ceiling. Backends should reject from metadata/stream length
+    /// before materializing content; this default preserves compatibility for non-file backends.
+    /// </summary>
+    byte[] Read(string resolvedLocation, long maximumBytes)
+    {
+        if (maximumBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        var bytes = Read(resolvedLocation);
+        if (bytes.LongLength > maximumBytes)
+            throw new McpToolException(
+                $"document exceeds the {maximumBytes}-byte read limit");
+        return bytes;
+    }
+
     /// <summary>Write bytes to an already-<see cref="Resolve"/>d location, creating or replacing it.</summary>
     /// <exception cref="McpToolException">The location cannot be written.</exception>
     void Write(string resolvedLocation, byte[] bytes);

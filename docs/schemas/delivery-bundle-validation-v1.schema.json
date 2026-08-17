@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docxodus.dev/schemas/delivery/delivery-bundle-validation/v1",
   "title": "Docxodus delivery bundle validation v1",
+  "description": "The structural validation-report wire contract. Collection and string ceilings are configurable verifier policy rather than schema constraints.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "schemaVersion", "decision", "finalDeliverable", "renderCohorts"],

@@ -20,19 +20,44 @@ internal static class DeliveryTool
         if (args.ValueKind != JsonValueKind.Object)
             throw new McpToolException("docxodus_deliver arguments must be an object");
 
-        var baselineLocation = store.Documents.Resolve(String(args, "baselinePath"));
-        var baselineBytes = store.Documents.Read(baselineLocation);
-        var workingBytes = DocxSessionOps.Save(session.Handle, persistAnchorIds: false);
+        ValidateProperties(args, "docxodus_deliver", "sessionId", "baselinePath",
+            "baselineDocumentVersion", "finalDocumentName", "finalDocumentVersion",
+            "revisionPolicy", "artifacts", "returnIncompleteBundle",
+            "failOnDeliverableValidationFailure");
+        var baselinePath = String(args, "baselinePath");
         var baselineVersion = NonNegativeLong(args, "baselineDocumentVersion");
         var finalVersion = NonNegativeLong(args, "finalDocumentVersion");
         var finalName = String(args, "finalDocumentName");
         var policy = Object(args, "revisionPolicy");
+        ValidateProperties(policy, "revisionPolicy", "preExistingRevisions",
+            "generatedRevisions");
+        var preExistingPolicy = RevisionPolicy(
+            String(policy, "preExistingRevisions"), "preExistingRevisions");
+        var generatedPolicy = RevisionPolicy(
+            String(policy, "generatedRevisions"), "generatedRevisions");
         var artifactArray = Array(args, "artifacts");
         if (artifactArray.GetArrayLength() == 0)
             throw new McpToolException("docxodus_deliver requires at least one artifact");
+        if (artifactArray.GetArrayLength() > DeliveryArtifactRequestRules.MaximumArtifactCount)
+            throw new McpToolException(
+                $"docxodus_deliver accepts at most {DeliveryArtifactRequestRules.MaximumArtifactCount} artifacts");
         var artifacts = artifactArray.EnumerateArray()
             .Select(ParseArtifact)
             .ToArray();
+        var returnIncomplete = OptionalBoolean(args, "returnIncompleteBundle", false);
+        var failOnValidation = OptionalBoolean(
+            args, "failOnDeliverableValidationFailure", true);
+
+        // All caller-controlled shape and policy is now known-valid. Only now perform store/session
+        // I/O, and keep the two exact input snapshots inside the shared raw-package budget.
+        var baselineLocation = store.Documents.Resolve(baselinePath);
+        var baselineBytes = store.Documents.Read(
+            baselineLocation, DeliveryArtifactRequestRules.MaximumInputPackageBytes);
+        var workingBytes = DocxSessionOps.Save(session.Handle, persistAnchorIds: false);
+        if (workingBytes.LongLength
+            > DeliveryArtifactRequestRules.MaximumInputPackageBytes - baselineBytes.LongLength)
+            throw new McpToolException(
+                "baseline and working documents exceed the delivery input byte limit");
 
         var request = new DeliveryBundleBuildRequest(
             new DeliveryDocumentSnapshot(
@@ -47,17 +72,14 @@ internal static class DeliveryTool
             finalVersion,
             new DeliveryBundleRevisionPolicy
             {
-                PreExistingRevisions = RevisionPolicy(
-                    String(policy, "preExistingRevisions"), "preExistingRevisions"),
-                GeneratedRevisions = RevisionPolicy(
-                    String(policy, "generatedRevisions"), "generatedRevisions"),
+                PreExistingRevisions = preExistingPolicy,
+                GeneratedRevisions = generatedPolicy,
             },
             artifacts);
         var options = new DeliveryBundleBuildOptions
         {
-            ReturnIncompleteBundle = OptionalBoolean(args, "returnIncompleteBundle", false),
-            FailOnDeliverableValidationFailure = OptionalBoolean(
-                args, "failOnDeliverableValidationFailure", true),
+            ReturnIncompleteBundle = returnIncomplete,
+            FailOnDeliverableValidationFailure = failOnValidation,
         };
 
         try
@@ -88,6 +110,8 @@ internal static class DeliveryTool
     {
         if (value.ValueKind != JsonValueKind.Object)
             throw new McpToolException("each delivery artifact must be an object");
+        ValidateProperties(value, "delivery artifact", "artifactId", "kind", "requiredness",
+            "reviewProfile", "commentProfile");
         var kind = EnumValue<DeliveryArtifactKind>(String(value, "kind"), "artifact kind");
         var requiredness = EnumValue<DeliveryArtifactRequiredness>(
             String(value, "requiredness"), "artifact requiredness");
@@ -97,7 +121,7 @@ internal static class DeliveryTool
         var comments = OptionalString(value, "commentProfile") is { } commentName
             ? EnumValue<DeliveryCommentProfile>(commentName, "comment profile")
             : (DeliveryCommentProfile?)null;
-        return new DeliveryArtifactRequest
+        var request = new DeliveryArtifactRequest
         {
             ArtifactId = String(value, "artifactId"),
             Kind = kind,
@@ -105,11 +129,21 @@ internal static class DeliveryTool
             ReviewProfile = review,
             CommentProfile = comments,
         };
+        try
+        {
+            DeliveryArtifactRequestRules.ValidateProfileSelection(request);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new McpToolException(exception.Message);
+        }
+        return request;
     }
 
     private static string Serialize(DeliveryBundle bundle)
     {
-        var returnedBytes = bundle.ManifestBytes.LongLength;
+        var manifestBytes = bundle.ManifestBytes;
+        var returnedBytes = manifestBytes.LongLength;
         foreach (var artifact in bundle.Manifest.Payload.Artifacts)
         {
             if (artifact.ByteLength is { } length)
@@ -125,12 +159,16 @@ internal static class DeliveryTool
         {
             writer.WriteStartObject();
             writer.WriteString("status", Name(bundle.Manifest.Payload.Status));
-            writer.WriteBoolean("verified", bundle.Verification.IsValid);
+            writer.WriteBoolean("verified", bundle.IsVerifiedDelivery);
             writer.WriteBoolean("manifestVerified", bundle.Verification.IsValid);
+            if (bundle.DeliverableDecision is { } decision)
+                writer.WriteString("deliverableDecision", Name(decision));
+            else
+                writer.WriteNull("deliverableDecision");
             writer.WritePropertyName("manifest");
-            using (var manifest = JsonDocument.Parse(bundle.ManifestBytes))
+            using (var manifest = JsonDocument.Parse(manifestBytes))
                 manifest.RootElement.WriteTo(writer);
-            writer.WriteBase64String("manifestBytes", bundle.ManifestBytes);
+            writer.WriteBase64String("manifestBytes", manifestBytes);
             writer.WriteStartArray("artifacts");
             foreach (var artifact in bundle.Manifest.Payload.Artifacts)
             {
@@ -191,7 +229,9 @@ internal static class DeliveryTool
     private static string String(JsonElement args, string name)
     {
         if (!args.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(value.GetString()))
+            || string.IsNullOrWhiteSpace(value.GetString())
+            || value.GetString()!.Length > DeliveryArtifactRequestRules.MaximumStringLength
+            || value.GetString()!.Any(char.IsControl))
             throw new McpToolException($"missing required string argument \"{name}\"");
         return value.GetString()!;
     }
@@ -200,7 +240,9 @@ internal static class DeliveryTool
     {
         if (!args.TryGetProperty(name, out var value))
             return null;
-        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString())
+            || value.GetString()!.Length > DeliveryArtifactRequestRules.MaximumStringLength
+            || value.GetString()!.Any(char.IsControl))
             throw new McpToolException($"optional argument \"{name}\" must be a non-blank string");
         return value.GetString();
     }
@@ -220,5 +262,23 @@ internal static class DeliveryTool
         if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
             throw new McpToolException($"argument \"{name}\" must be a boolean");
         return value.GetBoolean();
+    }
+
+    private static void ValidateProperties(
+        JsonElement value,
+        string context,
+        params string[] allowedProperties)
+    {
+        var allowed = allowedProperties.ToHashSet(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!allowed.Contains(property.Name))
+                throw new McpToolException(
+                    $"unknown {context} argument \"{property.Name}\"");
+            if (!seen.Add(property.Name))
+                throw new McpToolException(
+                    $"duplicate {context} argument \"{property.Name}\"");
+        }
     }
 }

@@ -103,6 +103,8 @@ public sealed class DeliveryRenderRequest
     public VerificationDigest SourcePackageDigest { get; }
     public byte[] SourceBytes => _sourceBytes.ToArray();
 
+    internal int SourceByteLength => _sourceBytes.Length;
+
     internal byte[] CopySourceBytes() => _sourceBytes.ToArray();
 }
 

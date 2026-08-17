@@ -48,6 +48,14 @@ public sealed class DeliveryBundleServiceTests
             relationship.Kind == DeliveryArtifactRelationshipKind.ReceiptFor
             && relationship.FromArtifactId == "receipt"
             && relationship.ToArtifactId == "final-docx");
+        using (var receipt = JsonDocument.Parse(bundle.GetArtifactBytes("receipt")))
+        {
+            var payload = receipt.RootElement.GetProperty("payload");
+            Assert.Contains(payload.GetProperty("artifacts").EnumerateArray(), artifact =>
+                artifact.GetProperty("artifactId").GetString() == "validation");
+            Assert.DoesNotContain(payload.GetProperty("evidence").EnumerateArray(), evidence =>
+                evidence.GetProperty("kind").GetString() == "validationResult");
+        }
 
         using var temporary = new TemporaryDirectory();
         var published = Path.Combine(temporary.Path, "bundle");
@@ -186,6 +194,7 @@ public sealed class DeliveryBundleServiceTests
             new DeliveryBundleBuildOptions { ReturnIncompleteBundle = true });
         Assert.Equal(DeliveryBundleStatus.Incomplete, diagnostic.Manifest.Payload.Status);
         Assert.True(diagnostic.Verification.IsValid);
+        Assert.False(diagnostic.IsVerifiedDelivery);
     }
 
     [Fact]
@@ -230,6 +239,8 @@ public sealed class DeliveryBundleServiceTests
         Assert.Equal(reportBytes, bundle.GetArtifactBytes(report.ArtifactId));
         Assert.True(bundle.Verification.IsValid,
             string.Join(Environment.NewLine, bundle.Verification.Findings));
+        Assert.Equal(DeliverableVerificationDecision.Failed, bundle.DeliverableDecision);
+        Assert.False(bundle.IsVerifiedDelivery);
     }
 
     [Fact]
@@ -431,6 +442,67 @@ public sealed class DeliveryBundleServiceTests
             await new DeliveryBundleService(renderer).BuildAsync(request));
 
         Assert.Empty(renderer.Requests);
+    }
+
+    [Fact]
+    public async Task BuildAsync_EnforcesExpandedPlanAndStringLimitsBeforeRendering()
+    {
+        var edit = SingleEdit("Bounded plan edit.");
+        var renderer = new CapturingRenderer();
+        var rendered = Request(edit, new[]
+        {
+            RenderArtifact(
+                "final-html",
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+        });
+
+        var planError = await Assert.ThrowsAsync<DeliveryBundleException>(async () =>
+            await new DeliveryBundleService(renderer).BuildAsync(
+                rendered,
+                new DeliveryBundleBuildOptions
+                {
+                    BundleVerificationLimits = new DeliveryBundleVerificationLimits
+                    {
+                        MaxArtifacts = 4,
+                    },
+                }));
+
+        Assert.Equal("artifact_count_resource_limit", planError.Code);
+        Assert.Empty(renderer.Requests);
+
+        var longId = Request(edit, Artifacts(
+            ("artifact-id-is-too-long", DeliveryArtifactKind.PackageDelta)));
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await new DeliveryBundleService(renderer).BuildAsync(
+                longId,
+                new DeliveryBundleBuildOptions
+                {
+                    BundleVerificationLimits = new DeliveryBundleVerificationLimits
+                    {
+                        MaxStringLength = 16,
+                    },
+                }));
+        Assert.Empty(renderer.Requests);
+    }
+
+    [Fact]
+    public async Task BuildAsync_ValidatesReceiptLimitsEvenWithoutReceiptArtifact()
+    {
+        var edit = SingleEdit("Invalid receipt options edit.");
+        var request = Request(edit, Array.Empty<DeliveryArtifactRequest>());
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+            await new DeliveryBundleService().BuildAsync(
+                request,
+                new DeliveryBundleBuildOptions
+                {
+                    DeliveryReceiptLimits = new DeliveryReceiptLimits
+                    {
+                        MaxTransactions = 0,
+                    },
+                }));
     }
 
     [Fact]

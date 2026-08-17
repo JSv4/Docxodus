@@ -54,7 +54,7 @@ public sealed class DeliveryCliTests : IDisposable
             "--final-name=final",
             "--pre-existing=preserve",
             "--generated=accept",
-            "--artifact=final:final-docx:required",
+            "--artifact=team:final:final-docx:required",
             "--artifact=semantic:semantic-delta:required",
             "--artifact=package:package-delta:required",
             "--artifact=validation:validation-report:required",
@@ -108,6 +108,57 @@ public sealed class DeliveryCliTests : IDisposable
         Assert.Contains("Both --pre-existing and --generated", stderr.ToString(),
             StringComparison.Ordinal);
         Assert.False(Directory.Exists(outputDirectory));
+    }
+
+    [Fact]
+    public async Task RunAsync_RejectsInvalidPdfProfileBeforeReadingInputs()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exitCode = await DeliveryCliApp.RunAsync(new[]
+        {
+            Path.Combine(_root, "missing-baseline.docx"),
+            Path.Combine(_root, "missing-working.docx"),
+            Path.Combine(_root, "not-created"),
+            "--baseline-version=0",
+            "--final-version=1",
+            "--final-name=final",
+            "--pre-existing=preserve",
+            "--generated=accept",
+            "--artifact=pdf:final-pdf:required:original:hidden",
+        }, stdout, stderr);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("requires the final review profile", stderr.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("file not found", stderr.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_RejectsSparseOversizeInputBeforeAllocatingIt()
+    {
+        var baselinePath = Path.Combine(_root, "oversize.docx");
+        using (var stream = new FileStream(baselinePath, FileMode.CreateNew, FileAccess.Write))
+            stream.SetLength(DeliveryArtifactRequestRules.MaximumInputPackageBytes + 1);
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exitCode = await DeliveryCliApp.RunAsync(new[]
+        {
+            baselinePath,
+            Path.Combine(_root, "working.docx"),
+            Path.Combine(_root, "not-created"),
+            "--baseline-version=0",
+            "--final-version=1",
+            "--final-name=final",
+            "--pre-existing=preserve",
+            "--generated=accept",
+            "--artifact=final:final-docx:required",
+        }, stdout, stderr);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("input budget", stderr.ToString(), StringComparison.Ordinal);
     }
 
     public void Dispose()

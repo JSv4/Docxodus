@@ -58,6 +58,8 @@ public sealed class DeliveryMcpTests : IDisposable
 
         Assert.Equal("complete", response.GetProperty("status").GetString());
         Assert.True(response.GetProperty("verified").GetBoolean());
+        Assert.True(response.GetProperty("manifestVerified").GetBoolean());
+        Assert.Equal("passed", response.GetProperty("deliverableDecision").GetString());
         var artifacts = response.GetProperty("artifacts").EnumerateArray().ToArray();
         var html = Assert.Single(artifacts, value =>
             value.GetProperty("artifactId").GetString() == "html");
@@ -91,6 +93,11 @@ public sealed class DeliveryMcpTests : IDisposable
             .EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("revisionPolicy", schema.GetProperty("required")
             .EnumerateArray().Select(value => value.GetString()));
+        var artifactSchema = schema.GetProperty("properties").GetProperty("artifacts");
+        Assert.Equal(DeliveryArtifactRequestRules.MaximumArtifactCount,
+            artifactSchema.GetProperty("maxItems").GetInt32());
+        Assert.Equal(3, artifactSchema.GetProperty("items").GetProperty("allOf")
+            .GetArrayLength());
 
         var sessionId = Open();
         var error = Assert.Throws<McpToolException>(() => Dispatcher.Call(
@@ -111,6 +118,57 @@ public sealed class DeliveryMcpTests : IDisposable
             }
             """)));
         Assert.Contains("at least one artifact", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deliver_RejectsInvalidProfilesAndUnknownPropertiesBeforeStoreIo()
+    {
+        var documents = new CountingDocumentStore();
+        using var store = new SessionStoreScope(documents);
+        var session = store.Store.Open(
+            DocxSessionTests.BuildDS001_SimpleTwoParagraphs(),
+            location: null,
+            new DocxSessionSettings());
+        var invalid = Parse($$"""
+            {
+              "sessionId": {{JsonSerializer.Serialize(session.Id)}},
+              "baselinePath": "baseline.docx",
+              "baselineDocumentVersion": 0,
+              "finalDocumentName": "final",
+              "finalDocumentVersion": 1,
+              "revisionPolicy": {
+                "preExistingRevisions": "preserve",
+                "generatedRevisions": "accept"
+              },
+              "artifacts": [
+                { "artifactId": "pdf", "kind": "finalPdf", "requiredness": "required", "reviewProfile": "original", "commentProfile": "hidden" }
+              ],
+              "typo": true
+            }
+            """);
+
+        var exception = Assert.Throws<McpToolException>(() =>
+            DeliveryTool.Execute(store.Store, session, invalid));
+
+        Assert.Contains("unknown docxodus_deliver argument", exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(0, documents.ResolveCount);
+        Assert.Equal(0, documents.ReadCount);
+    }
+
+    [Fact]
+    public void LocalStore_BoundedReadRejectsSparseOversizeBeforeAllocation()
+    {
+        var path = Path.Combine(_root, "oversize.docx");
+        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+            stream.SetLength(DeliveryArtifactRequestRules.MaximumInputPackageBytes + 1);
+        var documents = new LocalFileDocumentStore(_root);
+
+        var exception = Assert.Throws<McpToolException>(() => documents.Read(
+            documents.Resolve("oversize.docx"),
+            DeliveryArtifactRequestRules.MaximumInputPackageBytes));
+
+        Assert.Contains("read limit", exception.Message, StringComparison.Ordinal);
     }
 
     public void Dispose()
@@ -138,5 +196,35 @@ public sealed class DeliveryMcpTests : IDisposable
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private sealed class CountingDocumentStore : IDocumentStore
+    {
+        public string Kind => "counting";
+        public string RootDescription => "counting";
+        internal int ResolveCount { get; private set; }
+        internal int ReadCount { get; private set; }
+
+        public string Resolve(string location)
+        {
+            ResolveCount++;
+            return location;
+        }
+
+        public byte[] Read(string resolvedLocation)
+        {
+            ReadCount++;
+            throw new InvalidOperationException("read should not be reached");
+        }
+
+        public void Write(string resolvedLocation, byte[] bytes) =>
+            throw new InvalidOperationException("write should not be reached");
+    }
+
+    private sealed class SessionStoreScope : IDisposable
+    {
+        internal SessionStoreScope(IDocumentStore documents) => Store = new SessionStore(documents);
+        internal SessionStore Store { get; }
+        public void Dispose() => Store.CloseAll();
     }
 }

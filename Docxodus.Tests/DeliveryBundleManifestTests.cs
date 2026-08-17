@@ -300,6 +300,8 @@ public class DeliveryBundleManifestTests
         Assert.Contains("sourceDocumentName", renderRequired);
         Assert.Contains("sourceDocumentVersion", renderRequired);
         Assert.Contains("sourcePackageDigest", renderRequired);
+        Assert.DoesNotContain("\"maxItems\"", root.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"maxLength\"", root.GetRawText(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -326,6 +328,94 @@ public class DeliveryBundleManifestTests
             root.GetProperty("$defs").GetProperty("renderCohort")
                 .GetProperty("properties").GetProperty("commentProfile")
                 .GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.DoesNotContain("\"maxItems\"", root.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"maxLength\"", root.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DBM008_AvailableArtifactsCannotClaimZeroBytes()
+    {
+        var snapshots = Snapshots();
+        var request = Request(snapshots.Baseline, snapshots.Working, snapshots.Final,
+            RequestArtifact("empty", DeliveryArtifactKind.ValidationReport,
+                DeliveryArtifactRequiredness.Required));
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            DeliveryBundleManifest.Create(request, new[]
+            {
+                DeliveryBundleArtifactInput.Available(
+                    "empty", DeliveryArtifactKind.ValidationReport,
+                    "empty.json", "application/json", Array.Empty<byte>()),
+            }));
+
+        Assert.Contains("available_artifact_length_missing:empty", exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DBM009_VerifyJsonTreatsNullIdsAndRelationshipEndpointsAsFindings()
+    {
+        var finalBytes = new byte[] { 1, 2, 3, 4 };
+        var manifest = MinimalManifest(finalBytes);
+        var artifact = Assert.Single(manifest.Payload.Artifacts);
+        var nullArtifactId = DeliveryBundleManifest.FromPayload(manifest.Payload with
+        {
+            Artifacts = new[] { artifact with { ArtifactId = null! } },
+        });
+
+        var artifactResult = DeliveryBundleVerifier.VerifyJson(
+            nullArtifactId.ToJsonBytes(),
+            new Dictionary<string, byte[]> { ["final"] = finalBytes });
+
+        Assert.False(artifactResult.IsValid);
+        Assert.Contains("invalid_artifact_id:<null>", artifactResult.Findings);
+        Assert.Contains("undeclared_artifact_bytes:final", artifactResult.Findings);
+
+        var nullRelationshipTarget = DeliveryBundleManifest.FromPayload(manifest.Payload with
+        {
+            Relationships = new[]
+            {
+                new DeliveryArtifactRelationship
+                {
+                    RelationshipId = "null-target",
+                    Kind = DeliveryArtifactRelationshipKind.DerivedFrom,
+                    FromArtifactId = "final",
+                    ToArtifactId = null!,
+                },
+            },
+        });
+        var relationshipResult = DeliveryBundleVerifier.VerifyJson(
+            nullRelationshipTarget.ToJsonBytes(),
+            new Dictionary<string, byte[]> { ["final"] = finalBytes });
+
+        Assert.False(relationshipResult.IsValid);
+        Assert.Contains("relationship_target_missing:null-target",
+            relationshipResult.Findings);
+    }
+
+    [Fact]
+    public void DBM010_V1SchemaDoesNotFreezeConfigurableVerifierResourcePolicy()
+    {
+        var longName = new string('n', 4_097);
+        var baseline = new DeliveryDocumentSnapshot(longName + "-baseline", 1, new byte[] { 1 });
+        var working = new DeliveryDocumentSnapshot(longName + "-working", 2, new byte[] { 2 });
+        var final = new DeliveryDocumentSnapshot(longName + "-final", 3, new byte[] { 3 });
+        var request = Request(baseline, working, final,
+            RequestArtifact("final", DeliveryArtifactKind.FinalDocx,
+                DeliveryArtifactRequiredness.Required));
+        var bytes = new byte[] { 4 };
+        var limits = new DeliveryBundleVerificationLimits { MaxStringLength = 5_000 };
+
+        var manifest = DeliveryBundleManifest.Create(request, new[]
+        {
+            DeliveryBundleArtifactInput.Available(
+                "final", DeliveryArtifactKind.FinalDocx, "final.docx", DocxMediaType, bytes),
+        }, limits: limits);
+
+        Assert.True(DeliveryBundleVerifier.Verify(manifest,
+            new Dictionary<string, byte[]> { ["final"] = bytes }, limits).IsValid);
+        Assert.False(DeliveryBundleVerifier.Verify(manifest,
+            new Dictionary<string, byte[]> { ["final"] = bytes }).IsValid);
     }
 
     private static DeliveryBundleManifest MinimalManifest(

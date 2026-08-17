@@ -993,7 +993,11 @@ public sealed class DeliverableVerifierHardeningTests
         var map = PageMapBytes(renderer, 1);
         var mapDigest = Digest(map);
         var pdf2 = Encoding.ASCII.GetBytes(
-            "%PDF-2.0\n1 0 obj << /Type/XRef /Size 1 /Length 0 >>\nstream\n\nendstream\nendobj\n"
+            "%PDF-2.0\n"
+            + "1 0 obj << /Type/Catalog /Pages 2 0 R >> endobj\n"
+            + "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n"
+            + "3 0 obj << /Type\t/Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n"
+            + "4 0 obj << /Type/XRef /Size 5 /Length 0 >>\nstream\n\nendstream\nendobj\n"
             + "startxref\n9\n%%EOF\n");
         var html = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetPreamble()
             .Concat(Encoding.UTF8.GetBytes(
@@ -1029,6 +1033,73 @@ public sealed class DeliverableVerifierHardeningTests
             finding => finding.Code == "artifact.page_count_invalid");
         Assert.Null(Assert.Single(result.CompanionArtifacts,
             artifact => artifact.ArtifactId == "bad-page-count.json").PageCount);
+    }
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1.1")]
+    [InlineData("1.2")]
+    [InlineData("1.3")]
+    [InlineData("1.4")]
+    [InlineData("1.5")]
+    [InlineData("1.6")]
+    [InlineData("1.7")]
+    [InlineData("2.0")]
+    public void Pdf_version_vocabulary_accepts_only_the_supported_exact_header(string version)
+    {
+        var result = VerifyPdf(MinimalPdf(version));
+
+        Assert.DoesNotContain(result.Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
+    }
+
+    [Theory]
+    [InlineData("1.70")]
+    [InlineData("1.8")]
+    [InlineData("2.00")]
+    [InlineData("2.1")]
+    public void Pdf_version_vocabulary_rejects_prefix_matches(string version)
+    {
+        var result = VerifyPdf(MinimalPdf(version));
+
+        Assert.Contains(result.Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
+    }
+
+    [Fact]
+    public void Pdf_lexical_evidence_ignores_comments_strings_streams_and_name_spoofs()
+    {
+        var hiddenGraph = Encoding.ASCII.GetBytes(
+            "%PDF-1.7\n"
+            + "1 0 obj << /Value (/Type /Catalog /Type /Pages /Type /Page) /Length 39 >>\n"
+            + "stream\n/Type /Catalog /Type /Pages /Type /Page\nendstream\nendobj\n"
+            + "% /Type /Catalog /Type /Pages /Type /Page\n"
+            + "xref\ntrailer << /Size 2 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+        var namedKeywords = Encoding.ASCII.GetBytes(
+            "%PDF-1.7\n/obj /xref /trailer /startxref\n"
+            + "/Type /Catalog /Type /Pages /Type /Page\n%%EOF\n");
+        var nonDelimiterSuffix = Encoding.ASCII.GetBytes(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+            + "2 0 obj << /Type /Pages /Kids [3 0 R] >> endobj\n"
+            + "3 0 obj << /Type /Page{suffix} >> endobj\n"
+            + "xref\ntrailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+
+        Assert.Contains(VerifyPdf(hiddenGraph).Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
+        Assert.Contains(VerifyPdf(namedKeywords).Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
+        Assert.Contains(VerifyPdf(nonDelimiterSuffix).Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
+    }
+
+    [Fact]
+    public void Pdf_xref_and_object_streams_allow_a_compressed_document_graph()
+    {
+        var pdf = ObjectStreamPdf();
+        var result = VerifyPdf(pdf);
+
+        Assert.DoesNotContain(result.Findings,
+            finding => finding.Code == "artifact.pdf_malformed");
     }
 
     [Fact]
@@ -1354,12 +1425,99 @@ public sealed class DeliverableVerifierHardeningTests
         return Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map));
     }
 
-    private static byte[] MinimalPdf() => Encoding.ASCII.GetBytes(
-        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+    private static DeliverableVerificationResult VerifyPdf(byte[] pdf)
+    {
+        var package = IrTestDocuments.Create("Rendered").DocumentByteArray;
+        return DeliverableVerifier.VerifyDeliverable(new DeliverableVerificationRequest
+        {
+            DeliverableBytes = package,
+            CompanionArtifacts = new[]
+            {
+                Artifact("fixture.pdf", DeliverableArtifactRole.Pdf, "application/pdf",
+                    pdf, Digest(package), "fixture/pdf", 1),
+            },
+        });
+    }
+
+    private static byte[] MinimalPdf(string version = "1.4") => Encoding.ASCII.GetBytes(
+        $"%PDF-{version}\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
         + "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n"
         + "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\n"
         + "xref\n0 4\n0000000000 65535 f \n"
         + "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+
+    private static byte[] ObjectStreamPdf()
+    {
+        var objectBodies = new[]
+        {
+            "<< /Type /Catalog /Pages 3 0 R >>\n",
+            "<< /Type /Pages /Count 1 /Kids [4 0 R] >>\n",
+            "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] >>\n",
+        };
+        var objectHeader = new StringBuilder();
+        int objectOffset = 0;
+        for (var index = 0; index < objectBodies.Length; index++)
+        {
+            objectHeader.Append(index + 2).Append(' ').Append(objectOffset).Append(' ');
+            objectOffset += Encoding.ASCII.GetByteCount(objectBodies[index]);
+        }
+        var objectStream = Encoding.ASCII.GetBytes(
+            objectHeader + string.Concat(objectBodies));
+        var compressedObjects = DeflatePdfBytes(objectStream);
+
+        using var output = new MemoryStream();
+        void WriteAscii(string text) => output.Write(Encoding.ASCII.GetBytes(text));
+        WriteAscii("%PDF-1.7\n");
+        var objectStreamOffset = checked((uint)output.Position);
+        WriteAscii("1 0 obj\n<< /Type /ObjStm /N 3 /First "
+                   + objectHeader.Length.ToString(CultureInfo.InvariantCulture)
+                   + " /Length " + compressedObjects.Length.ToString(CultureInfo.InvariantCulture)
+                   + " /Filter /FlateDecode >>\nstream\n");
+        output.Write(compressedObjects);
+        WriteAscii("\nendstream\nendobj\n");
+
+        var xrefOffset = checked((uint)output.Position);
+        var xrefEntries = new byte[6 * 7];
+        WriteXrefEntry(xrefEntries, 0, 0, 0, ushort.MaxValue);
+        WriteXrefEntry(xrefEntries, 1, 1, objectStreamOffset, 0);
+        WriteXrefEntry(xrefEntries, 2, 2, 1, 0);
+        WriteXrefEntry(xrefEntries, 3, 2, 1, 1);
+        WriteXrefEntry(xrefEntries, 4, 2, 1, 2);
+        WriteXrefEntry(xrefEntries, 5, 1, xrefOffset, 0);
+        var compressedXref = DeflatePdfBytes(xrefEntries);
+        WriteAscii("5 0 obj\n<< /Type /XRef /Size 6 /Root 2 0 R /W [1 4 2] /Length "
+                   + compressedXref.Length.ToString(CultureInfo.InvariantCulture)
+                   + " /Filter /FlateDecode >>\nstream\n");
+        output.Write(compressedXref);
+        WriteAscii("\nendstream\nendobj\nstartxref\n"
+                   + xrefOffset.ToString(CultureInfo.InvariantCulture)
+                   + "\n%%EOF\n");
+        return output.ToArray();
+    }
+
+    private static byte[] DeflatePdfBytes(byte[] bytes)
+    {
+        using var output = new MemoryStream();
+        using (var compressed = new ZLibStream(
+                   output, CompressionLevel.SmallestSize, leaveOpen: true))
+            compressed.Write(bytes);
+        return output.ToArray();
+    }
+
+    private static void WriteXrefEntry(
+        byte[] entries,
+        int index,
+        byte type,
+        uint field2,
+        ushort field3)
+    {
+        var offset = index * 7;
+        entries[offset] = type;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+            entries.AsSpan(offset + 1, 4), field2);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
+            entries.AsSpan(offset + 5, 2), field3);
+    }
 
     private static VerificationDigest Digest(byte[] bytes) => new()
     {

@@ -212,6 +212,46 @@ public class DeliveryRevisionPolicyTests
         Assert.Equal(malformedSnapshot, malformed);
     }
 
+    [Fact]
+    public void DRP007_FullIdentityIncludesNativeConstituentKeysAndNormalizedDate()
+    {
+        var identity = RevisionIdentity();
+
+        Assert.True(RedlineReversibilityVerifier.IdentityEquivalent(identity, identity with { }));
+        Assert.False(RedlineReversibilityVerifier.IdentityEquivalent(
+            identity,
+            identity with { ConstituentKeys = new[] { "w:ins:rewritten" } }));
+        Assert.False(RedlineReversibilityVerifier.IdentityEquivalent(
+            identity,
+            identity with { DateUtc = "2026-08-17T13:01:03.0000000Z" }));
+    }
+
+    [Fact]
+    public void DRP008_DistinctCarrierRolesMayReuseOneNumericNativeId()
+    {
+        var preExisting = RevisionEntry(
+            "rev2-pre-existing", "insert", RevisionFamily.ContentInsert,
+            "kind=ContentInsert:http://schemas.openxmlformats.org/wordprocessingml/2006/main:ins:1");
+        var generated = RevisionEntry(
+            "rev2-generated", "delete", RevisionFamily.ContentDelete,
+            "kind=ContentDelete:http://schemas.openxmlformats.org/wordprocessingml/2006/main:del:1");
+        var findings = new List<RedlineProofFinding>();
+
+        var classifications = RedlineReversibilityVerifier.Classify(
+            new[] { preExisting }, new[] { preExisting, generated }, findings);
+
+        Assert.Contains(classifications, value =>
+            value.Redline?.Id == preExisting.Id
+            && value.Disposition == RedlineRevisionDisposition.PreExisting);
+        Assert.Contains(classifications, value =>
+            value.Redline?.Id == generated.Id
+            && value.Disposition == RedlineRevisionDisposition.Generated);
+        Assert.DoesNotContain(classifications, value =>
+            value.Disposition == RedlineRevisionDisposition.Conflicted);
+        Assert.DoesNotContain(findings, value =>
+            value.Severity == VerificationFindingSeverity.Error);
+    }
+
     private static RevisionFixture TwoRevisionClasses()
     {
         var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
@@ -383,6 +423,47 @@ public class DeliveryRevisionPolicyTests
     {
         PreExistingRevisions = preExisting,
         GeneratedRevisions = generated,
+    };
+
+    private static RedlineRevisionIdentity RevisionIdentity() => new()
+    {
+        Id = "revision-1",
+        PartUri = "/word/document.xml",
+        Scope = "body",
+        Type = "insert",
+        Family = RevisionFamily.ContentInsert,
+        ConstituentIds = new[] { "revision-1" },
+        ConstituentKeys = new[] { "w:ins:revision-1" },
+        Author = "Reviewer",
+        Date = "2026-08-17T08:01:02-05:00",
+        DateUtc = "2026-08-17T13:01:02.0000000Z",
+        Text = "Tracked text",
+        AnchorId = "p:doc:1",
+        AffectedAnchorIds = new[] { "p:doc:1" },
+        ResolutionStatus = RevisionResolutionStatus.Supported,
+    };
+
+    private static RevisionListEntry RevisionEntry(
+        string id,
+        string type,
+        RevisionFamily family,
+        string constituentKey) => new()
+    {
+        Id = id,
+        Type = type,
+        Family = family,
+        ConstituentIds = new[] { "1" },
+        ConstituentKeys = new[] { constituentKey },
+        Author = "Reviewer",
+        Date = null,
+        DateUtc = null,
+        Text = type,
+        PartUri = "/word/document.xml",
+        Scope = "body",
+        AnchorId = null,
+        AffectedAnchors = Array.Empty<Anchor>(),
+        ResolutionStatus = RevisionResolutionStatus.Supported,
+        Diagnostic = null,
     };
 
     private static void WriteArtifact(string group, string fileName, byte[] bytes)

@@ -381,66 +381,269 @@ internal static class DeliverableArtifactInspector
         if (bytes.Length < 24) return false;
         var span = bytes.AsSpan();
         int end = span.Length - 1;
-        while (end >= 0 && span[end] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n') end--;
-        bool supportedVersion = span.Length >= 8
+        while (end >= 0 && IsPdfWhiteSpace(span[end])) end--;
+        bool supportedVersion = span.Length >= 9
             && span[..5].SequenceEqual("%PDF-"u8)
             && ((span[5] == (byte)'1' && span[6] == (byte)'.' && span[7] is >= (byte)'0' and <= (byte)'7')
-                || (span[5] == (byte)'2' && span[6] == (byte)'.' && span[7] == (byte)'0'));
-        bool traditionalXref = ContainsPdfKeyword(span, "xref"u8)
-            && ContainsPdfKeyword(span, "trailer"u8);
-        bool xrefStream = ContainsPdfNamePair(span, "/Type"u8, "/XRef"u8);
+                || (span[5] == (byte)'2' && span[6] == (byte)'.' && span[7] == (byte)'0'))
+            && IsPdfWhiteSpace(span[8]);
+        var evidence = InspectPdfTokens(span);
+        bool traditionalXref = evidence.HasXrefKeyword && evidence.HasTrailerKeyword;
+        bool hasUncompressedDocumentGraph = evidence.HasCatalog
+            && evidence.HasPages && evidence.HasPage;
+        // PDF 1.5+ permits the Catalog, Pages, and Page dictionaries to live in a compressed
+        // object stream. In that representation the xref-stream trailer's Root/Size/W entries
+        // and an ObjStm declaration are the bounded lexical evidence available without turning
+        // this format sniff into an incomplete PDF parser.
+        bool hasCompressedDocumentGraph = evidence.HasXrefStream
+            && evidence.HasObjectStream
+            && evidence.HasRoot
+            && evidence.HasSize
+            && evidence.HasWidths;
         return supportedVersion
-            && ContainsPdfNamePair(span, "/Type"u8, "/Catalog"u8)
-            && ContainsPdfNamePair(span, "/Type"u8, "/Pages"u8)
-            && ContainsPdfNamePair(span, "/Type"u8, "/Page"u8)
-            && ContainsPdfKeyword(span, "obj"u8)
-            && (traditionalXref || xrefStream)
-            && ContainsPdfKeyword(span, "startxref"u8)
+            && (hasUncompressedDocumentGraph || hasCompressedDocumentGraph)
+            && evidence.HasObjectKeyword
+            && (traditionalXref || evidence.HasXrefStream)
+            && evidence.HasStartXrefKeyword
             && end >= 4 && span[..(end + 1)].EndsWith("%%EOF"u8);
     }
 
-    private static bool ContainsPdfKeyword(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> value)
+    private static PdfLexicalEvidence InspectPdfTokens(ReadOnlySpan<byte> bytes)
     {
+        bool hasObjectKeyword = false;
+        bool hasXrefKeyword = false;
+        bool hasTrailerKeyword = false;
+        bool hasStartXrefKeyword = false;
+        bool hasCatalog = false;
+        bool hasPages = false;
+        bool hasPage = false;
+        bool hasXrefStream = false;
+        bool hasObjectStream = false;
+        bool hasRoot = false;
+        bool hasSize = false;
+        bool hasWidths = false;
+        var previous = default(PdfToken);
         int offset = 0;
-        while (offset <= bytes.Length - value.Length)
+        while (TryReadPdfToken(bytes, ref offset, out var token))
         {
-            int relative = bytes[offset..].IndexOf(value);
-            if (relative < 0) return false;
-            int start = offset + relative;
-            int end = start + value.Length;
-            if ((start == 0 || IsPdfDelimiter(bytes[start - 1]))
-                && (end == bytes.Length || IsPdfDelimiter(bytes[end])))
-                return true;
-            offset = start + 1;
+            if (!token.IsName)
+            {
+                hasObjectKeyword |= PdfTokenEquals(bytes, token, "obj"u8);
+                hasXrefKeyword |= PdfTokenEquals(bytes, token, "xref"u8);
+                hasTrailerKeyword |= PdfTokenEquals(bytes, token, "trailer"u8);
+                hasStartXrefKeyword |= PdfTokenEquals(bytes, token, "startxref"u8);
+                if (PdfTokenEquals(bytes, token, "stream"u8))
+                {
+                    SkipPdfStream(bytes, ref offset);
+                    previous = default;
+                    continue;
+                }
+            }
+            else
+            {
+                hasRoot |= PdfTokenEquals(bytes, token, "/Root"u8);
+                hasSize |= PdfTokenEquals(bytes, token, "/Size"u8);
+                hasWidths |= PdfTokenEquals(bytes, token, "/W"u8);
+            }
+
+            if (previous.IsName && token.IsName
+                && PdfTokenEquals(bytes, previous, "/Type"u8))
+            {
+                hasCatalog |= PdfTokenEquals(bytes, token, "/Catalog"u8);
+                hasPages |= PdfTokenEquals(bytes, token, "/Pages"u8);
+                hasPage |= PdfTokenEquals(bytes, token, "/Page"u8);
+                hasXrefStream |= PdfTokenEquals(bytes, token, "/XRef"u8);
+                hasObjectStream |= PdfTokenEquals(bytes, token, "/ObjStm"u8);
+            }
+            previous = token;
         }
+
+        return new PdfLexicalEvidence(
+            hasObjectKeyword,
+            hasXrefKeyword,
+            hasTrailerKeyword,
+            hasStartXrefKeyword,
+            hasCatalog,
+            hasPages,
+            hasPage,
+            hasXrefStream,
+            hasObjectStream,
+            hasRoot,
+            hasSize,
+            hasWidths);
+    }
+
+    private static bool TryReadPdfToken(
+        ReadOnlySpan<byte> bytes,
+        ref int offset,
+        out PdfToken token)
+    {
+        while (offset < bytes.Length)
+        {
+            if (IsPdfWhiteSpace(bytes[offset]))
+            {
+                offset++;
+                continue;
+            }
+            if (bytes[offset] == (byte)'%')
+            {
+                while (offset < bytes.Length && bytes[offset] is not ((byte)'\r') and not ((byte)'\n'))
+                    offset++;
+                continue;
+            }
+            if (bytes[offset] == (byte)'(')
+            {
+                SkipPdfLiteralString(bytes, ref offset);
+                continue;
+            }
+            if (bytes[offset] == (byte)'<')
+            {
+                if (offset + 1 < bytes.Length && bytes[offset + 1] == (byte)'<')
+                    offset += 2;
+                else
+                {
+                    offset++;
+                    while (offset < bytes.Length && bytes[offset] != (byte)'>') offset++;
+                    if (offset < bytes.Length) offset++;
+                }
+                continue;
+            }
+            if (bytes[offset] == (byte)'/')
+            {
+                int nameStart = offset++;
+                while (offset < bytes.Length
+                       && !IsPdfWhiteSpace(bytes[offset])
+                       && !IsPdfDelimiter(bytes[offset]))
+                    offset++;
+                token = new PdfToken(nameStart, offset - nameStart, true);
+                return true;
+            }
+            if (IsPdfDelimiter(bytes[offset]))
+            {
+                offset++;
+                continue;
+            }
+
+            int start = offset++;
+            while (offset < bytes.Length
+                   && !IsPdfWhiteSpace(bytes[offset])
+                   && !IsPdfDelimiter(bytes[offset]))
+                offset++;
+            token = new PdfToken(start, offset - start, false);
+            return true;
+        }
+        token = default;
         return false;
     }
 
-    private static bool ContainsPdfNamePair(
-        ReadOnlySpan<byte> bytes,
-        ReadOnlySpan<byte> name,
-        ReadOnlySpan<byte> value)
+    private static void SkipPdfLiteralString(ReadOnlySpan<byte> bytes, ref int offset)
     {
-        int offset = 0;
-        while (offset <= bytes.Length - name.Length)
+        int depth = 0;
+        while (offset < bytes.Length)
         {
-            int relative = bytes[offset..].IndexOf(name);
-            if (relative < 0) return false;
-            int next = offset + relative + name.Length;
-            while (next < bytes.Length && IsPdfWhiteSpace(bytes[next])) next++;
-            if (bytes[next..].StartsWith(value)
-                && (next + value.Length == bytes.Length || IsPdfDelimiter(bytes[next + value.Length])))
-                return true;
-            offset += relative + 1;
+            var value = bytes[offset++];
+            if (value == (byte)'\\')
+            {
+                if (offset < bytes.Length) offset++;
+                continue;
+            }
+            if (value == (byte)'(')
+                depth++;
+            else if (value == (byte)')' && --depth <= 0)
+                return;
         }
-        return false;
+    }
+
+    private static void SkipPdfStream(ReadOnlySpan<byte> bytes, ref int offset)
+    {
+        if (offset < bytes.Length && bytes[offset] == (byte)'\r') offset++;
+        if (offset < bytes.Length && bytes[offset] == (byte)'\n') offset++;
+        ReadOnlySpan<byte> marker = "endstream"u8;
+        while (offset <= bytes.Length - marker.Length)
+        {
+            int relative = bytes[offset..].IndexOf(marker);
+            if (relative < 0)
+            {
+                offset = bytes.Length;
+                return;
+            }
+            int start = offset + relative;
+            int end = start + marker.Length;
+            if ((start == 0 || IsPdfWhiteSpace(bytes[start - 1]))
+                && (end == bytes.Length || IsPdfWhiteSpace(bytes[end])
+                    || IsPdfDelimiter(bytes[end])))
+            {
+                offset = end;
+                return;
+            }
+            offset = start + 1;
+        }
+        offset = bytes.Length;
+    }
+
+    private static bool PdfTokenEquals(
+        ReadOnlySpan<byte> bytes,
+        PdfToken token,
+        ReadOnlySpan<byte> expected)
+    {
+        var actual = bytes.Slice(token.Start, token.Length);
+        if (actual.SequenceEqual(expected)) return true;
+        if (!token.IsName || expected.IsEmpty || expected[0] != (byte)'/') return false;
+
+        int actualIndex = 0;
+        int expectedIndex = 0;
+        while (actualIndex < actual.Length && expectedIndex < expected.Length)
+        {
+            byte value = actual[actualIndex++];
+            if (value == (byte)'#' && actualIndex + 1 < actual.Length
+                && TryPdfHex(actual[actualIndex], out var high)
+                && TryPdfHex(actual[actualIndex + 1], out var low))
+            {
+                value = (byte)((high << 4) | low);
+                actualIndex += 2;
+            }
+            if (value != expected[expectedIndex++]) return false;
+        }
+        return actualIndex == actual.Length && expectedIndex == expected.Length;
+    }
+
+    private static bool TryPdfHex(byte value, out int number)
+    {
+        if (value is >= (byte)'0' and <= (byte)'9')
+            number = value - (byte)'0';
+        else if (value is >= (byte)'A' and <= (byte)'F')
+            number = value - (byte)'A' + 10;
+        else if (value is >= (byte)'a' and <= (byte)'f')
+            number = value - (byte)'a' + 10;
+        else
+        {
+            number = 0;
+            return false;
+        }
+        return true;
     }
 
     private static bool IsPdfWhiteSpace(byte value) => value is 0 or 9 or 10 or 12 or 13 or 32;
 
     private static bool IsPdfDelimiter(byte value) => IsPdfWhiteSpace(value)
         || value is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'[' or (byte)']'
-            or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%';
+            or (byte)'/' or (byte)'%';
+
+    private readonly record struct PdfToken(int Start, int Length, bool IsName);
+
+    private readonly record struct PdfLexicalEvidence(
+        bool HasObjectKeyword,
+        bool HasXrefKeyword,
+        bool HasTrailerKeyword,
+        bool HasStartXrefKeyword,
+        bool HasCatalog,
+        bool HasPages,
+        bool HasPage,
+        bool HasXrefStream,
+        bool HasObjectStream,
+        bool HasRoot,
+        bool HasSize,
+        bool HasWidths);
 
     private static bool LooksLikeHtml(byte[] bytes)
     {

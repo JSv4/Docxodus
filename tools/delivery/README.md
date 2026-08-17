@@ -19,7 +19,9 @@ Each repeatable `--artifact` value has this form:
 id:kind:requiredness[:review-profile:comment-profile]
 ```
 
-Render artifacts require the final two profile fields. Production HTML/PDF/PageMap/report output
+Parsing proceeds from the right, so an artifact ID may itself contain `:`. Render artifacts require
+the final two profile fields; `final-pdf` requires the `final` review profile and `review-pdf`
+requires `markup`. Production HTML/PDF/PageMap/report output
 uses the epic #434 framed host and must be configured with absolute paths:
 
 ```console
@@ -39,7 +41,12 @@ control the bounded render. Without renderer configuration, render outputs are e
 unavailable. The CLI cannot synthesize authoritative mutation history, so change receipts must be
 built through the programmatic API with a `DeliveryReceiptContext`.
 
-The CLI snapshots each input twice through one read-only handle and rejects a changing file. The
-output path must not exist. Artifacts are written into a private staging directory, verified, and
-then atomically renamed; the manifest is written last inside the stage. Incomplete output is
-retained only when `--return-incomplete` explicitly requests diagnostic publication.
+The CLI hashes and then snapshots each input through one read-only handle, retaining only one full
+buffer per input and rejecting a changing file. Baseline plus working bytes are limited to 100 MiB
+before allocation. The output path must not exist. Artifacts are written into a permission-restricted
+Unix staging directory, verified, and then atomically renamed without replacement; the manifest is
+written last inside the stage. Incomplete output is retained only when `--return-incomplete`
+explicitly requests diagnostic publication. The one-line JSON result reports `manifestVerified`
+for manifest/byte integrity, `deliverableDecision` for validation policy, and `verified` only for a
+complete bundle whose validation passed. `--allow-validation-failure` therefore never reports a
+failed diagnostic bundle as verified.

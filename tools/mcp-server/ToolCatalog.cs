@@ -533,16 +533,16 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_deliver",
-            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration; authoritative change-receipt evidence remains available through the programmatic transaction API.",
+            "Build one delivery bundle from a named baseline and the current session. Returns distinct manifestVerified, deliverableDecision, and verified-delivery fields plus canonical manifest/artifact bytes, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration; authoritative change-receipt evidence remains available through the programmatic transaction API.",
             """
             {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "sessionId": { "type": "string" },
-                "baselinePath": { "type": "string", "description": "Store-scoped baseline DOCX location." },
+                "sessionId": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "baselinePath": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000-\\u001F\\u007F]*$", "description": "Store-scoped baseline DOCX location." },
                 "baselineDocumentVersion": { "type": "integer", "minimum": 0 },
-                "finalDocumentName": { "type": "string", "minLength": 1 },
+                "finalDocumentName": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000-\\u001F\\u007F]*$" },
                 "finalDocumentVersion": { "type": "integer", "minimum": 0 },
                 "revisionPolicy": {
                   "type": "object",
@@ -556,17 +556,49 @@ internal static class ToolCatalog
                 "artifacts": {
                   "type": "array",
                   "minItems": 1,
+                  "maxItems": 1024,
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
-                      "artifactId": { "type": "string", "minLength": 1 },
+                      "artifactId": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000-\\u001F\\u007F]*$" },
                       "kind": { "type": "string", "enum": ["baselineDocx", "policyBaselineDocx", "workingDocx", "reviewDocx", "finalDocx", "standaloneHtml", "finalPdf", "reviewPdf", "pageMap", "renderReport", "baselinePackageManifest", "finalPackageManifest", "semanticDelta", "packageDelta", "validationReport", "reversibilityProof", "changeReceipt"] },
                       "requiredness": { "type": "string", "enum": ["required", "optional"] },
                       "reviewProfile": { "type": "string", "enum": ["final", "original", "markup"] },
                       "commentProfile": { "type": "string", "enum": ["hidden", "inline", "endnotes", "margin"] }
                     },
-                    "required": ["artifactId", "kind", "requiredness"]
+                    "required": ["artifactId", "kind", "requiredness"],
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": { "kind": { "enum": ["standaloneHtml", "finalPdf", "reviewPdf", "pageMap", "renderReport"] } },
+                          "required": ["kind"]
+                        },
+                        "then": { "required": ["reviewProfile", "commentProfile"] },
+                        "else": {
+                          "not": {
+                            "anyOf": [
+                              { "required": ["reviewProfile"] },
+                              { "required": ["commentProfile"] }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": { "kind": { "const": "finalPdf" } },
+                          "required": ["kind"]
+                        },
+                        "then": { "properties": { "reviewProfile": { "const": "final" } } }
+                      },
+                      {
+                        "if": {
+                          "properties": { "kind": { "const": "reviewPdf" } },
+                          "required": ["kind"]
+                        },
+                        "then": { "properties": { "reviewProfile": { "const": "markup" } } }
+                      }
+                    ]
                   }
                 },
                 "failOnDeliverableValidationFailure": { "type": "boolean", "default": true },

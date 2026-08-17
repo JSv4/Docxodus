@@ -125,14 +125,14 @@ modeled change in that part, but this never claims the modeled projection exhaus
 explains every XML node in the part. This conservative residual rule is the guard
 against silently losing unsupported content mixed into an otherwise modeled part.
 
-## Result and receipt embedding
+## Result and receipt binding
 
 The canonical JSON schema is
 `https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1`.
 Serialization is deterministic. It includes algorithm-labelled input/output digests,
 revision classifications, both path results, part divergences, and findings. The
-delivery receipt embeds this object as a value and includes its canonical JSON digest;
-it does not reinterpret or flatten proof fields.
+delivery receipt references the separately supplied canonical proof artifact by schema,
+digest, and artifact ID; it does not embed, reinterpret, or flatten the proof object.
 
 The checked-in schema is
 [`docs/schemas/redline-reversibility-proof-v1.schema.json`](../schemas/redline-reversibility-proof-v1.schema.json).

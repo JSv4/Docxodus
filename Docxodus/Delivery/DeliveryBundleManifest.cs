@@ -112,6 +112,9 @@ public sealed record DeliveryBundleManifest
             throw new ArgumentException("Artifact count exceeds the configured limit.", nameof(artifactInputs));
         if (inputArray.Any(value => value is null))
             throw new ArgumentException("Artifact inputs cannot contain null entries.", nameof(artifactInputs));
+        foreach (var input in inputArray)
+            DeliveryBundleValidation.RequireString(
+                input.ArtifactId, "artifact input ID", limits);
         if (inputArray.GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
             .Any(group => group.Count() != 1))
             throw new ArgumentException("Artifact IDs must be unique.", nameof(artifactInputs));
@@ -141,7 +144,7 @@ public sealed record DeliveryBundleManifest
                     $"Artifact '{input.ArtifactId}' does not match its requested kind.",
                     nameof(artifactInputs));
 
-            var bytes = input.CopyBytes();
+            var bytes = input.OwnedBytes;
             var artifact = new DeliveryBundleArtifact
             {
                 ArtifactId = input.ArtifactId,
@@ -236,26 +239,7 @@ public sealed record DeliveryBundleManifest
             DeliveryBundleValidation.RequireString(request.ArtifactId, "artifact request ID", limits);
             if (!Enum.IsDefined(request.Kind) || !Enum.IsDefined(request.Requiredness))
                 throw new ArgumentException($"Artifact request '{request.ArtifactId}' has an invalid enum value.");
-            if (IsProfiledRenderKind(request.Kind))
-            {
-                if (request.ReviewProfile is null || !Enum.IsDefined(request.ReviewProfile.Value)
-                    || request.CommentProfile is null || !Enum.IsDefined(request.CommentProfile.Value))
-                    throw new ArgumentException(
-                        $"Render artifact request '{request.ArtifactId}' requires explicit review and comment profiles.");
-                if (request.Kind == DeliveryArtifactKind.FinalPdf
-                    && request.ReviewProfile != DeliveryReviewProfile.Final)
-                    throw new ArgumentException(
-                        $"Final PDF request '{request.ArtifactId}' requires the final review profile.");
-                if (request.Kind == DeliveryArtifactKind.ReviewPdf
-                    && request.ReviewProfile != DeliveryReviewProfile.Markup)
-                    throw new ArgumentException(
-                        $"Review PDF request '{request.ArtifactId}' requires the markup review profile.");
-            }
-            else if (request.ReviewProfile is not null || request.CommentProfile is not null)
-            {
-                throw new ArgumentException(
-                    $"Non-render artifact request '{request.ArtifactId}' cannot select render profiles.");
-            }
+            DeliveryArtifactRequestRules.ValidateProfileSelection(request);
         }
         if (requests.GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
             .Any(group => group.Count() != 1))
@@ -350,12 +334,8 @@ public sealed record DeliveryBundleManifest
             string.Compare(left, right, StringComparison.Ordinal);
     }
 
-    internal static bool IsProfiledRenderKind(DeliveryArtifactKind kind) => kind is
-        DeliveryArtifactKind.StandaloneHtml
-        or DeliveryArtifactKind.FinalPdf
-        or DeliveryArtifactKind.ReviewPdf
-        or DeliveryArtifactKind.PageMap
-        or DeliveryArtifactKind.RenderReport;
+    internal static bool IsProfiledRenderKind(DeliveryArtifactKind kind) =>
+        DeliveryArtifactRequestRules.IsProfiledRenderKind(kind);
 }
 
 internal static class DeliveryBundleCanonicalJson
@@ -440,8 +420,10 @@ internal static class DeliveryBundleValidation
         string name,
         DeliveryBundleVerificationLimits limits)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > limits.MaxStringLength)
-            throw new ArgumentException($"{name} must be non-blank and within the configured length limit.");
+        if (string.IsNullOrWhiteSpace(value) || value.Length > limits.MaxStringLength
+            || value.Any(char.IsControl))
+            throw new ArgumentException(
+                $"{name} must be non-blank, control-free, and within the configured length limit.");
         return value;
     }
 }

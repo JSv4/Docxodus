@@ -95,12 +95,16 @@ markdown projection and search tools return:
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
 | `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
-| `docxodus_deliver` | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes |
+| `docxodus_deliver` | Build a delivery bundle from a named baseline and the current session; return its integrity, validation decision, manifest, and available artifact bytes |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
 
 `docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
 `docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
-as base64, with a 64 MiB pre-base64 byte limit. Production HTML/PDF/PageMap/report rendering uses
+as base64, with a 64 MiB pre-base64 byte limit. Baseline plus working input is bounded to 100 MiB,
+and malformed request shape/profile selections are rejected before baseline or session-byte I/O.
+The response separates `manifestVerified`, `deliverableDecision`, and `verified`, where `verified`
+requires manifest integrity, completeness, and a passing validation decision. Production
+HTML/PDF/PageMap/report rendering uses
 the process-owned epic #434 host when `DOCXODUS_NODE_PATH` and `DOCXODUS_EXPORT_HOST_PATH` are set;
 `DOCXODUS_CHROMIUM_PATH` is optional. The server never searches PATH or accepts executable paths
 from tool arguments. Authoritative change receipts remain unavailable here because issuance

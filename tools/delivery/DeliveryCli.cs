@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Text.Json;
+using System.Security.Cryptography;
 using Docxodus.Delivery;
 
 namespace Docxodus.DeliveryCli;
@@ -27,9 +28,13 @@ internal static class DeliveryCli
         {
             var parsed = Parse(args);
             var baselineBytes = await ReadStableInputAsync(
-                parsed.BaselinePath, "Baseline", cancellationToken).ConfigureAwait(false);
+                parsed.BaselinePath, "Baseline",
+                DeliveryArtifactRequestRules.MaximumInputPackageBytes,
+                cancellationToken).ConfigureAwait(false);
             var workingBytes = await ReadStableInputAsync(
-                parsed.WorkingPath, "Working", cancellationToken).ConfigureAwait(false);
+                parsed.WorkingPath, "Working",
+                DeliveryArtifactRequestRules.MaximumInputPackageBytes - baselineBytes.LongLength,
+                cancellationToken).ConfigureAwait(false);
 
             var request = new DeliveryBundleBuildRequest(
                 new DeliveryDocumentSnapshot(
@@ -67,8 +72,11 @@ internal static class DeliveryCli
             await output.WriteLineAsync(JsonSerializer.Serialize(new
             {
                 status = Name(bundle.Manifest.Payload.Status),
-                verified = bundle.Verification.IsValid,
+                verified = bundle.IsVerifiedDelivery,
                 manifestVerified = bundle.Verification.IsValid,
+                deliverableDecision = bundle.DeliverableDecision is { } decision
+                    ? Name(decision)
+                    : null,
                 outputDirectory = published,
                 manifestPath = Path.Combine(published, DeliveryBundle.ManifestFileName),
                 manifestDigest = bundle.Manifest.ManifestDigest.Value,
@@ -123,7 +131,12 @@ internal static class DeliveryCli
                 continue;
             }
             if (Value(argument, "--artifact=") is { } artifact)
+            {
+                if (artifacts.Count >= DeliveryArtifactRequestRules.MaximumArtifactCount)
+                    throw new CliUsageException(
+                        $"At most {DeliveryArtifactRequestRules.MaximumArtifactCount} artifacts may be requested.");
                 artifacts.Add(ParseArtifact(artifact));
+            }
             else if (Value(argument, "--pre-existing=") is { } preExistingName)
                 preExisting = One(preExisting, RevisionPolicy(preExistingName), "--pre-existing");
             else if (Value(argument, "--generated=") is { } generatedName)
@@ -206,33 +219,50 @@ internal static class DeliveryCli
     private static DeliveryArtifactRequest ParseArtifact(string value)
     {
         var parts = value.Split(':');
-        if (parts.Length is not (3 or 5))
+        DeliveryArtifactKind kind;
+        DeliveryArtifactRequiredness requiredness;
+        DeliveryReviewProfile? review = null;
+        DeliveryCommentProfile? comments = null;
+        string artifactId;
+        if (parts.Length >= 5
+            && TryEnumValue(parts[^4], out kind)
+            && DeliveryArtifactRequestRules.IsProfiledRenderKind(kind))
+        {
+            artifactId = string.Join(':', parts[..^4]);
+            requiredness = EnumValue<DeliveryArtifactRequiredness>(
+                parts[^3], "artifact requiredness");
+            review = EnumValue<DeliveryReviewProfile>(parts[^2], "review profile");
+            comments = EnumValue<DeliveryCommentProfile>(parts[^1], "comment profile");
+        }
+        else if (parts.Length >= 3 && TryEnumValue(parts[^2], out kind))
+        {
+            artifactId = string.Join(':', parts[..^2]);
+            requiredness = EnumValue<DeliveryArtifactRequiredness>(
+                parts[^1], "artifact requiredness");
+        }
+        else
+        {
             throw new CliUsageException(
                 "--artifact must be id:kind:requiredness[:review-profile:comment-profile].");
-        var kind = EnumValue<DeliveryArtifactKind>(parts[1], "artifact kind");
-        bool isRender = kind is DeliveryArtifactKind.StandaloneHtml
-            or DeliveryArtifactKind.FinalPdf
-            or DeliveryArtifactKind.ReviewPdf
-            or DeliveryArtifactKind.PageMap
-            or DeliveryArtifactKind.RenderReport;
-        if (isRender != (parts.Length == 5))
-            throw new CliUsageException(
-                isRender
-                    ? $"Render artifact '{parts[0]}' requires review and comment profiles."
-                    : $"Non-render artifact '{parts[0]}' cannot select render profiles.");
-        return new DeliveryArtifactRequest
+        }
+
+        var request = new DeliveryArtifactRequest
         {
-            ArtifactId = NonBlank(parts[0], "artifact id"),
+            ArtifactId = NonBlank(artifactId, "artifact id"),
             Kind = kind,
-            Requiredness = EnumValue<DeliveryArtifactRequiredness>(
-                parts[2], "artifact requiredness"),
-            ReviewProfile = isRender
-                ? EnumValue<DeliveryReviewProfile>(parts[3], "review profile")
-                : null,
-            CommentProfile = isRender
-                ? EnumValue<DeliveryCommentProfile>(parts[4], "comment profile")
-                : null,
+            Requiredness = requiredness,
+            ReviewProfile = review,
+            CommentProfile = comments,
         };
+        try
+        {
+            DeliveryArtifactRequestRules.ValidateProfileSelection(request);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CliUsageException(exception.Message);
+        }
+        return request;
     }
 
     private static string? Value(string argument, string prefix) =>
@@ -262,8 +292,12 @@ internal static class DeliveryCli
 
     private static string NonBlank(string value, string name) =>
         !string.IsNullOrWhiteSpace(value)
+        && value.Length <= DeliveryArtifactRequestRules.MaximumStringLength
+        && !value.Any(char.IsControl)
             ? value
-            : throw new CliUsageException($"{name} cannot be blank.");
+            : throw new CliUsageException(
+                $"{name} must be non-blank, control-free, and at most "
+                + $"{DeliveryArtifactRequestRules.MaximumStringLength} characters.");
 
     private static DeliveryRevisionPolicy RevisionPolicy(string value) =>
         EnumValue<DeliveryRevisionPolicy>(value, "revision policy");
@@ -279,6 +313,22 @@ internal static class DeliveryCli
                 return candidate;
         }
         throw new CliUsageException($"Unknown {name}: {value}");
+    }
+
+    private static bool TryEnumValue<T>(string value, out T result)
+        where T : struct, Enum
+    {
+        var compact = value.Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal);
+        foreach (var candidate in Enum.GetValues<T>())
+        {
+            if (!string.Equals(candidate.ToString(), compact, StringComparison.OrdinalIgnoreCase))
+                continue;
+            result = candidate;
+            return true;
+        }
+        result = default;
+        return false;
     }
 
     private static string Name<T>(T value)
@@ -300,7 +350,8 @@ internal static class DeliveryCli
           --working-version=N          Defaults to final-version.
           --return-incomplete          Return an explicitly incomplete bundle when a required
                                        adapter-backed artifact is unavailable.
-          --allow-validation-failure   Record comprehensive validation without failing delivery.
+          --allow-validation-failure   Publish diagnostic validation failures; verified remains
+                                       false and deliverableDecision reports the failed decision.
           --node-executable=PATH       Absolute Node.js executable for @docxodus/export.
           --export-host=PATH           Absolute path to the built framed host script.
           --chromium-executable=PATH   Optional explicit Chromium executable.
@@ -372,6 +423,7 @@ internal static class DeliveryCli
     private static async Task<byte[]> ReadStableInputAsync(
         string path,
         string label,
+        long maximumBytes,
         CancellationToken cancellationToken)
     {
         try
@@ -384,21 +436,25 @@ internal static class DeliveryCli
                 BufferSize = 64 * 1024,
                 Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
             });
-            if (stream.Length > int.MaxValue)
-                throw new IOException($"{label} file exceeds the supported snapshot size: {path}");
+            if (maximumBytes <= 0 || stream.Length > maximumBytes || stream.Length > int.MaxValue)
+                throw new IOException(
+                    $"{label} file exceeds the {maximumBytes}-byte remaining input budget: {path}");
 
             var length = checked((int)stream.Length);
-            var first = new byte[length];
-            await stream.ReadExactlyAsync(first, cancellationToken).ConfigureAwait(false);
-            if (await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0)
+            var firstDigest = await SHA256.HashDataAsync(stream, cancellationToken)
+                .ConfigureAwait(false);
+            if (stream.Length != length)
                 throw new IOException($"{label} file changed while it was being snapshotted: {path}");
 
             stream.Position = 0;
-            var second = new byte[length];
-            await stream.ReadExactlyAsync(second, cancellationToken).ConfigureAwait(false);
-            if (stream.Length != length || !first.AsSpan().SequenceEqual(second))
+            var bytes = GC.AllocateUninitializedArray<byte>(length);
+            await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+            if (await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0
+                || stream.Length != length
+                || !CryptographicOperations.FixedTimeEquals(
+                    firstDigest, SHA256.HashData(bytes)))
                 throw new IOException($"{label} file changed while it was being snapshotted: {path}");
-            return second;
+            return bytes;
         }
         catch (FileNotFoundException)
         {

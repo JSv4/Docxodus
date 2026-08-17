@@ -38,8 +38,12 @@ public sealed class DeliveryBundleService
         cancellationToken.ThrowIfCancellationRequested();
         options ??= new DeliveryBundleBuildOptions();
         ValidateOptions(options);
-        var requested = ValidateRequests(request.ArtifactSnapshot);
+        ValidateRequestDocumentNames(request, options.BundleVerificationLimits);
+        var requested = ValidateRequests(
+            request.ArtifactSnapshot, options.BundleVerificationLimits);
         var plans = PlanArtifacts(requested);
+        EnsurePlannedArtifactLimit(
+            plans, request.ReceiptContext, options.BundleVerificationLimits);
 
         bool needsReview = plans.Any(plan =>
             plan.Request.Kind is DeliveryArtifactKind.ReviewDocx
@@ -83,10 +87,14 @@ public sealed class DeliveryBundleService
             new WmlDocument(request.Baseline.Name, request.Baseline.CopyBytes()),
             new WmlDocument(final.Name, final.CopyBytes()),
             new SemanticDiffOptions { PackageOptions = options.PackageManifestOptions });
-        var packageDelta = DeliveryPackageDeltaReport.Create(baselineManifest, finalManifest);
+        var packageDelta = DeliveryPackageDeltaReport.Create(
+            baselineManifest,
+            finalManifest,
+            options.DeliverableVerificationOptions.MaxReportedDeltaChanges);
 
         var outputs = new Dictionary<string, DeliveryBundleArtifactInput>(StringComparer.Ordinal);
         var renderStates = new List<RenderState>();
+        DeliverableVerificationDecision? bundleDecision = null;
         foreach (var plan in plans.Where(plan => !IsDeferred(plan.Request.Kind)))
         {
             AddCoreArtifact(
@@ -172,6 +180,7 @@ public sealed class DeliveryBundleService
                 FinalDeliverable = finalReport,
                 RenderCohorts = cohortReports,
             };
+            bundleDecision = report.Decision;
             if (options.FailOnDeliverableValidationFailure
                 && report.Decision == DeliverableVerificationDecision.Failed)
             {
@@ -224,11 +233,16 @@ public sealed class DeliveryBundleService
 
         EnforceRequiredAvailability(outputs.Values, options.ReturnIncompleteBundle);
         var relationships = BuildRelationships(plans, outputs.Values, renderStates);
-        return DeliveryBundle.Create(
+        if (bundleDecision is null)
+            throw new InvalidOperationException(
+                "Artifact planning did not produce the required delivery validation decision.");
+        return DeliveryBundle.CreateWithDeliverableDecision(
             materializedRequest,
             outputs.Values,
             relationships,
-            limits: options.BundleVerificationLimits);
+            status: null,
+            limits: options.BundleVerificationLimits,
+            deliverableDecision: bundleDecision.Value);
     }
 
     private static DeliverableVerificationDecision CombineVerificationDecisions(
@@ -582,20 +596,11 @@ public sealed class DeliveryBundleService
                 builder.AddArtifact(ToReceiptArtifact(output));
             }
 
-            var validation = outputs.Values.FirstOrDefault(output =>
-                output.Kind == DeliveryArtifactKind.ValidationReport
-                && output.Availability == DeliveryArtifactAvailability.Available);
-            if (validation?.CopyBytes() is { } validationBytes)
-            {
-                builder.AddEvidence(new DeliveryEvidenceReference
-                {
-                    Kind = DeliveryEvidenceKind.ValidationResult,
-                    Schema = DeliveryBundleValidationReport.SchemaId,
-                    Digest = DeliveryBundleCanonicalJson.Digest(validationBytes),
-                    ArtifactId = validation.ArtifactId,
-                    Summary = "Bundle and render-cohort verification result.",
-                });
-            }
+            // The bundle validation artifact is an aggregate contract containing the final
+            // deliverable run plus zero or more render-cohort runs. #458's ValidationResult
+            // evidence kind deliberately accepts only an exact canonical
+            // DeliverableVerificationResult, so retain the aggregate in the receipt artifact
+            // inventory without falsely labeling its bytes as that narrower evidence schema.
             var proofOutput = outputs.Values.FirstOrDefault(output =>
                 output.Kind == DeliveryArtifactKind.ReversibilityProof
                 && output.Availability == DeliveryArtifactAvailability.Available);
@@ -755,9 +760,14 @@ public sealed class DeliveryBundleService
     }
 
     private static IReadOnlyList<DeliveryArtifactRequest> ValidateRequests(
-        IReadOnlyList<DeliveryArtifactRequest> requested)
+        IReadOnlyList<DeliveryArtifactRequest> requested,
+        DeliveryBundleVerificationLimits limits)
     {
         var snapshot = requested.ToArray();
+        if (snapshot.Length > limits.MaxArtifacts)
+            throw new DeliveryBundleException(
+                "artifact_count_resource_limit",
+                "The requested artifact count exceeds the configured bundle limit.");
         if (snapshot.Any(value => value is null))
             throw new ArgumentException("Artifact requests cannot contain null entries.");
         if (snapshot.GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
@@ -768,32 +778,55 @@ public sealed class DeliveryBundleService
             throw new ArgumentException("Non-render artifact kinds can be requested only once.");
         foreach (var value in snapshot)
         {
-            if (string.IsNullOrWhiteSpace(value.ArtifactId)
-                || !Enum.IsDefined(value.Kind)
+            DeliveryBundleValidation.RequireString(
+                value.ArtifactId, "artifact request ID", limits);
+            if (!Enum.IsDefined(value.Kind)
                 || !Enum.IsDefined(value.Requiredness))
                 throw new ArgumentException("Artifact request identity is invalid.");
-            if (DeliveryBundleManifest.IsProfiledRenderKind(value.Kind))
-            {
-                if (value.ReviewProfile is null || !Enum.IsDefined(value.ReviewProfile.Value)
-                    || value.CommentProfile is null || !Enum.IsDefined(value.CommentProfile.Value))
-                    throw new ArgumentException(
-                        $"Render artifact '{value.ArtifactId}' requires explicit review and comment profiles.");
-                if (value.Kind == DeliveryArtifactKind.FinalPdf
-                    && value.ReviewProfile != DeliveryReviewProfile.Final)
-                    throw new ArgumentException(
-                        $"Final PDF artifact '{value.ArtifactId}' requires the final review profile.");
-                if (value.Kind == DeliveryArtifactKind.ReviewPdf
-                    && value.ReviewProfile != DeliveryReviewProfile.Markup)
-                    throw new ArgumentException(
-                        $"Review PDF artifact '{value.ArtifactId}' requires the markup review profile.");
-            }
-            else if (value.ReviewProfile is not null || value.CommentProfile is not null)
-            {
-                throw new ArgumentException(
-                    $"Non-render artifact '{value.ArtifactId}' cannot select render profiles.");
-            }
+            DeliveryArtifactRequestRules.ValidateProfileSelection(value);
         }
         return snapshot;
+    }
+
+    private static void ValidateRequestDocumentNames(
+        DeliveryBundleBuildRequest request,
+        DeliveryBundleVerificationLimits limits)
+    {
+        DeliveryBundleValidation.RequireString(
+            request.Baseline.Name, "baseline document name", limits);
+        DeliveryBundleValidation.RequireString(
+            request.Working.Name, "working document name", limits);
+        DeliveryBundleValidation.RequireString(
+            request.FinalDocumentName, "final document name", limits);
+        if (new[]
+            {
+                request.Baseline.Name,
+                request.Working.Name,
+                request.FinalDocumentName,
+            }.Distinct(StringComparer.Ordinal).Count() != 3)
+        {
+            throw new ArgumentException(
+                "Baseline, working, and final document names must be distinct.",
+                nameof(request));
+        }
+    }
+
+    private static void EnsurePlannedArtifactLimit(
+        IReadOnlyCollection<ArtifactPlan> plans,
+        DeliveryReceiptContext? receiptContext,
+        DeliveryBundleVerificationLimits limits)
+    {
+        int transactionSemanticArtifacts = receiptContext?.TransactionSnapshot.Count(evidence =>
+            !Equals(
+                evidence.Contribution.BeforeDocument.RawPackageBytesDigest,
+                evidence.Contribution.AfterDocument.RawPackageBytesDigest)) ?? 0;
+        if (plans.Count > limits.MaxArtifacts - Math.Min(
+                transactionSemanticArtifacts, limits.MaxArtifacts))
+        {
+            throw new DeliveryBundleException(
+                "artifact_count_resource_limit",
+                "Requested, implicit, and transaction-evidence artifacts exceed the configured bundle limit.");
+        }
     }
 
     private static void EnsureImplicit(
@@ -1127,6 +1160,7 @@ public sealed class DeliveryBundleService
         ArgumentNullException.ThrowIfNull(options.BundleVerificationLimits);
         options.PackageManifestOptions.Validate();
         options.DeliverableVerificationOptions.Validate();
+        _ = options.DeliveryReceiptLimits.ValidateAndClone();
         options.BundleVerificationLimits.Validate();
     }
 

@@ -106,9 +106,13 @@ constituent verification fails and otherwise preserves `passedWithPreExistingFin
 ## Atomic directory publication
 
 `DeliveryBundleDirectoryPublisher.Publish` only targets a new absolute directory. It creates a
-private, marked sibling stage on the same filesystem, writes artifact files, writes the manifest
-last, rereads and verifies the staged bytes, checks the stage again immediately before commit, and
-renames the directory as the single commit point. Any failure removes only the owned stage. It
+marked sibling stage on the same filesystem (mode `0700`, with files mode `0600`, on Unix), writes
+artifact files, writes the manifest last, rereads and verifies the staged bytes, checks the stage
+again immediately before commit, and uses an atomic no-replace rename as the single commit point.
+A persistent sidecar is protected by an operating-system advisory lock, so a crashed publisher
+does not leave an unrecoverable lease. Failure cleanup deletes only a freshly authenticated stage
+whose complete tree still matches the publisher's snapshot; an ambiguously replaced or externally
+modified path is preserved and reported rather than recursively deleting foreign data. Publication
 never replaces an existing target or returns a misleading partial directory.
 
 Callers that explicitly need failure diagnostics can request an incomplete in-memory bundle.
@@ -121,10 +125,14 @@ The .NET API is authoritative. `docxodus-deliver` is a thin command-line adapter
 service and publisher; its complete syntax and renderer limitations are in
 [`tools/delivery/README.md`](../../tools/delivery/README.md). The MCP `docxodus_deliver` tool uses
 the same service with a named baseline and the current session, returning canonical manifest bytes
-and bounded base64 artifacts. Neither transport fabricates receipt history or render capability it
-does not possess.
+and bounded base64 artifacts. CLI and MCP inputs share the core 1,024-artifact, 4,096-character,
+and 100 MiB aggregate raw-package ceilings. Their results distinguish `manifestVerified` (manifest
+and byte integrity), `deliverableDecision` (the required validation report), and `verified` (a
+complete bundle with a passing deliverable decision). Neither transport fabricates receipt history
+or render capability it does not possess.
 
-End-to-end coverage requests every schema-v1 artifact, drives the production #434 host in real
-Chromium, publishes a fresh directory, reopens every file independently, verifies source bindings
-and the canonical manifest, and retains an HTML evidence index plus checksums even when an
-assertion fails. Fast unit coverage also uses a clearly identified deterministic test renderer.
+An opt-in end-to-end harness requests every schema-v1 artifact, drives the production #434 host in
+real Chromium, publishes a fresh directory, reopens every file independently, verifies source
+bindings and the canonical manifest, and retains an HTML evidence index plus checksums even when an
+assertion fails. Set `DOCXODUS_RUN_DELIVERY_EXPORT_HOST=1` in a host-equipped acceptance job to run
+it; the normal fast suite uses a clearly identified deterministic test renderer.

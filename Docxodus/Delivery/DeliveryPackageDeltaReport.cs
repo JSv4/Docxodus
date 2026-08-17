@@ -50,6 +50,8 @@ public sealed record DeliveryPackageDeltaChange
 /// </summary>
 public sealed record DeliveryPackageDeltaReport
 {
+    public const int DefaultMaximumChanges = 25_000;
+
     public const string SchemaId =
         "https://docxodus.dev/schemas/delivery/package-delta/v1";
 
@@ -63,18 +65,26 @@ public sealed record DeliveryPackageDeltaReport
 
     public static DeliveryPackageDeltaReport Create(
         PackageManifest baseline,
-        PackageManifest final)
+        PackageManifest final,
+        int maximumChanges = DefaultMaximumChanges)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(final);
+        if (maximumChanges <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumChanges));
         if (!baseline.IsValid || !final.IsValid)
         {
             throw new ArgumentException(
                 "Package delta inputs must be valid bounded package manifests.");
         }
 
-        var changes = PackageDelta.Compare(baseline, final)
-            .Select(Project)
+        var delta = PackageDelta.Compare(baseline, final, maximumChanges);
+        if (!delta.Complete)
+        {
+            throw new InvalidDataException(
+                "Package delta exceeds the configured complete-change limit.");
+        }
+        var changes = delta.Changes.Select(Project)
             .ToArray();
         return new DeliveryPackageDeltaReport
         {

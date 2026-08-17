@@ -262,7 +262,7 @@ public static class DeliveryBundleVerifier
 
         if (artifact.Availability == DeliveryArtifactAvailability.Available)
         {
-            if (artifact.ByteLength is null || artifact.ByteLength < 0)
+            if (artifact.ByteLength is null || artifact.ByteLength <= 0)
                 findings.Add($"available_artifact_length_missing:{id}");
             if (!ValidDigest(artifact.Digest))
                 findings.Add($"available_artifact_digest_missing:{id}");
@@ -392,6 +392,7 @@ public static class DeliveryBundleVerifier
 
         var ids = artifacts.Where(value => value is not null)
             .Select(value => value.ArtifactId)
+            .Where(value => !string.IsNullOrEmpty(value))
             .ToHashSet(StringComparer.Ordinal);
         foreach (var duplicate in relationships.Where(value => value is not null)
                      .GroupBy(value => value.RelationshipId, StringComparer.Ordinal)
@@ -431,7 +432,8 @@ public static class DeliveryBundleVerifier
         ICollection<string> findings)
     {
         if (relationships is null) return;
-        var uniqueArtifacts = artifacts.Where(value => value is not null)
+        var uniqueArtifacts = artifacts.Where(value => value is not null
+                && !string.IsNullOrEmpty(value.ArtifactId))
             .GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
@@ -451,7 +453,8 @@ public static class DeliveryBundleVerifier
                     : $"render_source_relationship_ambiguous:{id}");
                 continue;
             }
-            if (!uniqueArtifacts.TryGetValue(bindings[0].ToArtifactId, out var source))
+            if (string.IsNullOrEmpty(bindings[0].ToArtifactId)
+                || !uniqueArtifacts.TryGetValue(bindings[0].ToArtifactId, out var source))
                 continue;
 
             var expectedKind = artifact.Render?.ReviewProfile switch
@@ -505,7 +508,8 @@ public static class DeliveryBundleVerifier
         ICollection<string> findings,
         ICollection<DeliveryBundleArtifactVerification> results)
     {
-        var declared = artifacts.Where(value => value is not null)
+        var declared = artifacts.Where(value => value is not null
+                && !string.IsNullOrEmpty(value.ArtifactId))
             .GroupBy(value => value.ArtifactId, StringComparer.Ordinal)
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
@@ -551,7 +555,8 @@ public static class DeliveryBundleVerifier
                 findings.Add($"artifact_{StatusCode(status)}:{artifact.ArtifactId}");
         }
 
-        foreach (var supplied in artifactBytes.Keys.Where(key => !declared.ContainsKey(key))
+        foreach (var supplied in artifactBytes.Keys.Where(key => string.IsNullOrEmpty(key)
+                         || !declared.ContainsKey(key))
                      .OrderBy(value => value, StringComparer.Ordinal))
             findings.Add($"undeclared_artifact_bytes:{supplied}");
         if (actualTotal > limits.MaxTotalArtifactBytes)

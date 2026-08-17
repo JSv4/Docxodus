@@ -252,6 +252,7 @@ public sealed class DeliveryBundleArtifactInput
             ReadOnlySpan<byte>.Empty, reason, isImplicit, implicitRequiredness, renderMetadata);
 
     internal byte[]? CopyBytes() => _bytes?.ToArray();
+    internal byte[]? OwnedBytes => _bytes;
 }
 
 /// <summary>One directed, typed edge between two artifact IDs.</summary>

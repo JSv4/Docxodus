@@ -97,6 +97,8 @@ public sealed record DocxodusExportHostRendererOptions
 public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
 {
     private const long MaximumSafeJavaScriptInteger = 9_007_199_254_740_991;
+    private const int MaximumBatchRequests = 1_024;
+    private const int MaximumRenderDiagnostics = 1_024;
     private const string RenderReportSchema =
         "https://docxodus.dev/schemas/render/render-report/v1";
     private static readonly JsonSerializerOptions HostJson = new()
@@ -142,6 +144,9 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
     {
         ArgumentNullException.ThrowIfNull(requests);
         cancellationToken.ThrowIfCancellationRequested();
+        if (requests.Count > MaximumBatchRequests)
+            throw new InvalidDataException(
+                "The export-host request exceeds the bounded batch-request limit.");
         var snapshot = requests.ToArray();
         if (snapshot.Any(request => request is null))
             throw new ArgumentException("Render requests cannot contain null entries.", nameof(requests));
@@ -152,6 +157,11 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
             return new Dictionary<string, DeliveryRenderResult>(StringComparer.Ordinal);
         foreach (var request in snapshot)
         {
+            if (!ValidTransportString(request.ArtifactId)
+                || !ValidTransportString(request.SourceDocumentName))
+                throw new ArgumentException(
+                    "Render request IDs and source names must be bounded, control-free strings.",
+                    nameof(requests));
             if (!Capabilities.Supports(
                     request.Kind, request.ReviewProfile, request.CommentProfile))
                 throw new ArgumentException(
@@ -186,11 +196,22 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
 
     private byte[] SerializeRequest(IReadOnlyList<RenderGroup> groups)
     {
-        var envelope = new HostRequest(
-            1,
-            groups.Select(group => new HostBatchRequest(
+        long encodedDocumentCharacters = 0;
+        foreach (var group in groups)
+        {
+            var length = group.Requests[0].SourceByteLength;
+            var encodedLength = checked(((long)length + 2) / 3 * 4);
+            if (encodedLength > _options.MaximumFrameBytes
+                || encodedDocumentCharacters > _options.MaximumFrameBytes - encodedLength)
+                throw new InvalidDataException(
+                    "The export-host request exceeds the configured frame limit.");
+            encodedDocumentCharacters += encodedLength;
+        }
+
+        HostRequest Envelope(Func<RenderGroup, string> document) => new(
+            1, groups.Select(group => new HostBatchRequest(
                 group.BatchId,
-                Convert.ToBase64String(group.Requests[0].CopySourceBytes()),
+                document(group),
                 new HostBatchOptions(
                     group.Outputs,
                     group.Key.DocumentVersion,
@@ -202,6 +223,14 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
                     _options.StrictFonts,
                     checked((int)_options.RenderTimeout.TotalMilliseconds))))
                 .ToArray());
+        var envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(
+            Envelope(_ => string.Empty), HostJson).LongLength;
+        if (envelopeBytes > _options.MaximumFrameBytes
+            || encodedDocumentCharacters > _options.MaximumFrameBytes - envelopeBytes)
+            throw new InvalidDataException(
+                "The export-host request exceeds the configured frame limit.");
+        var envelope = Envelope(group =>
+            Convert.ToBase64String(group.Requests[0].CopySourceBytes()));
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, HostJson);
         if (bytes.Length > _options.MaximumFrameBytes)
             throw new InvalidDataException("The export-host request exceeds the configured frame limit.");
@@ -326,7 +355,10 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidOperationException
+            or System.ComponentModel.Win32Exception
+            or NotSupportedException
+            or ObjectDisposedException)
         {
         }
     }
@@ -349,9 +381,17 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         if (root.TryGetProperty("fatal", out var fatal))
             throw new InvalidDataException("The export host rejected its envelope: "
                                            + ErrorReason(fatal));
-        var batches = RequiredArray(root, "batches").EnumerateArray().ToArray();
-        var byId = batches.ToDictionary(
-            batch => RequiredString(batch, "id"), StringComparer.Ordinal);
+        var batchArray = RequiredArray(root, "batches");
+        if (batchArray.GetArrayLength() != groups.Count)
+            throw new InvalidDataException(
+                "The export host response does not match the requested batch count.");
+        var byId = new Dictionary<string, JsonElement>(groups.Count, StringComparer.Ordinal);
+        foreach (var batch in batchArray.EnumerateArray())
+        {
+            if (!byId.TryAdd(RequiredString(batch, "id"), batch))
+                throw new InvalidDataException(
+                    "The export host response repeats a batch ID.");
+        }
         if (!groups.Select(group => group.BatchId).ToHashSet(StringComparer.Ordinal)
             .SetEquals(byId.Keys))
             throw new InvalidDataException(
@@ -408,7 +448,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         if (!string.Equals(RequiredString(source, "rawPackageBytesDigest"),
                 group.Key.SourceDigest, StringComparison.OrdinalIgnoreCase)
             || RequiredInt64(source, "documentVersion") != group.Key.DocumentVersion
-            || RequiredInt64(source, "byteLength") != first.SourceBytes.LongLength)
+            || RequiredInt64(source, "byteLength") != first.SourceByteLength)
             throw new InvalidDataException("The failed render report is bound to different source bytes.");
         ValidateProfileBinding(group, report, "failed render report");
         var failure = RequiredObject(report, "failure");
@@ -447,13 +487,16 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         byte[]? htmlBytes = null;
         if (group.Outputs.Contains("html", StringComparer.Ordinal))
         {
-            htmlBytes = Encoding.UTF8.GetBytes(RequiredString(result, "html", allowEmpty: false));
+            htmlBytes = Encoding.UTF8.GetBytes(RequiredString(
+                result, "html", allowEmpty: false, maximumCharacters: int.MaxValue,
+                allowControlCharacters: true));
             EnsureDigest(reportElement, "htmlDigest", htmlBytes);
         }
         byte[]? pdfBytes = null;
         if (group.Outputs.Contains("pdf", StringComparer.Ordinal))
         {
-            pdfBytes = DecodeCanonicalBase64(RequiredString(result, "pdfBase64"));
+            pdfBytes = DecodeCanonicalBase64(RequiredString(
+                result, "pdfBase64", maximumCharacters: int.MaxValue));
             EnsureDigest(reportElement, "pdfDigest", pdfBytes);
         }
         var diagnostics = ParseDiagnostics(result, reportElement);
@@ -483,7 +526,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
         if (!string.Equals(RequiredString(source, "rawPackageBytesDigest"),
                 group.Key.SourceDigest, StringComparison.OrdinalIgnoreCase)
             || RequiredInt64(source, "documentVersion") != group.Key.DocumentVersion
-            || RequiredInt64(source, "byteLength") != first.SourceBytes.LongLength)
+            || RequiredInt64(source, "byteLength") != first.SourceByteLength)
             throw new InvalidDataException("The render report is bound to different source bytes.");
         ValidateProfileBinding(group, report, "render report");
         var environment = RequiredObject(report, "environment");
@@ -507,7 +550,12 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
     }
 
     private static IReadOnlyList<DeliverableRenderDiagnostic> ParseDiagnosticArray(
-        JsonElement warnings) => warnings.EnumerateArray().Select(warning =>
+        JsonElement warnings)
+    {
+        if (warnings.GetArrayLength() > MaximumRenderDiagnostics)
+            throw new InvalidDataException(
+                "The export host returned too many render diagnostics.");
+        return warnings.EnumerateArray().Select(warning =>
         {
             var code = RequiredString(warning, "code");
             var severity = RequiredString(warning, "severity");
@@ -536,6 +584,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
                 Resource = OptionalString(warning, "resource"),
             };
         }).ToArray();
+    }
 
     private static void EnsureDigest(JsonElement report, string bindingName, byte[] bytes)
     {
@@ -573,20 +622,51 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
 
     private static byte[] DecodeCanonicalBase64(string value)
     {
-        if (value.Length % 4 != 0 || value.Any(char.IsWhiteSpace))
+        if (!IsCanonicalBase64(value))
             throw new InvalidDataException("The export host returned non-canonical base64.");
         try
         {
-            var bytes = Convert.FromBase64String(value);
-            if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
-                throw new InvalidDataException("The export host returned non-canonical base64.");
-            return bytes;
+            return Convert.FromBase64String(value);
         }
         catch (FormatException exception)
         {
             throw new InvalidDataException("The export host returned invalid base64.", exception);
         }
     }
+
+    private static bool IsCanonicalBase64(string value)
+    {
+        if (value.Length == 0 || value.Length % 4 != 0)
+            return false;
+        int padding = value.EndsWith("==", StringComparison.Ordinal)
+            ? 2
+            : value.EndsWith('=') ? 1 : 0;
+        for (var index = 0; index < value.Length - padding; index++)
+        {
+            if (Base64Value(value[index]) < 0)
+                return false;
+        }
+        for (var index = value.Length - padding; index < value.Length; index++)
+        {
+            if (value[index] != '=')
+                return false;
+        }
+        if (padding == 2)
+            return (Base64Value(value[^3]) & 0x0f) == 0;
+        if (padding == 1)
+            return (Base64Value(value[^2]) & 0x03) == 0;
+        return true;
+    }
+
+    private static int Base64Value(char value) => value switch
+    {
+        >= 'A' and <= 'Z' => value - 'A',
+        >= 'a' and <= 'z' => value - 'a' + 26,
+        >= '0' and <= '9' => value - '0' + 52,
+        '+' => 62,
+        '/' => 63,
+        _ => -1,
+    };
 
     private static byte[] CanonicalJson(JsonElement element)
     {
@@ -682,16 +762,27 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
     private static string RequiredString(
         JsonElement value,
         string name,
-        bool allowEmpty = false) =>
+        bool allowEmpty = false,
+        int maximumCharacters = DeliveryArtifactRequestRules.MaximumStringLength,
+        bool allowControlCharacters = false) =>
         value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+        && property.GetString()!.Length <= maximumCharacters
         && (allowEmpty || !string.IsNullOrWhiteSpace(property.GetString()))
+        && (allowControlCharacters || !property.GetString()!.Any(char.IsControl))
             ? property.GetString()!
             : throw new InvalidDataException($"The export host response is missing string '{name}'.");
 
-    private static string? OptionalString(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
+    private static string? OptionalString(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property))
+            return null;
+        if (property.ValueKind != JsonValueKind.String
+            || property.GetString()!.Length > DeliveryArtifactRequestRules.MaximumStringLength
+            || property.GetString()!.Any(char.IsControl))
+            throw new InvalidDataException(
+                $"The export host response has an invalid optional string '{name}'.");
+        return property.GetString();
+    }
 
     private static int RequiredInt32(JsonElement value, string name) =>
         value.TryGetProperty(name, out var property) && property.TryGetInt32(out var number)
@@ -721,6 +812,11 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactBatchRenderer
     private static string Name<T>(T value)
         where T : struct, Enum =>
         JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
+
+    private static bool ValidTransportString(string value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= DeliveryArtifactRequestRules.MaximumStringLength
+        && !value.Any(char.IsControl);
 
     private static bool UsesProfileResolvedSource(DeliveryReviewProfile profile) =>
         profile is DeliveryReviewProfile.Final or DeliveryReviewProfile.Original;

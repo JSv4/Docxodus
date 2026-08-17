@@ -64,5 +64,26 @@ public sealed class DeliveryPackageDeltaReportTests
             DeliveryPackageDeltaReport.Create(invalid, valid));
         Assert.Throws<ArgumentException>(() =>
             DeliveryPackageDeltaReport.Create(valid, invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DeliveryPackageDeltaReport.Create(valid, valid, maximumChanges: 0));
+    }
+
+    [Fact]
+    public void DB003_Report_FailsClosedInsteadOfPublishingATruncatedDelta()
+    {
+        var baselineBytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = new DocxSession(baselineBytes);
+        var anchor = session.Project().AnchorIndex.Values
+            .First(value => value.Anchor.Kind == "p" && value.Anchor.Scope == "body").Anchor.Id;
+        Assert.True(session.ReplaceText(anchor, "Bounded package delta.").Success);
+        var finalBytes = session.Save(persistAnchorIds: false);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            DeliveryPackageDeltaReport.Create(
+                PackageManifestGenerator.Generate(baselineBytes),
+                PackageManifestGenerator.Generate(finalBytes),
+                maximumChanges: 1));
+
+        Assert.Contains("complete-change limit", exception.Message, StringComparison.Ordinal);
     }
 }

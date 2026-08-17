@@ -4,6 +4,7 @@
 #nullable enable
 
 using System.Text;
+using System.Security.Cryptography;
 using Docxodus.Delivery;
 using Xunit;
 
@@ -74,6 +75,36 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 ["working"] = File.ReadAllBytes(
                     Path.Combine(target, "documents", "working.docx")),
             }).IsValid);
+        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_RejectsBundleResourceLimitsBeforeCreatingAStage()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var checkpointReached = false;
+        var injector = new CallbackFaultInjector(_ => checkpointReached = true);
+
+        Assert.Throws<InvalidDataException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(
+                ModelBundle(),
+                target,
+                new DeliveryBundleVerificationLimits { MaxArtifactBytes = 1 },
+                injector));
+
+        Assert.False(checkpointReached);
+        Assert.False(PathEntryExists(target));
+        AssertNoStageDirectories(temporary.Path);
+
+        checkpointReached = false;
+        Assert.Throws<InvalidDataException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(
+                ModelBundle(),
+                Path.Combine(temporary.Path, "strict-metadata"),
+                new DeliveryBundleVerificationLimits { MaxStringLength = 3 },
+                injector));
+        Assert.False(checkpointReached);
         AssertNoStageDirectories(temporary.Path);
     }
 
@@ -164,7 +195,7 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     }
 
     [Fact]
-    public void Publish_WhenMarkerFreeCommitWindowFaults_PreservesAmbiguousStage()
+    public void Publish_WhenFinalCommitCheckpointFaults_CleansAuthenticatedStage()
     {
         using var temporary = new TemporaryDirectory();
         var target = Path.Combine(temporary.Path, "delivery");
@@ -175,7 +206,42 @@ public sealed class DeliveryBundleDirectoryPublisherTests
                 DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)
                 return;
             stage = context.StageDirectory;
-            throw new InjectedPublicationException("marker-free commit window");
+            Assert.True(File.Exists(Path.Combine(
+                context.StageDirectory, ".docxodus-delivery-stage")));
+            throw new InjectedPublicationException("final commit checkpoint");
+        });
+
+        Assert.Throws<InjectedPublicationException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.NotNull(stage);
+        Assert.False(PathEntryExists(stage!));
+        Assert.False(PathEntryExists(target));
+        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_CopiedMarkerCannotAuthorizeDeletingAReplacementDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Windows correctly prevents moving a directory containing an open marker.
+
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        string? replacement = null;
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint != DeliveryBundleDirectoryPublisherCheckpoint.BeforeCommit)
+                return;
+            var markerPath = Path.Combine(
+                context.StageDirectory, ".docxodus-delivery-stage");
+            var copiedMarker = File.ReadAllBytes(markerPath);
+            Directory.Move(context.StageDirectory, context.StageDirectory + "-displaced");
+            Directory.CreateDirectory(context.StageDirectory);
+            File.WriteAllBytes(markerPath, copiedMarker);
+            replacement = Path.Combine(context.StageDirectory, "foreign.txt");
+            File.WriteAllText(replacement, "belongs to another owner");
+            throw new InjectedPublicationException("foreign replacement");
         });
 
         var exception = Assert.Throws<IOException>(() =>
@@ -183,11 +249,87 @@ public sealed class DeliveryBundleDirectoryPublisherTests
 
         Assert.Contains("could not be removed safely", exception.Message,
             StringComparison.Ordinal);
-        Assert.IsType<AggregateException>(exception.InnerException);
-        Assert.NotNull(stage);
-        Assert.True(Directory.Exists(stage));
-        Assert.False(File.Exists(Path.Combine(stage!, ".docxodus-delivery-stage")));
+        Assert.NotNull(replacement);
+        Assert.Equal("belongs to another owner", File.ReadAllText(replacement!));
         Assert.False(PathEntryExists(target));
+    }
+
+    [Fact]
+    public void Publish_RejectsUnexpectedDirectoryAtFinalCheckpoint()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        string? stage = null;
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint !=
+                DeliveryBundleDirectoryPublisherCheckpoint.BeforeDirectoryCommit)
+                return;
+            stage = context.StageDirectory;
+            Directory.CreateDirectory(Path.Combine(context.StageDirectory, "unexpected-empty"));
+        });
+
+        var exception = Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
+        Assert.NotNull(stage);
+        Assert.True(Directory.Exists(Path.Combine(stage!, "unexpected-empty")));
+        Assert.False(PathEntryExists(target));
+    }
+
+    [Fact]
+    public void Publish_UnlockedPersistentLeaseFromPriorFailureDoesNotBlockRetry()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint == DeliveryBundleDirectoryPublisherCheckpoint.BeforeVerification)
+                throw new InjectedPublicationException("leave persistent lease");
+        });
+
+        Assert.Throws<InjectedPublicationException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        DeliveryBundleDirectoryPublisher.Publish(Source(), target);
+        Assert.True(Directory.Exists(target));
+        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_DoesNotMutatePreExistingLeaseFile()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var digest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(Path.GetFullPath(target))))
+            .ToLowerInvariant()[..24];
+        var lease = Path.Combine(
+            temporary.Path, $".docxodus-delivery-publish-{digest}.lock");
+        File.WriteAllText(lease, "must remain unchanged");
+
+        DeliveryBundleDirectoryPublisher.Publish(Source(), target);
+
+        Assert.Equal("must remain unchanged", File.ReadAllText(lease));
+    }
+
+    [Fact]
+    public void Publish_CreatesPrivateStageDirectoriesAndFilesOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+
+        DeliveryBundleDirectoryPublisher.Publish(Source(), target);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(target));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(Path.Combine(target, "documents", "working.docx")));
     }
 
     [Fact]
@@ -272,6 +414,10 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     [InlineData("a//empty.bin")]
     [InlineData("a/trailing/")]
     [InlineData("a/NUL.txt")]
+    [InlineData("a/COM¹.txt")]
+    [InlineData("a/LPT².log")]
+    [InlineData("a/CONIN$")]
+    [InlineData("a/CONOUT$.txt")]
     public void Publish_RejectsTraversalRootAndNonCanonicalArtifactPaths(string maliciousPath)
     {
         using var temporary = new TemporaryDirectory();
@@ -382,12 +528,13 @@ public sealed class DeliveryBundleDirectoryPublisherTests
             injected = true;
         });
 
-        Assert.Throws<IOException>(() =>
+        var exception = Assert.Throws<IOException>(() =>
             DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
 
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
         Assert.Empty(Directory.EnumerateFileSystemEntries(outside));
         Assert.False(PathEntryExists(target));
-        AssertNoStageDirectories(temporary.Path);
     }
 
     [Fact]
@@ -406,9 +553,38 @@ public sealed class DeliveryBundleDirectoryPublisherTests
         var exception = Assert.Throws<IOException>(() =>
             DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
 
-        Assert.Contains("changed after verification", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("changed after verification", exception.ToString(),
+            StringComparison.Ordinal);
         Assert.False(PathEntryExists(target));
-        AssertNoStageDirectories(temporary.Path);
+    }
+
+    [Fact]
+    public void Publish_RejectsExpandedStageFileBeforeAllocatingItsReplacementSize()
+    {
+        using var temporary = new TemporaryDirectory();
+        var target = Path.Combine(temporary.Path, "delivery");
+        var injector = new CallbackFaultInjector(context =>
+        {
+            if (context.Checkpoint != DeliveryBundleDirectoryPublisherCheckpoint.BeforeVerification)
+                return;
+            using var stream = new FileStream(
+                Path.Combine(context.StageDirectory, "documents", "working.docx"),
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.None);
+            stream.Write(new byte[] { 9, 9, 9 });
+        });
+
+        var exception = Assert.Throws<IOException>(() =>
+            DeliveryBundleDirectoryPublisher.Publish(Source(), target, injector));
+
+        Assert.Contains("could not be removed safely", exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("has length", exception.ToString(), StringComparison.Ordinal);
+        Assert.Contains("expected", exception.ToString(), StringComparison.Ordinal);
+        Assert.False(PathEntryExists(target));
     }
 
     [Fact]
@@ -531,9 +707,6 @@ public sealed class DeliveryBundleDirectoryPublisherTests
     {
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(parent), path =>
             Path.GetFileName(path).Contains(".docxodus-stage-", StringComparison.Ordinal));
-        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(parent), path =>
-            Path.GetFileName(path).StartsWith(
-                ".docxodus-delivery-publish-", StringComparison.Ordinal));
     }
 
     private static bool PathEntryExists(string path)

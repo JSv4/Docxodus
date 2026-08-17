@@ -68,10 +68,30 @@ internal sealed class LocalFileDocumentStore : IDocumentStore
     }
 
     public byte[] Read(string resolvedLocation)
+        => Read(resolvedLocation, int.MaxValue);
+
+    public byte[] Read(string resolvedLocation, long maximumBytes)
     {
+        if (maximumBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         try
         {
-            return File.ReadAllBytes(resolvedLocation);
+            using var stream = new FileStream(
+                resolvedLocation, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 64 * 1024, FileOptions.SequentialScan);
+            if (stream.Length > maximumBytes || stream.Length > int.MaxValue)
+                throw new McpToolException(
+                    $"document exceeds the {maximumBytes}-byte read limit: '{resolvedLocation}'");
+            var bytes = GC.AllocateUninitializedArray<byte>(checked((int)stream.Length));
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1 || stream.Length != bytes.LongLength)
+                throw new McpToolException(
+                    $"document changed while it was being read: '{resolvedLocation}'");
+            return bytes;
+        }
+        catch (McpToolException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
