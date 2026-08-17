@@ -17,9 +17,12 @@ The operation takes three immutable byte arrays:
 - `redline`: the native tracked-change document being proved.
 
 Optional proof settings carry the shared package-inspection limits and exact-byte
-policy. They also cap native revision elements per baseline/redline input; selective
-resolution rebuilds the live registry after each generated operation, so over-budget
-inventories fail before either path executes.
+policy. A raw aggregate-byte admission gate runs before package inspection. The
+settings also cap physical native revision carriers in each of baseline, intended
+final, redline, and each live path output; selective resolution rebuilds the live
+registry after each generated operation, so over-budget inventories fail before
+either path executes. Separate limits bound retained findings, revision evidence,
+semantic changes, package divergences, and evidence text.
 
 The cheap manifest-fact preflight is followed by a cap on the exact live registry,
 covering malformed and unsupported marker families that are intentionally absent
@@ -34,14 +37,25 @@ revisions to manufacture a match.
 ## Generated-revision ownership
 
 Revision ownership is established from the live, part-qualified revision registry,
-not from author names alone. A stable identity contains the owning part, revision
-family, and native constituent IDs. The proof inventories baseline, final, and
-redline revisions, then classifies the redline inventory as:
+not from author names alone. Each native carrier key includes the owning part,
+carrier role and QName, canonical numeric ID, and move name where applicable; its
+ownership stamp includes type, author, legacy date, UTC date, and resolution status.
+Content-derived text, anchors, and ordinal story labels are evidence, not ownership
+keys. The proof inventories baseline, final, and redline revisions, then classifies
+the redline inventory as:
 
 - `preExisting`: an unchanged identity already present in the selected baseline;
+- `intendedFinalPreExisting`: unchanged review state owned by the intended final but
+  absent from the baseline;
 - `generated`: an identity present only in the redline;
-- `conflicted`: an identity that overlaps a baseline identity but changes its family,
-  constituents, resolution status, or package location.
+- `conflicted`: an identity that overlaps endpoint-owned native carriers but changes
+  their ownership stamp, role, topology, or package location.
+
+Ordinary adjacent Word wrappers can split or merge into different presentation
+groups when a generated separator is inserted or resolved. Ownership therefore
+follows their individual native carriers. Topology-bearing move pairs and structured
+content-control envelopes additionally require their exact logical carrier set and
+family to remain intact.
 
 Every generated revision must be selectively resolvable. A malformed, ambiguous,
 unsupported, or ownership-conflicted revision fails closed. Pre-existing identities
@@ -61,6 +75,13 @@ example, paragraph-mark and paragraph-property markup that Word treats as one
 closure). The proof records that sibling separately as implicitly resolved only when
 none of its native constituents remain live. A changed identity or surviving
 constituent still fails closed, and target equivalence remains mandatory.
+
+Proof-mode resolution avoids global cleanup. It removes only relationships nominated
+by the selected revision and proven unreferenced afterward, protects baseline-owned
+numbering definitions, and correlates optional empty property shells with the
+expected endpoint by part plus stable anchor/path identity. Unrelated orphan
+relationships, XML nodes, and package parts therefore remain visible to whole-package
+comparison rather than being normalized away.
 
 Each path records:
 
@@ -112,6 +133,9 @@ Serialization is deterministic. It includes algorithm-labelled input/output dige
 revision classifications, both path results, part divergences, and findings. The
 delivery receipt embeds this object as a value and includes its canonical JSON digest;
 it does not reinterpret or flatten proof fields.
+
+The checked-in schema is
+[`docs/schemas/redline-reversibility-proof-v1.schema.json`](../schemas/redline-reversibility-proof-v1.schema.json).
 
 ## Dependency boundary
 

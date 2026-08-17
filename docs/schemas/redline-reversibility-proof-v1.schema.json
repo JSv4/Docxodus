@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1",
+  "title": "Docxodus redline reversibility proof v1",
+  "description": "The deterministic JSON representation emitted by RedlineReversibilityProof.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "success",
+    "requireExactPackageBytes",
+    "baselinePackage",
+    "intendedFinalPackage",
+    "redlinePackage",
+    "revisionClassifications",
+    "acceptToFinal",
+    "rejectToBaseline",
+    "findings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1"
+    },
+    "schemaVersion": { "const": 1 },
+    "success": { "type": "boolean" },
+    "requireExactPackageBytes": { "type": "boolean" },
+    "baselinePackage": { "$ref": "#/$defs/packageIdentity" },
+    "intendedFinalPackage": { "$ref": "#/$defs/packageIdentity" },
+    "redlinePackage": { "$ref": "#/$defs/packageIdentity" },
+    "revisionClassifications": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/revisionClassification" }
+    },
+    "acceptToFinal": { "$ref": "#/$defs/nullablePath" },
+    "rejectToBaseline": { "$ref": "#/$defs/nullablePath" },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "nullableString": { "type": ["string", "null"] },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "const": "SHA-256" },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "nullableDigest": {
+      "oneOf": [
+        { "$ref": "#/$defs/digest" },
+        { "type": "null" }
+      ]
+    },
+    "packageIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rawPackageBytesDigest",
+        "orderedOpcContentDigest",
+        "normalizedWholePackageDigest"
+      ],
+      "properties": {
+        "rawPackageBytesDigest": { "$ref": "#/$defs/digest" },
+        "orderedOpcContentDigest": { "$ref": "#/$defs/nullableDigest" },
+        "normalizedWholePackageDigest": { "$ref": "#/$defs/nullableDigest" }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryUri",
+        "ownerUri",
+        "relationshipId",
+        "targetUri",
+        "propertyPath"
+      ],
+      "properties": {
+        "entryUri": { "$ref": "#/$defs/nullableString" },
+        "ownerUri": { "$ref": "#/$defs/nullableString" },
+        "relationshipId": { "$ref": "#/$defs/nullableString" },
+        "targetUri": { "$ref": "#/$defs/nullableString" },
+        "propertyPath": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "nullableLocation": {
+      "oneOf": [
+        { "$ref": "#/$defs/location" },
+        { "type": "null" }
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "nullableDiagnostic": {
+      "oneOf": [
+        { "$ref": "#/$defs/diagnostic" },
+        { "type": "null" }
+      ]
+    },
+    "revisionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "partUri",
+        "scope",
+        "type",
+        "family",
+        "constituentIds",
+        "constituentKeys",
+        "author",
+        "date",
+        "dateUtc",
+        "text",
+        "anchorId",
+        "affectedAnchorIds",
+        "resolutionStatus",
+        "diagnostic"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "partUri": { "type": "string", "pattern": "^/" },
+        "scope": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "family": {
+          "enum": [
+            "contentInsert",
+            "contentDelete",
+            "move",
+            "paragraphMark",
+            "rowInsert",
+            "rowDelete",
+            "cellInsert",
+            "cellDelete",
+            "cellMerge",
+            "contentControlInsert",
+            "contentControlDelete",
+            "numberingPropertiesInsert",
+            "numberingChange",
+            "propertiesChange",
+            "unsupported"
+          ]
+        },
+        "constituentIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "constituentKeys": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "author": { "type": "string" },
+        "date": { "$ref": "#/$defs/nullableString" },
+        "dateUtc": { "$ref": "#/$defs/nullableString" },
+        "text": { "type": "string" },
+        "anchorId": { "$ref": "#/$defs/nullableString" },
+        "affectedAnchorIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resolutionStatus": {
+          "enum": ["supported", "unsupported", "malformed", "ambiguous"]
+        },
+        "diagnostic": { "$ref": "#/$defs/nullableDiagnostic" }
+      }
+    },
+    "nullableRevisionIdentity": {
+      "oneOf": [
+        { "$ref": "#/$defs/revisionIdentity" },
+        { "type": "null" }
+      ]
+    },
+    "revisionClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "baseline", "intendedFinal", "redline", "reason"],
+      "properties": {
+        "disposition": {
+          "enum": ["preExisting", "intendedFinalPreExisting", "generated", "conflicted"]
+        },
+        "baseline": { "$ref": "#/$defs/nullableRevisionIdentity" },
+        "intendedFinal": { "$ref": "#/$defs/nullableRevisionIdentity" },
+        "redline": { "$ref": "#/$defs/nullableRevisionIdentity" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "modeledSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "equivalent", "schema", "changeCount", "diagnostic"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "equivalent": { "type": ["boolean", "null"] },
+        "schema": { "$ref": "#/$defs/nullableString" },
+        "changeCount": { "type": ["integer", "null"], "minimum": 0 },
+        "diagnostic": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "divergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "partUri",
+        "occurrence",
+        "anchorId",
+        "applicableRevisionIds",
+        "expectedRawDigest",
+        "actualRawDigest",
+        "expectedNormalizedDigest",
+        "actualNormalizedDigest",
+        "hasModeledSemanticChange",
+        "unknownOrUnmodeled"
+      ],
+      "properties": {
+        "kind": { "enum": ["added", "removed", "modified"] },
+        "partUri": { "type": "string", "pattern": "^/" },
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "anchorId": { "$ref": "#/$defs/nullableString" },
+        "applicableRevisionIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "expectedRawDigest": { "$ref": "#/$defs/nullableDigest" },
+        "actualRawDigest": { "$ref": "#/$defs/nullableDigest" },
+        "expectedNormalizedDigest": { "$ref": "#/$defs/nullableDigest" },
+        "actualNormalizedDigest": { "$ref": "#/$defs/nullableDigest" },
+        "hasModeledSemanticChange": { "type": "boolean" },
+        "unknownOrUnmodeled": { "type": "boolean" }
+      }
+    },
+    "nullableDivergence": {
+      "oneOf": [
+        { "$ref": "#/$defs/divergence" },
+        { "type": "null" }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "direction",
+        "location",
+        "anchorId",
+        "revisionIds",
+        "remediation"
+      ],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string", "minLength": 1 },
+        "direction": {
+          "oneOf": [
+            { "enum": ["acceptToFinal", "rejectToBaseline"] },
+            { "type": "null" }
+          ]
+        },
+        "location": { "$ref": "#/$defs/nullableLocation" },
+        "anchorId": { "$ref": "#/$defs/nullableString" },
+        "revisionIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "remediation": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction",
+        "completed",
+        "equivalent",
+        "requestedRevisionIds",
+        "resolvedRevisionIds",
+        "implicitlyResolvedRevisionIds",
+        "survivingPreExistingRevisions",
+        "preExistingRevisionsPreserved",
+        "modeledSemantic",
+        "normalizedWholePackageEquivalent",
+        "orderedOpcContentEquivalent",
+        "exactPackageBytesEquivalent",
+        "divergenceAnalysisCompleted",
+        "expectedPackage",
+        "actualPackage",
+        "firstDivergence",
+        "divergences",
+        "findings"
+      ],
+      "properties": {
+        "direction": { "enum": ["acceptToFinal", "rejectToBaseline"] },
+        "completed": { "type": "boolean" },
+        "equivalent": { "type": "boolean" },
+        "requestedRevisionIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "resolvedRevisionIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "implicitlyResolvedRevisionIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "survivingPreExistingRevisions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/revisionIdentity" }
+        },
+        "preExistingRevisionsPreserved": { "type": "boolean" },
+        "modeledSemantic": { "$ref": "#/$defs/modeledSemantic" },
+        "normalizedWholePackageEquivalent": { "type": "boolean" },
+        "orderedOpcContentEquivalent": { "type": "boolean" },
+        "exactPackageBytesEquivalent": { "type": "boolean" },
+        "divergenceAnalysisCompleted": { "type": "boolean" },
+        "expectedPackage": { "$ref": "#/$defs/packageIdentity" },
+        "actualPackage": {
+          "oneOf": [
+            { "$ref": "#/$defs/packageIdentity" },
+            { "type": "null" }
+          ]
+        },
+        "firstDivergence": { "$ref": "#/$defs/nullableDivergence" },
+        "divergences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/divergence" }
+        },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/finding" }
+        }
+      }
+    },
+    "nullablePath": {
+      "oneOf": [
+        { "$ref": "#/$defs/path" },
+        { "type": "null" }
+      ]
+    }
+  }
+}

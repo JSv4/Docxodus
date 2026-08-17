@@ -162,14 +162,14 @@ public class DocxSessionRevisionTests
             Para(
                 RunT("Start "),
                 new XElement(W.moveFromRangeStart,
-                    new XAttribute(W.id, 500), new XAttribute(W.name, "move1")),
+                    RevAttrs(500, "Alice"), new XAttribute(W.name, "move1")),
                 new XElement(W.moveFrom, RevAttrs(501, "Alice"), RunT("moved bit")),
                 new XElement(W.moveFromRangeEnd, new XAttribute(W.id, 500)),
                 RunT("end.")),
             Para(
                 RunT("Dest "),
                 new XElement(W.moveToRangeStart,
-                    new XAttribute(W.id, 510), new XAttribute(W.name, "move1")),
+                    RevAttrs(510, "Alice"), new XAttribute(W.name, "move1")),
                 new XElement(W.moveTo, RevAttrs(511, "Alice"), RunT("moved bit")),
                 new XElement(W.moveToRangeEnd, new XAttribute(W.id, 510)),
                 RunT("here.")));

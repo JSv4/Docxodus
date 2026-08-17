@@ -31,6 +31,9 @@ namespace Docxodus.Internal;
 /// </summary>
 internal static class RevisionOps
 {
+    private static readonly XName W16duDateUtc =
+        XNamespace.Get("http://schemas.microsoft.com/office/word/2023/wordml/word16du")
+        + "dateUtc";
     internal const string TypeInsert = "insert";
     internal const string TypeDelete = "delete";
     internal const string TypeMove = "move";
@@ -82,6 +85,7 @@ internal static class RevisionOps
         required public RevisionFamily Family { get; init; }
         required public string Author { get; init; }
         public string? Date { get; set; }
+        public string? DateUtc { get; set; }
         required public int PartIndex { get; init; }
         public string PartUri { get; set; } = "";
         public string Scope { get; set; } = "body";
@@ -136,7 +140,9 @@ internal static class RevisionOps
         long max = 0;
         foreach (var element in root.DescendantsAndSelf())
         {
-            if (!RevisionIdBearingNames.Contains(element.Name)) continue;
+            if (!RevisionIdBearingNames.Contains(element.Name)
+                && !UnsupportedConflictNames.Contains(element.Name))
+                continue;
             if (long.TryParse((string?)element.Attribute(W.id), out var value) && value > max)
                 max = value;
         }
@@ -153,6 +159,15 @@ internal static class RevisionOps
     {
         W.customXmlMoveFromRangeStart, W.customXmlMoveFromRangeEnd,
         W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd,
+    };
+
+    private static readonly HashSet<XName> UnsupportedConflictNames = new()
+    {
+        W14.w14 + "conflictIns", W14.w14 + "conflictDel",
+        W14.w14 + "customXmlConflictInsRangeStart",
+        W14.w14 + "customXmlConflictInsRangeEnd",
+        W14.w14 + "customXmlConflictDelRangeStart",
+        W14.w14 + "customXmlConflictDelRangeEnd",
     };
 
     private static readonly HashSet<XName> MoveRangeNames = new()
@@ -196,6 +211,7 @@ internal static class RevisionOps
                 group.Scope = parts[pi].Scope;
             }
 
+            CoalesceTablePropertyGroups(groups, pi);
             CoalesceTableStructureGroups(groups, pi);
             AbsorbTrackedStructuredPayload(groups, pi);
         }
@@ -208,9 +224,7 @@ internal static class RevisionOps
     {
         foreach (var group in groups.Where(g => g.ResolutionStatus == RevisionResolutionStatus.Supported))
         {
-            if (group.Units.Any(u => string.IsNullOrEmpty(u.NativeId))
-                && group.Units.Any(u => u.Kind != UnitKind.PropsChange
-                    || u.Element.Name != W.tblGridChange))
+            if (group.Units.Any(u => string.IsNullOrEmpty(u.NativeId)))
             {
                 group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                 group.Diagnostic = new RevisionDiagnostic(
@@ -219,14 +233,141 @@ internal static class RevisionOps
                 continue;
             }
 
+            if (group.Units.Any(unit => string.IsNullOrEmpty(unit.Author)
+                    && unit.Element.Name != W.tblGridChange))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "missing_revision_author",
+                    "A live revision marker has no w:author and cannot establish ownership safely.");
+                continue;
+            }
+
+            var metadataCarriers = group.Units.Select(unit => unit.Element)
+                .Concat(group.RangeMarkers.Where(IsRevisionRangeStart)).Distinct().ToArray();
+            if (metadataCarriers.Any(element => element.Name != W.tblGridChange
+                    && string.IsNullOrEmpty((string?)element.Attribute(W.author))))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "missing_revision_author",
+                    "A live revision marker has no w:author and cannot establish ownership safely.");
+                continue;
+            }
+
+            if (metadataCarriers.Any(element => (string?)element.Attribute(W.date) is { } date
+                    && !IsValidRevisionDate(date)))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "invalid_revision_date",
+                    "A live revision marker has a noncanonical XML Schema date-time value.");
+                continue;
+            }
+
+            if (metadataCarriers.Any(element => DateUtcOf(element) is { } dateUtc
+                    && !IsValidRevisionDateUtc(dateUtc)))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "invalid_revision_date_utc",
+                    "A live revision marker has an invalid w16du:dateUtc value.");
+                continue;
+            }
+
             if (group.Units.Any(u => !string.IsNullOrEmpty(u.NativeId) && u.Wid is null)
                 || group.RangeMarkers.Any(marker =>
-                    !long.TryParse((string?)marker.Attribute(W.id), out _)))
+                    !TryParseCanonicalRevisionId((string?)marker.Attribute(W.id), out _)))
             {
                 group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                 group.Diagnostic = new RevisionDiagnostic(
                     "invalid_revision_id",
                     "A live revision marker has a nonnumeric w:id and cannot be addressed safely.");
+                continue;
+            }
+
+            if (group.Family == RevisionFamily.Move)
+            {
+                var fromStarts = group.RangeMarkers.Where(marker =>
+                    marker.Name == W.moveFromRangeStart).ToArray();
+                var fromEnds = group.RangeMarkers.Where(marker =>
+                    marker.Name == W.moveFromRangeEnd).ToArray();
+                var toStarts = group.RangeMarkers.Where(marker =>
+                    marker.Name == W.moveToRangeStart).ToArray();
+                var toEnds = group.RangeMarkers.Where(marker =>
+                    marker.Name == W.moveToRangeEnd).ToArray();
+                bool duplicate = fromStarts.Length > 1 || fromEnds.Length > 1
+                    || toStarts.Length > 1 || toEnds.Length > 1;
+                bool complete = fromStarts.Length == 1 && fromEnds.Length == 1
+                    && toStarts.Length == 1 && toEnds.Length == 1
+                    && group.Units.Any(unit => unit.Element.Name == W.moveFrom)
+                    && group.Units.Any(unit => unit.Element.Name == W.moveTo);
+                bool pairedIds = complete
+                    && string.Equals((string?)fromStarts[0].Attribute(W.id),
+                        (string?)fromEnds[0].Attribute(W.id), StringComparison.Ordinal)
+                    && string.Equals((string?)toStarts[0].Attribute(W.id),
+                        (string?)toEnds[0].Attribute(W.id), StringComparison.Ordinal);
+                bool distinctRangeIds = complete && !string.Equals(
+                    (string?)fromStarts[0].Attribute(W.id),
+                    (string?)toStarts[0].Attribute(W.id), StringComparison.Ordinal);
+                var metadataElements = group.Units.Select(unit => unit.Element)
+                    .Concat(fromStarts).Concat(toStarts).ToArray();
+                bool coherentMetadata = metadataElements.All(element =>
+                    string.Equals(AuthorOf(element), group.Author, StringComparison.Ordinal)
+                    && string.Equals((string?)element.Attribute(W.date), group.Date,
+                        StringComparison.Ordinal)
+                    && string.Equals(DateUtcOf(element), group.DateUtc,
+                        StringComparison.Ordinal));
+                if (!complete || !pairedIds || !distinctRangeIds || !coherentMetadata)
+                {
+                    group.ResolutionStatus = duplicate || !distinctRangeIds || !coherentMetadata
+                        ? RevisionResolutionStatus.Ambiguous
+                        : RevisionResolutionStatus.Malformed;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        duplicate ? "ambiguous_move_topology"
+                        : !distinctRangeIds ? "ambiguous_move_range_id"
+                        : !coherentMetadata ? "incoherent_move_metadata"
+                        : "malformed_move_topology",
+                        duplicate
+                            ? "A native move name identifies duplicate source or destination range markers."
+                            : !distinctRangeIds
+                                ? "A native move reuses one w:id for distinct source and destination ranges."
+                            : !coherentMetadata
+                                ? "A native move combines source and destination markup with different author/date ownership."
+                                : "A native move requires exactly paired source/destination ranges and both content sides.");
+                    continue;
+                }
+
+
+                bool fromOrdered = RangeContainsAll(
+                    fromStarts[0], fromEnds[0], group.Units
+                        .Where(unit => unit.Kind == UnitKind.Content
+                            && unit.Element.Name == W.moveFrom)
+                        .Select(unit => unit.Element));
+                bool toOrdered = RangeContainsAll(
+                    toStarts[0], toEnds[0], group.Units
+                        .Where(unit => unit.Kind == UnitKind.Content
+                            && unit.Element.Name == W.moveTo)
+                        .Select(unit => unit.Element));
+                bool disjoint = IsBefore(fromEnds[0], toStarts[0])
+                    || IsBefore(toEnds[0], fromStarts[0]);
+                if (!fromOrdered || !toOrdered || !disjoint)
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "overlapping_move_topology",
+                        "A native move requires ordered, disjoint source and destination ranges.");
+                    continue;
+                }
+            }
+
+            if (group.Units.Any(unit => unit.Kind == UnitKind.PropsChange
+                    && !IsValidPropsChange(unit.Element)))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "malformed_properties_change",
+                    "A property revision must contain exactly one matching stored-property shell under its live property parent.");
                 continue;
             }
 
@@ -263,13 +404,34 @@ internal static class RevisionOps
                     }
                 }
 
+                if (group.Family == RevisionFamily.CellInsert)
+                {
+                    var inserted = cells.Select(unit => unit.MarkedCell!).ToHashSet();
+                    bool emptiesRow = inserted.GroupBy(cell => cell.Parent).Any(byRow =>
+                    {
+                        var rowCells = byRow.Key?.Elements(W.tc).ToList()
+                            ?? new List<XElement>();
+                        return rowCells.Count == 0 || rowCells.All(inserted.Contains);
+                    });
+                    if (emptiesRow)
+                    {
+                        group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                        group.Diagnostic = new RevisionDiagnostic(
+                            "unresolvable_cell_insertion",
+                            "Rejecting the inserted cells would leave a table row with no cells.");
+                        continue;
+                    }
+                }
+
                 if (group.Family == RevisionFamily.CellMerge && cells.Any(u =>
-                    (string?)u.Element.Attribute(W.vMerge) is not ("rest" or "cont")))
+                    (string?)u.Element.Attribute(W.vMerge) is not ("rest" or "cont")
+                    || (string?)u.Element.Attribute(W.vMergeOrig) is { } original
+                        && original is not ("rest" or "cont")))
                 {
                     group.ResolutionStatus = RevisionResolutionStatus.Malformed;
                     group.Diagnostic = new RevisionDiagnostic(
                         "invalid_cell_merge_state",
-                        "w:cellMerge must carry w:vMerge='rest' or 'cont'.");
+                        "w:cellMerge must use only 'rest' or 'cont' for w:vMerge and w:vMergeOrig.");
                 }
             }
 
@@ -295,12 +457,14 @@ internal static class RevisionOps
             }
         }
 
-        // Reusing one live revision id for multiple independent groups in one part
-        // makes an id-based operation inherently ambiguous. Range-pair duplication was
-        // diagnosed earlier and groups already coalesced into one operation are fine.
-        foreach (var collision in groups.SelectMany(g => ConstituentIds(g)
-                .Select(id => (Group: g, Id: id)))
-            .GroupBy(x => (x.Group.PartUri, x.Id))
+        ValidateGlobalMoveRangeTopology(groups);
+
+        // Reusing one QName-qualified native carrier identity for independent groups is
+        // ambiguous. Numeric w:id values alone are not global: distinct carrier roles may
+        // legally reuse them, which is why the public contract exposes ConstituentKeys.
+        foreach (var collision in groups.SelectMany(g => ConstituentKeys(g)
+                .Select(key => (Group: g, Key: key)))
+            .GroupBy(x => (x.Group.PartUri, x.Key))
             .Where(g => g.Select(x => x.Group).Distinct().Count() > 1))
         {
             foreach (var group in collision.Select(x => x.Group).Distinct()
@@ -309,9 +473,122 @@ internal static class RevisionOps
                 group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
                 group.Diagnostic = new RevisionDiagnostic(
                     "duplicate_revision_id",
-                    $"w:id '{collision.Key.Id}' identifies multiple live revisions in {collision.Key.PartUri}.");
+                    $"Native carrier '{collision.Key.Key}' identifies multiple live revisions in {collision.Key.PartUri}.");
             }
         }
+    }
+
+    private static void ValidateGlobalMoveRangeTopology(List<RevisionGroup> groups)
+    {
+        foreach (var partGroups in groups.Where(group => group.Family == RevisionFamily.Move)
+            .GroupBy(group => group.PartIndex))
+        {
+            ValidateMoveRangeSide(
+                partGroups, W.moveFromRangeStart, W.moveFromRangeEnd);
+            ValidateMoveRangeSide(
+                partGroups, W.moveToRangeStart, W.moveToRangeEnd);
+        }
+    }
+
+    private static void ValidateMoveRangeSide(
+        IEnumerable<RevisionGroup> groups, XName startName, XName endName)
+    {
+        var ownerByMarker = groups.SelectMany(group => group.RangeMarkers
+                .Where(marker => marker.Name == startName || marker.Name == endName)
+                .Select(marker => (Marker: marker, Group: group)))
+            .ToDictionary(item => item.Marker, item => item.Group);
+        var ordered = ownerByMarker.Keys.OrderBy(marker => marker,
+            XNode.DocumentOrderComparer).ToArray();
+        var stack = new List<RevisionGroup>();
+        foreach (var marker in ordered)
+        {
+            var owner = ownerByMarker[marker];
+            if (marker.Name == startName)
+            {
+                stack.Add(owner);
+                continue;
+            }
+
+            if (stack.Count > 0 && ReferenceEquals(stack[^1], owner))
+            {
+                stack.RemoveAt(stack.Count - 1);
+                continue;
+            }
+
+            foreach (var group in stack.Append(owner).Distinct().Where(group =>
+                         group.ResolutionStatus == RevisionResolutionStatus.Supported))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "crossed_move_range_topology",
+                    "Native move ranges with different names cross or close out of stack order.");
+            }
+
+            var index = stack.FindLastIndex(group => ReferenceEquals(group, owner));
+            if (index >= 0)
+                stack.RemoveAt(index);
+        }
+    }
+
+    private static bool IsRevisionRangeStart(XElement element) =>
+        element.Name == W.moveFromRangeStart || element.Name == W.moveToRangeStart
+        || element.Name == W.customXmlInsRangeStart
+        || element.Name == W.customXmlDelRangeStart
+        || element.Name == W.customXmlMoveFromRangeStart
+        || element.Name == W.customXmlMoveToRangeStart;
+
+    private static bool IsValidRevisionDate(string value)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                @"^-?\d{4,}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            return false;
+        try
+        {
+            _ = System.Xml.XmlConvert.ToDateTime(
+                value, System.Xml.XmlDateTimeSerializationMode.RoundtripKind);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidRevisionDateUtc(string value) =>
+        value.EndsWith("Z", StringComparison.Ordinal)
+        && IsValidRevisionDate(value);
+
+    private static bool RangeContainsAll(
+        XElement start, XElement end, IEnumerable<XElement> contents) =>
+        IsBefore(start, end) && contents.All(element =>
+            IsBefore(start, element) && IsBefore(element, end));
+
+    private static bool IsBefore(XElement left, XElement right) =>
+        ReferenceEquals(left.Document, right.Document)
+        && XNode.DocumentOrderComparer.Compare(left, right) < 0;
+
+    private static bool IsValidPropsChange(XElement change)
+    {
+        var expectedProperty = change.Name == W.rPrChange ? W.rPr
+            : change.Name == W.pPrChange ? W.pPr
+            : change.Name == W.sectPrChange ? W.sectPr
+            : change.Name == W.tblPrChange ? W.tblPr
+            : change.Name == W.trPrChange ? W.trPr
+            : change.Name == W.tcPrChange ? W.tcPr
+            : change.Name == W.tblGridChange ? W.tblGrid
+            : change.Name == W.tblPrExChange ? W.tblPrEx
+            : null;
+        return expectedProperty is not null
+            && change.Parent?.Name == expectedProperty
+            && change.Parent.Elements().Count(element =>
+                PropsChangeNames.Contains(element.Name)) == 1
+            && !change.Ancestors().Skip(1).Any(ancestor => PropsChangeNames.Contains(ancestor.Name))
+            && !change.Descendants().Any(descendant =>
+                PropsChangeNames.Contains(descendant.Name))
+            && change.Elements().Count() == 1
+            && change.Elements().Single().Name == expectedProperty;
     }
 
     /// <summary>
@@ -434,7 +711,6 @@ internal static class RevisionOps
                 var stack = n == W.moveFromRangeEnd ? ctx.MoveFromStack : ctx.MoveToStack;
                 var id = (string?)child.Attribute(W.id);
                 int idx = stack.FindLastIndex(e => e.Id == id);
-                if (idx < 0) idx = stack.Count - 1;
                 if (idx >= 0)
                 {
                     ctx.MarkersFor(stack[idx].Name).Add(child);
@@ -514,7 +790,9 @@ internal static class RevisionOps
             // pPr/trPr are handled by WalkParagraph/WalkRow; everything else (runs,
             // hyperlinks, sdt, tbl, tc, rPr, tblPr, tblGrid, sectPr, …) recurses so
             // nested wrappers and *PrChange elements are found wherever they live.
-            if (n == W.pPr || n == W.trPr) continue;
+            if ((n == W.pPr && paragraph is not null)
+                || (n == W.trPr && markedRow is not null))
+                continue;
             if (child.HasElements)
                 WalkChildren(child.Elements(), ctx, paragraph, markedRow, markedRowType, sink);
         }
@@ -670,15 +948,29 @@ internal static class RevisionOps
             Author = AuthorOf(el),
             Date = (string?)el.Attribute(W.date),
             Paragraph = paragraph,
+            MarkedCell = el.Ancestors(W.tc).FirstOrDefault(),
+            MarkedRow = el.Ancestors(W.tr).FirstOrDefault(),
             Table = el.Ancestors(W.tbl).FirstOrDefault(),
             Wid = WidOf(el),
             NativeId = (string?)el.Attribute(W.id),
         };
 
-    private static string AuthorOf(XElement el) => (string?)el.Attribute(W.author) ?? "unknown";
+    private static string AuthorOf(XElement el) => (string?)el.Attribute(W.author) ?? string.Empty;
+
+    private static string? DateUtcOf(XElement element) =>
+        (string?)element.Attribute(W16duDateUtc);
 
     private static long? WidOf(XElement el) =>
-        long.TryParse((string?)el.Attribute(W.id), out var v) ? v : null;
+        TryParseCanonicalRevisionId((string?)el.Attribute(W.id), out var value) ? value : null;
+
+    private static bool TryParseCanonicalRevisionId(string? value, out long parsed)
+    {
+        if (!long.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture, out parsed))
+            return false;
+        return string.Equals(value, parsed.ToString(
+            System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+    }
 
     // ─── Grouping ───────────────────────────────────────────────────────
 
@@ -688,7 +980,6 @@ internal static class RevisionOps
         var moveGroups = new Dictionary<string, RevisionGroup>(StringComparer.Ordinal);
         var rowGroupByTr = new Dictionary<XElement, RevisionGroup>();
         var cellGroups = new List<RevisionGroup>();
-        var tablePropertyGroups = new List<RevisionGroup>();
         RevisionGroup? cur = null;
         RevisionGroup? lastRowGroup = null;
 
@@ -704,6 +995,7 @@ internal static class RevisionOps
                         Family = RevisionFamily.Move,
                         Author = u.Author,
                         Date = u.Date,
+                        DateUtc = DateUtcOf(u.Element),
                         PartIndex = partIndex,
                     };
                     if (ctx.RangeMarkers.TryGetValue(u.MoveName, out var markers))
@@ -717,9 +1009,13 @@ internal static class RevisionOps
 
             if (u.Kind == UnitKind.CellMark)
             {
-                var cellGroup = cellGroups.FirstOrDefault(g =>
-                    g.Family == u.Family && g.Author == u.Author && g.Date == u.Date
-                    && ReferenceEquals(g.Units[0].Table, u.Table));
+                // One Word cell operation forms a connected row/column region. Timestamp alone
+                // is insufficient: two distant edits can legitimately share it.
+                var cellGroup = cellGroups.FirstOrDefault(group =>
+                    group.Family == u.Family && group.Author == u.Author
+                    && group.Date == u.Date && group.DateUtc == DateUtcOf(u.Element)
+                    && ReferenceEquals(group.Units[0].Table, u.Table)
+                    && group.Units.Any(existing => CellsStructurallyAdjacent(existing, u)));
                 if (cellGroup is null)
                 {
                     cellGroup = NewGroup(u, partIndex);
@@ -745,6 +1041,7 @@ internal static class RevisionOps
             {
                 if (lastRowGroup is not null && lastRowGroup.Type == u.Type && lastRowGroup.Author == u.Author
                     && lastRowGroup.Date == u.Date
+                    && lastRowGroup.DateUtc == DateUtcOf(u.Element)
                     && lastRowGroup.Units[^1].MarkedRow is { } prevTr && u.MarkedRow is { } tr2
                     && prevTr.Parent == tr2.Parent && OnlyIgnorableBetween(prevTr, tr2))
                 {
@@ -761,7 +1058,9 @@ internal static class RevisionOps
             }
 
             if ((u.Kind == UnitKind.Content || u.Kind == UnitKind.ParaMark) && u.MarkedRow is not null
-                && rowGroupByTr.TryGetValue(u.MarkedRow, out var hostRow) && hostRow.Type == u.Type)
+                && rowGroupByTr.TryGetValue(u.MarkedRow, out var hostRow) && hostRow.Type == u.Type
+                && hostRow.Author == u.Author && hostRow.Date == u.Date
+                && hostRow.DateUtc == DateUtcOf(u.Element))
             {
                 hostRow.Units.Add(u);
                 continue;
@@ -769,16 +1068,9 @@ internal static class RevisionOps
 
             if (u.Kind == UnitKind.PropsChange)
             {
-                var tablePropertyGroup = u.Table is null ? null : tablePropertyGroups.FirstOrDefault(group =>
-                    group.Author == u.Author && group.Date == u.Date
-                    && ReferenceEquals(group.Units[0].Table, u.Table));
-                if (tablePropertyGroup is not null)
-                {
-                    tablePropertyGroup.Units.Add(u);
-                    cur = null;
-                }
-                else if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
+                if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
                     && cur.Date == u.Date
+                    && cur.DateUtc == DateUtcOf(u.Element)
                     && cur.Units[^1].Element.Name == W.rPrChange && u.Element.Name == W.rPrChange
                     && AdjacentFormatRuns(cur.Units[^1].Element, u.Element))
                 {
@@ -788,7 +1080,6 @@ internal static class RevisionOps
                 {
                     cur = NewGroup(u, partIndex);
                     groups.Add(cur);
-                    if (u.Table is not null) tablePropertyGroups.Add(cur);
                 }
                 continue;
             }
@@ -796,6 +1087,7 @@ internal static class RevisionOps
             // Content / paragraph-mark insert, delete, or unranged move — adjacency grouping.
             if (cur is not null && cur.Type == u.Type && cur.Author == u.Author
                 && cur.Date == u.Date
+                && cur.DateUtc == DateUtcOf(u.Element)
                 && cur.Units[^1].Element.Name == u.Element.Name
                 && Contiguous(cur.Units[^1], u))
             {
@@ -809,6 +1101,24 @@ internal static class RevisionOps
         }
     }
 
+    private static bool CellsStructurallyAdjacent(RevisionUnit left, RevisionUnit right)
+    {
+        var leftCell = left.MarkedCell;
+        var rightCell = right.MarkedCell;
+        var leftRow = leftCell?.Parent;
+        var rightRow = rightCell?.Parent;
+        if (leftCell is null || rightCell is null || leftRow?.Name != W.tr
+            || rightRow?.Name != W.tr || left.Table != right.Table)
+            return false;
+
+        int leftColumn = leftRow.Elements(W.tc).TakeWhile(cell => cell != leftCell).Count();
+        int rightColumn = rightRow.Elements(W.tc).TakeWhile(cell => cell != rightCell).Count();
+        if (leftRow == rightRow) return Math.Abs(leftColumn - rightColumn) == 1;
+        return leftColumn == rightColumn
+            && (OnlyIgnorableBetween(leftRow, rightRow)
+                || OnlyIgnorableBetween(rightRow, leftRow));
+    }
+
     private static RevisionGroup NewGroup(RevisionUnit u, int partIndex)
     {
         var g = new RevisionGroup
@@ -817,6 +1127,7 @@ internal static class RevisionOps
             Family = u.Family,
             Author = u.Author,
             Date = u.Date,
+            DateUtc = DateUtcOf(u.Element),
             PartIndex = partIndex,
         };
         g.Units.Add(u);
@@ -858,6 +1169,7 @@ internal static class RevisionOps
             var secondId = (string?)lastInside.Attribute(W.id);
             if (firstInside.Name != endName || lastInside.Name != startName || after.Name != endName
                 || string.IsNullOrEmpty(firstId) || string.IsNullOrEmpty(secondId)
+                || string.Equals(firstId, secondId, StringComparison.Ordinal)
                 || (string?)firstInside.Attribute(W.id) != firstId
                 || (string?)after.Attribute(W.id) != secondId)
             {
@@ -867,7 +1179,10 @@ internal static class RevisionOps
             // Both starts describe one wrapper revision and must carry a coherent stamp.
             var author = AuthorOf(before);
             var date = (string?)before.Attribute(W.date);
-            if (AuthorOf(lastInside) != author || (string?)lastInside.Attribute(W.date) != date)
+            var dateUtc = DateUtcOf(before);
+            if (AuthorOf(lastInside) != author
+                || (string?)lastInside.Attribute(W.date) != date
+                || DateUtcOf(lastInside) != dateUtc)
                 continue;
 
             var family = isInsert
@@ -1029,16 +1344,126 @@ internal static class RevisionOps
             || MoveRangeNames.Contains(name)
             || StructuredRangeNames.Contains(name)
             || UnsupportedRangeNames.Contains(name)
+            || UnsupportedConflictNames.Contains(name)
             || PropsChangeNames.Contains(name)
             || name == W.cellIns || name == W.cellDel || name == W.cellMerge
             || name == W.numberingChange || name == W.delText || name == W.delInstrText;
     }
+
+    /// <summary>
+    /// Count physical live carriers before registry allocation. Deletion payload text counts only
+    /// when orphaned; inside a claimed wrapper it is data, not a second revision operation.
+    /// </summary>
+    internal static bool IsNativeRevisionCarrierForInventory(XElement element) =>
+        RevisionIdBearingNames.Contains(element.Name)
+        || UnsupportedConflictNames.Contains(element.Name)
+        || ((element.Name == W.delText || element.Name == W.delInstrText)
+            && !element.Ancestors().Any(ancestor =>
+                ancestor.Name == W.del || ancestor.Name == W.moveFrom));
 
     private static bool IsClaimedDeletionPayload(
         XElement marker, IReadOnlySet<XElement> represented) =>
         (marker.Name == W.delText || marker.Name == W.delInstrText)
         && (marker.Ancestors(W.del).Any(represented.Contains)
             || marker.Ancestors(W.moveFrom).Any(represented.Contains));
+
+    /// <summary>
+    /// Coalesce only property revisions that have a concrete table-operation topology. This
+    /// preserves one-operation/one-entry semantics for row shading and column-width edits without
+    /// folding unrelated run or paragraph formatting merely because Word reused a timestamp.
+    /// </summary>
+    private static void CoalesceTablePropertyGroups(List<RevisionGroup> groups, int partIndex)
+    {
+        var propertyGroups = groups.Where(group => group.PartIndex == partIndex
+                && group.Family == RevisionFamily.PropertiesChange
+                && group.Units.Count > 0
+                && group.Units.All(unit => unit.Kind == UnitKind.PropsChange)
+                && group.Units[0].Table is not null)
+            .ToList();
+
+        foreach (var byStamp in propertyGroups.GroupBy(group => new
+        {
+            Table = group.Units[0].Table,
+            group.Author,
+            group.Date,
+            group.DateUtc,
+        }))
+        {
+            var remaining = byStamp.Where(groups.Contains).ToList();
+            var tableLevel = remaining.Where(group => group.Units.All(unit =>
+                    unit.Element.Name == W.tblGridChange
+                    || unit.Element.Name == W.tblPrChange
+                    || unit.Element.Name == W.tblPrExChange))
+                .ToList();
+            var tableCells = byStamp.Key.Table!.Descendants(W.tc).ToHashSet();
+            var changedCells = remaining.SelectMany(group => group.Units)
+                .Where(unit => unit.Element.Name == W.tcPrChange)
+                .Select(unit => unit.MarkedCell)
+                .Where(cell => cell is not null)
+                .Select(cell => cell!)
+                .ToHashSet();
+            bool completeColumnWidthTopology = tableCells.Count > 0
+                && tableCells.SetEquals(changedCells)
+                && tableLevel.Any(group => group.Units.Any(unit =>
+                    unit.Element.Name == W.tblGridChange))
+                && tableLevel.Any(group => group.Units.Any(unit =>
+                    unit.Element.Name == W.tblPrChange));
+            if (completeColumnWidthTopology)
+            {
+                var structural = remaining.Where(group => group.Units.All(unit =>
+                        unit.Element.Name == W.tblGridChange
+                        || unit.Element.Name == W.tblPrChange
+                        || unit.Element.Name == W.tblPrExChange
+                        || unit.Element.Name == W.trPrChange
+                        || unit.Element.Name == W.tcPrChange))
+                    .ToList();
+                MergeGroups(structural, groups);
+                remaining = remaining.Except(structural).ToList();
+            }
+
+            foreach (var sameKind in remaining.GroupBy(group => group.Units[0].Element.Name))
+            {
+                var candidates = sameKind.Where(group =>
+                        group.Units.All(unit => unit.MarkedCell is not null))
+                    .ToList();
+                while (candidates.Count > 0)
+                {
+                    var component = new List<RevisionGroup> { candidates[0] };
+                    candidates.RemoveAt(0);
+                    bool changed;
+                    do
+                    {
+                        changed = false;
+                        for (int index = candidates.Count - 1; index >= 0; index--)
+                        {
+                            if (!component.SelectMany(group => group.Units).Any(left =>
+                                    candidates[index].Units.Any(right =>
+                                        CellsStructurallyAdjacent(left, right))))
+                                continue;
+                            component.Add(candidates[index]);
+                            candidates.RemoveAt(index);
+                            changed = true;
+                        }
+                    }
+                    while (changed);
+                    MergeGroups(component, groups);
+                }
+            }
+        }
+    }
+
+    private static void MergeGroups(
+        IReadOnlyList<RevisionGroup> source, List<RevisionGroup> allGroups)
+    {
+        if (source.Count < 2) return;
+        var target = source[0];
+        foreach (var group in source.Skip(1))
+        {
+            target.Units.AddRange(group.Units);
+            target.RangeMarkers.AddRange(group.RangeMarkers);
+            allGroups.Remove(group);
+        }
+    }
 
     /// <summary>
     /// Word records one cell-structure action as live cell marks plus associated table,
@@ -1058,18 +1483,39 @@ internal static class RevisionOps
         {
             if (byTable.Key is null) continue;
             var tableCellGroups = byTable.ToList();
+            var markedCells = tableCellGroups.SelectMany(group => group.Units)
+                .Select(unit => unit.MarkedCell)
+                .Where(cell => cell is not null)
+                .Select(cell => cell!)
+                .ToHashSet();
             var candidates = groups.Where(g => g.PartIndex == partIndex
                 && !tableCellGroups.Contains(g)
                 && g.Units.Count > 0
-                && g.Units.All(u => ReferenceEquals(u.Table, byTable.Key)))
+                && g.Units.All(u => ReferenceEquals(u.Table, byTable.Key))
+                && g.Units.All(unit => unit.Element.Name == W.tblGridChange
+                    || unit.Element.Name == W.tblPrChange
+                    || unit.Element.Name == W.tblPrExChange
+                    || unit.Element.Name == W.tcPrChange
+                    || unit.Element.AncestorsAndSelf(W.tc).Any(markedCells.Contains)))
                 .ToList();
 
             foreach (var candidate in candidates)
             {
+                var candidateCells = candidate.Units
+                    .SelectMany(unit => unit.Element.AncestorsAndSelf(W.tc))
+                    .ToHashSet();
                 var matches = tableCellGroups.Where(c =>
-                    c.Author == candidate.Author && c.Date == candidate.Date).ToList();
+                    c.Author == candidate.Author && c.Date == candidate.Date
+                    && c.DateUtc == candidate.DateUtc
+                    && (candidate.Units.All(unit => unit.Element.Name == W.tblGridChange)
+                        || candidate.Units.All(unit => unit.Element.Name == W.tblPrChange
+                            || unit.Element.Name == W.tblPrExChange)
+                        || (candidateCells.Count > 0 && c.Units.Any(unit =>
+                            unit.MarkedCell is not null
+                            && candidateCells.Contains(unit.MarkedCell))))).ToList();
                 if (matches.Count == 0 && candidate.Units.All(u => u.Element.Name == W.tblGridChange)
-                    && candidate.Author == "unknown" && candidate.Date is null)
+                    && string.IsNullOrEmpty(candidate.Author) && candidate.Date is null
+                    && candidate.DateUtc is null)
                 {
                     matches = tableCellGroups;
                 }
@@ -1106,7 +1552,8 @@ internal static class RevisionOps
             var wrapper = structured.Units[0].StructuredWrapper;
             if (wrapper is null) continue;
             var candidates = groups.Where(g => g != structured && g.PartIndex == partIndex
-                && g.Type == structured.Type && g.Author == structured.Author && g.Date == structured.Date
+                && g.Type == structured.Type && g.Author == structured.Author
+                && g.Date == structured.Date && g.DateUtc == structured.DateUtc
                 && g.Units.Count > 0
                 && g.Units.All(u => u.Element.AncestorsAndSelf().Contains(wrapper)))
                 .ToList();
@@ -1260,14 +1707,17 @@ internal static class RevisionOps
             : null;
     }
 
-    private static IReadOnlyList<string> ConstituentKeys(RevisionGroup group)
+    internal static IReadOnlyList<string> ConstituentKeys(RevisionGroup group)
     {
         var keys = group.Units.Select(u =>
-                u.Element.Name.NamespaceName + ":" + u.Element.Name.LocalName + ":"
-                + (u.NativeId ?? ElementPath(u.Element)))
+                "kind=" + u.Kind + ":" + u.Element.Name.NamespaceName + ":"
+                + u.Element.Name.LocalName + ":"
+                + (u.NativeId ?? ElementPath(u.Element))
+                + (u.MoveName is null ? "" : ":name=" + u.MoveName))
             .Concat(group.RangeMarkers.Select(m =>
                 m.Name.NamespaceName + ":" + m.Name.LocalName + ":"
-                + ((string?)m.Attribute(W.id) ?? ElementPath(m))))
+                + ((string?)m.Attribute(W.id) ?? ElementPath(m))
+                + ((string?)m.Attribute(W.name) is { } name ? ":name=" + name : "")))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
@@ -1287,9 +1737,15 @@ internal static class RevisionOps
 
     // ─── Listing text ───────────────────────────────────────────────────
 
-    internal static string GroupText(RevisionGroup g)
+    internal static string GroupText(RevisionGroup g) =>
+        GroupText(g, int.MaxValue, out _);
+
+    internal static string GroupText(
+        RevisionGroup g, long maximumCharacters, out bool complete)
     {
         var sb = new StringBuilder();
+        int maximum = (int)Math.Min(int.MaxValue, Math.Max(0, maximumCharacters));
+        complete = true;
         // A move pair carries the same text on both sides; render the source side only.
         bool moveFromOnly = g.Type == TypeMove
             && g.Units.Any(u => u.Element.Name == W.moveFrom);
@@ -1299,48 +1755,73 @@ internal static class RevisionOps
             switch (u.Kind)
             {
                 case UnitKind.Content:
-                    AppendVisibleText(u.Element, u.Element.Name == W.del ? W.delText : W.t, sb);
+                    if (!AppendVisibleText(
+                            u.Element,
+                            u.Element.Name == W.del ? W.delText : W.t,
+                            sb,
+                            maximum))
+                        complete = false;
                     break;
                 case UnitKind.ParaMark:
-                    sb.Append('¶');
+                    if (sb.Length >= maximum) complete = false;
+                    else sb.Append('¶');
                     break;
                 case UnitKind.PropsChange:
                     if (u.Element.Name == W.rPrChange
                         && u.Element.Parent?.Parent is { } run && run.Name == W.r)
-                        AppendVisibleText(run, W.t, sb);
+                        complete &= AppendVisibleText(run, W.t, sb, maximum);
                     else if (u.Element.Name == W.pPrChange
                         && u.Element.Parent?.Parent is { } para && para.Name == W.p)
-                        AppendVisibleText(para, W.t, sb);
+                        complete &= AppendVisibleText(para, W.t, sb, maximum);
                     break;
                 case UnitKind.CellMark:
                     if (u.MarkedCell is { } cell)
-                        AppendVisibleText(cell, u.Family == RevisionFamily.CellDelete ? W.delText : W.t, sb);
+                        complete &= AppendVisibleText(
+                            cell,
+                            u.Family == RevisionFamily.CellDelete ? W.delText : W.t,
+                            sb,
+                            maximum);
                     break;
                 case UnitKind.NumberingPropertiesInsert:
                 case UnitKind.NumberingChange:
                     if (u.Paragraph is { } numberedParagraph)
-                        AppendVisibleText(numberedParagraph, W.t, sb);
+                        complete &= AppendVisibleText(numberedParagraph, W.t, sb, maximum);
                     break;
                 case UnitKind.StructuredRange:
                     if (u.StructuredWrapper is { } wrapper)
-                        AppendVisibleText(wrapper, W.t, sb);
+                        complete &= AppendVisibleText(wrapper, W.t, sb, maximum);
                     break;
             }
+            if (!complete) break;
         }
         return sb.ToString();
     }
 
-    private static void AppendVisibleText(XElement el, XName textName, StringBuilder sb)
+    private static bool AppendVisibleText(
+        XElement el, XName textName, StringBuilder sb, int maximumCharacters)
     {
         foreach (var child in el.Elements())
         {
             var n = child.Name;
             if (n == W.pPr || n == W.rPr || n == W.trPr || n == W.tcPr || n == W.tblPr) continue;
-            if (n == textName) { sb.Append(child.Value); continue; }
-            if (n == W.tab) { sb.Append('\t'); continue; }
-            if (n == W.br || n == W.cr) { sb.Append('\n'); continue; }
-            if (child.HasElements) AppendVisibleText(child, textName, sb);
+            if (n == textName)
+            {
+                var value = child.Value;
+                if (sb.Length > maximumCharacters - value.Length) return false;
+                sb.Append(value);
+                continue;
+            }
+            if (n == W.tab || n == W.br || n == W.cr)
+            {
+                if (sb.Length >= maximumCharacters) return false;
+                sb.Append(n == W.tab ? '\t' : '\n');
+                continue;
+            }
+            if (child.HasElements
+                && !AppendVisibleText(child, textName, sb, maximumCharacters))
+                return false;
         }
+        return true;
     }
 
     // ─── Resolution ─────────────────────────────────────────────────────
@@ -1352,7 +1833,11 @@ internal static class RevisionOps
     /// elements (<c>w:p</c>/<c>w:tr</c>/<c>w:tbl</c>) the resolution detached, so the caller
     /// can report their anchors as removed.
     /// </summary>
-    internal static List<XElement> Apply(RevisionGroup g, bool accept)
+    internal static List<XElement> Apply(
+        RevisionGroup g,
+        bool accept,
+        bool preserveUnrelatedMarkup = false,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys = null)
     {
         if (g.ResolutionStatus != RevisionResolutionStatus.Supported)
             throw new InvalidOperationException(g.Diagnostic?.Message
@@ -1372,8 +1857,8 @@ internal static class RevisionOps
         foreach (var u in g.Units.Where(u => u.Kind == UnitKind.PropsChange))
         {
             if (Detached(u.Element)) continue;
-            if (accept) AcceptProps(u.Element);
-            else RejectProps(u.Element);
+            if (accept) AcceptProps(u.Element, g.PartUri, protectedEmptyContainerKeys);
+            else RejectProps(u.Element, g.PartUri, protectedEmptyContainerKeys);
         }
 
         foreach (var u in g.Units.Where(u => u.Kind == UnitKind.Content))
@@ -1390,7 +1875,8 @@ internal static class RevisionOps
         {
             if (Detached(u.Element)) continue;
             bool rowSurvives = u.Type == TypeInsert ? accept : !accept;
-            if (rowSurvives) StripRowMark(u.Element);
+            if (rowSurvives) StripRowMark(
+                u.Element, g.PartUri, protectedEmptyContainerKeys);
             else RemoveRow(u.MarkedRow!, removedBlocks);
         }
 
@@ -1401,13 +1887,19 @@ internal static class RevisionOps
             if (accept)
                 u.Element.Remove();
             else if (numPr?.Name == W.numPr)
+            {
+                var propertyParent = numPr.Parent;
                 numPr.Remove();
+                RemoveEmptyPropertyAncestors(
+                    propertyParent, g.PartUri, protectedEmptyContainerKeys);
+            }
         }
 
         foreach (var u in g.Units.Where(u => u.Kind == UnitKind.NumberingChange))
             if (!Detached(u.Element)) u.Element.Remove();
 
-        ResolveCellStructure(g, accept, removedBlocks);
+        ResolveCellStructure(
+            g, accept, removedBlocks, protectedEmptyContainerKeys);
 
         // If resolving this revision removes an SDT envelope, expose its paragraphs before
         // resolving their pilcrows. A last paragraph inside w:sdtContent can then coalesce with
@@ -1427,7 +1919,10 @@ internal static class RevisionOps
             touchedParagraphs.Add(u.Paragraph);
             if (ContentSurvives(u.Element.Name, accept))
             {
+                var markerParent = u.Element.Parent;
                 u.Element.Remove();
+                RemoveEmptyPropertyAncestors(
+                    markerParent, g.PartUri, protectedEmptyContainerKeys);
             }
             else
             {
@@ -1462,17 +1957,21 @@ internal static class RevisionOps
             }
         }
 
-        foreach (var p in touchedParagraphs)
-        {
-            if (Detached(p)) continue;
-            CleanParagraphHusks(p);
-        }
+        if (!preserveUnrelatedMarkup)
+            foreach (var p in touchedParagraphs)
+            {
+                if (Detached(p)) continue;
+                CleanParagraphHusks(p);
+            }
 
         return removedBlocks;
     }
 
     private static void ResolveCellStructure(
-        RevisionGroup group, bool accept, List<XElement> removedElements)
+        RevisionGroup group,
+        bool accept,
+        List<XElement> removedElements,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys)
     {
         var cellUnits = group.Units.Where(u => u.Kind == UnitKind.CellMark).ToList();
         if (cellUnits.Count == 0) return;
@@ -1482,7 +1981,13 @@ internal static class RevisionOps
             if (accept)
             {
                 foreach (var unit in cellUnits)
-                    if (!Detached(unit.Element)) unit.Element.Remove();
+                    if (!Detached(unit.Element))
+                    {
+                        var markerParent = unit.Element.Parent;
+                        unit.Element.Remove();
+                        RemoveEmptyPropertyAncestors(
+                            markerParent, group.PartUri, protectedEmptyContainerKeys);
+                    }
             }
             else
             {
@@ -1501,7 +2006,13 @@ internal static class RevisionOps
                 AcceptDeletedCells(cellUnits, removedElements);
             else
                 foreach (var unit in cellUnits)
-                    if (!Detached(unit.Element)) unit.Element.Remove();
+                    if (!Detached(unit.Element))
+                    {
+                        var markerParent = unit.Element.Parent;
+                        unit.Element.Remove();
+                        RemoveEmptyPropertyAncestors(
+                            markerParent, group.PartUri, protectedEmptyContainerKeys);
+                    }
         }
         else if (group.Family == RevisionFamily.CellMerge)
         {
@@ -1543,13 +2054,15 @@ internal static class RevisionOps
             var structuralName = group.Family == RevisionFamily.CellInsert ? W.cellIns
                 : group.Family == RevisionFamily.CellDelete ? W.cellDel
                 : W.cellMerge;
-            foreach (var table in cellUnits.Select(u => u.Table).Where(t => t is not null)
-                .Select(t => t!).Distinct())
+            foreach (var cell in cellUnits.Select(u => u.MarkedCell).Where(c => c is not null)
+                .Select(c => c!).Distinct())
             {
-                foreach (var marker in table.Descendants()
-                    .Where(e => e.Name == structuralName)
+                var directMarkers = cell.Element(W.tcPr)?.Elements(structuralName)
                     .Where(e => AuthorOf(e) == group.Author
-                        && (string?)e.Attribute(W.date) == group.Date).ToList())
+                        && (string?)e.Attribute(W.date) == group.Date
+                        && DateUtcOf(e) == group.DateUtc).ToList();
+                if (directMarkers is null) continue;
+                foreach (var marker in directMarkers)
                     marker.Remove();
             }
         }
@@ -1654,8 +2167,9 @@ internal static class RevisionOps
         if (wrapperSurvives) return;
 
         var content = wrapper.Element(W.sdtContent);
-        var nodes = content?.Nodes().Where(n => n is not XElement e
-            || !StructuredRangeNames.Contains(e.Name)).ToList() ?? new List<XNode>();
+        // Preserve every payload node, including independently owned nested range revisions.
+        // The caller removes only this group's four exact marker objects after unwrapping.
+        var nodes = content?.Nodes().ToList() ?? new List<XNode>();
         foreach (var node in nodes) node.Remove();
         wrapper.ReplaceWith(nodes);
         removedElements.Add(wrapper);
@@ -1718,22 +2232,34 @@ internal static class RevisionOps
     private static bool Detached(XElement e) => e.Document is null;
 
     /// <summary>Whether <paramref name="paragraph"/>'s container would still hold a
-    /// block-level child (<c>w:p</c> or <c>w:tbl</c>) after removing it. Every OOXML
+    /// block-level child after removing it. Every OOXML
     /// paragraph container requires at least one, so the check is deliberately
     /// container-agnostic rather than a list of parent names: removing the last block-level
     /// child is a content-model violation wherever it happens.</summary>
     private static bool HasSurvivingBlockSibling(XElement paragraph) =>
         paragraph.Parent is { } container
-        && container.Elements().Any(sibling => !ReferenceEquals(sibling, paragraph)
-            && (sibling.Name == W.p || sibling.Name == W.tbl));
+        && (container.Name == W.body
+            || container.Elements().Any(sibling => !ReferenceEquals(sibling, paragraph)
+                && (sibling.Name == W.p || sibling.Name == W.tbl || sibling.Name == W.sdt
+                    || sibling.Name == W.customXml || sibling.Name == W.altChunk)));
 
     private static void UnwrapWrapper(XElement wrapper, bool restoreDeleted)
     {
         if (restoreDeleted)
         {
-            foreach (var dt in wrapper.Descendants(W.delText).ToList())
+            foreach (var dt in wrapper.Descendants(W.delText)
+                .Where(text => ReferenceEquals(
+                    text.Ancestors().FirstOrDefault(ancestor =>
+                        RevWrapperNames.Contains(ancestor.Name)),
+                    wrapper))
+                .ToList())
                 dt.ReplaceWith(new XElement(W.t, dt.Attributes(), dt.Nodes()));
-            foreach (var di in wrapper.Descendants(W.delInstrText).ToList())
+            foreach (var di in wrapper.Descendants(W.delInstrText)
+                .Where(text => ReferenceEquals(
+                    text.Ancestors().FirstOrDefault(ancestor =>
+                        RevWrapperNames.Contains(ancestor.Name)),
+                    wrapper))
+                .ToList())
                 di.ReplaceWith(new XElement(W.instrText, di.Attributes(), di.Nodes()));
         }
         // Detach the children before re-adding so they are MOVED, not cloned — a nested
@@ -1749,26 +2275,27 @@ internal static class RevisionOps
         var parent = wrapper.Parent;
         wrapper.Remove();
         // Collapse a hyperlink shell left with no content (mirrors RevisionProcessor's
-        // wholly-deleted-hyperlink rule); bookmarks inside it are preserved.
+        // wholly-deleted-hyperlink rule); range markers and reference-only runs are
+        // transparent and are preserved at the hyperlink's former position.
         while (parent is not null && parent.Name == W.hyperlink
-            && !parent.Elements().Any(e =>
-                e.Name != W.bookmarkStart && e.Name != W.bookmarkEnd && e.Name != W.proofErr))
+            && parent.Elements().All(IsIgnorableBetween))
         {
             var grandParent = parent.Parent;
-            var bookmarks = parent.Elements()
-                .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd)
-                .ToList();
-            foreach (var b in bookmarks) b.Remove();
-            parent.ReplaceWith(bookmarks);
+            var survivingNodes = parent.Nodes().ToList();
+            foreach (var node in survivingNodes) node.Remove();
+            parent.ReplaceWith(survivingNodes);
             parent = grandParent;
         }
     }
 
-    private static void StripRowMark(XElement mark)
+    private static void StripRowMark(
+        XElement mark,
+        string partUri,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys)
     {
         var trPr = mark.Parent;
         mark.Remove();
-        if (trPr is not null && !trPr.HasElements && !trPr.HasAttributes) trPr.Remove();
+        RemoveEmptyPropertyAncestors(trPr, partUri, protectedEmptyContainerKeys);
     }
 
     private static void RemoveRow(XElement tr, List<XElement> removedBlocks)
@@ -1791,19 +2318,27 @@ internal static class RevisionOps
     private static XElement? MergeParagraphWithNext(XElement p)
     {
         XElement? next = null;
+        var boundaryNodes = new List<XElement>();
         foreach (var e in p.ElementsAfterSelf())
         {
-            if (IgnorableBetween.Contains(e.Name)) continue;
-            if (e.Name == W.p) next = e;
-            break;
+            if (e.Name == W.p)
+            {
+                next = e;
+                break;
+            }
+            if (!IsIgnorableBetween(e)) break;
+            boundaryNodes.Add(e);
         }
         if (next is null) return null;
 
-        var content = p.Elements().Where(e => e.Name != W.pPr).ToList();
-        foreach (var c in content) c.Remove();
+        var prefix = p.Nodes()
+            .Where(node => node is not XElement element || element.Name != W.pPr)
+            .Concat(boundaryNodes.Cast<XNode>())
+            .ToList();
+        foreach (var node in prefix) node.Remove();
         var nextPPr = next.Element(W.pPr);
-        if (nextPPr is not null) nextPPr.AddAfterSelf(content);
-        else next.AddFirst(content);
+        if (nextPPr is not null) nextPPr.AddAfterSelf(prefix);
+        else next.AddFirst(prefix);
         p.Remove();
         return p;
     }
@@ -1813,12 +2348,17 @@ internal static class RevisionOps
         var pPr = p.Element(W.pPr);
         if (pPr is null) return;
         var rPr = pPr.Element(W.rPr);
-        if (rPr is not null && !rPr.HasElements && HasNoSemanticAttributes(rPr)) rPr.Remove();
-        if (!pPr.HasElements && HasNoSemanticAttributes(pPr)) pPr.Remove();
+        if (rPr is not null && !rPr.HasElements && HasNoSemanticNodes(rPr)
+            && HasNoSemanticAttributes(rPr)) rPr.Remove();
+        if (!pPr.HasElements && HasNoSemanticNodes(pPr)
+            && HasNoSemanticAttributes(pPr)) pPr.Remove();
     }
 
     private static bool HasNoSemanticAttributes(XElement element) =>
         element.Attributes().All(a => a.IsNamespaceDeclaration || a.Name == PtOpenXml.Unid);
+
+    private static bool HasNoSemanticNodes(XElement element) =>
+        element.Nodes().All(node => node is XText text && string.IsNullOrWhiteSpace(text.Value));
 
     // ─── Format-change resolution ───────────────────────────────────────
 
@@ -1832,14 +2372,52 @@ internal static class RevisionOps
         W.rPr, W.pPr, W.trPr, W.tcPr, W.tblPrEx,
     };
 
-    private static void AcceptProps(XElement change)
+    internal static bool IsRemovableEmptyPropertyContainer(XName name) =>
+        RemovableEmptyPropertyContainers.Contains(name);
+
+    internal static bool IsEmptyRemovablePropertyContainer(XElement element) =>
+        RemovableEmptyPropertyContainers.Contains(element.Name)
+        && !element.HasElements
+        && HasNoSemanticNodes(element)
+        && HasNoSemanticAttributes(element);
+
+    internal static IReadOnlyList<string> EmptyPropertyContainerKeys(
+        string partUri, XElement element)
+    {
+        var prefix = partUri + "|" + element.Name.NamespaceName + ":"
+            + element.Name.LocalName + "|";
+        var anchorOwner = element.AncestorsAndSelf()
+            .FirstOrDefault(candidate => candidate.Attribute(PtOpenXml.Unid) is not null)
+            ?? element.Parent?.DescendantsAndSelf()
+                .FirstOrDefault(candidate => candidate.Attribute(PtOpenXml.Unid) is not null);
+        var keys = new List<string> { prefix + "path=" + ElementPath(element) };
+        if ((string?)anchorOwner?.Attribute(PtOpenXml.Unid) is { } unid)
+            keys.Add(prefix + "anchor=" + unid);
+        return keys;
+    }
+
+    private static void AcceptProps(
+        XElement change,
+        string partUri,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys)
     {
         var parent = change.Parent;
         change.Remove();
-        if (parent is not null && !parent.HasElements && HasNoSemanticAttributes(parent)
-            && RemovableEmptyPropertyContainers.Contains(parent.Name))
+        RemoveEmptyPropertyAncestors(parent, partUri, protectedEmptyContainerKeys);
+    }
+
+    private static void RemoveEmptyPropertyAncestors(
+        XElement? element,
+        string partUri,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys)
+    {
+        while (element is not null && IsEmptyRemovablePropertyContainer(element)
+            && !EmptyPropertyContainerKeys(partUri, element).Any(key =>
+                protectedEmptyContainerKeys?.Contains(key) == true))
         {
-            parent.Remove();
+            var parent = element.Parent;
+            element.Remove();
+            element = parent;
         }
     }
 
@@ -1847,62 +2425,80 @@ internal static class RevisionOps
     /// the children the change's CT_*Base inner schema excludes (revision marks on a
     /// paragraph-mark rPr, header/footer references on sectPr, rPr/sectPr on pPr, row
     /// marks on trPr, cell revision marks on tcPr) in their schema position.</summary>
-    private static void RejectProps(XElement change)
+    private static void RejectProps(
+        XElement change,
+        string partUri,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys)
     {
         var parent = change.Parent;
         if (parent is null) { change.Remove(); return; }
         var stored = change.Elements().FirstOrDefault();
-        var storedChildren = stored?.Elements().Select(e => new XElement(e)).ToList()
-            ?? new List<XElement>();
+        var storedNodes = stored?.Nodes().Select(CloneNode).ToList()
+            ?? new List<XNode>();
+        var storedAttributes = stored?.Attributes()
+            .Where(attribute => !attribute.IsNamespaceDeclaration
+                && attribute.Name != PtOpenXml.Unid)
+            .Select(attribute => new XAttribute(attribute))
+            .ToList() ?? new List<XAttribute>();
         change.Remove();
+
+        // The archived property shell is the complete before-image, including attributes such
+        // as sectPr rsid values. Keep only projection metadata on the live shell, then restore
+        // every semantic attribute from the stored state.
+        parent.Attributes()
+            .Where(attribute => !attribute.IsNamespaceDeclaration
+                && attribute.Name != PtOpenXml.Unid)
+            .Remove();
+        parent.Add(storedAttributes);
 
         var pn = parent.Name;
         if (pn == W.rPr)
         {
             // CT_ParaRPr: ins/del/moveFrom/moveTo precede the property set.
             var marks = DetachAll(parent.Elements().Where(e => RevWrapperNames.Contains(e.Name)));
-            parent.ReplaceNodes(marks, storedChildren);
+            parent.ReplaceNodes(marks, storedNodes);
         }
         else if (pn == W.pPr)
         {
             // CT_PPr: base props, then rPr, then sectPr (pPrChange's stored pPr is CT_PPrBase).
             var rPr = DetachAll(parent.Elements(W.rPr));
             var sectPr = DetachAll(parent.Elements(W.sectPr));
-            parent.ReplaceNodes(storedChildren, rPr, sectPr);
+            parent.ReplaceNodes(storedNodes, rPr, sectPr);
         }
         else if (pn == W.sectPr)
         {
             // CT_SectPr: header/footer references come first (excluded from CT_SectPrBase).
             var refs = DetachAll(parent.Elements()
                 .Where(e => e.Name == W.headerReference || e.Name == W.footerReference));
-            parent.ReplaceNodes(refs, storedChildren);
+            parent.ReplaceNodes(refs, storedNodes);
         }
         else if (pn == W.trPr)
         {
             // CT_TrPr: base props, then ins/del row marks.
             var marks = DetachAll(parent.Elements().Where(e => e.Name == W.ins || e.Name == W.del));
-            parent.ReplaceNodes(storedChildren, marks);
+            parent.ReplaceNodes(storedNodes, marks);
         }
         else if (pn == W.tcPr)
         {
             // CT_TcPr: base props, then cellIns/cellDel/cellMerge.
             var cellRevs = DetachAll(parent.Elements()
                 .Where(e => e.Name == W.cellIns || e.Name == W.cellDel || e.Name == W.cellMerge));
-            parent.ReplaceNodes(storedChildren, cellRevs);
+            parent.ReplaceNodes(storedNodes, cellRevs);
         }
         else
         {
             // tblPr, tblGrid, tblPrEx — the stored element is the whole property set.
-            parent.ReplaceNodes(storedChildren);
+            parent.ReplaceNodes(storedNodes);
         }
 
         // A change whose stored old property set was empty leaves an empty husk —
         // remove it (Word writes no empty rPr/pPr), mirroring AcceptProps. tblPr/tblGrid
         // are excluded: see RemovableEmptyPropertyContainers.
-        if (!parent.HasElements && HasNoSemanticAttributes(parent)
-            && RemovableEmptyPropertyContainers.Contains(pn))
+        if (IsEmptyRemovablePropertyContainer(parent))
         {
-            parent.Remove();
+            if (!EmptyPropertyContainerKeys(partUri, parent).Any(key =>
+                    protectedEmptyContainerKeys?.Contains(key) == true))
+                parent.Remove();
         }
     }
 
@@ -1912,4 +2508,20 @@ internal static class RevisionOps
         foreach (var e in list) e.Remove();
         return list;
     }
+
+    private static XNode CloneNode(XNode node) => node switch
+    {
+        XElement element => new XElement(element),
+        XText text => new XText(text.Value),
+        XComment comment => new XComment(comment.Value),
+        XProcessingInstruction instruction =>
+            new XProcessingInstruction(instruction.Target, instruction.Data),
+        XDocumentType documentType => new XDocumentType(
+            documentType.Name,
+            documentType.PublicId,
+            documentType.SystemId,
+            documentType.InternalSubset),
+        _ => throw new InvalidOperationException(
+            $"Unsupported XML node in revision before-image: {node.NodeType}."),
+    };
 }

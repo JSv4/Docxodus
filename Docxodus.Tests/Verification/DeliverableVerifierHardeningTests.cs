@@ -767,8 +767,8 @@ public sealed class DeliverableVerifierHardeningTests
         var package = IrTestDocuments.FromBodyXml(
             "<w:p><w:ins w:author=\"Missing\"><w:r><w:t>Malformed</w:t></w:r></w:ins></w:p>"
             + "<w:p><w:ins w:id=\"7\" w:author=\"First\"><w:r><w:t>One</w:t></w:r></w:ins></w:p>"
-            + "<w:p><w:del w:id=\"7\" w:author=\"Second\"><w:r><w:delText>Two</w:delText>"
-            + "</w:r></w:del></w:p>"
+            + "<w:p><w:ins w:id=\"7\" w:author=\"Second\"><w:r><w:t>Two</w:t>"
+            + "</w:r></w:ins></w:p>"
             + "<w:p><w:customXmlMoveFromRangeStart w:id=\"9\" w:author=\"Third\"/>"
             + "<w:r><w:t>Unsupported</w:t></w:r>"
             + "<w:customXmlMoveFromRangeEnd w:id=\"9\"/></w:p>").DocumentByteArray;

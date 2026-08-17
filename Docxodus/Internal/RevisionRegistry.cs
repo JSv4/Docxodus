@@ -52,15 +52,23 @@ internal sealed class RevisionRegistry
                 "unresolved_revision",
                 "The revision cannot be resolved safely.");
 
-    internal List<XElement> Resolve(RevisionOps.RevisionGroup group, bool accept) =>
-        RevisionOps.Apply(group, accept);
+    internal List<XElement> Resolve(
+        RevisionOps.RevisionGroup group,
+        bool accept,
+        bool preserveUnrelatedMarkup = false,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys = null) =>
+        RevisionOps.Apply(
+            group, accept, preserveUnrelatedMarkup, protectedEmptyContainerKeys);
 
     /// <summary>
     /// Resolve every currently live revision through the same selective resolver used
     /// by individual operations. Rebuild after every group so newly exposed archived
     /// revisions are handled and detached nested groups disappear naturally.
     /// </summary>
-    internal List<XElement> ResolveAll(bool accept)
+    internal List<XElement> ResolveAll(
+        bool accept,
+        bool preserveUnrelatedMarkup = false,
+        IReadOnlyCollection<string>? protectedEmptyContainerKeys = null)
     {
         var removed = new List<XElement>();
         var registry = this;
@@ -81,7 +89,8 @@ internal sealed class RevisionRegistry
                 throw new InvalidOperationException(
                     "Bulk revision resolution made no progress; the document was left unchanged.");
 
-            removed.AddRange(registry.Resolve(next, accept));
+            removed.AddRange(registry.Resolve(
+                next, accept, preserveUnrelatedMarkup, protectedEmptyContainerKeys));
             registry = Build(_parts);
         }
 

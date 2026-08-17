@@ -5,6 +5,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text;
 
 namespace Docxodus.Verification;
 
@@ -12,6 +13,7 @@ namespace Docxodus.Verification;
 public enum RedlineRevisionDisposition
 {
     PreExisting,
+    IntendedFinalPreExisting,
     Generated,
     Conflicted,
 }
@@ -40,12 +42,43 @@ public sealed record RedlineReversibilityProofOptions
     public PackageManifestOptions PackageManifestOptions { get; init; } = new();
 
     /// <summary>
-    /// Maximum native revision elements accepted in either the baseline or redline package.
+    /// Maximum aggregate raw bytes accepted across the baseline, intended-final, and redline
+    /// packages. This admission check runs before package inspection or session construction.
+    /// </summary>
+    public long MaxPackageBytes { get; init; } = 100L * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum native revision elements accepted in any baseline, intended-final, redline, or
+    /// live path-output package.
     /// Selective resolution rebuilds the live registry after every operation, so this explicit
     /// bound prevents adversarial revision inventories from turning both proof paths into
     /// unbounded quadratic work. Raise it only for a reviewed, trusted workflow.
     /// </summary>
     public int MaxRevisionElements { get; init; } = 1_000;
+
+    /// <summary>Maximum semantic changes produced while comparing either proof path.</summary>
+    public int MaxSemanticChanges { get; init; } = 25_000;
+
+    /// <summary>Maximum package-delta records inspected for either proof path.</summary>
+    public int MaxPackageChanges { get; init; } = 25_000;
+
+    /// <summary>
+    /// Maximum ordinary findings retained across the complete proof. If this limit is exceeded,
+    /// one additional fail-closed resource finding is emitted and later findings are suppressed.
+    /// </summary>
+    public int MaxFindings { get; init; } = 10_000;
+
+    /// <summary>
+    /// Maximum aggregate constituent-ID, constituent-key, and affected-anchor records retained
+    /// while constructing each baseline, intended-final, redline, or live path inventory.
+    /// </summary>
+    public int MaxRevisionEvidenceItems { get; init; } = 25_000;
+
+    /// <summary>
+    /// Maximum aggregate characters retained from revision identities, including authors, text,
+    /// IDs, anchors, scopes, dates, and diagnostics.
+    /// </summary>
+    public long MaxEvidenceTextCharacters { get; init; } = 4L * 1024 * 1024;
 
     /// <summary>
     /// Require identical ZIP bytes in addition to modeled and normalized whole-package equality.
@@ -63,8 +96,10 @@ public sealed record RedlineRevisionIdentity
     required public string Type { get; init; }
     required public RevisionFamily Family { get; init; }
     required public IReadOnlyList<string> ConstituentIds { get; init; }
+    required public IReadOnlyList<string> ConstituentKeys { get; init; }
     required public string Author { get; init; }
     public string? Date { get; init; }
+    public string? DateUtc { get; init; }
     required public string Text { get; init; }
     public string? AnchorId { get; init; }
     required public IReadOnlyList<string> AffectedAnchorIds { get; init; }
@@ -77,6 +112,7 @@ public sealed record RedlineRevisionClassification
 {
     required public RedlineRevisionDisposition Disposition { get; init; }
     public RedlineRevisionIdentity? Baseline { get; init; }
+    public RedlineRevisionIdentity? IntendedFinal { get; init; }
     public RedlineRevisionIdentity? Redline { get; init; }
     required public string Reason { get; init; }
 }
@@ -152,6 +188,11 @@ public sealed record RedlineProofPathResult
     required public bool NormalizedWholePackageEquivalent { get; init; }
     required public bool OrderedOpcContentEquivalent { get; init; }
     required public bool ExactPackageBytesEquivalent { get; init; }
+    /// <summary>
+    /// Whether the complete bounded package delta was available. A false value never exposes a
+    /// potentially misleading prefix of divergences.
+    /// </summary>
+    required public bool DivergenceAnalysisCompleted { get; init; }
     required public RedlineProofPackageIdentity ExpectedPackage { get; init; }
     public RedlineProofPackageIdentity? ActualPackage { get; init; }
     public RedlinePackageDivergence? FirstDivergence { get; init; }
@@ -180,29 +221,55 @@ public sealed record RedlineReversibilityProof
     public RedlineProofPathResult? RejectToBaseline { get; init; }
     required public IReadOnlyList<RedlineProofFinding> Findings { get; init; }
 
+    /// <summary>Serialize the canonical, compact proof bytes used by delivery receipts.</summary>
+    public byte[] ToCanonicalUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(
+        this, JsonOptions.Canonical.RedlineReversibilityProof);
+
     /// <summary>Serialize the canonical, compact proof JSON used by delivery receipts.</summary>
-    public string ToCanonicalJson() => JsonSerializer.Serialize(this, JsonOptions.Canonical);
+    public string ToCanonicalJson() => Encoding.UTF8.GetString(ToCanonicalUtf8Bytes());
 
     /// <summary>Serialize proof JSON, optionally indented for a human-viewable artifact.</summary>
     public string ToJson(bool indented = true) => JsonSerializer.Serialize(
-        this, indented ? JsonOptions.Indented : JsonOptions.Canonical);
+        this, (indented ? JsonOptions.Indented : JsonOptions.Canonical)
+            .RedlineReversibilityProof);
 
     private static class JsonOptions
     {
-        internal static readonly JsonSerializerOptions Canonical = Create(indented: false);
-        internal static readonly JsonSerializerOptions Indented = Create(indented: true);
+        internal static readonly RedlineReversibilityProofJsonContext Canonical =
+            Create(indented: false);
+        internal static readonly RedlineReversibilityProofJsonContext Indented =
+            Create(indented: true);
 
-        private static JsonSerializerOptions Create(bool indented)
+        private static RedlineReversibilityProofJsonContext Create(bool indented)
         {
             var options = new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = indented,
             };
-            options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
-            return options;
+            options.Converters.Add(new JsonStringEnumConverter<RedlineRevisionDisposition>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<RedlineProofDirection>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<RedlinePackageDivergenceKind>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<RevisionFamily>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<RevisionResolutionStatus>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<VerificationFindingSeverity>(
+                JsonNamingPolicy.CamelCase));
+            return new RedlineReversibilityProofJsonContext(options);
         }
     }
+}
+
+/// <summary>Trim/AOT-safe metadata for the durable redline-proof wire contract.</summary>
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(RedlineReversibilityProof))]
+internal partial class RedlineReversibilityProofJsonContext : JsonSerializerContext
+{
 }
 
 /// <summary>
