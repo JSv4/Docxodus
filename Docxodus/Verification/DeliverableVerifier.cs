@@ -67,17 +67,30 @@ public static class DeliverableVerifier
             EditorialMarkers = options.EditorialMarkers.ToArray(),
             PlaceholderTokens = options.PlaceholderTokens.ToArray(),
         };
-        ValidateRequest(request);
+        ValidatePackageByteBudget(request, options);
+        ValidateRequest(request, options);
 
-        // Snapshot every caller-owned collection/byte array before any inspection. The manifest,
-        // SDK, session, and diff paths therefore all see the same exact package identity.
+        // Snapshot every caller-owned input that can be admitted under the configured limits before
+        // inspection. Oversized/unavailable artifact payloads are retained only for their immutable
+        // array length; the artifact inspector never reads their contents or hashes them.
         var deliverableBytes = request.DeliverableBytes.ToArray();
         var baselineBytes = request.BaselineBytes?.ToArray();
         var expectedPackageChanges = request.ExpectedPackageChanges.ToArray();
-        var artifacts = request.CompanionArtifacts.Select(artifact => artifact with
+        long admittedArtifactBytes = 0;
+        var artifacts = request.CompanionArtifacts
+            .OrderBy(artifact => artifact.ArtifactId, StringComparer.Ordinal)
+            .Select(artifact =>
         {
-            Bytes = artifact.Bytes?.ToArray(),
-            RenderDiagnostics = artifact.RenderDiagnostics.ToArray(),
+            bool admitBytes = artifact.Availability == DeliverableArtifactAvailability.Available
+                && artifact.Bytes is { } bytes
+                && bytes.LongLength <= options.MaxCompanionArtifactBytes
+                && bytes.LongLength <= options.MaxTotalCompanionArtifactBytes - admittedArtifactBytes;
+            if (admitBytes) admittedArtifactBytes += artifact.Bytes!.LongLength;
+            return artifact with
+            {
+                Bytes = admitBytes ? artifact.Bytes!.ToArray() : artifact.Bytes,
+                RenderDiagnostics = artifact.RenderDiagnostics.ToArray(),
+            };
         }).ToArray();
 
         var deliverable = InspectPackage(deliverableBytes, options, "deliverable");
@@ -109,44 +122,140 @@ public static class DeliverableVerifier
         if (baseline is not null)
         {
             if (CanContinueBoundedPackageInspection(baseline.Inspection)
-                && CanContinueBoundedPackageInspection(deliverable.Inspection))
+                && CanContinueBoundedPackageInspection(deliverable.Inspection)
+                && observations.Count < options.MaxFindings
+                && baseline.Inspection.Manifest.Relationships.Count
+                    <= options.MaxDetectorRelationships
+                && deliverable.Inspection.Manifest.Relationships.Count
+                    <= options.MaxDetectorRelationships)
             {
-                packageChanges = ProjectPackageChanges(PackageDelta.Compare(
-                    baseline.Inspection.Manifest, deliverable.Inspection.Manifest));
-                packageDeltaCompleted = true;
-                checks.Add(new DeliverableCheckResult
+                var packageDelta = PackageDelta.Compare(
+                    baseline.Inspection.Manifest,
+                    deliverable.Inspection.Manifest,
+                    options.MaxReportedDeltaChanges);
+                if (packageDelta.Complete)
                 {
-                    Check = "package_delta",
-                    Status = DeliverableCheckStatus.Completed,
-                    FindingCount = 0,
-                });
+                    packageChanges = ProjectPackageChanges(packageDelta.Changes);
+                    packageDeltaCompleted = true;
+                    checks.Add(new DeliverableCheckResult
+                    {
+                        Check = "package_delta",
+                        Status = DeliverableCheckStatus.Completed,
+                        FindingCount = 0,
+                    });
+                }
+                else
+                {
+                    int before = observations.Count;
+                    AddObservation(observations, options.MaxFindings,
+                        DeliverableFindingObservation.Create(
+                            "delta.package_change_limit_exceeded",
+                            DeliverableFindingCategory.Delta,
+                            VerificationFindingSeverity.Error,
+                            "Package comparison exceeded the configured delta-record budget.",
+                            "/",
+                            "Reduce the package delta or deliberately raise MaxReportedDeltaChanges.",
+                            new ChangeLocation { PropertyPath = "packageDelta" },
+                            subjectKey: options.MaxReportedDeltaChanges.ToString(
+                                CultureInfo.InvariantCulture)));
+                    checks.Add(new DeliverableCheckResult
+                    {
+                        Check = "package_delta",
+                        Status = DeliverableCheckStatus.UnavailableEvidence,
+                        FindingCount = observations.Count - before,
+                        Diagnostic = "delta record limit exceeded",
+                    });
+                    analysisCompleted = false;
+                }
             }
             else
             {
-                checks.Add(Skipped("package_delta", "baseline or deliverable manifest is invalid"));
+                checks.Add(Skipped("package_delta",
+                    baseline.Inspection.Manifest.Relationships.Count
+                        > options.MaxDetectorRelationships
+                        || deliverable.Inspection.Manifest.Relationships.Count
+                            > options.MaxDetectorRelationships
+                        ? "baseline or deliverable detector resource budget was exceeded"
+                        : observations.Count >= options.MaxFindings
+                            ? "finding limit was reached"
+                            : "baseline or deliverable manifest is invalid"));
                 analysisCompleted = false;
             }
             if (CanContinueBoundedWordInspection(baseline.Inspection)
-                && CanContinueBoundedWordInspection(deliverable.Inspection))
+                && CanContinueBoundedWordInspection(deliverable.Inspection)
+                && !baseline.DetectorBudgetExhausted
+                && !deliverable.DetectorBudgetExhausted
+                && baseline.Observations.Count < options.MaxFindings
+                && deliverable.Observations.Count < options.MaxFindings
+                && observations.Count < options.MaxFindings)
             {
                 int before = observations.Count;
                 try
                 {
-                    semanticChanges = SemanticDiff.Compare(
+                    semanticChanges = SemanticDiff.CompareBounded(
                         new WmlDocument("baseline.docx", baselineBytes!),
                         new WmlDocument("deliverable.docx", deliverableBytes),
                         new SemanticDiffOptions
                         {
                             IncludePackageChanges = false,
                             PackageOptions = options.PackageManifestOptions,
+                        },
+                        options.MaxReportedDeltaChanges);
+                    if (semanticChanges.ChangeCount <= options.MaxReportedDeltaChanges)
+                    {
+                        semanticDelta = ProjectSemanticDelta(semanticChanges);
+                        checks.Add(new DeliverableCheckResult
+                        {
+                            Check = "semantic_delta",
+                            Status = DeliverableCheckStatus.Completed,
+                            FindingCount = observations.Count - before,
                         });
-                    semanticDelta = ProjectSemanticDelta(semanticChanges);
+                    }
+                    else
+                    {
+                        semanticChanges = null;
+                        AddObservation(observations, options.MaxFindings,
+                            DeliverableFindingObservation.Create(
+                                "delta.semantic_change_limit_exceeded",
+                                DeliverableFindingCategory.Delta,
+                                VerificationFindingSeverity.Error,
+                                "Semantic comparison exceeded the configured delta-record budget.",
+                                "/",
+                                "Reduce the semantic delta or deliberately raise MaxReportedDeltaChanges.",
+                                new ChangeLocation { PropertyPath = "semanticDelta" },
+                                subjectKey: options.MaxReportedDeltaChanges.ToString(
+                                    CultureInfo.InvariantCulture)));
+                        checks.Add(new DeliverableCheckResult
+                        {
+                            Check = "semantic_delta",
+                            Status = DeliverableCheckStatus.UnavailableEvidence,
+                            FindingCount = observations.Count - before,
+                            Diagnostic = "delta record limit exceeded",
+                        });
+                        analysisCompleted = false;
+                    }
+                }
+                catch (SemanticChangeLimitExceededException)
+                {
+                    AddObservation(observations, options.MaxFindings,
+                        DeliverableFindingObservation.Create(
+                            "delta.semantic_change_limit_exceeded",
+                            DeliverableFindingCategory.Delta,
+                            VerificationFindingSeverity.Error,
+                            "Semantic comparison exceeded the configured delta-record budget.",
+                            "/",
+                            "Reduce the semantic delta or deliberately raise MaxReportedDeltaChanges.",
+                            new ChangeLocation { PropertyPath = "semanticDelta" },
+                            subjectKey: options.MaxReportedDeltaChanges.ToString(
+                                CultureInfo.InvariantCulture)));
                     checks.Add(new DeliverableCheckResult
                     {
                         Check = "semantic_delta",
-                        Status = DeliverableCheckStatus.Completed,
+                        Status = DeliverableCheckStatus.UnavailableEvidence,
                         FindingCount = observations.Count - before,
+                        Diagnostic = "delta record limit exceeded",
                     });
+                    analysisCompleted = false;
                 }
                 catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                 {
@@ -172,7 +281,14 @@ public static class DeliverableVerifier
             }
             else
             {
-                checks.Add(Skipped("semantic_delta", "baseline or deliverable is not safely openable"));
+                checks.Add(Skipped("semantic_delta",
+                    baseline.DetectorBudgetExhausted || deliverable.DetectorBudgetExhausted
+                        ? "baseline or deliverable detector resource budget was exceeded"
+                        : baseline.Observations.Count >= options.MaxFindings
+                          || deliverable.Observations.Count >= options.MaxFindings
+                          || observations.Count >= options.MaxFindings
+                            ? "baseline or deliverable finding limit was reached"
+                            : "baseline or deliverable is not safely openable"));
                 analysisCompleted = false;
             }
         }
@@ -228,11 +344,16 @@ public static class DeliverableVerifier
             baseline?.Observations,
             options,
             out var resolved);
-        if (classified.Count + resolved.Count > options.MaxFindings)
+        if (options.IncludeResolvedFindings
+            && classified.Count + resolved.Count > options.MaxFindings)
         {
             // Current findings have priority over historical resolved evidence.
             resolved = resolved.Take(Math.Max(0, options.MaxFindings - classified.Count)).ToArray();
             analysisCompleted = false;
+        }
+        else if (!options.IncludeResolvedFindings)
+        {
+            resolved = Array.Empty<DeliverableFinding>();
         }
 
         var decision = Decide(classified, options.Mode, analysisCompleted);
@@ -246,7 +367,7 @@ public static class DeliverableVerifier
             DeliverablePackage = PackageIdentity(deliverable.Inspection.Manifest),
             Checks = checks.ToArray(),
             Findings = classified,
-            ResolvedFindings = options.IncludeResolvedFindings ? resolved : Array.Empty<DeliverableFinding>(),
+            ResolvedFindings = resolved,
             SemanticDelta = semanticDelta,
             PackageChanges = packageChanges,
             CompanionArtifacts = artifactMetadata,
@@ -287,6 +408,7 @@ public static class DeliverableVerifier
             },
         };
         bool completed = true;
+        bool detectorBudgetExhausted = false;
         if (CanContinueBoundedWordInspection(inspection))
         {
             if (observations.Count >= options.MaxFindings)
@@ -317,6 +439,7 @@ public static class DeliverableVerifier
                         inspection, graph, observations, options.MaxFindings, budget);
                     var session = DeliverableSessionInspector.Inspect(
                         graph, options, observations, budget);
+                    detectorBudgetExhausted = budget.Exhausted;
                     if (budget.Exhausted)
                         AddObservation(observations, options.MaxFindings,
                             DeliverableFindingObservation.Create(
@@ -351,6 +474,7 @@ public static class DeliverableVerifier
             Observations = observations,
             Checks = checks,
             AnalysisCompleted = completed && observations.Count < options.MaxFindings,
+            DetectorBudgetExhausted = detectorBudgetExhausted,
         };
     }
 
@@ -433,14 +557,15 @@ public static class DeliverableVerifier
     {
         var unmatched = (expected?.Changes ?? Array.Empty<SemanticChange>())
             .Select(change => DeliverableVerificationIdentity.SemanticChangeFingerprint(change))
-            .ToList();
+            .GroupBy(value => value, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         foreach (var change in actual.Changes)
         {
             var fingerprint = DeliverableVerificationIdentity.SemanticChangeFingerprint(change);
-            int match = unmatched.FindIndex(candidate => candidate == fingerprint);
-            if (match >= 0)
+            if (unmatched.TryGetValue(fingerprint, out int remaining) && remaining > 0)
             {
-                unmatched.RemoveAt(match);
+                if (remaining == 1) unmatched.Remove(fingerprint);
+                else unmatched[fingerprint] = remaining - 1;
                 continue;
             }
             AddObservation(observations, maximumFindings,
@@ -455,7 +580,8 @@ public static class DeliverableVerifier
                     change.RightScope ?? change.LeftScope,
                     subjectKey: fingerprint));
         }
-        foreach (var fingerprint in unmatched.OrderBy(value => value, StringComparer.Ordinal))
+        foreach (var pair in unmatched.OrderBy(item => item.Key, StringComparer.Ordinal))
+        for (int index = 0; index < pair.Value; index++)
             AddObservation(observations, maximumFindings,
                 DeliverableFindingObservation.Create(
                     "delta.semantic_change_missing", DeliverableFindingCategory.Delta,
@@ -464,7 +590,7 @@ public static class DeliverableVerifier
                     "/",
                     "Update the deliverable or remove the stale expected change.",
                     new ChangeLocation { PropertyPath = "expectedSemanticChanges" },
-                    subjectKey: fingerprint));
+                    subjectKey: pair.Key));
     }
 
     private static void CheckExpectedPackageChanges(
@@ -473,13 +599,26 @@ public static class DeliverableVerifier
         ICollection<DeliverableFindingObservation> observations,
         int maximumFindings)
     {
-        var unmatched = expected.ToList();
+        var unmatched = expected
+            .OrderByDescending(PackageExpectationSpecificity)
+            .ThenBy(item => item.Kind)
+            .ThenBy(item => DeliverableVerificationIdentity.LocationKey(item.Location),
+                StringComparer.Ordinal)
+            .ThenBy(item => item.BeforeDigest?.Value, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.AfterDigest?.Value, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.BeforeValue, StringComparer.Ordinal)
+            .ThenBy(item => item.AfterValue, StringComparer.Ordinal)
+            .GroupBy(PackageExpectationBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
         foreach (var change in actual)
         {
-            int match = unmatched.FindIndex(candidate => MatchesPackageChange(change, candidate));
+            var bucket = PackageChangeBucket(change);
+            var candidates = unmatched.GetValueOrDefault(bucket);
+            int match = candidates?.FindIndex(candidate => MatchesPackageChange(change, candidate)) ?? -1;
             if (match >= 0)
             {
-                unmatched.RemoveAt(match);
+                candidates!.RemoveAt(match);
+                if (candidates.Count == 0) unmatched.Remove(bucket);
                 continue;
             }
             AddObservation(observations, maximumFindings,
@@ -491,7 +630,8 @@ public static class DeliverableVerifier
                     "Add this exact package change to the approved expectation or revert it.",
                     change.Location, subjectKey: change.ChangeId));
         }
-        foreach (var expectation in unmatched.OrderBy(item => item.Kind)
+        foreach (var expectation in unmatched.Values.SelectMany(items => items)
+                     .OrderBy(item => item.Kind)
                      .ThenBy(item => DeliverableVerificationIdentity.LocationKey(item.Location), StringComparer.Ordinal))
             AddObservation(observations, maximumFindings,
                 DeliverableFindingObservation.Create(
@@ -506,6 +646,21 @@ public static class DeliverableVerifier
                         expectation.BeforeDigest?.Value, expectation.AfterDigest?.Value,
                         expectation.BeforeValue, expectation.AfterValue)));
     }
+
+    private static string PackageExpectationBucket(DeliverablePackageChangeExpectation expectation) =>
+        string.Join("\u001f", ((int)expectation.Kind).ToString(CultureInfo.InvariantCulture),
+            DeliverableVerificationIdentity.LocationKey(expectation.Location));
+
+    private static string PackageChangeBucket(DeliverablePackageChange change) =>
+        string.Join("\u001f", ((int)change.Kind).ToString(CultureInfo.InvariantCulture),
+            DeliverableVerificationIdentity.LocationKey(change.Location));
+
+    private static int PackageExpectationSpecificity(
+        DeliverablePackageChangeExpectation expectation) =>
+        (expectation.BeforeDigest is null ? 0 : 1)
+        + (expectation.AfterDigest is null ? 0 : 1)
+        + (expectation.BeforeValue is null ? 0 : 1)
+        + (expectation.AfterValue is null ? 0 : 1);
 
     private static IReadOnlyList<DeliverablePackageChange> ProjectPackageChanges(
         IReadOnlyList<PackageDeltaChange> changes) => changes.Select(change =>
@@ -743,16 +898,86 @@ public static class DeliverableVerifier
         return result != 0 ? result : string.CompareOrdinal(left.FindingId, right.FindingId);
     }
 
-    private static void ValidateRequest(DeliverableVerificationRequest request)
+    private static void ValidateRequest(
+        DeliverableVerificationRequest request,
+        DeliverableVerificationOptions options)
     {
         if (request.ExpectedPackageChanges is null)
             throw new ArgumentException("ExpectedPackageChanges cannot be null.", nameof(request));
         if (request.CompanionArtifacts is null)
             throw new ArgumentException("CompanionArtifacts cannot be null.", nameof(request));
+        int semanticExpectationCount = request.ExpectedSemanticChanges?.Changes.Count ?? 0;
+        if (request.ExpectedPackageChanges.Count > options.MaxExpectedChanges
+            || semanticExpectationCount > options.MaxExpectedChanges
+            || request.ExpectedPackageChanges.Count
+                > options.MaxExpectedChanges - semanticExpectationCount)
+            throw new ArgumentException("Expected changes exceed the verification budget.", nameof(request));
+        if (request.CompanionArtifacts.Count > options.MaxCompanionArtifacts)
+            throw new ArgumentException("Companion artifacts exceed the verification budget.", nameof(request));
         if (request.ExpectedPackageChanges.Any(item => item is null))
             throw new ArgumentException("ExpectedPackageChanges cannot contain null.", nameof(request));
         if (request.CompanionArtifacts.Any(item => item is null))
             throw new ArgumentException("CompanionArtifacts cannot contain null.", nameof(request));
+
+        int diagnosticCount = 0;
+        long evidenceCharacters = 0;
+        void AddEvidenceText(string? value)
+        {
+            if (value is null) return;
+            if (value.Length > options.MaxEvidenceTextCharacters - evidenceCharacters)
+                throw new ArgumentException(
+                    "Evidence text exceeds the verification budget.", nameof(request));
+            evidenceCharacters += value.Length;
+        }
+        void AddLocationText(ChangeLocation location)
+        {
+            AddEvidenceText(location.EntryUri);
+            AddEvidenceText(location.OwnerUri);
+            AddEvidenceText(location.RelationshipId);
+            AddEvidenceText(location.TargetUri);
+            AddEvidenceText(location.PropertyPath);
+        }
+        int semanticValueNodes = 0;
+        foreach (var change in request.ExpectedSemanticChanges?.Changes
+                     ?? Array.Empty<SemanticChange>())
+        {
+            if (!Enum.IsDefined(change.Operation) || !Enum.IsDefined(change.Family))
+                throw new ArgumentOutOfRangeException(nameof(request),
+                    "Expected semantic-change discriminator is invalid.");
+            AddEvidenceText(change.Id);
+            AddEvidenceText(change.PartUri);
+            AddEvidenceText(change.Path);
+            AddEvidenceText(change.LeftAnchor);
+            AddEvidenceText(change.RightAnchor);
+            AddEvidenceText(change.LeftScope);
+            AddEvidenceText(change.RightScope);
+            AddEvidenceText(change.MoveId);
+            var pendingValues = new Stack<SemanticValue>();
+            pendingValues.Push(change.After);
+            pendingValues.Push(change.Before);
+            while (pendingValues.Count > 0)
+            {
+                var value = pendingValues.Pop();
+                if (value is null)
+                    throw new ArgumentException(
+                        "Expected semantic values cannot contain null.", nameof(request));
+                if (semanticValueNodes >= options.MaxExpectedSemanticValueNodes)
+                    throw new ArgumentException(
+                        "Expected semantic values exceed the verification budget.", nameof(request));
+                semanticValueNodes++;
+                AddEvidenceText(value.StringValue);
+                AddEvidenceText(value.DigestAlgorithm);
+                AddEvidenceText(value.DigestProfile);
+                AddEvidenceText(value.DigestValue);
+                for (int index = value.Properties.Count - 1; index >= 0; index--)
+                {
+                    AddEvidenceText(value.Properties[index].Name);
+                    pendingValues.Push(value.Properties[index].Value);
+                }
+                for (int index = value.Items.Count - 1; index >= 0; index--)
+                    pendingValues.Push(value.Items[index]);
+            }
+        }
         foreach (var expectation in request.ExpectedPackageChanges)
         {
             if (!Enum.IsDefined(expectation.Kind))
@@ -761,6 +986,9 @@ public static class DeliverableVerifier
                 throw new ArgumentException("Expected package-change locations cannot be null.", nameof(request));
             ValidateDigest(expectation.BeforeDigest, nameof(request));
             ValidateDigest(expectation.AfterDigest, nameof(request));
+            AddLocationText(expectation.Location);
+            AddEvidenceText(expectation.BeforeValue);
+            AddEvidenceText(expectation.AfterValue);
         }
         foreach (var artifact in request.CompanionArtifacts)
         {
@@ -768,18 +996,46 @@ public static class DeliverableVerifier
                 throw new ArgumentOutOfRangeException(nameof(request), "Artifact discriminator is invalid.");
             if (artifact.ArtifactId is null || artifact.MediaType is null)
                 throw new ArgumentException("ArtifactId and MediaType cannot be null.", nameof(request));
+            AddEvidenceText(artifact.ArtifactId);
+            AddEvidenceText(artifact.MediaType);
+            AddEvidenceText(artifact.UnavailableReason);
+            AddEvidenceText(artifact.RendererFingerprint);
             ValidateDigest(artifact.SourcePackageDigest, nameof(request));
             ValidateDigest(artifact.PageMapDigest, nameof(request));
-            if (artifact.RenderDiagnostics is null || artifact.RenderDiagnostics.Any(item => item is null))
-                throw new ArgumentException("RenderDiagnostics cannot be null or contain null.", nameof(request));
+            if (artifact.RenderDiagnostics is null)
+                throw new ArgumentException("RenderDiagnostics cannot be null.", nameof(request));
+            if (artifact.RenderDiagnostics.Count > options.MaxRenderDiagnostics - diagnosticCount)
+                throw new ArgumentException("Render diagnostics exceed the verification budget.", nameof(request));
+            if (artifact.RenderDiagnostics.Any(item => item is null))
+                throw new ArgumentException("RenderDiagnostics cannot contain null.", nameof(request));
+            diagnosticCount += artifact.RenderDiagnostics.Count;
             foreach (var diagnostic in artifact.RenderDiagnostics)
             {
                 if (!Enum.IsDefined(diagnostic.Kind) || !Enum.IsDefined(diagnostic.Severity))
                     throw new ArgumentOutOfRangeException(nameof(request), "Render diagnostic discriminator is invalid.");
                 if (diagnostic.Message is null)
                     throw new ArgumentException("Render diagnostic messages cannot be null.", nameof(request));
+                AddEvidenceText(diagnostic.Message);
+                AddEvidenceText(diagnostic.OwningPartUri);
+                AddEvidenceText(diagnostic.AnchorId);
+                AddEvidenceText(diagnostic.FontName);
+                AddEvidenceText(diagnostic.SubstitutedFontName);
+                AddEvidenceText(diagnostic.Remediation);
             }
         }
+    }
+
+    private static void ValidatePackageByteBudget(
+        DeliverableVerificationRequest request,
+        DeliverableVerificationOptions options)
+    {
+        long deliverableLength = request.DeliverableBytes.LongLength;
+        long baselineLength = request.BaselineBytes?.LongLength ?? 0;
+        if (deliverableLength > options.MaxPackageBytes
+            || baselineLength > options.MaxPackageBytes - deliverableLength)
+            throw new ArgumentException(
+                "Aggregate deliverable and baseline bytes exceed the verification budget.",
+                nameof(request));
     }
 
     private static void ValidateDigest(VerificationDigest? digest, string parameterName)

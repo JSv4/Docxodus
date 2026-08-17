@@ -68,6 +68,24 @@ public static class SemanticDiff
         return SemanticDiffEngine.Compare(left, right, options ?? new SemanticDiffOptions());
     }
 
+    /// <summary>
+    /// Internal verification seam that stops semantic projection as soon as the caller's bounded
+    /// evidence budget would be exceeded. Public semantic comparison remains unchanged.
+    /// </summary>
+    internal static SemanticChangeSet CompareBounded(
+        WmlDocument left,
+        WmlDocument right,
+        SemanticDiffOptions options,
+        int maximumChanges)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        ArgumentNullException.ThrowIfNull(options);
+        if (maximumChanges <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumChanges));
+        return SemanticDiffEngine.Compare(left, right, options, maximumChanges);
+    }
+
     public static string CompareJson(
         byte[] leftBytes,
         byte[] rightBytes,
@@ -79,6 +97,12 @@ public static class SemanticDiff
         WmlDocument right,
         SemanticDiffOptions? options = null,
         bool indented = true) => Compare(left, right, options).ToJson(indented);
+}
+
+/// <summary>Signals that a bounded semantic projection has more evidence than it may retain.</summary>
+internal sealed class SemanticChangeLimitExceededException(int maximumChanges)
+    : Exception($"Semantic comparison exceeded its {maximumChanges} change-record budget.")
+{
 }
 
 internal sealed record SemanticChangeDraft(
@@ -125,7 +149,8 @@ internal static class SemanticDiffEngine
     public static SemanticChangeSet Compare(
         byte[] leftBytes,
         byte[] rightBytes,
-        SemanticDiffOptions options)
+        SemanticDiffOptions options,
+        int maximumChanges = int.MaxValue)
     {
         // This overload owns the raw-byte trust boundary: do not construct WmlDocument (whose
         // constructor opens the OPC package to identify its document type) until inspection has
@@ -133,13 +158,14 @@ internal static class SemanticDiffEngine
         var packageChanges = PackageDetector.Compare(leftBytes, rightBytes, options);
         var left = new WmlDocument("left.docx", leftBytes);
         var right = new WmlDocument("right.docx", rightBytes);
-        return CompareValidated(left, right, options, packageChanges);
+        return CompareValidated(left, right, options, packageChanges, maximumChanges);
     }
 
     public static SemanticChangeSet Compare(
         WmlDocument originalLeft,
         WmlDocument originalRight,
-        SemanticDiffOptions options)
+        SemanticDiffOptions options,
+        int maximumChanges = int.MaxValue)
     {
         // Inspect the raw package before the Open XML SDK/IR path. This makes the declared package
         // limits an actual boundary for the default public operation instead of a late supplement
@@ -148,14 +174,16 @@ internal static class SemanticDiffEngine
             originalLeft.DocumentByteArray,
             originalRight.DocumentByteArray,
             options);
-        return CompareValidated(originalLeft, originalRight, options, packageChanges);
+        return CompareValidated(
+            originalLeft, originalRight, options, packageChanges, maximumChanges);
     }
 
     private static SemanticChangeSet CompareValidated(
         WmlDocument originalLeft,
         WmlDocument originalRight,
         SemanticDiffOptions options,
-        IReadOnlyList<SemanticChangeDraft> packageChanges)
+        IReadOnlyList<SemanticChangeDraft> packageChanges,
+        int maximumChanges)
     {
         var settings = options.DiffSettings ?? new DocxDiffSettings();
         // The exact normalization and compatibility gate of every sibling DocxDiff entry point:
@@ -171,7 +199,8 @@ internal static class SemanticDiffEngine
         var script = IrEditScriptBuilder.Build(leftIr, rightIr, diffSettings);
 
         var drafts = new List<SemanticChangeDraft>();
-        var projector = new Projector(leftIr, rightIr, diffSettings, drafts);
+        var projector = new Projector(
+            leftIr, rightIr, diffSettings, drafts, maximumChanges);
         projector.Project(script);
         projector.CompareRegistries();
         projector.CompareComments();
@@ -179,8 +208,13 @@ internal static class SemanticDiffEngine
         // The IR edit script is the alignment authority: a package fact whose "new location" is
         // the same aligned block (its content-derived Unid merely re-hashed under a text edit or
         // duplicate-shift) has not moved, so its Move record is dropped rather than published.
-        drafts.AddRange(packageChanges.Where(draft =>
-            !IsAlignedRelocation(draft, projector.AlignedBlockIdentities)));
+        // The cap counts what is actually published, so a dropped non-move can never exhaust it.
+        var publishedPackageChanges = packageChanges
+            .Where(draft => !IsAlignedRelocation(draft, projector.AlignedBlockIdentities))
+            .ToArray();
+        if (publishedPackageChanges.Length > maximumChanges - drafts.Count)
+            throw new SemanticChangeLimitExceededException(maximumChanges);
+        drafts.AddRange(publishedPackageChanges);
 
         var changes = drafts.Select((draft, index) => new SemanticChange
         {
@@ -257,17 +291,20 @@ internal static class SemanticDiffEngine
         private readonly IrDocument _right;
         private readonly IrDiffSettings _settings;
         private readonly List<SemanticChangeDraft> _changes;
+        private readonly int _maximumChanges;
 
         public Projector(
             IrDocument left,
             IrDocument right,
             IrDiffSettings settings,
-            List<SemanticChangeDraft> changes)
+            List<SemanticChangeDraft> changes,
+            int maximumChanges)
         {
             _left = left;
             _right = right;
             _settings = settings;
             _changes = changes;
+            _maximumChanges = maximumChanges;
         }
 
         /// <summary>
@@ -1601,6 +1638,8 @@ internal static class SemanticDiffEngine
             if (operation == SemanticChangeOperation.Modify && SemanticValuesEqual(before, after))
                 return;
 
+            if (_changes.Count >= _maximumChanges)
+                throw new SemanticChangeLimitExceededException(_maximumChanges);
             _changes.Add(new SemanticChangeDraft(
                 operation, family, NormalizePartUri(partUri), path,
                 leftAnchor, rightAnchor, leftScope, rightScope, moveId, before, after));

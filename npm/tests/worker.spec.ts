@@ -93,8 +93,13 @@ test.describe("Docxodus Web Worker Tests", () => {
 
         const manifest = await (window as any).DocxodusWorker
           .generatePackageManifest(view);
+        const verification = await (window as any).DocxodusWorker
+          .verifyDeliverable(view);
+        const baselineVerification = await (window as any).DocxodusWorker
+          .verifyDeliverable(view, view);
         const session = await (window as any).DocxodusWorker.openDocxSession(view);
         const sessionManifest = await session.getPackageManifest();
+        const sessionVerification = await session.verifyDeliverable();
         await session.close();
         let unchanged = false;
         try {
@@ -114,6 +119,22 @@ test.describe("Docxodus Web Worker Tests", () => {
           entrySizeType: typeof manifest.entries[0]?.size,
           sessionSchema: sessionManifest.schema,
           sessionIsValid: sessionManifest.isValid,
+          verificationSchema: verification.schema,
+          verificationMode: verification.mode,
+          verificationDecision: verification.decision,
+          verificationRawDigest:
+            verification.deliverablePackage.rawPackageBytesDigest.value,
+          verificationBaselineCompared: verification.baselineCompared,
+          baselineVerificationCompared: baselineVerification.baselineCompared,
+          baselineVerificationBaselineDigest:
+            baselineVerification.baselinePackage?.rawPackageBytesDigest.value,
+          baselineVerificationDeliverableDigest:
+            baselineVerification.deliverablePackage.rawPackageBytesDigest.value,
+          sessionVerificationSchema: sessionVerification.schema,
+          sessionVerificationBaselineCompared:
+            sessionVerification.baselineCompared,
+          sessionVerificationBaselineDigest:
+            sessionVerification.baselinePackage?.rawPackageBytesDigest.value,
           unchanged,
         };
       }, bytes);
@@ -126,6 +147,19 @@ test.describe("Docxodus Web Worker Tests", () => {
         "https://docxodus.dev/schemas/verification/package-manifest/v1"
       );
       expect(result.sessionIsValid).toBe(true);
+      expect(result.verificationSchema).toBe(
+        "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+      );
+      expect(result.verificationMode).toBe("standard");
+      expect(result.verificationDecision).toMatch(/^[a-z]/);
+      expect(result.verificationRawDigest).toBe(result.expectedDigest);
+      expect(result.verificationBaselineCompared).toBe(false);
+      expect(result.baselineVerificationCompared).toBe(true);
+      expect(result.baselineVerificationBaselineDigest).toBe(result.expectedDigest);
+      expect(result.baselineVerificationDeliverableDigest).toBe(result.expectedDigest);
+      expect(result.sessionVerificationSchema).toBe(result.verificationSchema);
+      expect(result.sessionVerificationBaselineCompared).toBe(true);
+      expect(result.sessionVerificationBaselineDigest).toBe(result.expectedDigest);
       expect(result.unchanged).toBe(true);
     }, { timeout: 60000 });
   });

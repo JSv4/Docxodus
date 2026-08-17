@@ -51,6 +51,7 @@ internal static class Dispatcher
         "generate_package_manifest" => VerificationOps.GeneratePackageManifest(
             Convert.FromBase64String(Str(args, "docxB64"))),
         "get_package_manifest" => VerificationOps.GetPackageManifest(Handle(args)),
+        "verify_deliverable" => VerifyDeliverable(args),
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
@@ -340,6 +341,33 @@ internal static class Dispatcher
 
         _ => throw new UnknownOpException(op),
     };
+
+    private static string VerifyDeliverable(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object)
+            throw new FormatException("verify_deliverable args must be an object");
+
+        if (args.TryGetProperty("docxB64", out var encoded))
+        {
+            if (encoded.ValueKind != JsonValueKind.String)
+                throw new FormatException("args property \"docxB64\" must be a string");
+
+            var packageBytes = Convert.FromBase64String(Str(args, "docxB64"));
+            if (!args.TryGetProperty("baselineB64", out var baseline))
+                return VerificationOps.VerifyDeliverable(packageBytes);
+            if (baseline.ValueKind != JsonValueKind.String)
+                throw new FormatException("args property \"baselineB64\" must be a string");
+
+            return VerificationOps.VerifyDeliverable(
+                Convert.FromBase64String(Str(args, "baselineB64")),
+                packageBytes);
+        }
+
+        if (args.TryGetProperty("baselineB64", out _))
+            throw new FormatException("args property \"baselineB64\" requires string \"docxB64\"");
+
+        return DocxSessionOps.VerifyDeliverable(Handle(args));
+    }
 
     private static string Ping()
     {

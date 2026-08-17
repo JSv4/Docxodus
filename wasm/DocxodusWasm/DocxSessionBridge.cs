@@ -941,6 +941,15 @@ public static partial class DocxSessionBridge
         DocxSessionOps.GetSemanticChanges(h);
 
     /// <summary>
+    /// Run the default deliverable-verification policy on the session's normal clean-save
+    /// checkpoint. When initial projection capture is enabled, the exact opening bytes are used
+    /// as the baseline. Returns the same canonical schema-v1 JSON as the stateless bridge.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliverable(int h) =>
+        DocxSessionOps.VerifyDeliverable(h);
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
     /// <see cref="AnchorTarget"/> records (each <c>{id, kind, scope, unid, partUri}</c>);
     /// empty array when the id is unknown.

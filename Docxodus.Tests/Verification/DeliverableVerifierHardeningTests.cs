@@ -11,6 +11,7 @@ using System.Xml.Linq;
 using Docxodus.Internal;
 using Docxodus.Tests.Ir;
 using Docxodus.Verification;
+using DocxodusDiffParityFixtures;
 using Xunit;
 
 namespace Docxodus.Tests.Verification;
@@ -846,6 +847,458 @@ public sealed class DeliverableVerifierHardeningTests
         }
     }
 
+    [Fact]
+    public void Native_moves_and_overlapping_comment_ranges_are_valid_complex_markup()
+    {
+        using var moveSession = new DocxSession(
+            IrTestDocuments.Create("Alpha", "Beta", "Gamma").DocumentByteArray,
+            new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = "Verifier fixture",
+            });
+        var paragraphs = moveSession.FindByKind("p", "body");
+        Assert.True(moveSession.MoveBlock(
+            paragraphs[0].Anchor.Id, paragraphs[2].Anchor.Id, Position.After).Success);
+        var moveResult = DeliverableVerifier.VerifyDeliverable(moveSession.Save());
+        var comments = DocxDiffCommentFixtures.Build("overlapping-ranges").Left;
+        var commentResult = DeliverableVerifier.VerifyDeliverable(comments.DocumentByteArray);
+
+        Assert.DoesNotContain(moveResult.Findings, finding =>
+            finding.Code.StartsWith("structure.move_", StringComparison.Ordinal)
+            || finding.Code.StartsWith("structure.revision_", StringComparison.Ordinal));
+        Assert.Equal(DeliverableVerificationDecision.Passed, moveResult.Decision);
+        Assert.DoesNotContain(commentResult.Findings, finding =>
+            finding.Code.Contains("comment_range", StringComparison.Ordinal));
+        Assert.Equal(DeliverableVerificationDecision.Passed, commentResult.Decision);
+    }
+
+    [Fact]
+    public void Decimal_marker_ids_use_numeric_identity_and_comment_references_are_document_wide()
+    {
+        var lexicalComment = IrTestDocuments.WithComment(
+            "Reviewer", "RV", "2025-01-01T00:00:00Z", "Lexical id fixture",
+            "<w:p><w:commentRangeStart w:id=\"00\"/><w:r><w:t>Target</w:t></w:r>"
+            + "<w:commentRangeEnd w:id=\"+0\"/><w:r><w:commentReference w:id=\"0\"/>"
+            + "</w:r></w:p>");
+        var lexicalResult = DeliverableVerifier.VerifyDeliverable(lexicalComment.DocumentByteArray);
+
+        var crossStory = IrTestDocuments.FromBodyAndHeaderXml(
+            "<w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>",
+            "<w:p><w:r><w:commentReference w:id=\"00\"/></w:r></w:p>").DocumentByteArray;
+        crossStory = RewriteEntry(crossStory, "word/_rels/document.xml.rels", xml =>
+        {
+            var relationships = XDocument.Parse(xml.TrimStart('\uFEFF'));
+            AddRelationship(relationships, "rIdComments", "comments", "comments.xml");
+            return relationships.ToString(SaveOptions.DisableFormatting);
+        });
+        crossStory = AddEntries(crossStory,
+            ("word/comments.xml", $"<w:comments xmlns:w=\"{IrTestDocuments.W}\">"
+                + "<w:comment w:id=\"+0\"><w:p/></w:comment></w:comments>"));
+        crossStory = RewriteContentTypes(crossStory,
+            ("/word/comments.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"));
+        var crossStoryResult = DeliverableVerifier.VerifyDeliverable(crossStory);
+
+        Assert.DoesNotContain(lexicalResult.Findings,
+            finding => finding.Code.StartsWith("structure.comment_", StringComparison.Ordinal));
+        Assert.Contains(crossStoryResult.Findings,
+            finding => finding.Code == "structure.comment_markers_invalid"
+                && finding.Message.Contains("2 reference mark(s)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Style_numbering_and_package_wide_content_control_ids_close_across_parts()
+    {
+        const string styledBody = "<w:p><w:pPr><w:pStyle w:val=\"Listy\"/></w:pPr>"
+            + "<w:r><w:t>Styled item</w:t></w:r></w:p>";
+        const string styles = "<w:style w:type=\"paragraph\" w:styleId=\"Listy\">"
+            + "<w:name w:val=\"Listy\"/><w:pPr><w:numPr><w:ilvl w:val=\"0\"/>"
+            + "<w:numId w:val=\"99\"/></w:numPr></w:pPr></w:style>";
+        var styled = IrTestDocuments.FromParts(styledBody, styles).DocumentByteArray;
+        const string bodySdt = "<w:sdt><w:sdtPr><w:id w:val=\"7\"/></w:sdtPr>"
+            + "<w:sdtContent><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:sdtContent></w:sdt>";
+        const string headerSdt = "<w:sdt><w:sdtPr><w:id w:val=\"07\"/></w:sdtPr>"
+            + "<w:sdtContent><w:p><w:r><w:t>Header</w:t></w:r></w:p></w:sdtContent></w:sdt>";
+        var duplicateSdts = IrTestDocuments.FromBodyAndHeaderXml(bodySdt, headerSdt);
+
+        var styledResult = DeliverableVerifier.VerifyDeliverable(styled);
+        var sdtResult = DeliverableVerifier.VerifyDeliverable(duplicateSdts.DocumentByteArray);
+
+        Assert.Contains(styledResult.Findings,
+            finding => finding.Code == "structure.numbering_instance_missing"
+                && finding.OwningPartUri.EndsWith("styles.xml", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, sdtResult.Findings.Count(
+            finding => finding.Code == "structure.content_control_id_duplicate"));
+    }
+
+    [Fact]
+    public void Marker_field_binding_and_namespace_closure_fail_without_false_render_matches()
+    {
+        var malformed = IrTestDocuments.FromBodyXml(
+            "<w:p><w:commentRangeStart w:id=\"4\"/><w:r><w:t>Comment</w:t></w:r>"
+            + "<w:commentRangeEnd w:id=\"4\"/><w:r><w:commentReference w:id=\"4\"/>"
+            + "<w:commentReference w:id=\"4\"/></w:r></w:p>"
+            + "<w:p><w:r><w:footnoteReference w:id=\"8\"/><w:footnoteReference w:id=\"8\"/>"
+            + "<w:fldChar w:fldCharType=\"begin\"/><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>"
+            + "<w:sdt><w:sdtPr><w:dataBinding w:xpath=\"/root\"/></w:sdtPr>"
+            + "<w:sdtContent><w:p/></w:sdtContent></w:sdt>").DocumentByteArray;
+        var foreign = IrTestDocuments.FromBodyXml(
+            "<w:p xmlns:x=\"urn:docxodus:extension\"><x:object/><x:ruby/><x:oMath/>"
+            + "<w:r><w:t>Safe</w:t></w:r></w:p>").DocumentByteArray;
+
+        var malformedResult = DeliverableVerifier.VerifyDeliverable(malformed);
+        var foreignResult = DeliverableVerifier.VerifyDeliverable(foreign);
+
+        AssertCodes(malformedResult, "structure.comment_markers_invalid",
+            "structure.footnote_reference_duplicate", "structure.field_instruction_missing",
+            "structure.content_control_store_item_id_missing");
+        Assert.DoesNotContain(foreignResult.Findings,
+            finding => finding.Code == "render.unsupported_content");
+    }
+
+    [Fact]
+    public void Workflow_owns_nested_text_once_and_scopes_custom_header_uri_by_semantic_role()
+    {
+        var textbox = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:pict><v:textbox><w:txbxContent><w:p><w:r>"
+            + "<w:t>{{BOX_TOKEN}}</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+            + "</w:pict></w:r></w:p>");
+        var header = IrTestDocuments.FromBodyAndHeaderXml(
+            "<w:p><w:r><w:t>Body</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>{{HEADER_TOKEN}}</w:t></w:r></w:p>").DocumentByteArray;
+        header = RewriteEntry(header, "word/_rels/document.xml.rels", xml =>
+            xml.Replace("header1.xml", "storyA.xml", StringComparison.Ordinal));
+        header = RewriteEntry(header, "[Content_Types].xml", xml =>
+            xml.Replace("/word/header1.xml", "/word/storyA.xml", StringComparison.Ordinal));
+        header = RenameEntry(header, "word/header1.xml", "word/storyA.xml");
+
+        var textboxResult = DeliverableVerifier.VerifyDeliverable(textbox.DocumentByteArray);
+        var headerResult = DeliverableVerifier.VerifyDeliverable(header);
+
+        Assert.Single(textboxResult.Findings,
+            finding => finding.Code == "workflow.placeholder_remaining");
+        var headerFinding = Assert.Single(headerResult.Findings,
+            finding => finding.Code == "workflow.placeholder_remaining");
+        Assert.Equal("/word/storyA.xml", headerFinding.OwningPartUri);
+        Assert.Equal("header", headerFinding.Scope);
+    }
+
+    [Fact]
+    public void Pdf2_xref_stream_and_bom_html_are_accepted_but_nonportable_page_counts_are_sanitized()
+    {
+        var package = IrTestDocuments.Create("Rendered").DocumentByteArray;
+        var source = Digest(package);
+        const string renderer = "fixture/modern";
+        var map = PageMapBytes(renderer, 1);
+        var mapDigest = Digest(map);
+        var pdf2 = Encoding.ASCII.GetBytes(
+            "%PDF-2.0\n1 0 obj << /Type/XRef /Size 1 /Length 0 >>\nstream\n\nendstream\nendobj\n"
+            + "startxref\n9\n%%EOF\n");
+        var html = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetPreamble()
+            .Concat(Encoding.UTF8.GetBytes(
+                "<!-- generated --><!doctype html><html><body>Rendered</body></html >"))
+            .ToArray();
+        var result = DeliverableVerifier.VerifyDeliverable(new DeliverableVerificationRequest
+        {
+            DeliverableBytes = package,
+            CompanionArtifacts = new[]
+            {
+                Artifact("map.json", DeliverableArtifactRole.PageMap, "application/json",
+                    map, source, renderer, 1),
+                Artifact("modern.pdf", DeliverableArtifactRole.Pdf, "application/pdf",
+                    pdf2, source, renderer, 1, mapDigest),
+                Artifact("bom.html", DeliverableArtifactRole.Html, "text/html",
+                    html, source, renderer, 1, mapDigest),
+                new DeliverableCompanionArtifactInput
+                {
+                    ArtifactId = "bad-page-count.json",
+                    Role = DeliverableArtifactRole.RenderReport,
+                    MediaType = "application/json",
+                    Availability = DeliverableArtifactAvailability.Available,
+                    Bytes = Encoding.UTF8.GetBytes("{}"),
+                    SourcePackageDigest = source,
+                    PageCount = SemanticValue.MaxSafeInteger + 1,
+                },
+            },
+        });
+
+        Assert.DoesNotContain(result.Findings,
+            finding => finding.Code is "artifact.pdf_malformed" or "artifact.html_malformed");
+        Assert.Contains(result.Findings,
+            finding => finding.Code == "artifact.page_count_invalid");
+        Assert.Null(Assert.Single(result.CompanionArtifacts,
+            artifact => artifact.ArtifactId == "bad-page-count.json").PageCount);
+    }
+
+    [Fact]
+    public void Request_budgets_precede_snapshots_and_detector_exhaustion_skips_semantic_diff()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+        var tooMany = new DeliverableVerificationRequest
+        {
+            DeliverableBytes = package,
+            CompanionArtifacts = new[]
+            {
+                new DeliverableCompanionArtifactInput
+                {
+                    ArtifactId = "one", Role = DeliverableArtifactRole.Other,
+                    MediaType = "application/octet-stream",
+                    Availability = DeliverableArtifactAvailability.Unavailable,
+                },
+                new DeliverableCompanionArtifactInput
+                {
+                    ArtifactId = "two", Role = DeliverableArtifactRole.Other,
+                    MediaType = "application/octet-stream",
+                    Availability = DeliverableArtifactAvailability.Unavailable,
+                },
+            },
+        };
+
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            tooMany, new DeliverableVerificationOptions { MaxCompanionArtifacts = 1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DeliverableVerifier.VerifyDeliverable(
+            package, new DeliverableVerificationOptions { MaxReportedDeltaChanges = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DeliverableVerifier.VerifyDeliverable(
+            package, new DeliverableVerificationOptions { MaxPackageBytes = 0 }));
+        var countOnly = tooMany with
+        {
+            CompanionArtifacts = new CountOnlyReadOnlyList<DeliverableCompanionArtifactInput>(2),
+        };
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            countOnly, new DeliverableVerificationOptions { MaxCompanionArtifacts = 1 }));
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            package, new DeliverableVerificationOptions
+            {
+                MaxConfiguredWorkflowMarkers = 1,
+                EditorialMarkers = new CountOnlyReadOnlyList<string>(2),
+            }));
+        var semanticValues = tooMany with
+        {
+            CompanionArtifacts = Array.Empty<DeliverableCompanionArtifactInput>(),
+            ExpectedSemanticChanges = new SemanticChangeSet(new[]
+            {
+                new SemanticChange
+                {
+                    Id = "caller-id",
+                    Operation = SemanticChangeOperation.Modify,
+                    Family = SemanticChangeFamily.Text,
+                    PartUri = "/word/document.xml",
+                    Path = "/document/body/p[1]",
+                    Before = SemanticValue.Array(new[]
+                    {
+                        SemanticValue.Absent,
+                        SemanticValue.Absent,
+                    }),
+                    After = SemanticValue.Absent,
+                },
+            }),
+        };
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            semanticValues,
+            new DeliverableVerificationOptions { MaxExpectedSemanticValueNodes = 3 }));
+        var bounded = DeliverableVerifier.VerifyDeliverable(package, package,
+            new DeliverableVerificationOptions { MaxDetectorNodes = 1 });
+        Assert.Contains(bounded.Checks, check => check.Check == "semantic_delta"
+            && check.Status == DeliverableCheckStatus.SkippedPrerequisiteFailed
+            && check.Diagnostic == "baseline or deliverable detector resource budget was exceeded");
+        Assert.Null(bounded.SemanticDelta);
+        Assert.False(bounded.AnalysisCompleted);
+    }
+
+    [Fact]
+    public void Raw_package_budget_rejects_single_and_aggregate_inputs_before_snapshotting()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            package,
+            new DeliverableVerificationOptions
+            {
+                MaxPackageBytes = package.LongLength - 1,
+            }));
+        Assert.Throws<ArgumentException>(() => DeliverableVerifier.VerifyDeliverable(
+            package,
+            package,
+            new DeliverableVerificationOptions
+            {
+                MaxPackageBytes = (package.LongLength * 2) - 1,
+            }));
+    }
+
+    [Fact]
+    public void Configured_pattern_and_paragraph_text_work_is_charged_before_scanning_or_copying()
+    {
+        var package = IrTestDocuments.Create(new string('x', 4_096)).DocumentByteArray;
+        var absentTokens = Enumerable.Range(0, 2_000)
+            .Select(index => $"ABSENT_TOKEN_{index:D4}")
+            .ToArray();
+        var scanOptions = new DeliverableVerificationOptions
+        {
+            PlaceholderTokens = absentTokens,
+            MaxDetectorNodes = 100_000,
+            MaxDetectorSteps = 50_000,
+        };
+
+        var first = DeliverableVerifier.VerifyDeliverable(package, scanOptions);
+        var second = DeliverableVerifier.VerifyDeliverable(package, scanOptions);
+        var textLimited = DeliverableVerifier.VerifyDeliverable(
+            package,
+            new DeliverableVerificationOptions
+            {
+                MaxDetectorNodes = 100_000,
+                MaxDetectorSteps = 100_000,
+                MaxDetectorTextCharacters = 128,
+            });
+
+        Assert.Contains(first.Findings, finding =>
+            finding.Code == "verification.resource_budget_exceeded"
+            && finding.Location?.PropertyPath == "detectorBudget/steps");
+        Assert.Equal(first.ToCanonicalJson(), second.ToCanonicalJson());
+        Assert.Contains(textLimited.Findings, finding =>
+            finding.Code == "verification.resource_budget_exceeded"
+            && finding.Location?.PropertyPath == "detectorBudget/text_characters");
+    }
+
+    [Fact]
+    public void Long_style_inheritance_chains_consume_the_shared_step_budget_linearly()
+    {
+        const int styleCount = 1_024;
+        var styles = string.Concat(Enumerable.Range(0, styleCount).Select(index =>
+            $"<w:style w:type=\"paragraph\" w:styleId=\"S{index}\">"
+            + $"<w:name w:val=\"S{index}\"/>"
+            + (index + 1 < styleCount
+                ? $"<w:basedOn w:val=\"S{index + 1}\"/>"
+                : string.Empty)
+            + "</w:style>"));
+        var package = IrTestDocuments.FromBodyAndStylesXml(
+            "<w:p><w:pPr><w:pStyle w:val=\"S0\"/></w:pPr>"
+            + "<w:r><w:t>Styled</w:t></w:r></w:p>",
+            styles).DocumentByteArray;
+
+        var result = DeliverableVerifier.VerifyDeliverable(
+            package,
+            new DeliverableVerificationOptions
+            {
+                MaxDetectorNodes = 100_000,
+                MaxDetectorSteps = 3_300,
+            });
+
+        Assert.Contains(result.Findings, finding =>
+            finding.Code == "verification.resource_budget_exceeded"
+            && finding.Location?.PropertyPath == "detectorBudget/steps");
+        Assert.Contains(result.Checks, check =>
+            check.Check == "deliverable.wordprocessing_closure"
+            && check.Status == DeliverableCheckStatus.UnavailableEvidence);
+    }
+
+    [Fact]
+    public void Delta_record_limits_fail_closed_without_returning_partial_evidence()
+    {
+        var baseline = IrTestDocuments.Create("Alpha", "Beta").DocumentByteArray;
+        var semanticDeliverable = IrTestDocuments.Create("Gamma", "Delta").DocumentByteArray;
+        Assert.True(SemanticDiff.Compare(baseline, semanticDeliverable,
+            new SemanticDiffOptions { IncludePackageChanges = false }).ChangeCount > 1);
+
+        var semantic = DeliverableVerifier.VerifyDeliverable(
+            baseline,
+            semanticDeliverable,
+            new DeliverableVerificationOptions { MaxReportedDeltaChanges = 1 });
+
+        Assert.Contains(semantic.Findings,
+            finding => finding.Code == "delta.semantic_change_limit_exceeded");
+        Assert.Contains(semantic.Checks, check => check.Check == "semantic_delta"
+            && check.Status == DeliverableCheckStatus.UnavailableEvidence
+            && check.Diagnostic == "delta record limit exceeded");
+        Assert.Null(semantic.SemanticDelta);
+        Assert.False(semantic.AnalysisCompleted);
+
+        var packageDeliverable = AddEntries(baseline,
+            ("custom/a.xml", "<a/>"),
+            ("custom/b.xml", "<b/>"));
+        var package = DeliverableVerifier.VerifyDeliverable(
+            baseline,
+            packageDeliverable,
+            new DeliverableVerificationOptions { MaxReportedDeltaChanges = 1 });
+
+        Assert.Contains(package.Findings,
+            finding => finding.Code == "delta.package_change_limit_exceeded");
+        Assert.Contains(package.Checks, check => check.Check == "package_delta"
+            && check.Status == DeliverableCheckStatus.UnavailableEvidence
+            && check.Diagnostic == "delta record limit exceeded");
+        Assert.Empty(package.PackageChanges);
+        Assert.False(package.AnalysisCompleted);
+    }
+
+    [Fact]
+    public void Omitted_resolved_evidence_does_not_consume_the_returned_finding_budget()
+    {
+        var baseline = IrTestDocuments.Create("{{ALPHA}}", "{{BETA}}").DocumentByteArray;
+        var deliverable = IrTestDocuments.Create("${GAMMA}", "${DELTA}").DocumentByteArray;
+
+        var result = DeliverableVerifier.VerifyDeliverable(
+            baseline,
+            deliverable,
+            new DeliverableVerificationOptions
+            {
+                IncludeResolvedFindings = false,
+                MaxFindings = 3,
+                RequireNoPlaceholders = false,
+            });
+
+        Assert.True(result.AnalysisCompleted, string.Join("; ", result.Checks.Select(check =>
+            $"{check.Check}:{check.Status}:{check.Diagnostic}")));
+        Assert.Empty(result.ResolvedFindings);
+        Assert.Equal(2, result.Findings.Count(finding =>
+            finding.Code == "workflow.placeholder_remaining"));
+        Assert.Equal(DeliverableVerificationDecision.Passed, result.Decision);
+    }
+
+    [Fact]
+    public void Tied_renderer_diagnostics_keep_finding_ids_when_input_order_reverses()
+    {
+        var package = IrTestDocuments.Create("Safe").DocumentByteArray;
+        var source = Digest(package);
+        var first = new DeliverableRenderDiagnostic
+        {
+            Kind = DeliverableRenderDiagnosticKind.Warning,
+            Message = "Alpha diagnostic",
+            Severity = VerificationFindingSeverity.Warning,
+        };
+        var second = first with
+        {
+            Message = "Beta diagnostic",
+            Severity = VerificationFindingSeverity.Error,
+        };
+
+        DeliverableVerificationResult Verify(IReadOnlyList<DeliverableRenderDiagnostic> diagnostics) =>
+            DeliverableVerifier.VerifyDeliverable(new DeliverableVerificationRequest
+            {
+                DeliverableBytes = package,
+                CompanionArtifacts = new[]
+                {
+                    new DeliverableCompanionArtifactInput
+                    {
+                        ArtifactId = "render.json",
+                        Role = DeliverableArtifactRole.RenderReport,
+                        MediaType = "application/json",
+                        Availability = DeliverableArtifactAvailability.Available,
+                        Bytes = Encoding.UTF8.GetBytes("{}"),
+                        SourcePackageDigest = source,
+                        RenderDiagnostics = diagnostics,
+                    },
+                },
+            });
+
+        var forward = Verify(new[] { first, second });
+        var reverse = Verify(new[] { second, first });
+
+        Assert.Equal(forward.ToCanonicalJson(), reverse.ToCanonicalJson());
+        Assert.Equal(
+            forward.Findings.ToDictionary(item => item.Message, item => item.FindingId),
+            reverse.Findings.ToDictionary(item => item.Message, item => item.FindingId));
+    }
+
     private static DeliverableCompanionArtifactInput Artifact(
         string id,
         DeliverableArtifactRole role,
@@ -960,6 +1413,39 @@ public sealed class DeliverableVerifierHardeningTests
             }
         }
         return output.ToArray();
+    }
+
+    private static byte[] RenameEntry(byte[] package, string oldName, string newName)
+    {
+        using var output = new MemoryStream();
+        using (var destination = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        using (var source = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read))
+        {
+            foreach (var sourceEntry in source.Entries)
+            {
+                var destinationEntry = destination.CreateEntry(
+                    sourceEntry.FullName == oldName ? newName : sourceEntry.FullName,
+                    CompressionLevel.Optimal);
+                destinationEntry.LastWriteTime = FixtureTimestamp;
+                using var input = sourceEntry.Open();
+                using var entryOutput = destinationEntry.Open();
+                input.CopyTo(entryOutput);
+            }
+        }
+        return output.ToArray();
+    }
+
+    private sealed class CountOnlyReadOnlyList<T>(int count) : IReadOnlyList<T>
+    {
+        public int Count { get; } = count;
+
+        public T this[int index] => throw new InvalidOperationException(
+            "The verifier must reject the declared count before indexing request evidence.");
+
+        public IEnumerator<T> GetEnumerator() => throw new InvalidOperationException(
+            "The verifier must reject the declared count before enumerating request evidence.");
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private static byte[] RewriteContentTypes(

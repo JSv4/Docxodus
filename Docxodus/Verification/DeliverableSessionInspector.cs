@@ -90,6 +90,7 @@ internal static class DeliverableSessionInspector
         DeliverableInspectionBudget budget)
     {
         var root = part.Xml!.Root!;
+        var scope = Scope(part);
         var pending = new Stack<(XElement Element, string Path)>();
         pending.Push((root, "/" + root.Name.LocalName + "[1]"));
         while (pending.Count > 0 && !budget.Exhausted && observations.Count < options.MaxFindings)
@@ -97,7 +98,7 @@ internal static class DeliverableSessionInspector
             var (element, path) = pending.Pop();
             if (!budget.Node() || !budget.Step()) break;
             if (IsWord(element) && element.Name.LocalName == "p")
-                InspectParagraph(part.Uri, element, path, options, observations, budget);
+                InspectParagraph(part.Uri, scope, element, path, options, observations, budget);
 
             var children = element.Elements().ToArray();
             var positions = new int[children.Length];
@@ -115,6 +116,7 @@ internal static class DeliverableSessionInspector
 
     private static void InspectParagraph(
         string partUri,
+        string scope,
         XElement paragraph,
         string path,
         DeliverableVerificationOptions options,
@@ -124,13 +126,24 @@ internal static class DeliverableSessionInspector
         var builder = new StringBuilder();
         foreach (var element in paragraph.Descendants())
         {
+            if (!ReferenceEquals(
+                    element.Ancestors().FirstOrDefault(candidate => IsWord(candidate)
+                        && candidate.Name.LocalName == "p"),
+                    paragraph))
+                continue;
             if (!budget.Node() || !budget.Step()) return;
             if (IsWord(element)
                 && element.Name.LocalName is "t" or "delText" or "instrText")
-                builder.Append(element.Value);
+            {
+                var value = element.Value;
+                // Admit text before growing the paragraph buffer. A small caller budget must not
+                // still permit one large retained paragraph to be copied in full.
+                if (!budget.Text(value.Length)) return;
+                builder.Append(value);
+            }
         }
         var text = builder.ToString();
-        if (text.Length == 0 || !budget.Text(text.Length)) return;
+        if (text.Length == 0) return;
         var anchor = paragraph.Attributes().FirstOrDefault(attribute =>
             attribute.Name.NamespaceName == InternalAnchorNamespace
             && attribute.Name.LocalName == "Unid")?.Value;
@@ -138,16 +151,22 @@ internal static class DeliverableSessionInspector
 
         foreach (var (pattern, kind, code) in HighConfidencePatterns)
             ScanRegex(pattern, kind, code, text, partUri, path, anchor,
-                VerificationFindingSeverity.Warning, options, observations, budget, seen);
+                scope, VerificationFindingSeverity.Warning, options, observations, budget, seen);
 
         foreach (var token in options.PlaceholderTokens.OrderBy(value => value, StringComparer.Ordinal))
         {
             int offset = 0;
-            while (!budget.Exhausted && (offset = text.IndexOf(token, offset, StringComparison.Ordinal)) >= 0)
+            while (!budget.Exhausted)
             {
-                if (!budget.RegexMatch() || !budget.Step()) return;
+                // IndexOf can inspect the entire remaining paragraph even when there is no match.
+                // Charge that worst-case work before attempting each configured-pattern scan so
+                // thousands of absent tokens cannot bypass MaxDetectorSteps.
+                if (!budget.Step(Math.Max(1, text.Length - offset))) return;
+                offset = text.IndexOf(token, offset, StringComparison.Ordinal);
+                if (offset < 0) break;
+                if (!budget.RegexMatch()) return;
                 AddTextFinding(observations, options.MaxFindings, partUri, path, anchor,
-                    offset, token.Length, "configured_token", "workflow.placeholder_remaining",
+                    scope, offset, token.Length, "configured_token", "workflow.placeholder_remaining",
                     VerificationFindingSeverity.Warning, token, seen);
                 offset += Math.Max(1, token.Length);
             }
@@ -156,12 +175,15 @@ internal static class DeliverableSessionInspector
         foreach (var marker in options.EditorialMarkers.OrderBy(value => value, StringComparer.Ordinal))
         {
             int offset = 0;
-            while (!budget.Exhausted && (offset = text.IndexOf(marker, offset, StringComparison.Ordinal)) >= 0)
+            while (!budget.Exhausted)
             {
-                if (!budget.RegexMatch() || !budget.Step()) return;
+                if (!budget.Step(Math.Max(1, text.Length - offset))) return;
+                offset = text.IndexOf(marker, offset, StringComparison.Ordinal);
+                if (offset < 0) break;
+                if (!budget.RegexMatch()) return;
                 if (IsBoundary(text, offset - 1) && IsBoundary(text, offset + marker.Length))
                     AddTextFinding(observations, options.MaxFindings, partUri, path, anchor,
-                        offset, marker.Length, "configured_editorial_marker", "workflow.editorial_marker",
+                        scope, offset, marker.Length, "configured_editorial_marker", "workflow.editorial_marker",
                         VerificationFindingSeverity.Warning, marker, seen);
                 offset += Math.Max(1, marker.Length);
             }
@@ -169,7 +191,7 @@ internal static class DeliverableSessionInspector
 
         if (options.DetectBracketedAlternativeClauses)
             ScanRegex(AlternativeClause, "alternative_clause", "workflow.alternative_clause",
-                text, partUri, path, anchor, VerificationFindingSeverity.Warning,
+                text, partUri, path, anchor, scope, VerificationFindingSeverity.Warning,
                 options, observations, budget, seen);
     }
 
@@ -181,6 +203,7 @@ internal static class DeliverableSessionInspector
         string partUri,
         string path,
         string? anchor,
+        string scope,
         VerificationFindingSeverity severity,
         DeliverableVerificationOptions options,
         ICollection<DeliverableFindingObservation> observations,
@@ -191,7 +214,7 @@ internal static class DeliverableSessionInspector
         {
             if (!budget.RegexMatch() || !budget.Step()) return;
             AddTextFinding(observations, options.MaxFindings, partUri, path, anchor,
-                match.Index, match.Length, kind, code, severity, match.Value, seen);
+                scope, match.Index, match.Length, kind, code, severity, match.Value, seen);
         }
     }
 
@@ -201,6 +224,7 @@ internal static class DeliverableSessionInspector
         string partUri,
         string paragraphPath,
         string? anchor,
+        string scope,
         int start,
         int length,
         string kind,
@@ -228,7 +252,7 @@ internal static class DeliverableSessionInspector
                 : "Replace or intentionally remove the template token before delivery.",
             new ChangeLocation { EntryUri = partUri, PropertyPath = propertyPath },
             anchor,
-            Scope(partUri),
+            scope,
             paragraphPath,
             subjectKey: string.Join("\u001f", kind, start.ToString(CultureInfo.InvariantCulture),
                 length.ToString(CultureInfo.InvariantCulture),
@@ -250,10 +274,38 @@ internal static class DeliverableSessionInspector
                 // Account for the registry's second traversal separately from the story scan.
                 if (!budget.Node() || !budget.Step()) return;
             }
-            parts.Add(new RevisionRegistry.Part(part.Uri, Scope(part.Uri), root));
+            parts.Add(new RevisionRegistry.Part(part.Uri, Scope(part), root));
         }
 
         var registry = RevisionRegistry.Build(parts);
+        var siblingPositions = new Dictionary<XElement, int>();
+        var indexedParents = new HashSet<XElement>();
+        var paths = new Dictionary<XElement, string>();
+        int SiblingPosition(XElement element)
+        {
+            if (element.Parent is not { } parent) return 1;
+            if (indexedParents.Add(parent))
+            {
+                var counts = new Dictionary<XName, int>();
+                foreach (var child in parent.Elements())
+                {
+                    int position = counts.GetValueOrDefault(child.Name) + 1;
+                    counts[child.Name] = position;
+                    siblingPositions[child] = position;
+                }
+            }
+            return siblingPositions[element];
+        }
+        string ElementPath(XElement element)
+        {
+            if (paths.TryGetValue(element, out var cached)) return cached;
+            var segments = element.AncestorsAndSelf().Reverse().Select(current =>
+                current.Name.LocalName + "["
+                + SiblingPosition(current).ToString(CultureInfo.InvariantCulture) + "]");
+            var path = "/" + string.Join("/", segments);
+            paths.Add(element, path);
+            return path;
+        }
         foreach (var group in registry.Entries
             .Where(entry => entry.ResolutionStatus != RevisionResolutionStatus.Supported)
             .OrderBy(entry => entry.PartUri, StringComparer.Ordinal)
@@ -282,36 +334,22 @@ internal static class DeliverableSessionInspector
         }
     }
 
-    private static string ElementPath(XElement element)
-    {
-        var segments = new Stack<string>();
-        for (var current = element; current is not null; current = current.Parent)
-        {
-            int position = 1;
-            for (var sibling = current.PreviousNode; sibling is not null; sibling = sibling.PreviousNode)
-            {
-                if (sibling is XElement siblingElement && siblingElement.Name == current.Name)
-                    position++;
-            }
-            segments.Push(current.Name.LocalName + "["
-                + position.ToString(CultureInfo.InvariantCulture) + "]");
-        }
-        return "/" + string.Join("/", segments);
-    }
-
     private static bool IsBoundary(string text, int index) => index < 0 || index >= text.Length
         || !(char.IsLetterOrDigit(text[index]) || text[index] == '_');
 
     private static bool IsWord(XElement element) =>
         element.Name.NamespaceName is TransitionalWord or StrictWord;
 
-    private static string Scope(string partUri) =>
-        partUri.Contains("/header", StringComparison.OrdinalIgnoreCase) ? "header"
-        : partUri.Contains("/footer", StringComparison.OrdinalIgnoreCase) ? "footer"
-        : partUri.Contains("/footnotes", StringComparison.OrdinalIgnoreCase) ? "footnote"
-        : partUri.Contains("/endnotes", StringComparison.OrdinalIgnoreCase) ? "endnote"
-        : partUri.Contains("/comments", StringComparison.OrdinalIgnoreCase) ? "comment"
-        : "body";
+    private static string Scope(PackageManifestInspectionEntry part) =>
+        part.Xml?.Root?.Name.LocalName switch
+        {
+            "hdr" => "header",
+            "ftr" => "footer",
+            "footnotes" => "footnote",
+            "endnotes" => "endnote",
+            "comments" => "comment",
+            _ => "body",
+        };
 
     private static Regex BoundedRegex(string pattern) => new(pattern,
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,

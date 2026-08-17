@@ -46,6 +46,15 @@ __all__ = [
     "PackageKind",
     "PackageRelationshipTargetMode",
     "VerificationFindingSeverity",
+    "DeliverableVerificationMode",
+    "DeliverableVerificationDecision",
+    "DeliverableFindingDisposition",
+    "DeliverableFindingCategory",
+    "DeliverableCheckStatus",
+    "DeliverablePackageChangeKind",
+    "DeliverableArtifactRole",
+    "DeliverableArtifactAvailability",
+    "DeliverableSemanticChangeFamily",
 ]
 
 
@@ -55,6 +64,101 @@ class VerificationFindingSeverity(str, Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
+
+class DeliverableVerificationMode(str, Enum):
+    STANDARD = "standard"
+    STRICT = "strict"
+    REPORT_ONLY = "reportOnly"
+
+
+class DeliverableVerificationDecision(str, Enum):
+    PASSED = "passed"
+    PASSED_WITH_PRE_EXISTING_FINDINGS = "passedWithPreExistingFindings"
+    FAILED = "failed"
+    NOT_EVALUATED = "notEvaluated"
+
+
+class DeliverableFindingDisposition(str, Enum):
+    NEW = "new"
+    PRE_EXISTING = "preExisting"
+    RESOLVED = "resolved"
+    UNCLASSIFIED = "unclassified"
+
+
+class DeliverableFindingCategory(str, Enum):
+    PACKAGE = "package"
+    OPEN_XML = "openXml"
+    RELATIONSHIP = "relationship"
+    STRUCTURE = "structure"
+    WORKFLOW = "workflow"
+    DELTA = "delta"
+    RENDER = "render"
+    ARTIFACT = "artifact"
+
+
+class DeliverableCheckStatus(str, Enum):
+    COMPLETED = "completed"
+    SKIPPED_PREREQUISITE_FAILED = "skippedPrerequisiteFailed"
+    UNAVAILABLE_EVIDENCE = "unavailableEvidence"
+
+
+class DeliverablePackageChangeKind(str, Enum):
+    ENTRY_ADDED = "entryAdded"
+    ENTRY_REMOVED = "entryRemoved"
+    ENTRY_MODIFIED = "entryModified"
+    RELATIONSHIP_ADDED = "relationshipAdded"
+    RELATIONSHIP_REMOVED = "relationshipRemoved"
+    RELATIONSHIP_MODIFIED = "relationshipModified"
+
+
+class DeliverableArtifactRole(str, Enum):
+    HTML = "html"
+    PDF = "pdf"
+    PAGE_MAP = "pageMap"
+    PAGE_IMAGE = "pageImage"
+    RENDER_REPORT = "renderReport"
+    OTHER = "other"
+
+
+class DeliverableArtifactAvailability(str, Enum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class DeliverableSemanticChangeFamily(str, Enum):
+    """Camel-case semantic-family values embedded in verification reports."""
+
+    TEXT = "text"
+    BLOCK_STRUCTURE = "blockStructure"
+    RUN_FORMATTING = "runFormatting"
+    PARAGRAPH_FORMATTING = "paragraphFormatting"
+    STYLE = "style"
+    NUMBERING = "numbering"
+    LIST = "list"
+    TABLE = "table"
+    TABLE_ROW = "tableRow"
+    TABLE_CELL = "tableCell"
+    TABLE_SPAN = "tableSpan"
+    TABLE_WIDTH = "tableWidth"
+    TABLE_STYLE = "tableStyle"
+    SECTION = "section"
+    PAGE_SETUP = "pageSetup"
+    HEADER = "header"
+    FOOTER = "footer"
+    FIELD = "field"
+    FOOTNOTE = "footnote"
+    ENDNOTE = "endnote"
+    COMMENT = "comment"
+    HYPERLINK = "hyperlink"
+    BOOKMARK = "bookmark"
+    CONTENT_CONTROL = "contentControl"
+    IMAGE = "image"
+    MEDIA = "media"
+    RELATIONSHIP = "relationship"
+    REVISION = "revision"
+    ANNOTATION = "annotation"
+    OPAQUE_PACKAGE_PART = "opaquePackagePart"
 
 
 class PackageKind(str, Enum):

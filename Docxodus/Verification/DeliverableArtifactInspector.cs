@@ -13,6 +13,7 @@ namespace Docxodus.Verification;
 internal static class DeliverableArtifactInspector
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private const long MaxPortableInteger = SemanticValue.MaxSafeInteger;
 
     internal static IReadOnlyList<DeliverableArtifactMetadata> Inspect(
         IReadOnlyList<DeliverableCompanionArtifactInput> artifacts,
@@ -145,7 +146,7 @@ internal static class DeliverableArtifactInspector
             Availability = artifact.Availability,
             ByteLength = artifact.Bytes?.LongLength,
             UnavailableReason = artifact.UnavailableReason,
-            PageCount = artifact.PageCount,
+            PageCount = PortablePageCount(artifact.PageCount),
             RendererFingerprint = artifact.RendererFingerprint,
             SourcePackageDigest = Normalize(artifact.SourcePackageDigest),
             PageMapDigest = artifact.Role == DeliverableArtifactRole.PageMap
@@ -169,7 +170,7 @@ internal static class DeliverableArtifactInspector
                     Finding(observations, maximumFindings, artifact, "artifact.pdf_malformed",
                         VerificationFindingSeverity.Error,
                         "The supplied bytes do not satisfy basic PDF structure checks.",
-                        "Supply a complete PDF with a header, catalog/page tree, xref/trailer, and EOF marker.");
+                        "Supply a complete PDF with a supported header, cross-reference data, startxref, and EOF marker.");
                 break;
             case DeliverableArtifactRole.Html:
                 if (!MediaTypeIs(artifact.MediaType, "text/html"))
@@ -247,10 +248,11 @@ internal static class DeliverableArtifactInspector
                 "The companion artifact names a different source package digest.",
                 "Regenerate the artifact from the delivered package or correct the binding.");
 
-        if (artifact.PageCount is < 0)
+        if (artifact.PageCount is < 0 or > MaxPortableInteger)
             Finding(observations, maximumFindings, artifact, "artifact.page_count_invalid",
-                VerificationFindingSeverity.Error, "Companion artifact pageCount cannot be negative.",
-                "Supply a non-negative page count.");
+                VerificationFindingSeverity.Error,
+                "Companion artifact pageCount must be a non-negative portable JSON integer.",
+                $"Supply a page count between 0 and {MaxPortableInteger} inclusive.");
         if (layoutArtifact && artifact.PageCount is null)
             Finding(observations, maximumFindings, artifact, "artifact.page_count_missing",
                 VerificationFindingSeverity.Error, "Layout-dependent evidence has no page count.",
@@ -376,22 +378,66 @@ internal static class DeliverableArtifactInspector
 
     private static bool LooksLikePdf(byte[] bytes)
     {
-        if (bytes.Length < 32) return false;
+        if (bytes.Length < 24) return false;
         var span = bytes.AsSpan();
         int end = span.Length - 1;
         while (end >= 0 && span[end] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n') end--;
-        return span.StartsWith("%PDF-1."u8)
-            && Contains(span, "/Type /Catalog"u8)
-            && Contains(span, "/Type /Pages"u8)
-            && Contains(span, "/Type /Page "u8)
-            && Contains(span, "xref"u8)
-            && Contains(span, "trailer"u8)
-            && Contains(span, "startxref"u8)
+        bool supportedVersion = span.Length >= 8
+            && span[..5].SequenceEqual("%PDF-"u8)
+            && ((span[5] == (byte)'1' && span[6] == (byte)'.' && span[7] is >= (byte)'0' and <= (byte)'7')
+                || (span[5] == (byte)'2' && span[6] == (byte)'.' && span[7] == (byte)'0'));
+        bool traditionalXref = ContainsPdfKeyword(span, "xref"u8)
+            && ContainsPdfKeyword(span, "trailer"u8);
+        bool xrefStream = ContainsPdfNamePair(span, "/Type"u8, "/XRef"u8);
+        return supportedVersion
+            && ContainsPdfKeyword(span, "obj"u8)
+            && (traditionalXref || xrefStream)
+            && ContainsPdfKeyword(span, "startxref"u8)
             && end >= 4 && span[..(end + 1)].EndsWith("%%EOF"u8);
     }
 
-    private static bool Contains(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> value) =>
-        bytes.IndexOf(value) >= 0;
+    private static bool ContainsPdfKeyword(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> value)
+    {
+        int offset = 0;
+        while (offset <= bytes.Length - value.Length)
+        {
+            int relative = bytes[offset..].IndexOf(value);
+            if (relative < 0) return false;
+            int start = offset + relative;
+            int end = start + value.Length;
+            if ((start == 0 || IsPdfDelimiter(bytes[start - 1]))
+                && (end == bytes.Length || IsPdfDelimiter(bytes[end])))
+                return true;
+            offset = start + 1;
+        }
+        return false;
+    }
+
+    private static bool ContainsPdfNamePair(
+        ReadOnlySpan<byte> bytes,
+        ReadOnlySpan<byte> name,
+        ReadOnlySpan<byte> value)
+    {
+        int offset = 0;
+        while (offset <= bytes.Length - name.Length)
+        {
+            int relative = bytes[offset..].IndexOf(name);
+            if (relative < 0) return false;
+            int next = offset + relative + name.Length;
+            while (next < bytes.Length && IsPdfWhiteSpace(bytes[next])) next++;
+            if (bytes[next..].StartsWith(value)
+                && (next + value.Length == bytes.Length || IsPdfDelimiter(bytes[next + value.Length])))
+                return true;
+            offset += relative + 1;
+        }
+        return false;
+    }
+
+    private static bool IsPdfWhiteSpace(byte value) => value is 0 or 9 or 10 or 12 or 13 or 32;
+
+    private static bool IsPdfDelimiter(byte value) => IsPdfWhiteSpace(value)
+        || value is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'[' or (byte)']'
+            or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%';
 
     private static bool LooksLikeHtml(byte[] bytes)
     {
@@ -400,15 +446,62 @@ internal static class DeliverableArtifactInspector
             var text = StrictUtf8.GetString(bytes);
             if (text.IndexOf('\0') >= 0) return false;
             var trimmed = text.AsSpan().TrimStart();
-            return (trimmed.StartsWith("<!doctype html", StringComparison.OrdinalIgnoreCase)
-                    || trimmed.StartsWith("<html", StringComparison.OrdinalIgnoreCase))
-                && text.Contains("<html", StringComparison.OrdinalIgnoreCase)
-                && text.Contains("</html>", StringComparison.OrdinalIgnoreCase);
+            if (!trimmed.IsEmpty && trimmed[0] == '\uFEFF') trimmed = trimmed[1..].TrimStart();
+            while (trimmed.StartsWith("<!--", StringComparison.Ordinal))
+            {
+                int commentEnd = trimmed.IndexOf("-->", StringComparison.Ordinal);
+                if (commentEnd < 0) return false;
+                trimmed = trimmed[(commentEnd + 3)..].TrimStart();
+            }
+            bool beginsWithDoctype = StartsWithHtmlToken(
+                trimmed, "<!doctype html", allowSlash: false);
+            bool beginsWithRoot = StartsWithHtmlToken(trimmed, "<html", allowSlash: true);
+            return (beginsWithDoctype || beginsWithRoot)
+                && HasHtmlStartTag(text)
+                && HasHtmlEndTag(text);
         }
         catch (DecoderFallbackException)
         {
             return false;
         }
+    }
+
+    private static bool StartsWithHtmlToken(
+        ReadOnlySpan<char> text,
+        ReadOnlySpan<char> token,
+        bool allowSlash)
+    {
+        if (!text.StartsWith(token, StringComparison.OrdinalIgnoreCase)) return false;
+        if (text.Length == token.Length) return false;
+        var next = text[token.Length];
+        return char.IsWhiteSpace(next) || next == '>' || (allowSlash && next == '/');
+    }
+
+    private static bool HasHtmlStartTag(string text)
+    {
+        int offset = 0;
+        while ((offset = text.IndexOf("<html", offset, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            int end = offset + 5;
+            if (end < text.Length
+                && (char.IsWhiteSpace(text[end]) || text[end] is '>' or '/'))
+                return true;
+            offset++;
+        }
+        return false;
+    }
+
+    private static bool HasHtmlEndTag(string text)
+    {
+        int offset = 0;
+        while ((offset = text.IndexOf("</html", offset, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            int end = offset + 6;
+            while (end < text.Length && char.IsWhiteSpace(text[end])) end++;
+            if (end < text.Length && text[end] == '>') return true;
+            offset++;
+        }
+        return false;
     }
 
     private static void EnsureUniqueProperties(JsonElement element)
@@ -463,6 +556,9 @@ internal static class DeliverableArtifactInspector
     private static VerificationDigest? Normalize(VerificationDigest? digest) => digest is null
         ? null : new VerificationDigest { Algorithm = "SHA-256", Value = digest.Value.ToLowerInvariant() };
 
+    private static long? PortablePageCount(long? value) => value is >= 0 and <= MaxPortableInteger
+        ? value : null;
+
     private sealed class ArtifactState(DeliverableCompanionArtifactInput input)
     {
         internal DeliverableCompanionArtifactInput Input { get; } = input;
@@ -481,7 +577,7 @@ internal static class DeliverableArtifactInspector
             ByteLength = Length,
             Digest = RawDigest,
             UnavailableReason = Input.UnavailableReason,
-            PageCount = EffectivePageCount ?? Input.PageCount,
+            PageCount = PortablePageCount(EffectivePageCount ?? Input.PageCount),
             RendererFingerprint = Input.RendererFingerprint,
             SourcePackageDigest = Normalize(Input.SourcePackageDigest),
             PageMapDigest = Input.Role == DeliverableArtifactRole.PageMap
