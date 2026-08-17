@@ -381,6 +381,10 @@ explicitly cancelled. Both failures still contribute to the job result. A timeou
 currently active case, but the initialized viewer and every previously finalized case remain in the
 artifact.
 
+Playwright retries write to `retry-N/` subdirectories beneath the configured artifact root. The
+first attempt remains available through the root viewer, and a retry cannot replace the original
+failure with a stale-output error.
+
 ## Triage rules
 
 LibreOffice is a comparison implementation, not an oracle. Start with severe cases, inspect the two

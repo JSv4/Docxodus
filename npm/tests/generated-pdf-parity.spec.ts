@@ -265,13 +265,16 @@ ${caseSections || '<p>No case artifacts have materialized yet. Inspect the run/f
 `);
 }
 
-function initializeOutputRoot(): string {
-  const outputRoot = resolve(process.env.DOCXODUS_GENERATED_PDF_PARITY_OUTPUT
+function initializeOutputRoot(retry: number): string {
+  const configuredOutputRoot = resolve(process.env.DOCXODUS_GENERATED_PDF_PARITY_OUTPUT
     ?? join(tmpdir(), 'docxodus-generated-pdf-parity'));
-  const relativeToRepo = relative(repoRoot, outputRoot);
+  const relativeToRepo = relative(repoRoot, configuredOutputRoot);
   if (relativeToRepo === '' || (!relativeToRepo.startsWith('..') && !isAbsolute(relativeToRepo))) {
-    throw new Error(`Generated-PDF parity artifacts must stay outside the repository: ${outputRoot}`);
+    throw new Error(`Generated-PDF parity artifacts must stay outside the repository: ${configuredOutputRoot}`);
   }
+  const outputRoot = retry === 0
+    ? configuredOutputRoot
+    : join(configuredOutputRoot, `retry-${retry}`);
   mkdirSync(outputRoot, { recursive: true, mode: 0o700 });
   const unexpected = readdirSync(outputRoot).filter((name) => !BOOTSTRAP_ARTIFACTS.has(name));
   if (unexpected.length) {
@@ -555,10 +558,10 @@ function summarizeCases(cases: PdfParityCaseResult[]) {
   };
 }
 
-test('supported generated PDFs match reference PDFs through the fidelity ratchet', async ({ page, browserName }) => {
+test('supported generated PDFs match reference PDFs through the fidelity ratchet', async ({ page, browserName }, testInfo) => {
   test.setTimeout(30 * 60 * 1000);
 
-  const outputRoot = initializeOutputRoot();
+  const outputRoot = initializeOutputRoot(testInfo.retry);
   const corpus = selectedCorpus();
   const startedAt = new Date().toISOString();
   // Capture the source identity before any benchmark-owned write. Record updates intentionally
