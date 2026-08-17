@@ -461,55 +461,57 @@ test.describe('standalone paginated HTML', () => {
     });
   });
 
-  test('fails closed before PageMap publication when a long footnote paragraph clips', async ({
+  test('publishes complete PageMaps when long footnote paragraphs continue', async ({
     page,
   }, testInfo) => {
     const cases = [
       {
         id: 'single-oversized-paragraph',
-        // Issue #489 case C: the whole-child splitter consumes this one paragraph even though
-        // it is taller than the maximum note band.
+        // Issue #489 case C: one paragraph is taller than the maximum note band and must
+        // continue across pages without clipping.
         source: generateFootnoteDocx(1, 2, 1, [700]),
       },
       {
         id: 'oversized-leading-paragraph-with-tail',
-        // Issue #489 case C2: the oversized leading paragraph must not permit the otherwise
-        // splittable tail to disappear behind the clipped note band.
+        // Issue #489 case C2: the long leader and its tail must all survive continuation.
         source: generateFootnoteDocx(1, 2, 3, [700, 8, 8]),
       },
     ];
-    const evidence: Array<{ id: string; sourceSha256: string; failure: unknown }> = [];
+    const evidence: Array<{
+      id: string;
+      sourceSha256: string;
+      pageMap: BrowserExportResult['pageMap'];
+      renderReport: BrowserExportResult['renderReport'];
+    }> = [];
 
     for (const entry of cases) {
-      const failure = await page.evaluate(async ({ bytes }) =>
-        (window as any).DocxodusStandalone.convertFailure(bytes, {
-          reviewProfile: 'final',
-          commentProfile: 'hidden',
-        }), { bytes: Array.from(entry.source) });
+      const result = await convert(page, entry.source, false, { commentProfile: 'hidden' });
+      const footnotePages = new Set(result.pageMap.fragments
+        .filter((fragment: any) => fragment.story === 'footnote')
+        .map((fragment: any) => fragment.pageNumber));
 
-      expect(failure.unexpectedSuccess, entry.id).toBeUndefined();
-      expect(failure.code, entry.id).toBe('pagination_failure');
-      expect(failure.phase, entry.id).toBe('running_story_placement');
-      expect(failure.report, entry.id).toEqual(expect.objectContaining({
-        status: 'failed',
-        source: expect.objectContaining({ rawPackageBytesDigest: digest(entry.source) }),
-        failure: expect.objectContaining({
-          code: 'pagination_failure',
-          phase: 'running_story_placement',
-          message: expect.stringContaining('footnote continuation is clipped'),
-          remediation: expect.stringContaining('issue #489'),
-        }),
-        unavailable: expect.arrayContaining([
-          expect.objectContaining({ field: 'bindings.pageMapDigest' }),
-          expect.objectContaining({ field: 'bindings.htmlDigest' }),
-        ]),
+      expect(result.pageCount, entry.id).toBeGreaterThan(2);
+      expect(footnotePages.size, `${entry.id} must continue its note across pages`)
+        .toBeGreaterThan(1);
+      expect(result.renderReport.status, entry.id).toBe('complete');
+      expect(result.renderReport.source.rawPackageBytesDigest, entry.id).toBe(digest(entry.source));
+      expect(result.renderReport.readiness, entry.id).toContainEqual(expect.objectContaining({
+        phase: 'running_story_placement',
+        status: 'complete',
+        pending: [],
       }));
-      expect(failure.report.bindings, `${entry.id} must not publish artifact bindings`).toBeUndefined();
-      expect(failure.pageMap, `${entry.id} must not publish an incomplete PageMap`).toBeUndefined();
-      evidence.push({ id: entry.id, sourceSha256: digest(entry.source), failure });
+      expect(result.renderReport.bindings.htmlDigest, entry.id).toBe(digest(result.html));
+      expect(result.renderReport.bindings.pageMapDigest, entry.id)
+        .toBe(digest(canonical(result.pageMap)));
+      evidence.push({
+        id: entry.id,
+        sourceSha256: digest(entry.source),
+        pageMap: result.pageMap,
+        renderReport: result.renderReport,
+      });
     }
 
-    await testInfo.attach('long-footnote-fail-closed.json', {
+    await testInfo.attach('long-footnote-continuation-exports.json', {
       body: Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`),
       contentType: 'application/json',
     });
