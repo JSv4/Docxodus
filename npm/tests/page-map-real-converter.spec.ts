@@ -30,6 +30,7 @@ interface RealPaginationResult {
   commentSectionInStaging: boolean;
   marginRegistryInStaging: boolean;
   marginColumns: number;
+  pageCommentIdCount: number;
   duplicatePageCommentIds: number;
   activeMarginBackrefs: number;
   endnoteReferenceCount: number;
@@ -113,6 +114,10 @@ async function convertPaginateAndRegister(
     } finally {
       bridge.CloseSession(handle);
     }
+    const pageCommentIds = Array.from(
+      container.querySelectorAll<HTMLElement>('.page-comment-margin [id]'),
+      (node) => node.id,
+    );
 
     return {
       htmlHasBareAnchors: /\bdata-anchor=/.test(html),
@@ -127,7 +132,8 @@ async function convertPaginateAndRegister(
         '#pagination-comment-margin-registry',
       ) !== null,
       marginColumns: container.querySelectorAll('.page-comment-margin').length,
-      duplicatePageCommentIds: container.querySelectorAll('.page-comment-margin [id]').length,
+      pageCommentIdCount: pageCommentIds.length,
+      duplicatePageCommentIds: pageCommentIds.length - new Set(pageCommentIds).size,
       activeMarginBackrefs: container.querySelectorAll(
         '.page-comment-margin a[href^="#"]',
       ).length,
@@ -190,6 +196,7 @@ test.describe('Real converter PageMap pipeline', () => {
         expect(result.marginRegistryInStaging).toBe(true);
         expect(result.marginColumns).toBeGreaterThan(0);
         expect(comments.every((fragment) => !fragment.inTableCell)).toBe(true);
+        expect(result.pageCommentIdCount).toBeGreaterThan(0);
         expect(result.duplicatePageCommentIds).toBe(0);
         expect(result.activeMarginBackrefs).toBe(0);
       }
