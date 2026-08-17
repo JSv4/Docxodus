@@ -139,6 +139,15 @@ internal static class Dispatcher
 
         switch (format)
         {
+            case "verification":
+                // Verification, like manifest and semantic_changes, always covers the complete
+                // logical package. Reject the property itself so null/non-string values cannot
+                // silently turn an invalid scoped request into a whole-document response.
+                if (args.TryGetProperty("anchorId", out _))
+                    throw new McpToolException(
+                        "verification is document-wide and does not accept anchorId");
+                return DocxSessionOps.VerifyDeliverable(session.Handle);
+
             case "manifest":
                 // Manifest is intentionally package-wide. Reject the property itself rather than
                 // only a successfully parsed string: OptStr maps null and non-string JSON values

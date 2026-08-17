@@ -51,7 +51,9 @@ internal sealed record DeliverableFindingObservation
         return new DeliverableFindingObservation
         {
             IdentityKey = nativeIdentity,
-            OccurrenceKey = nativeIdentity,
+            OccurrenceKey = string.Join("\u001e", nativeIdentity,
+                ((int)severity).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                message, remediation),
             Code = code,
             Category = category,
             Severity = severity,
@@ -72,4 +74,5 @@ internal sealed record DeliverableInspectionSnapshot
     required public IReadOnlyList<DeliverableFindingObservation> Observations { get; init; }
     required public IReadOnlyList<DeliverableCheckResult> Checks { get; init; }
     required public bool AnalysisCompleted { get; init; }
+    required public bool DetectorBudgetExhausted { get; init; }
 }

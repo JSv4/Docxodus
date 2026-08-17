@@ -116,6 +116,12 @@ public sealed record DeliverableVerificationOptions
         MaxUriLength = 2_048,
     };
 
+    /// <summary>
+    /// Maximum aggregate raw bytes accepted across the deliverable and optional baseline package.
+    /// This is enforced before either caller-owned array is cloned.
+    /// </summary>
+    public long MaxPackageBytes { get; init; } = 100L * 1024 * 1024;
+
     /// <summary>Office schema version used by the Open XML SDK validator.</summary>
     public FileFormatVersions OpenXmlVersion { get; init; } = FileFormatVersions.Office2019;
 
@@ -164,6 +170,27 @@ public sealed record DeliverableVerificationOptions
     /// <summary>Maximum aggregate bytes accepted across companion artifacts.</summary>
     public long MaxTotalCompanionArtifactBytes { get; init; } = 512L * 1024 * 1024;
 
+    /// <summary>Maximum companion-artifact records accepted in one request.</summary>
+    public int MaxCompanionArtifacts { get; init; } = 1_024;
+
+    /// <summary>Maximum aggregate renderer diagnostics accepted in one request.</summary>
+    public int MaxRenderDiagnostics { get; init; } = 10_000;
+
+    /// <summary>Maximum expected semantic plus package changes accepted in one request.</summary>
+    public int MaxExpectedChanges { get; init; } = 25_000;
+
+    /// <summary>Maximum semantic or package delta records returned by one comparison stage.</summary>
+    public int MaxReportedDeltaChanges { get; init; } = 25_000;
+
+    /// <summary>Maximum typed semantic-value nodes across expected semantic changes.</summary>
+    public int MaxExpectedSemanticValueNodes { get; init; } = 1_000_000;
+
+    /// <summary>Maximum configured workflow marker/token records.</summary>
+    public int MaxConfiguredWorkflowMarkers { get; init; } = 10_000;
+
+    /// <summary>Maximum aggregate characters in caller-supplied policy and evidence strings.</summary>
+    public long MaxEvidenceTextCharacters { get; init; } = 4L * 1024 * 1024;
+
     /// <summary>Include baseline findings that no longer exist in the delivered package.</summary>
     public bool IncludeResolvedFindings { get; init; } = true;
 
@@ -173,6 +200,8 @@ public sealed record DeliverableVerificationOptions
             throw new ArgumentOutOfRangeException(nameof(Mode));
         if (!Enum.IsDefined(OpenXmlVersion))
             throw new ArgumentOutOfRangeException(nameof(OpenXmlVersion));
+        if (MaxPackageBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxPackageBytes));
         if (MaxFindings <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxFindings));
         if (MaxDetectorNodes <= 0)
@@ -189,14 +218,49 @@ public sealed record DeliverableVerificationOptions
             throw new ArgumentOutOfRangeException(nameof(MaxCompanionArtifactBytes));
         if (MaxTotalCompanionArtifactBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTotalCompanionArtifactBytes));
+        if (MaxCompanionArtifacts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxCompanionArtifacts));
+        if (MaxRenderDiagnostics <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxRenderDiagnostics));
+        if (MaxExpectedChanges <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxExpectedChanges));
+        if (MaxReportedDeltaChanges <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxReportedDeltaChanges));
+        if (MaxExpectedSemanticValueNodes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxExpectedSemanticValueNodes));
+        if (MaxConfiguredWorkflowMarkers <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxConfiguredWorkflowMarkers));
+        if (MaxEvidenceTextCharacters <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxEvidenceTextCharacters));
         if (PackageManifestOptions is null)
             throw new ArgumentNullException(nameof(PackageManifestOptions));
-        if (EditorialMarkers is null || EditorialMarkers.Any(string.IsNullOrWhiteSpace))
-            throw new ArgumentException("EditorialMarkers cannot be null or contain blank values.",
+        if (EditorialMarkers is null)
+            throw new ArgumentNullException(nameof(EditorialMarkers));
+        if (PlaceholderTokens is null)
+            throw new ArgumentNullException(nameof(PlaceholderTokens));
+        if (EditorialMarkers.Count > MaxConfiguredWorkflowMarkers
+            || PlaceholderTokens.Count > MaxConfiguredWorkflowMarkers
+            || EditorialMarkers.Count > MaxConfiguredWorkflowMarkers - PlaceholderTokens.Count)
+            throw new ArgumentException("Configured workflow markers exceed the verification budget.");
+        if (EditorialMarkers.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("EditorialMarkers cannot contain blank values.",
                 nameof(EditorialMarkers));
-        if (PlaceholderTokens is null || PlaceholderTokens.Any(string.IsNullOrEmpty))
-            throw new ArgumentException("PlaceholderTokens cannot be null or contain empty values.",
+        if (PlaceholderTokens.Any(string.IsNullOrEmpty))
+            throw new ArgumentException("PlaceholderTokens cannot contain empty values.",
                 nameof(PlaceholderTokens));
+        long configuredCharacters = 0;
+        bool configuredTextExceeded = false;
+        foreach (var value in EditorialMarkers.Concat(PlaceholderTokens))
+        {
+            if (value.Length > MaxEvidenceTextCharacters - configuredCharacters)
+            {
+                configuredTextExceeded = true;
+                break;
+            }
+            configuredCharacters += value.Length;
+        }
+        if (configuredTextExceeded)
+            throw new ArgumentException("Configured workflow marker text exceeds the verification budget.");
         PackageManifestOptions.Validate();
     }
 }
@@ -400,27 +464,63 @@ public sealed record DeliverableVerificationResult
         Array.Empty<DeliverableArtifactMetadata>();
 
     /// <summary>Compact UTF-8 bytes used whenever the report is hashed or attached as evidence.</summary>
-    public byte[] ToCanonicalUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(this, JsonOptions.Canonical);
+    public byte[] ToCanonicalUtf8Bytes() => JsonSerializer.SerializeToUtf8Bytes(
+        this, JsonOptions.Canonical.DeliverableVerificationResult);
 
     public string ToCanonicalJson() => Encoding.UTF8.GetString(ToCanonicalUtf8Bytes());
 
     public string ToJson(bool indented = true) => JsonSerializer.Serialize(
-        this, indented ? JsonOptions.Indented : JsonOptions.Canonical);
+        this, (indented ? JsonOptions.Indented : JsonOptions.Canonical)
+            .DeliverableVerificationResult);
 
     private static class JsonOptions
     {
-        internal static readonly JsonSerializerOptions Canonical = Create(indented: false);
-        internal static readonly JsonSerializerOptions Indented = Create(indented: true);
+        internal static readonly DeliverableVerificationJsonContext Canonical =
+            Create(indented: false);
+        internal static readonly DeliverableVerificationJsonContext Indented =
+            Create(indented: true);
 
-        private static JsonSerializerOptions Create(bool indented)
+        private static DeliverableVerificationJsonContext Create(bool indented)
         {
             var options = new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = indented,
             };
-            options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
-            return options;
+            // Generic enum converters are trim/AOT-safe. Register them explicitly because the
+            // source-generation switch emits enum member names verbatim, while schema v1's
+            // durable wire vocabulary is camelCase.
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableVerificationMode>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableVerificationDecision>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableCheckStatus>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableFindingCategory>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<VerificationFindingSeverity>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableFindingDisposition>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverablePackageChangeKind>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<SemanticChangeOperation>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<SemanticChangeFamily>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableArtifactRole>(
+                JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliverableArtifactAvailability>(
+                JsonNamingPolicy.CamelCase));
+            return new DeliverableVerificationJsonContext(options);
         }
     }
+}
+
+/// <summary>Trim/AOT-safe metadata for the durable deliverable report wire contract.</summary>
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(DeliverableVerificationResult))]
+internal partial class DeliverableVerificationJsonContext : JsonSerializerContext
+{
 }

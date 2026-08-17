@@ -66,6 +66,7 @@ from .types import (
     DocxDiffRevision,
     DocxDiffSettings,
     DocxSessionSettings,
+    DeliverableVerificationResult,
     EditError,
     EditResult,
     EditSummary,
@@ -114,6 +115,7 @@ __all__ = [
     "ping",
     "convert_docx_to_html",
     "generate_package_manifest",
+    "verify_deliverable",
     "docx_diff_compare",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
@@ -183,6 +185,28 @@ def generate_package_manifest(data: bytes) -> PackageManifest:
     if not isinstance(result, Mapping):
         raise TypeError(f"generate_package_manifest: expected object, got {result!r}")
     return PackageManifest._from_wire(result)
+
+
+def verify_deliverable(
+    data: bytes,
+    baseline: bytes | None = None,
+) -> DeliverableVerificationResult:
+    """Run the default bounded deliverable gate over exact supplied DOCX bytes.
+
+    Malformed, encrypted, and safety-limited packages are represented by typed
+    report findings rather than requiring the bytes to open as an editable session.
+    When provided, ``baseline`` is compared as exact opening-package bytes.
+    """
+    args = {"docxB64": base64.b64encode(data).decode("ascii")}
+    if baseline is not None:
+        args["baselineB64"] = base64.b64encode(baseline).decode("ascii")
+    result = _call(
+        "verify_deliverable",
+        args,
+    )
+    if not isinstance(result, Mapping):
+        raise TypeError(f"verify_deliverable: expected object, got {result!r}")
+    return DeliverableVerificationResult._from_wire(result)
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +561,17 @@ class DocxSession:
         if not isinstance(result, Mapping):
             raise TypeError(f"get_package_manifest: expected object, got {result!r}")
         return PackageManifest._from_wire(result)
+
+    def verify_deliverable(self) -> DeliverableVerificationResult:
+        """Verify this session's clean-save checkpoint with the default policy.
+
+        Initial package capture is enabled by default; when present, those exact
+        opening bytes are used as the report baseline.
+        """
+        result = self._call("verify_deliverable", {})
+        if not isinstance(result, Mapping):
+            raise TypeError(f"verify_deliverable: expected object, got {result!r}")
+        return DeliverableVerificationResult._from_wire(result)
 
     def register_page_map(
         self, page_map: PageMap, expected_renderer_fingerprint: str | None = None

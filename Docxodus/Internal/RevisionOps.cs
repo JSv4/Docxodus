@@ -1037,7 +1037,8 @@ internal static class RevisionOps
     private static bool IsClaimedDeletionPayload(
         XElement marker, IReadOnlySet<XElement> represented) =>
         (marker.Name == W.delText || marker.Name == W.delInstrText)
-        && marker.Ancestors(W.del).Any(represented.Contains);
+        && (marker.Ancestors(W.del).Any(represented.Contains)
+            || marker.Ancestors(W.moveFrom).Any(represented.Contains));
 
     /// <summary>
     /// Word records one cell-structure action as live cell marks plus associated table,

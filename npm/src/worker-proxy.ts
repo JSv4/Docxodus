@@ -24,6 +24,7 @@ import type {
   WorkerResponse,
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
+  WorkerVerifyDeliverableResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetSemanticChangesResponse,
@@ -34,6 +35,7 @@ import type {
   WorkerSessionOpenResponse,
   WorkerSessionGetPackageManifestResponse,
   WorkerSessionGetSemanticChangesResponse,
+  WorkerSessionVerifyDeliverableResponse,
   WorkerSessionEditResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
@@ -49,6 +51,7 @@ import type {
   CharSpan,
   EditResult,
   PackageManifest,
+  DeliverableVerificationResult,
   SemanticChangeSet,
 } from "./types.js";
 
@@ -102,6 +105,9 @@ function deriveWasmBasePath(): string {
 export interface WorkerDocxSession {
   /** Generate a deterministic manifest of the session's current logical checkpoint. */
   getPackageManifest(): Promise<PackageManifest>;
+
+  /** Run the default deliverable gate over the session's clean-save checkpoint. */
+  verifyDeliverable(): Promise<DeliverableVerificationResult>;
 
   /** Compare the current logical checkpoint with the exact opening package. */
   getSemanticChanges(): Promise<SemanticChangeSet>;
@@ -166,6 +172,12 @@ export interface WorkerDocxSession {
 export interface WorkerDocxodus {
   /** Generate a deterministic, non-mutating verification manifest. */
   generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+
+  /** Run the default bounded deliverable gate, optionally against an exact baseline. */
+  verifyDeliverable(
+    document: File | Uint8Array,
+    baseline?: File | Uint8Array
+  ): Promise<DeliverableVerificationResult>;
 
   /** Compare two DOCX packages into the stable, versioned semantic-change schema. */
   getSemanticChanges(
@@ -429,6 +441,29 @@ export async function createWorkerDocxodus(
       return response.manifest!;
     },
 
+    async verifyDeliverable(
+      document: File | Uint8Array,
+      baseline?: File | Uint8Array
+    ): Promise<DeliverableVerificationResult> {
+      const bytes = await toBytes(document);
+      const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
+      const transfer: Transferable[] = [bytes.buffer];
+      if (baselineBytes !== undefined) transfer.push(baselineBytes.buffer);
+      const response = await sendRequest<WorkerVerifyDeliverableResponse>(
+        {
+          id: generateId(),
+          type: "verifyDeliverable",
+          documentBytes: bytes,
+          baselineBytes,
+        },
+        transfer
+      );
+      if (!response.success || !response.verification) {
+        throw new Error(response.error ?? "verifyDeliverable failed");
+      }
+      return response.verification;
+    },
+
     async getSemanticChanges(
       left: File | Uint8Array,
       right: File | Uint8Array,
@@ -609,6 +644,18 @@ export async function createWorkerDocxodus(
             throw new Error(res.error ?? "sessionGetSemanticChanges failed");
           }
           return res.semanticChanges;
+        },
+
+        async verifyDeliverable(): Promise<DeliverableVerificationResult> {
+          const res = await sendRequest<WorkerSessionVerifyDeliverableResponse>({
+            id: generateId(),
+            type: "sessionVerifyDeliverable",
+            handle,
+          });
+          if (!res.success || !res.verification) {
+            throw new Error(res.error ?? "sessionVerifyDeliverable failed");
+          }
+          return res.verification;
         },
 
         async addAnnotation(

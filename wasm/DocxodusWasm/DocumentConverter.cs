@@ -32,6 +32,44 @@ public partial class DocumentConverter
         VerificationOps.GeneratePackageManifest(docxBytes);
 
     /// <summary>
+    /// Run the default bounded deliverable-verification policy on exact supplied DOCX bytes.
+    /// The returned compact JSON is the canonical schema-v1 report; malformed and safety-limited
+    /// packages are represented by structured findings rather than editable-session errors.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliverable(byte[] docxBytes)
+    {
+        ValidateVerificationPackageBudget(docxBytes);
+        return VerificationOps.VerifyDeliverable(docxBytes);
+    }
+
+    /// <summary>
+    /// Run the default bounded deliverable-verification policy and classify exact delivered DOCX
+    /// bytes relative to exact baseline DOCX bytes.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliverableWithBaseline(
+        byte[] baselineBytes,
+        byte[] docxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(baselineBytes);
+        ValidateVerificationPackageBudget(docxBytes, baselineBytes);
+        return VerificationOps.VerifyDeliverable(baselineBytes, docxBytes);
+    }
+
+    private static void ValidateVerificationPackageBudget(
+        byte[] docxBytes,
+        byte[]? baselineBytes = null)
+    {
+        ArgumentNullException.ThrowIfNull(docxBytes);
+        long baselineLength = baselineBytes?.LongLength ?? 0;
+        if (docxBytes.LongLength > MaxDocumentSizeBytes
+            || baselineLength > MaxDocumentSizeBytes - docxBytes.LongLength)
+            throw new ArgumentException(
+                $"Aggregate document bytes exceed the {MaxDocumentSizeBytes / (1024 * 1024)}MB WASM limit.");
+    }
+
+    /// <summary>
     /// Validates input document bytes.
     /// </summary>
     /// <param name="docxBytes">The document bytes to validate</param>

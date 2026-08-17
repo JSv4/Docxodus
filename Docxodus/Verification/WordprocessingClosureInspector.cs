@@ -18,6 +18,9 @@ internal static class WordprocessingClosureInspector
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWord = "http://purl.oclc.org/ooxml/wordprocessingml/main";
     private const string Word2010 = "http://schemas.microsoft.com/office/word/2010/wordml";
+    private const string TransitionalMath =
+        "http://schemas.openxmlformats.org/officeDocument/2006/math";
+    private const string StrictMath = "http://purl.oclc.org/ooxml/officeDocument/math";
     internal static DeliverableCheckResult Inspect(
         PackageManifestInspection inspection,
         WordprocessingInspectionGraph graph,
@@ -33,7 +36,7 @@ internal static class WordprocessingClosureInspector
             // Count while traversing, before any detector can accidentally turn a large retained
             // XML tree into unbounded repeated work.
             if (!sink.Stopped)
-                foreach (var part in storyParts.Concat(graph.NumberingParts))
+                foreach (var part in storyParts.Concat(graph.NumberingParts).Concat(graph.StyleParts))
                 foreach (var _ in part.Xml!.Root!.DescendantsAndSelf())
                     if (!budget.Node() || !budget.Step()) break;
 
@@ -49,7 +52,8 @@ internal static class WordprocessingClosureInspector
                     "endnote", "endnoteReference", "/word/endnotes.xml");
             if (!sink.Stopped) InspectMoves(storyParts, sink);
             if (!sink.Stopped) InspectContentControls(graph, storyParts, sink);
-            if (!sink.Stopped) InspectNumbering(storyParts, graph.NumberingParts, sink);
+            if (!sink.Stopped)
+                InspectNumbering(storyParts, graph.NumberingParts, graph.StyleParts, sink);
             if (!sink.Stopped) InspectFields(storyParts, sink);
             if (!sink.Stopped) InspectStaticRenderRisks(graph, storyParts, sink);
         }
@@ -177,7 +181,7 @@ internal static class WordprocessingClosureInspector
                          IsElement(element, "bookmarkStart") || IsElement(element, "bookmarkEnd")))
             {
                 position++;
-                var id = WordAttribute(marker, "id");
+                var id = NormalizeDecimalId(WordAttribute(marker, "id"));
                 if (string.IsNullOrEmpty(id))
                 {
                     AddElementFinding(sink, part, marker,
@@ -197,7 +201,6 @@ internal static class WordprocessingClosureInspector
             foreach (var startOccurrence in startsById.Values.SelectMany(value => value))
             {
                 var start = startOccurrence.Element;
-                var id = WordAttribute(start, "id");
                 var name = WordAttribute(start, "name");
                 if (!string.IsNullOrEmpty(name))
                 {
@@ -223,8 +226,6 @@ internal static class WordprocessingClosureInspector
                         $"Bookmark end id '{id}' occurs before its start.",
                         "Place each bookmark end after its matching start in the same story part.", id);
             }
-            InspectRangeNesting(part, "bookmarkStart", "bookmarkEnd",
-                "structure.bookmark_nesting_invalid", sink);
         }
 
         foreach (var duplicate in names.Where(pair => pair.Value.Count > 1))
@@ -273,14 +274,16 @@ internal static class WordprocessingClosureInspector
                 VerificationFindingSeverity.Error, "A comment marker has no w:id.",
                 "Assign the marker its comment definition id or remove it.", null);
         var definitions = commentParts.SelectMany(part => DirectChildren(part, "comment")
-                .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
+                .Select(element => (Part: part, Element: element,
+                    Id: NormalizeDecimalId(WordAttribute(element, "id")))))
             .Where(item => item.Id is not null)
             .ToArray();
         var references = storyParts.SelectMany(part =>
                 Descendants(part, "commentReference")
                     .Concat(Descendants(part, "commentRangeStart"))
                     .Concat(Descendants(part, "commentRangeEnd"))
-                    .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
+                    .Select(element => (Part: part, Element: element,
+                        Id: NormalizeDecimalId(WordAttribute(element, "id")))))
             .Where(item => item.Id is not null)
             .ToArray();
 
@@ -306,9 +309,7 @@ internal static class WordprocessingClosureInspector
                 $"Comment definition id '{definition.Id}' is not referenced by document markup.",
                 "Remove the orphan definition or restore its range/reference markers.", definition.Id);
 
-        foreach (var group in references.GroupBy(
-                     item => (item.Part.Uri, Id: item.Id!),
-                     StringTupleComparer.Instance))
+        foreach (var group in references.GroupBy(item => item.Id!, StringComparer.Ordinal))
         {
             int starts = group.Count(item => IsElement(item.Element, "commentRangeStart"));
             int ends = group.Count(item => IsElement(item.Element, "commentRangeEnd"));
@@ -317,23 +318,23 @@ internal static class WordprocessingClosureInspector
             {
                 var start = group.Single(item => IsElement(item.Element, "commentRangeStart"));
                 var end = group.Single(item => IsElement(item.Element, "commentRangeEnd"));
-                if (XNode.CompareDocumentOrder(start.Element, end.Element) >= 0)
+                if (!string.Equals(start.Part.Uri, end.Part.Uri, StringComparison.OrdinalIgnoreCase)
+                    || XNode.CompareDocumentOrder(start.Element, end.Element) >= 0)
                     AddElementFinding(sink, start.Part, start.Element,
                         "structure.comment_range_order_invalid", VerificationFindingSeverity.Error,
-                        $"Comment range end id '{group.Key.Id}' does not follow its start.",
-                        "Place the range end after its matching start within the story.", group.Key.Id);
+                        $"Comment range end id '{group.Key}' does not follow its start in the same story.",
+                        "Place the range end after its matching start within one story.", group.Key);
             }
-            if (starts == ends && starts <= 1 && marks > 0) continue;
+            bool sameStory = group.Select(item => item.Part.Uri)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+            if (starts == ends && starts <= 1 && marks == 1 && sameStory) continue;
             var item = group.First();
             AddElementFinding(sink, item.Part, item.Element, "structure.comment_markers_invalid",
                 VerificationFindingSeverity.Error,
-                $"Comment id '{group.Key.Id}' in '{group.Key.Uri}' has {starts} range start(s), {ends} range end(s), and {marks} reference mark(s).",
-                "Pair comment range markers within each story part and retain at least one comment reference mark.",
-                group.Key.Id);
+                $"Comment id '{group.Key}' has {starts} range start(s), {ends} range end(s), and {marks} reference mark(s) across {group.Select(value => value.Part.Uri).Distinct(StringComparer.OrdinalIgnoreCase).Count()} story part(s).",
+                "Keep the optional range pair and exactly one comment reference mark together in one story part.",
+                group.Key);
         }
-        foreach (var part in storyParts)
-            InspectRangeNesting(part, "commentRangeStart", "commentRangeEnd",
-                "structure.comment_range_nesting_invalid", sink);
     }
 
     private static void InspectNotes(
@@ -360,13 +361,15 @@ internal static class WordprocessingClosureInspector
                 $"A {definitionName} reference has no w:id.",
                 $"Assign the reference its {definitionName} id or remove it.", null);
         var definitions = definitionParts.SelectMany(part => DirectChildren(part, definitionName)
-                .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"),
+                .Select(element => (Part: part, Element: element,
+                    Id: NormalizeDecimalId(WordAttribute(element, "id")),
                     Type: WordAttribute(element, "type"))))
             .Where(item => item.Type is not ("separator" or "continuationSeparator"))
             .Where(item => item.Id is not null)
             .ToArray();
         var references = storyParts.SelectMany(part => Descendants(part, referenceName)
-                .Select(element => (Part: part, Element: element, Id: WordAttribute(element, "id"))))
+                .Select(element => (Part: part, Element: element,
+                    Id: NormalizeDecimalId(WordAttribute(element, "id")))))
             .Where(item => item.Id is not null)
             .ToArray();
 
@@ -390,6 +393,14 @@ internal static class WordprocessingClosureInspector
                 $"structure.{definitionName}_unreachable", VerificationFindingSeverity.Warning,
                 $"{Title(definitionName)} definition id '{definition.Id}' is not referenced.",
                 $"Remove the orphan {definitionName} or restore its reference.", definition.Id);
+        foreach (var duplicate in references.GroupBy(item => item.Id!, StringComparer.Ordinal)
+                     .Where(group => group.Count() > 1))
+        foreach (var reference in duplicate)
+            AddElementFinding(sink, reference.Part, reference.Element,
+                $"structure.{definitionName}_reference_duplicate", VerificationFindingSeverity.Error,
+                $"{Title(definitionName)} id '{duplicate.Key}' is referenced {duplicate.Count()} times.",
+                $"Retain one reference for each {definitionName} definition and create distinct definitions for distinct notes.",
+                duplicate.Key);
     }
 
     private static void InspectMoves(
@@ -412,51 +423,70 @@ internal static class WordprocessingClosureInspector
                 AddElementFinding(sink, part, item.Element, "structure.move_id_missing",
                     VerificationFindingSeverity.Error,
                     "Tracked move markup has no w:id.",
-                    "Assign the same non-empty move id to the paired move-from and move-to markup.", null);
+                    "Assign each native revision/range marker a non-empty numeric w:id.", null);
 
-            foreach (var id in all.Select(item => item.Id)
-                         .Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal))
+            ValidateMoveRange(part, rangeFromStarts, rangeFromEnds, "source", sink);
+            ValidateMoveRange(part, rangeToStarts, rangeToEnds, "destination", sink);
+
+            var namedStarts = rangeFromStarts.Select(item => (Item: item, Side: "source"))
+                .Concat(rangeToStarts.Select(item => (Item: item, Side: "destination")))
+                .ToArray();
+            foreach (var item in namedStarts.Where(item =>
+                         string.IsNullOrEmpty(WordAttribute(item.Item.Element, "name"))))
+                AddElementFinding(sink, part, item.Item.Element, "structure.move_name_missing",
+                    VerificationFindingSeverity.Error,
+                    $"A tracked move {item.Side} range has no w:name correlation key.",
+                    "Assign matching non-empty w:name values to the move source and destination range starts.",
+                    item.Item.Id);
+            foreach (var group in namedStarts
+                         .Where(item => !string.IsNullOrEmpty(WordAttribute(item.Item.Element, "name")))
+                         .GroupBy(item => WordAttribute(item.Item.Element, "name")!, StringComparer.Ordinal))
             {
-                int wrapperFromCount = wrapperFrom.Count(item => item.Id == id);
-                int wrapperToCount = wrapperTo.Count(item => item.Id == id);
-                var element = all.First(item => item.Id == id).Element;
-                if (wrapperFromCount + wrapperToCount > 0
-                    && (wrapperFromCount != 1 || wrapperToCount != 1))
-                    AddElementFinding(sink, part, element, "structure.move_pair_invalid",
-                        VerificationFindingSeverity.Error,
-                        $"Tracked move id '{id}' has {wrapperFromCount} source wrapper(s) and {wrapperToCount} destination wrapper(s).",
-                        "Repair or remove the incomplete tracked move wrapper pair.", id);
-
-                int fromStartCount = rangeFromStarts.Count(item => item.Id == id);
-                int fromEndCount = rangeFromEnds.Count(item => item.Id == id);
-                int toStartCount = rangeToStarts.Count(item => item.Id == id);
-                int toEndCount = rangeToEnds.Count(item => item.Id == id);
-                bool hasRangeMarker = fromStartCount + fromEndCount + toStartCount + toEndCount > 0;
-                if (hasRangeMarker && (fromStartCount != 1 || fromEndCount != 1
-                                       || toStartCount != 1 || toEndCount != 1))
-                    AddElementFinding(sink, part, element, "structure.move_range_pair_invalid",
-                        VerificationFindingSeverity.Error,
-                        $"Tracked move range id '{id}' has source start/end counts {fromStartCount}/{fromEndCount} and destination start/end counts {toStartCount}/{toEndCount}.",
-                        "Pair every move range start/end and retain matching source and destination ranges.", id);
-                else if (hasRangeMarker
-                         && (XNode.CompareDocumentOrder(
-                                 rangeFromStarts.Single(item => item.Id == id).Element,
-                                 rangeFromEnds.Single(item => item.Id == id).Element) >= 0
-                             || XNode.CompareDocumentOrder(
-                                 rangeToStarts.Single(item => item.Id == id).Element,
-                                 rangeToEnds.Single(item => item.Id == id).Element) >= 0))
-                    AddElementFinding(sink, part, element, "structure.move_range_order_invalid",
-                        VerificationFindingSeverity.Error,
-                        $"Tracked move range id '{id}' has an end before its start.",
-                        "Place each move range end after its matching start.", id);
+                int sources = group.Count(item => item.Side == "source");
+                int destinations = group.Count(item => item.Side == "destination");
+                if (sources == 1 && destinations == 1) continue;
+                var item = group.First();
+                AddElementFinding(sink, part, item.Item.Element, "structure.move_pair_invalid",
+                    VerificationFindingSeverity.Error,
+                    $"Tracked move name '{group.Key}' has {sources} source range(s) and {destinations} destination range(s).",
+                    "Retain exactly one source and one destination range start for each native move name.",
+                    group.Key);
             }
+        }
+    }
+
+    private static void ValidateMoveRange(
+        PackageManifestInspectionEntry part,
+        IReadOnlyList<(XElement Element, string? Id)> starts,
+        IReadOnlyList<(XElement Element, string? Id)> ends,
+        string side,
+        FindingSink sink)
+    {
+        foreach (var id in starts.Select(item => item.Id).Concat(ends.Select(item => item.Id))
+                     .Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal))
+        {
+            var matchingStarts = starts.Where(item => item.Id == id).ToArray();
+            var matchingEnds = ends.Where(item => item.Id == id).ToArray();
+            var element = matchingStarts.FirstOrDefault().Element ?? matchingEnds[0].Element;
+            if (matchingStarts.Length != 1 || matchingEnds.Length != 1)
+                AddElementFinding(sink, part, element, "structure.move_range_pair_invalid",
+                    VerificationFindingSeverity.Error,
+                    $"Tracked move {side} range id '{id}' has {matchingStarts.Length} start(s) and {matchingEnds.Length} end(s).",
+                    "Use exactly one start and one end with the same id for each move-side range.", id);
+            else if (XNode.CompareDocumentOrder(
+                         matchingStarts[0].Element, matchingEnds[0].Element) >= 0)
+                AddElementFinding(sink, part, element, "structure.move_range_order_invalid",
+                    VerificationFindingSeverity.Error,
+                    $"Tracked move {side} range id '{id}' ends before its start.",
+                    "Place each move range end after its matching start.", id);
         }
     }
 
     private static (XElement Element, string? Id)[] MoveMarkers(
         PackageManifestInspectionEntry part,
         string localName) => Descendants(part, localName)
-        .Select(element => (Element: element, Id: WordAttribute(element, "id")))
+        .Select(element => (Element: element,
+            Id: NormalizeDecimalId(WordAttribute(element, "id"))))
         .ToArray();
 
     private static void InspectContentControls(
@@ -479,9 +509,10 @@ internal static class WordprocessingClosureInspector
                 $"Custom XML store item id '{item.Id}' is declared by multiple properties parts.",
                 "Assign each custom XML item one unique datastore item id.", duplicate.Key);
 
+        var ids = new Dictionary<string, List<(PackageManifestInspectionEntry Part, XElement Element)>>(
+            StringComparer.Ordinal);
         foreach (var part in parts)
         {
-            var ids = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var sdt in Descendants(part, "sdt"))
             {
                 var properties = sdt.Elements().FirstOrDefault(element => IsElement(element, "sdtPr"));
@@ -496,7 +527,14 @@ internal static class WordprocessingClosureInspector
                 var id = properties.Elements().FirstOrDefault(element => IsElement(element, "id")) is { } idElement
                     ? WordAttribute(idElement, "val")
                     : null;
-                if (!string.IsNullOrEmpty(id)) ids[id] = ids.GetValueOrDefault(id) + 1;
+                if (!string.IsNullOrEmpty(id))
+                {
+                    var normalizedId = NormalizeDecimalId(id)!;
+                    if (!ids.TryGetValue(normalizedId, out var controls))
+                        ids.Add(normalizedId,
+                            controls = new List<(PackageManifestInspectionEntry, XElement)>());
+                    controls.Add((part, sdt));
+                }
 
                 if (properties.Elements().Any(element => IsElement(element, "showingPlcHdr")))
                     AddElementFinding(sink, part, sdt, "workflow.content_control_placeholder",
@@ -507,7 +545,16 @@ internal static class WordprocessingClosureInspector
                 foreach (var binding in properties.Elements().Where(element => IsElement(element, "dataBinding")))
                 {
                     var storeItemId = WordAttribute(binding, "storeItemID");
-                    if (string.IsNullOrEmpty(storeItemId)) continue;
+                    if (string.IsNullOrEmpty(storeItemId))
+                    {
+                        AddElementFinding(sink, part, binding,
+                            "structure.content_control_store_item_id_missing",
+                            VerificationFindingSeverity.Error,
+                            "A content-control data binding has no w:storeItemID.",
+                            "Assign the binding an existing custom XML store item id or remove the invalid binding.",
+                            id);
+                        continue;
+                    }
                     var normalized = NormalizeGuid(storeItemId);
                     if (!storeItems.TryGetValue(normalized, out var matches))
                         AddElementFinding(sink, part, binding,
@@ -524,22 +571,19 @@ internal static class WordprocessingClosureInspector
                 }
             }
 
-            foreach (var duplicate in ids.Where(pair => pair.Value > 1))
-            {
-                var element = Descendants(part, "sdt").First(sdt =>
-                    sdt.Descendants().Any(candidate => IsElement(candidate, "id")
-                        && WordAttribute(candidate, "val") == duplicate.Key));
-                AddElementFinding(sink, part, element, "structure.content_control_id_duplicate",
-                    VerificationFindingSeverity.Error,
-                    $"Content-control id '{duplicate.Key}' occurs {duplicate.Value} times in this part.",
-                    "Assign each content control a unique native w:id.", duplicate.Key);
-            }
         }
+        foreach (var duplicate in ids.Where(pair => pair.Value.Count > 1))
+        foreach (var control in duplicate.Value)
+            AddElementFinding(sink, control.Part, control.Element,
+                "structure.content_control_id_duplicate", VerificationFindingSeverity.Error,
+                $"Content-control id '{duplicate.Key}' occurs {duplicate.Value.Count} times across document stories.",
+                "Assign each content control a document-wide unique native w:id.", duplicate.Key);
     }
 
     private static void InspectNumbering(
         IReadOnlyList<PackageManifestInspectionEntry> storyParts,
         IReadOnlyList<PackageManifestInspectionEntry> numberingParts,
+        IReadOnlyList<PackageManifestInspectionEntry> styleParts,
         FindingSink sink)
     {
         var numberingPart = numberingParts.FirstOrDefault();
@@ -553,17 +597,19 @@ internal static class WordprocessingClosureInspector
             ? new Dictionary<string, (string? AbstractId, HashSet<string> OverrideLevels)>(StringComparer.Ordinal)
             : numberElements
                 .Where(element => WordAttribute(element, "numId") is not null)
-                .GroupBy(element => WordAttribute(element, "numId")!, StringComparer.Ordinal)
+                .GroupBy(element => NormalizeDecimalId(WordAttribute(element, "numId"))!,
+                    StringComparer.Ordinal)
                 .ToDictionary(group => group.Key,
                     group =>
                     {
                         var first = group.First();
                         return (
-                            AbstractId: WordAttribute(first.Elements().FirstOrDefault(element =>
-                                IsElement(element, "abstractNumId")), "val"),
+                            AbstractId: NormalizeDecimalId(WordAttribute(
+                                first.Elements().FirstOrDefault(element =>
+                                    IsElement(element, "abstractNumId")), "val")),
                             OverrideLevels: first.Elements().Where(element => IsElement(element, "lvlOverride")
                                     && element.Elements().Any(child => IsElement(child, "lvl")))
-                                .Select(element => WordAttribute(element, "ilvl"))
+                                .Select(element => NormalizeDecimalId(WordAttribute(element, "ilvl")))
                                 .Where(value => value is not null).Select(value => value!)
                                 .ToHashSet(StringComparer.Ordinal));
                     },
@@ -572,10 +618,11 @@ internal static class WordprocessingClosureInspector
             ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
             : abstractElements
                 .Where(element => WordAttribute(element, "abstractNumId") is not null)
-                .GroupBy(element => WordAttribute(element, "abstractNumId")!, StringComparer.Ordinal)
+                .GroupBy(element => NormalizeDecimalId(WordAttribute(element, "abstractNumId"))!,
+                    StringComparer.Ordinal)
                 .ToDictionary(group => group.Key,
                     group => group.First().Elements().Where(element => IsElement(element, "lvl"))
-                        .Select(element => WordAttribute(element, "ilvl"))
+                        .Select(element => NormalizeDecimalId(WordAttribute(element, "ilvl")))
                         .Where(value => value is not null).Select(value => value!)
                         .ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
@@ -607,7 +654,7 @@ internal static class WordprocessingClosureInspector
                 "structure.numbering_abstract_id_duplicate", sink);
             foreach (var numElement in numberElements)
             {
-                var numId = WordAttribute(numElement, "numId");
+                var numId = NormalizeDecimalId(WordAttribute(numElement, "numId"));
                 var overrides = numElement.Elements().Where(element => IsElement(element, "lvlOverride")).ToArray();
                 foreach (var missing in overrides.Where(element =>
                              string.IsNullOrEmpty(WordAttribute(element, "ilvl"))))
@@ -617,7 +664,8 @@ internal static class WordprocessingClosureInspector
                         "Assign the override one unambiguous list level or remove it.", numId);
                 foreach (var duplicate in overrides.Where(element =>
                              WordAttribute(element, "ilvl") is not null)
-                             .GroupBy(element => WordAttribute(element, "ilvl")!, StringComparer.Ordinal)
+                             .GroupBy(element => NormalizeDecimalId(WordAttribute(element, "ilvl"))!,
+                                 StringComparer.Ordinal)
                              .Where(group => group.Count() > 1))
                     foreach (var element in duplicate)
                         AddElementFinding(sink, numberingPart, element,
@@ -630,7 +678,7 @@ internal static class WordprocessingClosureInspector
             {
                 if (num.Value.AbstractId is not null && abstracts.ContainsKey(num.Value.AbstractId)) continue;
                 var element = numberElements
-                    .First(candidate => WordAttribute(candidate, "numId") == num.Key);
+                    .First(candidate => NormalizeDecimalId(WordAttribute(candidate, "numId")) == num.Key);
                 AddElementFinding(sink, numberingPart, element,
                     "structure.numbering_abstract_missing", VerificationFindingSeverity.Error,
                     $"Numbering instance '{num.Key}' references missing abstract numbering '{num.Value.AbstractId ?? "(missing)"}'.",
@@ -638,11 +686,57 @@ internal static class WordprocessingClosureInspector
             }
         }
 
-        foreach (var part in storyParts)
-        foreach (var numPr in Descendants(part, "numPr"))
+        var referencedStyleIds = storyParts.SelectMany(part => Descendants(part, "pStyle"))
+            .Select(element => WordAttribute(element, "val"))
+            .Where(value => !string.IsNullOrEmpty(value))
+            .Select(value => value!)
+            .ToHashSet(StringComparer.Ordinal);
+        var styles = styleParts.SelectMany(part => DirectChildren(part, "style")
+                .Select(element => (Part: part, Element: element,
+                    Id: WordAttribute(element, "styleId"))))
+            .Where(item => !string.IsNullOrEmpty(item.Id))
+            .GroupBy(item => item.Id!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        bool hasImplicitParagraphStyle = storyParts.SelectMany(part => Descendants(part, "p"))
+            .Any(paragraph => !paragraph.Elements().Any(properties => IsElement(properties, "pPr")
+                && properties.Elements().Any(element => IsElement(element, "pStyle"))));
+        if (hasImplicitParagraphStyle)
+            foreach (var style in styles.Values.Where(style =>
+                         WordAttribute(style.Element, "type") == "paragraph"
+                         && WordAttribute(style.Element, "default") is "1" or "true"))
+                referencedStyleIds.Add(style.Id!);
+        var scheduledStyles = new HashSet<string>(referencedStyleIds, StringComparer.Ordinal);
+        var pendingStyles = new Queue<string>(scheduledStyles.OrderBy(value => value, StringComparer.Ordinal));
+        var visitedStyles = new HashSet<string>(StringComparer.Ordinal);
+        var usedStyles = new List<(PackageManifestInspectionEntry Part, XElement Element, string? Id)>();
+        while (pendingStyles.Count > 0)
         {
-            var numId = WordAttribute(numPr.Elements().FirstOrDefault(element => IsElement(element, "numId")), "val");
-            var level = WordAttribute(numPr.Elements().FirstOrDefault(element => IsElement(element, "ilvl")), "val") ?? "0";
+            if (!sink.ChargeStep()) return;
+            var styleId = pendingStyles.Dequeue();
+            if (!visitedStyles.Add(styleId)) continue;
+            if (!styles.TryGetValue(styleId, out var style)) continue;
+            usedStyles.Add(style);
+            var basedOn = style.Element.Elements().FirstOrDefault(element => IsElement(element, "basedOn"));
+            var baseId = WordAttribute(basedOn, "val");
+            if (!string.IsNullOrEmpty(baseId) && scheduledStyles.Add(baseId))
+                pendingStyles.Enqueue(baseId);
+        }
+
+        var numberingOwners = storyParts.SelectMany(part => Descendants(part, "numPr")
+                .Select(element => (Part: part, Element: element)))
+            .Concat(usedStyles.SelectMany(style => style.Element.Elements()
+                .Where(element => IsElement(element, "pPr"))
+                .SelectMany(properties => properties.Descendants()
+                    .Where(element => IsElement(element, "numPr")))
+                .Select(element => (style.Part, Element: element))));
+        foreach (var owner in numberingOwners)
+        {
+            var part = owner.Part;
+            var numPr = owner.Element;
+            var numId = NormalizeDecimalId(WordAttribute(
+                numPr.Elements().FirstOrDefault(element => IsElement(element, "numId")), "val"));
+            var level = NormalizeDecimalId(WordAttribute(
+                numPr.Elements().FirstOrDefault(element => IsElement(element, "ilvl")), "val")) ?? "0";
             if (string.IsNullOrEmpty(numId) || numId == "0") continue;
             if (!nums.TryGetValue(numId, out var num))
             {
@@ -671,7 +765,7 @@ internal static class WordprocessingClosureInspector
     {
         foreach (var part in parts)
         {
-            var fieldStack = new Stack<bool>();
+            var fieldStack = new Stack<FieldState>();
             foreach (var element in part.Xml!.Descendants())
             {
                 if (IsElement(element, "fldSimple")
@@ -680,11 +774,17 @@ internal static class WordprocessingClosureInspector
                         VerificationFindingSeverity.Error,
                         "A simple field has no instruction.",
                         "Add a valid w:instr instruction or replace the field with ordinary content.", null);
+                if (IsElement(element, "instrText") && fieldStack.Count > 0
+                    && !fieldStack.Peek().Separated && !string.IsNullOrWhiteSpace(element.Value))
+                {
+                    var field = fieldStack.Pop();
+                    fieldStack.Push(field with { HasInstruction = true });
+                }
                 if (!IsElement(element, "fldChar")) continue;
                 switch (WordAttribute(element, "fldCharType"))
                 {
                     case "begin":
-                        fieldStack.Push(false);
+                        fieldStack.Push(new FieldState(element, false, false));
                         break;
                     case "separate" when fieldStack.Count == 0:
                     case "end" when fieldStack.Count == 0:
@@ -693,18 +793,25 @@ internal static class WordprocessingClosureInspector
                             "A field separator/end appears without a matching field begin in this part.",
                             "Repair the complex-field begin/separate/end sequence.", null);
                         break;
-                    case "separate" when fieldStack.Peek():
+                    case "separate" when fieldStack.Peek().Separated:
                         AddElementFinding(sink, part, element, "structure.field_sequence_invalid",
                             VerificationFindingSeverity.Error,
                             "A complex field contains more than one separator at the same nesting level.",
                             "Retain at most one separator between each field begin/end pair.", null);
                         break;
                     case "separate":
-                        fieldStack.Pop();
-                        fieldStack.Push(true);
+                        var separated = fieldStack.Pop();
+                        fieldStack.Push(separated with { Separated = true });
                         break;
                     case "end":
-                        fieldStack.Pop();
+                        var ended = fieldStack.Pop();
+                        if (!ended.HasInstruction)
+                            AddElementFinding(sink, part, ended.Begin,
+                                "structure.field_instruction_missing",
+                                VerificationFindingSeverity.Error,
+                                "A complex field has no instruction text before its separator/end.",
+                                "Add valid w:instrText before the field result or replace the field with ordinary content.",
+                                null);
                         break;
                 }
             }
@@ -723,22 +830,31 @@ internal static class WordprocessingClosureInspector
         IReadOnlyList<PackageManifestInspectionEntry> parts,
         FindingSink sink)
     {
-        var riskyElements = new Dictionary<string, string>(StringComparer.Ordinal)
+        var riskyWordElements = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["altChunk"] = "Alternative-format chunks require renderer-specific conversion.",
             ["object"] = "Embedded OLE objects may not render consistently.",
-            ["oMath"] = "Office Math rendering support varies by renderer.",
-            ["oMathPara"] = "Office Math paragraph rendering support varies by renderer.",
             ["ruby"] = "Ruby annotations may not render consistently.",
             ["ffData"] = "Legacy form fields may not render or remain interactive.",
         };
         foreach (var part in parts)
-        foreach (var pair in riskyElements)
-        foreach (var element in part.Xml!.Descendants().Where(element => element.Name.LocalName == pair.Key))
+        foreach (var pair in riskyWordElements)
+        foreach (var element in part.Xml!.Descendants().Where(element => IsElement(element, pair.Key)))
             AddElementFinding(sink, part, element, "render.unsupported_content",
                 VerificationFindingSeverity.Warning, pair.Value,
                 "Inspect this content in the target renderer and attach its structured render diagnostics.",
                 pair.Key, DeliverableFindingCategory.Render);
+        foreach (var part in parts)
+        foreach (var element in part.Xml!.Descendants().Where(element =>
+                     element.Name.NamespaceName is TransitionalMath or StrictMath
+                     && element.Name.LocalName is "oMath" or "oMathPara"))
+            AddElementFinding(sink, part, element, "render.unsupported_content",
+                VerificationFindingSeverity.Warning,
+                element.Name.LocalName == "oMath"
+                    ? "Office Math rendering support varies by renderer."
+                    : "Office Math paragraph rendering support varies by renderer.",
+                "Inspect this content in the target renderer and attach its structured render diagnostics.",
+                element.Name.LocalName, DeliverableFindingCategory.Render);
 
         foreach (var entry in graph.ReachableEntries.Select(item => item.ManifestEntry).Where(entry =>
                      entry.Uri.EndsWith(".wmf", StringComparison.OrdinalIgnoreCase)
@@ -751,6 +867,8 @@ internal static class WordprocessingClosureInspector
                 new ChangeLocation { EntryUri = entry.Uri }, subject: entry.Uri);
     }
 
+    private sealed record FieldState(XElement Begin, bool Separated, bool HasInstruction);
+
     private static void ReportDuplicateIds(
         PackageManifestInspectionEntry part,
         IEnumerable<XElement> elements,
@@ -760,7 +878,8 @@ internal static class WordprocessingClosureInspector
     {
         foreach (var duplicate in elements
                      .Where(element => WordAttribute(element, attributeName) is not null)
-                     .GroupBy(element => WordAttribute(element, attributeName)!, StringComparer.Ordinal)
+                     .GroupBy(element => NormalizeDecimalId(WordAttribute(element, attributeName))!,
+                         StringComparer.Ordinal)
                      .Where(group => group.Count() > 1))
         foreach (var element in duplicate)
             AddElementFinding(sink, part, element, code, VerificationFindingSeverity.Error,
@@ -768,42 +887,11 @@ internal static class WordprocessingClosureInspector
                 "Assign unique numbering identifiers and update dependent references.", duplicate.Key);
     }
 
-    private static void InspectRangeNesting(
-        PackageManifestInspectionEntry part,
-        string startName,
-        string endName,
-        string code,
-        FindingSink sink)
-    {
-        var open = new Stack<string>();
-        var openIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var marker in part.Xml!.Descendants().Where(element =>
-                     IsElement(element, startName) || IsElement(element, endName)))
-        {
-            var id = WordAttribute(marker, "id");
-            if (string.IsNullOrEmpty(id)) continue;
-            if (IsElement(marker, startName))
-            {
-                if (openIds.Add(id)) open.Push(id);
-                continue;
-            }
-            if (!openIds.Remove(id)) continue;
-            if (open.Count > 0 && open.Peek() == id)
-            {
-                open.Pop();
-                continue;
-            }
-            AddElementFinding(sink, part, marker, code, VerificationFindingSeverity.Error,
-                $"Range id '{id}' crosses another range instead of closing in nested order.",
-                "Repair the start/end ordering so ranges are properly nested.", id);
-            while (open.Count > 0)
-            {
-                var popped = open.Pop();
-                openIds.Remove(popped);
-                if (popped == id) break;
-            }
-        }
-    }
+    private static string? NormalizeDecimalId(string? value) =>
+        value is not null
+        && long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+            ? number.ToString(CultureInfo.InvariantCulture)
+            : value;
 
     private static void AddElementFinding(
         FindingSink sink,
@@ -815,9 +903,8 @@ internal static class WordprocessingClosureInspector
         string remediation,
         string? subject,
         DeliverableFindingCategory category = DeliverableFindingCategory.Structure) =>
-        sink.Add(code, category, severity, message, part.Uri, remediation,
-            new ChangeLocation { EntryUri = part.Uri, PropertyPath = ElementPath(element) },
-            xpath: ElementPath(element), subject: subject);
+        sink.AddElement(code, category, severity, message, part.Uri, remediation,
+            element, subject);
 
     private static IEnumerable<XElement> Descendants(
         PackageManifestInspectionEntry part,
@@ -848,22 +935,15 @@ internal static class WordprocessingClosureInspector
 
     private static string Title(string value) => char.ToUpperInvariant(value[0]) + value[1..];
 
-    private static string ElementPath(XElement element)
-    {
-        var segments = element.AncestorsAndSelf().Reverse().Select(current =>
-        {
-            int position = current.Parent?.Elements(current.Name).TakeWhile(candidate => candidate != current).Count() + 1 ?? 1;
-            return $"{current.Name.LocalName}[{position.ToString(CultureInfo.InvariantCulture)}]";
-        });
-        return "/" + string.Join("/", segments);
-    }
-
     private sealed class FindingSink(
         ICollection<DeliverableFindingObservation> observations,
         int maximumFindings,
         DeliverableInspectionBudget budget)
     {
         private readonly int _maximum = Math.Max(0, maximumFindings);
+        private readonly Dictionary<XElement, int> _siblingPositions = new();
+        private readonly HashSet<XElement> _indexedParents = new();
+        private readonly Dictionary<XElement, string> _paths = new();
         internal bool Truncated { get; private set; } =
             observations.Count >= Math.Max(0, maximumFindings);
         internal string? ForcedDiagnostic { get; private set; }
@@ -874,6 +954,24 @@ internal static class WordprocessingClosureInspector
                 : FindingLimitReached ? "finding limit reached" : null);
 
         internal void ForceUnavailable(string diagnostic) => ForcedDiagnostic = diagnostic;
+
+        internal bool ChargeStep(long count = 1) => budget.Step(count);
+
+        internal void AddElement(
+            string code,
+            DeliverableFindingCategory category,
+            VerificationFindingSeverity severity,
+            string message,
+            string owningPart,
+            string remediation,
+            XElement element,
+            string? subject)
+        {
+            var path = Path(element);
+            Add(code, category, severity, message, owningPart, remediation,
+                new ChangeLocation { EntryUri = owningPart, PropertyPath = path },
+                xpath: path, subject: subject);
+        }
 
         internal void Add(
             string code,
@@ -896,18 +994,33 @@ internal static class WordprocessingClosureInspector
                 code, category, severity, message, owningPart, remediation,
                 location, xpath: xpath, subjectKey: subject));
         }
+
+        private string Path(XElement element)
+        {
+            if (_paths.TryGetValue(element, out var cached)) return cached;
+            var segments = element.AncestorsAndSelf().Reverse().Select(current =>
+                current.Name.LocalName + "["
+                + SiblingPosition(current).ToString(CultureInfo.InvariantCulture) + "]");
+            var path = "/" + string.Join("/", segments);
+            _paths.Add(element, path);
+            return path;
+        }
+
+        private int SiblingPosition(XElement element)
+        {
+            if (element.Parent is not { } parent) return 1;
+            if (_indexedParents.Add(parent))
+            {
+                var counts = new Dictionary<XName, int>();
+                foreach (var child in parent.Elements())
+                {
+                    int position = counts.GetValueOrDefault(child.Name) + 1;
+                    counts[child.Name] = position;
+                    _siblingPositions[child] = position;
+                }
+            }
+            return _siblingPositions[element];
+        }
     }
 
-    private sealed class StringTupleComparer : IEqualityComparer<(string Uri, string Id)>
-    {
-        internal static readonly StringTupleComparer Instance = new();
-
-        public bool Equals((string Uri, string Id) left, (string Uri, string Id) right) =>
-            string.Equals(left.Uri, right.Uri, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(left.Id, right.Id, StringComparison.Ordinal);
-
-        public int GetHashCode((string Uri, string Id) value) => HashCode.Combine(
-            StringComparer.OrdinalIgnoreCase.GetHashCode(value.Uri),
-            StringComparer.Ordinal.GetHashCode(value.Id));
-    }
 }

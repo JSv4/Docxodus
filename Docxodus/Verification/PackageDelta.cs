@@ -30,31 +30,51 @@ internal sealed record PackageDeltaChange
     internal string? AfterValue { get; init; }
 }
 
+/// <summary>A bounded package comparison. Incomplete results never expose a misleading prefix.</summary>
+internal sealed record PackageDeltaResult
+{
+    required internal bool Complete { get; init; }
+    required internal IReadOnlyList<PackageDeltaChange> Changes { get; init; }
+}
+
 /// <summary>
 /// Exact entry/content-type/relationship comparison over manifests produced by the bounded package
 /// inspector. It performs no delivery-policy matching and exposes no public API.
 /// </summary>
 internal static class PackageDelta
 {
-    internal static IReadOnlyList<PackageDeltaChange> Compare(
-        PackageManifest baseline,
-        PackageManifest deliverable)
-    {
-        var changes = new List<PackageDeltaChange>();
-        CompareEntries(baseline, deliverable, changes);
-        CompareRelationships(baseline, deliverable, changes);
-        return changes
-            .OrderBy(change => (int)change.Kind)
-            .ThenBy(change => LocationKey(change.Location), StringComparer.Ordinal)
-            .ThenBy(change => change.BeforeValue, StringComparer.Ordinal)
-            .ThenBy(change => change.AfterValue, StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static void CompareEntries(
+    internal static PackageDeltaResult Compare(
         PackageManifest baseline,
         PackageManifest deliverable,
-        ICollection<PackageDeltaChange> changes)
+        int maximumChanges)
+    {
+        if (maximumChanges <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumChanges));
+        var changes = new List<PackageDeltaChange>();
+        if (!CompareEntries(baseline, deliverable, changes, maximumChanges)
+            || !CompareRelationships(baseline, deliverable, changes, maximumChanges))
+            return new PackageDeltaResult
+            {
+                Complete = false,
+                Changes = Array.Empty<PackageDeltaChange>(),
+            };
+        return new PackageDeltaResult
+        {
+            Complete = true,
+            Changes = changes
+                .OrderBy(change => (int)change.Kind)
+                .ThenBy(change => LocationKey(change.Location), StringComparer.Ordinal)
+                .ThenBy(change => change.BeforeValue, StringComparer.Ordinal)
+                .ThenBy(change => change.AfterValue, StringComparer.Ordinal)
+                .ToArray(),
+        };
+    }
+
+    private static bool CompareEntries(
+        PackageManifest baseline,
+        PackageManifest deliverable,
+        ICollection<PackageDeltaChange> changes,
+        int maximumChanges)
     {
         var before = baseline.Entries.ToDictionary(entry => (entry.Uri, entry.Occurrence));
         var after = deliverable.Entries.ToDictionary(entry => (entry.Uri, entry.Occurrence));
@@ -88,13 +108,16 @@ internal static class PackageDelta
                 BeforeValue = EntryValue(left),
                 AfterValue = EntryValue(right),
             });
+            if (changes.Count > maximumChanges) return false;
         }
+        return true;
     }
 
-    private static void CompareRelationships(
+    private static bool CompareRelationships(
         PackageManifest baseline,
         PackageManifest deliverable,
-        ICollection<PackageDeltaChange> changes)
+        ICollection<PackageDeltaChange> changes,
+        int maximumChanges)
     {
         var before = IndexRelationships(baseline.Relationships);
         var after = IndexRelationships(deliverable.Relationships);
@@ -129,7 +152,9 @@ internal static class PackageDelta
                 BeforeValue = beforeValue,
                 AfterValue = afterValue,
             });
+            if (changes.Count > maximumChanges) return false;
         }
+        return true;
     }
 
     private static Dictionary<(string OwnerUri, string Id, int Occurrence), PackageRelationship>

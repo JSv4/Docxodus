@@ -69,7 +69,8 @@ cites are the final document's.
   `GetSemanticChangesJson()` emits its JSON representation.
 - **Deliverable gate.** `DeliverableVerifier.VerifyDeliverable()` combines bounded package/schema
   validation, cross-part closure, workflow residue, baseline-aware findings, expected deltas, and
-  digest-bound renderer artifacts into one canonical pass/failed report.
+  digest-bound renderer artifacts into one canonical pass/failed report. Default report operations
+  are also available through WASM/npm, Python, and MCP.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
