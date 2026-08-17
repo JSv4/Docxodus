@@ -4,6 +4,7 @@
 #nullable enable
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Docxodus.Verification;
 
@@ -129,6 +130,7 @@ public sealed record DeliveryDocumentIdentity
     required public long DocumentVersion { get; init; }
     required public string PackageKind { get; init; }
     required public string PackageManifestSchema { get; init; }
+    required public string MainDocumentUri { get; init; }
     required public VerificationDigest RawPackageBytesDigest { get; init; }
     public VerificationDigest? OrderedOpcContentDigest { get; init; }
     public VerificationDigest? NormalizedSemanticDigest { get; init; }
@@ -184,6 +186,13 @@ public sealed record DeliveryOperationEvidence
         Array.Empty<DeliveryOperationResultEvidence>();
 }
 
+/// <summary>A privacy-aware diagnostic attached to an owner revision identity.</summary>
+public sealed record DeliveryAuthoredDiagnostic
+{
+    required public string Code { get; init; }
+    required public DeliveryTextEvidence Message { get; init; }
+}
+
 /// <summary>Revision, comment, or annotation evidence copied from MutationBatchResult.</summary>
 public sealed record DeliveryAuthoredChange
 {
@@ -193,9 +202,16 @@ public sealed record DeliveryAuthoredChange
     required public VerificationDigest SourceDigest { get; init; }
     public string? Author { get; init; }
     public string? Date { get; init; }
+    public string? DateUtc { get; init; }
     public string? Type { get; init; }
+    public RevisionFamily? Family { get; init; }
     public string? PartUri { get; init; }
     public string? Scope { get; init; }
+    public string? AnchorId { get; init; }
+    public RevisionResolutionStatus? ResolutionStatus { get; init; }
+    public DeliveryAuthoredDiagnostic? Diagnostic { get; init; }
+    public IReadOnlyList<string> ConstituentIds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> ConstituentKeys { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> AffectedAnchorIds { get; init; } = Array.Empty<string>();
     public DeliveryTextEvidence? Text { get; init; }
     public JsonElement? FullEvidence { get; init; }
@@ -214,6 +230,7 @@ public sealed record DeliveryTransactionEntry
     required public long ResultVersion { get; init; }
     required public DeliveryDocumentIdentity BeforeDocument { get; init; }
     required public DeliveryDocumentIdentity AfterDocument { get; init; }
+    public VerificationDigest? ReportedPackageContentDigest { get; init; }
     public IReadOnlyList<DeliveryOperationEvidence> Operations { get; init; } =
         Array.Empty<DeliveryOperationEvidence>();
     public IReadOnlyList<DeliveryAuthoredChange> AuthoredChanges { get; init; } =
@@ -348,8 +365,25 @@ public sealed record DeliveryChangeReceipt
     public byte[] ToJsonBytes(bool indented = false) =>
         DeliveryChangeReceiptSerializer.Serialize(this, indented);
 
+    public byte[] ToJsonBytes(DeliveryReceiptLimits limits, bool indented = false) =>
+        DeliveryChangeReceiptSerializer.Serialize(this, limits, indented);
+
     public string ToJson(bool indented = false) =>
         System.Text.Encoding.UTF8.GetString(ToJsonBytes(indented));
+
+    public string ToJson(DeliveryReceiptLimits limits, bool indented = false) =>
+        System.Text.Encoding.UTF8.GetString(ToJsonBytes(limits, indented));
+}
+
+/// <summary>Trim/AOT-safe metadata for the durable delivery-receipt wire contract.</summary>
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.Never)]
+[JsonSerializable(typeof(DeliveryChangeReceiptPayload))]
+[JsonSerializable(typeof(DeliveryChangeReceipt))]
+[JsonSerializable(typeof(DeliveryTransactionEntry))]
+internal partial class DeliveryReceiptJsonContext : JsonSerializerContext
+{
 }
 
 /// <summary>A stable validation error raised while composing a receipt.</summary>

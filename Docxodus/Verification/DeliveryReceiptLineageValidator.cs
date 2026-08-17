@@ -11,8 +11,12 @@ internal sealed record DeliveryLineageValidationResult
     public IReadOnlyList<string> Findings { get; init; } = Array.Empty<string>();
     public IReadOnlyList<DeliveryDocumentIdentity> ReachableDocuments { get; init; } =
         Array.Empty<DeliveryDocumentIdentity>();
+    public IReadOnlyDictionary<long, DeliveryDocumentIdentity> ReachableDocumentsByVersion
+        { get; init; } = new Dictionary<long, DeliveryDocumentIdentity>();
     public IReadOnlyList<DeliveryTransactionEntry> StateChangingTransactions { get; init; } =
         Array.Empty<DeliveryTransactionEntry>();
+    public IReadOnlySet<string> AppliedTransactionEntryIds { get; init; } =
+        new HashSet<string>(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -28,7 +32,7 @@ internal static class DeliveryReceiptLineageValidator
         IReadOnlyList<DeliveryLineageEvent> lineage)
     {
         var reachable = new List<DeliveryDocumentIdentity>();
-        var digestByVersion = new Dictionary<long, string>();
+        var identityByVersion = new Dictionary<long, DeliveryDocumentIdentity>();
         var stateChanging = new List<DeliveryTransactionEntry>();
         var applied = new List<DeliveryTransactionEntry>();
         var redo = new List<DeliveryTransactionEntry>();
@@ -38,20 +42,22 @@ internal static class DeliveryReceiptLineageValidator
             IsValid = false,
             Findings = new[] { finding },
             ReachableDocuments = reachable.ToArray(),
+            ReachableDocumentsByVersion = new Dictionary<long, DeliveryDocumentIdentity>(
+                identityByVersion),
             StateChangingTransactions = stateChanging.ToArray(),
+            AppliedTransactionEntryIds = applied
+                .Select(entry => entry.EntryId)
+                .ToHashSet(StringComparer.Ordinal),
         };
 
         bool RegisterReachable(DeliveryDocumentIdentity document)
         {
-            if (digestByVersion.TryGetValue(document.DocumentVersion, out var digest)
-                && !string.Equals(digest, document.RawPackageBytesDigest.Value,
-                    StringComparison.Ordinal))
+            if (identityByVersion.TryGetValue(document.DocumentVersion, out var existing))
             {
-                return false;
+                return DocumentEquals(existing, document);
             }
-            digestByVersion[document.DocumentVersion] = document.RawPackageBytesDigest.Value;
-            if (!reachable.Any(existing => DocumentEquals(existing, document)))
-                reachable.Add(document);
+            identityByVersion.Add(document.DocumentVersion, document);
+            reachable.Add(document);
             return true;
         }
 
@@ -107,6 +113,17 @@ internal static class DeliveryReceiptLineageValidator
                             return Fail("failed_transaction_changed_document");
                         break;
                     case DeliveryTransactionStatus.Prediction:
+                        if (!DocumentEquals(transaction.BeforeDocument, transaction.AfterDocument)
+                            && (SameIdentityExceptVersion(
+                                    transaction.BeforeDocument, transaction.AfterDocument)
+                                || transaction.AfterDocument.DocumentVersion
+                                != transaction.BeforeDocument.DocumentVersion + 1
+                                || !transaction.Operations.Any(operation =>
+                                    operation.ExecutionStatus
+                                        == DeliveryOperationExecutionStatus.Succeeded)))
+                        {
+                            return Fail("invalid_prediction_transition");
+                        }
                         break;
                     default:
                         return Fail("invalid_transaction_status");
@@ -173,7 +190,12 @@ internal static class DeliveryReceiptLineageValidator
         {
             IsValid = true,
             ReachableDocuments = reachable.ToArray(),
+            ReachableDocumentsByVersion = new Dictionary<long, DeliveryDocumentIdentity>(
+                identityByVersion),
             StateChangingTransactions = stateChanging.ToArray(),
+            AppliedTransactionEntryIds = applied
+                .Select(entry => entry.EntryId)
+                .ToHashSet(StringComparer.Ordinal),
         };
     }
 
@@ -181,10 +203,10 @@ internal static class DeliveryReceiptLineageValidator
         DeliveryLineageValidationResult validation,
         long documentVersion,
         VerificationDigest packageDigest) =>
-        validation.ReachableDocuments.Any(document =>
-            document.DocumentVersion == documentVersion
-            && DeliveryReceiptValidation.DigestEquals(
-                document.RawPackageBytesDigest, packageDigest));
+        validation.ReachableDocumentsByVersion.TryGetValue(
+            documentVersion, out var document)
+        && DeliveryReceiptValidation.DigestEquals(
+            document.RawPackageBytesDigest, packageDigest);
 
     public static bool DocumentEquals(
         DeliveryDocumentIdentity left,
@@ -193,6 +215,19 @@ internal static class DeliveryReceiptLineageValidator
         && string.Equals(left.PackageKind, right.PackageKind, StringComparison.Ordinal)
         && string.Equals(left.PackageManifestSchema, right.PackageManifestSchema,
             StringComparison.Ordinal)
+        && string.Equals(left.MainDocumentUri, right.MainDocumentUri, StringComparison.Ordinal)
+        && DeliveryReceiptValidation.DigestEquals(
+            left.RawPackageBytesDigest, right.RawPackageBytesDigest)
+        && OptionalDigestEquals(left.OrderedOpcContentDigest, right.OrderedOpcContentDigest)
+        && OptionalDigestEquals(left.NormalizedSemanticDigest, right.NormalizedSemanticDigest);
+
+    private static bool SameIdentityExceptVersion(
+        DeliveryDocumentIdentity left,
+        DeliveryDocumentIdentity right) =>
+        string.Equals(left.PackageKind, right.PackageKind, StringComparison.Ordinal)
+        && string.Equals(left.PackageManifestSchema, right.PackageManifestSchema,
+            StringComparison.Ordinal)
+        && string.Equals(left.MainDocumentUri, right.MainDocumentUri, StringComparison.Ordinal)
         && DeliveryReceiptValidation.DigestEquals(
             left.RawPackageBytesDigest, right.RawPackageBytesDigest)
         && OptionalDigestEquals(left.OrderedOpcContentDigest, right.OrderedOpcContentDigest)

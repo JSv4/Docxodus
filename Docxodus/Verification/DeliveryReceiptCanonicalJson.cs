@@ -14,29 +14,25 @@ namespace Docxodus.Verification;
 
 internal static class DeliveryReceiptCanonicalJson
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-        Encoder = JavaScriptEncoder.Default,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        MaxDepth = 128,
-        WriteIndented = false,
-        Converters =
-        {
-            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false),
-        },
-    };
+    private static readonly DeliveryReceiptJsonContext SerializerContext =
+        CreateSerializerContext();
 
-    public static JsonSerializerOptions JsonOptions => SerializerOptions;
+    internal static DeliveryReceiptJsonContext JsonContext => SerializerContext;
 
-    public static byte[] SerializeCanonical<T>(T value)
-    {
-        var json = JsonSerializer.SerializeToUtf8Bytes(value, SerializerOptions);
-        return Canonicalize(json);
-    }
+    public static byte[] SerializeCanonical(JsonElement value) =>
+        Canonicalize(Encoding.UTF8.GetBytes(value.GetRawText()));
 
-    public static byte[] SerializeCanonicalBounded<T>(
+    public static byte[] SerializeCanonicalBounded(
+        JsonElement value,
+        DeliveryReceiptLimits limits,
+        int maximumBytes,
+        string limitCode)
+        => CanonicalizeBounded(
+            Encoding.UTF8.GetBytes(value.GetRawText()), limits, maximumBytes, limitCode);
+
+    internal static byte[] SerializeCanonicalBounded<T>(
         T value,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo,
         DeliveryReceiptLimits limits,
         int maximumBytes,
         string limitCode)
@@ -51,11 +47,7 @@ internal static class DeliveryReceiptCanonicalJson
             MaxDepth = limits.MaxJsonDepth,
         }))
         {
-            var options = new JsonSerializerOptions(SerializerOptions)
-            {
-                MaxDepth = limits.MaxJsonDepth,
-            };
-            JsonSerializer.Serialize(writer, value, options);
+            JsonSerializer.Serialize(writer, value, typeInfo);
         }
         var json = stream.ToArray();
         return CanonicalizeBounded(json, limits, maximumBytes, limitCode);
@@ -82,7 +74,10 @@ internal static class DeliveryReceiptCanonicalJson
         string limitCode)
     {
         if (limits is not null)
+        {
             DeliveryReceiptResourceBudget.Bytes(json.Length, maximumBytes, limitCode, "JSON input");
+            ScanBoundedJson(json, limits, limitCode);
+        }
         using var document = JsonDocument.Parse(json.ToArray(), new JsonDocumentOptions
         {
             AllowTrailingCommas = false,
@@ -111,6 +106,109 @@ internal static class DeliveryReceiptCanonicalJson
                 canonical.LongLength, maximumBytes, limitCode, "Canonical JSON");
         }
         return canonical;
+    }
+
+    private static void ScanBoundedJson(
+        ReadOnlySpan<byte> json,
+        DeliveryReceiptLimits limits,
+        string limitCode)
+    {
+        var reader = new Utf8JsonReader(json, new JsonReaderOptions
+        {
+            AllowTrailingCommas = false,
+            CommentHandling = JsonCommentHandling.Disallow,
+            MaxDepth = limits.MaxJsonDepth,
+        });
+        var containers = new List<JsonScanContainer>();
+        long aggregateItems = 0;
+
+        void CountArrayValue()
+        {
+            if (containers.Count == 0 || containers[^1].IsObject)
+                return;
+            CountItem(containers[^1]);
+        }
+
+        void CountItem(JsonScanContainer container)
+        {
+            container.ItemCount++;
+            if (container.ItemCount > limits.MaxCollectionItems)
+            {
+                throw new DeliveryReceiptValidationException(
+                    limitCode, "JSON collection exceeds the per-collection item limit.");
+            }
+            aggregateItems = checked(aggregateItems + 1);
+            if (aggregateItems > limits.MaxCollectionItems)
+            {
+                throw new DeliveryReceiptValidationException(
+                    limitCode, "JSON collections exceed the aggregate item limit.");
+            }
+        }
+
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                    CountArrayValue();
+                    containers.Add(new JsonScanContainer(isObject: true));
+                    break;
+                case JsonTokenType.StartArray:
+                    CountArrayValue();
+                    containers.Add(new JsonScanContainer(isObject: false));
+                    break;
+                case JsonTokenType.EndObject:
+                case JsonTokenType.EndArray:
+                    if (containers.Count == 0)
+                        throw new JsonException("JSON container is unbalanced.");
+                    containers.RemoveAt(containers.Count - 1);
+                    break;
+                case JsonTokenType.PropertyName:
+                {
+                    if (containers.Count == 0 || !containers[^1].IsObject)
+                        throw new JsonException("JSON property is outside an object.");
+                    var container = containers[^1];
+                    CountItem(container);
+                    var name = ReadBoundedJsonString(
+                        ref reader, limits, "JSON property name", limitCode);
+                    if (!container.PropertyNames!.Add(name))
+                        throw new JsonException($"Duplicate JSON property '{name}' is not canonical.");
+                    break;
+                }
+                case JsonTokenType.String:
+                    CountArrayValue();
+                    _ = ReadBoundedJsonString(
+                        ref reader, limits, "JSON string", limitCode);
+                    break;
+                case JsonTokenType.Number:
+                case JsonTokenType.True:
+                case JsonTokenType.False:
+                case JsonTokenType.Null:
+                    CountArrayValue();
+                    break;
+                default:
+                    throw new JsonException($"Unsupported JSON token {reader.TokenType}.");
+            }
+        }
+        if (containers.Count != 0)
+            throw new JsonException("JSON container is unbalanced.");
+    }
+
+    private static string ReadBoundedJsonString(
+        ref Utf8JsonReader reader,
+        DeliveryReceiptLimits limits,
+        string name,
+        string limitCode)
+    {
+        long maximumEncodedLength = checked((long)limits.MaxStringLength * 6);
+        if (reader.ValueSpan.Length > maximumEncodedLength)
+        {
+            throw new DeliveryReceiptValidationException(
+                limitCode, $"{name} exceeds the string-length limit.");
+        }
+        var value = reader.GetString()!;
+        CheckJsonString(limits, value, name, limitCode);
+        return value;
     }
 
     public static JsonElement ParseCanonicalObject(string json, string parameterName)
@@ -214,9 +312,7 @@ internal static class DeliveryReceiptCanonicalJson
                 writer.WriteStringValue(stringValue);
                 break;
             case JsonValueKind.Number:
-                // Numeric spelling is part of v1 for arbitrary operation/evidence extensions.
-                // Core receipt numbers are emitted by System.Text.Json using invariant formatting.
-                writer.WriteRawValue(value.GetRawText(), skipInputValidation: false);
+                WriteCanonicalNumber(writer, value);
                 break;
             case JsonValueKind.True:
                 writer.WriteBooleanValue(true);
@@ -231,6 +327,131 @@ internal static class DeliveryReceiptCanonicalJson
                 throw new JsonException($"Unsupported JSON token {value.ValueKind}.");
         }
 
+    }
+
+    /// <summary>
+    /// Require every known field emitted by the typed v1 model to be present with its canonical
+    /// value while allowing digest-covered future optional object properties.
+    /// </summary>
+    public static bool ContainsCanonicalKnownProjection(
+        JsonElement supplied,
+        JsonElement known)
+    {
+        if (supplied.ValueKind != known.ValueKind)
+            return false;
+        switch (known.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in known.EnumerateObject())
+                {
+                    if (!supplied.TryGetProperty(property.Name, out var suppliedValue)
+                        || !ContainsCanonicalKnownProjection(suppliedValue, property.Value))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            case JsonValueKind.Array:
+            {
+                var suppliedItems = supplied.EnumerateArray().ToArray();
+                var knownItems = known.EnumerateArray().ToArray();
+                return suppliedItems.Length == knownItems.Length
+                    && suppliedItems.Zip(knownItems).All(pair =>
+                        ContainsCanonicalKnownProjection(pair.First, pair.Second));
+            }
+            case JsonValueKind.String:
+                return string.Equals(
+                    supplied.GetString(), known.GetString(), StringComparison.Ordinal);
+            case JsonValueKind.Number:
+                return string.Equals(
+                    supplied.GetRawText(), known.GetRawText(), StringComparison.Ordinal);
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+            case JsonValueKind.Null:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    public static bool HasOnlyKnownProperties(JsonElement supplied, JsonElement known)
+    {
+        if (supplied.ValueKind != known.ValueKind)
+            return false;
+        if (known.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in supplied.EnumerateObject())
+            {
+                if (!known.TryGetProperty(property.Name, out var knownValue)
+                    || !HasOnlyKnownProperties(property.Value, knownValue))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (known.ValueKind == JsonValueKind.Array)
+        {
+            var suppliedItems = supplied.EnumerateArray().ToArray();
+            var knownItems = known.EnumerateArray().ToArray();
+            return suppliedItems.Length == knownItems.Length
+                && suppliedItems.Zip(knownItems).All(pair =>
+                    HasOnlyKnownProperties(pair.First, pair.Second));
+        }
+        return true;
+    }
+
+    private static DeliveryReceiptJsonContext CreateSerializerContext()
+    {
+        var options = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+            Encoder = JavaScriptEncoder.Default,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            MaxDepth = 128,
+            WriteIndented = false,
+        };
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryReceiptPrivacyProfile>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryTransactionStatus>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryOperationExecutionStatus>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryLineageAction>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryChangeDisposition>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryPackageChangeKind>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryArtifactRole>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryArtifactAvailability>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryEvidenceKind>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliverySemanticComparisonScope>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryAuthoredEntityKind>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<DeliveryObjectChangeKind>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<RevisionFamily>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<RevisionResolutionStatus>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<MutationBatchMode>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        options.Converters.Add(new JsonStringEnumConverter<PageMapStory>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        return new DeliveryReceiptJsonContext(options);
+    }
+
+    private static void WriteCanonicalNumber(Utf8JsonWriter writer, JsonElement value)
+    {
+        // V1 deliberately preserves the exact valid JSON numeric token. This avoids lossy
+        // double round-tripping for arbitrary future extension fields and is part of the
+        // hash-addressed wire contract.
+        writer.WriteRawValue(value.GetRawText(), skipInputValidation: false);
     }
 
     private static void AddJsonItems(
@@ -257,17 +478,47 @@ internal static class DeliveryReceiptCanonicalJson
         string limitCode)
     {
         if (limits is not null && text is not null
-            && text.Length > limits.MaxStringLength)
+            && (text.Length > limits.MaxStringLength
+                || Encoding.UTF8.GetByteCount(text) > limits.MaxStringLength))
         {
             throw new DeliveryReceiptValidationException(
                 limitCode, $"{name} exceeds the string-length limit.");
         }
+    }
+
+    private sealed class JsonScanContainer
+    {
+        public JsonScanContainer(bool isObject)
+        {
+            IsObject = isObject;
+            PropertyNames = isObject ? new HashSet<string>(StringComparer.Ordinal) : null;
+        }
+
+        public bool IsObject { get; }
+
+        public HashSet<string>? PropertyNames { get; }
+
+        public int ItemCount { get; set; }
     }
 }
 
 internal static class DeliveryReceiptValidation
 {
     public const string Sha256Algorithm = "SHA-256";
+    public const long MaxPortableInteger = 9_007_199_254_740_991;
+
+    public static void ValidatePortableNonNegativeInteger(
+        long value,
+        string code,
+        string name)
+    {
+        if (value < 0 || value > MaxPortableInteger)
+        {
+            throw new DeliveryReceiptValidationException(
+                code,
+                $"{name} must be between 0 and {Invariant(MaxPortableInteger)} inclusive.");
+        }
+    }
 
     public static void ValidateDigest(VerificationDigest? digest, string name)
     {
@@ -310,6 +561,20 @@ internal static class DeliveryReceiptValidation
         return value;
     }
 
+    public static string RequireOpcMainDocumentUri(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Length > 4096
+            || value[0] != '/'
+            || value.Contains('\\'))
+        {
+            throw new DeliveryReceiptValidationException(
+                "not_wordprocessing_package",
+                $"{name} must be an absolute OPC part URI.");
+        }
+        return value;
+    }
+
     public static string? NormalizeRelativePath(string? path)
     {
         if (path is null)
@@ -347,8 +612,9 @@ public static class DeliveryChangeReceiptSerializer
 {
     public static byte[] SerializePayload(DeliveryChangeReceiptPayload payload)
     {
-        ArgumentNullException.ThrowIfNull(payload);
-        return DeliveryReceiptCanonicalJson.SerializeCanonical(payload);
+        var limits = new DeliveryReceiptLimits().ValidateAndClone();
+        DeliveryReceiptResourceValidator.ValidatePayload(payload, limits);
+        return SerializePayload(payload, limits);
     }
 
     internal static byte[] SerializePayload(
@@ -358,33 +624,67 @@ public static class DeliveryChangeReceiptSerializer
         ArgumentNullException.ThrowIfNull(payload);
         return DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
             payload,
+            DeliveryReceiptCanonicalJson.JsonContext.DeliveryChangeReceiptPayload,
             limits,
             limits.MaxReceiptJsonBytes,
             "receipt_resource_limit");
     }
 
     public static byte[] Serialize(DeliveryChangeReceipt receipt, bool indented = false)
+        => Serialize(receipt, new DeliveryReceiptLimits(), indented);
+
+    public static byte[] Serialize(
+        DeliveryChangeReceipt receipt,
+        DeliveryReceiptLimits limits,
+        bool indented = false)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        var payload = SerializePayload(receipt.Payload);
+        ArgumentNullException.ThrowIfNull(limits);
+        var validatedLimits = limits.ValidateAndClone();
+        DeliveryReceiptResourceValidator.ValidatePayload(receipt.Payload, validatedLimits);
+        var payload = SerializePayload(receipt.Payload, validatedLimits);
         DeliveryReceiptValidation.ValidateDigest(receipt.ReceiptDigest, "receipt digest");
 
         using var payloadDocument = JsonDocument.Parse(payload);
-        var envelope = new Dictionary<string, object?>
+        using var stream = new DeliveryReceiptBoundedMemoryStream(
+            validatedLimits.MaxReceiptJsonBytes,
+            "receipt_resource_limit",
+            "Receipt JSON");
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
-            ["payload"] = payloadDocument.RootElement.Clone(),
-            ["receiptDigest"] = receipt.ReceiptDigest,
-        };
-        var canonical = DeliveryReceiptCanonicalJson.SerializeCanonical(envelope);
+            Encoder = JavaScriptEncoder.Default,
+            Indented = false,
+            MaxDepth = 128,
+        }))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("payload");
+            payloadDocument.RootElement.WriteTo(writer);
+            writer.WriteStartObject("receiptDigest");
+            writer.WriteString("algorithm", receipt.ReceiptDigest.Algorithm);
+            writer.WriteString("value", receipt.ReceiptDigest.Value);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        var canonical = stream.ToArray();
         if (!indented)
             return canonical;
 
         using var canonicalDocument = JsonDocument.Parse(canonical);
-        return JsonSerializer.SerializeToUtf8Bytes(canonicalDocument.RootElement,
-            new JsonSerializerOptions(DeliveryReceiptCanonicalJson.JsonOptions)
-            {
-                WriteIndented = true,
-            });
+        using var indentedStream = new DeliveryReceiptBoundedMemoryStream(
+            validatedLimits.MaxReceiptJsonBytes,
+            "receipt_resource_limit",
+            "Indented receipt JSON");
+        using (var writer = new Utf8JsonWriter(indentedStream, new JsonWriterOptions
+        {
+            Encoder = JavaScriptEncoder.Default,
+            Indented = true,
+            MaxDepth = 128,
+        }))
+        {
+            canonicalDocument.RootElement.WriteTo(writer);
+        }
+        return indentedStream.ToArray();
     }
 
     internal static DeliveryChangeReceipt Create(
@@ -400,6 +700,7 @@ public static class DeliveryChangeReceiptSerializer
         DeliveryReceiptResourceBudget.Bytes(
             DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
                 receipt,
+                DeliveryReceiptCanonicalJson.JsonContext.DeliveryChangeReceipt,
                 limits,
                 limits.MaxReceiptJsonBytes,
                 "receipt_resource_limit").LongLength,

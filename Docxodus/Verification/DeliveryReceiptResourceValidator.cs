@@ -61,6 +61,7 @@ internal static class DeliveryReceiptResourceValidator
             budget.String(transaction.RequestFingerprint, "request fingerprint");
             ValidateDocument(transaction.BeforeDocument, budget);
             ValidateDocument(transaction.AfterDocument, budget);
+            ValidateDigest(transaction.ReportedPackageContentDigest, budget);
             Add(transaction.Operations, budget, "transaction operations");
             foreach (var operation in transaction.Operations)
             {
@@ -94,10 +95,23 @@ internal static class DeliveryReceiptResourceValidator
                 budget.String(change.EntityId, "authored entity id");
                 budget.String(change.Author, "authored author");
                 budget.String(change.Date, "authored date");
+                budget.String(change.DateUtc, "authored UTC date");
                 budget.String(change.Type, "authored type");
                 budget.String(change.PartUri, "authored part URI");
                 budget.String(change.Scope, "authored scope");
+                budget.String(change.AnchorId, "authored primary anchor");
+                if (change.Diagnostic is { } diagnostic)
+                {
+                    budget.String(diagnostic.Code, "authored diagnostic code");
+                    ValidateText(diagnostic.Message, budget);
+                }
                 ValidateDigest(change.SourceDigest, budget);
+                Add(change.ConstituentIds, budget, "authored constituent ids");
+                foreach (var id in change.ConstituentIds)
+                    budget.String(id, "authored constituent id");
+                Add(change.ConstituentKeys, budget, "authored constituent keys");
+                foreach (var key in change.ConstituentKeys)
+                    budget.String(key, "authored constituent key");
                 Add(change.AffectedAnchorIds, budget, "affected anchor ids");
                 foreach (var anchor in change.AffectedAnchorIds)
                     budget.String(anchor, "affected anchor id");
@@ -201,6 +215,7 @@ internal static class DeliveryReceiptResourceValidator
             return;
         budget.String(document.PackageKind, "package kind");
         budget.String(document.PackageManifestSchema, "manifest schema");
+        budget.String(document.MainDocumentUri, "main document URI");
         ValidateDigest(document.RawPackageBytesDigest, budget);
         ValidateDigest(document.OrderedOpcContentDigest, budget);
         ValidateDigest(document.NormalizedSemanticDigest, budget);

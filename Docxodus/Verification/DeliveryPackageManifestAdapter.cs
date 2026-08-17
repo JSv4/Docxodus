@@ -22,8 +22,8 @@ internal static class DeliveryPackageManifestAdapter
         long documentVersion)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        if (documentVersion < 0)
-            throw new ArgumentOutOfRangeException(nameof(documentVersion));
+        DeliveryReceiptValidation.ValidatePortableNonNegativeInteger(
+            documentVersion, "invalid_document_version", "Document version");
         if (!IsSupportedSchema(manifest.Schema) || manifest.SchemaVersion != 1)
         {
             throw new DeliveryReceiptValidationException(
@@ -43,11 +43,20 @@ internal static class DeliveryPackageManifestAdapter
             manifest.NormalizedSemanticDigest, "normalized semantic digest");
         var packageKind = DeliveryReceiptValidation.RequireNonBlank(
             manifest.PackageKind, "package kind", 256);
+        if (!string.Equals(packageKind, "opc", StringComparison.Ordinal))
+        {
+            throw new DeliveryReceiptValidationException(
+                "not_wordprocessing_package",
+                "Delivery document identities require an OPC Word main-document part.");
+        }
+        var mainDocumentUri = DeliveryReceiptValidation.RequireOpcMainDocumentUri(
+            manifest.Facts.MainDocumentUri, "main document URI");
         return new DeliveryDocumentIdentity
         {
             DocumentVersion = documentVersion,
             PackageKind = packageKind,
             PackageManifestSchema = manifest.Schema,
+            MainDocumentUri = mainDocumentUri,
             RawPackageBytesDigest = DeliveryReceiptValidation.CloneDigest(
                 manifest.RawPackageBytesDigest),
             OrderedOpcContentDigest = DeliveryReceiptValidation.CloneOptionalDigest(
@@ -59,11 +68,19 @@ internal static class DeliveryPackageManifestAdapter
 
     public static IReadOnlyList<DeliveryPackageChangeObservation> Compare(
         PackageManifest before,
-        PackageManifest after)
+        PackageManifest after,
+        int maximumChanges)
     {
         ArgumentNullException.ThrowIfNull(before);
         ArgumentNullException.ThrowIfNull(after);
-        return PackageDelta.Compare(before, after).Select(ProjectChange).ToArray();
+        var delta = PackageDelta.Compare(before, after, maximumChanges);
+        if (!delta.Complete)
+        {
+            throw new DeliveryReceiptValidationException(
+                "receipt_resource_limit",
+                "Package comparison exceeds the receipt change-record limit.");
+        }
+        return delta.Changes.Select(ProjectChange).ToArray();
     }
 
     private static DeliveryPackageChangeObservation ProjectChange(PackageDeltaChange change) =>

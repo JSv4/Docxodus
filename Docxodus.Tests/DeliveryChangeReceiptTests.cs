@@ -6,6 +6,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Docxodus.Verification;
 using Xunit;
 
@@ -244,6 +245,20 @@ public class DeliveryChangeReceiptTests
                 ["semantic-transaction-2"] =
                     SemanticChanges(undoBytes, deliveredBytes).ToCanonicalUtf8Bytes(),
             }).IsValid);
+
+        var observed = receipt.Payload.PackageChanges.First();
+        builder.AddAttributionRule(new DeliveryChangeAttributionRule
+        {
+            Kind = observed.Kind,
+            EntryUri = observed.Location.EntryUri,
+            OwnerUri = observed.Location.OwnerUri,
+            RelationshipId = observed.Location.RelationshipId,
+            Disposition = DeliveryChangeDisposition.UserRequested,
+            TransactionEntryId = firstEntryId,
+            RequestedOperationIndex = 0,
+        });
+        Assert.Equal("unapplied_attribution_transaction",
+            Assert.Throws<DeliveryReceiptValidationException>(() => builder.Build()).Code);
     }
 
     [Fact]
@@ -1480,14 +1495,14 @@ public class DeliveryChangeReceiptTests
         builder.AddEvidence(new DeliveryEvidenceReference
         {
             Kind = DeliveryEvidenceKind.ValidationResult,
-            Schema = "https://example.test/validation/v1",
+            Schema = DeliverableVerificationResult.SchemaId,
             Digest = Digest(Encoding.UTF8.GetBytes("validation")),
             Summary = "validation evidence",
         });
         builder.AddEvidence(new DeliveryEvidenceReference
         {
             Kind = DeliveryEvidenceKind.RedlineReversibility,
-            Schema = "https://example.test/reversibility/v1",
+            Schema = RedlineReversibilityProof.SchemaId,
             Digest = Digest(Encoding.UTF8.GetBytes("reversibility")),
             Summary = "reversibility evidence",
         });
@@ -1617,9 +1632,11 @@ public class DeliveryChangeReceiptTests
             });
         Assert.Contains("receipt_resource_limit", objectLimit.Findings);
 
+        using var oversizedJson = JsonDocument.Parse(
+            JsonSerializer.Serialize(new { Value = new string('x', 4_096) }));
         var bounded = Assert.Throws<DeliveryReceiptValidationException>(() =>
             DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
-                new { Value = new string('x', 4_096) },
+                oversizedJson.RootElement,
                 new DeliveryReceiptLimits { MaxReceiptJsonBytes = 128 },
                 128,
                 "receipt_resource_limit"));
@@ -1812,14 +1829,16 @@ public class DeliveryChangeReceiptTests
     public void DCR030_PackageChanges_ProjectTheSharedPackageDeltaExactly()
     {
         var edit = SingleEdit("Shared package delta projection.");
-        var shared = PackageDelta.Compare(edit.BeforeManifest, edit.AfterManifest);
+        var shared = PackageDelta.Compare(
+            edit.BeforeManifest, edit.AfterManifest, int.MaxValue);
         var projected = DeliveryPackageManifestAdapter.Compare(
-            edit.BeforeManifest, edit.AfterManifest);
+            edit.BeforeManifest, edit.AfterManifest, int.MaxValue);
 
-        Assert.Equal(shared.Count, projected.Count);
-        for (int index = 0; index < shared.Count; index++)
+        Assert.True(shared.Complete);
+        Assert.Equal(shared.Changes.Count, projected.Count);
+        for (int index = 0; index < shared.Changes.Count; index++)
         {
-            var expected = shared[index];
+            var expected = shared.Changes[index];
             var actual = projected[index];
             Assert.Equal(expected.Kind switch
             {
@@ -1978,6 +1997,13 @@ public class DeliveryChangeReceiptTests
         Assert.Equal(
             new[] { revision.PartUri, duplicate.PartUri }.OrderBy(value => value),
             duplicateIds.Select(change => change.PartUri));
+        Assert.All(duplicateIds, change =>
+        {
+            Assert.NotNull(change.Family);
+            Assert.NotNull(change.ResolutionStatus);
+            Assert.NotEmpty(change.ConstituentIds);
+            Assert.NotEmpty(change.ConstituentKeys);
+        });
         Assert.True(DeliveryChangeReceiptVerifier.Verify(
             receipt, RequiredArtifactBytes(edit)).IsValid);
     }
@@ -2034,6 +2060,395 @@ public class DeliveryChangeReceiptTests
             ["clean-docx"] = documentBytes,
             ["semantic-source-to-delivered"] = emptySemantic.ToCanonicalUtf8Bytes(),
         }).IsValid);
+    }
+
+    [Fact]
+    public void DCR035_JsonReader_RequiresExactKnownFieldsAndProtectsRedactedExtensions()
+    {
+        const string secret = "DO-NOT-LEAK-UNKNOWN-EXTENSION-458";
+        var edit = SingleEdit("Strict portable JSON.");
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var artifacts = RequiredArtifactBytes(edit);
+
+        JsonObject Payload(DeliveryChangeReceipt value) =>
+            JsonNode.Parse(value.ToJson())!["payload"]!.AsObject();
+
+        var missingSchema = Payload(receipt);
+        Assert.True(missingSchema.Remove("schema"));
+        var missingResult = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(missingSchema), artifacts);
+        Assert.Contains("noncanonical_known_payload", missingResult.Findings);
+
+        var enumCase = Payload(receipt);
+        enumCase["privacyProfile"] = "HashAndSummary";
+        var enumResult = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(enumCase), artifacts);
+        Assert.Contains("noncanonical_known_payload", enumResult.Findings);
+
+        var redactedExtension = Payload(receipt);
+        redactedExtension["secret"] = secret;
+        var redactedResult = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(redactedExtension), artifacts);
+        Assert.Contains("unknown_fields_violate_privacy_profile", redactedResult.Findings);
+
+        var fullBuilder = Builder(edit, DeliveryReceiptPrivacyProfile.FullEvidence);
+        AddTransactionWithSemantic(fullBuilder, edit);
+        var full = fullBuilder.Build();
+        var fullExtension = Payload(full);
+        fullExtension["futureEvidence"] = new JsonObject { ["value"] = secret };
+        var fullResult = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(fullExtension), artifacts);
+        Assert.True(fullResult.IsValid, string.Join(",", fullResult.Findings));
+
+        foreach (var profile in new[]
+                 {
+                     DeliveryReceiptPrivacyProfile.HashOnly,
+                     DeliveryReceiptPrivacyProfile.HashAndSummary,
+                 })
+        {
+            var privacyBuilder = Builder(edit, profile);
+            AddTransactionWithSemantic(privacyBuilder, edit);
+            privacyBuilder.AddArtifact(DeliveryArtifactInput.Unavailable(
+                "private-render", DeliveryArtifactRole.Pdf, "application/pdf", secret));
+            privacyBuilder.AddEvidence(new DeliveryEvidenceReference
+            {
+                Kind = DeliveryEvidenceKind.ValidationResult,
+                Schema = DeliverableVerificationResult.SchemaId,
+                Digest = Digest(Encoding.UTF8.GetBytes("detached evidence")),
+                Summary = secret,
+            });
+            Assert.DoesNotContain(
+                secret, privacyBuilder.Build().ToJson(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void DCR036_FullEvidence_RejectsContradictoryProjectionsAndLogicalDuplicates()
+    {
+        var edit = SingleEdit("Full evidence projection.", tracked: true);
+        var builder = Builder(edit, DeliveryReceiptPrivacyProfile.FullEvidence);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var artifacts = RequiredArtifactBytes(edit);
+        var transaction = Assert.Single(receipt.Payload.Transactions);
+        var authored = transaction.AuthoredChanges.First();
+        var operation = Assert.Single(transaction.Operations);
+        var operationResult = Assert.Single(operation.Results);
+        var objectChange = Assert.Single(operationResult.ObjectChanges);
+
+        var forgedAuthor = Rehash(receipt.Payload with
+        {
+            Transactions = new[]
+            {
+                transaction with
+                {
+                    AuthoredChanges = new[] { authored with { Author = "Mallory" } },
+                },
+            },
+        });
+        var authorResult = DeliveryChangeReceiptVerifier.Verify(forgedAuthor, artifacts);
+        Assert.Contains("authored_evidence_projection_mismatch", authorResult.Findings);
+
+        var forgedObject = objectChange with
+        {
+            Scope = "header1",
+            AnchorId = $"{objectChange.Kind}:header1:{objectChange.Unid}",
+        };
+        var forgedResult = Rehash(receipt.Payload with
+        {
+            Transactions = new[]
+            {
+                transaction with
+                {
+                    Operations = new[]
+                    {
+                        operation with
+                        {
+                            Results = new[]
+                            {
+                                operationResult with
+                                {
+                                    ObjectChanges = new[] { forgedObject },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        var objectResult = DeliveryChangeReceiptVerifier.Verify(forgedResult, artifacts);
+        Assert.Contains("operation_result_projection_mismatch", objectResult.Findings);
+
+        var contradictory = authored with
+        {
+            ChangeKind = authored.ChangeKind == DeliveryObjectChangeKind.Added
+                ? DeliveryObjectChangeKind.Removed
+                : DeliveryObjectChangeKind.Added,
+            SourceDigest = Digest(Encoding.UTF8.GetBytes("contradictory owner bytes")),
+        };
+        var duplicate = Rehash(receipt.Payload with
+        {
+            Transactions = new[]
+            {
+                transaction with
+                {
+                    AuthoredChanges = new[] { authored, contradictory }
+                        .OrderBy(change => change.ChangeKind)
+                        .ToArray(),
+                },
+            },
+        });
+        var duplicateResult = DeliveryChangeReceiptVerifier.Verify(duplicate, artifacts);
+        Assert.Contains("duplicate_authored_change", duplicateResult.Findings);
+    }
+
+    [Fact]
+    public void DCR037_Prediction_ProvesOutputWithoutAdvancingLineage()
+    {
+        var edit = SingleEdit("Predicted output.");
+        var predictedResult = edit.Result with { Preview = true };
+        var operation = DeliveryNormalizedOperation.Create(
+            "docx_edit", "replace_text",
+            JsonSerializer.Serialize(new
+            {
+                anchorId = edit.AnchorId,
+                markdown = "Predicted output.",
+            }));
+        var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            predictedResult,
+            edit.BeforeManifest,
+            edit.AfterManifest,
+            new[] { operation });
+        var builder = new DeliveryChangeReceiptBuilder(
+            edit.BeforeManifest, predictedResult.BaseVersion)
+            .SetDeliveredDocument(edit.BeforeManifest, predictedResult.BaseVersion);
+        AddCleanDocx(
+            builder, edit.BeforeBytes, edit.BeforeManifest, predictedResult.BaseVersion);
+        var noDeliveryChange = new SemanticChangeSet(Array.Empty<SemanticChange>());
+        builder.AddSemanticChangeSet(
+            DeliverySemanticChangeSetInput.ForSourceToDelivered(noDeliveryChange));
+        builder.AddTransaction(contribution);
+
+        var receipt = builder.Build();
+        var transaction = Assert.Single(receipt.Payload.Transactions);
+        Assert.Equal(DeliveryTransactionStatus.Prediction, transaction.Status);
+        Assert.Equal(predictedResult.PackageHash,
+            transaction.ReportedPackageContentDigest?.Value);
+        var artifacts = new Dictionary<string, byte[]>
+        {
+            ["clean-docx"] = edit.BeforeBytes,
+            ["semantic-source-to-delivered"] = noDeliveryChange.ToCanonicalUtf8Bytes(),
+        };
+        Assert.True(DeliveryChangeReceiptVerifier.Verify(receipt, artifacts).IsValid);
+
+        var versionOnly = transaction with
+        {
+            ResultVersion = transaction.BaseVersion + 1,
+            AfterDocument = transaction.BeforeDocument with
+            {
+                DocumentVersion = transaction.BaseVersion + 1,
+            },
+        };
+        var forged = Rehash(receipt.Payload with { Transactions = new[] { versionOnly } });
+        var forgedResult = DeliveryChangeReceiptVerifier.Verify(forged, artifacts);
+        Assert.Contains("invalid_prediction_transition", forgedResult.Findings);
+    }
+
+    [Fact]
+    public void DCR038_PortableIntegersFactoriesAndOutputSerialization_AreBounded()
+    {
+        var edit = SingleEdit("Portable integer bounds.");
+        const long firstUnsafeInteger = 9_007_199_254_740_992;
+        var versionError = Assert.Throws<DeliveryReceiptValidationException>(() =>
+            DeliveryDocumentIdentity.FromManifest(edit.BeforeManifest, firstUnsafeInteger));
+        Assert.Equal("invalid_document_version", versionError.Code);
+
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var unsafePayload = receipt.Payload with
+        {
+            SourceDocument = receipt.Payload.SourceDocument with
+            {
+                DocumentVersion = firstUnsafeInteger,
+            },
+        };
+        var unsafeReceipt = Rehash(unsafePayload);
+        var unsafeResult = DeliveryChangeReceiptVerifier.Verify(
+            unsafeReceipt, RequiredArtifactBytes(edit));
+        Assert.Contains("invalid_document_version", unsafeResult.Findings);
+        Assert.Empty(unsafeResult.Artifacts);
+
+        int yielded = 0;
+        var operation = DeliveryNormalizedOperation.Create("docx_edit", "no_op");
+        IEnumerable<DeliveryNormalizedOperation> InfiniteOperations()
+        {
+            while (true)
+            {
+                yielded++;
+                yield return operation;
+            }
+        }
+        var emptyResult = new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = true,
+            RolledBack = false,
+            BaseVersion = 0,
+            ResultVersion = 0,
+        };
+        var enumerableError = Assert.Throws<DeliveryReceiptValidationException>(() =>
+            DeliveryTransactionContribution.FromMutationBatchResult(
+                emptyResult,
+                edit.BeforeManifest,
+                edit.BeforeManifest,
+                InfiniteOperations(),
+                limits: new DeliveryReceiptLimits { MaxOperationsPerTransaction = 3 }));
+        Assert.Equal("receipt_resource_limit", enumerableError.Code);
+        Assert.Equal(4, yielded);
+
+        var compact = receipt.ToJsonBytes();
+        var indented = receipt.ToJsonBytes(indented: true);
+        Assert.True(indented.Length > compact.Length);
+        var outputLimits = new DeliveryReceiptLimits
+        {
+            MaxReceiptJsonBytes = compact.Length + ((indented.Length - compact.Length) / 2),
+        };
+        Assert.Equal(compact, receipt.ToJsonBytes(outputLimits));
+        Assert.Equal("receipt_resource_limit",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                receipt.ToJsonBytes(outputLimits, indented: true)).Code);
+    }
+
+    [Fact]
+    public void DCR039_CanonicalJson_HasPortableEscapingOrderingAndTextCounts()
+    {
+        var escaped = DeliveryReceiptCanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(
+            "{\"\uE000\":\"é\",\"😀\":\"<&>\"}"));
+        Assert.Equal(
+            "{\"\\uD83D\\uDE00\":\"\\u003C\\u0026\\u003E\"," +
+            "\"\\uE000\":\"\\u00E9\"}",
+            Encoding.UTF8.GetString(escaped));
+
+        var exactNumbers = DeliveryReceiptCanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(
+            "{\"y\":1e+02,\"x\":9007199254740993.123456789}"));
+        Assert.Equal(
+            "{\"x\":9007199254740993.123456789,\"y\":1e+02}",
+            Encoding.UTF8.GetString(exactNumbers));
+
+        var dense = Encoding.UTF8.GetBytes(
+            "[" + string.Join(',', Enumerable.Repeat("0", 10_000)) + "]");
+        var denseLimits = new DeliveryReceiptLimits
+        {
+            MaxCollectionItems = 8,
+            MaxReceiptJsonBytes = dense.Length + 1,
+        };
+        Assert.Equal("receipt_resource_limit",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                DeliveryReceiptCanonicalJson.CanonicalizeBounded(
+                    dense,
+                    denseLimits,
+                    denseLimits.MaxReceiptJsonBytes,
+                    "receipt_resource_limit")).Code);
+
+        var edit = SingleEdit("UTF-16 evidence count.");
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        builder.AddWarning("😀");
+        var warning = Assert.Single(builder.Build().Payload.Warnings);
+        Assert.Equal(2, warning.CharacterCount);
+    }
+
+    [Fact]
+    public void DCR040_SourceInventoryIsSnapshottedAndMustIdentifyWordprocessingOpc()
+    {
+        var edit = SingleEdit("Immutable source inventory.");
+        var expectedBuilder = Builder(edit);
+        AddTransactionWithSemantic(expectedBuilder, edit);
+        var expected = expectedBuilder.Build();
+
+        var mutableEntries = edit.BeforeManifest.Entries.ToArray();
+        var mutableManifest = edit.BeforeManifest with { Entries = mutableEntries };
+        var snapshotBuilder = new DeliveryChangeReceiptBuilder(
+            mutableManifest, edit.Result.BaseVersion)
+            .SetDeliveredDocument(edit.AfterManifest, edit.Result.ResultVersion);
+        mutableEntries[0] = mutableEntries[0] with { Uri = "/tampered-after-construction.xml" };
+        AddCleanDocx(
+            snapshotBuilder, edit.AfterBytes, edit.AfterManifest, edit.Result.ResultVersion);
+        snapshotBuilder.AddSemanticChangeSet(
+            DeliverySemanticChangeSetInput.ForSourceToDelivered(
+                SemanticChanges(edit.BeforeBytes, edit.AfterBytes)));
+        var entryId = snapshotBuilder.AddTransaction(edit.Contribution);
+        AddTransactionSemantic(
+            snapshotBuilder,
+            entryId,
+            edit.BeforeBytes,
+            edit.AfterBytes,
+            "semantic-source-to-delivered");
+        var snapshot = snapshotBuilder.Build();
+        Assert.Equal(expected.Payload.PackageChanges, snapshot.Payload.PackageChanges);
+
+        Assert.Equal("not_wordprocessing_package",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                DeliveryDocumentIdentity.FromManifest(
+                    edit.BeforeManifest with { PackageKind = "zip" },
+                    edit.Result.BaseVersion)).Code);
+        Assert.Equal("not_wordprocessing_package",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                DeliveryDocumentIdentity.FromManifest(
+                    edit.BeforeManifest with
+                    {
+                        Facts = edit.BeforeManifest.Facts with { MainDocumentUri = null },
+                    },
+                    edit.Result.BaseVersion)).Code);
+        Assert.Equal("not_wordprocessing_package",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                DeliveryDocumentIdentity.FromManifest(
+                    edit.BeforeManifest with
+                    {
+                        Facts = edit.BeforeManifest.Facts with
+                        {
+                            MainDocumentUri = "word/document.xml",
+                        },
+                    },
+                    edit.Result.BaseVersion)).Code);
+    }
+
+    [Fact]
+    public void DCR041_ExternalEvidenceRequiresOwnerSchemaAndExactCanonicalBytes()
+    {
+        var edit = SingleEdit("Exact owner evidence.");
+        var validation = DeliverableVerifier.VerifyDeliverable(
+            edit.BeforeBytes, edit.AfterBytes);
+        var canonical = validation.ToCanonicalUtf8Bytes();
+        var noncanonical = Encoding.UTF8.GetBytes(
+            Encoding.UTF8.GetString(canonical).Insert(1, "\n"));
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        builder.AddArtifact(DeliveryArtifactInput.Available(
+            "validation", DeliveryArtifactRole.ValidationReport,
+            "application/json", noncanonical));
+        builder.AddEvidence(new DeliveryEvidenceReference
+        {
+            Kind = DeliveryEvidenceKind.ValidationResult,
+            Schema = DeliverableVerificationResult.SchemaId,
+            Digest = Digest(noncanonical),
+            ArtifactId = "validation",
+        });
+        Assert.Equal("invalid_evidence_artifact",
+            Assert.Throws<DeliveryReceiptValidationException>(() => builder.Build()).Code);
+
+        var schemaBuilder = Builder(edit);
+        Assert.Equal("evidence_schema_mismatch",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                schemaBuilder.AddEvidence(new DeliveryEvidenceReference
+                {
+                    Kind = DeliveryEvidenceKind.ValidationResult,
+                    Schema = "https://example.invalid/not-the-owner-schema",
+                    Digest = Digest(canonical),
+                })).Code);
     }
 
     private static DeliveryChangeReceipt BuildWithProfile(
@@ -2135,6 +2550,18 @@ public class DeliveryChangeReceiptTests
         Payload = payload,
         ReceiptDigest = Digest(DeliveryChangeReceiptSerializer.SerializePayload(payload)),
     };
+
+    private static byte[] RehashPayloadJson(JsonObject payload)
+    {
+        var canonicalPayload = DeliveryReceiptCanonicalJson.Canonicalize(
+            Encoding.UTF8.GetBytes(payload.ToJsonString()));
+        var digest = Digest(canonicalPayload);
+        var envelope = Encoding.UTF8.GetBytes(
+            $"{{\"payload\":{Encoding.UTF8.GetString(canonicalPayload)}," +
+            $"\"receiptDigest\":{{\"algorithm\":\"{digest.Algorithm}\"," +
+            $"\"value\":\"{digest.Value}\"}}}}");
+        return DeliveryReceiptCanonicalJson.Canonicalize(envelope);
+    }
 
     private static SemanticChangeSet SemanticChanges(byte[] before, byte[] after) =>
         SemanticDiff.Compare(

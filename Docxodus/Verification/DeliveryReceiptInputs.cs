@@ -11,12 +11,16 @@ namespace Docxodus.Verification;
 /// <summary>A caller-normalized document operation paired with one batch step.</summary>
 public sealed class DeliveryNormalizedOperation
 {
-    private DeliveryNormalizedOperation(string tool, string action, JsonElement arguments)
+    private DeliveryNormalizedOperation(
+        string tool,
+        string action,
+        JsonElement arguments,
+        byte[] canonicalArguments)
     {
         Tool = tool;
         Action = action;
         Arguments = arguments;
-        CanonicalArguments = DeliveryReceiptCanonicalJson.SerializeCanonical(arguments);
+        CanonicalArguments = canonicalArguments;
         ArgumentsDigest = DeliveryReceiptCanonicalJson.Digest(CanonicalArguments);
     }
 
@@ -29,18 +33,43 @@ public sealed class DeliveryNormalizedOperation
     public static DeliveryNormalizedOperation Create(
         string tool,
         string action,
-        string argumentsJson = "{}")
+        string argumentsJson = "{}",
+        DeliveryReceiptLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(argumentsJson);
-        if (argumentsJson.Length > new DeliveryReceiptLimits().MaxStringLength)
+        var validatedLimits = (limits ?? new DeliveryReceiptLimits()).ValidateAndClone();
+        int utf8Length = Encoding.UTF8.GetByteCount(argumentsJson);
+        if (argumentsJson.Length > validatedLimits.MaxStringLength
+            || utf8Length > validatedLimits.MaxReceiptJsonBytes)
         {
             throw new DeliveryReceiptValidationException(
                 "receipt_resource_limit", "Operation arguments exceed the string-length limit.");
         }
+        byte[] canonical;
+        try
+        {
+            canonical = DeliveryReceiptCanonicalJson.CanonicalizeBounded(
+                Encoding.UTF8.GetBytes(argumentsJson),
+                validatedLimits,
+                validatedLimits.MaxReceiptJsonBytes,
+                "receipt_resource_limit");
+        }
+        catch (JsonException ex)
+        {
+            throw new DeliveryReceiptValidationException(
+                "invalid_operation_arguments", $"argumentsJson is not valid JSON: {ex.Message}");
+        }
+        using var document = JsonDocument.Parse(canonical);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new DeliveryReceiptValidationException(
+                "invalid_operation_arguments", "argumentsJson must be a JSON object.");
+        }
         return new DeliveryNormalizedOperation(
             DeliveryReceiptValidation.RequireNonBlank(tool, nameof(tool), 256),
             DeliveryReceiptValidation.RequireNonBlank(action, nameof(action), 256),
-            DeliveryReceiptCanonicalJson.ParseCanonicalObject(argumentsJson, nameof(argumentsJson)));
+            document.RootElement.Clone(),
+            canonical);
     }
 }
 
@@ -84,7 +113,8 @@ public sealed class DeliveryTransactionContribution
         PackageManifest beforeManifest,
         PackageManifest afterManifest,
         IEnumerable<DeliveryNormalizedOperation> operations,
-        DeliveryTransactionIdentity? identity = null)
+        DeliveryTransactionIdentity? identity = null,
+        DeliveryReceiptLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(beforeManifest);
@@ -92,22 +122,39 @@ public sealed class DeliveryTransactionContribution
         ArgumentNullException.ThrowIfNull(operations);
         if (!Enum.IsDefined(result.Mode))
             throw new DeliveryReceiptValidationException("invalid_batch_mode", "Unknown batch mode.");
-        if (result.BaseVersion < 0 || result.ResultVersion < 0)
-            throw new DeliveryReceiptValidationException(
-                "invalid_document_version", "Batch versions cannot be negative.");
+        DeliveryReceiptValidation.ValidatePortableNonNegativeInteger(
+            result.BaseVersion, "invalid_document_version", "Batch base version");
+        DeliveryReceiptValidation.ValidatePortableNonNegativeInteger(
+            result.ResultVersion, "invalid_document_version", "Batch result version");
+        if (result.PackageHash is not null)
+        {
+            DeliveryReceiptValidation.ValidateDigest(
+                new VerificationDigest
+                {
+                    Algorithm = DeliveryReceiptValidation.Sha256Algorithm,
+                    Value = result.PackageHash,
+                },
+                "batch package-content digest");
+        }
 
-        var materialized = operations.ToArray();
-        if (materialized.Any(operation => operation is null))
+        var validatedLimits = (limits ?? new DeliveryReceiptLimits()).ValidateAndClone();
+        var materializedList = new List<DeliveryNormalizedOperation>();
+        foreach (var operation in operations)
         {
-            throw new DeliveryReceiptValidationException(
-                "null_operation", "Normalized operations cannot contain null.");
+            if (materializedList.Count >= validatedLimits.MaxOperationsPerTransaction)
+            {
+                throw new DeliveryReceiptValidationException(
+                    "receipt_resource_limit",
+                    "Normalized operations exceed the per-transaction limit.");
+            }
+            if (operation is null)
+            {
+                throw new DeliveryReceiptValidationException(
+                    "null_operation", "Normalized operations cannot contain null.");
+            }
+            materializedList.Add(operation);
         }
-        if (materialized.Length > new DeliveryReceiptLimits().MaxOperationsPerTransaction)
-        {
-            throw new DeliveryReceiptValidationException(
-                "receipt_resource_limit",
-                "Normalized operations exceed the default per-transaction limit.");
-        }
+        var materialized = materializedList.ToArray();
         var stepsByIndex = new Dictionary<int, MutationBatchStepResult>();
         foreach (var step in result.Steps)
         {
@@ -265,14 +312,15 @@ public sealed record DeliveryArtifactInput
         string artifactId,
         DeliveryArtifactRole role,
         string mediaType,
-        ReadOnlySpan<byte> bytes)
+        ReadOnlySpan<byte> bytes,
+        DeliveryReceiptLimits? limits = null)
     {
-        var defaults = new DeliveryReceiptLimits();
+        var validatedLimits = (limits ?? new DeliveryReceiptLimits()).ValidateAndClone();
         var maximum = role switch
         {
-            DeliveryArtifactRole.SemanticDiff => defaults.MaxSemanticEvidenceBytes,
-            DeliveryArtifactRole.PageMap => defaults.MaxPageMapBytes,
-            _ => defaults.MaxArtifactBytes,
+            DeliveryArtifactRole.SemanticDiff => validatedLimits.MaxSemanticEvidenceBytes,
+            DeliveryArtifactRole.PageMap => validatedLimits.MaxPageMapBytes,
+            _ => validatedLimits.MaxArtifactBytes,
         };
         var code = role switch
         {
