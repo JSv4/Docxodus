@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { open, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -16,6 +16,10 @@ import {
 } from "./index.js";
 import { canonicalJsonBytes } from "./canonical.js";
 import { writeDiagnosticNoReplace } from "./files.js";
+import { decodeStrictUtf8, strictJsonParse } from "./strict-json.js";
+
+const MAX_CONFIGURATION_BYTES = 1_048_576;
+const MAX_HUMAN_DIAGNOSTIC_CHARACTERS = 16_384;
 
 const HELP = `Usage:
   docxodus convert <input.docx> --to <html|pdf> --output <path>
@@ -77,26 +81,75 @@ function parseLimits(values: string[] | undefined): Partial<ExportResourceLimits
 
 async function readJson<T>(path: string | undefined, label: string): Promise<T | undefined> {
   if (!path) return undefined;
+  const absolutePath = resolve(path);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    return JSON.parse(await readFile(resolve(path), "utf8")) as T;
+    handle = await open(absolutePath, "r");
+    const realPathBefore = await realpath(absolutePath);
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile()) throw new Error("the path is not a regular file");
+    if (before.size > BigInt(MAX_CONFIGURATION_BYTES)) {
+      throw new Error(`the file exceeds ${MAX_CONFIGURATION_BYTES} bytes`);
+    }
+    const length = Number(before.size);
+    const bytes = Buffer.allocUnsafe(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(bytes, offset, length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    const probe = Buffer.allocUnsafe(1);
+    const extra = await handle.read(probe, 0, 1, offset);
+    const after = await handle.stat({ bigint: true });
+    const pathAfter = await stat(absolutePath, { bigint: true });
+    const realPathAfter = await realpath(absolutePath);
+    if (offset !== length || extra.bytesRead !== 0
+      || before.dev !== after.dev || before.ino !== after.ino
+      || before.size !== after.size || before.mtimeNs !== after.mtimeNs
+      || before.ctimeNs !== after.ctimeNs
+      || after.dev !== pathAfter.dev || after.ino !== pathAfter.ino
+      || after.size !== pathAfter.size || after.mtimeNs !== pathAfter.mtimeNs
+      || after.ctimeNs !== pathAfter.ctimeNs
+      || realPathBefore !== realPathAfter) {
+      throw new Error("the file changed while it was being read");
+    }
+    return strictJsonParse(decodeStrictUtf8(bytes, label)) as T;
   } catch (cause) {
     throw new Error(`${label} is not readable JSON: ${cause instanceof Error ? cause.message : cause}`);
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
 function humanError(error: unknown): string {
+  let message: string;
   if (error instanceof DocxodusExportError) {
-    return `${error.code} (${error.phase}): ${error.message}\nRemediation: ${error.remediation}`
+    message = `${error.code} (${error.phase}): ${error.message}\nRemediation: ${error.remediation}`
       + (error.detail ? `\nDetail: ${error.detail}` : "")
       + (error.committedDestinations.length
         ? `\nAlready committed: ${error.committedDestinations.join(", ")}`
         : "");
+  } else {
+    message = error instanceof Error ? error.message : String(error);
   }
-  return error instanceof Error ? error.message : String(error);
+  return message.length <= MAX_HUMAN_DIAGNOSTIC_CHARACTERS
+    ? message
+    : `${message.slice(0, MAX_HUMAN_DIAGNOSTIC_CHARACTERS - 3)}...`;
 }
 
 export async function runCli(argv: readonly string[]): Promise<number> {
   let reportPath: string | undefined;
+  let signalExitCode: number | undefined;
+  const controller = new AbortController();
+  const onInterrupt = (): void => {
+    signalExitCode ??= 130;
+    controller.abort();
+  };
+  const onTerminate = (): void => {
+    signalExitCode ??= 143;
+    controller.abort();
+  };
   try {
     const parsed = parseArgs({
       args: [...argv],
@@ -155,6 +208,14 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     );
     const timeoutMs = integer(parsed.values.timeout, "--timeout");
     if (timeoutMs === 0) throw new Error("--timeout must be positive.");
+    const configuredExecutable = process.env.DOCXODUS_CHROMIUM_PATH;
+    if (parsed.values["browser-executable"] !== undefined
+      && configuredExecutable !== undefined
+      && resolve(parsed.values["browser-executable"]) !== resolve(configuredExecutable)) {
+      throw new Error(
+        "--browser-executable conflicts with DOCXODUS_CHROMIUM_PATH; provide one identical absolute runtime path.",
+      );
+    }
     const options: NodeExportOptions = {
       reviewProfile,
       commentProfile,
@@ -167,18 +228,27 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       strictFonts: parsed.values["strict-fonts"],
       timeoutMs,
       browserExecutablePath: parsed.values["browser-executable"]
-        ?? process.env.DOCXODUS_CHROMIUM_PATH,
+        ?? configuredExecutable,
       fontDirectories: parsed.values["font-directory"],
       fontLicenseAttestations,
       environmentAttestation,
       limits: parseLimits(parsed.values.limit),
       title: parsed.values.title,
+      signal: controller.signal,
     };
-    const result = await renderDocxFile(inputPath, {
-      ...(target === "pdf" ? { pdfPath: outputPath } : { htmlPath: outputPath }),
-      reportPath,
-      pageMapPath: parsed.values["page-map"],
-    }, options);
+    process.once("SIGINT", onInterrupt);
+    process.once("SIGTERM", onTerminate);
+    let result;
+    try {
+      result = await renderDocxFile(inputPath, {
+        ...(target === "pdf" ? { pdfPath: outputPath } : { htmlPath: outputPath }),
+        reportPath,
+        pageMapPath: parsed.values["page-map"],
+      }, options);
+    } finally {
+      process.removeListener("SIGINT", onInterrupt);
+      process.removeListener("SIGTERM", onTerminate);
+    }
     process.stderr.write(
       `Rendered ${result.pageCount} page${result.pageCount === 1 ? "" : "s"}; `
       + `fingerprint ${result.rendererFingerprint}.\n`,
@@ -193,7 +263,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       }
     }
     process.stderr.write(`${humanError(error)}\n`);
-    return error instanceof DocxodusExportError ? 1 : 2;
+    return signalExitCode ?? (error instanceof DocxodusExportError ? 1 : 2);
   }
 }
 

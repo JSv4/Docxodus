@@ -21,6 +21,7 @@ import {
   renderDocxArtifacts,
   renderDocxFile,
 } from "../dist/index.js";
+import { canonicalJson } from "../dist/canonical.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(here);
@@ -48,7 +49,10 @@ async function writeJson(path, value) {
 }
 
 async function currentRuntimeDirectories() {
-  return new Set((await readdir(tmpdir())).filter((name) => name.startsWith("docxodus-export-")));
+  return new Set((await readdir(tmpdir())).filter((name) =>
+    name.startsWith("docxodus-export-")
+    || name.startsWith("playwright-artifacts-")
+    || name.startsWith("playwright_chromiumdev_profile-")));
 }
 
 async function inspectPdf(bytes) {
@@ -122,11 +126,33 @@ function framedRequest(value) {
   return Buffer.concat([header, payload]);
 }
 
-function parseFrame(buffer) {
+function framedProtocolRequest(value, blobs = []) {
+  return Buffer.concat([
+    framedRequest(value),
+    ...blobs.map((blob) => framedRequest(blob)),
+  ]);
+}
+
+function parseFrames(buffer) {
   assert.ok(buffer.byteLength >= 4);
   const length = buffer.readUInt32BE(0);
-  assert.equal(buffer.byteLength, length + 4);
-  return JSON.parse(buffer.subarray(4).toString("utf8"));
+  const control = JSON.parse(buffer.subarray(4, length + 4).toString("utf8"));
+  const blobs = [];
+  let offset = length + 4;
+  const descriptors = control.artifacts ?? control.diagnosticArtifacts ?? [];
+  for (const descriptor of descriptors) {
+    assert.ok(buffer.byteLength >= offset + 4);
+    const blobLength = buffer.readUInt32BE(offset);
+    assert.equal(blobLength, descriptor.byteLength);
+    offset += 4;
+    const bytes = buffer.subarray(offset, offset + blobLength);
+    assert.equal(bytes.byteLength, descriptor.byteLength);
+    assert.equal(digest(bytes), descriptor.sha256);
+    blobs.push({ descriptor, bytes });
+    offset += blobLength;
+  }
+  assert.equal(offset, buffer.byteLength);
+  return { control, blobs };
 }
 
 before(async () => {
@@ -148,7 +174,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await assert.rejects(
       convertDocxToPdf(source, { ...baseOptions, expectedSourceDigest: "0".repeat(64) }),
       (error) => error instanceof DocxodusExportError
-        && error.code === "invalid_document"
+        && error.code === "source_digest_mismatch"
         && error.phase === "package_preflight",
     );
     await assert.rejects(
@@ -158,20 +184,6 @@ describe("@docxodus/export", { concurrency: false }, () => {
       }),
       (error) => error instanceof DocxodusExportError
         && error.code === "resource_limit"
-        && error.phase === "package_preflight",
-    );
-    await assert.rejects(
-      convertDocxToPdf(source, {
-        ...baseOptions,
-        fontDirectories: ["/deployment/fonts"],
-        fontLicenseAttestations: [{
-          fileSha256: "not-a-digest",
-          embeddingPermitted: true,
-          basis: "test",
-        }],
-      }),
-      (error) => error instanceof DocxodusExportError
-        && error.code === "invalid_document"
         && error.phase === "input_validation",
     );
     await assert.rejects(
@@ -179,8 +191,30 @@ describe("@docxodus/export", { concurrency: false }, () => {
         ...baseOptions,
         fontDirectories: ["/deployment/fonts"],
         fontLicenseAttestations: [{
+          schemaVersion: 1,
+          usage: "standalone-document-font-embedding",
+          fileSha256: "not-a-digest",
+          embeddingPermitted: true,
+          permittedOutputs: ["pdf"],
+          subsettingPermitted: false,
+          basis: "test",
+        }],
+      }),
+      (error) => error instanceof DocxodusExportError
+        && error.code === "invalid_argument"
+        && error.phase === "input_validation",
+    );
+    await assert.rejects(
+      convertDocxToPdf(source, {
+        ...baseOptions,
+        fontDirectories: ["/deployment/fonts"],
+        fontLicenseAttestations: [{
+          schemaVersion: 1,
+          usage: "standalone-document-font-embedding",
           fileSha256: "a".repeat(64),
           embeddingPermitted: true,
+          permittedOutputs: ["pdf"],
+          subsettingPermitted: false,
           basis: "test-only attestation",
         }],
       }),
@@ -230,6 +264,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
     const options = {
       ...baseOptions,
       browser,
+      reviewProfileAlreadyApplied: true,
       expectedSourceDigest: sourceDigest,
       outputs: ["html", "pdf"],
       limits: { pdfOutputBytes: 1_000_000 },
@@ -245,6 +280,11 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(result.pageCount, result.pageMap.pages.length);
     assert.equal(result.renderReport.source.rawPackageBytesDigest, sourceDigest);
     assert.equal(result.renderReport.bindings.pdfDigest, digest(result.pdf));
+    assert.equal(result.renderReport.bindings.pageMapDigest,
+      digest(Buffer.from(canonicalJson(result.pageMap))));
+    assert.deepEqual(result.renderReport.options.outputs, ["html", "pdf"]);
+    assert.equal(result.renderReport.options.reviewProfileAlreadyApplied, true);
+    assert.equal(result.renderReport.environment.verification, "browserObserved");
     assert.deepEqual(result.renderReport.bindings.artifactRequestIds, []);
     assert.ok(result.renderReport.readiness.some((entry) =>
       entry.phase === "pdf_print" && entry.status === "complete"));
@@ -310,7 +350,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
         failure = error;
         return error instanceof DocxodusExportError
           && error.code === "resource_limit"
-          && error.phase === "output_verification"
+          && error.phase === "pdf_print"
           && error.report?.status === "failed";
       },
     );
@@ -353,6 +393,13 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.match(first.stderr.toString(), /Rendered \d+ page/);
     const originalDigest = digest(await readFile(pdf));
     assert.ok((await stat(pdf)).size > 1_000);
+    const pageMapBytes = await readFile(pageMap);
+    const reportBytes = await readFile(report);
+    assert.equal(pageMapBytes.at(-1), "}".charCodeAt(0));
+    assert.equal(reportBytes.at(-1), "}".charCodeAt(0));
+    const cliReport = JSON.parse(reportBytes.toString("utf8"));
+    assert.equal(cliReport.bindings.pageMapDigest, digest(pageMapBytes));
+    assert.equal(cliReport.bindings.pdfDigest, originalDigest);
 
     const second = spawnSync(process.execPath, args, {
       cwd: packageRoot,
@@ -369,53 +416,72 @@ describe("@docxodus/export", { concurrency: false }, () => {
 
   test("framed host rejects local executable authority and returns keyed PDF results", { timeout: 180_000 }, async () => {
     const source = await readFile(join(fixtures, "CA", "CA001-Plain.docx"));
+    const sourceDescriptor = {
+      id: "source-1",
+      byteLength: source.byteLength,
+      sha256: digest(source),
+      mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
     const forbidden = spawnSync(process.execPath, [hostEntry], {
       cwd: packageRoot,
-      input: framedRequest({
+      input: framedProtocolRequest({
         schemaVersion: 1,
+        sources: [sourceDescriptor],
         batches: [{
           id: "forbidden-runtime",
-          documentBase64: source.toString("base64"),
+          sourceId: "source-1",
+          artifactRequestIds: ["delivery-1"],
           options: {
             ...baseOptions,
             outputs: ["pdf"],
             browserExecutablePath: "/tmp/untrusted-executable",
           },
         }],
-      }),
+      }, [source]),
       maxBuffer: 10 * 1024 * 1024,
     });
     assert.equal(forbidden.status, 0);
-    assert.match(parseFrame(forbidden.stdout).fatal.message, /unknown fields: browserExecutablePath/);
+    assert.match(parseFrames(forbidden.stdout).control.fatal.message,
+      /unknown fields: browserExecutablePath/);
 
     const request = {
       schemaVersion: 1,
+      sources: [sourceDescriptor],
       batches: [{
         id: "artifact-1",
-        documentBase64: source.toString("base64"),
+        sourceId: "source-1",
+        artifactRequestIds: ["delivery-pdf"],
         options: { ...baseOptions, outputs: ["pdf"] },
       }, {
         id: "artifact-2",
-        documentBase64: source.toString("base64"),
+        sourceId: "source-1",
+        artifactRequestIds: ["delivery-html"],
         options: { ...baseOptions, outputs: ["html"] },
       }],
     };
     const rendered = spawnSync(process.execPath, [hostEntry], {
       cwd: packageRoot,
       env: { ...process.env, DOCXODUS_CHROMIUM_PATH: chromium.executablePath() },
-      input: framedRequest(request),
-      maxBuffer: 10 * 1024 * 1024,
+      input: framedProtocolRequest(request, [source]),
+      maxBuffer: 20 * 1024 * 1024,
     });
     assert.equal(rendered.status, 0, rendered.stderr.toString());
     assert.equal(rendered.stderr.byteLength, 0);
-    const response = parseFrame(rendered.stdout);
+    const { control: response, blobs } = parseFrames(rendered.stdout);
     assert.equal(response.schemaVersion, 1);
     assert.equal(response.batches.length, 2);
     assert.equal(response.batches[0].id, "artifact-1");
-    assert.equal(response.batches[0].ok, true);
-    assert.ok(Buffer.from(response.batches[0].result.pdfBase64, "base64").byteLength > 1_000);
     assert.equal(response.batches[1].id, "artifact-2");
-    assert.equal(response.batches[1].ok, true);
-    assert.match(response.batches[1].result.html, /^<!doctype html>/);
+    assert.equal(response.artifacts.length, 6);
+    const pdfBlob = blobs.find(({ descriptor }) => descriptor.kind === "pdf");
+    const htmlBlob = blobs.find(({ descriptor }) => descriptor.kind === "html");
+    assert.ok(pdfBlob.bytes.byteLength > 1_000);
+    assert.match(htmlBlob.bytes.toString("utf8"), /^<!doctype html>/);
+    for (const { descriptor, bytes } of blobs.filter(({ descriptor }) =>
+      descriptor.kind === "renderReport")) {
+      const report = JSON.parse(bytes.toString("utf8"));
+      assert.deepEqual(report.bindings.artifactRequestIds,
+        descriptor.batchId === "artifact-1" ? ["delivery-pdf"] : ["delivery-html"]);
+    }
   });
 });
