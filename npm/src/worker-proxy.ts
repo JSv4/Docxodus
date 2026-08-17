@@ -24,6 +24,7 @@ import type {
   WorkerResponse,
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
+  WorkerProjectReviewProfileResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
@@ -46,6 +47,7 @@ import type {
   CharSpan,
   EditResult,
   PackageManifest,
+  PackageManifestInspectionLimits,
 } from "./types.js";
 
 /**
@@ -158,7 +160,23 @@ export interface WorkerDocxSession {
  */
 export interface WorkerDocxodus {
   /** Generate a deterministic, non-mutating verification manifest. */
-  generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+  generatePackageManifest(
+    document: File | Uint8Array,
+    limits?: PackageManifestInspectionLimits,
+  ): Promise<PackageManifest>;
+
+  /** Generate the exact canonical manifest JSON for strict boundary validation. */
+  generatePackageManifestJson(
+    document: File | Uint8Array,
+    limits?: PackageManifestInspectionLimits,
+  ): Promise<string>;
+
+  /** Derive an isolated final/original package; the source bytes remain caller-owned. */
+  projectReviewProfile(
+    document: File | Uint8Array,
+    profile: "final" | "original",
+    maximumOutputBytes?: number,
+  ): Promise<Uint8Array>;
 
   /**
    * Convert a DOCX document to HTML.
@@ -168,7 +186,8 @@ export interface WorkerDocxodus {
    */
   convertDocxToHtml(
     document: File | Uint8Array,
-    options?: ConversionOptions
+    options?: ConversionOptions,
+    maximumOutputBytes?: number,
   ): Promise<string>;
 
   /**
@@ -299,15 +318,13 @@ export interface WorkerDocxodus {
 export async function createWorkerDocxodus(
   options?: WorkerDocxodusOptions
 ): Promise<WorkerDocxodus> {
+  if (options?.signal?.aborted) {
+    throw new Error("Worker creation aborted");
+  }
   // Determine WASM base path
   const wasmBasePath = options?.wasmBasePath ?? deriveWasmBasePath();
 
-  // Determine worker script path
-  // The worker bundle should be in the same directory as this module
-  let workerUrl: string;
-
-  // Try to create worker from bundled script or blob
-  // For now, we'll use a blob URL to inline the worker path
+  // The worker bundle is packaged beside this module.
   const workerScriptPath = new URL("./docxodus.worker.js", import.meta.url)
     .href;
 
@@ -325,6 +342,25 @@ export async function createWorkerDocxodus(
 
   // Track if worker is active
   let isWorkerActive = true;
+  let abortListener: (() => void) | undefined;
+
+  const stopWorker = (message: string): void => {
+    if (!isWorkerActive) return;
+    isWorkerActive = false;
+    worker.terminate();
+    for (const pending of pendingRequests.values()) {
+      pending.reject(new Error(message));
+    }
+    pendingRequests.clear();
+    if (abortListener && options?.signal) {
+      options.signal.removeEventListener("abort", abortListener);
+      abortListener = undefined;
+    }
+  };
+  if (options?.signal) {
+    abortListener = () => stopWorker("Worker creation or operation aborted");
+    options.signal.addEventListener("abort", abortListener, { once: true });
+  }
 
   // Cached warmup promise. Set on the first prepare() and reused thereafter so
   // repeated/concurrent calls share a single in-flight (or completed) warmup.
@@ -355,12 +391,7 @@ export async function createWorkerDocxodus(
 
   // Handle worker errors
   worker.onerror = (error) => {
-    // Reject all pending requests
-    for (const pending of pendingRequests.values()) {
-      pending.reject(new Error(`Worker error: ${error.message}`));
-    }
-    pendingRequests.clear();
-    isWorkerActive = false;
+    stopWorker(`Worker error: ${error.message}`);
   };
 
   /**
@@ -378,30 +409,36 @@ export async function createWorkerDocxodus(
 
       pendingRequests.set(request.id, { resolve, reject });
 
-      if (transfer && transfer.length > 0) {
-        worker.postMessage(request, transfer);
-      } else {
-        worker.postMessage(request);
+      try {
+        if (transfer && transfer.length > 0) {
+          worker.postMessage(request, transfer);
+        } else {
+          worker.postMessage(request);
+        }
+      } catch (error) {
+        pendingRequests.delete(request.id);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
 
   // Initialize the worker
-  const initResponse = await sendRequest({
-    id: generateId(),
-    type: "init",
-    wasmBasePath,
-  });
-
-  if (!initResponse.success) {
-    worker.terminate();
-    throw new Error(`Failed to initialize worker: ${initResponse.error}`);
+  try {
+    await sendRequest({
+      id: generateId(),
+      type: "init",
+      wasmBasePath,
+    });
+  } catch (error) {
+    stopWorker("Worker initialization failed");
+    throw error;
   }
 
   // Return the WorkerDocxodus instance
   return {
     async generatePackageManifest(
-      document: File | Uint8Array
+      document: File | Uint8Array,
+      limits?: PackageManifestInspectionLimits,
     ): Promise<PackageManifest> {
       const bytes = await toBytes(document);
       const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
@@ -409,15 +446,59 @@ export async function createWorkerDocxodus(
           id: generateId(),
           type: "generatePackageManifest",
           documentBytes: bytes,
+          limits,
         },
         [bytes.buffer]
       );
       return response.manifest!;
     },
 
+    async generatePackageManifestJson(
+      document: File | Uint8Array,
+      limits?: PackageManifestInspectionLimits,
+    ): Promise<string> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
+        {
+          id: generateId(),
+          type: "generatePackageManifest",
+          documentBytes: bytes,
+          limits,
+        },
+        [bytes.buffer],
+      );
+      if (response.manifestJson === undefined) {
+        throw new Error("Package manifest worker response omitted canonical JSON");
+      }
+      return response.manifestJson;
+    },
+
+    async projectReviewProfile(
+      document: File | Uint8Array,
+      profile: "final" | "original",
+      maximumOutputBytes?: number,
+    ): Promise<Uint8Array> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerProjectReviewProfileResponse>(
+        {
+          id: generateId(),
+          type: "projectReviewProfile",
+          documentBytes: bytes,
+          profile,
+          maximumOutputBytes,
+        },
+        [bytes.buffer],
+      );
+      if (!response.documentBytes || response.documentBytes.byteLength === 0) {
+        throw new Error(`Failed to derive the ${profile} review profile`);
+      }
+      return response.documentBytes;
+    },
+
     async convertDocxToHtml(
       document: File | Uint8Array,
-      options?: ConversionOptions
+      options?: ConversionOptions,
+      maximumOutputBytes?: number,
     ): Promise<string> {
       const bytes = await toBytes(document);
       const response = await sendRequest<WorkerConvertResponse>(
@@ -426,6 +507,7 @@ export async function createWorkerDocxodus(
           type: "convertDocxToHtml",
           documentBytes: bytes,
           options,
+          maximumOutputBytes,
         },
         [bytes.buffer]
       );
@@ -644,14 +726,7 @@ export async function createWorkerDocxodus(
     },
 
     terminate(): void {
-      isWorkerActive = false;
-      worker.terminate();
-
-      // Reject any pending requests
-      for (const pending of pendingRequests.values()) {
-        pending.reject(new Error("Worker terminated"));
-      }
-      pendingRequests.clear();
+      stopWorker("Worker terminated");
     },
 
     isActive(): boolean {

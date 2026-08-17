@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using Docxodus;
 using Docxodus.Internal;
+using Docxodus.Verification;
 using DocumentFormat.OpenXml.Packaging;
 
 namespace DocxodusWasm;
@@ -30,6 +31,28 @@ public partial class DocumentConverter
     [JSExport]
     public static string GeneratePackageManifest(byte[] docxBytes) =>
         VerificationOps.GeneratePackageManifest(docxBytes);
+
+    /// <summary>
+    /// Generate a package manifest with the exact effective export limits.  Every value is kept
+    /// inside the JavaScript safe-integer and .NET <see cref="int"/> range by the versioned v1
+    /// limits contract before this boundary is crossed.
+    /// </summary>
+    [JSExport]
+    public static string GeneratePackageManifestWithOptions(
+        byte[] docxBytes,
+        int maxEntryCount,
+        int maxTotalUncompressedBytes,
+        int maxXmlPartBytes,
+        int maxCompressionRatio,
+        int maxUriLength) =>
+        VerificationOps.GeneratePackageManifest(docxBytes, new PackageManifestOptions
+        {
+            MaxEntryCount = maxEntryCount,
+            MaxTotalUncompressedBytes = maxTotalUncompressedBytes,
+            MaxXmlPartBytes = maxXmlPartBytes,
+            MaxCompressionRatio = maxCompressionRatio,
+            MaxUriLength = maxUriLength,
+        });
 
     /// <summary>
     /// Validates input document bytes.

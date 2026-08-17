@@ -17,6 +17,16 @@ internal static class VerificationOps
     public static string GeneratePackageManifest(byte[] packageBytes) =>
         PackageManifestGenerator.GenerateJson(packageBytes);
 
+    /// <summary>
+    /// Generate canonical manifest JSON while applying the caller's effective inspection limits.
+    /// Export callers use this overload so a lowered ceiling constrains inspection itself rather
+    /// than inspecting with the defaults and rejecting only after expansion has occurred.
+    /// </summary>
+    public static string GeneratePackageManifest(
+        byte[] packageBytes,
+        PackageManifestOptions options) =>
+        PackageManifestGenerator.GenerateJson(packageBytes, options);
+
     /// <summary>Generate canonical manifest JSON for a live session's logical checkpoint.</summary>
     public static string GetPackageManifest(int handle) =>
         SessionRegistry.Get(handle).GetPackageManifest().ToJson();

@@ -15,15 +15,30 @@ interface BrowserExportResult {
   pageCount: number;
   pageMap: {
     rendererFingerprint: string;
-    pages: Array<{ pageNumber: number; width: number; height: number; sectionIndex?: number }>;
+    pages: Array<{
+      pageNumber: number;
+      pageInSection: number;
+      pageName: string;
+      width: number;
+      height: number;
+      sectionIndex?: number;
+    }>;
     fragments: unknown[];
   };
   renderReport: {
     status: 'complete';
     source: { rawPackageBytesDigest: string };
-    options: { layoutDigest: string };
+    derivedProfileSource?: { rawPackageBytesDigest: string; byteLength: number };
+    options: {
+      reviewProfile: 'final' | 'original' | 'markup';
+      reviewProfileAlreadyApplied: boolean;
+      title: string;
+      outputs: Array<'html' | 'pdf'>;
+      layoutDigest: string;
+      policy: { limits: Record<string, number> };
+    };
     environment: { rendererFingerprint: string; verification: string };
-    pages: Array<{ pageNumber: number; width: number; height: number; sectionIndex?: number }>;
+    pages: BrowserExportResult['pageMap']['pages'];
     bindings: { pageMapDigest: string; htmlDigest: string };
     fonts: Array<{ requestedFamily: string; status: string; source: string }>;
     warnings: Array<{ code: string; severity: string; phase: string }>;
@@ -44,6 +59,39 @@ function canonical(value: unknown): string {
 function digest(value: Uint8Array | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+
+test('freezes the closed render-report v1 schema and exact resource-limit vocabulary', () => {
+  const schema = JSON.parse(readFileSync(
+    join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
+    'utf8',
+  ));
+  const limits = JSON.parse(readFileSync(join(here, '..', 'src', 'export-resource-limits-v1.json'), 'utf8'));
+  const definitions = schema.$defs;
+  expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
+  expect(schema.oneOf).toEqual([
+    { $ref: '#/$defs/complete' },
+    { $ref: '#/$defs/failed' },
+  ]);
+  expect(definitions.complete.additionalProperties).toBe(false);
+  expect(definitions.failed.additionalProperties).toBe(false);
+  expect(definitions.complete.required).toEqual(expect.arrayContaining([
+    'fontIdentity', 'environment', 'pages', 'bindings',
+  ]));
+  expect(definitions.failed.required).toEqual(expect.arrayContaining(['failure', 'unavailable']));
+  expect(definitions.baseProperties.options.properties.outputs.oneOf.map(
+    (entry: { const: string[] }) => entry.const,
+  )).toEqual([[], ['html'], ['pdf'], ['html', 'pdf']]);
+  expect(new Set(definitions.limits.required)).toEqual(new Set(Object.keys(limits.defaults)));
+  expect(Object.keys(limits.defaults)).toEqual(Object.keys(limits.hardCeilings));
+  expect(definitions.runtimeAttestation.required).toEqual(expect.arrayContaining([
+    'chromiumProduct', 'chromiumBuild', 'executableSha256', 'launchFlags',
+    'hostFontsDigest', 'basis',
+  ]));
+  expect(definitions.errorCode.enum).toEqual(expect.arrayContaining([
+    'invalid_argument', 'source_digest_mismatch', 'document_version_unrepresentable',
+    'operation_cancelled', 'resource_limit',
+  ]));
+});
 
 function generateTrackedRevisionDocx(): Uint8Array {
   return storedZip([
@@ -180,6 +228,25 @@ img{max-width:100%;border:1px solid #bbb}li{margin:.5em}</style>
 test.describe('standalone paginated HTML', () => {
   test.beforeEach(async ({ page }) => ready(page));
 
+  test('uses strict RFC 8785-compatible canonical JSON at the browser boundary', async ({ page }) => {
+    const canonicalized = await page.evaluate(() => (window as any).DocxodusStandalone.canonicalJson({
+      z: -0,
+      nested: { b: true, a: '\u20ac' },
+      array: [3, null, 'é'],
+      omitted: undefined,
+    }));
+    expect(canonicalized).toBe('{"array":[3,null,"é"],"nested":{"a":"€","b":true},"z":0}');
+    const rejection = await page.evaluate(() => {
+      try {
+        (window as any).DocxodusStandalone.canonicalJson({ invalid: '\ud800' });
+        return '';
+      } catch (error) {
+        return String(error);
+      }
+    });
+    expect(rejection).toContain('unpaired UTF-16 surrogates');
+  });
+
   test('materializes one offline tree and binds its report, PageMap, and immutable source', async ({ page, context }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
     const result = await convert(page, source, true);
@@ -190,12 +257,11 @@ test.describe('standalone paginated HTML', () => {
     expect(result.html).not.toMatch(/<script\b/i);
     expect(result.pageCount).toBeGreaterThan(0);
     expect(result.pageMap.pages).toHaveLength(result.pageCount);
-    expect(result.renderReport.pages).toEqual(result.pageMap.pages.map((entry) => ({
-      pageNumber: entry.pageNumber,
-      width: entry.width,
-      height: entry.height,
-      sectionIndex: entry.sectionIndex,
-    })));
+    expect(result.renderReport.pages).toEqual(result.pageMap.pages);
+    expect(result.renderReport.options.outputs).toEqual(['html']);
+    expect(result.renderReport.options.title).toBe('');
+    expect(result.renderReport.options.reviewProfileAlreadyApplied).toBe(false);
+    expect(result.renderReport.derivedProfileSource).toBeDefined();
     expect(result.rendererFingerprint).toBe(result.pageMap.rendererFingerprint);
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
@@ -350,6 +416,107 @@ test.describe('standalone paginated HTML', () => {
     expect(linkAudit.fragmentsResolve).toBe(true);
   });
 
+  test('applies each review profile exactly once and proves already-applied input', async ({ page }) => {
+    const source = generateTrackedRevisionDocx();
+    const sourceDigest = digest(source);
+    const visibleText = (html: string) => page.evaluate((value) => {
+      const parsed = new DOMParser().parseFromString(value, 'text/html');
+      return parsed.body.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    }, html);
+
+    const finalResult = await convert(page, source, false, {
+      reviewProfile: 'final',
+      commentProfile: 'hidden',
+    });
+    const originalResult = await convert(page, source, false, {
+      reviewProfile: 'original',
+      commentProfile: 'hidden',
+    });
+    const markupResult = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      commentProfile: 'hidden',
+    });
+
+    expect(await visibleText(finalResult.html)).toContain('Before added after.');
+    expect(await visibleText(finalResult.html)).not.toContain('removed');
+    expect(await visibleText(originalResult.html)).toContain('Before removed after.');
+    expect(await visibleText(originalResult.html)).not.toContain('added');
+    expect(await visibleText(markupResult.html)).toContain('Before removedadded after.');
+    expect(finalResult.renderReport.source.rawPackageBytesDigest).toBe(sourceDigest);
+    expect(originalResult.renderReport.source.rawPackageBytesDigest).toBe(sourceDigest);
+    expect(markupResult.renderReport.source.rawPackageBytesDigest).toBe(sourceDigest);
+    expect(finalResult.renderReport.derivedProfileSource?.rawPackageBytesDigest).not.toBe(sourceDigest);
+    expect(originalResult.renderReport.derivedProfileSource?.rawPackageBytesDigest).not.toBe(sourceDigest);
+    expect(markupResult.renderReport.derivedProfileSource).toBeUndefined();
+
+    const noRevisions = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const alreadyApplied = await convert(page, noRevisions, false, {
+      reviewProfile: 'final',
+      reviewProfileAlreadyApplied: true,
+    });
+    expect(alreadyApplied.renderReport.options.reviewProfileAlreadyApplied).toBe(true);
+    expect(alreadyApplied.renderReport.derivedProfileSource).toBeUndefined();
+
+    const falseClaim = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertFailure(bytes, {
+        reviewProfile: 'final',
+        reviewProfileAlreadyApplied: true,
+        commentProfile: 'hidden',
+      }), Array.from(source));
+    expect(falseClaim.code).toBe('invalid_argument');
+    expect(falseClaim.phase).toBe('package_preflight');
+    expect(falseClaim.report.status).toBe('failed');
+    expect(falseClaim.report.derivedProfileSource).toBeUndefined();
+  });
+
+  test('fails exact source identity and caller-lowered package ceilings closed', async ({ page }) => {
+    const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const mismatch = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertFailure(bytes, {
+        reviewProfile: 'markup',
+        commentProfile: 'hidden',
+        expectedSourceDigest: '0'.repeat(64),
+      }), Array.from(source));
+    expect(mismatch.code).toBe('source_digest_mismatch');
+    expect(mismatch.phase).toBe('package_preflight');
+    expect(mismatch.report.source.rawPackageBytesDigest).toBe(digest(source));
+
+    const limited = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertFailure(bytes, {
+        reviewProfile: 'markup',
+        commentProfile: 'hidden',
+        limits: { opcEntries: 1 },
+      }), Array.from(source));
+    expect(limited.code).toBe('resource_limit');
+    expect(limited.phase).toBe('package_preflight');
+    expect(limited.report.options.policy.limits.opcEntries).toBe(1);
+    expect(limited.report.readiness.at(-1).status).toBe('failed');
+  });
+
+  test('honors AbortSignal and always removes its isolated render realm', async ({ page }) => {
+    const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const outcome = await page.evaluate(async (bytes) => {
+      const api = (window as any).DocxodusStandalone;
+      const controller = new AbortController();
+      controller.abort();
+      const before = document.querySelectorAll('iframe[data-docxodus-export-realm]').length;
+      const failure = await api.convertFailure(bytes, {
+        reviewProfile: 'markup',
+        commentProfile: 'hidden',
+        signal: controller.signal,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return {
+        failure,
+        before,
+        after: document.querySelectorAll('iframe[data-docxodus-export-realm]').length,
+      };
+    }, Array.from(source));
+    expect(outcome.failure.code).toBe('operation_cancelled');
+    expect(outcome.failure.phase).toBe('input_validation');
+    expect(outcome.after).toBe(outcome.before);
+  });
+
   test('preserves a structured failed report for strict unsupported content', async ({ page }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'WC', 'WC012-Math-After.docx')));
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
@@ -362,6 +529,17 @@ test.describe('standalone paginated HTML', () => {
     expect(failure.phase).toBe('docx_conversion');
     expect(failure.report.status).toBe('failed');
     expect(failure.report.failure.code).toBe('resource_policy_failure');
+    expect(failure.report.readiness.slice(0, -1).every(
+      (entry: { status: string }) => entry.status === 'complete',
+    )).toBe(true);
+    expect(failure.report.readiness.at(-1).status).toBe('failed');
+    expect(new Set(failure.report.unavailable.map(
+      (entry: { field: string }) => entry.field,
+    )).size).toBe(failure.report.unavailable.length);
+    expect(failure.report.unavailable).toContainEqual(expect.objectContaining({
+      field: 'bindings.pdfDigest',
+      reasonCode: 'notRequested',
+    }));
     await testInfo.attach('failed-render-report.json', {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
       contentType: 'application/json',
@@ -380,6 +558,7 @@ test.describe('standalone paginated HTML', () => {
     expect(failure.phase).toBe('running_story_placement');
     expect(failure.report.status).toBe('failed');
     expect(failure.report.failure.message).toContain('body content is clipped');
+    expect(failure.report.readiness.at(-1).status).toBe('failed');
     await testInfo.attach('clipped-content-render-report.json', {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
       contentType: 'application/json',

@@ -16,16 +16,19 @@ const dist = join(packageRoot, 'dist');
 const framework = join(dist, 'wasm', '_framework');
 const reportSchemaSource = resolve(packageRoot, '..', 'docs', 'schemas', 'render-report-v1.schema.json');
 const reportSchemaDestination = join(dist, 'render-report-v1.schema.json');
+const limitsContractSource = join(packageRoot, 'src', 'export-resource-limits-v1.json');
+const limitsContractDestination = join(dist, 'export-resource-limits-v1.json');
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
 
 copyFileSync(reportSchemaSource, reportSchemaDestination);
+copyFileSync(limitsContractSource, limitsContractDestination);
 
 const requiredRoots = [
   join(dist, 'export-browser.bundle.js'),
   join(dist, 'docxodus.worker.js'),
   join(dist, 'pagination.bundle.js'),
   reportSchemaDestination,
-  join(dist, 'export-resource-limits-v1.json'),
+  limitsContractDestination,
 ];
 for (const file of requiredRoots) assert.ok(statSync(file).isFile(), `missing export asset: ${file}`);
 assert.ok(statSync(framework).isDirectory(), `missing WASM framework directory: ${framework}`);
@@ -63,7 +66,7 @@ const assets = [...requiredRoots, ...frameworkFiles]
       sha256: createHash('sha256').update(bytes).digest('hex'),
     };
   })
-  .sort((left, right) => left.path.localeCompare(right.path));
+  .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 
 const manifest = {
   schema: 'https://docxodus.dev/schemas/export/export-assets/v1',

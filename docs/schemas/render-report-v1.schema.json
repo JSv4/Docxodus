@@ -6,6 +6,41 @@
     { "$ref": "#/$defs/complete" },
     { "$ref": "#/$defs/failed" }
   ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["status", "options"],
+        "properties": {
+          "status": { "const": "complete" },
+          "options": {
+            "required": ["reviewProfile", "reviewProfileAlreadyApplied"],
+            "properties": {
+              "reviewProfile": { "enum": ["final", "original"] },
+              "reviewProfileAlreadyApplied": { "const": false }
+            }
+          }
+        }
+      },
+      "then": { "required": ["derivedProfileSource"] }
+    },
+    {
+      "if": {
+        "required": ["options"],
+        "properties": {
+          "options": {
+            "anyOf": [
+              { "required": ["reviewProfile"], "properties": { "reviewProfile": { "const": "markup" } } },
+              {
+                "required": ["reviewProfileAlreadyApplied"],
+                "properties": { "reviewProfileAlreadyApplied": { "const": true } }
+              }
+            ]
+          }
+        }
+      },
+      "then": { "not": { "required": ["derivedProfileSource"] } }
+    }
+  ],
   "$defs": {
     "phase": {
       "enum": [
@@ -17,8 +52,9 @@
     },
     "errorCode": {
       "enum": [
-        "invalid_document", "conversion_failure", "browser_launch_failure",
-        "resource_policy_failure", "readiness_timeout", "pagination_failure",
+        "invalid_argument", "invalid_document", "source_digest_mismatch",
+        "document_version_unrepresentable", "conversion_failure", "browser_launch_failure",
+        "resource_policy_failure", "readiness_timeout", "operation_cancelled", "pagination_failure",
         "pdf_write_failure", "output_write_failure", "output_verification_failure",
         "resource_limit", "unsupported_runtime", "filesystem_failure"
       ]
@@ -29,10 +65,11 @@
       "required": ["code", "severity", "phase", "message", "remediation"],
       "properties": {
         "code": { "type": "string", "minLength": 1 },
-        "severity": { "enum": ["warning", "error"] },
+        "severity": { "const": "warning" },
         "phase": { "$ref": "#/$defs/phase" },
         "message": { "type": "string", "minLength": 1 },
         "remediation": { "type": "string", "minLength": 1 },
+        "detail": { "type": "string" },
         "partUri": { "type": "string" },
         "anchorId": { "type": "string" },
         "resource": { "type": "string" }
@@ -41,9 +78,11 @@
     "page": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pageNumber", "width", "height"],
+      "required": ["pageNumber", "pageInSection", "pageName", "width", "height"],
       "properties": {
         "pageNumber": { "type": "integer", "minimum": 1 },
+        "pageInSection": { "type": "integer", "minimum": 1 },
+        "pageName": { "type": "string", "minLength": 1 },
         "width": { "type": "number", "exclusiveMinimum": 0 },
         "height": { "type": "number", "exclusiveMinimum": 0 },
         "sectionIndex": { "type": "integer", "minimum": 0 }
@@ -63,6 +102,107 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         }
+      }
+    },
+    "fontIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "digest", "verification"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "verification": { "enum": ["browserObserved", "configured"] }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compressedDocxBytes", "opcEntries", "expandedOpcBytes", "xmlPartBytes",
+        "opcUriCharacters", "opcCompressionRatio", "htmlOutputBytes", "pdfOutputBytes",
+        "pageMapOutputBytes", "renderReportOutputBytes", "pdfParserExpandedBytes",
+        "finalPages", "domNodes", "automaticResources", "automaticResourceBytes",
+        "renderDiagnostics", "fontDirectoryEntries", "fontFiles", "fontFileBytes",
+        "fontTotalBytes", "fontRequests", "fontSampleCodePoints"
+      ],
+      "properties": {
+        "compressedDocxBytes": { "type": "integer", "minimum": 1 },
+        "opcEntries": { "type": "integer", "minimum": 1 },
+        "expandedOpcBytes": { "type": "integer", "minimum": 1 },
+        "xmlPartBytes": { "type": "integer", "minimum": 1 },
+        "opcUriCharacters": { "type": "integer", "minimum": 1 },
+        "opcCompressionRatio": { "type": "integer", "minimum": 1 },
+        "htmlOutputBytes": { "type": "integer", "minimum": 1 },
+        "pdfOutputBytes": { "type": "integer", "minimum": 1 },
+        "pageMapOutputBytes": { "type": "integer", "minimum": 1 },
+        "renderReportOutputBytes": { "type": "integer", "minimum": 1 },
+        "pdfParserExpandedBytes": { "type": "integer", "minimum": 1 },
+        "finalPages": { "type": "integer", "minimum": 1 },
+        "domNodes": { "type": "integer", "minimum": 1 },
+        "automaticResources": { "type": "integer", "minimum": 1 },
+        "automaticResourceBytes": { "type": "integer", "minimum": 1 },
+        "renderDiagnostics": { "type": "integer", "minimum": 1 },
+        "fontDirectoryEntries": { "type": "integer", "minimum": 1 },
+        "fontFiles": { "type": "integer", "minimum": 1 },
+        "fontFileBytes": { "type": "integer", "minimum": 1 },
+        "fontTotalBytes": { "type": "integer", "minimum": 1 },
+        "fontRequests": { "type": "integer", "minimum": 1 },
+        "fontSampleCodePoints": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "observedRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeKind", "locale", "timezone", "viewport", "deviceScaleFactor",
+        "media", "networkIsolation"
+      ],
+      "properties": {
+        "runtimeKind": { "enum": ["browser", "nodeChromium"] },
+        "playwrightVersion": { "type": "string", "minLength": 1 },
+        "browserProduct": { "type": "string", "minLength": 1 },
+        "browserBuild": { "type": "string", "minLength": 1 },
+        "executableSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "launchFlags": { "type": "array", "items": { "type": "string" } },
+        "operatingSystem": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "locale": { "type": "string", "minLength": 1 },
+        "timezone": { "type": "string", "minLength": 1 },
+        "viewport": {
+          "type": "array", "prefixItems": [
+            { "type": "number", "exclusiveMinimum": 0 },
+            { "type": "number", "exclusiveMinimum": 0 }
+          ], "items": false, "minItems": 2, "maxItems": 2
+        },
+        "deviceScaleFactor": { "type": "number", "exclusiveMinimum": 0 },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["colorScheme", "reducedMotion", "forcedColors", "printMedia"],
+          "properties": {
+            "colorScheme": { "enum": ["light", "dark", "no-preference"] },
+            "reducedMotion": { "enum": ["reduce", "no-preference"] },
+            "forcedColors": { "enum": ["active", "none"] },
+            "printMedia": { "const": true }
+          }
+        },
+        "networkIsolation": { "enum": ["ownedProcessRestricted", "contextRestricted"] }
+      }
+    },
+    "runtimeAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chromiumProduct", "chromiumBuild", "executableSha256", "launchFlags",
+        "hostFontsDigest", "basis"
+      ],
+      "properties": {
+        "chromiumProduct": { "type": "string", "minLength": 1 },
+        "chromiumBuild": { "type": "string", "minLength": 1 },
+        "executableSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "launchFlags": { "type": "array", "items": { "type": "string" } },
+        "hostFontsDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "basis": { "type": "string", "minLength": 1 }
       }
     },
     "baseProperties": {
@@ -90,11 +230,36 @@
       "options": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reviewProfile", "commentProfile", "layoutDigest"],
+        "required": [
+          "reviewProfile", "reviewProfileAlreadyApplied", "commentProfile", "title",
+          "outputs", "layoutDigest", "runtimePolicyDigest", "policy"
+        ],
         "properties": {
           "reviewProfile": { "enum": ["final", "original", "markup"] },
+          "reviewProfileAlreadyApplied": { "type": "boolean" },
           "commentProfile": { "enum": ["hidden", "inline", "endnotes", "margin"] },
-          "layoutDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "title": { "type": "string" },
+          "outputs": {
+            "oneOf": [
+              { "const": [] },
+              { "const": ["html"] },
+              { "const": ["pdf"] },
+              { "const": ["html", "pdf"] }
+            ]
+          },
+          "layoutDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "runtimePolicyDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unsupportedContent", "strictFonts", "timeoutMs", "limits"],
+            "properties": {
+              "unsupportedContent": { "enum": ["warn", "strict"] },
+              "strictFonts": { "type": "boolean" },
+              "timeoutMs": { "type": "integer", "minimum": 1 },
+              "limits": { "$ref": "#/$defs/limits" }
+            }
+          }
         }
       },
       "readiness": {
@@ -105,7 +270,7 @@
           "required": ["phase", "status", "elapsedMs", "pending"],
           "properties": {
             "phase": { "$ref": "#/$defs/phase" },
-            "status": { "enum": ["complete", "failed"] },
+            "status": { "enum": ["complete", "failed", "cancelled"] },
             "elapsedMs": { "type": "number", "minimum": 0 },
             "pending": { "type": "array", "items": { "type": "string" } }
           }
@@ -119,6 +284,9 @@
           "required": ["requestedFamily", "status", "source"],
           "properties": {
             "requestedFamily": { "type": "string", "minLength": 1 },
+            "requestedFamilyStack": {
+              "type": "array", "items": { "type": "string", "minLength": 1 }
+            },
             "resolvedFamily": { "type": "string", "minLength": 1 },
             "status": { "enum": ["resolved", "substituted", "missing", "unverified"] },
             "source": { "enum": ["browser", "embedded", "configured"] }
@@ -154,18 +322,15 @@
           }
         }
       },
+      "fontIdentity": { "$ref": "#/$defs/fontIdentity" },
       "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
     },
-    "baseRequired": [
-      "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
-      "unsupportedContent", "warnings"
-    ],
     "complete": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "schema", "schemaVersion", "source", "options", "readiness", "fonts", "resources",
-        "unsupportedContent", "warnings", "status", "environment", "pages", "bindings"
+        "unsupportedContent", "warnings", "fontIdentity", "status", "environment", "pages", "bindings"
       ],
       "properties": {
         "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
@@ -173,24 +338,81 @@
         "source": { "$ref": "#/$defs/baseProperties/source" },
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },
-        "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "readiness": {
+          "allOf": [
+            { "$ref": "#/$defs/baseProperties/readiness" },
+            { "items": { "properties": { "status": { "const": "complete" } } } }
+          ]
+        },
         "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
         "resources": { "$ref": "#/$defs/baseProperties/resources" },
         "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },
+        "fontIdentity": { "$ref": "#/$defs/fontIdentity" },
         "warnings": { "$ref": "#/$defs/baseProperties/warnings" },
         "status": { "const": "complete" },
         "environment": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rendererFingerprint", "verification"],
+          "required": ["rendererFingerprint", "verification", "fidelityTier", "observed"],
           "properties": {
             "rendererFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] }
-          }
+            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] },
+            "fidelityTier": { "enum": ["releaseBaselined", "experimental", "unbaselined"] },
+            "observed": { "$ref": "#/$defs/observedRuntime" },
+            "attested": { "$ref": "#/$defs/runtimeAttestation" },
+            "attestationDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "verification": { "const": "callerAttested" } } },
+              "then": { "required": ["attested", "attestationDigest"] }
+            },
+            {
+              "if": { "properties": { "verification": { "const": "nodeVerified" } } },
+              "then": {
+                "properties": {
+                  "observed": {
+                    "required": [
+                      "playwrightVersion", "browserProduct", "browserBuild", "executableSha256",
+                      "launchFlags", "operatingSystem", "architecture"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
         },
         "pages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/page" } },
         "bindings": { "$ref": "#/$defs/bindings" }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "options": { "properties": { "outputs": { "contains": { "const": "html" } } } } }
+          },
+          "then": { "properties": { "bindings": { "required": ["htmlDigest"] } } },
+          "else": { "properties": { "bindings": { "not": { "required": ["htmlDigest"] } } } }
+        },
+        {
+          "if": {
+            "properties": { "options": { "properties": { "outputs": { "contains": { "const": "pdf" } } } } }
+          },
+          "then": { "properties": { "bindings": { "required": ["pdfDigest"] } } },
+          "else": {
+            "properties": {
+              "bindings": {
+                "not": {
+                  "anyOf": [
+                    { "required": ["pdfDigest"] },
+                    { "required": ["pdfByteDeterministic"] },
+                    { "required": ["volatilePdfMetadata"] }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "failed": {
       "type": "object",
@@ -205,21 +427,40 @@
         "source": { "$ref": "#/$defs/baseProperties/source" },
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },
-        "readiness": { "$ref": "#/$defs/baseProperties/readiness" },
+        "readiness": {
+          "allOf": [
+            { "$ref": "#/$defs/baseProperties/readiness" },
+            {
+              "contains": {
+                "required": ["status"],
+                "properties": { "status": { "enum": ["failed", "cancelled"] } }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        },
         "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
         "resources": { "$ref": "#/$defs/baseProperties/resources" },
         "unsupportedContent": { "$ref": "#/$defs/baseProperties/unsupportedContent" },
+        "fontIdentity": { "$ref": "#/$defs/fontIdentity" },
         "warnings": { "$ref": "#/$defs/baseProperties/warnings" },
         "status": { "const": "failed" },
         "failure": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["code", "phase", "message", "remediation"],
+          "required": ["code", "severity", "phase", "message", "remediation"],
           "properties": {
             "code": { "$ref": "#/$defs/errorCode" },
+            "severity": { "const": "error" },
             "phase": { "$ref": "#/$defs/phase" },
             "message": { "type": "string", "minLength": 1 },
-            "remediation": { "type": "string", "minLength": 1 }
+            "remediation": { "type": "string", "minLength": 1 },
+            "detail": { "type": "string" },
+            "pending": { "type": "array", "items": { "type": "string" } },
+            "partUri": { "type": "string" },
+            "anchorId": { "type": "string" },
+            "resource": { "type": "string" }
           }
         },
         "environment": {
@@ -228,8 +469,21 @@
           "required": ["verification"],
           "properties": {
             "rendererFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] }
-          }
+            "verification": { "enum": ["nodeVerified", "browserObserved", "callerAttested"] },
+            "fidelityTier": { "enum": ["releaseBaselined", "experimental", "unbaselined"] },
+            "observed": { "$ref": "#/$defs/observedRuntime" },
+            "attested": { "$ref": "#/$defs/runtimeAttestation" },
+            "attestationDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": ["verification"],
+                "properties": { "verification": { "const": "callerAttested" } }
+              },
+              "then": { "required": ["attested", "attestationDigest"] }
+            }
+          ]
         },
         "partial": {
           "type": "object",
@@ -255,10 +509,11 @@
         },
         "unavailable": {
           "type": "array",
+          "maxItems": 4,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["field", "reason"],
+            "required": ["field", "reasonCode", "detail"],
             "properties": {
               "field": {
                 "enum": [
@@ -266,11 +521,62 @@
                   "bindings.htmlDigest", "bindings.pdfDigest"
                 ]
               },
-              "reason": { "type": "string", "minLength": 1 }
+              "reasonCode": {
+                "enum": ["notReached", "notRequested", "failedVerification", "discardedOnFailure"]
+              },
+              "detail": { "type": "string", "minLength": 1 }
+            }
+          },
+          "allOf": [
+            {
+              "contains": { "properties": { "field": { "const": "environment.rendererFingerprint" } } },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "field": { "const": "bindings.pageMapDigest" } } },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "field": { "const": "bindings.htmlDigest" } } },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "field": { "const": "bindings.pdfDigest" } } },
+              "minContains": 0,
+              "maxContains": 1
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "failure": {
+                "required": ["code"],
+                "properties": { "code": { "const": "operation_cancelled" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "readiness": {
+                "contains": { "properties": { "status": { "const": "cancelled" } } }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "readiness": {
+                "contains": { "properties": { "status": { "const": "failed" } } }
+              }
             }
           }
         }
-      }
+      ]
     }
   }
 }
