@@ -62,22 +62,55 @@ export function ptToPx(pt: number): number {
   return pt / 0.75;
 }
 
-/** Parses page dimensions from a section wrapper's data attributes. */
+function finiteDataNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function positiveDataNumber(value: string | undefined, fallback: number): number {
+  const parsed = finiteDataNumber(value, fallback);
+  return parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeDataNumber(value: string | undefined, fallback: number): number {
+  const parsed = finiteDataNumber(value, fallback);
+  return parsed >= 0 ? parsed : fallback;
+}
+
+function positiveFinite(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * Parses page dimensions from a section wrapper's data attributes.
+ *
+ * Zero is meaningful for margins and header/footer distances, so truthiness-based parsing would
+ * silently replace a valid edge-to-edge section with one-inch defaults. Number() also rejects
+ * partial numeric strings (for example `612evil`) instead of letting malformed staging markup
+ * leak non-deterministic CSS geometry into pagination.
+ */
 export function parseSectionDimensions(section: HTMLElement): PageDimensions {
-  const pageWidth = parseFloat(section.dataset.pageWidth || "") || DEFAULT_PAGE_WIDTH;
-  const pageHeight = parseFloat(section.dataset.pageHeight || "") || DEFAULT_PAGE_HEIGHT;
-  const contentWidth = parseFloat(section.dataset.contentWidth || "") || pageWidth - 2 * DEFAULT_MARGIN;
-  const contentHeight = parseFloat(section.dataset.contentHeight || "") || pageHeight - 2 * DEFAULT_MARGIN;
-  const marginTop = parseFloat(section.dataset.marginTop || "") || DEFAULT_MARGIN;
-  const marginRight = parseFloat(section.dataset.marginRight || "") || DEFAULT_MARGIN;
-  const marginBottom = parseFloat(section.dataset.marginBottom || "") || DEFAULT_MARGIN;
-  const marginLeft = parseFloat(section.dataset.marginLeft || "") || DEFAULT_MARGIN;
+  const pageWidth = positiveDataNumber(section.dataset.pageWidth, DEFAULT_PAGE_WIDTH);
+  const pageHeight = positiveDataNumber(section.dataset.pageHeight, DEFAULT_PAGE_HEIGHT);
+  const marginTop = finiteDataNumber(section.dataset.marginTop, DEFAULT_MARGIN);
+  const marginRight = finiteDataNumber(section.dataset.marginRight, DEFAULT_MARGIN);
+  const marginBottom = finiteDataNumber(section.dataset.marginBottom, DEFAULT_MARGIN);
+  const marginLeft = finiteDataNumber(section.dataset.marginLeft, DEFAULT_MARGIN);
+  const derivedContentWidth = positiveFinite(pageWidth - marginLeft - marginRight, pageWidth);
+  const derivedContentHeight = positiveFinite(pageHeight - marginTop - marginBottom, pageHeight);
+  const contentWidth = positiveDataNumber(section.dataset.contentWidth, derivedContentWidth);
+  const contentHeight = positiveDataNumber(section.dataset.contentHeight, derivedContentHeight);
   // `data-header-height`/`data-footer-height` carry `w:pgMar/@w:header` and `@w:footer`, which
   // are distances from the paper edge — the attribute names predate that being understood.
-  const headerDistance =
-    parseFloat(section.dataset.headerHeight || "") || DEFAULT_HEADER_FOOTER_DISTANCE;
-  const footerDistance =
-    parseFloat(section.dataset.footerHeight || "") || DEFAULT_HEADER_FOOTER_DISTANCE;
+  const headerDistance = nonNegativeDataNumber(
+    section.dataset.headerHeight,
+    DEFAULT_HEADER_FOOTER_DISTANCE,
+  );
+  const footerDistance = nonNegativeDataNumber(
+    section.dataset.footerHeight,
+    DEFAULT_HEADER_FOOTER_DISTANCE,
+  );
 
   return {
     pageWidth,

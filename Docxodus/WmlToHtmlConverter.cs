@@ -1110,6 +1110,9 @@ namespace Docxodus
             int globalTableIndex = 0;
             int sectionIndex = 0;
             var effectiveHeaderFooterReferences = new EffectiveHeaderFooterReferences();
+            var evenAndOddHeaders = mainDocPart.DocumentSettingsPart
+                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders);
+            bool hasEvenAndOddHeaders = IsOnOffPropertyEnabled(evenAndOddHeaders);
 
             foreach (var (sectPr, paragraphs, tables) in sectionData)
             {
@@ -1139,7 +1142,12 @@ namespace Docxodus
 
                 // Detect headers and footers
                 effectiveHeaderFooterReferences.Update(sectPr);
-                DetectHeadersFooters(wordDoc, sectPr, sectionMeta, effectiveHeaderFooterReferences);
+                DetectHeadersFooters(
+                    wordDoc,
+                    sectPr,
+                    sectionMeta,
+                    effectiveHeaderFooterReferences,
+                    hasEvenAndOddHeaders);
 
                 metadata.Sections.Add(sectionMeta);
 
@@ -1357,17 +1365,23 @@ namespace Docxodus
             }
         }
 
+        private static bool IsOnOffPropertyEnabled(XElement property) =>
+            property != null
+            && (property.Attribute(W.val) == null
+                || property.Attribute(W.val).ToBoolean() == true);
+
         private static void DetectHeadersFooters(
             WordprocessingDocument wordDoc,
             XElement sectPr,
             SectionMetadata sectionMeta,
-            EffectiveHeaderFooterReferences effectiveReferences)
+            EffectiveHeaderFooterReferences effectiveReferences,
+            bool hasEvenAndOddHeaders)
         {
             if (sectPr == null)
                 return;
 
             var mainDocPart = wordDoc.MainDocumentPart;
-            bool hasTitlePage = sectPr.Element(W.titlePg) != null;
+            bool hasTitlePage = IsOnOffPropertyEnabled(sectPr.Element(W.titlePg));
 
             // Check header references
             foreach (var headerRef in effectiveReferences.HeaderReferences)
@@ -1392,7 +1406,7 @@ namespace Docxodus
                                 sectionMeta.HasFirstPageHeader = hasTitlePage;
                                 break;
                             case "even":
-                                sectionMeta.HasEvenPageHeader = true;
+                                sectionMeta.HasEvenPageHeader = hasEvenAndOddHeaders;
                                 break;
                         }
                     }
@@ -1428,7 +1442,7 @@ namespace Docxodus
                                 sectionMeta.HasFirstPageFooter = hasTitlePage;
                                 break;
                             case "even":
-                                sectionMeta.HasEvenPageFooter = true;
+                                sectionMeta.HasEvenPageFooter = hasEvenAndOddHeaders;
                                 break;
                         }
                     }
@@ -3934,8 +3948,9 @@ namespace Docxodus
 
             // The even/odd switch is document-global. References can remain in the package while
             // the switch is off, but the Default story renders on those pages in that state.
-            bool hasEvenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
-                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders) != null;
+            var evenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
+                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders);
+            bool hasEvenAndOddHeaders = IsOnOffPropertyEnabled(evenAndOddHeaders);
 
             // Render headers/footers for each section
             for (int sectionIndex = 0; sectionIndex < sectionProperties.Count; sectionIndex++)
@@ -3944,7 +3959,8 @@ namespace Docxodus
                 effectiveReferences.Update(sectPr);
 
                 // Check if section has different first page headers/footers
-                bool hasTitlePage = sectPr.Element(W.titlePg) != null;
+                var titlePage = sectPr.Element(W.titlePg);
+                bool hasTitlePage = IsOnOffPropertyEnabled(titlePage);
 
                 // Render default header
                 var defaultHeaderContent = RenderHeaderReference(
@@ -3962,21 +3978,23 @@ namespace Docxodus
                 {
                     var firstHeaderContent = RenderHeaderReference(
                         wordDoc, settings, effectiveReferences.GetHeader("first"));
-                    if (firstHeaderContent != null)
-                    {
-                        registry.Add(new XElement(Xhtml.div,
-                            new XAttribute("data-section", sectionIndex),
-                            new XAttribute("data-hf-type", "header-first"),
-                            firstHeaderContent));
-                    }
+                    // Presence of titlePg selects the First story even when that story is blank.
+                    // Keep an empty registry entry so the paginator does not fall through to the
+                    // Default story on page one.
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-first"),
+                        firstHeaderContent));
                 }
 
                 // Render even header if the document actually uses even/odd stories
                 var evenHeaderContent = hasEvenAndOddHeaders
                     ? RenderHeaderReference(wordDoc, settings, effectiveReferences.GetHeader("even"))
                     : null;
-                if (evenHeaderContent != null)
+                if (hasEvenAndOddHeaders)
                 {
+                    // With the document-global switch enabled, an omitted effective Even story is
+                    // blank; it never falls back to Default. Preserve that distinction explicitly.
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
                         new XAttribute("data-hf-type", "header-even"),
@@ -3999,20 +4017,17 @@ namespace Docxodus
                 {
                     var firstFooterContent = RenderFooterReference(
                         wordDoc, settings, effectiveReferences.GetFooter("first"));
-                    if (firstFooterContent != null)
-                    {
-                        registry.Add(new XElement(Xhtml.div,
-                            new XAttribute("data-section", sectionIndex),
-                            new XAttribute("data-hf-type", "footer-first"),
-                            firstFooterContent));
-                    }
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-first"),
+                        firstFooterContent));
                 }
 
                 // Render even footer if the document actually uses even/odd stories
                 var evenFooterContent = hasEvenAndOddHeaders
                     ? RenderFooterReference(wordDoc, settings, effectiveReferences.GetFooter("even"))
                     : null;
-                if (evenFooterContent != null)
+                if (hasEvenAndOddHeaders)
                 {
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
@@ -5549,12 +5564,20 @@ namespace Docxodus
                 // Add section content
                 stagingContent.AddRange(divList);
 
+                var footnoteLayoutCompatibility = wordDoc.MainDocumentPart?
+                    .DocumentSettingsPart?.GetXDocument().Root?
+                    .Element(W.compat)?.Element(W.footnoteLayoutLikeWW8);
+                var useWord8FootnoteLayout = IsOnOffPropertyEnabled(footnoteLayoutCompatibility);
+
                 return new object[]
                 {
                     // Staging area containing the content (hidden by CSS for client-side measurement)
                     new XElement(Xhtml.div,
                         new XAttribute("id", "pagination-staging"),
                         new XAttribute("class", prefix + "staging"),
+                        useWord8FootnoteLayout
+                            ? new XAttribute("data-footnote-layout-like-word8", "true")
+                            : null,
                         stagingContent),
                     // Container where paginated content will be rendered by client-side JavaScript
                     new XElement(Xhtml.div,
