@@ -348,7 +348,7 @@ function summarizeCases(cases: CaseResult[]) {
   };
 }
 
-test('stratified tracked corpus matches LibreOffice at pixel level', async ({ page, browserName }) => {
+test('stratified tracked corpus matches LibreOffice at pixel level', async ({ page, browserName }, testInfo) => {
   test.setTimeout(20 * 60 * 1000);
   assertTrackedCorpus(VISUAL_PARITY_CORPUS);
   const fontContract = fontContractReport(repoRoot); // throws if the host misses the contract
@@ -356,13 +356,16 @@ test('stratified tracked corpus matches LibreOffice at pixel level', async ({ pa
   // rather than after twenty minutes at the ratchet's fingerprint check.
   const libreofficeVersion = assertLibreOfficeContract();
   const corpus = selectedCorpus();
-  const outputRoot = resolve(process.env.DOCXODUS_VISUAL_PARITY_OUTPUT ??
+  const configuredOutputRoot = resolve(process.env.DOCXODUS_VISUAL_PARITY_OUTPUT ??
     join(tmpdir(), 'docxodus-visual-parity'));
-  const outputRelativeToRepo = relative(repoRoot, outputRoot);
+  const outputRelativeToRepo = relative(repoRoot, configuredOutputRoot);
   if (outputRelativeToRepo === '' ||
       (!outputRelativeToRepo.startsWith('..') && !isAbsolute(outputRelativeToRepo))) {
-    throw new Error(`Visual parity artifacts must stay outside the repository: ${outputRoot}`);
+    throw new Error(`Visual parity artifacts must stay outside the repository: ${configuredOutputRoot}`);
   }
+  const outputRoot = testInfo.retry === 0
+    ? configuredOutputRoot
+    : join(configuredOutputRoot, `retry-${testInfo.retry}`);
   if (existsSync(outputRoot) && readdirSync(outputRoot).length) {
     throw new Error(`Visual parity output must be empty to prevent stale artifacts: ${outputRoot}`);
   }
