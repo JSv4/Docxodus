@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { PDFDocument } from "pdf-lib";
+import { PDFBool, PDFDict, PDFDocument, PDFName } from "pdf-lib";
 import type { CompleteRenderReport } from "./contracts.js";
 import { exportError } from "./contracts.js";
 
@@ -9,6 +9,7 @@ export interface VerifiedPdf {
 }
 
 const GEOMETRY_TOLERANCE_POINTS = 0.5;
+const PDF_WHITESPACE = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
 
 function closeTo(actual: number, expected: number): boolean {
   return Number.isFinite(actual)
@@ -33,14 +34,44 @@ function metadata(pdf: PDFDocument): Record<string, string> {
 export async function verifyPdf(
   bytes: Uint8Array,
   expectedPages: CompleteRenderReport["pages"],
+  maximumParserBytes: number,
 ): Promise<VerifiedPdf> {
-  if (bytes.byteLength < 8
-    || new TextDecoder("ascii").decode(bytes.subarray(0, 5)) !== "%PDF-") {
+  if (!Number.isSafeInteger(maximumParserBytes) || maximumParserBytes <= 0
+    || bytes.byteLength > maximumParserBytes) {
+    exportError(
+      "resource_limit",
+      "output_verification",
+      `pdfParserExpandedBytes admission failed (${bytes.byteLength} > ${maximumParserBytes}).`,
+      "Use a smaller PDF or a reviewed parser-memory limit.",
+    );
+  }
+  const view = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.byteLength < 16 || !/^%PDF-[12]\.[0-9](?:\r\n|\r|\n)/.test(
+    view.subarray(0, Math.min(16, view.byteLength)).toString("ascii"),
+  )) {
     exportError(
       "output_verification_failure",
       "output_verification",
       "Chromium did not return a recognizable PDF document.",
       "Retry with the pinned Chromium runtime and inspect browser diagnostics.",
+    );
+  }
+  const eof = view.lastIndexOf(Buffer.from("%%EOF", "ascii"));
+  if (eof < 0 || view.subarray(eof + 5).some((value) => !PDF_WHITESPACE.has(value))) {
+    exportError(
+      "output_verification_failure",
+      "output_verification",
+      "The generated PDF is missing a terminal EOF marker or has trailing non-PDF bytes.",
+      "Reject truncated and polyglot output; retry with pinned Chromium.",
+    );
+  }
+  const trailerStart = Math.max(0, eof - 128);
+  if (!/startxref\s+[0-9]+\s*%%EOF\s*$/.test(view.subarray(trailerStart).toString("ascii"))) {
+    exportError(
+      "output_verification_failure",
+      "output_verification",
+      "The generated PDF does not end in a canonical startxref/EOF trailer.",
+      "Retry with pinned Chromium and reject incomplete byte streams.",
     );
   }
 
@@ -70,7 +101,7 @@ export async function verifyPdf(
     );
   }
   const pages = pdf.getPages();
-  if (pages.length !== expectedPages.length) {
+  if (expectedPages.length < 1 || pages.length !== expectedPages.length) {
     exportError(
       "output_verification_failure",
       "output_verification",
@@ -84,7 +115,8 @@ export async function verifyPdf(
     const media = page.getMediaBox();
     const crop = page.getCropBox();
     for (const [boxName, box] of [["MediaBox", media], ["CropBox", crop]] as const) {
-      if (!closeTo(box.width, expected.width) || !closeTo(box.height, expected.height)) {
+      if (!closeTo(box.x, 0) || !closeTo(box.y, 0)
+        || !closeTo(box.width, expected.width) || !closeTo(box.height, expected.height)) {
         exportError(
           "output_verification_failure",
           "output_verification",
@@ -94,7 +126,27 @@ export async function verifyPdf(
         );
       }
     }
+    if (page.getRotation().angle !== 0) {
+      exportError(
+        "output_verification_failure",
+        "output_verification",
+        `PDF page ${index + 1} has an unexpected rotation dictionary.`,
+        "Represent page orientation through the finalized CSS page geometry.",
+      );
+    }
   });
+
+  const markInfo = pdf.catalog.lookupMaybe(PDFName.of("MarkInfo"), PDFDict);
+  const marked = markInfo?.lookupMaybe(PDFName.of("Marked"), PDFBool);
+  const structureTree = pdf.catalog.lookupMaybe(PDFName.of("StructTreeRoot"), PDFDict);
+  if (marked?.asBoolean() !== true || !structureTree) {
+    exportError(
+      "output_verification_failure",
+      "output_verification",
+      "Chromium did not produce the required tagged PDF structure.",
+      "Use tagged PDF printing with the supported Chromium revision.",
+    );
+  }
 
   return {
     digest: createHash("sha256").update(bytes).digest("hex"),
