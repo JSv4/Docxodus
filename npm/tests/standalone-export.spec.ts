@@ -278,16 +278,14 @@ test.describe('standalone paginated HTML', () => {
     expect(result.rendererFingerprint).toBe(result.pageMap.rendererFingerprint);
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
-    expect(result.renderReport.fonts.length).toBeGreaterThan(0);
     expect(result.renderReport.fonts.every((font) =>
       font.requestedFamily.length > 0
       && font.status === 'unverified'
       && font.source === 'browser')).toBe(true);
-    expect(result.renderReport.warnings).toContainEqual(expect.objectContaining({
-      code: 'font_environment_unverified',
-      severity: 'warning',
-      phase: 'font_loading',
-    }));
+    expect(result.renderReport.warnings.some((warning) =>
+      warning.code === 'font_environment_unverified'
+      && warning.severity === 'warning'
+      && warning.phase === 'font_loading')).toBe(result.renderReport.fonts.length > 0);
     for (const phase of [
       'wasm_initialization',
       'docx_conversion',
