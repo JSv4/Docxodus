@@ -2881,7 +2881,11 @@ class SemanticValueKind(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class SemanticValue:
-    """Closed typed value used for one semantic change's before/after state."""
+    """Closed typed value used for one semantic change's before/after state.
+
+    Version 1 integer values stay within JavaScript's exactly representable
+    ``[-(2**53-1), 2**53-1]`` range so all supported clients retain identity.
+    """
 
     kind: SemanticValueKind
     value: str | bool | int | Mapping[str, "SemanticValue"] | tuple["SemanticValue", ...] | None = None
@@ -2901,6 +2905,12 @@ class SemanticValue:
             value = tuple(cls._from_wire(member) for member in (raw or ()))
         elif kind is SemanticValueKind.ABSENT:
             value = None
+        elif kind is SemanticValueKind.INTEGER:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                raise ValueError(f"semantic integer must be an integer, got {raw!r}")
+            if not -(2**53 - 1) <= raw <= 2**53 - 1:
+                raise ValueError(f"semantic integer is outside the v1 safe range: {raw}")
+            value = raw
         else:
             value = raw
         return cls(

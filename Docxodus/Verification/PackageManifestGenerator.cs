@@ -518,6 +518,14 @@ public static class PackageManifestGenerator
                 new ChangeLocation { EntryUri = ContentTypesUri });
             return ContentTypeMap.Empty;
         }
+        catch (XmlDepthLimitException)
+        {
+            selected.XmlLimitReported = true;
+            AddFinding(findings, "xml_depth_limit_exceeded", VerificationFindingSeverity.Error,
+                $"[Content_Types].xml exceeds the {XmlSemanticNormalizer.MaxElementDepth.ToString(CultureInfo.InvariantCulture)} level XML nesting limit.",
+                new ChangeLocation { EntryUri = ContentTypesUri });
+            return ContentTypeMap.Empty;
+        }
         catch (Exception ex) when (ex is InvalidDataException or IOException or XmlException
             or UnauthorizedAccessException)
         {
@@ -656,6 +664,13 @@ public static class PackageManifestGenerator
             work.Xml = document;
             work.NormalizedXmlDigest = XmlSemanticNormalizer.Digest(
                 document, work.Uri, IsKnownOoxmlXml(work));
+        }
+        catch (XmlDepthLimitException)
+        {
+            work.XmlLimitReported = true;
+            AddFinding(findings, "xml_depth_limit_exceeded", VerificationFindingSeverity.Error,
+                $"XML entry exceeds the {XmlSemanticNormalizer.MaxElementDepth.ToString(CultureInfo.InvariantCulture)} level nesting limit.",
+                new ChangeLocation { EntryUri = work.Uri });
         }
         catch (Exception ex) when (ex is XmlException or InvalidOperationException)
         {

@@ -109,27 +109,35 @@ public class SemanticDiffTests
     [Fact]
     public void Mixed_story_note_and_comment_parts_keep_owning_part_and_scope()
     {
-        var storyLeft = IrTestDocuments.WithHeaderAndFooter("Old header", "Old footer");
-        var storyRight = IrTestDocuments.WithHeaderAndFooter("New header", "New footer");
-        var stories = SemanticDiff.Compare(storyLeft, storyRight);
-        AssertFamilies(stories, SemanticChangeFamily.Header, SemanticChangeFamily.Footer);
-        Assert.Contains(stories.Changes, change => change.PartUri.StartsWith("/word/header", StringComparison.Ordinal));
-        Assert.Contains(stories.Changes, change => change.PartUri.StartsWith("/word/footer", StringComparison.Ordinal));
+        var left = IrTestDocuments.WithMixedReviewParts(
+            "Old header", "Old footer", "Old footnote", "Old endnote", "Old comment");
+        var right = IrTestDocuments.WithMixedReviewParts(
+            "New header", "New footer", "New footnote", "New endnote", "New comment");
 
-        var noteLeft = IrTestDocuments.WithFootnoteAndEndnote("Old footnote", "Old endnote");
-        var noteRight = IrTestDocuments.WithFootnoteAndEndnote("New footnote", "New endnote");
-        var notes = SemanticDiff.Compare(noteLeft, noteRight);
-        AssertFamilies(notes, SemanticChangeFamily.Footnote, SemanticChangeFamily.Endnote);
-        Assert.Contains(notes.Changes, change => change.PartUri == "/word/footnotes.xml");
-        Assert.Contains(notes.Changes, change => change.PartUri == "/word/endnotes.xml");
+        var result = SemanticDiff.Compare(left, right);
 
-        const string body = "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Target</w:t></w:r>" +
-            "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
-        var commentLeft = IrTestDocuments.WithComment("Alice", "A", "2026-01-01T00:00:00Z", "Old", body);
-        var commentRight = IrTestDocuments.WithComment("Bob", "B", "2026-01-02T00:00:00Z", "New", body);
-        var comments = SemanticDiff.Compare(commentLeft, commentRight);
-        AssertFamilies(comments, SemanticChangeFamily.Comment);
-        Assert.Contains(comments.Changes, change => change.PartUri == "/word/comments.xml");
+        AssertFamilies(result,
+            SemanticChangeFamily.Header,
+            SemanticChangeFamily.Footer,
+            SemanticChangeFamily.Footnote,
+            SemanticChangeFamily.Endnote,
+            SemanticChangeFamily.Comment);
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.Header
+            && change.PartUri.StartsWith("/word/header", StringComparison.Ordinal));
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.Footer
+            && change.PartUri.StartsWith("/word/footer", StringComparison.Ordinal));
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.Footnote
+            && change.PartUri == "/word/footnotes.xml");
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.Endnote
+            && change.PartUri == "/word/endnotes.xml");
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.Comment
+            && change.PartUri == "/word/comments.xml");
+        Assert.All(result.Changes, AssertCompleteLocationAndValues);
     }
 
     [Fact]
@@ -278,6 +286,13 @@ public class SemanticDiffTests
         Assert.Equal(forward.ToCanonicalJson(), reverse.ToCanonicalJson());
         Assert.Equal(new[] { "chg-000001", "chg-000002" }, forward.Changes.Select(change => change.Id));
         Assert.Equal(forward.ToCanonicalUtf8Bytes(), reverse.ToCanonicalUtf8Bytes());
+
+        var moveA = Change("caller-a", "/word/same.xml", SemanticChangeFamily.Text, "same")
+            with { MoveId = "move-a" };
+        var moveZ = moveA with { Id = "caller-z", MoveId = "move-z" };
+        Assert.Equal(
+            new SemanticChangeSet(new[] { moveA, moveZ }).ToCanonicalJson(),
+            new SemanticChangeSet(new[] { moveZ, moveA }).ToCanonicalJson());
     }
 
     [Fact]
@@ -341,6 +356,128 @@ public class SemanticDiffTests
         Assert.DoesNotContain(result.Changes, change => change.Family == SemanticChangeFamily.Text);
         Assert.DoesNotContain(result.Changes, change =>
             change.Family == SemanticChangeFamily.OpaquePackagePart);
+    }
+
+    [Fact]
+    public void Formatting_on_zero_width_atomic_content_remains_visible()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>A</w:t><w:tab/></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>A</w:t><w:tab/></w:r></w:p>");
+
+        var result = SemanticDiff.Compare(left, right,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.RunFormatting
+            && change.Path.Contains("paragraph.atomic_tokens", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Changes, change => change.Family == SemanticChangeFamily.Text);
+    }
+
+    [Fact]
+    public void Atomic_token_changes_are_not_suppressed_when_plain_text_is_equal()
+    {
+        var line = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha</w:t><w:br/><w:t>Beta</w:t></w:r></w:p>");
+        var page = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha</w:t><w:br w:type=\"page\"/><w:t>Beta</w:t></w:r></w:p>");
+
+        var breakDiff = SemanticDiff.Compare(line, page,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        Assert.Contains(breakDiff.Changes, change =>
+            change.Family == SemanticChangeFamily.Text
+            && DescendantValues(change.Before).Concat(DescendantValues(change.After))
+                .Any(value => value.StringValue is "brk:Line" or "brk:Page"));
+
+        var refMiddle = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>" +
+            "<w:r><w:t> beta</w:t></w:r></w:p>");
+        var refEnd = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha beta</w:t></w:r>" +
+            "<w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>");
+
+        var noteDiff = SemanticDiff.Compare(refMiddle, refEnd,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        Assert.Contains(noteDiff.Changes, change =>
+            change.Family == SemanticChangeFamily.Text
+            && DescendantValues(change.Before).Concat(DescendantValues(change.After))
+                .Any(value => value.StringValue == "fn"));
+    }
+
+    [Fact]
+    public void Split_with_concurrent_text_edit_emits_structure_and_text()
+    {
+        var before = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha beta gamma delta</w:t></w:r></w:p>");
+        var after = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Alpha beta</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>GAMMA delta</w:t></w:r></w:p>");
+
+        var result = SemanticDiff.Compare(before, after,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        Assert.Contains(result.Changes, change =>
+            change.Family == SemanticChangeFamily.BlockStructure
+            && change.Operation == SemanticChangeOperation.Modify
+            && change.Path == "paragraph.split");
+        Assert.Contains(result.Changes, change => change.Family == SemanticChangeFamily.Text);
+    }
+
+    [Fact]
+    public void Split_and_merge_project_segment_formatting()
+    {
+        var combinedBold = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Alpha beta gamma delta</w:t></w:r></w:p>");
+        var splitFormats = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Alpha beta</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>gamma delta</w:t></w:r></w:p>");
+        var options = new SemanticDiffOptions { IncludePackageChanges = false };
+
+        var split = SemanticDiff.Compare(combinedBold, splitFormats, options);
+        Assert.Contains(split.Changes, change =>
+            change.Family == SemanticChangeFamily.BlockStructure
+            && change.Path == "paragraph.split");
+        Assert.Contains(split.Changes, change =>
+            change.Family == SemanticChangeFamily.RunFormatting);
+
+        var merge = SemanticDiff.Compare(splitFormats, combinedBold, options);
+        Assert.Contains(merge.Changes, change =>
+            change.Family == SemanticChangeFamily.BlockStructure
+            && change.Path == "paragraph.merge");
+        Assert.Contains(merge.Changes, change =>
+            change.Family == SemanticChangeFamily.RunFormatting);
+    }
+
+    [Fact]
+    public void One_sided_blocks_retain_run_section_and_opaque_semantics()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Anchor</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Anchor</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>" +
+            "</w:sectPr></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Inserted</w:t></w:r></w:p>" +
+            "<x:vendor xmlns:x=\"urn:vendor\"><x:data>secret</x:data></x:vendor>");
+
+        var result = SemanticDiff.Compare(left, right,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        Assert.Contains(result.Changes, change =>
+            change.Operation == SemanticChangeOperation.Insert
+            && change.Family == SemanticChangeFamily.RunFormatting);
+        Assert.Contains(result.Changes, change =>
+            change.Operation == SemanticChangeOperation.Insert
+            && change.Family == SemanticChangeFamily.Section);
+        Assert.Contains(result.Changes, change =>
+            change.Operation == SemanticChangeOperation.Insert
+            && change.Family == SemanticChangeFamily.PageSetup);
+        Assert.Contains(result.Changes, change =>
+            change.Operation == SemanticChangeOperation.Insert
+            && change.Family == SemanticChangeFamily.OpaquePackagePart
+            && change.Path == "block.opaque");
     }
 
     [Fact]
@@ -408,6 +545,35 @@ public class SemanticDiffTests
     }
 
     [Fact]
+    public void Inline_feature_rotation_uses_a_longest_stable_spine()
+    {
+        const string r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var left = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdA\"><w:r><w:t>A</w:t></w:r></w:hyperlink>" +
+            $"<w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdB\"><w:r><w:t>B</w:t></w:r></w:hyperlink>" +
+            $"<w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdC\"><w:r><w:t>C</w:t></w:r></w:hyperlink></w:p>",
+            ("rIdA", "https://example.test/a"),
+            ("rIdB", "https://example.test/b"),
+            ("rIdC", "https://example.test/c"));
+        var right = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdB\"><w:r><w:t>B</w:t></w:r></w:hyperlink>" +
+            $"<w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdC\"><w:r><w:t>C</w:t></w:r></w:hyperlink>" +
+            $"<w:hyperlink xmlns:r=\"{r}\" r:id=\"rIdA\"><w:r><w:t>A</w:t></w:r></w:hyperlink></w:p>",
+            ("rIdA", "https://example.test/a"),
+            ("rIdB", "https://example.test/b"),
+            ("rIdC", "https://example.test/c"));
+
+        var changes = SemanticDiff.Compare(left, right,
+            new SemanticDiffOptions { IncludePackageChanges = false }).Changes
+            .Where(change => change.Family == SemanticChangeFamily.Hyperlink)
+            .ToArray();
+
+        Assert.Equal(2, changes.Length);
+        Assert.Contains(changes, change => change.Operation == SemanticChangeOperation.Delete);
+        Assert.Contains(changes, change => change.Operation == SemanticChangeOperation.Insert);
+    }
+
+    [Fact]
     public void Bookmark_and_revision_location_changes_are_not_suppressed()
     {
         var bookmarkLeft = IrTestDocuments.FromBodyXml(
@@ -424,14 +590,120 @@ public class SemanticDiffTests
             && change.RightAnchor is not null);
 
         var revisionLeft = IrTestDocuments.FromBodyXml(
-            "<w:p><w:ins w:id=\"1\" w:author=\"A\"><w:r><w:t>Tracked</w:t></w:r></w:ins></w:p>" +
+            "<w:p><w:ins w:id=\"1\" w:author=\"A\"/><w:r><w:t>Source</w:t></w:r></w:p>" +
             "<w:p><w:r><w:t>Destination</w:t></w:r></w:p>");
         var revisionRight = IrTestDocuments.FromBodyXml(
-            "<w:p><w:r><w:t>Destination</w:t></w:r></w:p>" +
-            "<w:p><w:ins w:id=\"1\" w:author=\"A\"><w:r><w:t>Tracked</w:t></w:r></w:ins></w:p>");
+            "<w:p><w:r><w:t>Source</w:t></w:r></w:p>" +
+            "<w:p><w:ins w:id=\"1\" w:author=\"A\"/><w:r><w:t>Destination</w:t></w:r></w:p>");
         Assert.Contains(SemanticDiff.Compare(revisionLeft, revisionRight).Changes, change =>
             change.Family == SemanticChangeFamily.Revision
             && change.Operation == SemanticChangeOperation.Move);
+    }
+
+    [Fact]
+    public void Preceding_block_insert_does_not_move_unchanged_package_entities()
+    {
+        const string target =
+            "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Stable\"/>" +
+            "<w:r><w:t>Target</w:t></w:r><w:bookmarkEnd w:id=\"1\"/></w:p>";
+        var bookmarkLeft = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Existing</w:t></w:r></w:p>" + target);
+        var bookmarkRight = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Inserted</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Existing</w:t></w:r></w:p>" + target);
+
+        Assert.DoesNotContain(SemanticDiff.Compare(bookmarkLeft, bookmarkRight).Changes,
+            change => change.Family == SemanticChangeFamily.Bookmark);
+
+        const string linked =
+            "<w:p><w:hyperlink r:id=\"rIdLink\" " +
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+            "<w:r><w:t>Target</w:t></w:r></w:hyperlink></w:p>";
+        var bindingLeft = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            "<w:p><w:r><w:t>Existing</w:t></w:r></w:p>" + linked,
+            ("rIdLink", "https://example.test/stable"));
+        var bindingRight = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            "<w:p><w:r><w:t>Inserted</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Existing</w:t></w:r></w:p>" + linked,
+            ("rIdLink", "https://example.test/stable"));
+
+        Assert.DoesNotContain(SemanticDiff.Compare(bindingLeft, bindingRight).Changes,
+            change => change.Family == SemanticChangeFamily.Relationship);
+    }
+
+    [Fact]
+    public void Revision_relationship_id_churn_and_namespaced_shadow_order_are_suppressed()
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var revisionLeft = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:ins w:id=\"4\" w:author=\"Reviewer\"><w:hyperlink r:id=\"rIdA\" xmlns:r=\"{R}\">" +
+            "<w:r><w:t>Same</w:t></w:r></w:hyperlink></w:ins></w:p>",
+            ("rIdA", "https://example.test/same"));
+        var revisionRight = IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:ins w:id=\"4\" w:author=\"Reviewer\"><w:hyperlink r:id=\"rIdZ\" xmlns:r=\"{R}\">" +
+            "<w:r><w:t>Same</w:t></w:r></w:hyperlink></w:ins></w:p>",
+            ("rIdZ", "https://example.test/same"));
+        Assert.Empty(SemanticDiff.Compare(revisionLeft, revisionRight).Changes);
+
+        const string leftBody =
+            "<w:p xmlns:z=\"urn:shadow\"><w:bookmarkStart z:name=\"Shadow\" w:name=\"Real\" " +
+            "z:id=\"99\" w:id=\"1\"/><w:r><w:t>Same</w:t></w:r><w:bookmarkEnd w:id=\"1\"/>" +
+            "<w:ins z:author=\"Shadow\" w:author=\"Real\" w:id=\"2\"><w:r><w:t>Tracked</w:t></w:r></w:ins></w:p>";
+        const string rightBody =
+            "<w:p xmlns:z=\"urn:shadow\"><w:bookmarkStart w:id=\"1\" z:id=\"99\" " +
+            "w:name=\"Real\" z:name=\"Shadow\"/><w:r><w:t>Same</w:t></w:r><w:bookmarkEnd w:id=\"1\"/>" +
+            "<w:ins w:id=\"2\" w:author=\"Real\" z:author=\"Shadow\"><w:r><w:t>Tracked</w:t></w:r></w:ins></w:p>";
+        Assert.Empty(SemanticDiff.Compare(
+            IrTestDocuments.FromBodyXml(leftBody),
+            IrTestDocuments.FromBodyXml(rightBody)).Changes);
+    }
+
+    [Fact]
+    public void Recognized_part_envelopes_and_content_types_remain_visible()
+    {
+        var basis = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Same</w:t></w:r></w:p>");
+        var storyLeft = RewriteEntry(basis, "word/document.xml",
+            $"<w:document xmlns:w=\"{W}\" xmlns:v=\"urn:vendor\" v:flag=\"left\">" +
+            "<w:body><w:p><w:r><w:t>Same</w:t></w:r></w:p></w:body></w:document>");
+        var storyRight = RewriteEntry(basis, "word/document.xml",
+            $"<w:document xmlns:w=\"{W}\" xmlns:v=\"urn:vendor\" v:flag=\"right\">" +
+            "<w:body><w:p><w:r><w:t>Same</w:t></w:r></w:p></w:body></w:document>");
+        Assert.Contains(SemanticDiff.Compare(storyLeft, storyRight).Changes, change =>
+            change.Family == SemanticChangeFamily.OpaquePackagePart
+            && change.Path == "story.envelope.package");
+
+        var nestedLeft = IrTestDocuments.FromBodyXml(
+            "<w:p xmlns:v=\"urn:vendor\" v:flag=\"left\"><w:r><w:t>Same</w:t></w:r>" +
+            "<!--left audit--></w:p>");
+        var nestedRight = IrTestDocuments.FromBodyXml(
+            "<w:p xmlns:v=\"urn:vendor\" v:flag=\"right\"><w:r><w:t>Same</w:t></w:r>" +
+            "<!--right audit--></w:p>");
+        Assert.Contains(SemanticDiff.Compare(nestedLeft, nestedRight).Changes, change =>
+            change.Family == SemanticChangeFamily.OpaquePackagePart
+            && change.Path == "story.extensions.package");
+
+        const string annotationPrefix =
+            "<annotations xmlns=\"http://docxodus.dev/annotations/v1\" xmlns:v=\"urn:vendor\" ";
+        const string annotationBody =
+            "><annotation id=\"ann-1\" label=\"Same\"><range bookmarkName=\"same\"/>" +
+            "</annotation></annotations>";
+        var annotationLeft = WithCustomXmlPayload(basis,
+            annotationPrefix + "v:flag=\"left\"" + annotationBody);
+        var annotationRight = WithCustomXmlPayload(basis,
+            annotationPrefix + "v:flag=\"right\"" + annotationBody);
+        Assert.Contains(SemanticDiff.Compare(annotationLeft, annotationRight).Changes, change =>
+            change.Family == SemanticChangeFamily.Annotation
+            && change.Path == "annotation.registry.package");
+
+        var macroEnabled = RewritePartContentType(
+            basis,
+            "/word/document.xml",
+            "application/vnd.ms-word.document.macroEnabled.main+xml");
+        Assert.Contains(SemanticDiff.Compare(basis, macroEnabled).Changes, change =>
+            change.Family == SemanticChangeFamily.OpaquePackagePart
+            && change.Path == "package.content_type"
+            && change.PartUri == "/word/document.xml");
     }
 
     [Fact]
@@ -579,6 +851,11 @@ public class SemanticDiffTests
             duplicate,
             document.DocumentByteArray,
             new SemanticDiffOptions()));
+
+        var rawBoundaryError = Assert.Throws<InvalidDataException>(() => SemanticDiff.Compare(
+            new byte[] { 0x50, 0x4b, 0x03, 0x04 },
+            document.DocumentByteArray));
+        Assert.Contains("manifest preflight", rawBoundaryError.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -588,9 +865,12 @@ public class SemanticDiffTests
         var right = IrTestDocuments.Create("After");
 
         var publicJson = DocxDiff.GetSemanticChanges(left, right).ToCanonicalJson();
+        var publicByteJson = DocxDiff.GetSemanticChanges(
+            left.DocumentByteArray, right.DocumentByteArray).ToCanonicalJson();
         var wireJson = DocxDiffOps.GetSemanticChangesJson(
             left.DocumentByteArray, right.DocumentByteArray, settingsJson: null);
 
+        Assert.Equal(publicJson, publicByteJson);
         Assert.Equal(publicJson, wireJson);
     }
 
@@ -605,6 +885,9 @@ public class SemanticDiffTests
 
         Assert.Equal("https://json-schema.org/draft/2020-12/schema",
             root.GetProperty("$schema").GetString());
+        Assert.Equal(
+            "https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/schemas/semantic-changes-v1.schema.json",
+            root.GetProperty("$id").GetString());
         var properties = root.GetProperty("properties");
         Assert.Equal(SemanticChangeSet.CurrentSchema,
             properties.GetProperty("schema").GetProperty("const").GetString());
@@ -844,6 +1127,32 @@ public class SemanticDiffTests
             declaration = new XElement(root.Name.Namespace + "Override",
                 new XAttribute("PartName", customPartName));
             root.Add(declaration);
+        }
+        declaration.SetAttributeValue("ContentType", contentType);
+        return RewriteEntry(source, "[Content_Types].xml",
+            types.ToString(SaveOptions.DisableFormatting));
+    }
+
+    private static WmlDocument RewritePartContentType(
+        WmlDocument source,
+        string partName,
+        string contentType)
+    {
+        XDocument types;
+        using (var stream = new MemoryStream(source.DocumentByteArray, writable: false))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
+        using (var input = archive.GetEntry("[Content_Types].xml")!.Open())
+            types = XDocument.Load(input);
+
+        var declaration = types.Root!.Elements().FirstOrDefault(element =>
+            element.Name.LocalName == "Override"
+            && (string?)element.Attribute("PartName") == partName);
+        if (declaration is null)
+        {
+            declaration = new XElement(
+                types.Root.Name.Namespace + "Override",
+                new XAttribute("PartName", partName));
+            types.Root.Add(declaration);
         }
         declaration.SetAttributeValue("ContentType", contentType);
         return RewriteEntry(source, "[Content_Types].xml",

@@ -5109,8 +5109,8 @@ public sealed partial class DocxSession : IDisposable
 
             var currentPackageBytes = SerializePackageCheckpoint();
             return Verification.SemanticDiff.Compare(
-                new WmlDocument("initial.docx", _initialPackageBytes),
-                new WmlDocument("current.docx", currentPackageBytes),
+                _initialPackageBytes,
+                currentPackageBytes,
                 options);
         }
     }

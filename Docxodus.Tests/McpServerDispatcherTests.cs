@@ -243,9 +243,12 @@ public class McpServerDispatcherTests : IDisposable
             }
         }
 
-        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store,
-            "docxodus_get_content",
-            J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes","anchorId":"ignored"}""")));
+        foreach (var forbiddenAnchor in new[] { "\"ignored\"", "null", "{}" })
+        {
+            Assert.Throws<McpToolException>(() => Dispatcher.Call(_store,
+                "docxodus_get_content",
+                J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes","anchorId":{{forbiddenAnchor}}}""")));
+        }
     }
 
     [Fact]

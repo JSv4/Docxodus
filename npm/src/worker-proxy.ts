@@ -26,16 +26,19 @@ import type {
   WorkerGeneratePackageManifestResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
+  WorkerGetSemanticChangesResponse,
   WorkerGetRevisionsResponse,
   WorkerGetDocumentMetadataResponse,
   WorkerGetVersionResponse,
   WorkerPrepareResponse,
   WorkerSessionOpenResponse,
   WorkerSessionGetPackageManifestResponse,
+  WorkerSessionGetSemanticChangesResponse,
   WorkerSessionEditResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
   CompareOptions,
+  DocxDiffSettings,
   GetRevisionsOptions,
   Revision,
   VersionInfo,
@@ -46,6 +49,7 @@ import type {
   CharSpan,
   EditResult,
   PackageManifest,
+  SemanticChangeSet,
 } from "./types.js";
 
 /**
@@ -98,6 +102,9 @@ function deriveWasmBasePath(): string {
 export interface WorkerDocxSession {
   /** Generate a deterministic manifest of the session's current logical checkpoint. */
   getPackageManifest(): Promise<PackageManifest>;
+
+  /** Compare the current logical checkpoint with the exact opening package. */
+  getSemanticChanges(): Promise<SemanticChangeSet>;
 
   /**
    * Add an annotation to the document at the given anchor.
@@ -159,6 +166,13 @@ export interface WorkerDocxSession {
 export interface WorkerDocxodus {
   /** Generate a deterministic, non-mutating verification manifest. */
   generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+
+  /** Compare two DOCX packages into the stable, versioned semantic-change schema. */
+  getSemanticChanges(
+    left: File | Uint8Array,
+    right: File | Uint8Array,
+    settings?: DocxDiffSettings
+  ): Promise<SemanticChangeSet>;
 
   /**
    * Convert a DOCX document to HTML.
@@ -415,6 +429,26 @@ export async function createWorkerDocxodus(
       return response.manifest!;
     },
 
+    async getSemanticChanges(
+      left: File | Uint8Array,
+      right: File | Uint8Array,
+      settings?: DocxDiffSettings
+    ): Promise<SemanticChangeSet> {
+      const leftBytes = await toBytes(left);
+      const rightBytes = await toBytes(right);
+      const response = await sendRequest<WorkerGetSemanticChangesResponse>(
+        {
+          id: generateId(),
+          type: "getSemanticChanges",
+          leftBytes,
+          rightBytes,
+          settings,
+        },
+        [leftBytes.buffer, rightBytes.buffer]
+      );
+      return response.semanticChanges!;
+    },
+
     async convertDocxToHtml(
       document: File | Uint8Array,
       options?: ConversionOptions
@@ -563,6 +597,18 @@ export async function createWorkerDocxodus(
             throw new Error(res.error ?? "sessionGetPackageManifest failed");
           }
           return res.manifest;
+        },
+
+        async getSemanticChanges(): Promise<SemanticChangeSet> {
+          const res = await sendRequest<WorkerSessionGetSemanticChangesResponse>({
+            id: generateId(),
+            type: "sessionGetSemanticChanges",
+            handle,
+          });
+          if (!res.success || !res.semanticChanges) {
+            throw new Error(res.error ?? "sessionGetSemanticChanges failed");
+          }
+          return res.semanticChanges;
         },
 
         async addAnnotation(
