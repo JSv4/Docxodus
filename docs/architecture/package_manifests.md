@@ -21,7 +21,7 @@ error-severity finding.
 | .NET | `PackageManifestGenerator.Generate(bytes)` / `GenerateJson(bytes)` | `session.GetPackageManifest()` |
 | WASM export | `DocumentConverter.GeneratePackageManifest(bytes)` | `DocxSessionBridge.GetPackageManifest(handle)` |
 | npm | `await generatePackageManifest(fileOrBytes)` | `session.getPackageManifest()` |
-| npm worker | `await worker.generatePackageManifest(fileOrBytes)` | — |
+| npm worker | `await worker.generatePackageManifest(fileOrBytes)` | `await session.getPackageManifest()` |
 | Python | `generate_package_manifest(bytes)` | `session.get_package_manifest()` |
 | MCP | — | `docxodus_get_content({ sessionId, format: "manifest" })` |
 
@@ -56,9 +56,12 @@ suppresses both content digests: an inspection that stopped early has not seen t
 and two packages differing only past the cut must not compare equal.
 
 `packageKind` is one of `opc`, `zip`, `zip-encrypted`, `ole-encrypted`, `ole`, or `malformed`.
-Password-encrypted OOXML commonly appears as an OLE compound file containing `EncryptedPackage`
-and `EncryptionInfo`; it is identified without attempting decryption. Traditional ZIP encryption
-is detected from central-directory flags. Both are unsupported and produce error findings.
+Password-encrypted OOXML commonly appears as an OLE compound file containing reachable
+`EncryptedPackage` and `EncryptionInfo` streams; the compound-file header, allocation tables,
+directory tree, and regular-sector/MiniFAT stream chains are validated without attempting
+decryption.
+Traditional ZIP encryption is detected from central-directory flags. Both are unsupported and
+produce error findings.
 
 ### Entries and content types
 
@@ -67,7 +70,8 @@ duplicate names. Each record contains:
 
 - a canonical leading-slash URI and a stable duplicate `occurrence`;
 - resolved content type plus source (`override`, `default`, `implicit`, or `unresolved`);
-- declared uncompressed and compressed sizes;
+- declared uncompressed and compressed sizes, encoded as base-10 strings so ZIP64 values remain
+  exact in JavaScript and every other JSON client;
 - the exact uncompressed-byte digest and, for readable XML, normalized XML digest;
 - `isXml` and tri-state `isEncrypted` (`null` when the central-directory flags cannot be
   established authoritatively).
@@ -80,23 +84,27 @@ absent, malformed, oversize, or unreadable, the manifest says so once
 (`missing_content_types` / `malformed_content_types` / `content_types_unreadable`) instead of
 blaming every part in the package. `contentTypes` preserves every Default/Override declaration,
 including duplicate occurrences, while separately reporting duplicate keys, conflicting values,
-and Override targets that do not exist.
+Override targets that do not exist, and malformed MIME media-type values. A malformed MIME value
+remains in the declaration inventory but is not used to resolve an entry.
 
-**Directory-only ZIP entries.** OPC packages should not carry them, but 7-Zip, Windows'
+**Empty directory-only ZIP entries.** OPC packages should not carry them, but 7-Zip, Windows'
 *Send to → Compressed folder*, several Java/PHP zip writers, and some Word templates do, and Word
 opens those files. They are inventoried with a trailing-slash URI (`/word/`), reported as a
 `directory_entry` **warning** rather than an error, exempt from content-type resolution, and
-excluded from both content digests — adding or dropping folder entries is repackaging, not a
-document change.
+excluded from both content digests — adding or dropping empty folder entries is repackaging, not
+a document change. A trailing-slash entry containing payload bytes is instead an error and remains
+in both identities; malformed payload cannot disappear behind directory-artifact handling.
 
 ### Relationships
 
 `relationships` includes every readable package-level and part-level Relationship with owner URI,
 Id, type, raw target, normalized target mode, resolved internal target URI, and target presence.
-`/` is the package owner. Targets may be relative to the owning part or package-absolute
-(`/word/document.xml`, the form the Open XML SDK writes); neither can escape the package root.
-A target is external only when it carries an RFC 3986 scheme, never merely because it starts with
-a slash. External targets are retained but never dereferenced.
+`/` is the package owner. Internal targets may be relative to the owning part or package-absolute
+(`/word/document.xml`, the form the Open XML SDK writes); neither can escape the package root, and
+an internal target cannot carry an RFC 3986 scheme. A target is external only when its exact
+`TargetMode` value is `External`; external targets are retained but never dereferenced. Invalid
+spellings are reported, retained in the relationship inventory with the closed `Internal`
+fallback, and deliberately left unresolved.
 
 The generator distinguishes:
 
@@ -136,9 +144,10 @@ the aggregate streams are UTF-8 prefixed by a little-endian 32-bit byte length; 
 little-endian 32-bit integers and entry sizes use little-endian 64-bit integers. Entries sort by
 canonical URI using ordinal comparison, then by occurrence. Using the already-computed per-entry
 digest avoids a second decompression pass over untrusted input.
-Duplicates receive occurrences by raw digest, size, then original archive index, so archive order
-does not perturb otherwise distinguishable duplicates. Directory-only entries contribute to
-neither digest.
+Duplicates receive occurrences by raw digest, size, canonical URI spelling, then original archive
+index, so archive order does not perturb otherwise distinguishable duplicates. Empty
+directory-only entries contribute to neither digest; a trailing-slash entry with payload is
+invalid and does contribute.
 
 Each semantic-digest entry is tagged with the identity it contributed: `X` a normalized XML
 digest, `B` opaque binary bytes, `U` an entry whose declared content type says XML but whose bytes
@@ -170,11 +179,12 @@ processing instructions, and whitespace, and a configured character ceiling. Its
 stream applies these rules:
 
 - XML declarations, BOM/encoding choice, namespace-prefix spelling *in element and attribute
-  names*, and namespace-declaration placement are ignored. A prefix appearing inside an attribute
-  *value* — `mc:Ignorable="w14"`, `xsi:type` and other QName-valued attributes — is hashed as
-  written, so renaming such a prefix reports a semantic difference. Schema v1 does not interpret
-  attribute values, and treating an unknown value as a QName would be a guess; this is a known
-  conservative limitation, not a claim that the two documents differ.
+  names*, and namespace-declaration placement are ignored. Namespace prefixes in the recognized
+  QName-valued `xsi:type` and markup-compatibility attributes (`Ignorable`, `MustUnderstand`,
+  `Requires`, `PreserveAttributes`, `PreserveElements`, and `ProcessContent`) are resolved to
+  namespace URIs, so prefix-only rewrites remain equal while rebinding a prefix changes the digest.
+  A prefix in any other attribute value is conservatively hashed as written; interpreting an
+  unknown application's value as a QName would be a guess.
 - Element and attribute names use expanded `{namespace URI, local name}` identity. Non-namespace
   attributes sort ordinally by namespace URI, local name, then value.
 - Attribute order, quote style, entity spelling, empty-element spelling, and CDATA-versus-text
@@ -229,14 +239,22 @@ OPC resolution. `ToJson(indented: true)` is for display and is not the canonical
 | total declared uncompressed bytes | 1 GiB |
 | XML part bytes parsed | 32 MiB |
 | per-entry expansion ratio | 1,000:1 |
-| decoded package URI characters | 2,048 |
+| canonical package URI characters | 2,048 |
 
-Raw OPC segment validation rejects malformed escapes, encoded slash/backslash or unreserved
-characters, empty/dot/trailing-dot segments, and paths that escape the package root before any
-percent decoding can hide them. Both declared and actual decompressed bytes are bounded: every
+ZIP item names are first checked as ASCII physical names and mapped to logical OPC part names:
+valid UTF-8 escapes for non-ASCII scalars are decoded (`%C3%A9` becomes `é`), while ASCII and
+opaque escapes such as `%FC` stay escaped with upper-case hex. A literal non-ASCII ZIP item name
+is invalid. The resulting logical IRI-segment validation rejects illegal literals, malformed
+escapes, encoded slash/backslash or percent-encoded `iunreserved` characters,
+empty/dot/trailing-dot segments, interleaved part names, and paths that escape the package root.
+Logical reserved escapes stay escaped, so distinct names such as `a%40b.xml` and `a@b.xml` never
+collapse. Overrides and relationship targets are already logical IRIs and therefore do not receive
+the physical ZIP decoding step. Part-name equivalence folds ASCII case only; Unicode IRI
+characters retain their code-point identity. Both declared and actual decompressed bytes are bounded: every
 entry has a saturating `compressedSize × MaxCompressionRatio` ceiling and all reads share the
-package budget. ZIP traversal/absolute/backslash paths, count/size/ratio breaches, DTDs, encrypted entries,
-unreadable payloads, duplicate/conflicting metadata, and relationship faults are returned in
+package budget. ZIP traversal/absolute/backslash paths, count/size/ratio breaches, CRC mismatches,
+DTDs, encrypted entries, unreadable payloads, malformed MIME types, duplicate/conflicting metadata,
+and relationship faults are returned in
 `findings`. Each finding has a stable snake-case code, `info`/`warning`/`error` severity, a human
 message, and a reusable `ChangeLocation` (entry, owner, relationship, target, or property path).
 Consumers should branch on `code`, not message text.
@@ -256,9 +274,11 @@ package still yields its raw digest, entry inventory, and findings, but no conte
 resolved content types — deciding that an unreadable central directory contains no encrypted
 entries is a claim the manifest will not make.
 
-The entry-count limit truncates inspection at `MaxEntryCount`. Declared expansion is nonetheless
-summed over the whole central directory, so a package cannot dodge the size budget by also
-breaching the entry-count limit.
+The entry-count limit truncates payload inspection at `MaxEntryCount`. A name-only index of the
+complete central directory is nonetheless retained so an Override, relationship, or content-types
+item after the cutoff is not falsely reported absent and does not change `packageKind`. Declared
+expansion is also summed over the whole central directory, so a package cannot dodge the size
+budget by breaching the entry-count limit.
 
 ## Examples
 

@@ -31,6 +31,7 @@ import type {
   WorkerGetVersionResponse,
   WorkerPrepareResponse,
   WorkerSessionOpenResponse,
+  WorkerSessionGetPackageManifestResponse,
   WorkerSessionEditResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
@@ -95,6 +96,9 @@ function deriveWasmBasePath(): string {
  * {@link close} when finished to free the in-worker handle.
  */
 export interface WorkerDocxSession {
+  /** Generate a deterministic manifest of the session's current logical checkpoint. */
+  getPackageManifest(): Promise<PackageManifest>;
+
   /**
    * Add an annotation to the document at the given anchor.
    * @param anchorId - Markdown-projection anchor id of the target block
@@ -244,7 +248,8 @@ export interface WorkerDocxodus {
 
   /**
    * Open a {@link WorkerDocxSession} for surgical annotation editing inside
-   * the worker. The document bytes are transferred to the worker (zero-copy).
+   * the worker. Uint8Array inputs are copied once so the caller's buffer remains attached and
+   * subarray boundaries are preserved; the private copy is then transferred.
    *
    * Always call {@link WorkerDocxSession.close} when you are done to release
    * the in-worker session handle.
@@ -548,6 +553,18 @@ export async function createWorkerDocxodus(
       const handle = openResponse.handle;
 
       return {
+        async getPackageManifest(): Promise<PackageManifest> {
+          const res = await sendRequest<WorkerSessionGetPackageManifestResponse>({
+            id: generateId(),
+            type: "sessionGetPackageManifest",
+            handle,
+          });
+          if (!res.success || !res.manifest) {
+            throw new Error(res.error ?? "sessionGetPackageManifest failed");
+          }
+          return res.manifest;
+        },
+
         async addAnnotation(
           anchorId: string,
           span: CharSpan | null,

@@ -3,6 +3,7 @@
 
 #nullable enable
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
@@ -26,12 +27,8 @@ public static class PackageManifestGenerator
     private const string AnnotationNamespace = "http://docxodus.dev/annotations/v1";
     private const string TransitionalPackageRelationshipsNamespace =
         "http://schemas.openxmlformats.org/package/2006/relationships";
-    private const string StrictPackageRelationshipsNamespace =
-        "http://purl.oclc.org/ooxml/package/relationships";
     private const string TransitionalContentTypesNamespace =
         "http://schemas.openxmlformats.org/package/2006/content-types";
-    private const string StrictContentTypesNamespace =
-        "http://purl.oclc.org/ooxml/package/content-types";
     private const string TransitionalWordNamespace =
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWordNamespace =
@@ -46,7 +43,9 @@ public static class PackageManifestGenerator
         StrictOfficeRelationshipNamespace + "/";
     private const string Word2012Namespace =
         "http://schemas.microsoft.com/office/word/2012/wordml";
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly AsciiCaseInsensitiveComparer PartNameComparer =
+        AsciiCaseInsensitiveComparer.Instance;
+    private static readonly uint[] Crc32Table = CreateCrc32Table();
     private static readonly byte[] OleSignature = { 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 };
     private static readonly HashSet<string> WordprocessingXmlContentTypes = new(
         StringComparer.OrdinalIgnoreCase)
@@ -139,14 +138,23 @@ public static class PackageManifestGenerator
         List<VerificationFinding> findings)
     {
         var archiveEntries = archive.Entries.ToList();
-        var encryptedFlags = TryReadEncryptedFlags(packageBytes, archiveEntries.Count);
-        if (encryptedFlags is null)
+        var centralMetadata = TryReadCentralDirectoryMetadata(packageBytes, archiveEntries.Count);
+        if (centralMetadata is null)
         {
             AddFinding(findings, "zip_encryption_detection_unavailable",
                 VerificationFindingSeverity.Error,
                 "ZIP central-directory encryption flags could not be parsed authoritatively.",
                 new ChangeLocation { PropertyPath = "entries[].isEncrypted" });
         }
+
+        // Keep a name-only index for the complete central directory. A capped inspection cannot
+        // read payloads beyond the cap, but it must not invent missing targets/owners/overrides or
+        // misclassify an OPC package merely because their entries occur after the cutoff.
+        var allEntryUris = archiveEntries
+            .Select(entry => TryCanonicalizeEntryName(entry.FullName, out var uri) ? uri : null)
+            .Where(uri => uri is not null)
+            .Select(uri => uri!)
+            .ToHashSet(PartNameComparer);
 
         // Declared expansion is measured over the whole central directory. Measuring it only over
         // the entries we go on to inspect would let a package dodge the budget by also breaching
@@ -196,8 +204,8 @@ public static class PackageManifestGenerator
                     "ZIP entry metadata could not be read.", new ChangeLocation { EntryUri = uri });
             }
 
-            bool? encrypted = encryptedFlags is not null && index < encryptedFlags.Count
-                ? encryptedFlags[index]
+            bool? encrypted = centralMetadata is not null && index < centralMetadata.Count
+                ? centralMetadata[index].IsEncrypted
                 : null;
             if (encrypted == true)
             {
@@ -217,10 +225,16 @@ public static class PackageManifestGenerator
                     new ChangeLocation { EntryUri = uri });
             }
 
-            if (isDirectory)
+            if (isDirectory && length == 0)
             {
                 AddFinding(findings, "directory_entry", VerificationFindingSeverity.Warning,
                     "OPC packages should not contain directory-only ZIP entries.",
+                    new ChangeLocation { EntryUri = uri });
+            }
+            else if (isDirectory)
+            {
+                AddFinding(findings, "nonempty_directory_entry", VerificationFindingSeverity.Error,
+                    "A trailing-slash ZIP entry contains payload bytes and is not a directory artifact.",
                     new ChangeLocation { EntryUri = uri });
             }
 
@@ -233,6 +247,9 @@ public static class PackageManifestGenerator
                 Size = length,
                 CompressedSize = compressedLength,
                 IsEncrypted = encrypted,
+                ExpectedCrc32 = centralMetadata is not null && index < centralMetadata.Count
+                    ? centralMetadata[index].Crc32
+                    : null,
                 RatioExceeded = ratioExceeded,
             });
         }
@@ -247,9 +264,10 @@ public static class PackageManifestGenerator
         }
 
         FindDuplicateEntryNames(works, findings);
+        FindInterleavedPartNames(works, findings);
         var readBudget = new ActualReadBudget(options.MaxTotalUncompressedBytes);
         var contentTypeMap = ReadContentTypes(
-            works, totalLimitExceeded, options, readBudget, findings);
+            works, allEntryUris, totalLimitExceeded, options, readBudget, findings);
         foreach (var work in works)
         {
             (work.ContentType, work.ContentTypeSource) = contentTypeMap.Resolve(work.Uri);
@@ -266,13 +284,13 @@ public static class PackageManifestGenerator
             }
         }
         if (!contentTypeMap.IsAvailable
-            && works.Any(work => string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)))
+            && works.Any(work => PartNameComparer.Equals(work.Uri, ContentTypesUri)))
         {
             AddFinding(findings, "content_types_unreadable", VerificationFindingSeverity.Error,
                 "[Content_Types].xml is present but could not be used, so no part content type was resolved.",
                 new ChangeLocation { EntryUri = ContentTypesUri });
         }
-        ValidateContentTypeTargets(contentTypeMap, works, findings);
+        ValidateContentTypeTargets(contentTypeMap, allEntryUris, findings);
 
         var payloadsInspected = !totalLimitExceeded && !readBudget.Exceeded;
         if (payloadsInspected)
@@ -287,7 +305,7 @@ public static class PackageManifestGenerator
         FindConflictingEntries(works, findings);
         AssignStableOccurrences(works);
         var relationships = ReadRelationships(
-            works, options, payloadsInspected, findings, out var unreadableOwners);
+            works, allEntryUris, options, payloadsInspected, findings, out var unreadableOwners);
         ValidateRelationshipReferences(works, relationships, unreadableOwners, findings);
         var facts = BuildFacts(works, relationships);
 
@@ -330,9 +348,8 @@ public static class PackageManifestGenerator
             })
             .ToList();
 
-        var hasContentTypes = works.Any(work =>
-            string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase));
-        var isEncrypted = works.Any(work => work.IsEncrypted == true);
+        var hasContentTypes = allEntryUris.Contains(ContentTypesUri);
+        var isEncrypted = centralMetadata?.Any(entry => entry.IsEncrypted) == true;
         var packageKind = isEncrypted
             ? "zip-encrypted"
             : hasContentTypes ? "opc" : "zip";
@@ -345,8 +362,7 @@ public static class PackageManifestGenerator
         VerificationDigest rawDigest,
         List<VerificationFinding> findings)
     {
-        var encrypted = ContainsUtf16Name(bytes, "EncryptedPackage")
-            || ContainsUtf16Name(bytes, "EncryptionInfo");
+        var encrypted = ContainsEncryptedOoxmlStreams(bytes);
         AddFinding(findings,
             encrypted ? "unsupported_ole_encryption" : "unsupported_compound_file",
             VerificationFindingSeverity.Error,
@@ -379,6 +395,7 @@ public static class PackageManifestGenerator
             .ThenBy(finding => finding.Location?.OwnerUri ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(finding => finding.Location?.RelationshipId ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(finding => finding.Location?.TargetUri ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(finding => finding.Location?.PropertyPath ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(finding => finding.Message, StringComparer.Ordinal)
             .ToList();
         return new PackageManifest
@@ -399,20 +416,24 @@ public static class PackageManifestGenerator
 
     private static ContentTypeMap ReadContentTypes(
         IReadOnlyList<EntryWork> works,
+        IReadOnlySet<string> allEntryUris,
         bool totalLimitExceeded,
         PackageManifestOptions options,
         ActualReadBudget readBudget,
         List<VerificationFinding> findings)
     {
         var candidates = works.Where(work =>
-                string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase))
+                PartNameComparer.Equals(work.Uri, ContentTypesUri))
             .OrderBy(work => work.ArchiveIndex)
             .ToList();
         if (candidates.Count == 0)
         {
-            AddFinding(findings, "missing_content_types", VerificationFindingSeverity.Error,
-                "The package has no [Content_Types].xml entry.",
-                new ChangeLocation { EntryUri = ContentTypesUri });
+            if (!allEntryUris.Contains(ContentTypesUri))
+            {
+                AddFinding(findings, "missing_content_types", VerificationFindingSeverity.Error,
+                    "The package has no [Content_Types].xml entry.",
+                    new ChangeLocation { EntryUri = ContentTypesUri });
+            }
             return ContentTypeMap.Empty;
         }
         if (totalLimitExceeded)
@@ -439,7 +460,7 @@ public static class PackageManifestGenerator
                 readBudget);
             selected.PreloadedBytes = bytes;
             var document = XmlSemanticNormalizer.Parse(bytes,
-                Math.Max(options.MaxXmlPartBytes * 2, 1));
+                XmlCharacterLimit(options.MaxXmlPartBytes));
             return ContentTypeMap.Parse(document, options.MaxUriLength, findings);
         }
         catch (ManifestSafetyException ex)
@@ -487,6 +508,7 @@ public static class PackageManifestGenerator
             {
                 work.ActualSize = preloaded.LongLength;
                 work.RawBytesDigest = Digest(preloaded);
+                ValidateCrc32(work, ComputeCrc32(preloaded), findings);
                 if (work.ActualSize != work.Size)
                 {
                     AddFinding(findings, "entry_size_mismatch", VerificationFindingSeverity.Error,
@@ -505,6 +527,7 @@ public static class PackageManifestGenerator
             long readTotal = 0;
             var expansionRemaining = ExpansionCeiling(
                 work.CompressedSize, options.MaxCompressionRatio);
+            var crc32 = uint.MaxValue;
             var actualXmlLimitExceeded = false;
             int read;
             while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
@@ -518,6 +541,7 @@ public static class PackageManifestGenerator
                     throw new ManifestSafetyException(SafetyLimitKind.EntryExpansion);
                 readTotal += read;
                 hash.AppendData(buffer, 0, read);
+                crc32 = AppendCrc32(crc32, buffer.AsSpan(0, read));
                 if (xml is not null && !actualXmlLimitExceeded)
                 {
                     if (readTotal > options.MaxXmlPartBytes)
@@ -536,6 +560,7 @@ public static class PackageManifestGenerator
                 }
             }
             work.ActualSize = readTotal;
+            ValidateCrc32(work, ~crc32, findings);
             if (readTotal != work.Size)
             {
                 AddFinding(findings, "entry_size_mismatch", VerificationFindingSeverity.Error,
@@ -579,7 +604,7 @@ public static class PackageManifestGenerator
         try
         {
             var document = XmlSemanticNormalizer.Parse(bytes,
-                Math.Max(options.MaxXmlPartBytes * 2, 1));
+                XmlCharacterLimit(options.MaxXmlPartBytes));
             work.Xml = document;
             work.NormalizedXmlDigest = XmlSemanticNormalizer.Digest(
                 document, work.Uri, IsKnownOoxmlXml(work));
@@ -597,13 +622,14 @@ public static class PackageManifestGenerator
 
     private static IReadOnlyList<PackageRelationship> ReadRelationships(
         IReadOnlyList<EntryWork> works,
+        IReadOnlySet<string> allEntryUris,
         PackageManifestOptions options,
         bool payloadsInspected,
         List<VerificationFinding> findings,
         out HashSet<string> unreadableOwners)
     {
-        var entryUris = works.Select(work => work.Uri).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        unreadableOwners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entryUris = allEntryUris;
+        unreadableOwners = new HashSet<string>(PartNameComparer);
         var relationships = new List<PackageRelationship>();
         foreach (var work in works.Where(work => IsRelationshipPart(work.Uri))
                      .OrderBy(work => work.Uri, StringComparer.Ordinal)
@@ -668,10 +694,11 @@ public static class PackageManifestGenerator
                     continue;
                 }
 
-                var external = string.Equals(rawMode, "External", StringComparison.OrdinalIgnoreCase);
-                if (!string.IsNullOrEmpty(rawMode)
-                    && !external
-                    && !string.Equals(rawMode, "Internal", StringComparison.OrdinalIgnoreCase))
+                var external = string.Equals(rawMode, "External", StringComparison.Ordinal);
+                var validTargetMode = string.IsNullOrEmpty(rawMode)
+                    || external
+                    || string.Equals(rawMode, "Internal", StringComparison.Ordinal);
+                if (!validTargetMode)
                 {
                     AddFinding(findings, "invalid_target_mode", VerificationFindingSeverity.Error,
                         "Relationship TargetMode must be Internal or External.",
@@ -681,7 +708,7 @@ public static class PackageManifestGenerator
 
                 string? resolved = null;
                 bool? targetPresent = null;
-                if (!external)
+                if (validTargetMode && !external)
                 {
                     resolved = ResolveRelationshipTarget(
                         owner, target, options.MaxUriLength, out var invalidTarget);
@@ -708,6 +735,9 @@ public static class PackageManifestGenerator
                     Id = id,
                     Type = type,
                     Target = target,
+                    // Missing means Internal by OPC default. Invalid spellings are reported but
+                    // use the closed Internal fallback on the wire so malformed relationships
+                    // remain consumable and do not disappear from the inventory.
                     TargetMode = external ? "External" : "Internal",
                     ResolvedTargetUri = resolved,
                     IsTargetPresent = targetPresent,
@@ -752,15 +782,15 @@ public static class PackageManifestGenerator
         List<VerificationFinding> findings)
     {
         var idsByOwner = relationships
-            .GroupBy(relationship => relationship.OwnerUri, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(relationship => relationship.OwnerUri, PartNameComparer)
             .ToDictionary(group => group.Key,
                 group => group.Select(relationship => relationship.Id)
                     .ToHashSet(StringComparer.Ordinal),
-                StringComparer.OrdinalIgnoreCase);
+                PartNameComparer);
         var emitted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var work in works.Where(work => work.Xml?.Root is not null
                      && !IsRelationshipPart(work.Uri)
-                     && !string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)))
+                     && !PartNameComparer.Equals(work.Uri, ContentTypesUri)))
         {
             // Without a parsed .rels part we do not know which IDs the part defines, so every
             // reference would look dangling. relationship_part_unreadable already named the cause.
@@ -772,7 +802,7 @@ public static class PackageManifestGenerator
                          .Where(attribute =>
                              IsOfficeRelationshipNamespace(attribute.Name.NamespaceName)
                              && attribute.Name.LocalName is
-                                 "id" or "embed" or "link" or "dm" or "lo" or "qs" or "cs"
+                                 "id" or "embed" or "link" or "dm" or "lo" or "qs" or "cs" or "txbx"
                              && !string.IsNullOrWhiteSpace(attribute.Value)))
             {
                 if (ids?.Contains(attribute.Value) == true)
@@ -787,7 +817,6 @@ public static class PackageManifestGenerator
             }
         }
     }
-
     private static PackageManifestFacts BuildFacts(
         IReadOnlyList<EntryWork> works,
         IReadOnlyList<PackageRelationship> relationships)
@@ -798,7 +827,7 @@ public static class PackageManifestGenerator
                 && relationship.TargetMode == "Internal")
             .Select(relationship => relationship.ResolvedTargetUri)
             .FirstOrDefault(uri => uri is not null && works.Any(work =>
-                string.Equals(work.Uri, uri, StringComparison.OrdinalIgnoreCase)
+                PartNameComparer.Equals(work.Uri, uri)
                 && IsWordprocessingMainPart(work)));
 
         var sectionCount = 0;
@@ -862,7 +891,7 @@ public static class PackageManifestGenerator
 
             if (mainDocumentUri is not null
                 && isWordPart
-                && string.Equals(work.Uri, mainDocumentUri, StringComparison.OrdinalIgnoreCase))
+                && PartNameComparer.Equals(work.Uri, mainDocumentUri))
                 sectionCount += wordElements.Count(element => element.Name.LocalName == "sectPr");
             if (IsContentType(work, "footnotes"))
                 footnoteCount += CountPositiveDefinitions(wordElements, "footnote");
@@ -930,8 +959,10 @@ public static class PackageManifestGenerator
             NumberingDefinitionCount = numberingCount,
             ThemePartCount = works.Count(work =>
                 IsMime(work, "application/vnd.openxmlformats-officedocument.theme+xml")),
-            MediaPartCount = works.Count(work =>
-                work.ContentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true),
+            MediaPartCount = works.Count(work => work.ContentType is { } contentType
+                && (IsMediaTypeFamily(contentType, "image")
+                    || IsMediaTypeFamily(contentType, "audio")
+                    || IsMediaTypeFamily(contentType, "video"))),
             CustomXmlPartCount = works.Count(IsCustomXmlDataPart),
             DrawingCount = drawingCount,
             AltChunkCount = altChunkCount,
@@ -993,21 +1024,23 @@ public static class PackageManifestGenerator
 
     private static void AssignStableOccurrences(IReadOnlyList<EntryWork> works)
     {
-        foreach (var group in works.GroupBy(work => work.Uri, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in works.GroupBy(work => work.Uri, PartNameComparer))
         {
             var occurrence = 0;
             foreach (var work in group
                          .OrderBy(work => work.RawBytesDigest?.Value ?? string.Empty, StringComparer.Ordinal)
                          .ThenBy(work => work.Size)
+                         .ThenBy(work => work.Uri, StringComparer.Ordinal)
                          .ThenBy(work => work.ArchiveIndex))
                 work.Occurrence = occurrence++;
         }
     }
 
-    // Directory-only entries carry no content, so they stay out of both content identities: a
-    // repack that adds or drops folder entries is packaging, not a document change.
+    // Empty directory-only entries carry no content, so they stay out of both content identities:
+    // a repack that adds or drops folder entries is packaging, not a document change. A malformed
+    // trailing-slash entry with bytes is retained so its payload cannot disappear from identity.
     private static IEnumerable<EntryWork> StableEntryOrder(IReadOnlyList<EntryWork> works) =>
-        works.Where(work => !work.IsDirectory)
+        works.Where(work => !work.IsDirectory || work.Size != 0)
             .OrderBy(work => work.Uri, StringComparer.Ordinal)
             .ThenBy(work => work.Occurrence);
 
@@ -1015,7 +1048,7 @@ public static class PackageManifestGenerator
         IReadOnlyList<EntryWork> works,
         List<VerificationFinding> findings)
     {
-        foreach (var group in works.GroupBy(work => work.Uri, StringComparer.OrdinalIgnoreCase)
+        foreach (var group in works.GroupBy(work => work.Uri, PartNameComparer)
                      .Where(group => group.Count() > 1))
         {
             AddFinding(findings, "duplicate_entry", VerificationFindingSeverity.Error,
@@ -1024,11 +1057,36 @@ public static class PackageManifestGenerator
         }
     }
 
+    private static void FindInterleavedPartNames(
+        IReadOnlyList<EntryWork> works,
+        List<VerificationFinding> findings)
+    {
+        var partNames = works
+            .Where(work => !work.IsDirectory
+                && !PartNameComparer.Equals(work.Uri, ContentTypesUri))
+            .Select(work => work.Uri)
+            .ToHashSet(PartNameComparer);
+        foreach (var partName in partNames.OrderBy(name => name, StringComparer.Ordinal))
+        {
+            for (var separator = partName.IndexOf('/', 1);
+                 separator >= 0;
+                 separator = partName.IndexOf('/', separator + 1))
+            {
+                var prefix = partName[..separator];
+                if (!partNames.Contains(prefix))
+                    continue;
+                AddFinding(findings, "interleaved_part_names", VerificationFindingSeverity.Error,
+                    "A part name is derived from another part name by appending path segments.",
+                    new ChangeLocation { EntryUri = partName, TargetUri = prefix });
+            }
+        }
+    }
+
     private static void FindConflictingEntries(
         IReadOnlyList<EntryWork> works,
         List<VerificationFinding> findings)
     {
-        foreach (var group in works.GroupBy(work => work.Uri, StringComparer.OrdinalIgnoreCase)
+        foreach (var group in works.GroupBy(work => work.Uri, PartNameComparer)
                      .Where(group => group.Count() > 1))
         {
             if (group.Select(work => work.RawBytesDigest?.Value)
@@ -1045,13 +1103,12 @@ public static class PackageManifestGenerator
 
     private static void ValidateContentTypeTargets(
         ContentTypeMap map,
-        IReadOnlyList<EntryWork> works,
+        IReadOnlySet<string> allEntryUris,
         List<VerificationFinding> findings)
     {
-        var entries = works.Select(work => work.Uri).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var declaration in map.Declarations.Where(declaration => declaration.Kind == "override"))
         {
-            if (!entries.Contains(declaration.Key))
+            if (!allEntryUris.Contains(declaration.Key))
             {
                 AddFinding(findings, "missing_content_type_target", VerificationFindingSeverity.Error,
                     "Content-type Override names a part that is absent from the package.",
@@ -1060,27 +1117,33 @@ public static class PackageManifestGenerator
         }
     }
 
-    private static bool IsXml(string uri, string? contentType) =>
-        string.Equals(uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)
-        || IsRelationshipPart(uri)
-        || uri.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
-        || uri.EndsWith(".vml", StringComparison.OrdinalIgnoreCase)
-        || contentType?.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) == true
-        || contentType?.Equals("application/xml", StringComparison.OrdinalIgnoreCase) == true
-        || contentType?.Equals("text/xml", StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsXml(string uri, string? contentType)
+    {
+        if (PartNameComparer.Equals(uri, ContentTypesUri) || IsRelationshipPart(uri))
+            return true;
+        if (contentType is not null)
+        {
+            var essence = MediaTypeEssence(contentType);
+            return essence.EndsWith("+xml", StringComparison.OrdinalIgnoreCase)
+                || essence.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
+                || essence.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
+        }
+        return uri.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+            || uri.EndsWith(".vml", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsKnownOoxmlXml(EntryWork work) =>
-        string.Equals(work.Uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase)
+        PartNameComparer.Equals(work.Uri, ContentTypesUri)
         || IsRelationshipPart(work.Uri)
         || (work.ContentType is not null
-            && KnownOoxmlXmlContentTypes.Contains(work.ContentType));
+            && KnownOoxmlXmlContentTypes.Contains(MediaTypeEssence(work.ContentType)));
 
     private static bool IsRelationshipPart(string uri) =>
         XmlSemanticNormalizer.IsRelationshipPart(uri);
 
     private static string? RelationshipOwner(string relationshipPartUri)
     {
-        if (relationshipPartUri.Equals("/_rels/.rels", StringComparison.OrdinalIgnoreCase))
+        if (PartNameComparer.Equals(relationshipPartUri, "/_rels/.rels"))
             return "/";
         var marker = relationshipPartUri.LastIndexOf("/_rels/", StringComparison.OrdinalIgnoreCase);
         if (marker < 0 || !relationshipPartUri.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
@@ -1090,7 +1153,7 @@ public static class PackageManifestGenerator
         if (file.Length == 0)
             return null;
         var owner = directory + "/" + file;
-        return IsValidDecodedPartName(owner) ? owner : null;
+        return TryCanonicalizePartName(owner, out var canonicalOwner) ? canonicalOwner : null;
     }
 
     private static string? ResolveRelationshipTarget(
@@ -1112,7 +1175,7 @@ public static class PackageManifestGenerator
 
         var delimiter = target.IndexOfAny(['?', '#']);
         var rawPath = delimiter < 0 ? target : target[..delimiter];
-        if (!TryDecodeOpcPath(rawPath, requireAbsolute: false, allowRelative: true,
+        if (!TryCanonicalizeOpcPath(rawPath, requireAbsolute: false, allowRelative: true,
                 allowDotSegments: true, out var targetIsAbsolute, out var targetSegments))
         {
             invalidTarget = true;
@@ -1147,12 +1210,13 @@ public static class PackageManifestGenerator
         }
 
         var resolved = "/" + string.Join('/', resolvedSegments);
-        if (!IsValidDecodedPartName(resolved) || resolved.Length > maximumUriLength)
+        if (!TryCanonicalizePartName(resolved, out var canonicalResolved)
+            || canonicalResolved.Length > maximumUriLength)
         {
             invalidTarget = true;
             return null;
         }
-        return resolved;
+        return canonicalResolved;
     }
 
     private static bool HasUriScheme(string value)
@@ -1178,22 +1242,60 @@ public static class PackageManifestGenerator
     {
         canonical = "/" + name.Replace('\\', '/').TrimStart('/');
 
+        // The content-types stream is a package metadata item, not an OPC part name. Its square
+        // brackets are therefore the one deliberate exception to the isegment-nz grammar.
+        if (PartNameComparer.Equals(name, "[Content_Types].xml"))
+        {
+            canonical = ContentTypesUri;
+            return true;
+        }
+
         // A single trailing forward slash marks a directory-only entry. Those are packaging
         // artifacts, not OPC parts, so the grammar is applied to the path they name and the
         // slash is kept in the canonical URI so a folder can never collide with a real part.
         // A trailing backslash is still a malformed path and is left to fail below.
         var isDirectory = name.EndsWith("/", StringComparison.Ordinal);
         var body = isDirectory ? name[..^1] : name;
-        if (body.Length == 0)
+        if (body.Length == 0 || body.Any(character => character > 0x7f)
+            || !TryMapZipItemNameToLogicalName(body, out var logicalBody))
             return false;
-        if (!TryDecodeOpcPath(body, requireAbsolute: false, allowRelative: true,
+        if (!TryCanonicalizeOpcPath(logicalBody, requireAbsolute: false, allowRelative: true,
                 allowDotSegments: false, out var isAbsolute, out var segments)
             || isAbsolute)
             return false;
         var joined = "/" + string.Join('/', segments);
-        if (!IsValidDecodedPartName(joined))
-            return false;
         canonical = isDirectory ? joined + "/" : joined;
+        return true;
+    }
+
+    // ZIP item names are the ASCII physical mapping of logical OPC part names. During the inverse
+    // mapping, valid UTF-8 percent sequences for non-ASCII scalars become literal Unicode. ASCII
+    // escapes and opaque octets remain escaped for the logical part-name validator to interpret.
+    private static bool TryMapZipItemNameToLogicalName(string itemName, out string logicalName)
+    {
+        var builder = new StringBuilder(itemName.Length);
+        for (var index = 0; index < itemName.Length;)
+        {
+            if (itemName[index] != '%')
+            {
+                builder.Append(itemName[index++]);
+                continue;
+            }
+            if (!TryReadPercentByte(itemName, index, out var value))
+            {
+                logicalName = string.Empty;
+                return false;
+            }
+            if (TryDecodeNonAsciiUtf8Escape(itemName, index, out var rune, out var consumed))
+            {
+                builder.Append(rune.ToString());
+                index += consumed;
+                continue;
+            }
+            AppendCanonicalPercentEscape(builder, value);
+            index += 3;
+        }
+        logicalName = builder.ToString();
         return true;
     }
 
@@ -1221,22 +1323,22 @@ public static class PackageManifestGenerator
     private static bool TryCanonicalizePartName(string rawName, out string canonical)
     {
         canonical = rawName;
-        if (!TryDecodeOpcPath(rawName, requireAbsolute: true, allowRelative: false,
+        if (!TryCanonicalizeOpcPath(rawName, requireAbsolute: true, allowRelative: false,
                 allowDotSegments: false, out _, out var segments))
             return false;
         canonical = "/" + string.Join('/', segments);
-        return IsValidDecodedPartName(canonical);
+        return true;
     }
 
-    private static bool TryDecodeOpcPath(
+    private static bool TryCanonicalizeOpcPath(
         string rawPath,
         bool requireAbsolute,
         bool allowRelative,
         bool allowDotSegments,
         out bool isAbsolute,
-        out List<string> decodedSegments)
+        out List<string> canonicalSegments)
     {
-        decodedSegments = new List<string>();
+        canonicalSegments = new List<string>();
         isAbsolute = rawPath.StartsWith("/", StringComparison.Ordinal);
         if (rawPath.Length == 0 || rawPath.Contains('\\')
             || (requireAbsolute && !isAbsolute) || (!allowRelative && !isAbsolute)
@@ -1248,75 +1350,155 @@ public static class PackageManifestGenerator
             return false;
         foreach (var rawSegment in pathBody.Split('/'))
         {
-            if (!TryDecodeOpcSegment(rawSegment, allowDotSegments, out var segment))
+            if (!TryCanonicalizeOpcSegment(rawSegment, allowDotSegments, out var segment))
                 return false;
-            decodedSegments.Add(segment);
+            canonicalSegments.Add(segment);
         }
         return true;
     }
 
-    private static bool TryDecodeOpcSegment(
+    private static bool TryCanonicalizeOpcSegment(
         string rawSegment,
         bool allowDotSegments,
-        out string decoded)
+        out string canonical)
     {
-        decoded = string.Empty;
+        canonical = string.Empty;
         if (rawSegment.Length == 0)
             return false;
-        var bytes = new List<byte>(rawSegment.Length);
-        var literalStart = 0;
-        try
+        var builder = new StringBuilder(rawSegment.Length);
+        for (var index = 0; index < rawSegment.Length;)
         {
-            for (var index = 0; index < rawSegment.Length; index++)
+            if (rawSegment[index] == '%')
             {
-                if (rawSegment[index] != '%')
-                    continue;
-                if (index > literalStart)
-                    bytes.AddRange(StrictUtf8.GetBytes(rawSegment[literalStart..index]));
-                if (index + 2 >= rawSegment.Length
-                    || !TryHex(rawSegment[index + 1], out var high)
-                    || !TryHex(rawSegment[index + 2], out var low))
+                if (!TryReadPercentByte(rawSegment, index, out var encoded)
+                    || encoded is (byte)'/' or (byte)'\\'
+                    || encoded <= 0x7f && IsAsciiUnreserved(encoded))
                     return false;
-                var encoded = (byte)((high << 4) | low);
-                if (encoded is (byte)'/' or (byte)'\\' || IsUnreserved(encoded))
-                    return false;
-                bytes.Add(encoded);
-                index += 2;
-                literalStart = index + 1;
+
+                var escapeCharactersConsumed = 3;
+                if (TryDecodeNonAsciiUtf8Escape(rawSegment, index, out var rune,
+                        out var utf8Consumed))
+                {
+                    // A logical part name must spell RFC 3987 iunreserved characters literally.
+                    // Other valid sequences, and opaque bytes such as %FC, remain percent escapes.
+                    if (IsIUnreserved(rune))
+                        return false;
+                    escapeCharactersConsumed = utf8Consumed;
+                }
+                for (var escape = index;
+                     escape < index + escapeCharactersConsumed;
+                     escape += 3)
+                {
+                    TryReadPercentByte(rawSegment, escape, out var escapedByte);
+                    AppendCanonicalPercentEscape(builder, escapedByte);
+                }
+                index += escapeCharactersConsumed;
+                continue;
             }
-            if (literalStart < rawSegment.Length)
-                bytes.AddRange(StrictUtf8.GetBytes(rawSegment[literalStart..]));
-            decoded = StrictUtf8.GetString(bytes.ToArray());
-        }
-        catch (EncoderFallbackException)
-        {
-            return false;
-        }
-        catch (DecoderFallbackException)
-        {
-            return false;
+
+            var status = Rune.DecodeFromUtf16(rawSegment.AsSpan(index), out var literal,
+                out var consumed);
+            if (status != OperationStatus.Done || !IsIPChar(literal))
+                return false;
+            builder.Append(rawSegment, index, consumed);
+            index += consumed;
         }
 
-        if (decoded.Length == 0
-            || decoded.Any(character => char.IsControl(character)
-                || character is '/' or '\\' or '?' or '#'))
-            return false;
-        if (decoded is "." or "..")
+        canonical = builder.ToString();
+        if (canonical is "." or "..")
             return allowDotSegments;
-        return !decoded.EndsWith(".", StringComparison.Ordinal);
+        return !canonical.EndsWith(".", StringComparison.Ordinal);
     }
 
-    private static bool IsValidDecodedPartName(string value)
+    private static bool TryDecodeNonAsciiUtf8Escape(
+        string value,
+        int offset,
+        out Rune rune,
+        out int charactersConsumed)
     {
-        if (!value.StartsWith("/", StringComparison.Ordinal)
-            || value.StartsWith("//", StringComparison.Ordinal) || value.Length == 1)
+        rune = Rune.ReplacementChar;
+        charactersConsumed = 0;
+        if (!TryReadPercentByte(value, offset, out var first))
             return false;
-        return value[1..].Split('/').All(segment =>
-            segment.Length > 0 && segment is not "." and not ".."
-            && !segment.EndsWith(".", StringComparison.Ordinal)
-            && !segment.Any(character => char.IsControl(character)
-                || character is '/' or '\\' or '?' or '#'));
+        var byteCount = first switch
+        {
+            >= 0xc2 and <= 0xdf => 2,
+            >= 0xe0 and <= 0xef => 3,
+            >= 0xf0 and <= 0xf4 => 4,
+            _ => 0,
+        };
+        if (byteCount == 0)
+            return false;
+
+        Span<byte> bytes = stackalloc byte[4];
+        bytes[0] = first;
+        for (var byteIndex = 1; byteIndex < byteCount; byteIndex++)
+        {
+            if (!TryReadPercentByte(value, offset + byteIndex * 3, out bytes[byteIndex]))
+                return false;
+        }
+        if (Rune.DecodeFromUtf8(bytes[..byteCount], out rune, out var bytesConsumed)
+                != OperationStatus.Done
+            || bytesConsumed != byteCount || rune.Value <= 0x7f)
+        {
+            return false;
+        }
+        charactersConsumed = byteCount * 3;
+        return true;
     }
+
+    private static bool TryReadPercentByte(string value, int offset, out byte decoded)
+    {
+        decoded = 0;
+        if (offset < 0 || offset + 2 >= value.Length || value[offset] != '%'
+            || !TryHex(value[offset + 1], out var high)
+            || !TryHex(value[offset + 2], out var low))
+            return false;
+        decoded = (byte)((high << 4) | low);
+        return true;
+    }
+
+    private static void AppendCanonicalPercentEscape(StringBuilder builder, byte value)
+    {
+        builder.Append('%');
+        builder.Append(value.ToString("X2", CultureInfo.InvariantCulture));
+    }
+
+    private static bool IsIPChar(Rune value)
+    {
+        var scalar = value.Value;
+        if (scalar > 0x7f)
+            return IsUcsChar(scalar);
+        return IsAsciiUnreserved((byte)scalar)
+            || scalar is '!' or '$' or '&' or '\'' or '(' or ')' or '*' or '+' or ','
+                or ';' or '=' or ':' or '@';
+    }
+
+    private static bool IsIUnreserved(Rune value) =>
+        value.Value <= 0x7f
+            ? IsAsciiUnreserved((byte)value.Value)
+            : IsUcsChar(value.Value);
+
+    // RFC 3987 ucschar, used by OPC's isegment-nz grammar. Private-use characters and Unicode
+    // noncharacters are intentionally outside these ranges.
+    private static bool IsUcsChar(int value) =>
+        value is >= 0x00a0 and <= 0xd7ff
+            or >= 0xf900 and <= 0xfdcf
+            or >= 0xfdf0 and <= 0xffef
+            or >= 0x10000 and <= 0x1fffd
+            or >= 0x20000 and <= 0x2fffd
+            or >= 0x30000 and <= 0x3fffd
+            or >= 0x40000 and <= 0x4fffd
+            or >= 0x50000 and <= 0x5fffd
+            or >= 0x60000 and <= 0x6fffd
+            or >= 0x70000 and <= 0x7fffd
+            or >= 0x80000 and <= 0x8fffd
+            or >= 0x90000 and <= 0x9fffd
+            or >= 0xa0000 and <= 0xafffd
+            or >= 0xb0000 and <= 0xbfffd
+            or >= 0xc0000 and <= 0xcfffd
+            or >= 0xd0000 and <= 0xdfffd
+            or >= 0xe1000 and <= 0xefffd;
 
     private static bool TryHex(char value, out int nibble)
     {
@@ -1339,13 +1521,15 @@ public static class PackageManifestGenerator
         return false;
     }
 
-    private static bool IsUnreserved(byte value) =>
+    private static bool IsAsciiUnreserved(byte value) =>
         value is >= (byte)'A' and <= (byte)'Z'
         || value is >= (byte)'a' and <= (byte)'z'
         || value is >= (byte)'0' and <= (byte)'9'
         || value is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~';
 
-    private static IReadOnlyList<bool>? TryReadEncryptedFlags(byte[] bytes, int expectedCount)
+    private static IReadOnlyList<ZipCentralEntryMetadata>? TryReadCentralDirectoryMetadata(
+        byte[] bytes,
+        int expectedCount)
     {
         const uint eocdSignature = 0x06054b50;
         const uint zip64EocdSignature = 0x06064b50;
@@ -1422,7 +1606,7 @@ public static class PackageManifestGenerator
             return null;
 
         var count = (int)entryCount;
-        var flags = new List<bool>(count);
+        var metadata = new List<ZipCentralEntryMetadata>(count);
         var position = (int)centralOffset;
         var centralEnd = centralOffset + centralSize;
         for (var index = 0; index < count; index++)
@@ -1431,7 +1615,9 @@ public static class PackageManifestGenerator
                 || (ulong)(position + 46) > centralEnd
                 || ReadUInt32(bytes, position) != centralSignature)
                 return null;
-            flags.Add((ReadUInt16(bytes, position + 8) & 1) != 0);
+            metadata.Add(new ZipCentralEntryMetadata(
+                IsEncrypted: (ReadUInt16(bytes, position + 8) & 1) != 0,
+                Crc32: ReadUInt32(bytes, position + 16)));
             var nameLength = ReadUInt16(bytes, position + 28);
             var extraLength = ReadUInt16(bytes, position + 30);
             var commentLength = ReadUInt16(bytes, position + 32);
@@ -1441,7 +1627,42 @@ public static class PackageManifestGenerator
                 return null;
             position = (int)nextPosition;
         }
-        return flags;
+        return metadata;
+    }
+
+    private static void ValidateCrc32(
+        EntryWork work,
+        uint actualCrc32,
+        List<VerificationFinding> findings)
+    {
+        if (work.ExpectedCrc32 is not { } expectedCrc32 || actualCrc32 == expectedCrc32)
+            return;
+        AddFinding(findings, "crc_mismatch", VerificationFindingSeverity.Error,
+            "Entry payload CRC-32 does not match the ZIP central-directory value.",
+            new ChangeLocation { EntryUri = work.Uri });
+    }
+
+    private static uint ComputeCrc32(ReadOnlySpan<byte> bytes) =>
+        ~AppendCrc32(uint.MaxValue, bytes);
+
+    private static uint AppendCrc32(uint state, ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+            state = Crc32Table[(state ^ value) & 0xff] ^ (state >> 8);
+        return state;
+    }
+
+    private static uint[] CreateCrc32Table()
+    {
+        var table = new uint[256];
+        for (uint index = 0; index < table.Length; index++)
+        {
+            var value = index;
+            for (var bit = 0; bit < 8; bit++)
+                value = (value & 1) != 0 ? 0xedb88320U ^ (value >> 1) : value >> 1;
+            table[index] = value;
+        }
+        return table;
     }
 
     private static ushort ReadUInt16(byte[] bytes, int offset) =>
@@ -1493,6 +1714,11 @@ public static class PackageManifestGenerator
             ? long.MaxValue
             : (long)Math.Floor(product);
     }
+
+    private static long XmlCharacterLimit(long maximumXmlBytes) =>
+        maximumXmlBytes > long.MaxValue / 2
+            ? long.MaxValue
+            : Math.Max(maximumXmlBytes * 2, 1);
 
     private static string SafetyFindingCode(SafetyLimitKind kind) => kind switch
     {
@@ -1547,7 +1773,7 @@ public static class PackageManifestGenerator
 
     private static bool IsWordprocessingPart(EntryWork work)
         => work.ContentType is not null
-            && WordprocessingXmlContentTypes.Contains(work.ContentType);
+            && WordprocessingXmlContentTypes.Contains(MediaTypeEssence(work.ContentType));
 
     private static bool IsWordprocessingStoryPart(EntryWork work) =>
         IsWordprocessingMainPart(work)
@@ -1576,8 +1802,8 @@ public static class PackageManifestGenerator
     private static bool IsOfficeRelationshipNamespace(string value) =>
         value is TransitionalOfficeRelationshipNamespace or StrictOfficeRelationshipNamespace;
 
-    private static bool IsPackageRelationshipsNamespace(string value) => value is
-        TransitionalPackageRelationshipsNamespace or StrictPackageRelationshipsNamespace;
+    private static bool IsPackageRelationshipsNamespace(string value) =>
+        value == TransitionalPackageRelationshipsNamespace;
 
     private static bool IsOfficeRelationshipType(string value, string localType) =>
         value.Equals(TransitionalOfficeRelationshipTypePrefix + localType, StringComparison.Ordinal)
@@ -1594,7 +1820,19 @@ public static class PackageManifestGenerator
             + token + "+xml");
 
     private static bool IsMime(EntryWork work, string contentType) =>
-        string.Equals(work.ContentType, contentType, StringComparison.OrdinalIgnoreCase);
+        work.ContentType is { } declared
+        && string.Equals(MediaTypeEssence(declared), contentType,
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMediaTypeFamily(string contentType, string topLevelType) =>
+        MediaTypeEssence(contentType).StartsWith(
+            topLevelType + "/", StringComparison.OrdinalIgnoreCase);
+
+    private static string MediaTypeEssence(string contentType)
+    {
+        var parameter = contentType.IndexOf(';');
+        return (parameter < 0 ? contentType : contentType[..parameter]).TrimEnd(' ', '\t');
+    }
 
     private static bool IsCommentsPart(EntryWork work) =>
         IsContentType(work, "comments");
@@ -1627,10 +1865,647 @@ public static class PackageManifestGenerator
         return true;
     }
 
-    private static bool ContainsUtf16Name(byte[] bytes, string value)
+    private static bool IsValidContentTypeMediaType(string value)
     {
-        var needle = Encoding.Unicode.GetBytes(value);
-        return bytes.AsSpan().IndexOf(needle) >= 0;
+        // OPC ContentType values are media types, not arbitrary labels. Keep the parser local and
+        // bounded: MIME tokens are ASCII and optional parameters use the RFC quoted-string shape.
+        // Leading/trailing whitespace is significant in an XML attribute and is never accepted.
+        if (value.Length == 0
+            || char.IsWhiteSpace(value[0])
+            || char.IsWhiteSpace(value[^1]))
+        {
+            return false;
+        }
+
+        var offset = 0;
+        if (!ConsumeMediaTypeToken(value, ref offset)
+            || offset >= value.Length || value[offset++] != '/'
+            || !ConsumeMediaTypeToken(value, ref offset))
+        {
+            return false;
+        }
+
+        while (offset < value.Length)
+        {
+            ConsumeOptionalWhitespace(value, ref offset);
+            if (offset >= value.Length || value[offset++] != ';')
+                return false;
+            ConsumeOptionalWhitespace(value, ref offset);
+            if (!ConsumeMediaTypeToken(value, ref offset))
+                return false;
+            if (offset >= value.Length || value[offset++] != '=')
+                return false;
+            if (offset >= value.Length)
+                return false;
+
+            if (value[offset] == '"')
+            {
+                offset++;
+                var closed = false;
+                while (offset < value.Length)
+                {
+                    var character = value[offset++];
+                    if (character == '"')
+                    {
+                        closed = true;
+                        break;
+                    }
+                    if (character == '\\')
+                    {
+                        if (offset >= value.Length || !IsQuotedMediaTypeCharacter(value[offset++]))
+                            return false;
+                    }
+                    else if (!IsQuotedMediaTypeCharacter(character) || character == '\\')
+                    {
+                        return false;
+                    }
+                }
+                if (!closed)
+                    return false;
+            }
+            else if (!ConsumeMediaTypeToken(value, ref offset))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ConsumeMediaTypeToken(string value, ref int offset)
+    {
+        var start = offset;
+        while (offset < value.Length && IsMediaTypeTokenCharacter(value[offset]))
+            offset++;
+        return offset > start;
+    }
+
+    private static bool IsMediaTypeTokenCharacter(char character) =>
+        character is >= '0' and <= '9'
+        or >= 'A' and <= 'Z'
+        or >= 'a' and <= 'z'
+        or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.'
+        or '^' or '_' or '`' or '|' or '~';
+
+    private static bool IsQuotedMediaTypeCharacter(char character) =>
+        character is '\t' or ' '
+        || character is >= (char)0x21 and <= (char)0x7e;
+
+    private static void ConsumeOptionalWhitespace(string value, ref int offset)
+    {
+        while (offset < value.Length && value[offset] is ' ' or '\t')
+            offset++;
+    }
+
+    private const uint CfbDifSector = 0xfffffffc;
+    private const uint CfbFatSector = 0xfffffffd;
+    private const uint CfbEndOfChain = 0xfffffffe;
+    private const uint CfbFreeSector = 0xffffffff;
+    private const uint CfbNoStream = 0xffffffff;
+
+    private static bool ContainsEncryptedOoxmlStreams(byte[] bytes) =>
+        TryReadCompoundFileDirectory(bytes, out var hasEncryptedPackage, out var hasEncryptionInfo)
+        && hasEncryptedPackage && hasEncryptionInfo;
+
+    private static bool TryReadCompoundFileDirectory(
+        ReadOnlySpan<byte> bytes,
+        out bool hasEncryptedPackage,
+        out bool hasEncryptionInfo)
+    {
+        hasEncryptedPackage = false;
+        hasEncryptionInfo = false;
+
+        if (bytes.Length < 512 || !bytes.StartsWith(OleSignature)
+            || BinaryPrimitives.ReadUInt16LittleEndian(bytes[24..]) != 0x003e
+            || BinaryPrimitives.ReadUInt16LittleEndian(bytes[28..]) != 0xfffe
+            || BinaryPrimitives.ReadUInt16LittleEndian(bytes[32..]) != 6
+            || BinaryPrimitives.ReadUInt32LittleEndian(bytes[56..]) != 4096
+            || !AllZero(bytes[8..24]) || !AllZero(bytes[34..40]))
+        {
+            return false;
+        }
+
+        var majorVersion = BinaryPrimitives.ReadUInt16LittleEndian(bytes[26..]);
+        var sectorShift = BinaryPrimitives.ReadUInt16LittleEndian(bytes[30..]);
+        if ((majorVersion != 3 || sectorShift != 9)
+            && (majorVersion != 4 || sectorShift != 12))
+        {
+            return false;
+        }
+
+        var sectorSize = 1 << sectorShift;
+        if (bytes.Length < sectorSize || bytes.Length % sectorSize != 0)
+            return false;
+        var sectorCount = bytes.Length / sectorSize - 1;
+        if (sectorCount <= 0)
+            return false;
+
+        var declaredDirectorySectorCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes[40..]);
+        if ((majorVersion == 3 && declaredDirectorySectorCount != 0)
+            || declaredDirectorySectorCount > (uint)sectorCount)
+        {
+            return false;
+        }
+
+        var fatSectorCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes[44..]);
+        var firstDirectorySector = BinaryPrimitives.ReadUInt32LittleEndian(bytes[48..]);
+        var firstMiniFatSector = BinaryPrimitives.ReadUInt32LittleEndian(bytes[60..]);
+        var miniFatSectorCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes[64..]);
+        var firstDifatSector = BinaryPrimitives.ReadUInt32LittleEndian(bytes[68..]);
+        var difatSectorCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes[72..]);
+        if (fatSectorCount == 0 || fatSectorCount > (uint)sectorCount
+            || !IsRegularCfbSector(firstDirectorySector, sectorCount)
+            || miniFatSectorCount > (uint)sectorCount
+            || difatSectorCount > (uint)sectorCount
+            || (miniFatSectorCount == 0 && firstMiniFatSector != CfbEndOfChain)
+            || (miniFatSectorCount != 0 && !IsRegularCfbSector(firstMiniFatSector, sectorCount)))
+        {
+            return false;
+        }
+
+        var fatSectors = new List<uint>((int)fatSectorCount);
+        var difatSectors = new List<uint>((int)difatSectorCount);
+        var specialSectors = new HashSet<uint>();
+        for (var index = 0; index < 109; index++)
+        {
+            var sector = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(76 + index * 4)..]);
+            if ((uint)fatSectors.Count < fatSectorCount)
+            {
+                if (!TryAddCfbSector(sector, sectorCount, fatSectors, specialSectors))
+                    return false;
+            }
+            else if (sector != CfbFreeSector)
+            {
+                return false;
+            }
+        }
+
+        if ((uint)fatSectors.Count == fatSectorCount)
+        {
+            if (difatSectorCount != 0 || firstDifatSector != CfbEndOfChain)
+                return false;
+        }
+        else
+        {
+            if (difatSectorCount == 0 || !IsRegularCfbSector(firstDifatSector, sectorCount))
+                return false;
+            var difatSector = firstDifatSector;
+            var entriesPerDifatSector = sectorSize / sizeof(uint) - 1;
+            for (uint chainIndex = 0; chainIndex < difatSectorCount; chainIndex++)
+            {
+                if (!IsRegularCfbSector(difatSector, sectorCount)
+                    || !specialSectors.Add(difatSector))
+                {
+                    return false;
+                }
+                difatSectors.Add(difatSector);
+
+                var sectorBytes = CompoundFileSector(bytes, sectorSize, difatSector);
+                for (var index = 0; index < entriesPerDifatSector; index++)
+                {
+                    var fatSector = BinaryPrimitives.ReadUInt32LittleEndian(
+                        sectorBytes[(index * sizeof(uint))..]);
+                    if ((uint)fatSectors.Count < fatSectorCount)
+                    {
+                        if (!TryAddCfbSector(
+                            fatSector, sectorCount, fatSectors, specialSectors))
+                        {
+                            return false;
+                        }
+                    }
+                    else if (fatSector != CfbFreeSector)
+                    {
+                        return false;
+                    }
+                }
+
+                var next = BinaryPrimitives.ReadUInt32LittleEndian(
+                    sectorBytes[(entriesPerDifatSector * sizeof(uint))..]);
+                if (chainIndex + 1 == difatSectorCount)
+                {
+                    if (next != CfbEndOfChain)
+                        return false;
+                }
+                else if (!IsRegularCfbSector(next, sectorCount))
+                {
+                    return false;
+                }
+                difatSector = next;
+            }
+            if ((uint)fatSectors.Count != fatSectorCount)
+                return false;
+        }
+
+        foreach (var fatSector in fatSectors)
+        {
+            if (!TryReadCompoundFileFatEntry(
+                    bytes, sectorSize, sectorCount, fatSectors, fatSector, out var marker)
+                || marker != CfbFatSector)
+            {
+                return false;
+            }
+        }
+        foreach (var difatSector in difatSectors)
+        {
+            if (!TryReadCompoundFileFatEntry(
+                    bytes, sectorSize, sectorCount, fatSectors, difatSector, out var marker)
+                || marker != CfbDifSector)
+            {
+                return false;
+            }
+        }
+
+        var directorySectors = new HashSet<uint>();
+        var currentDirectorySector = firstDirectorySector;
+        var directorySectorCount = 0;
+        var sawRootEntry = false;
+        var directoryEntries = new List<CompoundFileDirectoryEntry?>();
+        while (currentDirectorySector != CfbEndOfChain)
+        {
+            if (!IsRegularCfbSector(currentDirectorySector, sectorCount)
+                || specialSectors.Contains(currentDirectorySector)
+                || !directorySectors.Add(currentDirectorySector))
+            {
+                return false;
+            }
+
+            directorySectorCount++;
+            var sectorBytes = CompoundFileSector(bytes, sectorSize, currentDirectorySector);
+            for (var offset = 0; offset < sectorBytes.Length; offset += 128)
+            {
+                var entry = sectorBytes.Slice(offset, 128);
+                var objectType = entry[66];
+                if (objectType == 0)
+                {
+                    directoryEntries.Add(null);
+                    continue;
+                }
+                if (objectType is not (1 or 2 or 5)
+                    || entry[67] > 1
+                    || !TryReadCompoundFileDirectoryName(entry, out var name))
+                {
+                    return false;
+                }
+
+                var isFirstDirectoryEntry = directorySectorCount == 1 && offset == 0;
+                if (isFirstDirectoryEntry)
+                {
+                    if (objectType != 5 || name != "Root Entry")
+                        return false;
+                    sawRootEntry = true;
+                }
+                else if (objectType == 5)
+                {
+                    return false;
+                }
+
+                var streamSize = BinaryPrimitives.ReadUInt64LittleEndian(entry[120..]);
+                if (majorVersion == 3 && streamSize > uint.MaxValue)
+                    return false;
+                var startingSector = BinaryPrimitives.ReadUInt32LittleEndian(entry[116..]);
+                if (objectType == 2
+                    && ((streamSize == 0 && startingSector != CfbEndOfChain)
+                        || (streamSize != 0 && startingSector >= CfbDifSector)))
+                {
+                    return false;
+                }
+                directoryEntries.Add(new CompoundFileDirectoryEntry
+                {
+                    Name = name,
+                    ObjectType = objectType,
+                    LeftSibling = BinaryPrimitives.ReadUInt32LittleEndian(entry[68..]),
+                    RightSibling = BinaryPrimitives.ReadUInt32LittleEndian(entry[72..]),
+                    Child = BinaryPrimitives.ReadUInt32LittleEndian(entry[76..]),
+                    StartingSector = startingSector,
+                    StreamSize = streamSize,
+                });
+            }
+
+            if (!TryReadCompoundFileFatEntry(bytes, sectorSize, sectorCount, fatSectors,
+                    currentDirectorySector, out currentDirectorySector)
+                || currentDirectorySector is CfbFreeSector or CfbFatSector or CfbDifSector)
+            {
+                return false;
+            }
+        }
+
+        if (!sawRootEntry
+            || (majorVersion == 4
+                && declaredDirectorySectorCount != (uint)directorySectorCount)
+            || directoryEntries.Count == 0 || directoryEntries[0] is not { } root
+            || root.LeftSibling != CfbNoStream || root.RightSibling != CfbNoStream)
+        {
+            return false;
+        }
+
+        if (!TryReadCompoundFileMiniStreamAllocation(
+                bytes, sectorSize, sectorCount, fatSectors, specialSectors,
+                directorySectors, firstMiniFatSector, miniFatSectorCount, root,
+                out var miniFatSectors, out var rootMiniStreamSize,
+                out var unavailableRegularSectors))
+        {
+            return false;
+        }
+
+        var seenEncryptedPackageEntry = false;
+        var seenEncryptionInfoEntry = false;
+        var allocatedEncryptionMiniSectors = new HashSet<uint>();
+        var allocatedEncryptionRegularSectors = new HashSet<uint>();
+        var directoryTree = new Stack<uint>();
+        var visitedDirectoryEntries = new HashSet<uint>();
+        if (root.Child != CfbNoStream)
+            directoryTree.Push(root.Child);
+        while (directoryTree.Count != 0)
+        {
+            var streamId = directoryTree.Pop();
+            if (streamId >= (uint)directoryEntries.Count
+                || directoryEntries[(int)streamId] is not { } entry
+                || !visitedDirectoryEntries.Add(streamId))
+            {
+                return false;
+            }
+            if (entry.LeftSibling != CfbNoStream)
+                directoryTree.Push(entry.LeftSibling);
+            if (entry.RightSibling != CfbNoStream)
+                directoryTree.Push(entry.RightSibling);
+            if (entry.ObjectType != 2)
+                continue;
+            if (entry.Child != CfbNoStream)
+                return false;
+
+            if (entry.Name.Equals("EncryptedPackage", StringComparison.OrdinalIgnoreCase))
+            {
+                if (seenEncryptedPackageEntry)
+                    return false;
+                seenEncryptedPackageEntry = true;
+                hasEncryptedPackage = IsValidCompoundFileEncryptionStream(
+                    bytes, sectorSize, sectorCount, fatSectors, unavailableRegularSectors,
+                    miniFatSectors, rootMiniStreamSize, allocatedEncryptionMiniSectors,
+                    allocatedEncryptionRegularSectors, entry);
+            }
+            else if (entry.Name.Equals("EncryptionInfo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (seenEncryptionInfoEntry)
+                    return false;
+                seenEncryptionInfoEntry = true;
+                hasEncryptionInfo = IsValidCompoundFileEncryptionStream(
+                    bytes, sectorSize, sectorCount, fatSectors, unavailableRegularSectors,
+                    miniFatSectors, rootMiniStreamSize, allocatedEncryptionMiniSectors,
+                    allocatedEncryptionRegularSectors, entry);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsValidCompoundFileEncryptionStream(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        int sectorCount,
+        IReadOnlyList<uint> fatSectors,
+        IReadOnlySet<uint> unavailableRegularSectors,
+        IReadOnlyList<uint> miniFatSectors,
+        ulong rootMiniStreamSize,
+        HashSet<uint> allocatedEncryptionMiniSectors,
+        HashSet<uint> allocatedEncryptionRegularSectors,
+        CompoundFileDirectoryEntry entry)
+    {
+        if (entry.StreamSize < sizeof(ulong))
+            return false;
+        if (entry.StreamSize < 4096)
+        {
+            const ulong miniSectorSize = 64;
+            var expectedMiniSectors = entry.StreamSize / miniSectorSize
+                + (entry.StreamSize % miniSectorSize == 0 ? 0UL : 1UL);
+            var finalMiniSectorBytes = entry.StreamSize % miniSectorSize;
+            var currentMiniSector = entry.StartingSector;
+            var streamMiniSectors = new HashSet<uint>();
+            for (ulong index = 0; index < expectedMiniSectors; index++)
+            {
+                var bytesInMiniSector = index + 1 == expectedMiniSectors
+                    && finalMiniSectorBytes != 0
+                    ? finalMiniSectorBytes
+                    : miniSectorSize;
+                var rootOffset = (ulong)currentMiniSector * miniSectorSize;
+                if (rootOffset >= rootMiniStreamSize
+                    || bytesInMiniSector > rootMiniStreamSize - rootOffset
+                    || !streamMiniSectors.Add(currentMiniSector)
+                    || allocatedEncryptionMiniSectors.Contains(currentMiniSector)
+                    || !TryReadCompoundFileMiniFatEntry(
+                        bytes, sectorSize, miniFatSectors, currentMiniSector,
+                        out var nextMiniSector))
+                {
+                    return false;
+                }
+                if (index + 1 == expectedMiniSectors)
+                {
+                    if (nextMiniSector != CfbEndOfChain)
+                        return false;
+                }
+                else
+                {
+                    currentMiniSector = nextMiniSector;
+                }
+            }
+
+            allocatedEncryptionMiniSectors.UnionWith(streamMiniSectors);
+            return true;
+        }
+
+        var expectedSectors = entry.StreamSize / (ulong)sectorSize
+            + (entry.StreamSize % (ulong)sectorSize == 0 ? 0UL : 1UL);
+        if (!TryReadCompoundFileRegularSectorChain(
+                bytes, sectorSize, sectorCount, fatSectors, unavailableRegularSectors,
+                entry.StartingSector, expectedSectors, out var streamSectors)
+            || streamSectors.Any(allocatedEncryptionRegularSectors.Contains))
+        {
+            return false;
+        }
+        allocatedEncryptionRegularSectors.UnionWith(streamSectors);
+        return true;
+    }
+
+    private static bool TryReadCompoundFileMiniStreamAllocation(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        int sectorCount,
+        IReadOnlyList<uint> fatSectors,
+        IReadOnlySet<uint> specialSectors,
+        IReadOnlySet<uint> directorySectors,
+        uint firstMiniFatSector,
+        uint miniFatSectorCount,
+        CompoundFileDirectoryEntry root,
+        out List<uint> miniFatSectors,
+        out ulong rootMiniStreamSize,
+        out HashSet<uint> unavailableRegularSectors)
+    {
+        miniFatSectors = new List<uint>();
+        rootMiniStreamSize = 0;
+        unavailableRegularSectors = new HashSet<uint>(specialSectors);
+        unavailableRegularSectors.UnionWith(directorySectors);
+
+        if (!TryReadCompoundFileRegularSectorChain(
+                bytes, sectorSize, sectorCount, fatSectors, unavailableRegularSectors,
+                firstMiniFatSector, miniFatSectorCount, out miniFatSectors))
+        {
+            return false;
+        }
+        unavailableRegularSectors.UnionWith(miniFatSectors);
+
+        var expectedRootSectors = root.StreamSize / (ulong)sectorSize
+            + (root.StreamSize % (ulong)sectorSize == 0 ? 0UL : 1UL);
+        if (!TryReadCompoundFileRegularSectorChain(
+                bytes, sectorSize, sectorCount, fatSectors, unavailableRegularSectors,
+                root.StartingSector, expectedRootSectors, out var rootMiniStreamSectors))
+        {
+            return false;
+        }
+        unavailableRegularSectors.UnionWith(rootMiniStreamSectors);
+
+        rootMiniStreamSize = root.StreamSize;
+        return true;
+    }
+
+    private static bool TryReadCompoundFileRegularSectorChain(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        int sectorCount,
+        IReadOnlyList<uint> fatSectors,
+        IReadOnlySet<uint> unavailableSectors,
+        uint startingSector,
+        ulong expectedSectorCount,
+        out List<uint> chain)
+    {
+        chain = new List<uint>();
+        if (expectedSectorCount == 0)
+            return startingSector == CfbEndOfChain;
+        if (expectedSectorCount > (ulong)sectorCount)
+            return false;
+
+        var currentSector = startingSector;
+        var visitedSectors = new HashSet<uint>();
+        for (ulong index = 0; index < expectedSectorCount; index++)
+        {
+            if (!IsRegularCfbSector(currentSector, sectorCount)
+                || unavailableSectors.Contains(currentSector)
+                || !visitedSectors.Add(currentSector)
+                || !TryReadCompoundFileFatEntry(bytes, sectorSize, sectorCount, fatSectors,
+                    currentSector, out var nextSector))
+            {
+                return false;
+            }
+            chain.Add(currentSector);
+            if (index + 1 == expectedSectorCount)
+                return nextSector == CfbEndOfChain;
+            currentSector = nextSector;
+        }
+        return false;
+    }
+
+    private static bool TryReadCompoundFileMiniFatEntry(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        IReadOnlyList<uint> miniFatSectors,
+        uint miniSector,
+        out uint value)
+    {
+        value = CfbFreeSector;
+        var entriesPerMiniFatSector = sectorSize / sizeof(uint);
+        var miniFatSectorIndex = (ulong)miniSector / (uint)entriesPerMiniFatSector;
+        if (miniFatSectorIndex >= (ulong)miniFatSectors.Count)
+            return false;
+        var entryIndex = (int)(miniSector % (uint)entriesPerMiniFatSector);
+        var miniFatBytes = CompoundFileSector(
+            bytes, sectorSize, miniFatSectors[(int)miniFatSectorIndex]);
+        value = BinaryPrimitives.ReadUInt32LittleEndian(
+            miniFatBytes[(entryIndex * sizeof(uint))..]);
+        return true;
+    }
+
+    private static bool TryAddCfbSector(
+        uint sector,
+        int sectorCount,
+        List<uint> sectors,
+        HashSet<uint> usedSectors)
+    {
+        if (!IsRegularCfbSector(sector, sectorCount) || !usedSectors.Add(sector))
+            return false;
+        sectors.Add(sector);
+        return true;
+    }
+
+    private static bool TryReadCompoundFileFatEntry(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        int sectorCount,
+        IReadOnlyList<uint> fatSectors,
+        uint sector,
+        out uint value)
+    {
+        value = CfbFreeSector;
+        if (!IsRegularCfbSector(sector, sectorCount))
+            return false;
+        var entriesPerFatSector = sectorSize / sizeof(uint);
+        var fatSectorIndex = (int)(sector / (uint)entriesPerFatSector);
+        if (fatSectorIndex >= fatSectors.Count)
+            return false;
+        var entryIndex = (int)(sector % (uint)entriesPerFatSector);
+        var fatBytes = CompoundFileSector(bytes, sectorSize, fatSectors[fatSectorIndex]);
+        value = BinaryPrimitives.ReadUInt32LittleEndian(fatBytes[(entryIndex * sizeof(uint))..]);
+        return true;
+    }
+
+    private static bool TryReadCompoundFileDirectoryName(
+        ReadOnlySpan<byte> entry,
+        out string name)
+    {
+        name = string.Empty;
+        var byteLength = BinaryPrimitives.ReadUInt16LittleEndian(entry[64..]);
+        if (byteLength is < 2 or > 64 || (byteLength & 1) != 0
+            || BinaryPrimitives.ReadUInt16LittleEndian(entry[(byteLength - 2)..]) != 0)
+        {
+            return false;
+        }
+        for (var offset = 0; offset < byteLength - 2; offset += 2)
+        {
+            if (BinaryPrimitives.ReadUInt16LittleEndian(entry[offset..]) == 0)
+                return false;
+        }
+        name = Encoding.Unicode.GetString(entry[..(byteLength - 2)]);
+        return true;
+    }
+
+    private static ReadOnlySpan<byte> CompoundFileSector(
+        ReadOnlySpan<byte> bytes,
+        int sectorSize,
+        uint sector)
+    {
+        var offset = checked((int)(((long)sector + 1) * sectorSize));
+        return bytes.Slice(offset, sectorSize);
+    }
+
+    private static bool IsRegularCfbSector(uint sector, int sectorCount) =>
+        sector < (uint)sectorCount;
+
+    private static bool AllZero(ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+        {
+            if (value != 0)
+                return false;
+        }
+        return true;
+    }
+
+    private sealed class CompoundFileDirectoryEntry
+    {
+        required public string Name { get; init; }
+        required public byte ObjectType { get; init; }
+        required public uint LeftSibling { get; init; }
+        required public uint RightSibling { get; init; }
+        required public uint Child { get; init; }
+        required public uint StartingSector { get; init; }
+        required public ulong StreamSize { get; init; }
     }
 
     private static void AddFinding(
@@ -1655,6 +2530,7 @@ public static class PackageManifestGenerator
         required public long Size { get; init; }
         required public long CompressedSize { get; init; }
         public bool? IsEncrypted { get; init; }
+        public uint? ExpectedCrc32 { get; init; }
         required public bool RatioExceeded { get; init; }
         public bool XmlLimitReported { get; set; }
         public bool XmlUnparsable { get; set; }
@@ -1669,6 +2545,8 @@ public static class PackageManifestGenerator
         public byte[]? PreloadedBytes { get; set; }
         public bool ReadBlocked { get; set; }
     }
+
+    private readonly record struct ZipCentralEntryMetadata(bool IsEncrypted, uint Crc32);
 
     private sealed class ActualReadBudget
     {
@@ -1694,8 +2572,8 @@ public static class PackageManifestGenerator
     private sealed class ContentTypeMap
     {
         public static readonly ContentTypeMap Empty = new(
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, string>(PartNameComparer),
+            new Dictionary<string, string>(PartNameComparer),
             Array.Empty<PackageContentTypeDeclaration>(),
             isAvailable: false);
 
@@ -1721,7 +2599,7 @@ public static class PackageManifestGenerator
 
         public (string? ContentType, string Source) Resolve(string uri)
         {
-            if (string.Equals(uri, ContentTypesUri, StringComparison.OrdinalIgnoreCase))
+            if (PartNameComparer.Equals(uri, ContentTypesUri))
                 return (ContentTypesMime, "implicit");
             if (IsRelationshipPart(uri))
                 return (RelationshipsMime, "implicit");
@@ -1741,8 +2619,7 @@ public static class PackageManifestGenerator
             List<VerificationFinding> findings)
         {
             if (document.Root?.Name.LocalName != "Types"
-                || document.Root.Name.NamespaceName is not
-                    (TransitionalContentTypesNamespace or StrictContentTypesNamespace))
+                || document.Root.Name.NamespaceName != TransitionalContentTypesNamespace)
             {
                 AddFinding(findings, "malformed_content_types", VerificationFindingSeverity.Error,
                     "[Content_Types].xml root element must be Types.",
@@ -1750,10 +2627,10 @@ public static class PackageManifestGenerator
                 return Empty;
             }
 
-            var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var defaults = new Dictionary<string, string>(PartNameComparer);
+            var overrides = new Dictionary<string, string>(PartNameComparer);
             var declarations = new List<PackageContentTypeDeclaration>();
-            var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var occurrences = new Dictionary<string, int>(PartNameComparer);
             foreach (var element in document.Root.Elements())
             {
                 if (element.Name.NamespaceName != document.Root.Name.NamespaceName)
@@ -1805,6 +2682,15 @@ public static class PackageManifestGenerator
                         "Content-type Override PartName does not satisfy the OPC part-name grammar.",
                         new ChangeLocation { EntryUri = ContentTypesUri, TargetUri = rawKey });
                 }
+                var validContentType = IsValidContentTypeMediaType(contentType);
+                if (!validContentType)
+                {
+                    AddFinding(findings, "malformed_content_type",
+                        VerificationFindingSeverity.Error,
+                        "ContentType must be a syntactically valid MIME media type without edge whitespace.",
+                        new ChangeLocation { EntryUri = ContentTypesUri,
+                            PropertyPath = kind + ":" + key });
+                }
                 var occurrenceKey = kind + "\0" + key;
                 occurrences.TryGetValue(occurrenceKey, out var occurrence);
                 occurrences[occurrenceKey] = occurrence + 1;
@@ -1816,7 +2702,7 @@ public static class PackageManifestGenerator
                     Occurrence = occurrence,
                 });
 
-                if (!validKey)
+                if (!validKey || !validContentType)
                     continue;
                 var target = kind == "default" ? defaults : overrides;
                 if (target.TryGetValue(key, out var existing))
@@ -1839,7 +2725,7 @@ public static class PackageManifestGenerator
 
             return new ContentTypeMap(defaults, overrides, declarations
                 .OrderBy(declaration => declaration.Kind, StringComparer.Ordinal)
-                .ThenBy(declaration => declaration.Key, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(declaration => declaration.Key, PartNameComparer)
                 .ThenBy(declaration => declaration.ContentType, StringComparer.Ordinal)
                 .ThenBy(declaration => declaration.Occurrence)
                 .ToList(),
@@ -1852,12 +2738,50 @@ public static class PackageManifestGenerator
         public static readonly OwnerIdComparer Instance = new();
 
         public bool Equals((string OwnerUri, string Id) x, (string OwnerUri, string Id) y) =>
-            StringComparer.OrdinalIgnoreCase.Equals(x.OwnerUri, y.OwnerUri)
+            PartNameComparer.Equals(x.OwnerUri, y.OwnerUri)
             && StringComparer.Ordinal.Equals(x.Id, y.Id);
 
         public int GetHashCode((string OwnerUri, string Id) obj) =>
-            HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(obj.OwnerUri),
+            HashCode.Combine(PartNameComparer.GetHashCode(obj.OwnerUri),
                 StringComparer.Ordinal.GetHashCode(obj.Id));
+    }
+
+    private sealed class AsciiCaseInsensitiveComparer : IEqualityComparer<string>, IComparer<string>
+    {
+        public static readonly AsciiCaseInsensitiveComparer Instance = new();
+
+        public bool Equals(string? x, string? y) => Compare(x, y) == 0;
+
+        public int Compare(string? x, string? y)
+        {
+            if (ReferenceEquals(x, y))
+                return 0;
+            if (x is null)
+                return -1;
+            if (y is null)
+                return 1;
+            var shared = Math.Min(x.Length, y.Length);
+            for (var index = 0; index < shared; index++)
+            {
+                var left = FoldAscii(x[index]);
+                var right = FoldAscii(y[index]);
+                if (left != right)
+                    return left.CompareTo(right);
+            }
+            return x.Length.CompareTo(y.Length);
+        }
+
+        public int GetHashCode(string value)
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            var hash = new HashCode();
+            foreach (var character in value)
+                hash.Add(FoldAscii(character));
+            return hash.ToHashCode();
+        }
+
+        private static char FoldAscii(char value) =>
+            value is >= 'a' and <= 'z' ? (char)(value - ('a' - 'A')) : value;
     }
 
     private enum SafetyLimitKind

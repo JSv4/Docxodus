@@ -32,6 +32,10 @@ from .enums import (
     HyperlinkKind,
     LineSpacingRule,
     MutationBatchMode,
+    PackageContentTypeDeclarationKind,
+    PackageContentTypeSource,
+    PackageKind,
+    PackageRelationshipTargetMode,
     ParagraphAlignment,
     PlaceholderKind,
     PlaceholderKinds,
@@ -41,6 +45,7 @@ from .enums import (
     TableRowHeightRule,
     TableVerticalMergeRole,
     TrackedChangeMode,
+    VerificationFindingSeverity,
     WhitespaceMode,
 )
 
@@ -199,7 +204,7 @@ class ChangeLocation:
 @dataclass(frozen=True, slots=True)
 class VerificationFinding:
     code: str
-    severity: str
+    severity: VerificationFindingSeverity
     message: str
     location: ChangeLocation | None = None
 
@@ -208,7 +213,7 @@ class VerificationFinding:
         location = d.get("location")
         return cls(
             code=str(d["code"]),
-            severity=str(d["severity"]),
+            severity=VerificationFindingSeverity(str(d["severity"])),
             message=str(d["message"]),
             location=ChangeLocation._from_wire(location) if isinstance(location, Mapping) else None,
         )
@@ -219,7 +224,7 @@ class PackageManifestEntry:
     uri: str
     occurrence: int
     content_type: str | None
-    content_type_source: str
+    content_type_source: PackageContentTypeSource
     size: int
     compressed_size: int
     raw_bytes_digest: VerificationDigest | None
@@ -235,7 +240,7 @@ class PackageManifestEntry:
             uri=str(d["uri"]),
             occurrence=int(d["occurrence"]),
             content_type=d.get("contentType"),
-            content_type_source=str(d["contentTypeSource"]),
+            content_type_source=PackageContentTypeSource(str(d["contentTypeSource"])),
             size=int(d["size"]),
             compressed_size=int(d["compressedSize"]),
             raw_bytes_digest=VerificationDigest._from_wire(raw) if isinstance(raw, Mapping) else None,
@@ -253,7 +258,7 @@ class PackageManifestEntry:
 
 @dataclass(frozen=True, slots=True)
 class PackageContentTypeDeclaration:
-    kind: str
+    kind: PackageContentTypeDeclarationKind
     key: str
     content_type: str
     occurrence: int
@@ -261,7 +266,7 @@ class PackageContentTypeDeclaration:
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "PackageContentTypeDeclaration":
         return cls(
-            kind=str(d["kind"]),
+            kind=PackageContentTypeDeclarationKind(str(d["kind"])),
             key=str(d["key"]),
             content_type=str(d["contentType"]),
             occurrence=int(d["occurrence"]),
@@ -274,7 +279,7 @@ class PackageRelationship:
     id: str
     type: str
     target: str
-    target_mode: str
+    target_mode: PackageRelationshipTargetMode
     resolved_target_uri: str | None
     is_target_present: bool | None
 
@@ -286,7 +291,7 @@ class PackageRelationship:
             id=str(d["id"]),
             type=str(d["type"]),
             target=str(d["target"]),
-            target_mode=str(d["targetMode"]),
+            target_mode=PackageRelationshipTargetMode(str(d["targetMode"])),
             resolved_target_uri=d.get("resolvedTargetUri"),
             is_target_present=bool(present) if present is not None else None,
         )
@@ -399,7 +404,7 @@ class PackageManifest:
 
     schema: str
     schema_version: int
-    package_kind: str
+    package_kind: PackageKind
     is_valid: bool
     raw_package_bytes_digest: VerificationDigest
     ordered_opc_content_digest: VerificationDigest | None
@@ -417,7 +422,7 @@ class PackageManifest:
         return cls(
             schema=str(d["schema"]),
             schema_version=int(d["schemaVersion"]),
-            package_kind=str(d["packageKind"]),
+            package_kind=PackageKind(str(d["packageKind"])),
             is_valid=bool(d["isValid"]),
             raw_package_bytes_digest=VerificationDigest._from_wire(
                 d["rawPackageBytesDigest"]

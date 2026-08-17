@@ -179,7 +179,8 @@ Package verification is available statelessly as `generate_package_manifest(docx
 the current logical checkpoint as `session.get_package_manifest()`. Both return frozen typed
 dataclasses for the schema documented in
 [`package_manifests.md`](../docs/architecture/package_manifests.md); validation failures are
-structured findings rather than editable-package exceptions.
+structured findings rather than editable-package exceptions. Closed wire vocabularies decode to
+`str` enums, and decimal-string ZIP64 sizes decode to exact Python `int` values.
 
 | Tier | Methods |
 |---|---|

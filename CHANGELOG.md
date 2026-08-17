@@ -18,9 +18,13 @@ All notable changes to this project will be documented in this file.
 
   `isValid` is a claim about the package, so it is reserved for defects a real file does not
   have: package-absolute relationship targets (`Target="/word/document.xml"`, the form the Open
-  XML SDK writes) resolve normally, and directory-only ZIP entries — which 7-Zip, Windows'
+  XML SDK writes) resolve normally, and empty directory-only ZIP entries — which 7-Zip, Windows'
   *Send to → Compressed folder*, and several Word templates emit — are a `directory_entry`
-  warning, inventoried with a trailing-slash URI and excluded from both content digests. A
+  warning, inventoried with a trailing-slash URI and excluded from both content digests; a
+  trailing-slash entry with payload is invalid and remains in both identities. ZIP64 entry sizes
+  are decimal strings on the JSON wire, avoiding silent precision loss in JavaScript. ASCII ZIP
+  item names are mapped losslessly to Unicode logical OPC names without collapsing reserved or
+  opaque percent escapes. A
   finding whose real cause is one unreadable file is reported once against that file rather than
   once per part: an unusable `[Content_Types].xml` yields `content_types_unreadable` instead of
   `missing_content_type` on every entry, and an unparsed `.rels` part yields

@@ -87,9 +87,15 @@ test.describe("Docxodus Web Worker Tests", () => {
         const view = backing.subarray(3, 3 + documentBytes.length);
         view.set(documentBytes);
         const expected = Array.from(view);
+        const expectedDigest = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", view))
+        ).map(value => value.toString(16).padStart(2, "0")).join("");
 
         const manifest = await (window as any).DocxodusWorker
           .generatePackageManifest(view);
+        const session = await (window as any).DocxodusWorker.openDocxSession(view);
+        const sessionManifest = await session.getPackageManifest();
+        await session.close();
         let unchanged = false;
         try {
           unchanged = view.byteLength === documentBytes.length
@@ -100,10 +106,26 @@ test.describe("Docxodus Web Worker Tests", () => {
         } catch {
           unchanged = false;
         }
-        return { packageKind: manifest.packageKind, unchanged };
+        return {
+          packageKind: manifest.packageKind,
+          isValid: manifest.isValid,
+          rawDigest: manifest.rawPackageBytesDigest.value,
+          expectedDigest,
+          entrySizeType: typeof manifest.entries[0]?.size,
+          sessionSchema: sessionManifest.schema,
+          sessionIsValid: sessionManifest.isValid,
+          unchanged,
+        };
       }, bytes);
 
       expect(result.packageKind).toBe("opc");
+      expect(result.isValid).toBe(true);
+      expect(result.rawDigest).toBe(result.expectedDigest);
+      expect(result.entrySizeType).toBe("string");
+      expect(result.sessionSchema).toBe(
+        "https://docxodus.dev/schemas/verification/package-manifest/v1"
+      );
+      expect(result.sessionIsValid).toBe(true);
       expect(result.unchanged).toBe(true);
     }, { timeout: 60000 });
   });

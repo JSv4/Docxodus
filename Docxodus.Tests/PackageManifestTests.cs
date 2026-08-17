@@ -248,14 +248,14 @@ public class PackageManifestTests
         var ole = new byte[512];
         new byte[] { 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 }.CopyTo(ole, 0);
         Encoding.Unicode.GetBytes("EncryptedPackage").CopyTo(ole, 64);
-        var encryptedOle = PackageManifestGenerator.Generate(ole);
+        var corruptOle = PackageManifestGenerator.Generate(ole);
         var encryptedZip = PackageManifestGenerator.Generate(MarkFirstEntryEncrypted(BuildZip(
             MinimalEntries(), CompressionLevel.NoCompression, DefaultTimestamp)));
 
         Assert.Equal("malformed", malformed.PackageKind);
         Assert.Contains(malformed.Findings, finding => finding.Code == "malformed_package");
-        Assert.Equal("ole-encrypted", encryptedOle.PackageKind);
-        Assert.Contains(encryptedOle.Findings, finding => finding.Code == "unsupported_ole_encryption");
+        Assert.Equal("ole", corruptOle.PackageKind);
+        Assert.Contains(corruptOle.Findings, finding => finding.Code == "unsupported_compound_file");
         Assert.Equal("zip-encrypted", encryptedZip.PackageKind);
         Assert.Contains(encryptedZip.Findings, finding => finding.Code == "unsupported_zip_encryption");
         Assert.Contains(encryptedZip.Entries, entry => entry.IsEncrypted == true);

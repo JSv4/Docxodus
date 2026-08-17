@@ -27,6 +27,10 @@ namespace Docxodus.Verification;
 internal static class XmlSemanticNormalizer
 {
     private const string ContentTypesUri = "/[Content_Types].xml";
+    private const string XmlSchemaInstanceNamespace =
+        "http://www.w3.org/2001/XMLSchema-instance";
+    private const string MarkupCompatibilityNamespace =
+        "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
     internal static XDocument Parse(byte[] bytes, long maxCharacters)
     {
@@ -56,7 +60,10 @@ internal static class XmlSemanticNormalizer
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         WriteByte(hash, (byte)'D');
-        foreach (var node in document.Nodes())
+        // XML permits only production-S whitespace outside the document element. It is document
+        // serialization formatting, just like an XML declaration, and is never application text.
+        foreach (var node in document.Nodes().Where(node =>
+                     node is not XText text || !IsXmlWhitespace(text.Value)))
             WriteNode(hash, node, entryUri, ignoreFormattingWhitespace,
                 isDocumentRoot: true, preserveSpace: false);
         return new VerificationDigest
@@ -128,7 +135,7 @@ internal static class XmlSemanticNormalizer
         foreach (var attribute in attributes)
         {
             WriteName(hash, attribute.Name);
-            WriteString(hash, attribute.Value);
+            WriteAttributeValue(hash, element, attribute);
         }
 
         var space = element.Attribute(XNamespace.Xml + "space")?.Value;
@@ -139,7 +146,7 @@ internal static class XmlSemanticNormalizer
             && children.OfType<XElement>().Any())
         {
             children = children.Where(node =>
-                node is not XText text || !string.IsNullOrWhiteSpace(text.Value));
+                node is not XText text || !IsXmlWhitespace(text.Value));
         }
         if (isDocumentRoot && IsRelationshipPart(entryUri))
             children = SortOpcMetadataChildren(children, relationshipPart: true);
@@ -166,7 +173,7 @@ internal static class XmlSemanticNormalizer
         if (nodes.Any(node => node switch
             {
                 XElement => false,
-                XText text => !string.IsNullOrWhiteSpace(text.Value),
+                XText text => !IsXmlWhitespace(text.Value),
                 _ => true,
             }))
             return nodes;
@@ -176,16 +183,166 @@ internal static class XmlSemanticNormalizer
                 .ThenBy(ElementAttributeKey("Type"), StringComparer.Ordinal)
                 .ThenBy(ElementAttributeKey("Target"), StringComparer.Ordinal)
                 .ThenBy(ElementAttributeKey("TargetMode"), StringComparer.Ordinal)
+                .ThenBy(NormalizedElementIdentity, StringComparer.Ordinal)
             : elements.OrderBy(element => element.Name.LocalName, StringComparer.Ordinal)
-                .ThenBy(ElementAttributeKey("PartName"), StringComparer.OrdinalIgnoreCase)
-                .ThenBy(ElementAttributeKey("Extension"), StringComparer.OrdinalIgnoreCase)
-                .ThenBy(ElementAttributeKey("ContentType"), StringComparer.Ordinal);
+                .ThenBy(ElementAttributeKey("PartName"), AsciiCaseInsensitiveComparer.Instance)
+                .ThenBy(ElementAttributeKey("Extension"), AsciiCaseInsensitiveComparer.Instance)
+                .ThenBy(ElementAttributeKey("ContentType"), StringComparer.Ordinal)
+                .ThenBy(NormalizedElementIdentity, StringComparer.Ordinal);
         return ordered.Cast<XNode>();
     }
 
     private static Func<XElement, string> ElementAttributeKey(string localName) =>
-        element => element.Attributes().FirstOrDefault(attribute =>
-            attribute.Name.LocalName == localName)?.Value ?? string.Empty;
+        element => element.Attribute(XName.Get(localName))?.Value ?? string.Empty;
+
+    // The schema keys above make manifests easy to inspect, but they are not a total order: OPC
+    // part identifiers fold ASCII case, and relationship markup can carry extension attributes.
+    // Use the same normalized token stream that is ultimately hashed as the final tie-breaker so
+    // child order remains serialization-only even when primary keys compare equal.
+    private static string NormalizedElementIdentity(XElement element)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        WriteElement(hash, element, entryUri: string.Empty, ignoreFormattingWhitespace: true,
+            isDocumentRoot: false, inheritedPreserveSpace: false);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static void WriteAttributeValue(
+        IncrementalHash hash,
+        XElement context,
+        XAttribute attribute)
+    {
+        if (attribute.Name.NamespaceName == XmlSchemaInstanceNamespace
+            && attribute.Name.LocalName == "type"
+            && TryResolveQName(context, attribute.Value, out var typeName))
+        {
+            WriteByte(hash, (byte)'Q');
+            WriteName(hash, typeName);
+            return;
+        }
+
+        var isMcAttribute = attribute.Name.NamespaceName == MarkupCompatibilityNamespace;
+        var isPrefixList = isMcAttribute
+            && attribute.Name.LocalName is "Ignorable" or "MustUnderstand"
+            || attribute.Name.NamespaceName.Length == 0
+            && attribute.Name.LocalName == "Requires"
+            && context.Name.NamespaceName == MarkupCompatibilityNamespace;
+        if (isPrefixList
+            && TryResolvePrefixList(context, attribute.Value, out var namespaceNames))
+        {
+            WriteByte(hash, (byte)'P');
+            WriteInt32(hash, namespaceNames.Count);
+            foreach (var namespaceName in namespaceNames)
+                WriteString(hash, namespaceName);
+            return;
+        }
+
+        if (isMcAttribute
+            && attribute.Name.LocalName is
+                "PreserveAttributes" or "PreserveElements" or "ProcessContent"
+            && TryResolveQNameList(context, attribute.Value, out var names))
+        {
+            WriteByte(hash, (byte)'L');
+            WriteInt32(hash, names.Count);
+            foreach (var name in names)
+                WriteName(hash, name);
+            return;
+        }
+
+        WriteByte(hash, (byte)'V');
+        WriteString(hash, attribute.Value);
+    }
+
+    private static bool TryResolveQName(XElement context, string value, out XName name)
+    {
+        name = XName.Get("invalid");
+        var tokens = SplitXmlWhitespace(value);
+        if (tokens.Count != 1)
+            return false;
+        var token = tokens[0];
+        var separator = token.IndexOf(':');
+        if (separator != token.LastIndexOf(':'))
+            return false;
+        var prefix = separator < 0 ? string.Empty : token[..separator];
+        var localName = separator < 0 ? token : token[(separator + 1)..];
+        try
+        {
+            if (prefix.Length > 0)
+                XmlConvert.VerifyNCName(prefix);
+            XmlConvert.VerifyNCName(localName);
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+        var namespaceName = prefix.Length == 0
+            ? context.GetDefaultNamespace()
+            : context.GetNamespaceOfPrefix(prefix);
+        if (namespaceName is null)
+            return false;
+        name = namespaceName + localName;
+        return true;
+    }
+
+    private static bool TryResolveQNameList(
+        XElement context,
+        string value,
+        out IReadOnlyList<XName> names)
+    {
+        var resolved = new List<XName>();
+        foreach (var token in SplitXmlWhitespace(value))
+        {
+            if (!TryResolveQName(context, token, out var name))
+            {
+                names = Array.Empty<XName>();
+                return false;
+            }
+            resolved.Add(name);
+        }
+        names = resolved
+            .Distinct()
+            .OrderBy(name => name.NamespaceName, StringComparer.Ordinal)
+            .ThenBy(name => name.LocalName, StringComparer.Ordinal)
+            .ToList();
+        return names.Count > 0;
+    }
+
+    private static bool TryResolvePrefixList(
+        XElement context,
+        string value,
+        out IReadOnlyList<string> namespaceNames)
+    {
+        var resolved = new List<string>();
+        foreach (var prefix in SplitXmlWhitespace(value))
+        {
+            try
+            {
+                XmlConvert.VerifyNCName(prefix);
+            }
+            catch (XmlException)
+            {
+                namespaceNames = Array.Empty<string>();
+                return false;
+            }
+            var namespaceName = context.GetNamespaceOfPrefix(prefix);
+            if (namespaceName is null)
+            {
+                namespaceNames = Array.Empty<string>();
+                return false;
+            }
+            resolved.Add(namespaceName.NamespaceName);
+        }
+        namespaceNames = resolved.Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        return namespaceNames.Count > 0;
+    }
+
+    private static IReadOnlyList<string> SplitXmlWhitespace(string value) =>
+        value.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+    private static bool IsXmlWhitespace(string value) =>
+        value.All(character => character is ' ' or '\t' or '\r' or '\n');
 
     private static IEnumerable<XNode> CoalesceAdjacentText(IEnumerable<XNode> source)
     {
@@ -243,5 +400,32 @@ internal static class XmlSemanticNormalizer
         Span<byte> data = stackalloc byte[1];
         data[0] = value;
         hash.AppendData(data);
+    }
+
+    private sealed class AsciiCaseInsensitiveComparer : IComparer<string>
+    {
+        public static readonly AsciiCaseInsensitiveComparer Instance = new();
+
+        public int Compare(string? left, string? right)
+        {
+            if (ReferenceEquals(left, right))
+                return 0;
+            if (left is null)
+                return -1;
+            if (right is null)
+                return 1;
+            var sharedLength = Math.Min(left.Length, right.Length);
+            for (var index = 0; index < sharedLength; index++)
+            {
+                var leftCharacter = FoldAscii(left[index]);
+                var rightCharacter = FoldAscii(right[index]);
+                if (leftCharacter != rightCharacter)
+                    return leftCharacter.CompareTo(rightCharacter);
+            }
+            return left.Length.CompareTo(right.Length);
+        }
+
+        private static char FoldAscii(char value) =>
+            value is >= 'a' and <= 'z' ? (char)(value - ('a' - 'A')) : value;
     }
 }

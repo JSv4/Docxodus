@@ -5,7 +5,8 @@
  * thread free for UI updates and user interactions.
  *
  * Communication is via postMessage with structured request/response types.
- * Document bytes are transferred (not copied) for efficiency.
+ * Caller-owned Uint8Array inputs are first cloned to preserve their exact view and avoid
+ * detachment; that private clone is then transferred to the worker.
  */
 
 import type {
@@ -19,6 +20,7 @@ import type {
   WorkerGetRevisionsRequest,
   WorkerGetDocumentMetadataRequest,
   WorkerSessionOpenRequest,
+  WorkerSessionGetPackageManifestRequest,
   WorkerSessionCloseRequest,
   WorkerSessionAddAnnotationRequest,
   WorkerSessionRemoveAnnotationRequest,
@@ -437,6 +439,18 @@ function handleSessionOpen(
   }
 }
 
+/** Generate a manifest from the current logical checkpoint of a live worker session. */
+function handleSessionGetPackageManifest(
+  request: WorkerSessionGetPackageManifestRequest
+): { manifest?: PackageManifest; error?: string } {
+  try {
+    const json = ensureInitialized().DocxSessionBridge.GetPackageManifest(request.handle);
+    return { manifest: JSON.parse(json) as PackageManifest };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 /**
  * Handle sessionClose request.
  */
@@ -729,6 +743,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "sessionOpen",
           success: !result.error,
           handle: result.handle,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionGetPackageManifest": {
+        const result = handleSessionGetPackageManifest(
+          request as WorkerSessionGetPackageManifestRequest
+        );
+        response = {
+          id: request.id,
+          type: "sessionGetPackageManifest",
+          success: !result.error,
+          manifest: result.manifest,
           error: result.error,
         };
         break;

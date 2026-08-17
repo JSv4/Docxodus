@@ -140,7 +140,10 @@ internal static class Dispatcher
         switch (format)
         {
             case "manifest":
-                if (anchorId is not null)
+                // Manifest is intentionally package-wide. Reject the property itself rather than
+                // only a successfully parsed string: OptStr maps null and non-string JSON values
+                // to null, which otherwise lets a forbidden anchorId slip through silently.
+                if (args.TryGetProperty("anchorId", out _))
                     throw new FormatException(
                         "anchorId is not supported when format is manifest; manifests describe the complete package");
                 return VerificationOps.GetPackageManifest(session.Handle);

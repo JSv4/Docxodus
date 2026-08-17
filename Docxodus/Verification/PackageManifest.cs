@@ -3,6 +3,7 @@
 
 #nullable enable
 
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -87,7 +88,7 @@ public sealed record PackageManifestOptions
     /// <summary>Maximum declared uncompressed/compressed ratio accepted for an entry.</summary>
     public double MaxCompressionRatio { get; init; } = 1_000;
 
-    /// <summary>Maximum decoded package URI length.</summary>
+    /// <summary>Maximum canonical package URI length.</summary>
     public int MaxUriLength { get; init; } = 2_048;
 
     internal void Validate()
@@ -120,10 +121,13 @@ public sealed record PackageManifestEntry
     /// <summary><c>override</c>, <c>default</c>, <c>implicit</c>, or <c>unresolved</c>.</summary>
     required public string ContentTypeSource { get; init; }
 
-    /// <summary>Declared uncompressed byte length.</summary>
+    /// <summary>
+    /// Declared uncompressed byte length. Canonical JSON emits this as a decimal string so ZIP64
+    /// values remain lossless in clients whose numeric type cannot represent every <see cref="long"/>.
+    /// </summary>
     required public long Size { get; init; }
 
-    /// <summary>Compressed ZIP byte length.</summary>
+    /// <summary>Compressed ZIP byte length; also a decimal string in canonical JSON.</summary>
     required public long CompressedSize { get; init; }
 
     /// <summary>SHA-256 over the exact uncompressed entry bytes; null when reading was unsafe or unavailable.</summary>
@@ -150,7 +154,7 @@ public sealed record PackageContentTypeDeclaration
     /// <summary><c>default</c> or <c>override</c>.</summary>
     required public string Kind { get; init; }
 
-    /// <summary>Lower-case extension for a default, or canonical part URI for an override.</summary>
+    /// <summary>Declared extension spelling for a default, or canonical part URI for an override.</summary>
     required public string Key { get; init; }
 
     /// <summary>Declared MIME type.</summary>
@@ -320,8 +324,11 @@ public sealed record PackageManifest
             writer.WriteNumber("occurrence", entry.Occurrence);
             WriteNullableString(writer, "contentType", entry.ContentType);
             writer.WriteString("contentTypeSource", entry.ContentTypeSource);
-            writer.WriteNumber("size", entry.Size);
-            writer.WriteNumber("compressedSize", entry.CompressedSize);
+            // ZIP64 sizes can exceed JavaScript's 53-bit safe-integer range.  Decimal strings keep
+            // schema-v1 lossless in every JSON client instead of silently rounding large entries.
+            writer.WriteString("size", entry.Size.ToString(CultureInfo.InvariantCulture));
+            writer.WriteString("compressedSize",
+                entry.CompressedSize.ToString(CultureInfo.InvariantCulture));
             writer.WritePropertyName("rawBytesDigest");
             WriteDigest(writer, entry.RawBytesDigest);
             writer.WritePropertyName("normalizedXmlDigest");

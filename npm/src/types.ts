@@ -824,8 +824,10 @@ export interface PackageManifestEntry {
   occurrence: number;
   contentType: string | null;
   contentTypeSource: "override" | "default" | "implicit" | "unresolved";
-  size: number;
-  compressedSize: number;
+  /** Exact declared uncompressed byte length as a base-10 integer string. */
+  size: string;
+  /** Exact compressed ZIP byte length as a base-10 integer string. */
+  compressedSize: string;
   rawBytesDigest: VerificationDigest | null;
   normalizedXmlDigest: VerificationDigest | null;
   isXml: boolean;
@@ -3572,6 +3574,7 @@ export type WorkerRequestType =
   | "getVersion"
   | "prepare"
   | "sessionOpen"
+  | "sessionGetPackageManifest"
   | "sessionClose"
   | "sessionAddAnnotation"
   | "sessionRemoveAnnotation"
@@ -3602,7 +3605,7 @@ export interface WorkerInitRequest extends WorkerRequestBase {
  */
 export interface WorkerConvertRequest extends WorkerRequestBase {
   type: "convertDocxToHtml";
-  /** Document bytes (transferred, not copied) */
+  /** Private exact-view copy of the caller's document bytes, transferred to the worker. */
   documentBytes: Uint8Array;
   /** Conversion options */
   options?: ConversionOptions;
@@ -3680,10 +3683,16 @@ export interface WorkerPrepareRequest extends WorkerRequestBase {
  */
 export interface WorkerSessionOpenRequest extends WorkerRequestBase {
   type: "sessionOpen";
-  /** Document bytes transferred to the worker */
+  /** Private exact-view copy of the caller's document bytes, transferred to the worker. */
   documentBytes: Uint8Array;
   /** Session settings as JSON */
   settingsJson?: string;
+}
+
+/** Generate a manifest from the current logical checkpoint of a worker session. */
+export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
+  type: "sessionGetPackageManifest";
+  handle: number;
 }
 
 /**
@@ -3752,6 +3761,7 @@ export type WorkerRequest =
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
   | WorkerSessionOpenRequest
+  | WorkerSessionGetPackageManifestRequest
   | WorkerSessionCloseRequest
   | WorkerSessionAddAnnotationRequest
   | WorkerSessionRemoveAnnotationRequest
@@ -3852,6 +3862,12 @@ export interface WorkerSessionOpenResponse extends WorkerResponseBase {
   handle?: number;
 }
 
+/** Response containing the current worker-session package manifest. */
+export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseBase {
+  type: "sessionGetPackageManifest";
+  manifest?: PackageManifest;
+}
+
 /**
  * Response from sessionClose request.
  */
@@ -3887,6 +3903,7 @@ export type WorkerResponse =
   | WorkerGetVersionResponse
   | WorkerPrepareResponse
   | WorkerSessionOpenResponse
+  | WorkerSessionGetPackageManifestResponse
   | WorkerSessionCloseResponse
   | WorkerSessionEditResponse;
 

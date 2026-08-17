@@ -275,7 +275,7 @@ function DocumentComparer() {
 edits, without advancing its version. Both return the same schema-v1 `PackageManifest` with exact
 package, ordered OPC-content, and normalized-semantic SHA-256 identities plus entries,
 relationships, facts, and structured findings. Worker users can call
-`worker.generatePackageManifest(document)`. See
+`worker.generatePackageManifest(document)` or `await workerSession.getPackageManifest()`. See
 [`package_manifests.md`](../docs/architecture/package_manifests.md) for the normalization boundary.
 
 ### Stateful inspection and editing
