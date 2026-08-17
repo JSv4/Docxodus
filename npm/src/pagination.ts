@@ -616,6 +616,7 @@ export class PaginationEngine {
     // Full canonical source identities remain on all clones, including table cells.
     this.qualifyPageFragments(pages);
     this.transferVisibleFragmentTargets();
+    this.normalizeVisiblePageFragments(pages);
     this.lastPages = pages;
 
       const result = {
@@ -638,6 +639,18 @@ export class PaginationEngine {
 
   private checkpoint(): void {
     this.cancellationCheckpoint?.();
+  }
+
+  /**
+   * Normalize visible fragment identities after a caller applies final standalone styles.  This
+   * deliberately runs before the stability barrier; materializePageMap is read-only so PageMap
+   * measurement cannot mutate a tree after it was declared stable.
+   */
+  normalizePageMapFragmentIdentities(): void {
+    if (this.lastPages.length === 0) {
+      throw new Error("paginate() must complete before fragment identities can be normalized");
+    }
+    this.normalizeVisiblePageFragments(this.lastPages);
   }
 
   /**
@@ -712,8 +725,13 @@ export class PaginationEngine {
         const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
         emittedFragmentCounts.set(anchorId, fragmentIndex + 1);
         const fragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
-        element.dataset.fragmentIndex = String(fragmentIndex);
-        element.dataset.pageFragmentId = fragmentId;
+        if (element.dataset.fragmentIndex !== String(fragmentIndex)
+          || element.dataset.pageFragmentId !== fragmentId
+          || element.dataset.pageNumber !== String(page.pageNumber)) {
+          throw new Error(
+            `page ${page.pageNumber} fragment identity changed after final-tree normalization`,
+          );
+        }
         fragments.push({
           fragmentId,
           anchorId,
@@ -745,6 +763,33 @@ export class PaginationEngine {
       pages,
       fragments,
     };
+  }
+
+  private normalizeVisiblePageFragments(pages: PageInfo[]): void {
+    const emittedFragmentCounts = new Map<string, number>();
+    for (const page of pages) {
+      this.checkpoint();
+      const pageRect = page.element.getBoundingClientRect();
+      for (const element of Array.from(
+        page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]"),
+      )) {
+        this.checkpoint();
+        if (this.isDeliberatelyUnrenderedSource(element, page.element)) continue;
+        const anchorId = element.dataset.sourceAnchorId;
+        if (!anchorId) continue;
+        const style = this.view.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const rect = element.getBoundingClientRect();
+        const visible = this.intersectWithClippingAncestors(element, page.element, pageRect, rect);
+        if (rect.width <= 0 || rect.height <= 0
+          || visible.right <= visible.left || visible.bottom <= visible.top) continue;
+        const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
+        emittedFragmentCounts.set(anchorId, fragmentIndex + 1);
+        element.dataset.pageNumber = String(page.pageNumber);
+        element.dataset.fragmentIndex = String(fragmentIndex);
+        element.dataset.pageFragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
+      }
+    }
   }
 
   /**

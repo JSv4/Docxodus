@@ -16,6 +16,7 @@ import type {
   WorkerConvertRequest,
   WorkerGeneratePackageManifestRequest,
   WorkerVerifyDeliverableRequest,
+  WorkerProjectReviewProfileRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetSemanticChangesRequest,
@@ -129,12 +130,44 @@ function isErrorResponse(result: string): boolean {
 
 function handleGeneratePackageManifest(
   request: WorkerGeneratePackageManifestRequest
-): { manifest?: PackageManifest; error?: string } {
+): { manifest?: PackageManifest; manifestJson?: string; error?: string } {
   try {
-    const json = ensureInitialized().DocumentConverter.GeneratePackageManifest(
-      request.documentBytes
-    );
-    return { manifest: JSON.parse(json) as PackageManifest };
+    const json = request.limits
+      ? ensureInitialized().DocumentConverter.GeneratePackageManifestWithOptions(
+        request.documentBytes,
+        request.limits.opcEntries,
+        request.limits.expandedOpcBytes,
+        request.limits.xmlPartBytes,
+        request.limits.opcCompressionRatio,
+        request.limits.opcUriCharacters,
+      )
+      : ensureInitialized().DocumentConverter.GeneratePackageManifest(
+        request.documentBytes
+      );
+    return { manifest: JSON.parse(json) as PackageManifest, manifestJson: json };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleProjectReviewProfile(
+  request: WorkerProjectReviewProfileRequest,
+): { documentBytes?: Uint8Array; error?: string } {
+  try {
+    const result = request.profile === "final"
+      ? ensureInitialized().DocxDiffBridge.AcceptRevisions(request.documentBytes)
+      : ensureInitialized().DocxDiffBridge.RejectRevisions(request.documentBytes);
+    if (!result || result.byteLength === 0) {
+      return { error: `Failed to derive the ${request.profile} review profile` };
+    }
+    if (request.maximumOutputBytes !== undefined
+      && result.byteLength > request.maximumOutputBytes) {
+      return {
+        error: `Derived ${request.profile} package exceeds compressedDocxBytes ` +
+          `(${result.byteLength} > ${request.maximumOutputBytes})`,
+      };
+    }
+    return { documentBytes: result };
   } catch (error) {
     return { error: String(error) };
   }
@@ -268,6 +301,27 @@ function handleConvert(
 
     if (isErrorResponse(result)) {
       return parseError(result);
+    }
+
+    if (request.maximumOutputBytes !== undefined) {
+      let byteLength = 0;
+      for (let index = 0; index < result.length; index++) {
+        const unit = result.charCodeAt(index);
+        if (unit < 0x80) byteLength++;
+        else if (unit < 0x800) byteLength += 2;
+        else if (unit >= 0xd800 && unit <= 0xdbff
+          && result.charCodeAt(index + 1) >= 0xdc00
+          && result.charCodeAt(index + 1) <= 0xdfff) {
+          byteLength += 4;
+          index++;
+        } else byteLength += 3;
+        if (byteLength > request.maximumOutputBytes) {
+          return {
+            error: `Converted HTML exceeds htmlOutputBytes ` +
+              `(${byteLength} > ${request.maximumOutputBytes})`,
+          };
+        }
+      }
     }
 
     return { html: result };
@@ -715,6 +769,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "generatePackageManifest",
           success: !result.error,
           manifest: result.manifest,
+          manifestJson: result.manifestJson,
           error: result.error,
         };
         break;
@@ -731,6 +786,24 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           verification: result.verification,
           error: result.error,
         };
+        break;
+      }
+
+      case "projectReviewProfile": {
+        const result = handleProjectReviewProfile(
+          request as WorkerProjectReviewProfileRequest,
+        );
+        response = {
+          id: request.id,
+          type: "projectReviewProfile",
+          success: !result.error,
+          documentBytes: result.documentBytes,
+          error: result.error,
+        };
+        if (result.documentBytes) {
+          self.postMessage(response, { transfer: [result.documentBytes.buffer as ArrayBuffer] });
+          return;
+        }
         break;
       }
 

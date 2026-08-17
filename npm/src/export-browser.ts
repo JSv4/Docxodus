@@ -16,6 +16,7 @@ import {
   CommentRenderMode,
   PaginationMode,
   type PackageManifest,
+  type PackageManifestInspectionLimits,
   type VersionInfo,
 } from "./types.js";
 
@@ -42,11 +43,15 @@ export type ExportPhase =
   | "cleanup";
 
 export type DocxodusExportErrorCode =
+  | "invalid_argument"
   | "invalid_document"
+  | "source_digest_mismatch"
+  | "document_version_unrepresentable"
   | "conversion_failure"
   | "browser_launch_failure"
   | "resource_policy_failure"
   | "readiness_timeout"
+  | "operation_cancelled"
   | "pagination_failure"
   | "pdf_write_failure"
   | "output_write_failure"
@@ -60,12 +65,24 @@ export interface ExportResourceLimits {
   opcEntries: number;
   expandedOpcBytes: number;
   xmlPartBytes: number;
+  opcUriCharacters: number;
+  opcCompressionRatio: number;
   htmlOutputBytes: number;
   pdfOutputBytes: number;
+  pageMapOutputBytes: number;
+  renderReportOutputBytes: number;
+  pdfParserExpandedBytes: number;
   finalPages: number;
   domNodes: number;
   automaticResources: number;
   automaticResourceBytes: number;
+  renderDiagnostics: number;
+  fontDirectoryEntries: number;
+  fontFiles: number;
+  fontFileBytes: number;
+  fontTotalBytes: number;
+  fontRequests: number;
+  fontSampleCodePoints: number;
 }
 
 interface ExportLimitsContract {
@@ -85,22 +102,27 @@ export interface PaginatedHtmlOptions {
   documentVersion?: number;
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
+  reviewProfileAlreadyApplied?: boolean;
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: UnsupportedContentPolicy;
   strictFonts?: boolean;
   timeoutMs?: number;
   limits?: Partial<ExportResourceLimits>;
-  /** Override only when the package's `dist/wasm` directory is hosted elsewhere. */
+  signal?: AbortSignal;
+  /** Reserved browser-only resolver boundary implemented by issue #442. */
+  fontResolver?: unknown;
+  /** Trusted runtime assets only; never a document-resource base URL. */
   wasmBasePath?: string;
 }
 
 export interface RenderWarning {
   code: string;
-  severity: "warning" | "error";
+  severity: "warning";
   phase: ExportPhase;
   message: string;
   remediation: string;
+  detail?: string;
   partUri?: string;
   anchorId?: string;
   resource?: string;
@@ -108,16 +130,23 @@ export interface RenderWarning {
 
 export interface ReadinessOutcome {
   phase: ExportPhase;
-  status: "complete" | "failed";
+  status: "complete" | "failed" | "cancelled";
   elapsedMs: number;
   pending: string[];
 }
 
 export interface FontResolution {
   requestedFamily: string;
+  requestedFamilyStack?: string[];
   resolvedFamily?: string;
   status: "resolved" | "substituted" | "missing" | "unverified";
   source: "browser" | "embedded" | "configured";
+}
+
+export interface FontConfigurationIdentity {
+  schemaVersion: 1;
+  digest: string;
+  verification: "browserObserved" | "configured";
 }
 
 export interface ResourceOutcome {
@@ -149,26 +178,76 @@ export interface RenderReportBase {
   };
   options: {
     reviewProfile: ReviewProfile;
+    reviewProfileAlreadyApplied: boolean;
     commentProfile: CommentProfile;
+    title: string;
+    outputs: Array<"html" | "pdf">;
     layoutDigest: string;
+    runtimePolicyDigest: string;
+    policy: {
+      unsupportedContent: UnsupportedContentPolicy;
+      strictFonts: boolean;
+      timeoutMs: number;
+      limits: ExportResourceLimits;
+    };
   };
   readiness: ReadinessOutcome[];
   fonts: FontResolution[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   warnings: RenderWarning[];
+  fontIdentity?: FontConfigurationIdentity;
 }
 
 export type EnvironmentVerification = "nodeVerified" | "browserObserved" | "callerAttested";
+export type FidelityTier = "releaseBaselined" | "experimental" | "unbaselined";
+
+export interface ExportRuntimeObservedFacts {
+  runtimeKind: "browser" | "nodeChromium";
+  playwrightVersion?: string;
+  browserProduct?: string;
+  browserBuild?: string;
+  executableSha256?: string;
+  launchFlags?: string[];
+  operatingSystem?: string;
+  architecture?: string;
+  locale: string;
+  timezone: string;
+  viewport: [number, number];
+  deviceScaleFactor: number;
+  media: {
+    colorScheme: "light" | "dark" | "no-preference";
+    reducedMotion: "reduce" | "no-preference";
+    forcedColors: "active" | "none";
+    printMedia: true;
+  };
+  networkIsolation: "ownedProcessRestricted" | "contextRestricted";
+}
+
+export interface ExportRuntimeAttestationEvidence {
+  chromiumProduct: string;
+  chromiumBuild: string;
+  executableSha256: string;
+  launchFlags: string[];
+  hostFontsDigest: string;
+  basis: string;
+}
 
 export interface CompleteRenderReport extends RenderReportBase {
   status: "complete";
+  fontIdentity: FontConfigurationIdentity;
   environment: {
     rendererFingerprint: string;
     verification: EnvironmentVerification;
+    fidelityTier: FidelityTier;
+    observed: ExportRuntimeObservedFacts;
+    attested?: ExportRuntimeAttestationEvidence;
+    attestationDigest?: string;
   };
   pages: Array<{
     pageNumber: number;
+    pageInSection: number;
+    pageName: string;
     width: number;
     height: number;
     sectionIndex?: number;
@@ -187,13 +266,23 @@ export interface FailedRenderReport extends RenderReportBase {
   status: "failed";
   failure: {
     code: DocxodusExportErrorCode;
+    severity: "error";
     phase: ExportPhase;
     message: string;
     remediation: string;
+    detail?: string;
+    pending?: string[];
+    partUri?: string;
+    anchorId?: string;
+    resource?: string;
   };
   environment?: {
     rendererFingerprint?: string;
     verification: EnvironmentVerification;
+    fidelityTier?: FidelityTier;
+    observed?: ExportRuntimeObservedFacts;
+    attested?: ExportRuntimeAttestationEvidence;
+    attestationDigest?: string;
   };
   partial?: {
     pages?: CompleteRenderReport["pages"];
@@ -205,7 +294,8 @@ export interface FailedRenderReport extends RenderReportBase {
       | "bindings.pageMapDigest"
       | "bindings.htmlDigest"
       | "bindings.pdfDigest";
-    reason: string;
+    reasonCode: "notReached" | "notRequested" | "failedVerification" | "discardedOnFailure";
+    detail: string;
   }>;
 }
 
@@ -228,6 +318,10 @@ export class DocxodusExportError extends Error {
   readonly phase: ExportPhase;
   readonly remediation: string;
   readonly detail?: string;
+  readonly pending?: readonly string[];
+  readonly partUri?: string;
+  readonly anchorId?: string;
+  readonly resource?: string;
   readonly cause?: unknown;
   report?: FailedRenderReport;
 
@@ -236,7 +330,15 @@ export class DocxodusExportError extends Error {
     phase: ExportPhase,
     message: string,
     remediation: string,
-    options: { detail?: string; cause?: unknown; report?: FailedRenderReport } = {},
+    options: {
+      detail?: string;
+      pending?: readonly string[];
+      partUri?: string;
+      anchorId?: string;
+      resource?: string;
+      cause?: unknown;
+      report?: FailedRenderReport;
+    } = {},
   ) {
     super(message);
     this.name = "DocxodusExportError";
@@ -244,6 +346,10 @@ export class DocxodusExportError extends Error {
     this.phase = phase;
     this.remediation = remediation;
     this.detail = options.detail;
+    this.pending = options.pending;
+    this.partUri = options.partUri;
+    this.anchorId = options.anchorId;
+    this.resource = options.resource;
     this.cause = options.cause;
     this.report = options.report;
   }
@@ -252,10 +358,15 @@ export class DocxodusExportError extends Error {
     return {
       name: this.name,
       code: this.code,
+      severity: "error",
       phase: this.phase,
       message: this.message,
       remediation: this.remediation,
       ...(this.detail === undefined ? {} : { detail: this.detail }),
+      ...(this.pending === undefined ? {} : { pending: [...this.pending] }),
+      ...(this.partUri === undefined ? {} : { partUri: this.partUri }),
+      ...(this.anchorId === undefined ? {} : { anchorId: this.anchorId }),
+      ...(this.resource === undefined ? {} : { resource: this.resource }),
       ...(this.report === undefined ? {} : { report: this.report }),
     };
   }
@@ -265,6 +376,7 @@ interface NormalizedOptions {
   documentVersion: number;
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
+  reviewProfileAlreadyApplied: boolean;
   commentProfile: CommentProfile;
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -272,6 +384,7 @@ interface NormalizedOptions {
   timeoutMs: number;
   limits: ExportResourceLimits;
   wasmBasePath: string;
+  signal?: AbortSignal;
 }
 
 interface ExecutionState {
@@ -283,6 +396,8 @@ interface ExecutionState {
   fonts: FontResolution[];
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
+  limits: ExportResourceLimits;
+  signal?: AbortSignal;
 }
 
 interface FinalizedTree {
@@ -328,7 +443,15 @@ const PACKAGE_LIMIT_FINDINGS = new Set([
   "total_expansion_limit_exceeded",
   "xml_size_limit_exceeded",
 ]);
-const CSP = [
+const RUNTIME_ASSET_GRAPH_MAX_BYTES = 1024 * 1024;
+const RUNTIME_ASSET_COUNT_MAX = 10_000;
+const RUNTIME_ASSET_BYTES_MAX = 64 * 1024 * 1024;
+const RUNTIME_ASSET_TOTAL_BYTES_MAX = 1024 * 1024 * 1024;
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+const STANDALONE_CSP = [
   "default-src 'none'",
   "base-uri 'none'",
   "connect-src 'none'",
@@ -337,65 +460,130 @@ const CSP = [
   "frame-src 'none'",
   "img-src data:",
   "media-src data:",
-  "navigate-to 'none'",
   "object-src 'none'",
   "script-src 'none'",
   "style-src 'unsafe-inline'",
 ].join("; ");
+const RENDER_CSP = `${STANDALONE_CSP}; navigate-to 'none'`;
 
 function fail(
   code: DocxodusExportErrorCode,
   phase: ExportPhase,
   message: string,
   remediation: string,
-  options: { detail?: string; cause?: unknown } = {},
+  options: {
+    detail?: string;
+    pending?: readonly string[];
+    partUri?: string;
+    anchorId?: string;
+    resource?: string;
+    cause?: unknown;
+  } = {},
 ): never {
   throw new DocxodusExportError(code, phase, message, remediation, options);
 }
 
 function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   if (!options || typeof options !== "object") {
-    fail("invalid_document", "input_validation", "Export options are required.",
+    fail("invalid_argument", "input_validation", "Export options are required.",
       "Supply explicit reviewProfile and commentProfile values.");
   }
   if (!ALLOWED_REVIEW_PROFILES.has(options.reviewProfile)) {
-    fail("invalid_document", "input_validation", "reviewProfile is invalid.",
+    fail("invalid_argument", "input_validation", "reviewProfile is invalid.",
       "Use final, original, or markup.");
   }
   if (!ALLOWED_COMMENT_PROFILES.has(options.commentProfile)) {
-    fail("invalid_document", "input_validation", "commentProfile is invalid.",
+    fail("invalid_argument", "input_validation", "commentProfile is invalid.",
       "Use hidden, inline, endnotes, or margin.");
+  }
+  const reviewProfileAlreadyApplied = options.reviewProfileAlreadyApplied ?? false;
+  if (typeof reviewProfileAlreadyApplied !== "boolean") {
+    fail("invalid_argument", "input_validation", "reviewProfileAlreadyApplied must be boolean.",
+      "Omit it or pass true only for exact policy-derived final/original bytes.");
+  }
+  if (reviewProfileAlreadyApplied && options.reviewProfile === "markup") {
+    fail("invalid_argument", "input_validation",
+      "reviewProfileAlreadyApplied is invalid with the markup profile.",
+      "Use unchanged source bytes for markup, or choose final/original.");
   }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
-    fail("invalid_document", "input_validation", "unsupportedContent is invalid.",
+    fail("invalid_argument", "input_validation", "unsupportedContent is invalid.",
       "Use warn or strict.");
   }
   const documentVersion = options.documentVersion ?? 0;
   if (!Number.isSafeInteger(documentVersion) || documentVersion < 0) {
-    fail("invalid_document", "input_validation",
+    fail("document_version_unrepresentable", "input_validation",
       "documentVersion must be a non-negative JavaScript safe integer.",
       "Use a value between 0 and Number.MAX_SAFE_INTEGER.");
   }
   if (options.expectedSourceDigest !== undefined
-    && !/^[0-9a-f]{64}$/i.test(options.expectedSourceDigest)) {
-    fail("invalid_document", "input_validation", "expectedSourceDigest must be a SHA-256 hex digest.",
-      "Supply exactly 64 hexadecimal characters.");
+    && !/^[0-9a-f]{64}$/.test(options.expectedSourceDigest)) {
+    fail("invalid_argument", "input_validation", "expectedSourceDigest must be a lower-case SHA-256 hex digest.",
+      "Supply exactly 64 lower-case hexadecimal characters.");
+  }
+  const title = options.title ?? "";
+  if (typeof title !== "string") {
+    fail("invalid_argument", "input_validation", "title must be a string.",
+      "Supply a plain document title or omit it for the normative empty title.");
+  }
+  try {
+    assertWellFormedUnicode(title);
+  } catch {
+    fail("invalid_argument", "input_validation", "title contains an unpaired UTF-16 surrogate.",
+      "Supply well-formed Unicode text that can be encoded as strict UTF-8.");
+  }
+  if (options.strictFonts !== undefined && typeof options.strictFonts !== "boolean") {
+    fail("invalid_argument", "input_validation", "strictFonts must be boolean.",
+      "Pass true or false.");
+  }
+  if (options.fontResolver !== undefined) {
+    fail("unsupported_runtime", "font_loading",
+      "The browser fontResolver contract is reserved but not implemented on this branch.",
+      "Omit fontResolver until issue #442 supplies the versioned resolver.");
+  }
+  if (options.signal !== undefined
+    && (typeof options.signal !== "object"
+      || typeof options.signal.addEventListener !== "function"
+      || typeof options.signal.removeEventListener !== "function"
+      || typeof options.signal.aborted !== "boolean")) {
+    fail("invalid_argument", "input_validation", "signal must be an AbortSignal.",
+      "Pass a standards-compliant AbortSignal or omit it.");
+  }
+  let wasmBasePath: string;
+  try {
+    if (options.wasmBasePath !== undefined
+      && (typeof options.wasmBasePath !== "string" || options.wasmBasePath.length === 0)) {
+      throw new TypeError("empty or non-string path");
+    }
+    const resolved = new URL(options.wasmBasePath ?? "./wasm/", import.meta.url);
+    if (!new Set(["http:", "https:", "file:"]).has(resolved.protocol)) {
+      throw new TypeError("unsupported runtime URL scheme");
+    }
+    wasmBasePath = resolved.href;
+  } catch {
+    fail("invalid_argument", "input_validation", "wasmBasePath must be a valid non-empty URL string.",
+      "Point it only at the closed, hash-verified Docxodus runtime asset directory.");
   }
 
   const limits = { ...DEFAULT_EXPORT_RESOURCE_LIMITS };
+  if (options.limits !== undefined
+    && (!options.limits || typeof options.limits !== "object" || Array.isArray(options.limits))) {
+    fail("invalid_argument", "input_validation", "limits must be an object.",
+      "Supply only lower integer values from ExportResourceLimits.");
+  }
   for (const [name, value] of Object.entries(options.limits ?? {})) {
     if (!(name in limits)) {
-      fail("invalid_document", "input_validation", `Unknown export limit: ${name}.`,
+      fail("invalid_argument", "input_validation", `Unknown export limit: ${name}.`,
         "Use a key from ExportResourceLimits.");
     }
     const key = name as keyof ExportResourceLimits;
     if (!Number.isSafeInteger(value) || value <= 0) {
-      fail("invalid_document", "input_validation", `Export limit ${name} must be a positive safe integer.`,
+      fail("invalid_argument", "input_validation", `Export limit ${name} must be a positive safe integer.`,
         "Supply a positive integer no greater than the published default.");
     }
     if (value > DEFAULT_EXPORT_RESOURCE_LIMITS[key]) {
-      fail("invalid_document", "input_validation", `Export limit ${name} may only lower the default.`,
+      fail("invalid_argument", "input_validation", `Export limit ${name} may only lower the default.`,
         `Use ${DEFAULT_EXPORT_RESOURCE_LIMITS[key]} or less.`);
     }
     limits[key] = value;
@@ -404,30 +592,50 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
   const timeoutMs = options.timeoutMs ?? LIMITS_CONTRACT.timeoutMs.default;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0
     || timeoutMs > LIMITS_CONTRACT.timeoutMs.hardCeiling) {
-    fail("invalid_document", "input_validation", "timeoutMs is outside the supported range.",
+    fail("invalid_argument", "input_validation", "timeoutMs is outside the supported range.",
       `Use an integer from 1 through ${LIMITS_CONTRACT.timeoutMs.hardCeiling}.`);
   }
 
   return Object.freeze({
     documentVersion,
-    expectedSourceDigest: options.expectedSourceDigest?.toLowerCase(),
+    expectedSourceDigest: options.expectedSourceDigest,
     reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied,
     commentProfile: options.commentProfile,
-    title: options.title ?? "Document",
+    title,
     unsupportedContent,
     strictFonts: options.strictFonts ?? false,
     timeoutMs,
     limits: Object.freeze(limits),
-    wasmBasePath: options.wasmBasePath ?? new URL("./wasm/", import.meta.url).href,
+    wasmBasePath,
+    signal: options.signal,
   });
 }
 
-async function ownedBytes(document: File | Uint8Array): Promise<Uint8Array> {
-  if (document instanceof Uint8Array) return new Uint8Array(document);
-  if (typeof File !== "undefined" && document instanceof File) {
-    return new Uint8Array(await document.arrayBuffer());
+async function ownedBytes(
+  document: File | Uint8Array,
+  maximum: number,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  if (signal?.aborted) {
+    fail("operation_cancelled", "input_validation", "Export was cancelled before input snapshotting.",
+      "Retry with a non-aborted signal.");
   }
-  fail("invalid_document", "input_validation", "document must be a File or Uint8Array.",
+  if (document instanceof Uint8Array) {
+    enforceLimit(document.byteLength, maximum, "compressedDocxBytes", "input_validation");
+    return new Uint8Array(document);
+  }
+  if (typeof File !== "undefined" && document instanceof File) {
+    enforceLimit(document.size, maximum, "compressedDocxBytes", "input_validation");
+    const bytes = new Uint8Array(await document.arrayBuffer());
+    if (signal?.aborted) {
+      fail("operation_cancelled", "input_validation", "Export was cancelled while reading the input File.",
+        "Retry with a non-aborted signal.");
+    }
+    enforceLimit(bytes.byteLength, maximum, "compressedDocxBytes", "input_validation");
+    return bytes;
+  }
+  fail("invalid_argument", "input_validation", "document must be a File or Uint8Array.",
     "Pass immutable DOCX bytes or a browser File.");
 }
 
@@ -443,12 +651,17 @@ async function runPhase<T>(
 ): Promise<T> {
   state.phase = phase;
   const started = monotonicNow();
-  const remaining = state.deadline - Date.now();
+  if (state.signal?.aborted) {
+    fail("operation_cancelled", phase, `Export was cancelled during ${phase}.`,
+      "Retry with a non-aborted signal.", { pending });
+  }
+  const remaining = state.deadline - monotonicNow();
   if (remaining <= 0) {
     fail("readiness_timeout", phase, `Export timed out during ${phase}.`,
-      "Increase timeoutMs or remove the pending resource.", { detail: pending.join(", ") });
+      "Increase timeoutMs or remove the pending resource.", { pending });
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new DocxodusExportError(
@@ -456,16 +669,31 @@ async function runPhase<T>(
         phase,
         `Export timed out during ${phase}.`,
         "Increase timeoutMs or remove the pending resource.",
-        { detail: pending.join(", ") },
+        { pending },
       )), remaining);
     });
-    const result = await Promise.race([Promise.resolve().then(operation), timeout]);
+    const cancellation = new Promise<never>((_, reject) => {
+      if (!state.signal) return;
+      abortListener = () => reject(new DocxodusExportError(
+        "operation_cancelled",
+        phase,
+        `Export was cancelled during ${phase}.`,
+        "Retry with a non-aborted signal.",
+        { pending },
+      ));
+      state.signal.addEventListener("abort", abortListener, { once: true });
+    });
+    const result = await Promise.race([Promise.resolve().then(operation), timeout, cancellation]);
     // A synchronous DOM operation cannot be pre-empted by the timer because it
     // blocks the event loop. Reject it immediately after control returns; hot
     // pagination loops also invoke the cooperative checkpoint below.
-    if (Date.now() >= state.deadline) {
+    if (state.signal?.aborted) {
+      fail("operation_cancelled", phase, `Export was cancelled during ${phase}.`,
+        "Retry with a non-aborted signal.", { pending });
+    }
+    if (monotonicNow() >= state.deadline) {
       fail("readiness_timeout", phase, `Export timed out during ${phase}.`,
-        "Increase timeoutMs or remove the pending resource.", { detail: pending.join(", ") });
+        "Increase timeoutMs or remove the pending resource.", { pending });
     }
     state.readiness.push({
       phase,
@@ -477,18 +705,73 @@ async function runPhase<T>(
   } catch (error) {
     state.readiness.push({
       phase,
-      status: "failed",
+      status: error instanceof DocxodusExportError && error.code === "operation_cancelled"
+        ? "cancelled"
+        : "failed",
       elapsedMs: Math.max(0, monotonicNow() - started),
       pending: [...pending],
     });
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    if (abortListener && state.signal) state.signal.removeEventListener("abort", abortListener);
   }
 }
 
 function utf8Bytes(value: string): Uint8Array {
   return TEXT_ENCODER.encode(value);
+}
+
+function utf8ByteLength(value: string): number {
+  let length = 0;
+  for (let index = 0; index < value.length; index++) {
+    const unit = value.charCodeAt(index);
+    if (unit < 0x80) length++;
+    else if (unit < 0x800) length += 2;
+    else if (unit >= 0xd800 && unit <= 0xdbff
+      && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+      length += 4;
+      index++;
+    } else length += 3;
+  }
+  return length;
+}
+
+function preflightConvertedHtml(source: string, options: NormalizedOptions): void {
+  enforceLimit(utf8ByteLength(source), options.limits.htmlOutputBytes,
+    "htmlOutputBytes", "docx_conversion");
+  let prospectiveNodes = 2;
+  let inText = false;
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] !== "<") {
+      if (!inText && !/\s/.test(source[index])) {
+        prospectiveNodes++;
+        inText = true;
+      }
+      continue;
+    }
+    inText = false;
+    const next = source[index + 1];
+    if (next && next !== "/" && next !== "!" && next !== "?") prospectiveNodes++;
+    if (prospectiveNodes > options.limits.domNodes) {
+      fail("resource_limit", "docx_conversion",
+        `domNodes limit exceeded before HTML attachment (${prospectiveNodes} > ${options.limits.domNodes}).`,
+        "Use a smaller document or a lower-complexity conversion profile.");
+    }
+  }
+}
+
+function countDomNodes(document: Document, maximum: number, phase: ExportPhase): number {
+  const walker = document.createTreeWalker(document, 0xffffffff);
+  let count = 0;
+  while (walker.nextNode()) {
+    count++;
+    if (count > maximum) {
+      fail("resource_limit", phase, `domNodes limit exceeded (${count} > ${maximum}).`,
+        "Use a smaller document or a lower-complexity conversion profile.");
+    }
+  }
+  return count;
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -501,25 +784,110 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-async function loadRuntimeAssetIdentity(wasmBasePath: string): Promise<RuntimeAssetIdentity> {
+async function boundedResponseBytes(
+  response: Response,
+  maximum: number,
+  label: string,
+): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && /^(?:0|[1-9]\d*)$/.test(declared)
+    && BigInt(declared) > BigInt(maximum)) {
+    fail("unsupported_runtime", "wasm_initialization",
+      `${label} exceeds its admitted byte length.`,
+      "Deploy the closed, bounded runtime asset graph generated with this package.");
+  }
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maximum) {
+      fail("unsupported_runtime", "wasm_initialization",
+        `${label} exceeds its admitted byte length.`,
+        "Deploy the closed, bounded runtime asset graph generated with this package.");
+    }
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maximum) {
+        await reader.cancel();
+        fail("unsupported_runtime", "wasm_initialization",
+          `${label} exceeds its admitted byte length.`,
+          "Deploy the closed, bounded runtime asset graph generated with this package.");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function loadRuntimeAssetIdentity(
+  wasmBasePath: string,
+  signal: AbortSignal,
+): Promise<RuntimeAssetIdentity> {
   const manifestUrl = new URL("./export-assets.json", import.meta.url);
-  const response = await globalThis.fetch(manifestUrl, { cache: "no-store", credentials: "same-origin" });
+  const response = await globalThis.fetch(manifestUrl, {
+    cache: "no-store",
+    credentials: "same-origin",
+    signal,
+  });
   if (!response.ok) {
     fail("unsupported_runtime", "wasm_initialization",
       `The runtime asset graph could not be loaded (${response.status}).`,
       "Deploy export-assets.json beside the browser export bundle.");
   }
-  const manifest = await response.json() as {
-    schemaVersion?: unknown;
-    packageVersion?: unknown;
-    assets?: unknown;
-  };
-  if (manifest.schemaVersion !== 1 || typeof manifest.packageVersion !== "string"
-    || !Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+  const graphBytes = await boundedResponseBytes(
+    response,
+    RUNTIME_ASSET_GRAPH_MAX_BYTES,
+    "Runtime asset graph",
+  );
+  let graphText: string;
+  try {
+    graphText = new TextDecoder("utf-8", { fatal: true }).decode(graphBytes);
+  } catch {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The runtime asset graph is not strict UTF-8.",
+      "Regenerate export-assets.json without malformed byte sequences.");
+  }
+  const manifest = strictJsonParse(graphText, (detail) => fail(
+    "unsupported_runtime",
+    "wasm_initialization",
+    "The runtime asset graph is malformed.",
+    "Deploy the versioned export-assets.json generated with this bundle.",
+    { detail },
+  )) as Record<string, unknown>;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
+    || Object.keys(manifest).some((key) => !["schema", "schemaVersion", "packageVersion", "assets"].includes(key))
+    || manifest.schema !== "https://docxodus.dev/schemas/export/export-assets/v1"
+    || manifest.schemaVersion !== 1 || typeof manifest.packageVersion !== "string"
+    || manifest.packageVersion.length === 0
+    || !Array.isArray(manifest.assets) || manifest.assets.length === 0
+    || manifest.assets.length > RUNTIME_ASSET_COUNT_MAX) {
     fail("unsupported_runtime", "wasm_initialization",
       "The runtime asset graph is malformed.",
       "Deploy the versioned export-assets.json generated with this bundle.");
   }
+  try {
+    assertWellFormedUnicode(manifest.packageVersion);
+  } catch {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The runtime asset graph packageVersion is not well-formed Unicode.",
+      "Regenerate export-assets.json from valid package metadata.");
+  }
+  let aggregateAssetBytes = 0;
+  const paths = new Set<string>();
   const assets = manifest.assets.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       fail("unsupported_runtime", "wasm_initialization",
@@ -527,22 +895,57 @@ async function loadRuntimeAssetIdentity(wasmBasePath: string): Promise<RuntimeAs
         "Regenerate the package runtime asset graph.");
     }
     const record = entry as Record<string, unknown>;
-    if (typeof record.path !== "string" || typeof record.mediaType !== "string"
+    if (Object.keys(record).some((key) => !["path", "mediaType", "byteLength", "sha256"].includes(key))
+      || typeof record.path !== "string" || typeof record.mediaType !== "string"
       || !Number.isSafeInteger(record.byteLength) || (record.byteLength as number) < 0
+      || (record.byteLength as number) > RUNTIME_ASSET_BYTES_MAX
       || typeof record.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sha256)) {
       fail("unsupported_runtime", "wasm_initialization",
         `Runtime asset entry ${index} has invalid identity fields.`,
         "Regenerate the package runtime asset graph.");
     }
-    return {
-      path: record.path,
-      mediaType: record.mediaType,
-      byteLength: record.byteLength,
-      sha256: record.sha256,
+    const path = record.path;
+    const segments = path.split("/");
+    const extension = path.slice(path.lastIndexOf("."));
+    const expectedMediaType: Record<string, string> = {
+      ".css": "text/css",
+      ".dat": "application/octet-stream",
+      ".js": "text/javascript",
+      ".json": "application/json",
+      ".wasm": "application/wasm",
     };
-  }).sort((left, right) => String(left.path).localeCompare(String(right.path)));
+    if (!path.startsWith("./") || path.includes("\\") || path.includes("?") || path.includes("#")
+      || segments.some((segment, segmentIndex) =>
+        (segmentIndex > 0 && (segment === "" || segment === "." || segment === "..")))
+      || paths.has(path) || expectedMediaType[extension] !== record.mediaType) {
+      fail("unsupported_runtime", "wasm_initialization",
+        `Runtime asset entry ${index} has a non-canonical or duplicate path.`,
+        "Regenerate the package runtime asset graph.");
+    }
+    paths.add(path);
+    aggregateAssetBytes += record.byteLength as number;
+    if (aggregateAssetBytes > RUNTIME_ASSET_TOTAL_BYTES_MAX) {
+      fail("unsupported_runtime", "wasm_initialization",
+        "The runtime asset graph exceeds its aggregate byte ceiling.",
+        "Deploy a bounded Docxodus runtime package.");
+    }
+    return {
+      path,
+      mediaType: record.mediaType as string,
+      byteLength: record.byteLength as number,
+      sha256: record.sha256 as string,
+    };
+  });
+  for (let index = 1; index < assets.length; index++) {
+    if (compareCodeUnits(assets[index - 1].path, assets[index].path) >= 0) {
+      fail("unsupported_runtime", "wasm_initialization",
+        "Runtime asset entries are not in canonical path order.",
+        "Regenerate export-assets.json with the package asset generator.");
+    }
+  }
   const materializer = assets.find((entry) => entry.path === "./export-browser.bundle.js");
-  if (!materializer) {
+  if (!materializer || !paths.has("./docxodus.worker.js")
+    || !paths.has("./wasm/_framework/dotnet.js")) {
     fail("unsupported_runtime", "wasm_initialization",
       "The runtime asset graph does not identify the browser materializer.",
       "Regenerate export-assets.json from the complete runtime package.");
@@ -551,13 +954,19 @@ async function loadRuntimeAssetIdentity(wasmBasePath: string): Promise<RuntimeAs
   const materializerResponse = await globalThis.fetch(import.meta.url, {
     cache: "no-store",
     credentials: "same-origin",
+    signal,
   });
   if (!materializerResponse.ok) {
     fail("unsupported_runtime", "wasm_initialization",
       `The loaded browser materializer could not be verified (${materializerResponse.status}).`,
       "Serve the browser export bundle from a readable same-origin URL.");
   }
-  const materializerDigest = await sha256(new Uint8Array(await materializerResponse.arrayBuffer()));
+  const materializerBytes = await boundedResponseBytes(
+    materializerResponse,
+    materializer.byteLength,
+    "Browser materializer",
+  );
+  const materializerDigest = await sha256(materializerBytes);
   if (materializerDigest !== materializer.sha256) {
     fail("unsupported_runtime", "wasm_initialization",
       "The loaded browser materializer does not match export-assets.json.",
@@ -577,13 +986,14 @@ async function loadRuntimeAssetIdentity(wasmBasePath: string): Promise<RuntimeAs
     const assetResponse = await globalThis.fetch(url, {
       cache: "force-cache",
       credentials: "same-origin",
+      signal,
     });
     if (!assetResponse.ok) {
       fail("unsupported_runtime", "wasm_initialization",
         `Runtime asset ${asset.path} could not be verified (${assetResponse.status}).`,
         "Deploy every runtime asset named by export-assets.json.");
     }
-    const bytes = new Uint8Array(await assetResponse.arrayBuffer());
+    const bytes = await boundedResponseBytes(assetResponse, asset.byteLength, `Runtime asset ${asset.path}`);
     if (bytes.byteLength !== asset.byteLength || await sha256(bytes) !== asset.sha256) {
       fail("unsupported_runtime", "wasm_initialization",
         `Runtime asset ${asset.path} does not match export-assets.json.`,
@@ -605,15 +1015,24 @@ async function loadRuntimeAssetIdentity(wasmBasePath: string): Promise<RuntimeAs
 }
 
 function canonicalValue(value: unknown): unknown {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    assertWellFormedUnicode(value);
+    return value;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("Canonical JSON does not support non-finite numbers");
     return Object.is(value, -0) ? 0 : value;
   }
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("Canonical JSON supports only plain objects");
+    }
     const result: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      assertWellFormedUnicode(key);
       const member = (value as Record<string, unknown>)[key];
       if (member !== undefined) result[key] = canonicalValue(member);
     }
@@ -622,13 +1041,356 @@ function canonicalValue(value: unknown): unknown {
   throw new TypeError(`Canonical JSON does not support ${typeof value}`);
 }
 
+function assertWellFormedUnicode(value: string): void {
+  for (let index = 0; index < value.length; index++) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
+      }
+      index++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
+    }
+  }
+}
+
 /** Serialize report/schema values with recursively sorted object keys and no insignificant space. */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value));
 }
 
+async function canonicalMaterialDigest(domain: string, value: unknown): Promise<string> {
+  if (!/^[\x20-\x7e]+$/.test(domain)) {
+    throw new TypeError("Canonical digest domain tags must be printable ASCII");
+  }
+  const domainBytes = utf8Bytes(domain);
+  const materialBytes = utf8Bytes(canonicalJson(value));
+  const input = new Uint8Array(domainBytes.byteLength + 1 + materialBytes.byteLength);
+  input.set(domainBytes, 0);
+  input[domainBytes.byteLength] = 0;
+  input.set(materialBytes, domainBytes.byteLength + 1);
+  return sha256(input);
+}
+
+function constantTimeDigestEqual(left: string, right: string): boolean {
+  let difference = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function manifestFailure(path: string, detail: string): never {
+  fail("invalid_document", "package_preflight",
+    `DOCX preflight returned a manifest that violates schema v1 at ${path}.`,
+    "Use the matching hardened #493 package-manifest producer and consumer.",
+    { detail });
+}
+
+function strictJsonParse(
+  source: string,
+  onFailure: (detail: string) => never = (detail) => manifestFailure("$", detail),
+): unknown {
+  let cursor = 0;
+  const whitespace = () => {
+    while (cursor < source.length && /[\u0009\u000a\u000d\u0020]/.test(source[cursor])) cursor++;
+  };
+  const parseStringToken = (): string => {
+    const start = cursor;
+    if (source[cursor++] !== '"') throw new SyntaxError(`Expected string at ${start}`);
+    while (cursor < source.length) {
+      const character = source[cursor++];
+      if (character === '"') return JSON.parse(source.slice(start, cursor)) as string;
+      if (character.charCodeAt(0) < 0x20) throw new SyntaxError(`Control character at ${cursor - 1}`);
+      if (character !== "\\") continue;
+      if (cursor >= source.length) throw new SyntaxError("Unterminated JSON escape");
+      const escape = source[cursor++];
+      if (escape === "u") {
+        if (!/^[0-9a-fA-F]{4}$/.test(source.slice(cursor, cursor + 4))) {
+          throw new SyntaxError(`Invalid Unicode escape at ${cursor - 2}`);
+        }
+        cursor += 4;
+      } else if (!'"\\/bfnrt'.includes(escape)) {
+        throw new SyntaxError(`Invalid JSON escape at ${cursor - 2}`);
+      }
+    }
+    throw new SyntaxError("Unterminated JSON string");
+  };
+  const parseValue = (depth: number): void => {
+    if (depth > 128) throw new SyntaxError("JSON nesting is too deep");
+    whitespace();
+    const character = source[cursor];
+    if (character === '"') {
+      parseStringToken();
+      return;
+    }
+    if (character === "{") {
+      cursor++;
+      whitespace();
+      const keys = new Set<string>();
+      if (source[cursor] === "}") { cursor++; return; }
+      while (cursor < source.length) {
+        whitespace();
+        const key = parseStringToken();
+        if (keys.has(key)) throw new SyntaxError(`Duplicate JSON property ${JSON.stringify(key)}`);
+        keys.add(key);
+        whitespace();
+        if (source[cursor++] !== ":") throw new SyntaxError(`Expected colon at ${cursor - 1}`);
+        parseValue(depth + 1);
+        whitespace();
+        const separator = source[cursor++];
+        if (separator === "}") return;
+        if (separator !== ",") throw new SyntaxError(`Expected object separator at ${cursor - 1}`);
+      }
+      throw new SyntaxError("Unterminated JSON object");
+    }
+    if (character === "[") {
+      cursor++;
+      whitespace();
+      if (source[cursor] === "]") { cursor++; return; }
+      while (cursor < source.length) {
+        parseValue(depth + 1);
+        whitespace();
+        const separator = source[cursor++];
+        if (separator === "]") return;
+        if (separator !== ",") throw new SyntaxError(`Expected array separator at ${cursor - 1}`);
+      }
+      throw new SyntaxError("Unterminated JSON array");
+    }
+    const rest = source.slice(cursor);
+    const literal = /^(?:true|false|null)/.exec(rest)?.[0]
+      ?? /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest)?.[0];
+    if (!literal) throw new SyntaxError(`Invalid JSON value at ${cursor}`);
+    cursor += literal.length;
+  };
+  try {
+    parseValue(0);
+    whitespace();
+    if (cursor !== source.length) throw new SyntaxError(`Trailing JSON data at ${cursor}`);
+    return JSON.parse(source) as unknown;
+  } catch (error) {
+    return onFailure(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function recordAt(
+  value: unknown,
+  path: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): JsonRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    manifestFailure(path, "expected an object");
+  }
+  const record = value as JsonRecord;
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) manifestFailure(`${path}.${key}`, "unknown property");
+  }
+  for (const key of required) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      manifestFailure(`${path}.${key}`, "missing required property");
+    }
+  }
+  return record;
+}
+
+function arrayAt(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) manifestFailure(path, "expected an array");
+  return value;
+}
+
+function stringAt(value: unknown, path: string, allowEmpty = true): string {
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
+    manifestFailure(path, "expected a string");
+  }
+  try {
+    assertWellFormedUnicode(value);
+  } catch (error) {
+    manifestFailure(path, error instanceof Error ? error.message : String(error));
+  }
+  return value;
+}
+
+function integerAt(value: unknown, path: string, minimum = 0): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) {
+    manifestFailure(path, `expected a safe integer >= ${minimum}`);
+  }
+  return value as number;
+}
+
+function booleanAt(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") manifestFailure(path, "expected a boolean");
+  return value;
+}
+
+function enumAt<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    manifestFailure(path, `expected one of ${allowed.join(", ")}`);
+  }
+  return value as T;
+}
+
+function digestAt(value: unknown, path: string, nullable: boolean): void {
+  if (value === null && nullable) return;
+  const digest = recordAt(value, path, ["algorithm", "value"]);
+  if (digest.algorithm !== "SHA-256") manifestFailure(`${path}.algorithm`, "expected SHA-256");
+  if (typeof digest.value !== "string" || !/^[0-9a-f]{64}$/.test(digest.value)) {
+    manifestFailure(`${path}.value`, "expected 64 lower-case hexadecimal digits");
+  }
+}
+
+function decimalAt(value: unknown, path: string): bigint {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) {
+    manifestFailure(path, "expected a canonical non-negative base-10 integer string");
+  }
+  return BigInt(value);
+}
+
+function validatePackageManifestJson(source: string): PackageManifest {
+  const value = strictJsonParse(source);
+  const manifest = recordAt(value, "$", [
+    "schema", "schemaVersion", "packageKind", "isValid", "rawPackageBytesDigest",
+    "orderedOpcContentDigest", "normalizedSemanticDigest", "entries", "contentTypes",
+    "relationships", "facts", "findings",
+  ]);
+  if (manifest.schema !== "https://docxodus.dev/schemas/verification/package-manifest/v1") {
+    manifestFailure("$.schema", "unexpected package-manifest discriminator");
+  }
+  if (manifest.schemaVersion !== 1) manifestFailure("$.schemaVersion", "expected 1");
+  enumAt(manifest.packageKind, "$.packageKind", [
+    "opc", "zip", "zip-encrypted", "ole-encrypted", "ole", "malformed",
+  ] as const);
+  booleanAt(manifest.isValid, "$.isValid");
+  digestAt(manifest.rawPackageBytesDigest, "$.rawPackageBytesDigest", false);
+  digestAt(manifest.orderedOpcContentDigest, "$.orderedOpcContentDigest", true);
+  digestAt(manifest.normalizedSemanticDigest, "$.normalizedSemanticDigest", true);
+
+  for (const [index, item] of arrayAt(manifest.entries, "$.entries").entries()) {
+    const path = `$.entries[${index}]`;
+    const entry = recordAt(item, path, [
+      "uri", "occurrence", "contentType", "contentTypeSource", "size", "compressedSize",
+      "rawBytesDigest", "normalizedXmlDigest", "isXml", "isEncrypted",
+    ]);
+    stringAt(entry.uri, `${path}.uri`, false);
+    integerAt(entry.occurrence, `${path}.occurrence`);
+    if (entry.contentType !== null) stringAt(entry.contentType, `${path}.contentType`, false);
+    enumAt(entry.contentTypeSource, `${path}.contentTypeSource`, [
+      "override", "default", "implicit", "unresolved",
+    ] as const);
+    decimalAt(entry.size, `${path}.size`);
+    decimalAt(entry.compressedSize, `${path}.compressedSize`);
+    digestAt(entry.rawBytesDigest, `${path}.rawBytesDigest`, true);
+    digestAt(entry.normalizedXmlDigest, `${path}.normalizedXmlDigest`, true);
+    booleanAt(entry.isXml, `${path}.isXml`);
+    if (entry.isEncrypted !== null) booleanAt(entry.isEncrypted, `${path}.isEncrypted`);
+  }
+  for (const [index, item] of arrayAt(manifest.contentTypes, "$.contentTypes").entries()) {
+    const path = `$.contentTypes[${index}]`;
+    const declaration = recordAt(item, path, ["kind", "key", "contentType", "occurrence"]);
+    enumAt(declaration.kind, `${path}.kind`, ["default", "override"] as const);
+    stringAt(declaration.key, `${path}.key`, false);
+    stringAt(declaration.contentType, `${path}.contentType`, false);
+    integerAt(declaration.occurrence, `${path}.occurrence`);
+  }
+  for (const [index, item] of arrayAt(manifest.relationships, "$.relationships").entries()) {
+    const path = `$.relationships[${index}]`;
+    const relationship = recordAt(item, path, [
+      "ownerUri", "id", "type", "target", "targetMode", "resolvedTargetUri", "isTargetPresent",
+    ]);
+    stringAt(relationship.ownerUri, `${path}.ownerUri`, false);
+    stringAt(relationship.id, `${path}.id`, false);
+    stringAt(relationship.type, `${path}.type`, false);
+    stringAt(relationship.target, `${path}.target`, false);
+    enumAt(relationship.targetMode, `${path}.targetMode`, ["Internal", "External"] as const);
+    if (relationship.resolvedTargetUri !== null) {
+      stringAt(relationship.resolvedTargetUri, `${path}.resolvedTargetUri`, false);
+    }
+    if (relationship.isTargetPresent !== null) {
+      booleanAt(relationship.isTargetPresent, `${path}.isTargetPresent`);
+    }
+  }
+
+  const facts = recordAt(manifest.facts, "$.facts", [
+    "mainDocumentUri", "isStrictOoxml", "isMacroEnabled", "hasCoreProperties",
+    "hasExtendedProperties", "hasCustomProperties", "sectionCount", "paragraphCount", "tableCount",
+    "headerPartCount", "footerPartCount", "footnoteCount", "endnoteCount", "styleCount",
+    "numberingDefinitionCount", "themePartCount", "mediaPartCount", "customXmlPartCount",
+    "drawingCount", "altChunkCount", "fieldCount", "revisions", "annotations",
+  ]);
+  if (facts.mainDocumentUri !== null) stringAt(facts.mainDocumentUri, "$.facts.mainDocumentUri", false);
+  for (const name of [
+    "isStrictOoxml", "isMacroEnabled", "hasCoreProperties", "hasExtendedProperties",
+    "hasCustomProperties",
+  ]) booleanAt(facts[name], `$.facts.${name}`);
+  for (const name of [
+    "sectionCount", "paragraphCount", "tableCount", "headerPartCount", "footerPartCount",
+    "footnoteCount", "endnoteCount", "styleCount", "numberingDefinitionCount", "themePartCount",
+    "mediaPartCount", "customXmlPartCount", "drawingCount", "altChunkCount", "fieldCount",
+  ]) integerAt(facts[name], `$.facts.${name}`);
+  const revisions = recordAt(facts.revisions, "$.facts.revisions", [
+    "insertions", "deletions", "moveFrom", "moveTo", "propertyChanges", "structuralChanges",
+    "otherChanges", "total",
+  ]);
+  for (const name of Object.keys(revisions)) integerAt(revisions[name], `$.facts.revisions.${name}`);
+  const annotations = recordAt(facts.annotations, "$.facts.annotations", [
+    "comments", "commentReplies", "threadedCommentMetadata", "resolvedComments", "people",
+    "docxodusAnnotations",
+  ]);
+  for (const name of Object.keys(annotations)) integerAt(annotations[name], `$.facts.annotations.${name}`);
+
+  for (const [index, item] of arrayAt(manifest.findings, "$.findings").entries()) {
+    const path = `$.findings[${index}]`;
+    const finding = recordAt(item, path, ["code", "severity", "message", "location"]);
+    stringAt(finding.code, `${path}.code`, false);
+    enumAt(finding.severity, `${path}.severity`, ["info", "warning", "error"] as const);
+    stringAt(finding.message, `${path}.message`, false);
+    if (finding.location !== null) {
+      const location = recordAt(finding.location, `${path}.location`, [
+        "entryUri", "ownerUri", "relationshipId", "targetUri", "propertyPath",
+      ]);
+      for (const name of Object.keys(location)) {
+        if (location[name] !== null) stringAt(location[name], `${path}.location.${name}`);
+      }
+    }
+  }
+  return manifest as unknown as PackageManifest;
+}
+
 function addWarning(state: ExecutionState, warning: RenderWarning): void {
+  enforceDiagnosticAdmission(state, 1);
   state.warnings.push(warning);
+}
+
+function addResource(state: ExecutionState, resource: ResourceOutcome): void {
+  enforceDiagnosticAdmission(state, 1);
+  state.resources.push(resource);
+}
+
+function addUnsupportedContent(state: ExecutionState, outcome: UnsupportedContentOutcome): void {
+  enforceDiagnosticAdmission(state, 1);
+  state.unsupportedContent.push(outcome);
+}
+
+function addFont(state: ExecutionState, font: FontResolution): void {
+  enforceLimit(state.fonts.length + 1, state.limits.fontRequests, "fontRequests", "font_loading");
+  enforceDiagnosticAdmission(state, 1);
+  state.fonts.push(font);
+}
+
+function enforceDiagnosticAdmission(state: ExecutionState, additional: number): void {
+  const current = state.warnings.length + state.resources.length
+    + state.unsupportedContent.length + state.fonts.length;
+  if (current + additional > state.limits.renderDiagnostics) {
+    fail("resource_limit", state.phase,
+      `renderDiagnostics limit exceeded (${current + additional} > ${state.limits.renderDiagnostics}).`,
+      "Use a smaller document or a versioned deployment policy with a higher diagnostic ceiling.");
+  }
 }
 
 function enforceLimit(actual: number, maximum: number, name: keyof ExportResourceLimits, phase: ExportPhase): void {
@@ -638,19 +1400,35 @@ function enforceLimit(actual: number, maximum: number, name: keyof ExportResourc
   }
 }
 
-function preflightManifest(
+function inspectionLimits(options: NormalizedOptions): PackageManifestInspectionLimits {
+  return {
+    opcEntries: options.limits.opcEntries,
+    expandedOpcBytes: options.limits.expandedOpcBytes,
+    xmlPartBytes: options.limits.xmlPartBytes,
+    opcUriCharacters: options.limits.opcUriCharacters,
+    opcCompressionRatio: options.limits.opcCompressionRatio,
+  };
+}
+
+async function preflightManifest(
   manifest: PackageManifest,
   bytes: Uint8Array,
   options: NormalizedOptions,
   state: ExecutionState,
-): void {
-  if (!manifest || manifest.schemaVersion !== 1 || !manifest.rawPackageBytesDigest?.value) {
-    fail("invalid_document", "package_preflight", "DOCX preflight returned an invalid manifest.",
-      "Validate the package with the Docxodus package verifier.");
+  compareExpectedDigest: boolean,
+): Promise<void> {
+  const sourceDigest = manifest.rawPackageBytesDigest.value;
+  const recomputedDigest = await sha256(bytes);
+  if (!constantTimeDigestEqual(sourceDigest, recomputedDigest)) {
+    fail("invalid_document", "package_preflight",
+      "The #493 source digest does not match the exact bytes supplied to export.",
+      "Use a matching package-manifest producer and immutable source snapshot.", {
+        detail: `manifest=${sourceDigest}; recomputed=${recomputedDigest}`,
+      });
   }
-  const sourceDigest = manifest.rawPackageBytesDigest.value.toLowerCase();
-  if (options.expectedSourceDigest && options.expectedSourceDigest !== sourceDigest) {
-    fail("invalid_document", "package_preflight", "The source digest does not match expectedSourceDigest.",
+  if (compareExpectedDigest && options.expectedSourceDigest
+    && !constantTimeDigestEqual(options.expectedSourceDigest, sourceDigest)) {
+    fail("source_digest_mismatch", "package_preflight", "The source digest does not match expectedSourceDigest.",
       "Render the exact verified source bytes or update the expected digest.", {
         detail: `expected=${options.expectedSourceDigest}; actual=${sourceDigest}`,
       });
@@ -659,7 +1437,7 @@ function preflightManifest(
     if (finding.severity === "info") continue;
     addWarning(state, {
       code: finding.code,
-      severity: finding.severity,
+      severity: "warning",
       phase: "package_preflight",
       message: finding.message,
       remediation: "Inspect the named package part before relying on export fidelity.",
@@ -677,22 +1455,58 @@ function preflightManifest(
 
   enforceLimit(bytes.byteLength, options.limits.compressedDocxBytes, "compressedDocxBytes", "package_preflight");
   enforceLimit(manifest.entries.length, options.limits.opcEntries, "opcEntries", "package_preflight");
-  enforceLimit(
-    manifest.entries.reduce((sum, entry) => sum + entry.size, 0),
-    options.limits.expandedOpcBytes,
-    "expandedOpcBytes",
-    "package_preflight",
-  );
-  const largestXml = manifest.entries.reduce(
-    (largest, entry) => entry.isXml ? Math.max(largest, entry.size) : largest,
-    0,
-  );
-  enforceLimit(largestXml, options.limits.xmlPartBytes, "xmlPartBytes", "package_preflight");
+  let expandedBytes = 0n;
+  const expandedLimit = BigInt(options.limits.expandedOpcBytes);
+  const xmlLimit = BigInt(options.limits.xmlPartBytes);
+  const ratioLimit = BigInt(options.limits.opcCompressionRatio);
+  for (const [index, entry] of manifest.entries.entries()) {
+    if (entry.uri.length > options.limits.opcUriCharacters) {
+      fail("resource_limit", "package_preflight",
+        `opcUriCharacters limit exceeded for entry ${index} (${entry.uri.length} > ${options.limits.opcUriCharacters}).`,
+        "Use a package with shorter canonical OPC part names.", { partUri: entry.uri });
+    }
+    const size = decimalAt(entry.size, `$.entries[${index}].size`);
+    const compressedSize = decimalAt(entry.compressedSize, `$.entries[${index}].compressedSize`);
+    expandedBytes += size;
+    if (expandedBytes > expandedLimit) {
+      fail("resource_limit", "package_preflight",
+        `expandedOpcBytes limit exceeded (${expandedBytes.toString()} > ${expandedLimit.toString()}).`,
+        "Use a smaller package or lower-expansion resources.");
+    }
+    if (entry.isXml && size > xmlLimit) {
+      fail("resource_limit", "package_preflight",
+        `xmlPartBytes limit exceeded (${size.toString()} > ${xmlLimit.toString()}).`,
+        "Split or reduce the XML part before export.", { partUri: entry.uri });
+    }
+    if ((compressedSize === 0n && size > 0n)
+      || (compressedSize > 0n && size > compressedSize * ratioLimit)) {
+      fail("resource_limit", "package_preflight",
+        `opcCompressionRatio limit exceeded for ${entry.uri}.`,
+        "Repackage the document without a suspiciously high expansion ratio.", { partUri: entry.uri });
+    }
+  }
 
   if (manifest.packageKind !== "opc" || !manifest.isValid || !manifest.facts.mainDocumentUri) {
     fail("invalid_document", "package_preflight",
       `The input is not a valid DOCX OPC package (${manifest.packageKind}).`,
       "Repair or decrypt the document before export.");
+  }
+  const mainRelationship = manifest.relationships.find((relationship) =>
+    relationship.ownerUri === "/"
+    && relationship.targetMode === "Internal"
+    && relationship.type.endsWith("/officeDocument"));
+  if (!mainRelationship
+    || mainRelationship.resolvedTargetUri !== manifest.facts.mainDocumentUri
+    || mainRelationship.isTargetPresent !== true
+    || !manifest.entries.some((entry) => entry.uri === manifest.facts.mainDocumentUri)) {
+    fail("invalid_document", "package_preflight",
+      "The manifest's main-document identity is incomplete or inconsistent.",
+      "Repair the package-level officeDocument relationship and target part.");
+  }
+  if (options.reviewProfileAlreadyApplied && manifest.facts.revisions.total !== 0) {
+    fail("invalid_argument", "package_preflight",
+      "reviewProfileAlreadyApplied input still contains native tracked revisions.",
+      "Supply the exact already-accepted/rejected package or set reviewProfileAlreadyApplied to false.");
   }
 
   const externalAutomatic = manifest.relationships.filter((relationship) =>
@@ -701,15 +1515,15 @@ function preflightManifest(
   for (const relationship of externalAutomatic) {
     const warning: RenderWarning = {
       code: "external_automatic_resource_omitted",
-      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      severity: "warning",
       phase: "package_preflight",
       message: "An external automatic resource is not fetched by standalone export.",
       remediation: "Embed the resource in the DOCX package before export.",
       partUri: relationship.ownerUri,
       resource: relationship.target,
     };
-    addWarning(state, warning);
-    state.resources.push({ kind: "image", status: "omitted", resource: relationship.target });
+    if (options.unsupportedContent !== "strict") addWarning(state, warning);
+    addResource(state, { kind: "external_link", status: "omitted", resource: relationship.target });
   }
   if (externalAutomatic.length > 0 && options.unsupportedContent === "strict") {
     fail("resource_policy_failure", "package_preflight",
@@ -720,12 +1534,12 @@ function preflightManifest(
   if (manifest.facts.isMacroEnabled) {
     const warning: RenderWarning = {
       code: "macro_content_not_exported",
-      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      severity: "warning",
       phase: "package_preflight",
       message: "Macro content is not active or embedded in standalone HTML.",
       remediation: "Remove macros or use warn policy for a static visual export.",
     };
-    addWarning(state, warning);
+    if (options.unsupportedContent !== "strict") addWarning(state, warning);
     if (options.unsupportedContent === "strict") {
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
@@ -733,12 +1547,12 @@ function preflightManifest(
   if (manifest.facts.altChunkCount > 0) {
     const warning: RenderWarning = {
       code: "altchunk_not_supported",
-      severity: options.unsupportedContent === "strict" ? "error" : "warning",
+      severity: "warning",
       phase: "package_preflight",
       message: "Arbitrary altChunk content is not a supported standalone export input.",
       remediation: "Materialize altChunk content into ordinary WordprocessingML before export.",
     };
-    addWarning(state, warning);
+    if (options.unsupportedContent !== "strict") addWarning(state, warning);
     if (options.unsupportedContent === "strict") {
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
@@ -773,11 +1587,11 @@ function conversionOptions(options: NormalizedOptions) {
   };
 }
 
-function bootstrapHtml(title = "Document"): string {
+function bootstrapHtml(title = ""): string {
   const safeTitle = title.replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
   })[character]!);
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}"><title>${safeTitle}</title></head><body></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${RENDER_CSP}"><title>${safeTitle}</title></head><body></body></html>`;
 }
 
 async function createIsolatedFrame(
@@ -822,16 +1636,43 @@ async function createIsolatedFrame(
   return frame;
 }
 
-function automaticUrlAllowed(value: string): boolean {
+const STANDALONE_DATA_MEDIA_TYPES = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp", "image/tiff",
+  "image/x-icon", "font/woff", "font/woff2", "font/ttf", "font/otf",
+  "application/font-woff", "application/vnd.ms-fontobject",
+]);
+
+function dataUrlInfo(value: string): { mediaType: string; byteLength: number } | undefined {
+  if (!value.startsWith("data:")) return undefined;
+  const comma = value.indexOf(",");
+  if (comma < 0) return undefined;
+  const metadata = value.slice(5, comma);
+  const segments = metadata.split(";");
+  const mediaType = (segments.shift() ?? "").toLowerCase();
+  if (mediaType === "" && value === "data:,") return { mediaType: "", byteLength: 0 };
+  if (!STANDALONE_DATA_MEDIA_TYPES.has(mediaType)) return undefined;
+  if (segments.some((segment) => segment.toLowerCase() !== "base64")) return undefined;
+  if (!segments.some((segment) => segment.toLowerCase() === "base64")) return undefined;
+  const payload = value.slice(comma + 1);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload)) {
+    return undefined;
+  }
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  return { mediaType, byteLength: payload.length / 4 * 3 - padding };
+}
+
+function automaticUrlAllowed(value: string, allowFragment = false): boolean {
   const trimmed = value.trim();
-  return trimmed === "" || trimmed.startsWith("data:") || trimmed.startsWith("#");
+  return trimmed === "" || dataUrlInfo(trimmed) !== undefined
+    || (allowFragment && trimmed.startsWith("#"));
 }
 
 function standaloneSrcsetAllowed(value: string): boolean {
   // Fail closed to one self-contained candidate. A loose comma split would
   // misparse the comma that is part of every data URL and could retain a later
   // network candidate.
-  return /^\s*data:[^,\s]+,[^,\s]+(?:\s+(?:\d+(?:\.\d+)?x|\d+w))?\s*$/i.test(value);
+  const match = /^\s*(data:\S+?)(?:\s+(?:\d+(?:\.\d+)?x|\d+w))?\s*$/i.exec(value);
+  return !!match && dataUrlInfo(match[1]) !== undefined;
 }
 
 const SVG_URL_PRESENTATION_ATTRIBUTES = new Set([
@@ -840,13 +1681,7 @@ const SVG_URL_PRESENTATION_ATTRIBUTES = new Set([
 ]);
 
 function estimateDataUrlBytes(value: string): number | undefined {
-  const comma = value.indexOf(",");
-  if (comma < 0 || !value.startsWith("data:")) return undefined;
-  const metadata = value.slice(5, comma);
-  const payload = value.slice(comma + 1);
-  return /;base64(?:;|$)/i.test(metadata)
-    ? Math.floor(payload.replace(/\s/g, "").length * 3 / 4)
-    : utf8Bytes(decodeURIComponent(payload)).byteLength;
+  return dataUrlInfo(value.trim())?.byteLength;
 }
 
 function policyWarning(
@@ -854,16 +1689,15 @@ function policyWarning(
   options: NormalizedOptions,
   warning: Omit<RenderWarning, "severity">,
 ): void {
-  const resolved: RenderWarning = {
-    ...warning,
-    severity: options.unsupportedContent === "strict" ? "error" : "warning",
-  };
-  addWarning(state, resolved);
   if (options.unsupportedContent === "strict") {
-    fail("resource_policy_failure", resolved.phase, resolved.message, resolved.remediation, {
-      detail: resolved.resource,
+    fail("resource_policy_failure", warning.phase, warning.message, warning.remediation, {
+      detail: warning.detail,
+      partUri: warning.partUri,
+      anchorId: warning.anchorId,
+      resource: warning.resource,
     });
   }
+  addWarning(state, { ...warning, severity: "warning" });
 }
 
 interface CssSecurityToken {
@@ -1109,7 +1943,7 @@ function sanitizeCss(
   for (let pass = 0; pass < 8; pass++) {
     const tokens = cssSecurityTokens(candidate);
     const actionable = tokens.filter((token) =>
-      token.kind !== "url" || !automaticUrlAllowed(token.value));
+      token.kind !== "url" || !automaticUrlAllowed(token.value, true));
     if (actionable.length === 0) return candidate;
 
     let cursor = 0;
@@ -1127,7 +1961,7 @@ function sanitizeCss(
         // A semicolon cannot be consumed as the optional trailing whitespace of a
         // hex escape, so identifier fragments cannot join across this boundary.
         sanitized += ";";
-      } else if (token.kind === "url" && automaticUrlAllowed(token.value)) {
+      } else if (token.kind === "url" && automaticUrlAllowed(token.value, true)) {
         sanitized += candidate.slice(token.start, token.end);
       } else {
         policyWarning(state, options, {
@@ -1228,7 +2062,7 @@ function sanitizeConvertedDocument(
         if (href.startsWith("#") || /^(?:https?|mailto|tel):/i.test(href)) {
           if (!href.startsWith("#")) {
             element.setAttribute("rel", "noopener noreferrer");
-            state.resources.push({ kind: "external_link", status: "allowed_user_link", resource: href });
+            addResource(state, { kind: "external_link", status: "allowed_user_link", resource: href });
           }
           continue;
         }
@@ -1242,8 +2076,20 @@ function sanitizeConvertedDocument(
         });
         continue;
       }
+      if (name === "ping" && element.localName === "a") {
+        element.removeAttribute(attribute.name);
+        policyWarning(state, options, {
+          code: "hyperlink_ping_omitted",
+          phase: "docx_conversion",
+          message: "A hyperlink ping target was removed from standalone output.",
+          remediation: "Use an ordinary user-activated hyperlink without background tracking requests.",
+          resource: attribute.value,
+        });
+        continue;
+      }
       if ((name === "href" && element.localName !== "a") || urlAttributes.has(name)) {
-        if (!automaticUrlAllowed(attribute.value)) {
+        const allowFragment = element.namespaceURI === "http://www.w3.org/2000/svg";
+        if (!automaticUrlAllowed(attribute.value, allowFragment)) {
           element.removeAttribute(attribute.name);
           policyWarning(state, options, {
             code: "external_automatic_resource_omitted",
@@ -1260,6 +2106,15 @@ function sanitizeConvertedDocument(
       element.addEventListener("submit", (event) => event.preventDefault());
     }
   }
+
+  // Admit the sanitized detached tree before importing it into the live layout realm or allowing
+  // the browser to decode any data URL. This bounds the second DOM copy and decoded resources.
+  countDomNodes(parsed, options.limits.domNodes, "docx_conversion");
+  const admittedResources = automaticResourceCount(parsed);
+  enforceLimit(admittedResources.count, options.limits.automaticResources,
+    "automaticResources", "docx_conversion");
+  enforceLimit(admittedResources.bytes, options.limits.automaticResourceBytes,
+    "automaticResourceBytes", "docx_conversion");
 
   target.documentElement.lang = parsed.documentElement.lang || "en-US";
   target.title = options.title;
@@ -1283,7 +2138,7 @@ function inventoryConvertedContent(
         : {}),
       action: "placeholder",
     };
-    state.unsupportedContent.push(outcome);
+    addUnsupportedContent(state, outcome);
     policyWarning(state, options, {
       code: "unsupported_content_placeholder",
       phase: "docx_conversion",
@@ -1296,7 +2151,7 @@ function inventoryConvertedContent(
   for (const image of Array.from(document.querySelectorAll<HTMLImageElement>("img"))) {
     const source = image.getAttribute("src") ?? "";
     const metadata = /^data:([^;,]+)/i.exec(source);
-    state.resources.push({
+    addResource(state, {
       kind: "image",
       status: "embedded",
       resource: image.alt || undefined,
@@ -1305,7 +2160,7 @@ function inventoryConvertedContent(
     });
   }
   for (const svg of Array.from(document.querySelectorAll<SVGSVGElement>("svg"))) {
-    state.resources.push({
+    addResource(state, {
       kind: svg.classList.contains("chart") || svg.closest("[class*='chart']") ? "chart" : "svg",
       status: "inline",
     });
@@ -1330,9 +2185,8 @@ function inventoryBrowserObservedFonts(document: Document, state: ExecutionState
     const family = view.getComputedStyle(element).fontFamily.trim();
     if (family) families.add(family);
   }
-  for (const requestedFamily of Array.from(families).sort((left, right) =>
-    left.localeCompare(right))) {
-    state.fonts.push({
+  for (const requestedFamily of Array.from(families).sort(compareCodeUnits)) {
+    addFont(state, {
       requestedFamily,
       status: "unverified",
       source: "browser",
@@ -1506,6 +2360,15 @@ function finalizePageTree(
   }
   normalizeFragmentTargets(document, pages, state, options);
   document.documentElement.dataset.docxodusStandalone = "v1";
+  const policy = document.querySelector<HTMLMetaElement>(
+    "meta[http-equiv='Content-Security-Policy' i]",
+  );
+  if (!policy) {
+    fail("output_verification_failure", "running_story_placement",
+      "The standalone document lost its Content Security Policy.",
+      "Report the materializer defect; finalization must retain the closed policy.");
+  }
+  policy.content = STANDALONE_CSP;
   const style = document.createElement("style");
   style.id = "docxodus-standalone-style";
   style.textContent = standaloneStyle(pages);
@@ -1702,9 +2565,10 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
 
 async function layoutDigestForOptions(options: NormalizedOptions): Promise<string> {
   const layoutContract = {
+    title: options.title,
     reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
     commentProfile: options.commentProfile,
-    unsupportedContent: options.unsupportedContent,
     pagination: {
       mode: "paginated",
       scale: 1,
@@ -1714,40 +2578,83 @@ async function layoutDigestForOptions(options: NormalizedOptions): Promise<strin
       cssPrefix: "page-",
     },
   };
-  return sha256(utf8Bytes(canonicalJson(layoutContract)));
+  return canonicalMaterialDigest("docxodus:layout-options:v1", layoutContract);
 }
 
-async function rendererIdentity(
-  document: Document,
-  layoutDigest: string,
+async function runtimePolicyDigestForOptions(
+  options: NormalizedOptions,
   runtimeAssets: RuntimeAssetIdentity,
-  runtimeVersion: VersionInfo,
-  fonts: FontResolution[],
 ): Promise<string> {
+  return canonicalMaterialDigest("docxodus:runtime-policy:v1", {
+    assetGraphDigest: runtimeAssets.graphDigest,
+    assetPackageVersion: runtimeAssets.packageVersion,
+    isolation: {
+      attachedSameOriginFrame: true,
+      scripts: "denied",
+      automaticNetwork: "denied",
+      sandbox: ["allow-same-origin"],
+    },
+    limits: options.limits,
+    strictFonts: options.strictFonts,
+    timeoutMs: options.timeoutMs,
+    unsupportedContent: options.unsupportedContent,
+  });
+}
+
+function observedRuntimeFacts(document: Document): ExportRuntimeObservedFacts {
   const view = document.defaultView;
   if (!view) {
     fail("unsupported_runtime", "browser_launch", "The render document has no browser identity.",
       "Use an attached browser document.");
   }
-  const navigatorWithUaData = view.navigator as Navigator & {
-    userAgentData?: {
-      brands?: Array<{ brand: string; version: string }>;
-      mobile?: boolean;
-      platform?: string;
-      getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
-    };
+  return {
+    runtimeKind: "browser",
+    locale: view.navigator.language || "und",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    viewport: [view.innerWidth, view.innerHeight],
+    deviceScaleFactor: view.devicePixelRatio,
+    media: {
+      colorScheme: view.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : view.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "no-preference",
+      reducedMotion: view.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "reduce" : "no-preference",
+      forcedColors: view.matchMedia("(forced-colors: active)").matches ? "active" : "none",
+      printMedia: true,
+    },
+    networkIsolation: "contextRestricted",
   };
-  let highEntropyUserAgent: Record<string, unknown> | undefined;
-  try {
-    highEntropyUserAgent = await navigatorWithUaData.userAgentData?.getHighEntropyValues?.([
-      "architecture", "bitness", "fullVersionList", "model", "platformVersion", "wow64",
-    ]);
-  } catch {
-    // High-entropy UA values are optional browser observations. The ordinary
-    // user agent and platform below remain part of the fingerprint.
+}
+
+async function rendererIdentity(
+  document: Document,
+  layoutDigest: string,
+  runtimePolicyDigest: string,
+  runtimeAssets: RuntimeAssetIdentity,
+  runtimeVersion: VersionInfo,
+  fonts: FontResolution[],
+): Promise<{
+  rendererFingerprint: string;
+  observed: ExportRuntimeObservedFacts;
+  fontIdentity: FontConfigurationIdentity;
+}> {
+  const view = document.defaultView;
+  if (!view) {
+    fail("unsupported_runtime", "browser_launch", "The render document has no browser identity.",
+      "Use an attached browser document.");
   }
   const fontRecords = fonts.map((font) => ({ ...font }))
-    .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+    .sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
+  const fontDigest = await canonicalMaterialDigest(
+    "docxodus:font-configuration:v1",
+    { verification: "browserObserved", fonts: fontRecords },
+  );
+  const fontIdentity: FontConfigurationIdentity = {
+    schemaVersion: 1,
+    digest: fontDigest,
+    verification: "browserObserved",
+  };
+  const observed = observedRuntimeFacts(document);
   const fingerprint = {
     contract: "docxodus-standalone-browser-v1",
     verification: "browserObserved",
@@ -1757,80 +2664,208 @@ async function rendererIdentity(
     pageMapSchemaVersion: 1,
     renderReportSchemaVersion: 1,
     layoutDigest,
-    fontConfigurationDigest: await sha256(utf8Bytes(canonicalJson(fontRecords))),
+    runtimePolicyDigest,
+    fontConfigurationDigest: fontDigest,
     fonts: fontRecords,
-    browser: {
-      userAgent: view.navigator.userAgent,
-      platform: view.navigator.platform,
-      language: view.navigator.language,
-      languages: Array.from(view.navigator.languages),
-      userAgentData: navigatorWithUaData.userAgentData
-        ? {
-          brands: navigatorWithUaData.userAgentData.brands,
-          mobile: navigatorWithUaData.userAgentData.mobile,
-          platform: navigatorWithUaData.userAgentData.platform,
-          highEntropy: highEntropyUserAgent,
-        }
-        : undefined,
-      viewport: [view.innerWidth, view.innerHeight],
-      devicePixelRatio: view.devicePixelRatio,
-      hardwareConcurrency: view.navigator.hardwareConcurrency,
-      maxTouchPoints: view.navigator.maxTouchPoints,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-      screen: {
-        width: view.screen.width,
-        height: view.screen.height,
-        colorDepth: view.screen.colorDepth,
-        pixelDepth: view.screen.pixelDepth,
-      },
-      media: {
-        print: view.matchMedia("print").matches,
-        darkColorScheme: view.matchMedia("(prefers-color-scheme: dark)").matches,
-        reducedMotion: view.matchMedia("(prefers-reduced-motion: reduce)").matches,
-        forcedColors: view.matchMedia("(forced-colors: active)").matches,
-      },
-    },
+    observed,
   };
-  return sha256(utf8Bytes(canonicalJson(fingerprint)));
+  return {
+    rendererFingerprint: await canonicalMaterialDigest(
+      "docxodus:renderer-fingerprint:v1",
+      fingerprint,
+    ),
+    observed,
+    fontIdentity,
+  };
 }
 
-function finalPages(pages: HTMLElement[]): CompleteRenderReport["pages"] {
-  return pages.map((page, index) => ({
-    pageNumber: Number.parseInt(page.dataset.pageNumber ?? String(index + 1), 10),
-    width: Number.parseFloat(page.dataset.pageWidthPt ?? page.style.width),
-    height: Number.parseFloat(page.dataset.pageHeightPt ?? page.style.height),
-    sectionIndex: Number.parseInt(page.dataset.sectionIndex ?? "0", 10),
-  }));
+function reportPages(pageMap: PageMap): CompleteRenderReport["pages"] {
+  return pageMap.pages.map((page) => ({ ...page }));
+}
+
+function storyForAnchor(anchorId: string): PageMap["fragments"][number]["story"] {
+  const first = anchorId.indexOf(":");
+  const second = first < 0 ? -1 : anchorId.indexOf(":", first + 1);
+  const scope = first >= 0 && second > first ? anchorId.slice(first + 1, second) : "body";
+  if (scope.startsWith("hdr")) return "header";
+  if (scope.startsWith("ftr")) return "footer";
+  if (scope === "fn") return "footnote";
+  if (scope === "en") return "endnote";
+  if (scope === "cmt") return "comment";
+  return "body";
+}
+
+function visibleRectWithinPage(
+  document: Document,
+  element: HTMLElement,
+  page: HTMLElement,
+): { left: number; top: number; right: number; bottom: number } {
+  const pageRect = page.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  let left = Math.max(rect.left, pageRect.left);
+  let top = Math.max(rect.top, pageRect.top);
+  let right = Math.min(rect.right, pageRect.right);
+  let bottom = Math.min(rect.bottom, pageRect.bottom);
+  const clips = (value: string) =>
+    value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
+  for (let ancestor = element.parentElement;
+    ancestor && ancestor !== page;
+    ancestor = ancestor.parentElement) {
+    const style = document.defaultView!.getComputedStyle(ancestor);
+    const ancestorRect = ancestor.getBoundingClientRect();
+    if (clips(style.overflowX)) {
+      left = Math.max(left, ancestorRect.left);
+      right = Math.min(right, ancestorRect.right);
+    }
+    if (clips(style.overflowY)) {
+      top = Math.max(top, ancestorRect.top);
+      bottom = Math.min(bottom, ancestorRect.bottom);
+    }
+  }
+  return { left, top, right, bottom };
+}
+
+function assertStandaloneResourceAudit(document: Document): void {
+  if (document.querySelector(
+    "script, iframe, object, embed, video, audio, source, track, link, base, meta[http-equiv='refresh' i]",
+  )) {
+    throw new Error("offline output contains active or external-loading content");
+  }
+  const meta = document.querySelector<HTMLMetaElement>(
+    "meta[http-equiv='Content-Security-Policy' i]",
+  );
+  if (!meta || meta.content !== STANDALONE_CSP) {
+    throw new Error("offline output CSP is missing or changed");
+  }
+  for (const element of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on")) throw new Error(`offline output retained ${attribute.name}`);
+      if (name === "style") {
+        const unsafe = cssSecurityTokens(attribute.value).find((token) =>
+          token.kind !== "url" || !automaticUrlAllowed(token.value, true));
+        if (unsafe) throw new Error(`offline inline style retained ${unsafe.kind}`);
+      }
+      if (name === "srcset" && !standaloneSrcsetAllowed(attribute.value)) {
+        throw new Error("offline output retained an unsafe srcset");
+      }
+      if (name === "href" && element.localName === "a") {
+        const href = attribute.value.trim();
+        if (!href.startsWith("#") && !/^(?:https?|mailto|tel):/i.test(href)) {
+          throw new Error(`offline output retained unsafe hyperlink ${href}`);
+        }
+      } else if (name === "ping" && element.localName === "a") {
+        throw new Error("offline output retained a hyperlink ping target");
+      } else if (["src", "poster", "data", "action", "formaction", "background", "xlink:href", "href"].includes(name)) {
+        const allowFragment = element.namespaceURI === "http://www.w3.org/2000/svg";
+        if (!automaticUrlAllowed(attribute.value, allowFragment)) {
+          throw new Error(`offline output retained automatic URL ${attribute.value}`);
+        }
+      }
+    }
+    if (element.localName === "style") {
+      const unsafe = cssSecurityTokens(element.textContent ?? "").find((token) =>
+        token.kind !== "url" || !automaticUrlAllowed(token.value, true));
+      if (unsafe) throw new Error(`offline stylesheet retained ${unsafe.kind}`);
+    }
+  }
 }
 
 async function verifyOfflineReopen(
   hostDocument: Document,
   html: string,
-  expectedPages: CompleteRenderReport["pages"],
+  expectedPageMap: PageMap,
   state: ExecutionState,
 ): Promise<void> {
   const frame = await createIsolatedFrame(hostDocument, state, html, "output_verification");
   try {
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
-    if (pages.length !== expectedPages.length) {
-      throw new Error(`offline page count changed (${pages.length} != ${expectedPages.length})`);
+    await awaitFonts(reopened);
+    await decodeImages(reopened);
+    validateInlineSvg(reopened);
+    await awaitStableTree(reopened, pages);
+    countDomNodes(reopened, state.limits.domNodes, "output_verification");
+    const resources = automaticResourceCount(reopened);
+    enforceLimit(resources.count, state.limits.automaticResources,
+      "automaticResources", "output_verification");
+    enforceLimit(resources.bytes, state.limits.automaticResourceBytes,
+      "automaticResourceBytes", "output_verification");
+    assertStandaloneResourceAudit(reopened);
+
+    if (pages.length !== expectedPageMap.pages.length) {
+      throw new Error(`offline page count changed (${pages.length} != ${expectedPageMap.pages.length})`);
     }
     for (let index = 0; index < pages.length; index++) {
       const page = pages[index];
-      const expected = expectedPages[index];
+      const expected = expectedPageMap.pages[index];
       const rect = page.getBoundingClientRect();
       const widthPt = rect.width * 72 / 96;
       const heightPt = rect.height * 72 / 96;
       if (Math.abs(widthPt - expected.width) > 0.1
         || Math.abs(heightPt - expected.height) > 0.1
-        || Number.parseInt(page.dataset.sectionIndex ?? "0", 10) !== expected.sectionIndex) {
+        || Number.parseInt(page.dataset.pageNumber ?? "0", 10) !== expected.pageNumber
+        || Number.parseInt(page.dataset.pageInSection ?? "0", 10) !== expected.pageInSection
+        || Number.parseInt(page.dataset.sectionIndex ?? "0", 10) !== expected.sectionIndex
+        || reopened.defaultView!.getComputedStyle(page).page !== expected.pageName) {
         throw new Error(`offline geometry changed on page ${expected.pageNumber}`);
       }
     }
-    if (reopened.querySelector("script, link[rel='stylesheet'], iframe, object, embed")) {
-      throw new Error("offline output contains an active or external-loading element");
+
+    const actualFragments: PageMap["fragments"] = [];
+    for (const page of pages) {
+      const pageNumber = Number.parseInt(page.dataset.pageNumber ?? "0", 10);
+      const expectedPage = expectedPageMap.pages.find((candidate) => candidate.pageNumber === pageNumber);
+      if (!expectedPage) throw new Error(`offline output added page ${pageNumber}`);
+      const pageRect = page.getBoundingClientRect();
+      const pointPerRenderedX = expectedPage.width / pageRect.width;
+      const pointPerRenderedY = expectedPage.height / pageRect.height;
+      for (const element of Array.from(
+        page.querySelectorAll<HTMLElement>("[data-source-anchor-id][data-page-fragment-id]"),
+      )) {
+        const style = reopened.defaultView!.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const rect = element.getBoundingClientRect();
+        const visible = visibleRectWithinPage(reopened, element, page);
+        if (rect.width <= 0 || rect.height <= 0
+          || visible.right <= visible.left || visible.bottom <= visible.top) continue;
+        const anchorId = element.dataset.sourceAnchorId!;
+        actualFragments.push({
+          fragmentId: element.dataset.pageFragmentId!,
+          anchorId,
+          fragmentIndex: Number.parseInt(element.dataset.fragmentIndex ?? "-1", 10),
+          pageNumber,
+          geometry: {
+            x: (visible.left - pageRect.left) * pointPerRenderedX,
+            y: (visible.top - pageRect.top) * pointPerRenderedY,
+            width: (visible.right - visible.left) * pointPerRenderedX,
+            height: (visible.bottom - visible.top) * pointPerRenderedY,
+          },
+          story: storyForAnchor(anchorId),
+          inTableCell: element.matches("td,th") || element.closest("td,th") !== null,
+        });
+      }
+    }
+    if (actualFragments.length !== expectedPageMap.fragments.length) {
+      throw new Error(
+        `offline fragment inventory changed (${actualFragments.length} != ${expectedPageMap.fragments.length})`,
+      );
+    }
+    for (let index = 0; index < actualFragments.length; index++) {
+      const actual = actualFragments[index];
+      const expected = expectedPageMap.fragments[index];
+      if (actual.fragmentId !== expected.fragmentId
+        || actual.anchorId !== expected.anchorId
+        || actual.fragmentIndex !== expected.fragmentIndex
+        || actual.pageNumber !== expected.pageNumber
+        || actual.story !== expected.story
+        || actual.inTableCell !== expected.inTableCell
+        || Math.abs(actual.geometry.x - expected.geometry.x) > 0.1
+        || Math.abs(actual.geometry.y - expected.geometry.y) > 0.1
+        || Math.abs(actual.geometry.width - expected.geometry.width) > 0.1
+        || Math.abs(actual.geometry.height - expected.geometry.height) > 0.1) {
+        throw new Error(`offline PageMap fragment changed at index ${index}`);
+      }
     }
   } finally {
     frame.remove();
@@ -1840,9 +2875,13 @@ async function verifyOfflineReopen(
 function reportBase(
   manifest: PackageManifest,
   sourceBytes: Uint8Array,
+  derivedManifest: PackageManifest | undefined,
+  derivedBytes: Uint8Array | undefined,
   options: NormalizedOptions,
   layoutDigest: string,
+  runtimePolicyDigest: string,
   state: ExecutionState,
+  fontIdentity?: FontConfigurationIdentity,
 ): RenderReportBase {
   return {
     schema: REPORT_SCHEMA,
@@ -1852,54 +2891,129 @@ function reportBase(
       byteLength: sourceBytes.byteLength,
       documentVersion: options.documentVersion,
     },
+    ...(derivedManifest && derivedBytes ? {
+      derivedProfileSource: {
+        rawPackageBytesDigest: derivedManifest.rawPackageBytesDigest.value,
+        byteLength: derivedBytes.byteLength,
+      },
+    } : {}),
     options: {
       reviewProfile: options.reviewProfile,
+      reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
       commentProfile: options.commentProfile,
+      title: options.title,
+      outputs: ["html"],
       layoutDigest,
+      runtimePolicyDigest,
+      policy: {
+        unsupportedContent: options.unsupportedContent,
+        strictFonts: options.strictFonts,
+        timeoutMs: options.timeoutMs,
+        limits: { ...options.limits },
+      },
     },
     readiness: state.readiness.map((outcome) => ({ ...outcome, pending: [...outcome.pending] })),
     fonts: state.fonts.map((font) => ({ ...font })),
     resources: state.resources.map((resource) => ({ ...resource })),
     unsupportedContent: state.unsupportedContent.map((outcome) => ({ ...outcome })),
     warnings: state.warnings.map((warning) => ({ ...warning })),
+    ...(fontIdentity ? { fontIdentity: { ...fontIdentity } } : {}),
   };
 }
 
 function failureReport(
   manifest: PackageManifest,
   sourceBytes: Uint8Array,
+  derivedManifest: PackageManifest | undefined,
+  derivedBytes: Uint8Array | undefined,
   options: NormalizedOptions,
   layoutDigest: string,
+  runtimePolicyDigest: string,
   rendererFingerprint: string | undefined,
+  observed: ExportRuntimeObservedFacts | undefined,
+  fontIdentity: FontConfigurationIdentity | undefined,
   state: ExecutionState,
   error: DocxodusExportError,
+  pageMapWasMaterialized: boolean,
+  htmlWasMaterialized: boolean,
   pages?: CompleteRenderReport["pages"],
 ): FailedRenderReport {
   const unavailable: FailedRenderReport["unavailable"] = [];
   if (!rendererFingerprint) unavailable.push({
     field: "environment.rendererFingerprint",
-    reason: `Failure occurred during ${error.phase} before renderer identity completed.`,
+    reasonCode: "notReached",
+    detail: `Failure occurred during ${error.phase} before renderer identity completed.`,
   });
   unavailable.push(
-    { field: "bindings.pageMapDigest", reason: "No verified PageMap is published for a failed render." },
-    { field: "bindings.htmlDigest", reason: "No HTML artifact is published for a failed render." },
-    { field: "bindings.pdfDigest", reason: "PDF output was not requested by the browser materializer." },
+    {
+      field: "bindings.pageMapDigest",
+      reasonCode: pageMapWasMaterialized ? "discardedOnFailure" : "notReached",
+      detail: pageMapWasMaterialized
+        ? "The materialized PageMap is discarded because the render did not complete."
+        : "PageMap materialization was not reached.",
+    },
+    {
+      field: "bindings.htmlDigest",
+      reasonCode: htmlWasMaterialized ? "discardedOnFailure" : "notReached",
+      detail: htmlWasMaterialized
+        ? "The selected HTML payload is discarded because the render did not complete."
+        : "Standalone HTML materialization was not reached.",
+    },
+    {
+      field: "bindings.pdfDigest",
+      reasonCode: "notRequested",
+      detail: "PDF output was not selected by the browser materializer.",
+    },
   );
   return {
-    ...reportBase(manifest, sourceBytes, options, layoutDigest, state),
+    ...reportBase(
+      manifest,
+      sourceBytes,
+      derivedManifest,
+      derivedBytes,
+      options,
+      layoutDigest,
+      runtimePolicyDigest,
+      state,
+      fontIdentity,
+    ),
     status: "failed",
     failure: {
       code: error.code,
+      severity: "error",
       phase: error.phase,
       message: error.message,
       remediation: error.remediation,
+      ...(error.detail ? { detail: error.detail } : {}),
+      ...(error.pending ? { pending: [...error.pending] } : {}),
+      ...(error.partUri ? { partUri: error.partUri } : {}),
+      ...(error.anchorId ? { anchorId: error.anchorId } : {}),
+      ...(error.resource ? { resource: error.resource } : {}),
     },
-    ...(rendererFingerprint
-      ? { environment: { rendererFingerprint, verification: "browserObserved" as const } }
+    ...(rendererFingerprint && observed
+      ? {
+        environment: {
+          rendererFingerprint,
+          verification: "browserObserved" as const,
+          fidelityTier: "unbaselined" as const,
+          observed,
+        },
+      }
       : {}),
     ...(pages ? { partial: { pages } } : {}),
     unavailable,
   };
+}
+
+function ensureTerminalReadiness(state: ExecutionState, error: DocxodusExportError): void {
+  const last = state.readiness.at(-1);
+  if (last && last.status !== "complete") return;
+  state.readiness.push({
+    phase: error.phase,
+    status: error.code === "operation_cancelled" ? "cancelled" : "failed",
+    elapsedMs: 0,
+    pending: error.pending ? [...error.pending] : [],
+  });
 }
 
 function asExportError(error: unknown, phase: ExportPhase): DocxodusExportError {
@@ -1927,39 +3041,48 @@ export async function convertDocxToPaginatedHtml(
   // Both snapshots happen before the first await. Later caller mutations cannot
   // split the verified package identity from the bytes transferred to WASM.
   const options = normalizeOptions(requestedOptions);
-  const sourcePromise = ownedBytes(document);
+  const startedAt = monotonicNow();
+  const ownedOperationAbort = new AbortController();
+  const sourcePromise = ownedBytes(
+    document,
+    options.limits.compressedDocxBytes,
+    options.signal,
+  );
   const state: ExecutionState = {
-    startedAt: Date.now(),
-    deadline: Date.now() + options.timeoutMs,
+    startedAt,
+    deadline: startedAt + options.timeoutMs,
     phase: "input_validation",
     readiness: [],
     warnings: [],
     fonts: [],
     resources: [],
     unsupportedContent: [],
+    limits: options.limits,
+    signal: options.signal,
   };
   let sourceBytes: Uint8Array | undefined;
+  let renderBytes: Uint8Array | undefined;
+  let derivedBytes: Uint8Array | undefined;
   let worker: WorkerDocxodus | undefined;
   let frame: HTMLIFrameElement | undefined;
   let manifest: PackageManifest | undefined;
+  let derivedManifest: PackageManifest | undefined;
   let runtimeAssets: RuntimeAssetIdentity | undefined;
   let runtimeVersion: VersionInfo | undefined;
   let layoutDigest = "";
+  let runtimePolicyDigest = "";
   let rendererFingerprint: string | undefined;
+  let observed: ExportRuntimeObservedFacts | undefined;
+  let fontIdentity: FontConfigurationIdentity | undefined;
+  let pageMapWasMaterialized = false;
+  let htmlWasMaterialized = false;
   let pagesForFailure: CompleteRenderReport["pages"] | undefined;
 
   try {
     sourceBytes = await runPhase(state, "input_validation", ["document bytes"], () => sourcePromise);
-    enforceLimit(sourceBytes.byteLength, options.limits.compressedDocxBytes,
-      "compressedDocxBytes", "input_validation");
     if (sourceBytes.byteLength === 0) {
       fail("invalid_document", "input_validation", "The DOCX input is empty.",
         "Pass a non-empty OPC package.");
-    }
-    if (options.reviewProfile === "original") {
-      fail("unsupported_runtime", "input_validation",
-        "The original revision profile is not yet available in the browser materializer.",
-        "Use final or markup until issue #444 supplies shared reject-revision projection.");
     }
     if (options.strictFonts) {
       fail("unsupported_runtime", "font_loading",
@@ -1969,17 +3092,96 @@ export async function convertDocxToPaginatedHtml(
     layoutDigest = await layoutDigestForOptions(options);
 
     runtimeAssets = await runPhase(state, "wasm_initialization", ["runtime asset graph"], () =>
-      loadRuntimeAssetIdentity(options.wasmBasePath));
-    worker = await runPhase(state, "wasm_initialization", ["WASM worker"], () =>
-      createWorkerDocxodus({ wasmBasePath: options.wasmBasePath }));
+      loadRuntimeAssetIdentity(options.wasmBasePath, ownedOperationAbort.signal));
+    runtimePolicyDigest = await runtimePolicyDigestForOptions(options, runtimeAssets);
+    worker = await runPhase(state, "wasm_initialization", ["WASM worker"], async () => {
+      const created = await createWorkerDocxodus({
+        wasmBasePath: options.wasmBasePath,
+        signal: ownedOperationAbort.signal,
+      });
+      // runPhase may already have returned a timeout/cancellation while asynchronous
+      // worker initialization was still in flight. Never orphan that late worker.
+      if (ownedOperationAbort.signal.aborted
+        || options.signal?.aborted
+        || monotonicNow() >= state.deadline) {
+        created.terminate();
+      }
+      return created;
+    });
     runtimeVersion = await runPhase(state, "wasm_initialization", ["WASM runtime identity"], () =>
       worker!.getVersion());
-    manifest = await runPhase(state, "package_preflight", ["package manifest"], () =>
-      worker!.generatePackageManifest(sourceBytes!));
-    preflightManifest(manifest, sourceBytes, options, state);
+    const manifestJson = await runPhase(state, "package_preflight", ["source package manifest"], () =>
+      worker!.generatePackageManifestJson(sourceBytes!, inspectionLimits(options)));
+    manifest = validatePackageManifestJson(manifestJson);
+    await preflightManifest(manifest, sourceBytes, options, state, true);
 
-    const convertedHtml = await runPhase(state, "docx_conversion", ["WASM conversion"], () =>
-      worker!.convertDocxToHtml(sourceBytes!, conversionOptions(options)));
+    renderBytes = sourceBytes;
+    if (options.reviewProfile !== "markup" && !options.reviewProfileAlreadyApplied) {
+      derivedBytes = await runPhase(
+        state,
+        "package_preflight",
+        [`${options.reviewProfile} review-profile projection`],
+        async () => {
+          try {
+            return await worker!.projectReviewProfile(
+              sourceBytes!,
+              options.reviewProfile as "final" | "original",
+              options.limits.compressedDocxBytes,
+            );
+          } catch (error) {
+            if (String(error).includes("exceeds compressedDocxBytes")) {
+              fail("resource_limit", "package_preflight",
+                "The derived review-profile package exceeds compressedDocxBytes.",
+                "Use a smaller document or remove revision history before export.");
+            }
+            throw error;
+          }
+        },
+      );
+      enforceLimit(derivedBytes.byteLength, options.limits.compressedDocxBytes,
+        "compressedDocxBytes", "package_preflight");
+      const derivedManifestJson = await runPhase(
+        state,
+        "package_preflight",
+        ["derived package manifest"],
+        () => worker!.generatePackageManifestJson(derivedBytes!, inspectionLimits(options)),
+      );
+      derivedManifest = validatePackageManifestJson(derivedManifestJson);
+      await preflightManifest(derivedManifest, derivedBytes, options, state, false);
+      if (derivedManifest.facts.revisions.total !== 0) {
+        fail("conversion_failure", "package_preflight",
+          `The ${options.reviewProfile} projection retained native tracked revisions.`,
+          "Report the projection defect; derived bytes must be fully accepted or rejected exactly once.");
+      }
+      if (manifest.facts.revisions.total > 0
+        && constantTimeDigestEqual(
+          manifest.rawPackageBytesDigest.value,
+          derivedManifest.rawPackageBytesDigest.value,
+        )) {
+        fail("conversion_failure", "package_preflight",
+          `The ${options.reviewProfile} projection did not change revision-bearing package bytes.`,
+          "Report the projection defect; changed review state requires a distinct derived identity.");
+      }
+      renderBytes = derivedBytes;
+    }
+
+    const convertedHtml = await runPhase(state, "docx_conversion", ["WASM conversion"], async () => {
+      try {
+        return await worker!.convertDocxToHtml(
+          renderBytes!,
+          conversionOptions(options),
+          options.limits.htmlOutputBytes,
+        );
+      } catch (error) {
+        if (String(error).includes("exceeds htmlOutputBytes")) {
+          fail("resource_limit", "docx_conversion",
+            "Converted HTML exceeds htmlOutputBytes before main-thread materialization.",
+            "Use a smaller document or lower-complexity conversion profile.");
+        }
+        throw error;
+      }
+    });
+    preflightConvertedHtml(convertedHtml, options);
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
     let firstAttemptSignature: string | undefined;
@@ -1999,13 +3201,6 @@ export async function convertDocxToPaginatedHtml(
         await runPhase(state, "chart_svg_materialization", ["inline SVG"], () =>
           validateInlineSvg(renderDocument));
 
-        rendererFingerprint = await rendererIdentity(
-          renderDocument,
-          layoutDigest,
-          runtimeAssets,
-          runtimeVersion,
-          state.fonts,
-        );
         const staging = renderDocument.getElementById("pagination-staging") as HTMLElement | null;
         const container = renderDocument.getElementById("pagination-container") as HTMLElement | null;
         if (!staging || !container) {
@@ -2020,11 +3215,17 @@ export async function convertDocxToPaginatedHtml(
           pageGap: 0,
           fragmentParagraphs: true,
           checkCancellation: () => {
-            if (Date.now() >= state.deadline) {
+            if (state.signal?.aborted) {
+              fail("operation_cancelled", state.phase,
+                `Export was cancelled during ${state.phase}.`,
+                "Retry with a non-aborted signal.",
+                { pending: ["page layout"] });
+            }
+            if (monotonicNow() >= state.deadline) {
               fail("readiness_timeout", state.phase,
                 `Export timed out during ${state.phase}.`,
                 "Increase timeoutMs or reduce document layout complexity.",
-                { detail: "cooperative pagination checkpoint" });
+                { detail: "cooperative pagination checkpoint", pending: ["page layout"] });
             }
           },
         });
@@ -2038,10 +3239,13 @@ export async function convertDocxToPaginatedHtml(
 
         await runPhase(state, "running_story_placement", ["headers, footers, and notes"], () => {
           finalizePageTree(renderDocument, pages, state, options);
+          // Running-story placement changes the visible fragment set. This is
+          // the sole identity-writing normalization pass; PageMap measurement
+          // below remains read-only.
+          engine.normalizePageMapFragmentIdentities();
           assertNoClippedContent(renderDocument);
         });
-        enforceLimit(renderDocument.querySelectorAll("*").length,
-          options.limits.domNodes, "domNodes", "running_story_placement");
+        countDomNodes(renderDocument, options.limits.domNodes, "running_story_placement");
         const automaticResources = automaticResourceCount(renderDocument);
         enforceLimit(automaticResources.count, options.limits.automaticResources,
           "automaticResources", "running_story_placement");
@@ -2085,63 +3289,146 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
-    const finalRendererFingerprint = rendererFingerprint;
-    if (!finalRendererFingerprint) {
-      fail("output_verification_failure", "output_verification",
-        "Renderer identity is unavailable after successful pagination.",
-        "Retry in an attached standards-compliant browser.");
-    }
-    pagesForFailure = finalPages(pages);
+    const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
+      rendererIdentity(
+        renderDocument,
+        layoutDigest,
+        runtimePolicyDigest,
+        runtimeAssets!,
+        runtimeVersion!,
+        state.fonts,
+      ));
+    rendererFingerprint = renderer.rendererFingerprint;
+    observed = renderer.observed;
+    fontIdentity = renderer.fontIdentity;
     const pageMap = await runPhase(state, "output_verification", ["PageMap geometry"], () =>
-      engine.materializePageMap(options.documentVersion, finalRendererFingerprint));
+      engine.materializePageMap(options.documentVersion, rendererFingerprint!));
+    pageMapWasMaterialized = true;
+    if (pageMap.documentVersion !== options.documentVersion
+      || pageMap.rendererFingerprint !== rendererFingerprint
+      || pageMap.pages.length !== pages.length) {
+      fail("output_verification_failure", "output_verification",
+        "PageMap identity does not match the finalized render.",
+        "Report the materializer defect; artifact identity fields must agree exactly.");
+    }
+    const pageNumbers = new Set<number>();
+    for (const [index, page] of pageMap.pages.entries()) {
+      if (page.pageNumber !== index + 1 || pageNumbers.has(page.pageNumber)
+        || !Number.isInteger(page.pageInSection) || page.pageInSection < 1
+        || page.sectionIndex === undefined
+        || !Number.isInteger(page.sectionIndex) || page.sectionIndex < 0
+        || typeof page.pageName !== "string" || page.pageName.length === 0
+        || !Number.isFinite(page.width) || page.width <= 0
+        || !Number.isFinite(page.height) || page.height <= 0) {
+        fail("output_verification_failure", "output_verification",
+          `PageMap page ${index} violates the finalized page invariants.`,
+          "Report the materializer defect; page identities and geometry must be finite and contiguous.");
+      }
+      pageNumbers.add(page.pageNumber);
+    }
+    const fragmentIds = new Set<string>();
+    const nextFragmentIndex = new Map<string, number>();
+    for (const [index, fragment] of pageMap.fragments.entries()) {
+      const page = pageMap.pages[fragment.pageNumber - 1];
+      const expectedIndex = nextFragmentIndex.get(fragment.anchorId) ?? 0;
+      const geometry = fragment.geometry;
+      if (!page || fragmentIds.has(fragment.fragmentId)
+        || fragment.fragmentId !==
+          `p${fragment.pageNumber}-f${fragment.fragmentIndex}-${fragment.anchorId}`
+        || fragment.fragmentIndex !== expectedIndex
+        || !Object.values(geometry).every((value) => Number.isFinite(value) && value >= 0)
+        || geometry.x + geometry.width > page.width + 0.1
+        || geometry.y + geometry.height > page.height + 0.1) {
+        fail("output_verification_failure", "output_verification",
+          `PageMap fragment ${index} violates the visible-fragment invariants.`,
+          "Report the materializer defect; fragments must be unique, ordered, visible, and page-bounded.");
+      }
+      fragmentIds.add(fragment.fragmentId);
+      nextFragmentIndex.set(fragment.anchorId, expectedIndex + 1);
+    }
+    pagesForFailure = reportPages(pageMap);
+    const pageMapJson = canonicalJson(pageMap);
+    enforceLimit(utf8ByteLength(pageMapJson), options.limits.pageMapOutputBytes,
+      "pageMapOutputBytes", "output_verification");
     const pageMapDigest = await runPhase(state, "output_verification", ["PageMap digest"], () =>
-      sha256(utf8Bytes(canonicalJson(pageMap))));
+      sha256(utf8Bytes(pageMapJson)));
     const html = serializeDocument(renderDocument);
-    enforceLimit(utf8Bytes(html).byteLength, options.limits.htmlOutputBytes,
+    htmlWasMaterialized = true;
+    enforceLimit(utf8ByteLength(html), options.limits.htmlOutputBytes,
       "htmlOutputBytes", "output_verification");
     await runPhase(state, "output_verification", ["offline reopen"], () =>
-      verifyOfflineReopen(globalThis.document, html, pagesForFailure!, state));
+      verifyOfflineReopen(globalThis.document, html, pageMap, state));
     const htmlDigest = await runPhase(state, "output_verification", ["HTML digest"], () =>
       sha256(utf8Bytes(html)));
 
-    return await runPhase(state, "output_verification", ["final artifact assembly"], () => {
-      const report: CompleteRenderReport = {
-        ...reportBase(manifest!, sourceBytes!, options, layoutDigest, state),
-        status: "complete",
-        environment: { rendererFingerprint: finalRendererFingerprint, verification: "browserObserved" },
-        pages: pagesForFailure!,
-        bindings: {
-          pageMapDigest,
-          htmlDigest,
-          artifactRequestIds: [],
-        },
-      };
-      return {
-        html,
-        pageCount: pages.length,
-        pageMap,
-        renderReport: report,
-        warnings: report.warnings,
-        rendererFingerprint: finalRendererFingerprint,
-      };
-    });
+    const report: CompleteRenderReport = {
+      ...reportBase(
+        manifest,
+        sourceBytes,
+        derivedManifest,
+        derivedBytes,
+        options,
+        layoutDigest,
+        runtimePolicyDigest,
+        state,
+        fontIdentity,
+      ),
+      status: "complete",
+      fontIdentity,
+      environment: {
+        rendererFingerprint,
+        verification: "browserObserved",
+        fidelityTier: "unbaselined",
+        observed,
+      },
+      pages: pagesForFailure,
+      bindings: {
+        pageMapDigest,
+        htmlDigest,
+        artifactRequestIds: [],
+      },
+    };
+    enforceLimit(utf8ByteLength(canonicalJson(report)), options.limits.renderReportOutputBytes,
+      "renderReportOutputBytes", "output_verification");
+    return {
+      html,
+      pageCount: pages.length,
+      pageMap,
+      renderReport: report,
+      warnings: report.warnings,
+      rendererFingerprint,
+    };
   } catch (error) {
     const resolved = asExportError(error, state.phase);
+    ensureTerminalReadiness(state, resolved);
     if (manifest && sourceBytes) {
       resolved.report = failureReport(
         manifest,
         sourceBytes,
+        derivedManifest,
+        derivedBytes,
         options,
         layoutDigest,
+        runtimePolicyDigest,
         rendererFingerprint,
+        observed,
+        fontIdentity,
         state,
         resolved,
+        pageMapWasMaterialized,
+        htmlWasMaterialized,
         pagesForFailure,
       );
+      if (utf8ByteLength(canonicalJson(resolved.report)) > options.limits.renderReportOutputBytes) {
+        // Preserve the primary structured error while withholding an artifact
+        // that would itself exceed the versioned report ceiling.
+        resolved.report = undefined;
+      }
     }
     throw resolved;
   } finally {
     state.phase = "cleanup";
+    ownedOperationAbort.abort();
     frame?.remove();
     worker?.terminate();
   }

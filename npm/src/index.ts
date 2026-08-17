@@ -142,6 +142,7 @@ export type {
   TableMergeContent,
   TableShadingScope,
   PackageManifest,
+  PackageManifestInspectionLimits,
   PackageManifestEntry,
   PackageManifestFacts,
   PackageRelationship,

@@ -164,4 +164,79 @@ public class PaginatedHeaderFooterContentTests
         Assert.Contains("data:image/png;base64,", html);
         Assert.DoesNotContain("[UNSUPPORTED IMAGE]", html);
     }
+
+    [Fact]
+    public void PHF013_PublicProcessImageFindsTheHeaderOwnerWithoutConversionAnnotations()
+    {
+        using var ms = new MemoryStream();
+        using (var created = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document, true))
+        {
+            var main = created.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("body")))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var mainImage = main.AddImagePart(ImagePartType.Png, "rIdImage");
+            using (var stream = mainImage.GetStream(FileMode.Create, FileAccess.Write))
+                stream.Write(new byte[] { 1, 2, 3 });
+
+            var header = main.AddNewPart<HeaderPart>();
+            var headerImage = header.AddImagePart(ImagePartType.Png, "rIdImage");
+            using (var stream = headerImage.GetStream(FileMode.Create, FileAccess.Write))
+                stream.Write(new byte[] { 10, 11, 12 });
+            using (var writer = new StreamWriter(header.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
+                    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                    "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+                    "<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"9525\" cy=\"9525\"/>" +
+                    "<wp:docPr id=\"1\" name=\"header image\"/><a:graphic><a:graphicData>" +
+                    "<pic:pic><pic:blipFill><a:blip r:embed=\"rIdImage\"/></pic:blipFill></pic:pic>" +
+                    "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:hdr>");
+            }
+
+            main.Document.Body!.Append(new SectionProperties(
+                new HeaderReference { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(header) }));
+            main.Document.Save();
+        }
+
+        ms.Position = 0;
+        using var document = WordprocessingDocument.Open(ms, true);
+        var drawing = document.MainDocumentPart!.HeaderParts.Single()
+            .GetXDocument().Descendants()
+            .Single(element => element.Name.LocalName == "drawing");
+        var image = WmlToHtmlConverter.ProcessImage(
+            document,
+            drawing,
+            info => new XElement("probe", Convert.ToHexString(info.ImageBytes)));
+
+        Assert.NotNull(image);
+        Assert.Equal("0A0B0C", image!.Value);
+    }
+
+    [Fact]
+    public void PHF014_DanglingHeaderHyperlinkKeepsItsVisibleChildren()
+    {
+        using var ms = new MemoryStream();
+        using (var created = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document, true))
+        {
+            var main = created.AddMainDocumentPart();
+            var header = main.AddNewPart<HeaderPart>();
+            header.Header = new Header(new Paragraph(
+                new Hyperlink(new Run(new Text("dangling header link"))) { Id = "rIdMissing" }));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("body"))),
+                new SectionProperties(
+                    new HeaderReference { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(header) })));
+            main.Document.Save();
+            header.Header.Save();
+        }
+
+        var html = PaginatedHtml(ms.ToArray());
+
+        Assert.Contains("dangling header link", html);
+    }
 }
