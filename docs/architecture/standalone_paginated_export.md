@@ -1059,9 +1059,10 @@ faithful rendering. Native SVG image parts are not claimed until their current p
 replaced and covered by readiness/vector tests. Password-protected/encrypted or malformed packages
 fail before rendering.
 
-Issue #489's current whole-paragraph footnote splitter can clip a note tail and omit its PageMap
-geometry. Full footnote fidelity is explicitly unsupported until #489 lands; the exporter detects
-the clipped/oversized condition and fails rather than shipping a complete result with missing text.
+Eligible text-only footnote paragraphs continue within the paragraph at deterministic Unicode-safe
+boundaries, preserving inline structure, identities, ordering, and PageMap fragments. Structurally
+indivisible note content retains the typed clipped-content failure rather than shipping a complete
+result with missing text.
 
 Package preflight, raw source identity, revision/comment/media inventory, safety findings, and ZIP
 resource ceilings reuse #493's `PackageManifestGenerator` contract through its WASM surface. The
@@ -1076,7 +1077,7 @@ the #501 acceptance boundary; code written against the former numeric entry-size
 | #438 / #501 | isolated final page-tree materialization, offline serializer, complete v1 browser types/schema/docs/tests |
 | #439 / #502 | `@docxodus/export`, CLI, local runtime serving, bundle/PDF bytes and typed failures |
 | #440 / #503 | mixed-section effective PDF-box and sequencing proof |
-| #489 / #504 | lossless mid-paragraph footnote continuation before complete note text/PageMap coverage |
+| #489 / #504 | lossless mid-paragraph footnote continuation and complete note text/PageMap coverage |
 | #441 / #505 | phased readiness barrier, quiet interval, cancellation, delayed-resource tests |
 | #442 / #506 | font directories/resolver, license policy, resolution evidence, fingerprint integration |
 | #443 / #507 | generated-PDF raster/text/link ratchet and reproducibility documentation |

@@ -64,16 +64,26 @@ interface PaginatedShape {
   sectionFillers: boolean[];
   pageSizes: Array<{ width: number; height: number }>;
   contentBoxes: Array<{ top: number; left: number; width: number; height: number }>;
+  checkpoints: number;
 }
 
-async function paginate(page: Page): Promise<PaginatedShape> {
+async function paginate(page: Page, checkpointLimit?: number): Promise<PaginatedShape> {
   await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
 
-  return page.evaluate(() => {
+  return page.evaluate((limit) => {
     const staging = document.getElementById('staging') as HTMLElement;
     const container = document.getElementById('container') as HTMLElement;
     const { PaginationEngine } = (window as any).DocxodusPagination;
-    new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+    let checkpoints = 0;
+    new PaginationEngine(staging, container, {
+      showPageNumbers: false,
+      checkCancellation: () => {
+        checkpoints++;
+        if (limit !== undefined && checkpoints > limit) {
+          throw new Error(`pagination exceeded ${limit} checkpoints`);
+        }
+      },
+    }).paginate();
 
     const pages = Array.from(container.querySelectorAll<HTMLElement>('.page-content'));
     const boxes = Array.from(container.querySelectorAll<HTMLElement>('.page-box'));
@@ -112,8 +122,9 @@ async function paginate(page: Page): Promise<PaginatedShape> {
         width: parseFloat(content.style.width),
         height: parseFloat(content.style.height),
       })),
+      checkpoints,
     };
-  });
+  }, checkpointLimit);
 }
 
 test.describe('Continuous section breaks', () => {
@@ -266,6 +277,82 @@ test.describe('Continuous section breaks', () => {
     expect(result.pagesInSection).toEqual([1, 1]);
     expect(result.footnotes[0]).toContain('note before section break');
     expect(result.footnotes[1]).toBe('');
+  });
+
+  test('long pre-break note tails advance section pages, stories, and restarted numbering', async ({
+    page,
+  }) => {
+    const words = Array.from({ length: 80 }, (_, index) => `tail-${index}`).join(' ');
+    await page.setContent(staging(`
+      <style>
+        .page-footnotes { font: 10pt/10pt Arial; }
+        .page-footnotes hr { height: 1px; margin: 0 0 3pt; border: 0; }
+        .footnote-item, .footnote-content p, .footnote-continuation p { margin: 0; }
+      </style>
+      <div id="pagination-hf-registry">
+        <div data-section="1" data-hf-type="header-first"><p>section-one-first</p></div>
+        <div data-section="1" data-hf-type="header-even"><p>section-one-even</p></div>
+        <div data-section="1" data-hf-type="header-default"><p>section-one-default</p></div>
+      </div>
+      <div id="pagination-footnote-registry">
+        <div class="footnote-item" data-footnote-id="f-long">
+          <span class="footnote-number">1</span>
+          <span class="footnote-content"><p>${words}</p></span>
+        </div>
+      </div>
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height:20pt">before <sup data-footnote-id="f-long">1</sup></p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-page-num-start="10" ${PAGE_GEOMETRY}>
+        <p style="height:20pt">after continuation</p>
+      </div>`));
+
+    const result = await paginate(page, 20_000);
+    const ownedBySecondSection = result.sectionIndices
+      .map((owner, index) => ({ owner, index }))
+      .filter(({ owner }) => owner === 1)
+      .map(({ index }) => index);
+
+    expect(ownedBySecondSection.length).toBeGreaterThan(2);
+    expect(ownedBySecondSection.map((index) => result.pagesInSection[index]))
+      .toEqual(ownedBySecondSection.map((_, index) => index + 1));
+    expect(ownedBySecondSection.map((index) => result.displayedPageNumbers[index]))
+      .toEqual(ownedBySecondSection.map((_, index) => index + 10));
+    expect(ownedBySecondSection.map((index) => result.headers[index]))
+      .toEqual(ownedBySecondSection.map((_, index) =>
+        index === 0 ? 'section-one-first'
+          : (index + 1) % 2 === 0 ? 'section-one-even' : 'section-one-default'));
+    expect(result.content.flat()).toEqual(['before 1', 'after continuation']);
+    const renderedWords = result.footnotes.join(' ');
+    for (const word of words.split(' ')) {
+      expect(renderedWords.match(new RegExp(`\\b${word}\\b`, 'g'))).toHaveLength(1);
+    }
+  });
+
+  test('a tall first header advances one empty physical page without retrying forever', async ({
+    page,
+  }) => {
+    await page.setContent(staging(`
+      <div id="pagination-hf-registry">
+        <div data-section="0" data-hf-type="header-first">
+          <p style="height:80pt">tall first header</p>
+        </div>
+      </div>
+      <div data-section-index="0"
+           data-page-width="122" data-page-height="122"
+           data-content-width="120" data-content-height="120"
+           data-margin-top="1" data-margin-right="1"
+           data-margin-bottom="1" data-margin-left="1"
+           data-header-height="1" data-footer-height="1">
+        <p style="height:60pt">fits the default-header page</p>
+      </div>`));
+
+    const result = await paginate(page, 2_000);
+    expect(result.content).toEqual([[], ['fits the default-header page']]);
+    expect(result.pagesInSection).toEqual([1, 2]);
+    expect(result.headers).toEqual(['tall first header', '']);
+    expect(result.checkpoints).toBeLessThan(2_000);
   });
 
   test('footnoteLayoutLikeWW8 shares only post-break paragraphs without references', async ({

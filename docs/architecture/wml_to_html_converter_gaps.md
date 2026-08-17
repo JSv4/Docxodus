@@ -287,7 +287,7 @@ Several Word elements are not handled in `ConvertToHtmlTransform`:
 | `W.softHyphen` | Soft hyphen | Loses word-wrap hints |
 | `W.yearLong`, `W.monthLong`, etc. | Date/time fields | No output |
 | `W.pgNum` | Page numbers | Cannot resolve |
-| `W.separator`, `W.continuationSeparator` | Footnote separators | Ignored |
+| `W.separator`, `W.continuationSeparator` | Footnote separators | Preserved as inert normal/continuation story templates in the hidden paginated-footnote registry; the paginator clones the normal story when a note starts and the continuation story on carried-note pages, falling back to typed 2in/full-width rules only when the corresponding story is absent. |
 
 ---
 
