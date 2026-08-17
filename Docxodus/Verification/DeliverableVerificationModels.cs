@@ -473,6 +473,23 @@ public sealed record DeliverableVerificationResult
         this, (indented ? JsonOptions.Indented : JsonOptions.Canonical)
             .DeliverableVerificationResult);
 
+    internal static bool IsExactCanonical(ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            var result = JsonSerializer.Deserialize(
+                bytes, JsonOptions.Canonical.DeliverableVerificationResult);
+            return result is not null
+                && string.Equals(result.Schema, SchemaId, StringComparison.Ordinal)
+                && result.SchemaVersion == 1
+                && bytes.SequenceEqual(result.ToCanonicalUtf8Bytes());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static class JsonOptions
     {
         internal static readonly DeliverableVerificationJsonContext Canonical =

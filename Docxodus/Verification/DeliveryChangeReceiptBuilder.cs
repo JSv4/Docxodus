@@ -30,11 +30,15 @@ public sealed class DeliveryChangeReceiptBuilder
     private readonly List<(long Sequence, DeliveryLineageEventInput Input)> _lineage = new();
     private readonly Dictionary<string, DeliveryArtifact> _artifacts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, byte[]> _artifactBytes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PageMap> _validatedPageMaps = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string ArtifactId, string AnchorId), PageCitation>
+        _pageMapProjections = new();
     private readonly List<DeliveryPageCitationInput> _citations = new();
     private readonly List<DeliveryEvidenceReference> _evidence = new();
     private readonly List<(DeliverySemanticChangeSetInput Input,
         DeliverySemanticChangeSetProjection Projection)> _semanticChangeSets = new();
-    private readonly List<DeliveryChangeAttributionRule> _attributionRules = new();
+    private readonly Dictionary<DeliveryAttributionKey, DeliveryChangeAttributionRule>
+        _attributionRules = new();
     private readonly List<string> _warnings = new();
     private long _nextSequence;
     private DeliveryDocumentIdentity? _deliveredDocument;
@@ -52,7 +56,7 @@ public sealed class DeliveryChangeReceiptBuilder
             throw new ArgumentOutOfRangeException(nameof(privacyProfile));
         _limits = (limits ?? new DeliveryReceiptLimits()).ValidateAndClone();
         ValidateManifestResources(sourceManifest);
-        _sourceManifest = sourceManifest;
+        _sourceManifest = CloneManifest(sourceManifest);
         _sourceDocument = DeliveryDocumentIdentity.FromManifest(
             sourceManifest, sourceDocumentVersion);
         _privacyProfile = privacyProfile;
@@ -166,7 +170,8 @@ public sealed class DeliveryChangeReceiptBuilder
             input.ArtifactId,
             DeliveryArtifactRole.SemanticDiff,
             "application/json",
-            projection.CanonicalBytes) with
+            projection.CanonicalBytes,
+            _limits) with
         {
             RelativePath = input.RelativePath,
         };
@@ -211,15 +216,23 @@ public sealed class DeliveryChangeReceiptBuilder
                 "Semantic evidence must be registered from a SemanticChangeSet instance.");
         }
         DeliveryReceiptValidation.RequireNonBlank(evidence.Schema, "evidence schema", 2048);
+        var expectedSchema = ExpectedEvidenceSchema(evidence.Kind);
+        if (!string.Equals(evidence.Schema, expectedSchema, StringComparison.Ordinal))
+        {
+            throw new DeliveryReceiptValidationException(
+                "evidence_schema_mismatch",
+                $"Evidence kind '{evidence.Kind}' requires schema '{expectedSchema}'.");
+        }
         DeliveryReceiptValidation.ValidateDigest(evidence.Digest, "evidence digest");
         if (evidence.ArtifactId is not null)
             DeliveryReceiptValidation.RequireNonBlank(evidence.ArtifactId, "evidence artifact id", 256);
         _evidence.Add(evidence with
         {
             Digest = DeliveryReceiptValidation.CloneDigest(evidence.Digest),
-            Summary = _privacyProfile == DeliveryReceiptPrivacyProfile.HashOnly
+            Summary = evidence.Summary is null
+                || _privacyProfile == DeliveryReceiptPrivacyProfile.HashOnly
                 ? null
-                : evidence.Summary,
+                : ProfiledFreeText(evidence.Summary, "evidence summary"),
         });
         return this;
     }
@@ -229,7 +242,12 @@ public sealed class DeliveryChangeReceiptBuilder
         ArgumentNullException.ThrowIfNull(rule);
         EnsureCollectionCapacity(_attributionRules.Count, "attribution rules");
         ValidateAttributionRule(rule);
-        _attributionRules.Add(rule);
+        if (!_attributionRules.TryAdd(AttributionKey(rule), rule))
+        {
+            throw new DeliveryReceiptValidationException(
+                "ambiguous_attribution",
+                "More than one attribution rule identifies the same package change.");
+        }
         return this;
     }
 
@@ -260,7 +278,8 @@ public sealed class DeliveryChangeReceiptBuilder
         }
         var deliveredManifest = ValidateRequiredCleanDocx(_deliveredDocument);
         var semanticChangeSets = BuildSemanticChangeSetBindings(lineageValidation);
-        var packageChanges = BuildPackageChanges(_sourceManifest, deliveredManifest);
+        var packageChanges = BuildPackageChanges(
+            _sourceManifest, deliveredManifest, lineageValidation);
         if (FailOnUnexpectedChanges
             && packageChanges.Any(change =>
                 change.Disposition == DeliveryChangeDisposition.Unexpected))
@@ -353,11 +372,9 @@ public sealed class DeliveryChangeReceiptBuilder
         if (authoredChanges.GroupBy(value => new
             {
                 value.EntityKind,
-                value.ChangeKind,
                 value.EntityId,
                 value.PartUri,
                 value.Scope,
-                SourceDigest = value.SourceDigest.Value,
             }).Any(group => group.Count() != 1))
         {
             throw new DeliveryReceiptValidationException(
@@ -381,6 +398,13 @@ public sealed class DeliveryChangeReceiptBuilder
             ResultVersion = result.ResultVersion,
             BeforeDocument = contribution.BeforeDocument,
             AfterDocument = contribution.AfterDocument,
+            ReportedPackageContentDigest = result.PackageHash is null
+                ? null
+                : new VerificationDigest
+                {
+                    Algorithm = DeliveryReceiptValidation.Sha256Algorithm,
+                    Value = result.PackageHash,
+                },
             Operations = operations,
             AuthoredChanges = authoredChanges,
             Warnings = warnings,
@@ -403,7 +427,6 @@ public sealed class DeliveryChangeReceiptBuilder
             }
             propertyNames.Add(property.Name);
         }
-        propertyNames.Sort(StringComparer.Ordinal);
         return new DeliveryOperationEvidence
         {
             Index = index,
@@ -414,7 +437,7 @@ public sealed class DeliveryChangeReceiptBuilder
                 ? null
                 : propertyNames.Count == 0
                     ? "no argument properties"
-                    : $"{propertyNames.Count} argument properties: {string.Join(", ", propertyNames)}",
+                    : $"{propertyNames.Count} argument properties",
             Arguments = _privacyProfile == DeliveryReceiptPrivacyProfile.FullEvidence
                 ? operation.Arguments.Clone()
                 : null,
@@ -463,7 +486,9 @@ public sealed class DeliveryChangeReceiptBuilder
         {
             ResultDigest = DeliveryReceiptCanonicalJson.Digest(canonical),
             Success = result.Success,
-            ErrorCode = result.Error?.Code.ToString(),
+            ErrorCode = result.Error is null
+                ? null
+                : DocxSessionJson.EnumToSnake(result.Error.Code),
             ErrorMessage = result.Error is null
                 ? null
                 : TextEvidence(result.Error.Message, "structured edit error"),
@@ -695,8 +720,7 @@ public sealed class DeliveryChangeReceiptBuilder
             .ThenBy(change => change.ChangeKind)
             .ThenBy(change => change.EntityId, StringComparer.Ordinal)
             .ThenBy(change => change.PartUri, StringComparer.Ordinal)
-            .ThenBy(change => change.Scope, StringComparer.Ordinal)
-            .ThenBy(change => change.SourceDigest.Value, StringComparer.Ordinal);
+            .ThenBy(change => change.Scope, StringComparer.Ordinal);
     }
 
     private static void AddAuthoredChanges<T>(
@@ -726,9 +750,30 @@ public sealed class DeliveryChangeReceiptBuilder
             SourceDigest = DeliveryReceiptCanonicalJson.Digest(canonical.Bytes),
             Author = revision.Author,
             Date = revision.Date,
+            DateUtc = revision.DateUtc,
             Type = revision.Type,
+            Family = revision.Family,
             PartUri = revision.PartUri,
             Scope = revision.Scope,
+            AnchorId = revision.AnchorId,
+            ResolutionStatus = revision.ResolutionStatus,
+            Diagnostic = revision.Diagnostic is null
+                ? null
+                : new DeliveryAuthoredDiagnostic
+                {
+                    Code = DeliveryReceiptValidation.RequireNonBlank(
+                        revision.Diagnostic.Code, "revision diagnostic code", 1024),
+                    Message = TextEvidence(
+                        revision.Diagnostic.Message, "revision diagnostic message"),
+                },
+            ConstituentIds = revision.ConstituentIds
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray(),
+            ConstituentKeys = revision.ConstituentKeys
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray(),
             AffectedAnchorIds = revision.AffectedAnchors.Select(anchor => anchor.Id)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(value => value, StringComparer.Ordinal)
@@ -861,6 +906,7 @@ public sealed class DeliveryChangeReceiptBuilder
             input.MediaType, "artifact media type", 512);
         var path = DeliveryReceiptValidation.NormalizeRelativePath(input.RelativePath);
         DeliveryReceiptValidation.ValidateOptionalDigest(input.PageMapDigest, "artifact page-map digest");
+        ValidateInputDocument(input.Document);
         if (input.RendererFingerprint is not null)
             DeliveryReceiptValidation.RequireNonBlank(
                 input.RendererFingerprint, "renderer fingerprint", 4096);
@@ -946,8 +992,10 @@ public sealed class DeliveryChangeReceiptBuilder
             Role = input.Role,
             MediaType = mediaType,
             Availability = input.Availability,
-            UnavailableReason = DeliveryReceiptValidation.RequireNonBlank(
-                input.UnavailableReason, "artifact unavailable reason", 4096),
+            UnavailableReason = ProfiledFreeText(
+                DeliveryReceiptValidation.RequireNonBlank(
+                    input.UnavailableReason, "artifact unavailable reason", 4096),
+                "artifact unavailable reason"),
             RelativePath = path,
             DocumentVersion = input.Document?.DocumentVersion,
             PackageDigest = DeliveryReceiptValidation.CloneOptionalDigest(
@@ -956,6 +1004,61 @@ public sealed class DeliveryChangeReceiptBuilder
             PageMapDigest = DeliveryReceiptValidation.CloneOptionalDigest(input.PageMapDigest),
         };
     }
+
+    private static void ValidateInputDocument(DeliveryDocumentIdentity? document)
+    {
+        if (document is null)
+            return;
+        DeliveryReceiptValidation.ValidatePortableNonNegativeInteger(
+            document.DocumentVersion, "invalid_document_version", "Artifact document version");
+        DeliveryReceiptValidation.RequireNonBlank(
+            document.PackageKind, "artifact package kind", 256);
+        if (!string.Equals(document.PackageKind, "opc", StringComparison.Ordinal))
+        {
+            throw new DeliveryReceiptValidationException(
+                "not_wordprocessing_package", "Artifact document must be an OPC package.");
+        }
+        DeliveryReceiptValidation.RequireOpcMainDocumentUri(
+            document.MainDocumentUri, "artifact main document URI");
+        if (!DeliveryPackageManifestAdapter.IsSupportedSchema(document.PackageManifestSchema))
+        {
+            throw new DeliveryReceiptValidationException(
+                "unsupported_package_manifest", "Artifact package-manifest schema is unsupported.");
+        }
+        DeliveryReceiptValidation.ValidateDigest(
+            document.RawPackageBytesDigest, "artifact package digest");
+        DeliveryReceiptValidation.ValidateOptionalDigest(
+            document.OrderedOpcContentDigest, "artifact content digest");
+        DeliveryReceiptValidation.ValidateOptionalDigest(
+            document.NormalizedSemanticDigest, "artifact semantic digest");
+    }
+
+    private static PackageManifest CloneManifest(PackageManifest manifest) => manifest with
+    {
+        RawPackageBytesDigest = DeliveryReceiptValidation.CloneDigest(
+            manifest.RawPackageBytesDigest),
+        OrderedOpcContentDigest = DeliveryReceiptValidation.CloneOptionalDigest(
+            manifest.OrderedOpcContentDigest),
+        NormalizedSemanticDigest = DeliveryReceiptValidation.CloneOptionalDigest(
+            manifest.NormalizedSemanticDigest),
+        Entries = manifest.Entries.Select(entry => entry with
+        {
+            RawBytesDigest = DeliveryReceiptValidation.CloneOptionalDigest(entry.RawBytesDigest),
+            NormalizedXmlDigest = DeliveryReceiptValidation.CloneOptionalDigest(
+                entry.NormalizedXmlDigest),
+        }).ToArray(),
+        ContentTypes = manifest.ContentTypes.Select(value => value with { }).ToArray(),
+        Relationships = manifest.Relationships.Select(value => value with { }).ToArray(),
+        Facts = manifest.Facts with
+        {
+            Revisions = manifest.Facts.Revisions with { },
+            Annotations = manifest.Facts.Annotations with { },
+        },
+        Findings = manifest.Findings.Select(finding => finding with
+        {
+            Location = finding.Location is null ? null : finding.Location with { },
+        }).ToArray(),
+    };
 
     private IReadOnlyList<DeliveryLineageEvent> MaterializeLineage()
     {
@@ -1097,23 +1200,20 @@ public sealed class DeliveryChangeReceiptBuilder
 
     private IReadOnlyList<DeliveryPackageChange> BuildPackageChanges(
         PackageManifest before,
-        PackageManifest after)
+        PackageManifest after,
+        DeliveryLineageValidationResult lineageValidation)
     {
-        return DeliveryPackageManifestAdapter.Compare(before, after)
-            .Select(candidate => BuildPackageChange(candidate))
+        return DeliveryPackageManifestAdapter.Compare(
+                before, after, _limits.MaxCollectionItems)
+            .Select(candidate => BuildPackageChange(candidate, lineageValidation))
             .ToArray();
     }
 
-    private DeliveryPackageChange BuildPackageChange(DeliveryPackageChangeObservation candidate)
+    private DeliveryPackageChange BuildPackageChange(
+        DeliveryPackageChangeObservation candidate,
+        DeliveryLineageValidationResult lineageValidation)
     {
-        var matching = _attributionRules.Where(rule => Matches(rule, candidate)).ToArray();
-        if (matching.Length > 1)
-        {
-            throw new DeliveryReceiptValidationException(
-                "ambiguous_attribution",
-                "More than one attribution rule matches the same package change.");
-        }
-        var rule = matching.SingleOrDefault();
+        _attributionRules.TryGetValue(AttributionKey(candidate), out var rule);
         if (rule is not null && rule.TransactionEntryId is not null)
         {
             if (!_entriesById.TryGetValue(rule.TransactionEntryId, out var entry))
@@ -1128,6 +1228,12 @@ public sealed class DeliveryChangeReceiptBuilder
                 throw new DeliveryReceiptValidationException(
                     "invalid_attribution_transaction",
                     "Package-change attribution must reference a committed transaction.");
+            }
+            if (!lineageValidation.AppliedTransactionEntryIds.Contains(entry.EntryId))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "unapplied_attribution_transaction",
+                    "Package-change attribution must reference a transaction applied in the delivered state.");
             }
             if (rule.RequestedOperationIndex is { } index
                 && (index < 0 || index >= entry.Operations.Count))
@@ -1152,17 +1258,13 @@ public sealed class DeliveryChangeReceiptBuilder
         var afterEvidence = candidate.After is null
             ? null
             : TextEvidence(candidate.After, "result package record");
-        var identity = new
-        {
-            after = afterEvidence?.Digest,
-            before = beforeEvidence?.Digest,
-            kind = candidate.Kind.ToString(),
-            location = candidate.Location,
-        };
         return new DeliveryPackageChange
         {
-            ChangeId = DeliveryReceiptCanonicalJson.DigestToken(
-                DeliveryReceiptCanonicalJson.SerializeCanonical(identity)),
+            ChangeId = DeliveryReceiptIdentity.PackageChangeId(
+                candidate.Kind,
+                candidate.Location,
+                beforeEvidence?.Digest,
+                afterEvidence?.Digest),
             Kind = candidate.Kind,
             Location = candidate.Location,
             Before = beforeEvidence,
@@ -1170,7 +1272,9 @@ public sealed class DeliveryChangeReceiptBuilder
             Disposition = rule?.Disposition ?? DeliveryChangeDisposition.Unexpected,
             TransactionEntryId = rule?.TransactionEntryId,
             RequestedOperationIndex = rule?.RequestedOperationIndex,
-            Derivation = rule?.Derivation,
+            Derivation = rule?.Derivation is null
+                ? null
+                : ProfiledFreeText(rule.Derivation, "derivation"),
         };
     }
 
@@ -1214,10 +1318,39 @@ public sealed class DeliveryChangeReceiptBuilder
                         "evidence_artifact_role_mismatch",
                         $"Evidence '{reference.Kind}' requires artifact role '{expectedRole}'.");
                 }
+                if (!_artifactBytes.TryGetValue(artifactId, out var evidenceBytes)
+                    || !IsExactEvidence(reference.Kind, evidenceBytes))
+                {
+                    throw new DeliveryReceiptValidationException(
+                        "invalid_evidence_artifact",
+                        $"Evidence artifact '{artifactId}' is not the exact canonical owner contract.");
+                }
             }
             yield return reference;
         }
     }
+
+    private static string ExpectedEvidenceSchema(DeliveryEvidenceKind kind) => kind switch
+    {
+        DeliveryEvidenceKind.ValidationResult => DeliverableVerificationResult.SchemaId,
+        DeliveryEvidenceKind.RedlineReversibility => RedlineReversibilityProof.SchemaId,
+        DeliveryEvidenceKind.SemanticChangeSet =>
+            throw new DeliveryReceiptValidationException(
+                "semantic_evidence_requires_typed_factory",
+                "Semantic evidence must use the typed #457 binding."),
+        _ => throw new DeliveryReceiptValidationException(
+            "unknown_evidence_kind", "Unknown evidence kind."),
+    };
+
+    private static bool IsExactEvidence(DeliveryEvidenceKind kind, ReadOnlySpan<byte> bytes) =>
+        kind switch
+        {
+            DeliveryEvidenceKind.ValidationResult =>
+                DeliverableVerificationResult.IsExactCanonical(bytes),
+            DeliveryEvidenceKind.RedlineReversibility =>
+                RedlineReversibilityProof.IsExactCanonical(bytes),
+            _ => false,
+        };
 
     private DeliveryPageCitation BuildPageCitation(
         DeliveryPageCitationInput input,
@@ -1225,8 +1358,10 @@ public sealed class DeliveryChangeReceiptBuilder
     {
         ArgumentNullException.ThrowIfNull(input.Citation);
         ArgumentNullException.ThrowIfNull(input.Document);
-        if (!lineageValidation.ReachableDocuments.Any(document =>
-                DeliveryReceiptLineageValidator.DocumentEquals(document, input.Document)))
+        if (!lineageValidation.ReachableDocumentsByVersion.TryGetValue(
+                input.Document.DocumentVersion, out var reachableDocument)
+            || !DeliveryReceiptLineageValidator.DocumentEquals(
+                reachableDocument, input.Document))
         {
             throw new DeliveryReceiptValidationException(
                 "unreachable_citation_document",
@@ -1245,12 +1380,11 @@ public sealed class DeliveryChangeReceiptBuilder
                 "missing_citation_artifact", $"Citation artifact '{artifactId}' is unavailable.");
         }
         if (artifact.Role is not (DeliveryArtifactRole.Pdf
-            or DeliveryArtifactRole.PageImage
             or DeliveryArtifactRole.RenderReport))
         {
             throw new DeliveryReceiptValidationException(
                 "non_paginated_citation_artifact",
-                "Page citations require PDF, page-image, or paginated render-report evidence.");
+                "Page citations require PDF or paginated render-report evidence.");
         }
         if (!_artifacts.TryGetValue(pageMapArtifactId, out var pageMapArtifact)
             || pageMapArtifact.Availability != DeliveryArtifactAvailability.Available
@@ -1315,34 +1449,42 @@ public sealed class DeliveryChangeReceiptBuilder
                 "citation_page_map_binding_mismatch",
                 "Page-map artifact does not match the citation document and renderer.");
         }
-        PageMap pageMap;
-        try
+        if (!_validatedPageMaps.TryGetValue(pageMapArtifactId, out var pageMap))
         {
-            // Canonicalization is only a strict UTF-8/JSON/duplicate-property gate. The artifact
-            // digest above remains over the renderer's original bytes.
-            _ = DeliveryReceiptCanonicalJson.CanonicalizeBounded(
-                pageMapBytes, _limits, _limits.MaxPageMapBytes,
-                "page_map_resource_limit");
-            pageMap = DocxSessionJson.ParsePageMap(Encoding.UTF8.GetString(pageMapBytes));
+            try
+            {
+                // Canonicalization is only a strict UTF-8/JSON/duplicate-property gate. The
+                // artifact digest above remains over the renderer's original bytes.
+                _ = DeliveryReceiptCanonicalJson.CanonicalizeBounded(
+                    pageMapBytes, _limits, _limits.MaxPageMapBytes,
+                    "page_map_resource_limit");
+                pageMap = DocxSessionJson.ParsePageMap(Encoding.UTF8.GetString(pageMapBytes));
+            }
+            catch (Exception ex) when (ex is JsonException or FormatException)
+            {
+                throw new DeliveryReceiptValidationException(
+                    "invalid_page_map_artifact",
+                    $"Page-map artifact '{pageMapArtifactId}' is not a valid PageMap: {ex.Message}");
+            }
+            var mapValidation = PageMapContract.ValidatePortable(
+                pageMap, input.Document.DocumentVersion, rendererFingerprint);
+            if (!mapValidation.Success)
+            {
+                throw new DeliveryReceiptValidationException(
+                    "invalid_page_map_artifact",
+                    mapValidation.Message ?? "Page-map artifact is invalid.");
+            }
+            _validatedPageMaps.Add(pageMapArtifactId, pageMap);
         }
-        catch (Exception ex) when (ex is JsonException or FormatException)
+        var projectionKey = (pageMapArtifactId, citation.AnchorId);
+        if (!_pageMapProjections.TryGetValue(projectionKey, out var projected))
         {
-            throw new DeliveryReceiptValidationException(
-                "invalid_page_map_artifact",
-                $"Page-map artifact '{pageMapArtifactId}' is not a valid PageMap: {ex.Message}");
+            projected = PageMapContract.ProjectCitation(
+                pageMap,
+                citation.AnchorId,
+                new PageCitationRequest(citation.DocumentVersion, rendererFingerprint));
+            _pageMapProjections.Add(projectionKey, projected);
         }
-        var mapValidation = PageMapContract.ValidatePortable(
-            pageMap, input.Document.DocumentVersion, rendererFingerprint);
-        if (!mapValidation.Success)
-        {
-            throw new DeliveryReceiptValidationException(
-                "invalid_page_map_artifact",
-                mapValidation.Message ?? "Page-map artifact is invalid.");
-        }
-        var projected = PageMapContract.ProjectCitation(
-            pageMap,
-            citation.AnchorId,
-            new PageCitationRequest(citation.DocumentVersion, rendererFingerprint));
         if (projected.Availability != PageMapAvailability.Available
             || !CitationCoordinatesEqual(citation, projected))
         {
@@ -1398,16 +1540,40 @@ public sealed class DeliveryChangeReceiptBuilder
         };
     }
 
+    private string ProfiledFreeText(string value, string label)
+    {
+        var digest = DeliveryReceiptCanonicalJson.DigestToken(Encoding.UTF8.GetBytes(value));
+        return _privacyProfile switch
+        {
+            DeliveryReceiptPrivacyProfile.HashOnly => digest,
+            DeliveryReceiptPrivacyProfile.HashAndSummary =>
+                $"{label}; {value.Length.ToString(CultureInfo.InvariantCulture)} characters; {digest}",
+            _ => value,
+        };
+    }
+
     private static DeliveryObjectChange ObjectChange(
         DeliveryObjectChangeKind changeKind,
-        Anchor anchor) => new()
+        Anchor anchor)
     {
-        ChangeKind = changeKind,
-        AnchorId = anchor.Id,
-        Kind = anchor.Kind,
-        Scope = anchor.Scope,
-        Unid = anchor.Unid,
-    };
+        var id = DeliveryReceiptValidation.RequireNonBlank(anchor.Id, "anchor id", 4096);
+        var kind = DeliveryReceiptValidation.RequireNonBlank(anchor.Kind, "anchor kind", 256);
+        var scope = DeliveryReceiptValidation.RequireNonBlank(anchor.Scope, "anchor scope", 1024);
+        var unid = DeliveryReceiptValidation.RequireNonBlank(anchor.Unid, "anchor unid", 2048);
+        if (!string.Equals(id, $"{kind}:{scope}:{unid}", StringComparison.Ordinal))
+        {
+            throw new DeliveryReceiptValidationException(
+                "invalid_anchor_id", "Changed anchor identity is inconsistent.");
+        }
+        return new DeliveryObjectChange
+        {
+            ChangeKind = changeKind,
+            AnchorId = id,
+            Kind = kind,
+            Scope = scope,
+            Unid = unid,
+        };
+    }
 
     private static DeliveryTransactionStatus TransactionStatus(MutationBatchResult result)
     {
@@ -1428,20 +1594,7 @@ public sealed class DeliveryChangeReceiptBuilder
         MutationBatchMode mode,
         IReadOnlyList<DeliveryNormalizedOperation> operations)
     {
-        var shape = new
-        {
-            mode = mode == MutationBatchMode.Atomic ? "atomic" : "bestEffort",
-            operations = operations.Select(operation => new
-            {
-                action = operation.Action,
-                arguments = operation.Arguments,
-                tool = operation.Tool,
-            }).ToArray(),
-        };
-        return DeliveryReceiptCanonicalJson.DigestToken(
-            DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
-                shape, _limits, _limits.MaxReceiptJsonBytes,
-                "receipt_resource_limit"));
+        return DeliveryReceiptIdentity.RequestFingerprint(mode, operations, _limits);
     }
 
     private static string DeriveEntryId(
@@ -1453,30 +1606,22 @@ public sealed class DeliveryChangeReceiptBuilder
         string? transactionId,
         long sequence)
     {
-        var identity = new
-        {
-            afterPackage = after.RawPackageBytesDigest,
-            baseVersion,
-            beforePackage = before.RawPackageBytesDigest,
+        return DeliveryReceiptIdentity.TransactionEntryId(
             requestFingerprint,
+            before,
+            after,
+            baseVersion,
             resultVersion,
             transactionId,
-            transactionSequence = transactionId is null ? sequence : (long?)null,
-        };
-        return DeliveryReceiptCanonicalJson.DigestToken(
-            DeliveryReceiptCanonicalJson.SerializeCanonical(identity));
+            sequence);
     }
 
     private bool TransactionEvidenceEquals(
         DeliveryTransactionEntry left,
         DeliveryTransactionEntry right)
     {
-        var leftBytes = DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
-            left with { Sequence = 0 }, _limits, _limits.MaxReceiptJsonBytes,
-            "receipt_resource_limit");
-        var rightBytes = DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
-            right with { Sequence = 0 }, _limits, _limits.MaxReceiptJsonBytes,
-            "receipt_resource_limit");
+        var leftBytes = DeliveryReceiptIdentity.TransactionEvidence(left, _limits);
+        var rightBytes = DeliveryReceiptIdentity.TransactionEvidence(right, _limits);
         return leftBytes.AsSpan().SequenceEqual(rightBytes);
     }
 
@@ -1572,6 +1717,7 @@ public sealed class DeliveryChangeReceiptBuilder
             budget.String(revision.Type, "revision type");
             budget.String(revision.Author, "revision author");
             budget.String(revision.Date, "revision date");
+            budget.String(revision.DateUtc, "revision UTC date");
             budget.String(revision.Text, "revision text");
             budget.String(revision.PartUri, "revision part URI");
             budget.String(revision.Scope, "revision scope");
@@ -1579,6 +1725,9 @@ public sealed class DeliveryChangeReceiptBuilder
             budget.AddItems(revision.ConstituentIds.Count, "revision constituent ids");
             foreach (var id in revision.ConstituentIds)
                 budget.String(id, "revision constituent id");
+            budget.AddItems(revision.ConstituentKeys.Count, "revision constituent keys");
+            foreach (var key in revision.ConstituentKeys)
+                budget.String(key, "revision constituent key");
             budget.AddItems(revision.AffectedAnchors.Count, "revision affected anchors");
             foreach (var anchor in revision.AffectedAnchors)
                 AccountAnchor(anchor, budget);
@@ -1872,16 +2021,19 @@ public sealed class DeliveryChangeReceiptBuilder
             "receipt_resource_limit"), element);
     }
 
-    private static bool Matches(
-        DeliveryChangeAttributionRule rule,
-        DeliveryPackageChangeObservation candidate) =>
-        rule.Kind == candidate.Kind
-        && (rule.EntryUri is null || string.Equals(
-            rule.EntryUri, candidate.Location.EntryUri, StringComparison.Ordinal))
-        && (rule.OwnerUri is null || string.Equals(
-            rule.OwnerUri, candidate.Location.OwnerUri, StringComparison.Ordinal))
-        && (rule.RelationshipId is null || string.Equals(
-            rule.RelationshipId, candidate.Location.RelationshipId, StringComparison.Ordinal));
+    private static DeliveryAttributionKey AttributionKey(
+        DeliveryChangeAttributionRule rule) => new(
+            rule.Kind,
+            rule.EntryUri ?? string.Empty,
+            rule.OwnerUri ?? string.Empty,
+            rule.RelationshipId ?? string.Empty);
+
+    private static DeliveryAttributionKey AttributionKey(
+        DeliveryPackageChangeObservation candidate) => new(
+            candidate.Kind,
+            candidate.Location.EntryUri ?? string.Empty,
+            candidate.Location.OwnerUri ?? string.Empty,
+            candidate.Location.RelationshipId ?? string.Empty);
 
     private static void ValidateAttributionRule(DeliveryChangeAttributionRule rule)
     {
@@ -1922,4 +2074,10 @@ public sealed class DeliveryChangeReceiptBuilder
         if (rule.Disposition == DeliveryChangeDisposition.Derived)
             DeliveryReceiptValidation.RequireNonBlank(rule.Derivation, "derivation", 4096);
     }
+
+    private readonly record struct DeliveryAttributionKey(
+        DeliveryPackageChangeKind Kind,
+        string EntryUri,
+        string OwnerUri,
+        string RelationshipId);
 }

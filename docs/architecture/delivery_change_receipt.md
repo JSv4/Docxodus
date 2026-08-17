@@ -17,12 +17,16 @@ A delivery receipt connects these immutable inputs:
 - optional review DOCX, HTML, PDF, image, and report artifacts;
 - optional page citations produced for a specific document version and render fingerprint.
 
-The schema identifier is
-`https://docxodus.dev/schemas/verification/delivery-change-receipt/v1`. A receipt is an
-envelope containing a canonical `payload` and a `receiptDigest`. The digest is SHA-256
-over the canonical UTF-8 JSON bytes of `payload`; it never includes itself. Every artifact
-record carries its own SHA-256 and byte length. Verification first checks the receipt
-digest, then independently hashes each available artifact.
+The exact writer contract is published as
+[delivery-change-receipt-v1.schema.json](../schemas/delivery-change-receipt-v1.schema.json),
+with schema identifier
+`https://docxodus.dev/schemas/verification/delivery-change-receipt/v1`. The schema is the
+closed projection emitted by the v1 writer: nullable members are present as JSON `null` and
+collections are present as arrays, including when empty. A receipt is an envelope containing a
+canonical `payload` and a `receiptDigest`. The digest is SHA-256 over the canonical UTF-8 JSON
+bytes of `payload`; it never includes itself. Every available artifact record carries its own
+SHA-256 and byte length. Verification first checks the receipt digest, then independently hashes
+each available artifact.
 
 The receipt proves what the supplied evidence says and whether referenced bytes still
 match. It is not a signature or an assertion about who controlled a transaction ID.
@@ -31,16 +35,32 @@ this schema.
 
 ## Deterministic payload
 
-Canonical serialization uses UTF-8 without a byte-order mark, camel-case property names,
-JSON strings for enums, no insignificant whitespace, and invariant number formatting.
-Every JSON object's properties are sorted by property name using ordinal comparison;
-duplicate property names are rejected. Map-shaped inputs are emitted as arrays sorted by
-their stable key. Sets, findings, package parts, relationships, artifacts, and warnings have
-defined ordinal sort keys. Operation, transaction, and lineage-event arrays retain their
-meaningful execution order. Transactions and undo/redo events also carry one contiguous shared
-`sequence`, so chronology remains unambiguous when an edit follows an undo. Numeric spelling
-inside arbitrary operation or external-evidence extensions is retained in v1, while core receipt
-numbers use the invariant spelling emitted by `System.Text.Json`.
+Canonical serialization uses UTF-8 without a byte-order mark, camel-case property names, JSON
+strings for enums, and no insignificant whitespace. String escaping is exactly
+`Utf8JsonWriter` with `JavaScriptEncoder.Default`, not `UnsafeRelaxedJsonEscaping`: JSON quote,
+backslash, and control-character escapes use the writer's fixed spellings; HTML-sensitive Basic
+Latin characters are escaped; and non-Basic-Latin scalar values are emitted as uppercase
+`\uXXXX` UTF-16 code-unit escapes, using a surrogate pair for a supplementary scalar. `/` is not
+escaped. These escape spellings, including escape-letter and hexadecimal case, are hash-significant.
+
+Every JSON object's properties are sorted with `string.CompareOrdinal`. This is a comparison of
+UTF-16 code units with no culture, case folding, or Unicode normalization; it is not UTF-8 byte or
+Unicode scalar-value order. Duplicate property names are rejected. Map-shaped inputs are emitted
+as arrays sorted by their stable key. Sets, findings, package parts, relationships, artifacts, and
+warnings have defined ordinal sort keys. Operation, transaction, and lineage-event arrays retain
+their meaningful execution order. Transactions and undo/redo events also carry one contiguous
+shared `sequence`, so chronology remains unambiguous when an edit follows an undo.
+
+Core receipt numbers use the exact invariant token emitted by the typed `System.Text.Json` writer.
+When raw JSON is verified, every known numeric field must have the same raw token as that typed
+projection: numerically equivalent alternatives such as `1.0` or `1e0` do not match core `1`.
+Conversely, a numeric value in an unknown `fullEvidence` extension is grammar-validated and then
+written with its original `JsonElement.GetRawText()` token; it is never rounded through `double`.
+Different extension lexemes therefore produce different receipt digests even when they denote the
+same mathematical value. All typed non-negative 64-bit receipt integers (versions, sequences,
+artifact lengths, and citation versions) are restricted to the JavaScript-portable interval
+0 through 9007199254740991 inclusive. Typed 32-bit counts and indexes retain their narrower CLR
+range. The portable-integer rule does not reinterpret arbitrary extension-number tokens.
 
 Portable verification enforces the builder's order, not merely the enclosing payload digest.
 Rehashing a payload after reordering or duplicating artifacts, package changes, citations,
@@ -64,8 +84,12 @@ The entry records:
 - atomic or best-effort mode, base version, result version, and outcome;
 - normalized operations in step order, including tool, action, and normalized arguments;
 - resolved anchors, scopes, created/modified/removed objects, and structured errors;
-- revision, comment, and annotation changes with their recorded authorship;
+- revision, comment, and annotation changes with their recorded authorship; revision evidence also
+  retains the owner record's `dateUtc`, family, part URI, scope, primary anchor, resolution status,
+  privacy-aware diagnostic, constituent IDs, and constituent keys;
 - before/after package identities and the semantic changes attributable to the entry;
+- the batch result's optional reported package-content digest as evidence distinct from the
+  independently manifested before/after package identities;
 - warnings emitted by the transaction and evidence collectors.
 
 Operation arguments are data, never embedded JSON fragments. Normalization rejects
@@ -81,9 +105,13 @@ prefix `succeededRolledBack`, the failing operation `failedRolledBack`, and the 
 verifier recomputes operation success from every nested result and checks execution/rollback state
 against the transaction outcome. A best-effort transaction is partially committed only when it
 retained at least one successful step and at least one failed step. Isolated previews may be
-recorded as predictions, but they are distinct from committed entries and cannot advance the
-delivered-document lineage. Because `MutationBatchStepResult.Success` is the conjunction of its
-results, an executed step may legitimately return an empty result list: it is retained as a
+recorded as predictions, but they are distinct from committed entries. A prediction must start at
+the current receipt state. Its after identity may equal its before identity, or it may report a
+version exactly one greater when at least one operation succeeded. Either way, prediction output is
+not registered as reachable, does not become current, does not enter the applied stack, and does
+not clear or populate the redo stack; the next real transition must still start from the
+pre-prediction current identity. Because `MutationBatchStepResult.Success` is the conjunction of
+its results, an executed step may legitimately return an empty result list: it is retained as a
 successful no-op operation rather than being rewritten as an internal failure.
 
 Undo and redo do not masquerade as new user-requested changes. They are ordered lineage
@@ -114,26 +142,44 @@ instead of receiving a second receipt-level disposition. Unknown parts and relat
 to `unexpected`. Receipt success can be configured to fail on any unexpected package change
 without altering the underlying evidence.
 
-Every package-change record carrying an operation index, including `derived`, must identify an
-operation that succeeded and was not rolled back in a committed or partially committed
-transaction. This is especially important for partially committed best-effort batches: a failed
-step remains visible as evidence, but it cannot be used to explain bytes retained by a different
-successful step. `derived` changes may reference their originating transaction and operation with
-an explicit derivation.
+Every package-change record that names a transaction must name a committed or partially committed
+transaction that remains on the final applied stack. If it also carries an operation index,
+including for `derived`, that operation must have succeeded and must not have been rolled back. An
+undone transaction cannot explain delivered bytes; a subsequent valid redo makes it applied again.
+This is especially important for partially committed best-effort batches: a failed step remains
+visible as evidence, but it cannot be used to explain bytes retained by a different successful
+step. `derived` changes may reference their originating transaction and operation with an explicit
+derivation.
 
 ## Privacy profiles
 
-The default `hashAndSummary` profile includes stable locations, change kinds, counts,
-digests, and bounded summaries, but excludes full paragraph, comment, and operation text.
-`hashOnly` retains identities, dispositions, counts, and hashes with text summaries omitted.
-`fullEvidence` includes complete normalized operation, result, authorship, and package-record
-values. Semantic evidence remains an exact, separately hashed artifact owned by the #457 schema;
-the receipt records only its root schema/version/count and transition binding.
+The default `hashAndSummary` profile includes stable locations, change kinds, counts, digests, and
+bounded structural summaries, but excludes full paragraph, comment, and operation text. `hashOnly`
+retains identities, dispositions, counts, and hashes with `DeliveryTextEvidence.summary` and
+`.value` both null. `hashAndSummary` requires a non-textual summary and a null value;
+`fullEvidence` requires both the summary and exact value. `characterCount` is .NET `string.Length`,
+so it counts UTF-16 code units rather than Unicode scalar values or grapheme clusters; `digest` is
+SHA-256 over the exact UTF-8 encoding of the value.
+
+Revision diagnostic messages use `DeliveryTextEvidence`. Free-form derivations,
+artifact-unavailable reasons, and supplied evidence summaries use the same profile boundary.
+`hashOnly` stores only `sha256:<64 lower-case hex>`; `hashAndSummary` stores
+`<field label>; <UTF-16 count> characters; sha256:<64 lower-case hex>`; and `fullEvidence` stores
+the original text. Operation argument summaries are structural property counts and full argument,
+result, authored, and package-record values occur only in `fullEvidence`. Semantic evidence remains
+an exact, separately hashed artifact owned by the #457 schema; the receipt records only its root
+schema/version/count and transition binding.
 
 The selected profile is part of the canonical payload. Redaction is performed before
-canonicalization and hashing; removing text from an already generated receipt invalidates
-its digest. Artifact hashes remain available in every profile, so a verifier with authorized
-access to the bytes can validate them independently.
+canonicalization and hashing; removing text from an already generated receipt invalidates its
+digest. Artifact hashes remain available in every profile, so a verifier with authorized access to
+the bytes can validate them independently. The JSON verifier authenticates the raw payload before
+deserialization and then requires every known field, array position, value, and core numeric lexeme
+to equal the typed projection. Unknown optional object properties may be retained only for
+`fullEvidence`. They are rejected recursively for `hashOnly` and `hashAndSummary`, because an
+otherwise ignored field could smuggle free text past redaction. The published schema describes the
+closed output of the current writer; this `fullEvidence` reader allowance is the additive
+compatibility rule, not permission for the v1 writer to invent fields.
 
 ## Page citations and render evidence
 
@@ -149,11 +195,13 @@ A page citation is accepted only with all of:
 
 Receipt construction rejects a citation whose version, package identity, renderer
 fingerprint, or artifact reference does not match the supplied delivery evidence. A
-continuous HTML projection is not promoted to a page citation. Both construction and portable
-verification strictly parse the referenced PageMap bytes, reject malformed UTF-8 and duplicate
-JSON properties, apply the same portable geometry/order/story contract used by
-`DocxSession.RegisterPageMap`, and project the citation again. The PageMap artifact digest remains
-over the renderer's original bytes; JSON canonicalization is only an input-validity gate.
+continuous HTML projection is not promoted to a page citation. A `PageImage` artifact is also
+excluded: the citation's render artifact must have role `Pdf` or `RenderReport`, even when an image
+represents one physical page. Both construction and portable verification strictly parse the
+referenced PageMap bytes, reject malformed UTF-8 and duplicate JSON properties, apply the same
+portable geometry/order/story contract used by `DocxSession.RegisterPageMap`, and project the
+citation again. The PageMap artifact digest remains over the renderer's original bytes; JSON
+canonicalization is only an input-validity gate.
 
 ## Artifact records
 
@@ -170,23 +218,27 @@ package manifest, validation result, reversibility proof, and render reports. An
 artifact has an explicit reason and no digest or byte length; it cannot masquerade as an output
 that was produced and verified.
 
-The caller's manifest is not accepted as proof of the clean output. Construction and verification
-both run the corrected bounded package-manifest generator over the exact supplied bytes, require a
-valid OPC package with a WordprocessingML main document, and compare the recomputed raw, ordered
-OPC-content, and normalized-semantic identities with `DeliveredDocument`. The recomputed clean
-manifest's entries and relationships—not a same-identity caller inventory—are also the sole source
-for delivered package-change observations. Semantic JSON receives
+The caller's manifest is not accepted as proof of the clean output. Every document identity carries
+the package-manifest schema and the manifest's `MainDocumentUri`, in addition to its raw and
+optional content/semantic digests. Construction and verification both run the corrected bounded
+package-manifest generator over the exact supplied clean bytes, require a valid OPC package with a
+WordprocessingML main document, and compare the recomputed package kind, schema, main-document URI,
+raw digest, ordered OPC-content digest, and normalized-semantic digest with `DeliveredDocument`.
+The recomputed clean manifest's entries and relationships—not a same-identity caller inventory—are
+also the sole source for delivered package-change observations. Semantic JSON receives
 the analogous treatment: the complete closed #457 type graph is reconstructed and accepted only
 when serializing it again produces byte-for-byte identical canonical evidence. Whitespace,
 property-order variants, partial objects, null nested records, and merely rehashed substitutes fail.
 
 The source side has a narrower trust boundary in v1: receipt construction receives a source
 manifest but not the exact source DOCX bytes, so it cannot independently reparse that inventory.
-Source entries and relationships are therefore trusted caller input and affect the reported deltas
-even when the manifest carries a genuine raw-package digest identity. Consumers must not treat that
-digest alone as authentication of the supplied source inventory. A future exact-source artifact
-registration can make source and delivered inventory verification symmetric without changing this
-v1 behavior.
+The adapter does require the supported manifest schema/version, `IsValid`, package kind `opc`, and
+a nonblank Word main-document URI before creating `SourceDocument`; those are caller-attested
+manifest facts, not a reparse of source bytes. Source entries and relationships are therefore
+trusted caller input and affect the reported deltas even when the manifest carries a genuine
+raw-package digest identity. Consumers must not treat that digest or main-document URI alone as
+authentication of the supplied source inventory. A future exact-source artifact registration can
+make source and delivered inventory verification symmetric without changing this v1 behavior.
 
 The receipt envelope is stored beside those outputs and is verified by hashing its canonical
 payload. Artifact records are covered by that digest, and their bytes are covered by their
@@ -247,20 +299,29 @@ inspection additionally uses `CleanDocxManifestOptions`, whose corrected #493 pa
 authoritative. Verification accepts overrides through `DeliveryReceiptVerificationOptions` and
 returns stable `*_resource_limit` findings rather than parsing, decoding, copying, or hashing past
 the applicable boundary. Object-based construction and verification preflight aggregate collection,
-escaped-string, semantic-value depth, and serialized-byte budgets before canonicalization; receipt,
+escaped-string, semantic-value depth, and serialized-byte budgets before canonicalization. Receipt,
 canonical JSON, and exact typed-semantic writers additionally write through hard-capped streams, so
 the configured ceiling is enforced while bytes are produced rather than after an oversized buffer
-already exists. JSON arrays are charged one item at a time before recursion, and object properties
-are charged before entering the capped sortable property list; neither path first materializes an
-untrusted collection merely to learn that it exceeds the item budget.
+already exists. Every public receipt-output path is bounded: the overloads without limits use
+validated defaults; the overloads accepting `DeliveryReceiptLimits` cap payload and compact
+envelope output at that instance's `MaxReceiptJsonBytes`; and an indented request re-emits the
+already canonical envelope through a second stream capped at the same configured value. Indented
+output may therefore be rejected even when its compact equivalent fits. JSON arrays are charged one
+item at a time before recursion, and object properties are charged before entering the capped
+sortable property list; neither path first materializes an untrusted collection merely to learn
+that it exceeds the item budget.
 
 ## Schema evolution
 
-Within `payload`, schema v1 is additive: readers must ignore unknown optional fields but must
-reject unknown enum values, digest algorithms, required evidence kinds, and major versions.
-The envelope itself has exactly `payload` and `receiptDigest`, preventing unprotected top-level
-extensions. A new required field, changed canonicalization rule, changed field meaning, or
-changed default attribution/privacy behavior requires v2 and a new schema identifier.
+The checked-in v1 schema is the exact, closed writer projection. Portable readers provide a narrow
+additive rule only for a `fullEvidence` payload: after authenticating the raw payload, they may
+ignore unknown optional object properties but still require the complete known projection with
+exact values and array lengths. Redacted profiles reject unknown properties recursively. All
+profiles reject unknown enum values, digest algorithms, required evidence kinds, and major
+versions. The envelope itself has exactly `payload` and `receiptDigest`, preventing unprotected
+top-level extensions. A new required field, changed canonicalization or escaping rule, changed
+field meaning, or changed default attribution/privacy behavior requires v2 and a new schema
+identifier.
 
 Writers always emit one exact schema identifier and canonicalization profile. Readers may
 migrate an older payload to an internal model for display, but verification uses the rules
@@ -278,11 +339,16 @@ relationship comparator. The sole #457 seam accepts a typed `SemanticChangeSet`,
 `ToCanonicalUtf8Bytes()` output, and records the public schema, version, and count. Portable
 verification strictly reconstructs the full nested #457 change/value schema and requires its exact
 canonical bytes; receipt fields are not used as a substitute for that owner-defined contract.
-The receipt hash-addresses exact validation and reversibility artifacts from #463/#464 when
-supplied, using their owner-defined schema identifiers and canonical bytes without flattening or
-renaming their fields. This generic evidence boundary verifies artifact identity and availability;
-it does not reinterpret the owner's pass/fail decision. A consumer that needs to trust that
-decision must parse and verify the artifact with the #463 or #464 contract. The delivery operation
-in #465 assembles artifacts and invokes the receipt builder; receipt construction itself performs
-no document mutation,
-rendering, ZIP inspection, or OOXML parsing outside those shared components.
+The receipt hash-addresses validation and reversibility artifacts from #463/#464 without flattening
+or renaming their fields. Their generic references require the exact owner schema identifier. When
+a reference names an artifact, the artifact must be available under the owner-specific role, its
+digest must equal the reference digest, and both construction and portable verification require the
+supplied bytes to be the owner's exact canonical serialization: the full closed owner type is
+deserialized and reserialized, so whitespace, reordered properties, omitted/null substitutions,
+unknown fields, and merely rehashed lookalikes fail. A reference without an artifact ID is only a
+schema-and-digest assertion because no owner bytes are present to parse. In either case, the receipt
+does not reinterpret the owner's pass/fail or success decision; a consumer that relies on that
+decision applies the #463 or #464 semantics to the authenticated owner object. The delivery
+operation in #465 assembles artifacts and invokes the receipt builder; receipt construction itself
+performs no document mutation, rendering, ZIP inspection, or OOXML parsing outside those shared
+components.

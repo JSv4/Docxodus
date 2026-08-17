@@ -233,6 +233,23 @@ public sealed record RedlineReversibilityProof
         this, (indented ? JsonOptions.Indented : JsonOptions.Canonical)
             .RedlineReversibilityProof);
 
+    internal static bool IsExactCanonical(ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            var proof = JsonSerializer.Deserialize(
+                bytes, JsonOptions.Canonical.RedlineReversibilityProof);
+            return proof is not null
+                && string.Equals(proof.Schema, SchemaId, StringComparison.Ordinal)
+                && proof.SchemaVersion == 1
+                && bytes.SequenceEqual(proof.ToCanonicalUtf8Bytes());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static class JsonOptions
     {
         internal static readonly RedlineReversibilityProofJsonContext Canonical =
