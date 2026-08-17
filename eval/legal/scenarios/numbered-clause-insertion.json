@@ -28,9 +28,10 @@
     { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
   ],
   "baseline": {
     "executor": "scripted-session-v1",
@@ -40,7 +41,7 @@
   },
   "invariants": [
     { "id": "assignment-clause-present", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[.//w:t[contains(., 'Assignment. Neither party')]]" }, "operator": "equals", "expected": 1 },
-    { "id": "assignment-style-and-numbering", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[w:pPr/w:pStyle[@w:val='AgreementClause'] and w:pPr/w:numPr][.//w:t[contains(., 'Assignment.')]]" }, "operator": "equals", "expected": 1 },
+    { "id": "assignment-style-and-numbering", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:p[w:pPr/w:pStyle[@w:val='AgreementClause'] and w:pPr/w:numPr/w:numId[@w:val='42']][.//w:t[contains(., 'Assignment.')]]" }, "operator": "equals", "expected": 1 },
     { "id": "numbering-definition-retained", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/numbering.xml", "xpath": "//w:num[@w:numId='42']" }, "operator": "equals", "expected": 1 }
   ],
   "changeBudget": {

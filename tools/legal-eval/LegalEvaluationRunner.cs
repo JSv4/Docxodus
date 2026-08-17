@@ -62,6 +62,10 @@ public sealed class LegalEvaluationRunner
     {
         output ??= TextWriter.Null;
         error ??= TextWriter.Null;
+        if (options.Subset is not ("fast" or "full"))
+            throw new ScenarioValidationException("subset must be 'fast' or 'full'");
+        if (!Enum.IsDefined(options.RenderMode))
+            throw new ScenarioValidationException("render mode is unsupported");
         var artifactRoot = NormalizeDirectoryPath(options.ArtifactRoot);
         var corpusPath = ResolveCanonicalPath(options.CorpusPath);
         var corpusRoot = Path.GetDirectoryName(corpusPath)
@@ -130,9 +134,9 @@ public sealed class LegalEvaluationRunner
                 EvaluationScore? planningScore = null;
                 if (engineScore.Status == "passed" && candidateDirectory is not null)
                 {
-                    var candidatePath = Path.Combine(
+                    var requestedCandidatePath = Path.Combine(
                         candidateDirectory, scenario.Id + ".docx");
-                    if (!File.Exists(candidatePath))
+                    if (!File.Exists(requestedCandidatePath))
                     {
                         var reason = $"candidate file is absent: {scenario.Id}.docx in the requested candidate directory";
                         planningScore = FailureScore(scenario, baseline!, ScoreKind.ModelPlanning,
@@ -141,8 +145,11 @@ public sealed class LegalEvaluationRunner
                     }
                     else
                     {
+                        string? candidatePath = null;
                         try
                         {
+                            candidatePath = RequireRegularCandidatePath(
+                                candidateDirectory, requestedCandidatePath);
                             var candidate = ReadCandidateBounded(candidatePath);
                             planningScore = scorer.Score(scenario, baseline!, candidate,
                                 ScoreKind.ModelPlanning, stagingRoot, options.RenderMode);
@@ -150,9 +157,12 @@ public sealed class LegalEvaluationRunner
                         catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
                         {
                             byte[]? candidate = null;
-                            try { candidate = ReadCandidateBounded(candidatePath); }
-                            catch (Exception readException)
-                                when (DeliverableExceptionBoundary.IsRecoverable(readException)) { }
+                            if (candidatePath is not null)
+                            {
+                                try { candidate = ReadCandidateBounded(candidatePath); }
+                                catch (Exception readException)
+                                    when (DeliverableExceptionBoundary.IsRecoverable(readException)) { }
+                            }
                             planningScore = FailureScore(scenario, baseline!, ScoreKind.ModelPlanning,
                                 stagingRoot, ExceptionDetail(exception,
                                     candidateDirectory, stagingRoot, artifactRoot),
@@ -530,7 +540,7 @@ public sealed class LegalEvaluationRunner
     /// appends any not-yet-existing suffix. This makes scope checks reflect the location that a
     /// later create or replace operation will actually address.
     /// </summary>
-    private static string ResolveCanonicalPath(string path)
+    internal static string ResolveCanonicalPath(string path)
     {
         var remainingComponents = 1024;
         var remainingLinks = 64;
@@ -616,9 +626,13 @@ public sealed class LegalEvaluationRunner
         var scorer = new EvaluationScorer(artifactRenderer: artifactRenderer);
         var evidence = scorer.AnalyzeAvailableEvidence(
             baseline, candidate, kind, reason,
-            inputSafetyError, candidateSafetyError, expectedSafetyError);
+            inputSafetyError, candidateSafetyError, expectedSafetyError) with
+        {
+            ScenarioContractJson = EvaluationScorer.ScenarioContract(scenario),
+        };
         var publication = ArtifactWriter.WriteIncomplete(directory, scenario.Id, kind, status,
-            metrics, scenario.ExpectedOutputs, reason, baseline.OperationLog, evidence,
+            metrics, scenario.ExpectedOutputs, reason,
+            EvaluationScorer.PublishedOperationLog(kind, baseline.OperationLog), evidence,
             rendererSafe ? renderMode : ArtifactRenderMode.Disabled,
             allowExternalRenderer: rendererSafe && kind == ScoreKind.EngineBaseline,
             artifactRenderer: artifactRenderer,
@@ -650,13 +664,30 @@ public sealed class LegalEvaluationRunner
         return new BaselineExecution(input, input, expected,
             EvaluationScorer.ErrorEnvelope("semantic-diff", "failed", detail),
             SemanticDiffSucceeded: false,
-            new[] { $"baseline-initialization-failed:{exception.GetType().Name}:{exception.Message}" },
+            new[] { $"baseline-initialization-failed:{detail}" },
             Succeeded: false,
-            Error: exception.ToString());
+            Error: detail);
     }
 
     private static byte[] ReadCandidateBounded(string path) =>
         ReadFileBounded(path, MaximumCandidateBytes, "candidate");
+
+    private static string RequireRegularCandidatePath(
+        string candidateDirectory, string requestedPath)
+    {
+        var info = new FileInfo(requestedPath);
+        if (!info.Exists)
+            throw new ScenarioValidationException("candidate file disappeared before it was read");
+        if (info.LinkTarget is not null
+            || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new ScenarioValidationException(
+                "candidate files must be regular files, not symbolic links or reparse points");
+        var canonical = ResolveCanonicalPath(requestedPath);
+        if (!IsUnderRoot(candidateDirectory, canonical))
+            throw new ScenarioValidationException(
+                "candidate file escapes the requested candidate directory");
+        return canonical;
+    }
 
     private static byte[] ReadFileBounded(string path, long maximumBytes, string label)
     {
@@ -697,6 +728,7 @@ public sealed class LegalEvaluationRunner
             artifact.Status,
             path = artifact.Path is null ? null : RelativeUnderRoot(artifactRoot, artifact.Path),
             artifact.MediaType,
+            artifact.Role,
             artifact.SizeBytes,
             artifact.Sha256,
             artifact.UnavailableReason,
@@ -773,7 +805,7 @@ public sealed class LegalEvaluationRunner
         var temporary = path + ".stage-" + Guid.NewGuid().ToString("N");
         try
         {
-            File.WriteAllText(temporary, value,
+            File.WriteAllText(temporary, NormalizeLineEndings(value),
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.Move(temporary, path, overwrite: true);
         }
@@ -785,6 +817,9 @@ public sealed class LegalEvaluationRunner
 
     private static string KindName(ScoreKind kind) =>
         kind == ScoreKind.EngineBaseline ? "engine-baseline" : "model-planning";
+
+    private static string NormalizeLineEndings(string value) =>
+        value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static string ExceptionDetail(Exception exception, params string?[] roots)
     {
@@ -804,7 +839,9 @@ public sealed class LegalEvaluationRunner
     }
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     private sealed record StagedExternalReport(string DestinationPath, string TemporaryPath);
 

@@ -48,6 +48,9 @@ public sealed class BaselineExecutionException : Exception
 public sealed class ScriptedBaselineExecutor
 {
     private const string FixedRevisionDate = "2026-01-15T12:00:00Z";
+    private const int MaximumSemanticChanges = 4096;
+    private const long MaximumRetainedTraceBytes = 512L * 1024 * 1024;
+    private const long MaximumRetainedReviewerBytes = 512L * 1024 * 1024;
     private static readonly DateTime FixedRevisionTimestamp = DateTime.Parse(
         FixedRevisionDate, null,
         System.Globalization.DateTimeStyles.AdjustToUniversal
@@ -70,12 +73,16 @@ public sealed class ScriptedBaselineExecutor
             "evaluation input");
         var expected = ReadBounded(scenario.ExpectedDocument.Path,
             _packageValidator.MaximumPackageBytes, "pinned expected document");
+        RequireSha256(input, scenario.Fixture.SourceSha256, "evaluation input");
+        RequireSha256(expected, scenario.ExpectedDocument.SourceSha256,
+            "pinned expected document");
         var inputManifest = _packageValidator.Inspect(input, "evaluation input");
         var expectedManifest = _packageValidator.Inspect(expected, "pinned expected document");
         var current = input;
         var outputManifest = inputManifest;
         var log = new List<string>();
         var traces = new List<BaselineTransactionTrace>();
+        long retainedTraceBytes = 0;
         string? error = null;
         string? receiptUnavailableReason = null;
         DocxSession? session = null;
@@ -120,6 +127,10 @@ public sealed class ScriptedBaselineExecutor
                     var after = session.Save(false);
                     var afterManifest = _packageValidator.Inspect(
                         after, $"scripted operation {index} output");
+                    retainedTraceBytes = checked(retainedTraceBytes + before.Length + after.Length);
+                    if (retainedTraceBytes > MaximumRetainedTraceBytes)
+                        throw new ScenarioValidationException(
+                            $"baseline transaction evidence exceeds the {MaximumRetainedTraceBytes}-byte limit");
                     traces.Add(new BaselineTransactionTrace(
                         before, after, beforeManifest, afterManifest, result, normalized));
                     current = after;
@@ -148,9 +159,14 @@ public sealed class ScriptedBaselineExecutor
         var semanticDiffSucceeded = false;
         try
         {
-            semanticDiff = SemanticDiff.Compare(
+            semanticDiff = SemanticDiff.CompareBounded(
                 new WmlDocument("input.docx", input),
-                new WmlDocument("output.docx", current)).ToCanonicalJson();
+                new WmlDocument("output.docx", current),
+                new SemanticDiffOptions
+                {
+                    PackageOptions = _packageValidator.ManifestOptions,
+                },
+                MaximumSemanticChanges).ToCanonicalJson();
             semanticDiffSucceeded = true;
         }
         catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
@@ -197,11 +213,13 @@ public sealed class ScriptedBaselineExecutor
         var find = String(operation, "find");
         var replacement = String(operation, "replace");
         var anchor = UniqueAnchor(session, locator);
-        if (Bool(operation, "tracked", false))
-        {
-            session.SetTrackedChanges(TrackedChangeMode.RenderInline);
-            session.SetRevisionAuthor(String(operation, "author"));
-        }
+        var tracked = Bool(operation, "tracked", false);
+        // Tracked-change settings are session state. Set both branches explicitly so a tracked
+        // replacement cannot leak into a later operation that requested an ordinary edit.
+        session.SetTrackedChanges(tracked
+            ? TrackedChangeMode.RenderInline
+            : TrackedChangeMode.Accept);
+        session.SetRevisionAuthor(tracked ? String(operation, "author") : null);
         var replacements = session.ReplaceTextRange(anchor, find, replacement);
         if (replacements.Count != 1)
             throw new InvalidOperationException(
@@ -301,6 +319,7 @@ public sealed class ScriptedBaselineExecutor
         if (reviewersNode.Count < 2)
             throw new ScenarioValidationException("consolidate requires at least two reviewer documents");
         var reviewers = new List<DocxDiffReviewer>();
+        long retainedReviewerBytes = 0;
         foreach (var reviewerNode in reviewersNode)
         {
             var reviewer = reviewerNode as JsonObject
@@ -316,10 +335,15 @@ public sealed class ScriptedBaselineExecutor
             if (results.Any(result => !result.Success))
                 throw new InvalidOperationException(
                     $"consolidate reviewer operation failed: {results.First(result => !result.Success).Error?.Message}");
+            var reviewerBytes = session.Save(false);
+            retainedReviewerBytes = checked(retainedReviewerBytes + reviewerBytes.Length);
+            if (retainedReviewerBytes > MaximumRetainedReviewerBytes)
+                throw new ScenarioValidationException(
+                    $"consolidation reviewer evidence exceeds the {MaximumRetainedReviewerBytes}-byte limit");
             reviewers.Add(new DocxDiffReviewer
             {
                 Author = String(reviewer, "author"),
-                Document = new WmlDocument("reviewer.docx", session.Save(false)),
+                Document = new WmlDocument("reviewer.docx", reviewerBytes),
             });
         }
         var settings = new DocxDiffConsolidateSettings
@@ -379,6 +403,15 @@ public sealed class ScriptedBaselineExecutor
         return bytes;
     }
 
+    private static void RequireSha256(byte[] bytes, string expected, string label)
+    {
+        var actual = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            throw new ScenarioValidationException(
+                $"{label} changed after corpus validation: expected SHA-256 {expected}, actual {actual}");
+    }
+
     private static string ExceptionDetail(Exception exception)
     {
         var detail = $"{exception.GetType().Name}: {exception.Message}";
@@ -389,5 +422,7 @@ public sealed class ScriptedBaselineExecutor
     }
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 }

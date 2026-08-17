@@ -158,6 +158,7 @@ public sealed record ArtifactRecord(
 
 internal sealed record EvaluationEvidence
 {
+    public string? ScenarioContractJson { get; init; }
     public byte[]? Input { get; init; }
     public byte[]? Candidate { get; init; }
     public byte[]? Expected { get; init; }

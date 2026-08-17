@@ -3,17 +3,31 @@
   "$id": "https://docxodus.dev/schemas/legal-eval/scenario-2.0.json",
   "title": "Docxodus deterministic legal workflow scenario",
   "$defs": {
+    "boundedNonBlankString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "corpusRelativePath": {
+      "allOf": [
+        { "$ref": "#/$defs/boundedNonBlankString" },
+        {
+          "pattern": "^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
+        }
+      ]
+    },
     "replaceTextOperation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["op", "anchorContains", "find", "replace"],
       "properties": {
         "op": { "const": "replaceText" },
-        "anchorContains": { "type": "string", "minLength": 1 },
-        "find": { "type": "string", "minLength": 1 },
-        "replace": { "type": "string", "minLength": 1 },
+        "anchorContains": { "$ref": "#/$defs/boundedNonBlankString" },
+        "find": { "$ref": "#/$defs/boundedNonBlankString" },
+        "replace": { "$ref": "#/$defs/boundedNonBlankString" },
         "tracked": { "type": "boolean" },
-        "author": { "type": "string", "minLength": 1 }
+        "author": { "$ref": "#/$defs/boundedNonBlankString" }
       },
       "allOf": [
         {
@@ -28,10 +42,10 @@
       "required": ["op", "row", "column", "text"],
       "properties": {
         "op": { "const": "replaceTableCell" },
-        "author": { "type": "string", "minLength": 1 },
-        "row": { "type": "integer", "minimum": 0 },
-        "column": { "type": "integer", "minimum": 0 },
-        "text": { "type": "string", "minLength": 1 }
+        "author": { "$ref": "#/$defs/boundedNonBlankString" },
+        "row": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "column": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "text": { "$ref": "#/$defs/boundedNonBlankString" }
       }
     },
     "reviewerOperation": {
@@ -50,6 +64,20 @@
         }
       ]
     },
+    "consolidateOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "reviewers"],
+      "properties": {
+        "op": { "const": "consolidate" },
+        "reviewers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/reviewerOperation" }
+        }
+      }
+    },
     "operation": {
       "oneOf": [
         { "$ref": "#/$defs/replaceTextOperation" },
@@ -60,9 +88,9 @@
           "required": ["op", "afterAnchorContains", "styleId", "text"],
           "properties": {
             "op": { "const": "insertNumberedClause" },
-            "afterAnchorContains": { "type": "string", "minLength": 1 },
-            "styleId": { "type": "string", "minLength": 1 },
-            "text": { "type": "string", "minLength": 1 }
+            "afterAnchorContains": { "$ref": "#/$defs/boundedNonBlankString" },
+            "styleId": { "$ref": "#/$defs/boundedNonBlankString" },
+            "text": { "$ref": "#/$defs/boundedNonBlankString" }
           }
         },
         {
@@ -71,17 +99,17 @@
           "required": ["op", "anchorContains", "spanText", "author", "comment", "initials", "replyAuthor", "reply", "replyInitials", "footnote", "bookmark", "linkText"],
           "properties": {
             "op": { "const": "addReviewBundle" },
-            "anchorContains": { "type": "string", "minLength": 1 },
-            "spanText": { "type": "string", "minLength": 1 },
-            "author": { "type": "string", "minLength": 1 },
-            "comment": { "type": "string", "minLength": 1 },
-            "initials": { "type": "string", "minLength": 1 },
-            "replyAuthor": { "type": "string", "minLength": 1 },
-            "reply": { "type": "string", "minLength": 1 },
-            "replyInitials": { "type": "string", "minLength": 1 },
-            "footnote": { "type": "string", "minLength": 1 },
-            "bookmark": { "type": "string", "minLength": 1 },
-            "linkText": { "type": "string", "minLength": 1 }
+            "anchorContains": { "$ref": "#/$defs/boundedNonBlankString" },
+            "spanText": { "$ref": "#/$defs/boundedNonBlankString" },
+            "author": { "$ref": "#/$defs/boundedNonBlankString" },
+            "comment": { "$ref": "#/$defs/boundedNonBlankString" },
+            "initials": { "$ref": "#/$defs/boundedNonBlankString" },
+            "replyAuthor": { "$ref": "#/$defs/boundedNonBlankString" },
+            "reply": { "$ref": "#/$defs/boundedNonBlankString" },
+            "replyInitials": { "$ref": "#/$defs/boundedNonBlankString" },
+            "footnote": { "$ref": "#/$defs/boundedNonBlankString" },
+            "bookmark": { "$ref": "#/$defs/boundedNonBlankString" },
+            "linkText": { "$ref": "#/$defs/boundedNonBlankString" }
           }
         },
         {
@@ -90,31 +118,87 @@
           "required": ["op", "tag", "text"],
           "properties": {
             "op": { "const": "fillContentControl" },
-            "tag": { "type": "string", "minLength": 1 },
-            "text": { "type": "string", "minLength": 1 }
+            "tag": { "$ref": "#/$defs/boundedNonBlankString" },
+            "text": { "$ref": "#/$defs/boundedNonBlankString" }
+          }
+        },
+        { "$ref": "#/$defs/consolidateOperation" }
+      ]
+    },
+    "expectedOutput": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "candidate-docx" },
+            "mediaType": { "const": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+            "role": { "const": "candidate" }, "required": { "const": true }
           }
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["op", "reviewers"],
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
           "properties": {
-            "op": { "const": "consolidate" },
-            "reviewers": {
-              "type": "array",
-              "minItems": 2,
-              "maxItems": 256,
-              "items": { "$ref": "#/$defs/reviewerOperation" }
-            }
+            "id": { "const": "semantic-change-set-v1" }, "mediaType": { "const": "application/json" },
+            "role": { "const": "verification" }, "required": { "const": true }
           }
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["op", "message"],
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
           "properties": {
-            "op": { "const": "failForTest" },
-            "message": { "type": "string", "minLength": 1 }
+            "id": { "const": "after-html" }, "mediaType": { "const": "text/html" },
+            "role": { "const": "review" }, "required": { "const": true }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "redline-docx" },
+            "mediaType": { "const": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+            "role": { "const": "review" }, "required": { "const": true }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "candidate-pdf" }, "mediaType": { "const": "application/pdf" },
+            "role": { "const": "review" }, "required": { "const": false }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "candidate-package-manifest-v1" }, "mediaType": { "const": "application/json" },
+            "role": { "const": "verification" }, "required": { "const": true }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "deliverable-verification-v1" }, "mediaType": { "const": "application/json" },
+            "role": { "const": "verification" }, "required": { "const": true }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "delivery-change-receipt-v1" }, "mediaType": { "const": "application/json" },
+            "role": { "const": "verification" }, "required": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "mediaType", "role", "required"],
+          "properties": {
+            "id": { "const": "redline-reversibility-proof-v1" }, "mediaType": { "const": "application/json" },
+            "role": { "const": "verification" }, "required": { "type": "boolean" }
           }
         }
       ]
@@ -124,7 +208,7 @@
       "additionalProperties": false,
       "required": ["id", "metric", "deterministic", "probe", "operator", "expected"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/boundedNonBlankString" },
         "metric": { "enum": ["task_completion", "target_precision", "unintended_change", "document_validity", "redline_reversibility", "rendering_regression"] },
         "deterministic": { "const": true },
         "probe": {
@@ -135,8 +219,8 @@
               "required": ["kind", "part", "xpath"],
               "properties": {
                 "kind": { "const": "xmlCount" },
-                "part": { "type": "string", "pattern": "^/" },
-                "xpath": { "type": "string", "minLength": 1 }
+                "part": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^/" },
+                "xpath": { "$ref": "#/$defs/boundedNonBlankString" }
               }
             },
             {
@@ -145,13 +229,13 @@
               "required": ["kind", "text"],
               "properties": {
                 "kind": { "const": "textCount" },
-                "text": { "type": "string", "minLength": 1 }
+                "text": { "$ref": "#/$defs/boundedNonBlankString" }
               }
             }
           ]
         },
         "operator": { "enum": ["equals", "atLeast"] },
-        "expected": { "type": "number" }
+        "expected": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
       }
     },
     "partExistsInvariant": {
@@ -159,7 +243,7 @@
       "additionalProperties": false,
       "required": ["id", "metric", "deterministic", "probe", "operator", "expected"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/boundedNonBlankString" },
         "metric": { "enum": ["task_completion", "target_precision", "unintended_change", "document_validity", "redline_reversibility", "rendering_regression"] },
         "deterministic": { "const": true },
         "probe": {
@@ -168,7 +252,7 @@
           "required": ["kind", "part"],
           "properties": {
             "kind": { "const": "partExists" },
-            "part": { "type": "string", "pattern": "^/" }
+            "part": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^/" }
           }
         },
         "operator": { "const": "equals" },
@@ -194,16 +278,22 @@
   ],
   "properties": {
     "schemaVersion": { "const": "2.0" },
-    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" },
-    "title": { "type": "string", "minLength": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+      "not": { "enum": ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"] }
+    },
+    "title": { "$ref": "#/$defs/boundedNonBlankString" },
     "tier": { "enum": ["fast", "full"] },
     "fixture": {
       "type": "object",
       "additionalProperties": false,
       "required": ["path", "provenanceId", "sourceSha256"],
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "provenanceId": { "type": "string", "minLength": 1 },
+        "path": { "$ref": "#/$defs/corpusRelativePath" },
+        "provenanceId": { "$ref": "#/$defs/boundedNonBlankString" },
         "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
@@ -212,8 +302,8 @@
       "additionalProperties": false,
       "required": ["path", "provenanceId", "sourceSha256"],
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "provenanceId": { "type": "string", "minLength": 1 },
+        "path": { "$ref": "#/$defs/corpusRelativePath" },
+        "provenanceId": { "$ref": "#/$defs/boundedNonBlankString" },
         "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
@@ -222,12 +312,12 @@
       "additionalProperties": false,
       "required": ["text", "constraints"],
       "properties": {
-        "text": { "type": "string", "minLength": 1 },
+        "text": { "$ref": "#/$defs/boundedNonBlankString" },
         "constraints": {
           "type": "array",
           "minItems": 1,
           "maxItems": 256,
-          "items": { "type": "string", "minLength": 1 }
+          "items": { "$ref": "#/$defs/boundedNonBlankString" }
         }
       }
     },
@@ -247,38 +337,28 @@
           "required": ["applicability", "reason"],
           "properties": {
             "applicability": { "const": "notApplicable" },
-            "reason": { "type": "string", "minLength": 1, "maxLength": 16384 }
+            "reason": { "$ref": "#/$defs/boundedNonBlankString" }
           }
         }
       ]
     },
     "expectedOutputs": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 256,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "mediaType", "role", "required"],
-        "properties": {
-          "id": {
-            "enum": [
-              "candidate-docx",
-              "semantic-change-set-v1",
-              "after-html",
-              "redline-docx",
-              "candidate-pdf",
-              "candidate-package-manifest-v1",
-              "deliverable-verification-v1",
-              "delivery-change-receipt-v1",
-              "redline-reversibility-proof-v1"
-            ]
-          },
-          "mediaType": { "type": "string", "minLength": 1 },
-          "role": { "type": "string", "minLength": 1 },
-          "required": { "type": "boolean" }
-        }
-      }
+      "minItems": 9,
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/expectedOutput" },
+      "allOf": [
+        { "contains": { "properties": { "id": { "const": "candidate-docx" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "semantic-change-set-v1" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "after-html" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "redline-docx" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "candidate-pdf" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "candidate-package-manifest-v1" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "deliverable-verification-v1" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "delivery-change-receipt-v1" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "redline-reversibility-proof-v1" } }, "required": ["id"] } }
+      ]
     },
     "baseline": {
       "type": "object",
@@ -289,8 +369,14 @@
         "operations": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/operation" }
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/operation" },
+          "allOf": [
+            {
+              "if": { "contains": { "properties": { "op": { "const": "consolidate" } }, "required": ["op"] } },
+              "then": { "maxItems": 1 }
+            }
+          ]
         }
       }
     },
@@ -314,15 +400,92 @@
           "type": "array",
           "minItems": 1,
           "maxItems": 256,
-          "items": { "type": "string", "pattern": "^/(?!.*\\.\\.)" }
+          "items": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^/(?!.*\\.\\.)" }
         },
         "allowedRelationshipOwners": {
           "type": "array",
           "maxItems": 256,
-          "items": { "type": "string", "pattern": "^/(?!.*\\.\\.)" }
+          "items": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^/(?!.*\\.\\.)" }
         },
-        "maximumChangedAnchors": { "type": "integer", "minimum": 0 }
+        "maximumChangedAnchors": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "baseline": {
+            "properties": {
+              "operations": {
+                "contains": { "properties": { "op": { "const": "consolidate" } }, "required": ["op"] }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "expectedOutputs": {
+            "contains": {
+              "properties": {
+                "id": { "const": "delivery-change-receipt-v1" },
+                "required": { "const": false }
+              },
+              "required": ["id", "required"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "expectedOutputs": {
+            "contains": {
+              "properties": {
+                "id": { "const": "delivery-change-receipt-v1" },
+                "required": { "const": true }
+              },
+              "required": ["id", "required"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "redlineReversibility": {
+            "properties": { "applicability": { "const": "required" } },
+            "required": ["applicability"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "expectedOutputs": {
+            "contains": {
+              "properties": {
+                "id": { "const": "redline-reversibility-proof-v1" },
+                "required": { "const": true }
+              },
+              "required": ["id", "required"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "expectedOutputs": {
+            "contains": {
+              "properties": {
+                "id": { "const": "redline-reversibility-proof-v1" },
+                "required": { "const": false }
+              },
+              "required": ["id", "required"]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

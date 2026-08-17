@@ -27,6 +27,7 @@ internal static class ArtifactWriter
     private const long MaximumRenderedAggregateBytes = 512L * 1024 * 1024;
     private const int MaximumRasterDimension = 16_384;
     private const long MaximumRasterPixels = 50_000_000;
+    private const long MaximumRasterAggregatePixels = 250_000_000;
     private const string DocxMediaType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -87,6 +88,11 @@ internal static class ArtifactWriter
         {
             var records = new List<ArtifactRecord>();
             var reason = evidence.FailureReason ?? "evidence was unavailable";
+            records.Add(evidence.ScenarioContractJson is null
+                ? Unavailable("scenario-contract-v1", reason,
+                    "application/json", "provenance")
+                : WriteText(stage, "scenario-contract-v1.json", "scenario-contract-v1",
+                    evidence.ScenarioContractJson, "application/json", "provenance"));
             records.Add(WriteOptionalDocx(stage, "input.docx", "input-docx",
                 evidence.Input, reason, "source"));
             records.Add(WriteOptionalDocx(stage, "candidate.docx", "candidate-docx",
@@ -130,7 +136,9 @@ internal static class ArtifactWriter
         IReadOnlyList<string> operationLog,
         List<ArtifactRecord> records)
     {
-        var finalMetrics = metrics.Append(RequiredOutputMetric(expectedOutputs, records)).ToList();
+        RemoveUnpublishedFiles(directory, records);
+        var finalMetrics = metrics.Append(
+            RequiredOutputMetric(scoreKind, expectedOutputs, records)).ToList();
         var finalStatus = status == "incomplete"
             ? "incomplete"
             : finalMetrics.Any(value => value.Status == "failed") ? "failed" : "passed";
@@ -139,6 +147,9 @@ internal static class ArtifactWriter
             JsonSerializer.Serialize(new
             {
                 schemaVersion = "1.0",
+                traceSource = scoreKind == ScoreKind.EngineBaseline
+                    ? "scripted-session-v1 authoritative engine log"
+                    : "no model plan/tool trace was supplied; scripted engine operations are intentionally excluded",
                 operations = operationLog,
             }, JsonOptions), "application/json"));
         records.Add(WriteText(directory, "summary.md", "scenario-summary",
@@ -149,10 +160,16 @@ internal static class ArtifactWriter
     }
 
     private static MetricResult RequiredOutputMetric(
+        ScoreKind scoreKind,
         IReadOnlyList<ExpectedArtifact> expectedOutputs,
         IReadOnlyList<ArtifactRecord> artifacts)
     {
-        var required = expectedOutputs.Where(value => value.Required).ToList();
+        // A model candidate has no accepted plan/tool trace format yet. The corpus's receipt
+        // requirement is therefore an engine-baseline requirement, not permission to copy the
+        // scripted executor's trace onto an unrelated model candidate.
+        var required = expectedOutputs.Where(value => value.Required
+            && (scoreKind == ScoreKind.EngineBaseline
+                || value.Id != "delivery-change-receipt-v1")).ToList();
         var missing = required.Where(output => !artifacts.Any(artifact =>
                 artifact.Id == output.Id
                 && artifact.Status == "available"
@@ -244,7 +261,8 @@ internal static class ArtifactWriter
                 .Where(value => value.Key.StartsWith("transaction-semantic-change-set-",
                     StringComparison.Ordinal)).OrderBy(value => value.Key, StringComparer.Ordinal))
             {
-                records.Add(WriteBytes(directory, artifact.Key + ".json", artifact.Key,
+                records.Add(WriteBytes(directory,
+                    Path.Combine("receipt", artifact.Key + ".json"), artifact.Key,
                     artifact.Value, "application/json", "receipt-evidence"));
             }
         }
@@ -314,14 +332,17 @@ internal static class ArtifactWriter
         }
 
         artifactRenderer ??= new ExternalArtifactRenderer();
+        var rendererDirectory = Path.Combine(directory, "renderer");
+        Directory.CreateDirectory(rendererDirectory);
         long renderedBytes = 0;
+        long renderedPixels = 0;
 
         var documents = new[]
         {
-            (Prefix: "before", PdfId: "input-pdf", SourceName: "input.docx", Bytes: input),
-            (Prefix: "candidate", PdfId: "candidate-pdf", SourceName: "candidate.docx", Bytes: candidate),
-            (Prefix: "target", PdfId: "target-pdf", SourceName: "expected.docx", Bytes: expected),
-            (Prefix: "redline", PdfId: "redline-pdf", SourceName: "redline.docx", Bytes: redline),
+            (Prefix: "before", PdfId: "input-pdf", Bytes: input),
+            (Prefix: "candidate", PdfId: "candidate-pdf", Bytes: candidate),
+            (Prefix: "target", PdfId: "target-pdf", Bytes: expected),
+            (Prefix: "redline", PdfId: "redline-pdf", Bytes: redline),
         };
         var pages = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         foreach (var document in documents)
@@ -334,12 +355,39 @@ internal static class ArtifactWriter
                     $"{document.Prefix} DOCX is unavailable", "image/png", "review"));
                 continue;
             }
-            var sourcePath = Path.Combine(directory, document.SourceName);
-            var rendered = artifactRenderer.RenderDocument(
-                directory, sourcePath, document.Prefix);
-            var pdfPath = rendered.PdfPath is null
-                ? null
-                : RequireRenderedPath(directory, rendered.PdfPath);
+            // External renderers receive a private copy and a dedicated output directory. This
+            // keeps accidental renderer output collisions away from the authoritative DOCX and
+            // JSON evidence already written at the score root. The source copy is not registered
+            // and is removed before the inventory is finalized.
+            var sourcePath = Path.Combine(rendererDirectory, document.Prefix + "-source.docx");
+            File.WriteAllBytes(sourcePath, document.Bytes);
+            RenderedDocumentEvidence rendered;
+            string? pdfPath;
+            List<string> pagePaths;
+            try
+            {
+                rendered = artifactRenderer.RenderDocument(
+                    rendererDirectory, sourcePath, document.Prefix);
+                rendered = rendered with
+                {
+                    Error = NormalizeRendererDiagnostic(
+                        rendered.Error, rendererDirectory),
+                };
+                pdfPath = rendered.PdfPath is null
+                    ? null
+                    : RequireRenderedPath(rendererDirectory, rendered.PdfPath);
+                pagePaths = rendered.PagePaths
+                    .Select(value => RequireRenderedPath(rendererDirectory, value)).ToList();
+            }
+            catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
+            {
+                var rendererError = RendererError(exception, rendererDirectory);
+                records.Add(Unavailable(document.PdfId, rendererError,
+                    "application/pdf", "review"));
+                records.Add(Unavailable($"{document.Prefix}-visual", rendererError,
+                    "image/png", "review"));
+                continue;
+            }
             if (pdfPath is null || !File.Exists(pdfPath))
             {
                 records.Add(Unavailable(document.PdfId,
@@ -358,8 +406,6 @@ internal static class ArtifactWriter
                 continue;
             }
             records.Add(Record(document.PdfId, pdfPath, "application/pdf", "review"));
-            var pagePaths = rendered.PagePaths
-                .Select(value => RequireRenderedPath(directory, value)).ToList();
             if (pagePaths.Count > MaximumRenderedPages)
             {
                 records.Add(Unavailable($"{document.Prefix}-visual",
@@ -378,6 +424,13 @@ internal static class ArtifactWriter
             {
                 records.Add(Unavailable($"{document.Prefix}-visual",
                     pageLimitError, "image/png", "review"));
+                continue;
+            }
+            if (!TryIncludeRasterFiles(
+                    pagePaths, ref renderedPixels, out var rasterLimitError))
+            {
+                records.Add(Unavailable($"{document.Prefix}-visual",
+                    rasterLimitError, "image/png", "review"));
                 continue;
             }
             pages[document.Prefix] = pagePaths;
@@ -399,9 +452,27 @@ internal static class ArtifactWriter
                 "rendering_regression", "failed",
                 "candidate and target raster pages were not both available", 0);
         }
-        var diff = artifactRenderer.ComparePages(directory, targetPages, candidatePages);
-        var diffPaths = diff.Paths
-            .Select(value => RequireRenderedPath(directory, value)).ToList();
+        RenderedVisualDiffEvidence diff;
+        List<string> diffPaths;
+        try
+        {
+            diff = artifactRenderer.ComparePages(
+                rendererDirectory, targetPages, candidatePages);
+            diff = diff with
+            {
+                Error = NormalizeRendererDiagnostic(diff.Error, rendererDirectory),
+            };
+            diffPaths = diff.Paths
+                .Select(value => RequireRenderedPath(rendererDirectory, value)).ToList();
+        }
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
+        {
+            var rendererError = RendererError(exception, rendererDirectory);
+            records.Add(Unavailable("candidate-target-visual-diff",
+                rendererError, "image/png", "review"));
+            return new MetricResult("rendering-regression.visual-layout",
+                "rendering_regression", "failed", rendererError, 0);
+        }
         if (diffPaths.Count > MaximumRenderedPages)
         {
             records.Add(Unavailable("candidate-target-visual-diff",
@@ -425,6 +496,13 @@ internal static class ArtifactWriter
                 diffLimitError, "image/png", "review"));
             return new MetricResult("rendering-regression.visual-layout",
                 "rendering_regression", "failed", diffLimitError, 0);
+        }
+        if (!TryIncludeRasterFiles(diffPaths, ref renderedPixels, out var diffRasterError))
+        {
+            records.Add(Unavailable("candidate-target-visual-diff",
+                diffRasterError, "image/png", "review"));
+            return new MetricResult("rendering-regression.visual-layout",
+                "rendering_regression", "failed", diffRasterError, 0);
         }
         for (var index = 0; index < diffPaths.Count; index++)
             records.Add(Record($"candidate-target-visual-diff-page-{index + 1:D3}",
@@ -455,6 +533,7 @@ internal static class ArtifactWriter
         ref long aggregateBytes,
         out string error)
     {
+        var candidateAggregate = aggregateBytes;
         foreach (var path in paths)
         {
             var info = new FileInfo(path);
@@ -469,16 +548,48 @@ internal static class ArtifactWriter
                     + $"{MaximumRenderedFileBytes}-byte per-file limit";
                 return false;
             }
-            if (info.Length > MaximumRenderedAggregateBytes - aggregateBytes)
+            if (info.Length > MaximumRenderedAggregateBytes - candidateAggregate)
             {
                 error = $"renderer output exceeds the "
                     + $"{MaximumRenderedAggregateBytes}-byte aggregate limit";
                 return false;
             }
-            aggregateBytes += info.Length;
+            candidateAggregate += info.Length;
         }
+        aggregateBytes = candidateAggregate;
         error = string.Empty;
         return true;
+    }
+
+    private static bool TryIncludeRasterFiles(
+        IReadOnlyList<string> paths,
+        ref long aggregatePixels,
+        out string error)
+    {
+        try
+        {
+            var candidateAggregate = aggregatePixels;
+            foreach (var path in paths)
+            {
+                var dimensions = ReadPngDimensions(path);
+                var pixels = checked((long)dimensions.Width * dimensions.Height);
+                if (pixels > MaximumRasterAggregatePixels - candidateAggregate)
+                {
+                    error = $"renderer output exceeds the "
+                        + $"{MaximumRasterAggregatePixels}-pixel aggregate limit";
+                    return false;
+                }
+                candidateAggregate += pixels;
+            }
+            aggregatePixels = candidateAggregate;
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
+        {
+            error = exception.Message;
+            return false;
+        }
     }
 
     private static (string? Path, string? Diagnostics) TryLibreOfficePdf(
@@ -525,15 +636,20 @@ internal static class ArtifactWriter
             startInfo.Environment["XDG_CACHE_HOME"] = Path.Combine(loHome, ".cache");
             startInfo.Environment["SAL_USE_VCLPLUGIN"] = "svp";
             var result = RunProcess(startInfo, TimeSpan.FromSeconds(45));
+            var diagnostics = result.Diagnostics.Replace(
+                profileRoot, "<libreoffice-profile>", PathComparison);
             if (result.ExitCode != 0 || !File.Exists(generatedPdf))
-                return (null, result.Diagnostics);
+                return (null, diagnostics);
             if (!string.Equals(generatedPdf, pdf, PathComparison))
                 File.Move(generatedPdf, pdf, overwrite: true);
             return (pdf, null);
         }
         catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
-            return (null, exception.Message);
+            return (null, profileRoot is null
+                ? exception.Message
+                : exception.Message.Replace(
+                    profileRoot, "<libreoffice-profile>", PathComparison));
         }
         finally
         {
@@ -562,7 +678,10 @@ internal static class ArtifactWriter
             };
             foreach (var argument in new[]
             {
-                "-png", "-r", "144", Path.Combine(directory, prefix + ".pdf"), outputPrefix,
+                "-png", "-r", "144", "-f", "1", "-l",
+                (MaximumRenderedPages + 1).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                Path.Combine(directory, prefix + ".pdf"), outputPrefix,
             })
                 startInfo.ArgumentList.Add(argument);
             var result = RunProcess(startInfo, TimeSpan.FromSeconds(45));
@@ -747,8 +866,39 @@ internal static class ArtifactWriter
         }
         catch (OperationCanceledException)
         {
-            process.Kill(entireProcessTree: true);
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(milliseconds: 5_000);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception or NotSupportedException)
+            {
+                // Preserve the deterministic timeout result even if the child exited between
+                // cancellation and kill, or process-tree termination is unavailable.
+            }
+            try
+            {
+                _ = Task.WaitAll(new Task[] { outputTask, errorTask }, millisecondsTimeout: 5_000);
+            }
+            catch (AggregateException)
+            {
+                // Diagnostic pipe failures must not replace the bounded timeout result.
+            }
             return (-1, $"{Path.GetFileName(startInfo.FileName)} timed out after {timeout.TotalSeconds:0} seconds");
+        }
+        try
+        {
+            if (!Task.WaitAll(new Task[] { outputTask, errorTask }, millisecondsTimeout: 5_000))
+                return (-1,
+                    $"{Path.GetFileName(startInfo.FileName)} diagnostic pipes did not close after process exit");
+        }
+        catch (AggregateException exception)
+        {
+            var detail = exception.Flatten().InnerExceptions.FirstOrDefault()?.Message
+                ?? "unknown diagnostic pipe failure";
+            return (-1,
+                $"{Path.GetFileName(startInfo.FileName)} diagnostic pipe failed: {detail}");
         }
         var diagnostics = string.Join(" ", new[]
         {
@@ -796,9 +946,10 @@ internal static class ArtifactWriter
         records.Add(WriteArtifactStatus(directory, records));
         var indexedRecords = records.ToList();
         records.Add(WriteText(directory, "index.md", "artifact-index-markdown",
-            BuildArtifactIndexMarkdown(scenarioId, status, indexedRecords), "text/markdown"));
+            BuildArtifactIndexMarkdown(directory, scenarioId, status, indexedRecords),
+            "text/markdown"));
         records.Add(WriteText(directory, "index.html", "artifact-index-html",
-            BuildArtifactIndexHtml(scenarioId, status, indexedRecords), "text/html"));
+            BuildArtifactIndexHtml(directory, scenarioId, status, indexedRecords), "text/html"));
     }
 
     private static ArtifactRecord WriteEvaluationBundleManifest(
@@ -810,17 +961,32 @@ internal static class ArtifactWriter
         IReadOnlyList<string> operationLog,
         IReadOnlyList<ArtifactRecord> records)
     {
-        var fingerprintComponents = new List<string>
+        var artifactProjection = records.OrderBy(value => value.Id, StringComparer.Ordinal)
+            .Select(value => new
+            {
+                value.Id,
+                value.Status,
+                path = RelativePath(directory, value.Path),
+                value.MediaType,
+                value.Role,
+                value.SizeBytes,
+                value.Sha256,
+                value.UnavailableReason,
+            }).ToList();
+        var metricProjection = metrics.Select(value => new { value.Id, value.Status }).ToList();
+        var fingerprintDocument = new
         {
+            schemaVersion = "docxodus.evaluation-bundle-run-id/1.0",
             scenarioId,
-            scoreKind.ToString(),
+            scoreKind,
             status,
+            operations = operationLog,
+            metricStatus = metricProjection,
+            artifacts = artifactProjection,
         };
-        fingerprintComponents.AddRange(operationLog);
-        fingerprintComponents.AddRange(records.OrderBy(value => value.Id, StringComparer.Ordinal)
-            .Select(value => $"{value.Id}:{value.Status}:{value.Sha256}:{value.SizeBytes}"));
-        var fingerprintInput = string.Join("\n", fingerprintComponents);
-        var runId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)))
+        var fingerprintBytes = JsonSerializer.SerializeToUtf8Bytes(
+            fingerprintDocument, FingerprintJsonOptions);
+        var runId = Convert.ToHexString(SHA256.HashData(fingerprintBytes))
             .ToLowerInvariant();
         return WriteText(directory, "evaluation-bundle-manifest-v2.json",
             "evaluation-bundle-manifest-v2",
@@ -829,26 +995,20 @@ internal static class ArtifactWriter
                 schemaVersion = "docxodus.evaluation-bundle-manifest/2.0",
                 bundleKind = "legal-workflow-evaluation",
                 runId,
+                runIdAlgorithm = "sha256 of compact UTF-8 docxodus.evaluation-bundle-run-id/1.0 JSON",
                 contentScope = "content artifacts only; excludes this bundle manifest, artifact status, and indexes to avoid digest cycles",
                 rendererOutputSemantics = records.Any(value => value.Status == "available" && IsRenderedArtifact(value.Id))
                     ? "renderer outputs are content-addressed for this run; the runId is reproducible only when the renderer and its output are reproducible"
-                    : "no external renderer output is included in this receipt",
+                    : "no external renderer output is included in this bundle",
+                operationTraceSemantics = scoreKind == ScoreKind.EngineBaseline
+                    ? "operations are from the scripted-session-v1 engine baseline"
+                    : "operations is empty because candidate-directory ingestion supplies no model plan/tool trace or model/config metadata",
                 scenarioId,
                 scoreKind,
                 status,
                 operations = operationLog,
-                metricStatus = metrics.Select(value => new { value.Id, value.Status }),
-                artifacts = records.OrderBy(value => value.Id, StringComparer.Ordinal).Select(value => new
-                {
-                    value.Id,
-                    value.Status,
-                    path = RelativePath(directory, value.Path),
-                    value.MediaType,
-                    value.Role,
-                    value.SizeBytes,
-                    value.Sha256,
-                    value.UnavailableReason,
-                }),
+                metricStatus = metricProjection,
+                artifacts = artifactProjection,
             }, JsonOptions), "application/json");
     }
 
@@ -871,7 +1031,10 @@ internal static class ArtifactWriter
         }, JsonOptions), "application/json");
 
     private static string BuildArtifactIndexMarkdown(
-        string scenarioId, string status, IReadOnlyList<ArtifactRecord> records)
+        string directory,
+        string scenarioId,
+        string status,
+        IReadOnlyList<ArtifactRecord> records)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"# Evaluation artifacts: {scenarioId}").AppendLine()
@@ -880,7 +1043,7 @@ internal static class ArtifactWriter
             .AppendLine("| --- | --- | --- | --- | ---: | --- |");
         foreach (var record in records.OrderBy(value => value.Id, StringComparer.Ordinal))
         {
-            var relative = RelativePath(string.Empty, record.Path);
+            var relative = RelativePath(directory, record.Path);
             var link = relative is null ? "—" : $"[open]({Uri.EscapeDataString(relative).Replace("%2F", "/", StringComparison.OrdinalIgnoreCase)})";
             builder.Append("| ").Append(EscapeCell(record.Id)).Append(" | ")
                 .Append(EscapeCell(record.Status)).Append(" | ").Append(link).Append(" | ")
@@ -892,7 +1055,10 @@ internal static class ArtifactWriter
     }
 
     private static string BuildArtifactIndexHtml(
-        string scenarioId, string status, IReadOnlyList<ArtifactRecord> records)
+        string directory,
+        string scenarioId,
+        string status,
+        IReadOnlyList<ArtifactRecord> records)
     {
         var builder = new StringBuilder();
         builder.Append("<!doctype html><html><head><meta charset=\"utf-8\">")
@@ -903,7 +1069,7 @@ internal static class ArtifactWriter
             .Append("</strong></p><table><thead><tr><th>Artifact</th><th>Status</th><th>View</th><th>Media type</th><th>Bytes</th><th>SHA-256 / reason</th></tr></thead><tbody>");
         foreach (var record in records.OrderBy(value => value.Id, StringComparer.Ordinal))
         {
-            var relative = RelativePath(string.Empty, record.Path);
+            var relative = RelativePath(directory, record.Path);
             builder.Append("<tr><td><code>").Append(WebUtility.HtmlEncode(record.Id))
                 .Append("</code></td><td>").Append(WebUtility.HtmlEncode(record.Status)).Append("</td><td>");
             if (relative is not null)
@@ -987,6 +1153,8 @@ internal static class ArtifactWriter
         string role = "evidence")
     {
         var path = Path.Combine(directory, fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("artifact path has no parent"));
         File.WriteAllBytes(path, bytes);
         return Record(id, path, mediaType, role);
     }
@@ -996,9 +1164,56 @@ internal static class ArtifactWriter
         string role = "evidence")
     {
         var path = Path.Combine(directory, fileName);
-        File.WriteAllText(path, value, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("artifact path has no parent"));
+        File.WriteAllText(path, NormalizeLineEndings(value),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         return Record(id, path, mediaType, role);
     }
+
+    private static void RemoveUnpublishedFiles(
+        string directory, IReadOnlyList<ArtifactRecord> records)
+    {
+        var published = records.Where(value => value.Path is not null)
+            .Select(value => Path.GetFullPath(value.Path!))
+            .ToHashSet(PathComparerFor(directory));
+        var pending = new Stack<string>();
+        var directories = new List<string>();
+        pending.Push(directory);
+        while (pending.Count != 0)
+        {
+            var current = pending.Pop();
+            foreach (var path in Directory.EnumerateFileSystemEntries(current))
+            {
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    if ((attributes & FileAttributes.Directory) != 0)
+                        Directory.Delete(path);
+                    else
+                        File.Delete(path);
+                    continue;
+                }
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pending.Push(path);
+                    directories.Add(path);
+                }
+                else if (!published.Contains(Path.GetFullPath(path)))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+        foreach (var child in directories
+            .OrderByDescending(value => value.Length))
+        {
+            if (!Directory.EnumerateFileSystemEntries(child).Any()) Directory.Delete(child);
+        }
+    }
+
+    private static string NormalizeLineEndings(string value) =>
+        value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static ArtifactRecord Record(
         string id, string path, string mediaType, string role = "evidence")
@@ -1094,22 +1309,93 @@ internal static class ArtifactWriter
 
     private static string RequireRenderedPath(string directory, string path)
     {
-        var root = Path.GetFullPath(directory).TrimEnd(
+        var root = LegalEvaluationRunner.ResolveCanonicalPath(directory).TrimEnd(
             Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(path);
+        var fullPath = LegalEvaluationRunner.ResolveCanonicalPath(path);
         if (!fullPath.StartsWith(root, PathComparison))
             throw new ScenarioValidationException(
-                $"renderer output escapes the score artifact directory: {path}");
+                "renderer output escapes its dedicated artifact directory");
         return fullPath;
     }
 
+    private static string RendererError(Exception exception, string rendererDirectory)
+    {
+        var detail = NormalizeRendererDiagnostic(
+            $"{exception.GetType().Name}: {exception.Message}", rendererDirectory)
+            ?? exception.GetType().Name;
+        return "renderer failed: " + detail;
+    }
+
+    private static string? NormalizeRendererDiagnostic(
+        string? diagnostic, string rendererDirectory)
+    {
+        if (diagnostic is null) return null;
+        var detail = NormalizeLineEndings(diagnostic);
+        foreach (var (root, replacement) in new[]
+        {
+            (rendererDirectory, "."),
+            (Directory.GetCurrentDirectory(), "<working-directory>"),
+            (Path.GetTempPath(), "<temporary-directory>"),
+        })
+        {
+            var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            detail = detail.Replace(fullRoot + Path.DirectorySeparatorChar,
+                    replacement + Path.DirectorySeparatorChar, PathComparison)
+                .Replace(fullRoot + Path.AltDirectorySeparatorChar,
+                    replacement + Path.AltDirectorySeparatorChar, PathComparison)
+                .Replace(fullRoot, replacement, PathComparison);
+        }
+        detail = detail.Trim();
+        if (detail.Length == 0) detail = "renderer reported an unspecified error";
+        return detail.Length <= MaximumRendererDiagnosticCharacters
+            ? detail
+            : detail[..MaximumRendererDiagnosticCharacters] + " [diagnostics truncated]";
+    }
+
+    private static StringComparer PathComparerFor(string directory)
+    {
+        var probe = Path.Combine(directory,
+            ".docxodus-case-probe-lower-" + Guid.NewGuid().ToString("N"));
+        var alternate = Path.Combine(directory,
+            Path.GetFileName(probe).ToUpperInvariant());
+        try
+        {
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write,
+                       FileShare.None, bufferSize: 1, FileOptions.DeleteOnClose))
+                return File.Exists(alternate)
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or NotSupportedException)
+        {
+            return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+        }
+        finally
+        {
+            try { if (File.Exists(probe)) File.Delete(probe); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    private static readonly JsonSerializerOptions FingerprintJsonOptions = new()
+    {
+        WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };

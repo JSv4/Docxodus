@@ -30,7 +30,8 @@
     { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
     { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
   ],
   "baseline": {
     "executor": "scripted-session-v1",
@@ -47,6 +48,8 @@
   "invariants": [
     { "id": "finance-authorship", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Finance Counsel']" }, "operator": "atLeast", "expected": 1 },
     { "id": "commercial-authorship", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//*[@w:author='Commercial Counsel']" }, "operator": "atLeast", "expected": 1 },
+    { "id": "finance-fee-change", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins[@w:author='Finance Counsel'][.//w:t='$135,000']" }, "operator": "equals", "expected": 1 },
+    { "id": "commercial-notice-change", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins[@w:author='Commercial Counsel'][.//w:t[contains(., 'sixty (60')]]" }, "operator": "equals", "expected": 1 },
     { "id": "consolidated-markup-present", "metric": "redline_reversibility", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:ins | //w:del" }, "operator": "atLeast", "expected": 4 },
     { "id": "single-economics-table", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:tbl" }, "operator": "equals", "expected": 1 }
   ],

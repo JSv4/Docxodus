@@ -3,8 +3,8 @@ name: Legal workflow evaluation
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # Stacked pull requests target another feature branch until the stack lands.
+  pull_request: {}
   schedule:
     - cron: '17 5 * * 1'
   workflow_dispatch:

@@ -102,6 +102,11 @@ The canonical scenario output IDs are `candidate-docx`, `redline-docx`,
 silently request an artifact the runner does not know how to produce or verify. A real #458
 delivery receipt is required only when the engine path has authoritative batch traces; model and
 consolidation paths retain an explicit unavailable record instead of synthetic provenance.
+All nine canonical outputs must be declared exactly once. The receipt is required for each of the
+eight session-backed engine scenarios and optional only for the trace-less consolidation facade;
+model scoring applies the same scenario declaration without pretending that a model supplied the
+engine trace. A model `operation-log.json` is therefore empty and explicitly identifies the absent
+model plan/tool trace.
 
 ## Evidence from every score
 
@@ -126,6 +131,9 @@ Each safe completed edit score contains:
   and per-transaction semantic evidence when an authoritative batch trace exists;
 - `metrics.json`, `operation-log.json`, `summary.md`, and a content-addressed
   `evaluation-bundle-manifest-v2.json`;
+- a portable `scenario-contract-v1.json` containing the instruction, constraints, operations,
+  invariants, output policy, fixture/golden provenance IDs and hashes, and evaluator/library
+  versions used for the score;
 - linked `index.html`/`index.md` views whose entries include the bundle manifest and artifact-status
   documents along with media type, size, and SHA-256;
 - before/candidate/target/redline PDFs, every rendered page, and page-aligned visual diffs when
@@ -144,6 +152,10 @@ missing or conversion fails, `artifact-status.json` records that result rather t
 visual. External renderers are used only for trusted scripted-engine documents; untrusted model
 candidates retain sanitized HTML and explicit renderer-unavailable records. Preview HTML has a
 restrictive CSP and removes active handlers plus external links/resources.
+Rasterization is capped before launch at 101 pages (the extra page detects an over-limit document),
+and retained renderer files are bounded by page count, per-file/aggregate bytes, dimensions, and
+aggregate pixels. Rejected and undeclared renderer outputs, including symlinks, are removed before
+the artifact tree is atomically published.
 
 `evaluation-bundle-manifest-v2.json` is the evaluator's cycle-free inventory of the files retained
 for one score; it is distinct from the typed #458 `delivery-change-receipt-v1.json`. Its digest
@@ -151,6 +163,10 @@ scope excludes the bundle manifest, status, and index files to avoid a hash cycl
 external renderer output are reproducible when their inputs and deterministic providers are
 unchanged. A bundle containing PDFs, page images, or visual diffs is run-specific unless the
 selected renderer and its output are independently reproducible.
+The `runId` is SHA-256 over compact UTF-8 JSON with an explicit
+`docxodus.evaluation-bundle-run-id/1.0` schema. It covers scenario/score status, operations, metric
+status, and every retained artifact's ID, status, relative path, media type, role, size, digest, and
+unavailable reason; delimiters or host newline conventions cannot alias two different bundles.
 
 ## Fixture provenance
 
@@ -180,12 +196,21 @@ runs weekly on a schedule with document renderers installed and `--render`, prod
 before/candidate/target/redline evidence and visual diffs. Every smoke-evidence step and both
 artifact uploads use `if: always()`, so earlier failures do not silently suppress later diagnostic
 attempts or uploads.
+Both ordinary and legal-evaluation workflows run for pull requests targeting any branch, including
+stacked PR bases. Generic CI excludes only `LegalEvalTier=Full`; the dedicated workflow still runs
+the fast tier on every PR, while the nine-scenario full tier remains scheduled or explicitly
+dispatched.
 
 Package inspection uses #456 as the single source of truth for bounded raw/expanded/XML sizes, ZIP
 entry counts, compression ratios, path safety, duplicate names, and DTD-free XML parsing. The same
 manifest options flow through #457 semantic comparison, #463 verification, #464 proof, and artifact
 serialization. A package that fails this boundary is retained as evidence but is not sent to
 downstream OOXML/diff/HTML parsers or external renderers.
+Semantic comparisons retain at most 4,096 change records, scripted scenarios retain at most 32
+operations, consolidation retains at most 16 reviewers, and transaction/reviewer snapshots have
+aggregate byte ceilings. Corpus paths are resolved through existing symlink components before
+root-containment checks. Exact #463 expected semantic and package deltas are blocking: a broad
+scenario part/anchor budget cannot turn a verifier rejection into a passing validity score.
 
 New operations belong in `ScriptedBaselineExecutor`; new deterministic package probes belong in
 `EvaluationScorer`. Every new scenario must include at least one compatible deterministic invariant.

@@ -28,9 +28,10 @@
     { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
   ],
   "baseline": {
     "executor": "scripted-session-v1",

@@ -22,6 +22,7 @@ public sealed class EvaluationScorer
     private const long MaximumInvariantPartBytes = 32L * 1024 * 1024;
     private const int MaximumProofXmlParts = 256;
     private const long MaximumProofXmlBytes = 64L * 1024 * 1024;
+    private const int MaximumSemanticChanges = 4096;
     private const string WNamespace =
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private readonly IEvaluationPackageValidator _packageValidator;
@@ -80,7 +81,7 @@ public sealed class EvaluationScorer
             targetChanges = CompareSemantic(baseline.Input, baseline.Expected);
             candidateTargetChanges = CompareSemantic(candidate, baseline.Expected);
             verification = VerifyCandidate(
-                baseline.Input, candidate, baseline.Expected, targetChanges);
+                baseline.Input, candidate, baseline.Expected);
             metrics.AddRange(EvaluateInvariants(scenario, candidate));
             metrics.Add(EvaluateTargetPrecision(candidateTargetChanges));
             metrics.AddRange(SafeMetrics(
@@ -127,9 +128,10 @@ public sealed class EvaluationScorer
             status,
             metrics,
             scenario.ExpectedOutputs,
-            baseline.OperationLog,
+            PublishedOperationLog(kind, baseline.OperationLog),
             new EvaluationEvidence
             {
+                ScenarioContractJson = ScenarioContract(scenario),
                 Input = baseline.Input,
                 Candidate = candidate,
                 Expected = baseline.Expected,
@@ -359,7 +361,13 @@ public sealed class EvaluationScorer
 
         var anchors = candidateChanges.Changes
             .SelectMany(value => new[] { value.LeftAnchor, value.RightAnchor })
-            .Where(value => value is not null).Cast<string>().Distinct(StringComparer.Ordinal).ToList();
+            .Where(value => value is not null).Cast<string>()
+            // #457 exposes both paragraph (p:...) and inline (li:...) views of the same stable
+            // scope/hash. Count that logical anchor once while still counting before and after
+            // identities separately. Otherwise every ordinary text replacement consumes four
+            // budget slots and the corpus's declared logical-anchor budgets cannot pass.
+            .Select(NormalizeSemanticAnchor)
+            .Distinct(StringComparer.Ordinal).ToList();
         var anchorPass = anchors.Count <= scenario.ChangeBudget.MaximumChangedAnchors;
 
         return new[]
@@ -383,6 +391,12 @@ public sealed class EvaluationScorer
         };
     }
 
+    private static string NormalizeSemanticAnchor(string anchor)
+    {
+        var separator = anchor.IndexOf(':');
+        return separator < 0 ? anchor : anchor[(separator + 1)..];
+    }
+
     private static MetricResult EvaluateValidity(DeliverableVerificationResult verification)
     {
         var requiredChecks = new HashSet<string>(StringComparer.Ordinal)
@@ -396,9 +410,13 @@ public sealed class EvaluationScorer
             .Where(check => requiredChecks.Contains(check.Check)
                 && check.Status != DeliverableCheckStatus.Completed)
             .ToList();
-        var blocking = verification.Findings.Where(finding => finding.BlocksDelivery
-            && finding.Category != DeliverableFindingCategory.Delta).ToList();
-        var passed = incomplete.Count == 0 && blocking.Count == 0;
+        // The verifier was configured with the pinned target's exact semantic and package
+        // deltas. A blocking delta therefore means the candidate is not the declared delivery,
+        // even when its broader scenario change budget happens to permit the affected part.
+        var blocking = verification.Findings.Where(finding => finding.BlocksDelivery).ToList();
+        var passed = incomplete.Count == 0 && blocking.Count == 0
+            && verification.Decision is DeliverableVerificationDecision.Passed
+                or DeliverableVerificationDecision.PassedWithPreExistingFindings;
         return new MetricResult("document-validity.openxml", "document_validity",
             passed ? "passed" : "failed",
             passed
@@ -460,14 +478,17 @@ public sealed class EvaluationScorer
         }
     }
 
-    private SemanticChangeSet CompareSemantic(byte[] before, byte[] after) =>
-        SemanticDiff.Compare(
+    private SemanticChangeSet CompareSemantic(
+        byte[] before, byte[] after, bool includePackageChanges = true) =>
+        SemanticDiff.CompareBounded(
             new WmlDocument("before.docx", before),
             new WmlDocument("after.docx", after),
             new SemanticDiffOptions
             {
+                IncludePackageChanges = includePackageChanges,
                 PackageOptions = _packageValidator.ManifestOptions,
-            });
+            },
+            MaximumSemanticChanges);
 
     internal EvaluationEvidence AnalyzeAvailableEvidence(
         BaselineExecution baseline,
@@ -510,7 +531,7 @@ public sealed class EvaluationScorer
             if (candidate is not null && targetChanges is not null
                 && inputSafetyError is null && candidateSafetyError is null)
                 verification = VerifyCandidate(
-                    baseline.Input, candidate, baseline.Expected, targetChanges);
+                    baseline.Input, candidate, baseline.Expected);
             if (candidate is not null && inputSafetyError is null && candidateSafetyError is null)
                 (redline, proof) = BuildRedlineProof(baseline.Input, candidate);
             if (candidate is not null && inputManifest is not null && candidateManifest is not null
@@ -555,8 +576,7 @@ public sealed class EvaluationScorer
     private DeliverableVerificationResult VerifyCandidate(
         byte[] input,
         byte[] candidate,
-        byte[] expected,
-        SemanticChangeSet targetChanges)
+        byte[] expected)
     {
         var options = new DeliverableVerificationOptions
         {
@@ -574,11 +594,16 @@ public sealed class EvaluationScorer
                 BeforeValue = change.BeforeValue,
                 AfterValue = change.AfterValue,
             }).ToArray();
+        // DeliverableVerifier computes its modeled semantic delta with package supplements
+        // disabled; package/relationship facts are matched independently below. Feed it the same
+        // semantic surface so bookmark/revision supplements are not falsely reported as missing.
+        var expectedModeledChanges = CompareSemantic(
+            input, expected, includePackageChanges: false);
         return DeliverableVerifier.VerifyDeliverable(new DeliverableVerificationRequest
         {
             BaselineBytes = input,
             DeliverableBytes = candidate,
-            ExpectedSemanticChanges = targetChanges,
+            ExpectedSemanticChanges = expectedModeledChanges,
             ExpectedPackageChanges = expectedPackageChanges,
         }, options with { FailOnUnexpectedChanges = true });
     }
@@ -1228,6 +1253,61 @@ public sealed class EvaluationScorer
         Value = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
     };
 
+    internal static IReadOnlyList<string> PublishedOperationLog(
+        ScoreKind kind, IReadOnlyList<string> baselineOperationLog) =>
+        kind == ScoreKind.EngineBaseline
+            ? baselineOperationLog
+            : Array.Empty<string>();
+
+    internal static string ScenarioContract(LegalScenario scenario) =>
+        JsonSerializer.Serialize(new
+        {
+            schemaVersion = "docxodus.legal-evaluation-scenario-contract/1.0",
+            sourceSchemaVersion = "2.0",
+            evaluatorVersion = typeof(EvaluationScorer).Assembly.GetName().Version?.ToString()
+                ?? "unknown",
+            docxodusVersion = typeof(DocxSession).Assembly.GetName().Version?.ToString()
+                ?? "unknown",
+            scenario.Id,
+            scenario.Title,
+            tier = scenario.Tier == EvalTier.Fast ? "fast" : "full",
+            fixture = new
+            {
+                provenanceId = scenario.Fixture.ProvenanceId,
+                sourceSha256 = scenario.Fixture.SourceSha256,
+            },
+            expectedDocument = new
+            {
+                provenanceId = scenario.ExpectedDocument.ProvenanceId,
+                sourceSha256 = scenario.ExpectedDocument.SourceSha256,
+            },
+            scenario.Instruction,
+            scenario.Constraints,
+            redlineReversibility = new
+            {
+                applicability = scenario.RedlineReversibility.Applicability
+                    == RedlineReversibilityApplicability.Required
+                        ? "required"
+                        : "notApplicable",
+                scenario.RedlineReversibility.Reason,
+            },
+            expectedOutputs = scenario.ExpectedOutputs,
+            baseline = new
+            {
+                executor = "scripted-session-v1",
+                operations = scenario.BaselineOperations,
+            },
+            invariants = scenario.Invariants,
+            changeBudget = new
+            {
+                allowedChangedParts = scenario.ChangeBudget.AllowedChangedParts
+                    .Order(StringComparer.Ordinal),
+                allowedRelationshipOwners = scenario.ChangeBudget.AllowedRelationshipOwners
+                    .Order(StringComparer.Ordinal),
+                scenario.ChangeBudget.MaximumChangedAnchors,
+            },
+        }, ScenarioContractJsonOptions);
+
     internal static string RenderHtml(byte[] bytes)
     {
         var settings = new WmlToHtmlConverterSettings
@@ -1277,9 +1357,11 @@ public sealed class EvaluationScorer
     {
         try
         {
-            return (SemanticDiff.Compare(
+            return (SemanticDiff.CompareBounded(
                 new WmlDocument("before.docx", input),
-                new WmlDocument("after.docx", candidate)).ToCanonicalJson(), null);
+                new WmlDocument("after.docx", candidate),
+                new SemanticDiffOptions(),
+                MaximumSemanticChanges).ToCanonicalJson(), null);
         }
         catch (Exception exception) when (DeliverableExceptionBoundary.IsRecoverable(exception))
         {
@@ -1294,6 +1376,12 @@ public sealed class EvaluationScorer
         return (result.Json ?? ErrorEnvelope(artifact, "failed",
             result.Error ?? "semantic diff generation failed"), result.Json is not null);
     }
+
+    private static readonly JsonSerializerOptions ScenarioContractJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
     internal static string ErrorEnvelope(string artifact, string status, string detail) =>
         JsonSerializer.Serialize(new

@@ -28,9 +28,10 @@
     { "id": "semantic-change-set-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "candidate-package-manifest-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "deliverable-verification-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": false },
+    { "id": "delivery-change-receipt-v1", "mediaType": "application/json", "role": "verification", "required": true },
     { "id": "redline-reversibility-proof-v1", "mediaType": "application/json", "role": "verification", "required": true },
-    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true }
+    { "id": "after-html", "mediaType": "text/html", "role": "review", "required": true },
+    { "id": "candidate-pdf", "mediaType": "application/pdf", "role": "review", "required": false }
   ],
   "baseline": {
     "executor": "scripted-session-v1",
@@ -41,6 +42,7 @@
   "invariants": [
     { "id": "control-filled", "metric": "task_completion", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']][.//w:t='Acme Manufacturing LLC']" }, "operator": "equals", "expected": 1 },
     { "id": "placeholder-removed", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']]//w:t[contains(., '[CLIENT LEGAL NAME]')]" }, "operator": "equals", "expected": 0 },
+    { "id": "placeholder-display-state-cleared", "metric": "target_precision", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdt[w:sdtPr/w:tag[@w:val='ClientLegalName']]/w:sdtPr/w:showingPlcHdr" }, "operator": "equals", "expected": 0 },
     { "id": "control-identity-preserved", "metric": "unintended_change", "deterministic": true, "probe": { "kind": "xmlCount", "part": "/word/document.xml", "xpath": "//w:sdtPr[w:id[@w:val='9001'] and w:alias[@w:val='Client legal name'] and w:tag[@w:val='ClientLegalName']]" }, "operator": "equals", "expected": 1 }
   ],
   "changeBudget": {

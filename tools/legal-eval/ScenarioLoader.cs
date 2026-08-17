@@ -16,10 +16,19 @@ public static class ScenarioLoader
     private const int MaximumJsonBytes = 4 * 1024 * 1024;
     private const int MaximumProvenanceDocumentBytes = 64 * 1024 * 1024;
     private const int MaximumArrayItems = 256;
+    private const int MaximumBaselineOperations = 32;
+    private const int MaximumConsolidationReviewers = 16;
     private const int MaximumStringCharacters = 16 * 1024;
     private static readonly Regex ScenarioSlug = new(
         "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+    private static readonly HashSet<string> ReservedWindowsFileNames = new(
+        new[]
+        {
+            "con", "prn", "aux", "nul",
+            "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+            "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+        }, StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> Metrics = new(StringComparer.Ordinal)
     {
@@ -50,7 +59,7 @@ public static class ScenarioLoader
 
     public static LegalCorpus LoadCorpus(string corpusPath)
     {
-        var fullCorpusPath = Path.GetFullPath(corpusPath);
+        var fullCorpusPath = LegalEvaluationRunner.ResolveCanonicalPath(corpusPath);
         var root = Path.GetDirectoryName(fullCorpusPath)
             ?? throw new ScenarioValidationException($"Corpus path has no directory: {corpusPath}");
         var corpus = ReadObject(fullCorpusPath, "corpus");
@@ -87,14 +96,15 @@ public static class ScenarioLoader
         IReadOnlyDictionary<string, FixtureProvenance> provenance,
         IReadOnlyDictionary<string, ExpectedDocumentProvenance> expectedDocumentProvenance)
     {
-        var fullPath = Path.GetFullPath(scenarioPath);
+        var fullPath = LegalEvaluationRunner.ResolveCanonicalPath(scenarioPath);
         var node = ReadObject(fullPath, "scenario");
         RejectUnknown(node, fullPath, "schemaVersion", "id", "title", "tier", "fixture",
             "expectedDocument", "instruction", "redlineReversibility", "expectedOutputs",
             "baseline", "invariants", "changeBudget");
         RequireExactVersion(node, fullPath, "2.0");
         var id = RequireString(node, "id", fullPath);
-        if (id.Length > 128 || !ScenarioSlug.IsMatch(id))
+        if (id.Length > 128 || !ScenarioSlug.IsMatch(id)
+            || ReservedWindowsFileNames.Contains(id))
             throw Error(fullPath, $"id '{id}' is not a safe scenario slug");
         var title = RequireString(node, "title", fullPath);
         var tier = RequireString(node, "tier", fullPath) switch
@@ -118,8 +128,9 @@ public static class ScenarioLoader
         if (!string.Equals(sourceSha, actualSha, StringComparison.Ordinal))
             throw Error(fullPath,
                 $"fixture sourceSha256 mismatch for {fixtureRelative}: expected {sourceSha}, actual {actualSha}");
-        if (!string.Equals(provenanceEntry.SourceSha256, actualSha, StringComparison.Ordinal))
-            throw Error(fullPath, $"provenance hash mismatch for '{provenanceId}'");
+        if (!string.Equals(provenanceEntry.SourcePath, fixturePath, PathComparison)
+            || !string.Equals(provenanceEntry.SourceSha256, actualSha, StringComparison.Ordinal))
+            throw Error(fullPath, $"fixture provenance mismatch for '{provenanceId}'");
 
         var expectedNode = RequireObject(node, "expectedDocument", fullPath);
         RejectUnknown(expectedNode, fullPath, "path", "provenanceId", "sourceSha256");
@@ -216,12 +227,40 @@ public static class ScenarioLoader
         var operationNodes = RequireArray(baseline, "operations", fullPath);
         if (operationNodes.Count == 0)
             throw Error(fullPath, "baseline.operations must be explicit and non-empty");
+        if (operationNodes.Count > MaximumBaselineOperations)
+            throw Error(fullPath,
+                $"baseline.operations exceeds the {MaximumBaselineOperations}-operation limit");
         var operations = operationNodes.Select((value, index) =>
             value as JsonObject
                 ?? throw Error(fullPath, $"baseline.operations[{index}] must be an object"))
             .Select(value => (JsonObject)value.DeepClone()).ToList();
         foreach (var operation in operations)
             ValidateOperation(operation, fullPath, nestedReviewer: false);
+        var consolidationCount = operations.Count(value =>
+            value["op"]?.GetValue<string>() == "consolidate");
+        if (consolidationCount != 0 && operations.Count != 1)
+            throw Error(fullPath,
+                "consolidate must be the scenario's sole baseline operation");
+
+        if (outputs.Count != ExpectedOutputContracts.Count
+            || ExpectedOutputContracts.Keys.Except(
+                outputs.Select(value => value.Id), StringComparer.Ordinal).Any())
+            throw Error(fullPath,
+                "expectedOutputs must declare every canonical artifact exactly once");
+        foreach (var output in outputs)
+        {
+            var required = output.Id switch
+            {
+                "candidate-pdf" => false,
+                "delivery-change-receipt-v1" => consolidationCount == 0,
+                "redline-reversibility-proof-v1" =>
+                    reversibility.Applicability == RedlineReversibilityApplicability.Required,
+                _ => true,
+            };
+            if (output.Required != required)
+                throw Error(fullPath,
+                    $"expectedOutputs required policy for '{output.Id}' must be {required.ToString().ToLowerInvariant()}");
+        }
 
         var invariantNodes = RequireArray(node, "invariants", fullPath);
         if (invariantNodes.Count == 0)
@@ -239,7 +278,7 @@ public static class ScenarioLoader
             if (!Metrics.Contains(metric))
                 throw Error(fullPath, $"invariants[{index}].metric '{metric}' is not recognized");
             if (!invariant.ContainsKey("expected"))
-                throw Error(fullPath, $"invariants[{index}].expected is required (null is allowed)");
+                throw Error(fullPath, $"invariants[{index}].expected is required");
             var probe = (JsonObject)RequireObject(invariant, "probe", fullPath).DeepClone();
             var operation = RequireString(invariant, "operator", fullPath);
             var expected = invariant["expected"]?.DeepClone();
@@ -450,16 +489,15 @@ public static class ScenarioLoader
                 var reviewers = RequireArray(operation, "reviewers", path);
                 if (reviewers.Count < 2)
                     throw Error(path, "consolidate.reviewers must contain at least two operations");
+                if (reviewers.Count > MaximumConsolidationReviewers)
+                    throw Error(path,
+                        $"consolidate.reviewers exceeds the {MaximumConsolidationReviewers}-reviewer limit");
                 foreach (var reviewerNode in reviewers)
                 {
                     var reviewer = reviewerNode as JsonObject
                         ?? throw Error(path, "consolidate.reviewers entries must be objects");
                     ValidateOperation(reviewer, path, nestedReviewer: true);
                 }
-                break;
-            case "failForTest":
-                RejectUnknown(operation, path, "op", "message");
-                _ = RequireString(operation, "message", path);
                 break;
             default:
                 throw Error(path, $"unsupported baseline operation '{kind}'");
@@ -508,11 +546,10 @@ public static class ScenarioLoader
         if (operation is not ("equals" or "atLeast"))
             throw Error(path, $"{prefix} numeric probe requires equals or atLeast");
         if (expected is not JsonValue number
-            || (!number.TryGetValue<int>(out _)
-                && !number.TryGetValue<long>(out _)
-                && !number.TryGetValue<double>(out _)
-                && !number.TryGetValue<decimal>(out _)))
-            throw Error(path, $"{prefix} numeric probe requires a numeric expected value");
+            || !number.TryGetValue<long>(out var expectedCount)
+            || expectedCount < 0)
+            throw Error(path,
+                $"{prefix} numeric probe requires a non-negative integer expected value");
     }
 
     private static void RejectUnknown(JsonObject node, string path, params string[] allowed)
@@ -610,8 +647,13 @@ public static class ScenarioLoader
     {
         if (Path.IsPathRooted(relative))
             throw Error(source, $"paths must be corpus-relative, got '{relative}'");
-        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(Path.Combine(root, relative));
+        var canonicalRoot = Path.TrimEndingDirectorySeparator(
+            LegalEvaluationRunner.ResolveCanonicalPath(root));
+        var fullRoot = Path.EndsInDirectorySeparator(canonicalRoot)
+            ? canonicalRoot
+            : canonicalRoot + Path.DirectorySeparatorChar;
+        var fullPath = LegalEvaluationRunner.ResolveCanonicalPath(
+            Path.Combine(canonicalRoot, relative));
         if (!fullPath.StartsWith(fullRoot, PathComparison))
             throw Error(source, $"path escapes corpus root: '{relative}'");
         return fullPath;
@@ -643,5 +685,7 @@ public static class ScenarioLoader
         new($"{path}: {message}");
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 }

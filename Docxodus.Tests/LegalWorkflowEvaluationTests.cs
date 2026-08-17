@@ -7,6 +7,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Xml.Linq;
 using Docxodus.Verification;
 using LegalEval;
 using Xunit;
@@ -72,7 +73,7 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.Equal(scenario.Fixture.SourceSha256, Sha256File(scenario.Fixture.Path));
             Assert.Equal(scenario.ExpectedDocument.SourceSha256,
                 Sha256File(scenario.ExpectedDocument.Path));
-            Assert.All(scenario.ExpectedOutputs, output => Assert.Contains(output.Id, new[]
+            var canonicalOutputIds = new[]
             {
                 "candidate-docx",
                 "semantic-change-set-v1",
@@ -83,7 +84,17 @@ public sealed class LegalWorkflowEvaluationTests
                 "deliverable-verification-v1",
                 "delivery-change-receipt-v1",
                 "redline-reversibility-proof-v1",
-            }));
+            };
+            Assert.Equal(canonicalOutputIds.Order(StringComparer.Ordinal),
+                scenario.ExpectedOutputs.Select(value => value.Id).Order(StringComparer.Ordinal));
+            var receipt = Assert.Single(scenario.ExpectedOutputs,
+                value => value.Id == "delivery-change-receipt-v1");
+            Assert.Equal(scenario.BaselineOperations.All(value =>
+                value["op"]?.GetValue<string>() != "consolidate"), receipt.Required);
+            var proof = Assert.Single(scenario.ExpectedOutputs,
+                value => value.Id == "redline-reversibility-proof-v1");
+            Assert.Equal(scenario.RedlineReversibility.Applicability
+                == RedlineReversibilityApplicability.Required, proof.Required);
         });
         Assert.All(corpus.Provenance.Values, provenance =>
         {
@@ -633,6 +644,14 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.Equal("failed", model.Status);
         Assert.Contains(model.Metrics, value =>
             value.Id == "target-precision.reference-equivalence" && value.Status == "failed");
+        var engineLog = JsonNode.Parse(File.ReadAllText(Assert.Single(engine.Artifacts,
+            value => value.Id == "operation-log").Path!))!;
+        var modelLog = JsonNode.Parse(File.ReadAllText(Assert.Single(model.Artifacts,
+            value => value.Id == "operation-log").Path!))!;
+        Assert.NotEmpty(engineLog["operations"]!.AsArray());
+        Assert.Empty(modelLog["operations"]!.AsArray());
+        Assert.Contains("intentionally excluded", modelLog["traceSource"]!.GetValue<string>(),
+            StringComparison.Ordinal);
         Assert.NotEqual(engine.ArtifactDirectory, model.ArtifactDirectory);
         AssertInspectableArtifacts(engine);
         AssertInspectableArtifacts(model);
@@ -698,6 +717,14 @@ public sealed class LegalWorkflowEvaluationTests
         var verification = DeliveryChangeReceiptVerifier.VerifyJson(
             File.ReadAllBytes(receipt.Path!), suppliedArtifacts);
         Assert.True(verification.IsValid, string.Join(Environment.NewLine, verification.Findings));
+        var transactionArtifact = engine.Artifacts.First(value =>
+            value.Id.StartsWith("transaction-semantic-change-set-", StringComparison.Ordinal));
+        var transactionRelative = Path.GetRelativePath(
+            engine.ArtifactDirectory!, transactionArtifact.Path!).Replace(
+                Path.DirectorySeparatorChar, '/');
+        Assert.Contains($"href=\"{transactionRelative}\"",
+            File.ReadAllText(Path.Combine(engine.ArtifactDirectory!, "index.html")),
+            StringComparison.Ordinal);
 
         var model = scorer.Score(scenario, baseline, baseline.Output,
             ScoreKind.ModelPlanning, Path.Combine(root, "model"));
@@ -836,6 +863,21 @@ public sealed class LegalWorkflowEvaluationTests
 
     [Fact]
     [Trait("LegalEvalTier", "Fast")]
+    public void Deterministic_zip_normalization_removes_source_host_and_writer_metadata()
+    {
+        var sparseAttributes = ZipWithAttributes(0, "archive A", "entry A",
+            CompressionLevel.NoCompression);
+        var hostAttributes = ZipWithAttributes(unchecked((int)0xA1FF1234),
+            "archive B", "entry B", CompressionLevel.Optimal);
+        var sparseNormalized = ZipPackageOutputNormalizer.NormalizeDeterministic(sparseAttributes);
+        var hostNormalized = ZipPackageOutputNormalizer.NormalizeDeterministic(hostAttributes);
+
+        Assert.Equal(sparseNormalized, hostNormalized);
+        AssertDeterministicContainer(sparseNormalized);
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Readable_fixture_recipe_reproduces_the_pinned_input_fixture()
     {
         var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
@@ -934,6 +976,71 @@ public sealed class LegalWorkflowEvaluationTests
 
     [Fact]
     [Trait("LegalEvalTier", "Fast")]
+    public void Exact_verifier_rejects_semantically_neutral_unexpected_package_delta()
+    {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "defined-term-targeting");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
+        var candidate = RewriteZipEntry(baseline.Expected, "word/document.xml", bytes =>
+            bytes.Concat(new byte[] { (byte)'\n' }).ToArray());
+
+        var score = new EvaluationScorer().Score(scenario, baseline, candidate,
+            ScoreKind.ModelPlanning, Path.Combine(ArtifactRoot, "unexpected-exact-delta"));
+
+        Assert.Equal("failed", score.Status);
+        var validity = Assert.Single(score.Metrics,
+            value => value.Id == "document-validity.openxml");
+        Assert.Equal("failed", validity.Status);
+        var verification = JsonNode.Parse(File.ReadAllText(Assert.Single(score.Artifacts,
+            value => value.Id == "deliverable-verification-v1").Path!))!;
+        Assert.Equal("failed", verification["decision"]!.GetValue<string>());
+        Assert.Contains(verification["findings"]!.AsArray(), value =>
+            value!["code"]!.GetValue<string>().StartsWith("delta.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Tracked_change_mode_does_not_leak_into_a_later_untracked_replacement()
+    {
+        var source = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "defined-term-targeting");
+        var scenario = source with
+        {
+            BaselineOperations = new JsonObject[]
+            {
+                new()
+                {
+                    ["op"] = "replaceText",
+                    ["anchorContains"] = "notice of nonrenewal",
+                    ["find"] = "thirty (30)",
+                    ["replace"] = "forty-five (45)",
+                    ["tracked"] = true,
+                    ["author"] = "Evaluation Counsel",
+                },
+                new()
+                {
+                    ["op"] = "replaceText",
+                    ["anchorContains"] = "means the credit stated in Exhibit A",
+                    ["find"] = "Service Credit",
+                    ["replace"] = "Availability Credit",
+                    ["tracked"] = false,
+                },
+            },
+        };
+
+        var execution = new ScriptedBaselineExecutor().Execute(scenario);
+        var document = ReadZipXml(execution.Output, "word/document.xml");
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        Assert.Contains(document.Descendants(w + "ins").Descendants(w + "t"),
+            value => value.Value.Contains("forty-five (45)", StringComparison.Ordinal));
+        var ordinary = Assert.Single(document.Descendants(w + "t"),
+            value => value.Value.Contains("Availability Credit", StringComparison.Ordinal));
+        Assert.DoesNotContain(ordinary.Ancestors(), value =>
+            value.Name == w + "ins" || value.Name == w + "del");
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
     public void Canonical_semantic_artifacts_are_the_exact_shared_457_serialization()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -981,6 +1088,11 @@ public sealed class LegalWorkflowEvaluationTests
         unsafeId["id"] = "../../escape";
         AssertInvalidScenario(unsafeId, directory, "unsafe-id.json", corpus, "safe scenario slug");
 
+        var reservedId = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        reservedId["id"] = "con";
+        AssertInvalidScenario(reservedId, directory, "reserved-id.json", corpus,
+            "safe scenario slug");
+
         var unknown = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
         unknown["surprise"] = true;
         AssertInvalidScenario(unknown, directory, "unknown-property.json", corpus, "unknown properties");
@@ -991,6 +1103,16 @@ public sealed class LegalWorkflowEvaluationTests
         invariant["expected"] = null;
         AssertInvalidScenario(invalidOperand, directory, "invalid-operand.json", corpus,
             "numeric probe requires");
+
+        var negativeCount = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        negativeCount["invariants"]!.AsArray()[0]!["expected"] = -1;
+        AssertInvalidScenario(negativeCount, directory, "negative-count.json", corpus,
+            "non-negative integer expected value");
+
+        var fractionalCount = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        fractionalCount["invariants"]!.AsArray()[0]!["expected"] = 0.5;
+        AssertInvalidScenario(fractionalCount, directory, "fractional-count.json", corpus,
+            "non-negative integer expected value");
 
         var escapingFixture = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
         escapingFixture["fixture"]!["path"] = "../outside.docx";
@@ -1007,6 +1129,20 @@ public sealed class LegalWorkflowEvaluationTests
         AssertInvalidScenario(invalidRole, directory, "invalid-output-role.json", corpus,
             "role for 'candidate-docx' must be 'candidate'");
 
+        var missingOutput = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        missingOutput["expectedOutputs"]!.AsArray().RemoveAt(0);
+        AssertInvalidScenario(missingOutput, directory, "missing-output.json", corpus,
+            "declare every canonical artifact exactly once");
+
+        var testOnlyOperation = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        testOnlyOperation["baseline"]!["operations"] = new JsonArray(new JsonObject
+        {
+            ["op"] = "failForTest",
+            ["message"] = "must not be accepted from corpus JSON",
+        });
+        AssertInvalidScenario(testOnlyOperation, directory, "test-only-operation.json", corpus,
+            "unsupported baseline operation 'failForTest'");
+
         var consolidationSource = corpus.Scenarios
             .Single(value => value.Id == "compare-consolidate");
         var invalidReviewer = JsonNode.Parse(File.ReadAllText(consolidationSource.FilePath))!.AsObject();
@@ -1018,6 +1154,91 @@ public sealed class LegalWorkflowEvaluationTests
         };
         AssertInvalidScenario(invalidReviewer, directory, "invalid-reviewer.json", corpus,
             "reviewer operation 'fillContentControl' is unsupported");
+
+        var mixedConsolidation = JsonNode.Parse(
+            File.ReadAllText(consolidationSource.FilePath))!.AsObject();
+        mixedConsolidation["baseline"]!["operations"]!.AsArray().Add(
+            (JsonObject)source.BaselineOperations[0].DeepClone());
+        AssertInvalidScenario(mixedConsolidation, directory, "mixed-consolidation.json", corpus,
+            "consolidate must be the scenario's sole baseline operation");
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Corpus_paths_cannot_escape_through_symlinks_and_runner_rejects_unknown_subsets()
+    {
+        var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
+        var source = corpus.Scenarios.Single(value => value.Id == "defined-term-targeting");
+        var directory = Path.Combine(ArtifactRoot, "adversarial-corpus-symlink");
+        var root = Path.Combine(directory, "corpus");
+        Directory.CreateDirectory(root);
+        var link = Path.Combine(root, "fixture-link.docx");
+        if (File.Exists(link)) File.Delete(link);
+        CreateFileSymlinkOrSkip(link, source.Fixture.Path);
+        var node = JsonNode.Parse(File.ReadAllText(source.FilePath))!.AsObject();
+        node["fixture"]!["path"] = "fixture-link.docx";
+        var path = Path.Combine(root, "scenario.json");
+        File.WriteAllText(path, node.ToJsonString(new() { WriteIndented = true }));
+
+        var exception = Assert.Throws<ScenarioValidationException>(() =>
+            ScenarioLoader.LoadScenario(path, root, corpus.Provenance,
+                corpus.ExpectedDocumentProvenance));
+        Assert.Contains("path escapes corpus root", exception.Message, StringComparison.Ordinal);
+
+        Assert.Throws<ScenarioValidationException>(() => new LegalEvaluationRunner().Run(
+            new EvaluationRunOptions(CorpusPath, "typo", null, null,
+                Path.Combine(directory, "invalid-subset"), null)));
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Candidate_symlinks_are_rejected_without_copying_their_external_target()
+    {
+        var corpus = ScenarioLoader.LoadCorpus(CorpusPath);
+        var scenario = corpus.Scenarios.Single(value => value.Id == "defined-term-targeting");
+        var directory = Path.Combine(ArtifactRoot, "candidate-symlink");
+        var candidates = Path.Combine(directory, "candidates");
+        Directory.CreateDirectory(candidates);
+        var external = Path.Combine(directory, "outside.docx");
+        File.Copy(scenario.ExpectedDocument.Path, external, overwrite: true);
+        var candidateLink = Path.Combine(candidates, scenario.Id + ".docx");
+        if (File.Exists(candidateLink)) File.Delete(candidateLink);
+        CreateFileSymlinkOrSkip(candidateLink, external);
+
+        var outcome = new LegalEvaluationRunner().Run(new EvaluationRunOptions(
+            CorpusPath, "full", scenario.Id, candidates,
+            Path.Combine(directory, "artifacts"), null));
+
+        Assert.Equal(1, outcome.ExitCode);
+        var planning = Assert.IsType<EvaluationScore>(outcome.Results.Single().ModelPlanning);
+        Assert.Equal("failed", planning.Status);
+        Assert.Contains("regular files", Assert.Single(planning.Metrics,
+            value => value.Id == "model-planning.execution").Detail, StringComparison.Ordinal);
+        Assert.Equal("unavailable", Assert.Single(planning.Artifacts,
+            value => value.Id == "candidate-docx").Status);
+        Assert.Equal(Sha256File(scenario.ExpectedDocument.Path), Sha256File(external));
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Executor_rechecks_fixture_and_golden_hashes_at_the_execution_boundary()
+    {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "defined-term-targeting");
+        var directory = Path.Combine(ArtifactRoot, "execution-hash-recheck");
+        Directory.CreateDirectory(directory);
+        var swappedFixture = Path.Combine(directory, "swapped.docx");
+        File.Copy(scenario.ExpectedDocument.Path, swappedFixture, overwrite: true);
+        var changedScenario = scenario with
+        {
+            Fixture = scenario.Fixture with { Path = swappedFixture },
+        };
+
+        var exception = Assert.Throws<ScenarioValidationException>(() =>
+            new ScriptedBaselineExecutor().ExecuteCheckpointed(changedScenario));
+
+        Assert.Contains("changed after corpus validation", exception.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1091,7 +1312,7 @@ public sealed class LegalWorkflowEvaluationTests
     }
 
     [Fact]
-    [Trait("LegalEvalTier", "Full")]
+    [Trait("LegalEvalTier", "Fast")]
     public void Renderer_contract_records_deterministic_available_and_unavailable_evidence()
     {
         var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
@@ -1129,8 +1350,17 @@ public sealed class LegalWorkflowEvaluationTests
         }
         Assert.Equal("passed", Assert.Single(available.Metrics,
             value => value.Id == "rendering-regression.visual-layout").Status);
-        Assert.False(File.Exists(Path.Combine(available.ArtifactDirectory!, "before.docx")));
-        Assert.False(File.Exists(Path.Combine(available.ArtifactDirectory!, "target.docx")));
+        Assert.All(available.Artifacts.Where(value => value.Id.EndsWith("-pdf", StringComparison.Ordinal)
+                || value.Id.Contains("visual", StringComparison.Ordinal)), artifact =>
+            Assert.Contains($"{Path.DirectorySeparatorChar}renderer{Path.DirectorySeparatorChar}",
+                artifact.Path!, StringComparison.Ordinal));
+        Assert.DoesNotContain(Directory.EnumerateFiles(available.ArtifactDirectory!, "*",
+            SearchOption.AllDirectories), value =>
+            value.EndsWith("-source.docx", StringComparison.Ordinal));
+        Assert.Contains("href=\"renderer/candidate.pdf\"",
+            File.ReadAllText(Path.Combine(available.ArtifactDirectory!, "index.html")),
+            StringComparison.Ordinal);
+        AssertArtifactTreeMatchesInventory(available);
 
         var differingRenderer = new StubArtifactRenderer(available: true, differentPixels: 17);
         var differing = new EvaluationScorer(artifactRenderer: differingRenderer).Score(
@@ -1144,6 +1374,48 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.Contains("difference pixels=17", visualMetric.Detail, StringComparison.Ordinal);
         Assert.Equal("available", Assert.Single(differing.Artifacts,
             value => value.Id == "candidate-target-visual-diff").Status);
+
+        var excessiveRenderer = new StubArtifactRenderer(
+            available: true, pageCount: 101, createOrphan: true);
+        var excessive = new EvaluationScorer(artifactRenderer: excessiveRenderer).Score(
+            scenario, baseline, baseline.Output, ScoreKind.EngineBaseline,
+            Path.Combine(ArtifactRoot, "renderer-excessive-pages"),
+            ArtifactRenderMode.TrustedDocuments);
+        Assert.Equal("unavailable", Assert.Single(excessive.Artifacts,
+            value => value.Id == "candidate-visual").Status);
+        Assert.DoesNotContain(Directory.EnumerateFiles(excessive.ArtifactDirectory!, "*",
+            SearchOption.AllDirectories), value =>
+            value.EndsWith("renderer-orphan.tmp", StringComparison.Ordinal)
+            || Path.GetFileName(value).Contains("-page-", StringComparison.Ordinal));
+        AssertArtifactTreeMatchesInventory(excessive);
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Renderer_exceptions_and_escape_paths_become_bounded_failed_evidence()
+    {
+        var scenario = ScenarioLoader.LoadCorpus(CorpusPath).Scenarios
+            .Single(value => value.Id == "defined-term-targeting");
+        var baseline = new ScriptedBaselineExecutor().Execute(scenario);
+
+        foreach (var escape in new[] { false, true })
+        {
+            var score = new EvaluationScorer(
+                    artifactRenderer: new HostileArtifactRenderer(escape))
+                .Score(scenario, baseline, baseline.Output, ScoreKind.EngineBaseline,
+                    Path.Combine(ArtifactRoot, escape ? "renderer-escape" : "renderer-throw"),
+                    ArtifactRenderMode.TrustedDocuments);
+
+            Assert.Equal("failed", score.Status);
+            var pdf = Assert.Single(score.Artifacts, value => value.Id == "candidate-pdf");
+            Assert.Equal("unavailable", pdf.Status);
+            Assert.Contains("renderer failed", pdf.UnavailableReason!, StringComparison.Ordinal);
+            Assert.DoesNotContain(score.ArtifactDirectory!, pdf.UnavailableReason!,
+                StringComparison.Ordinal);
+            Assert.Equal("available", Assert.Single(score.Artifacts,
+                value => value.Id == "evaluation-bundle-manifest-v2").Status);
+            AssertArtifactTreeMatchesInventory(score);
+        }
     }
 
     [Fact]
@@ -1191,8 +1463,15 @@ public sealed class LegalWorkflowEvaluationTests
     [Trait("LegalEvalTier", "Fast")]
     public void Legal_eval_workflow_keeps_every_smoke_evidence_step_runnable_after_failure()
     {
-        var workflow = File.ReadAllLines(Path.Combine(
-            RepositoryRoot, ".github", "workflows", "legal-eval.yml"));
+        var workflowPath = Path.Combine(
+            RepositoryRoot, ".github", "workflows", "legal-eval.yml");
+        var workflow = File.ReadAllLines(workflowPath);
+        Assert.Contains("pull_request: {}", File.ReadAllText(workflowPath),
+            StringComparison.Ordinal);
+        var ci = File.ReadAllText(Path.Combine(
+            RepositoryRoot, ".github", "workflows", "ci.yml"));
+        Assert.Contains("pull_request: {}", ci, StringComparison.Ordinal);
+        Assert.Contains("--filter LegalEvalTier!=Full", ci, StringComparison.Ordinal);
         foreach (var step in new[]
         {
             "Generate epic 435 smoke workflow",
@@ -1213,6 +1492,25 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.Contains(workflow[start..end],
                 value => value.Trim() == "if: always()");
         }
+    }
+
+    [Fact]
+    [Trait("LegalEvalTier", "Fast")]
+    public void Published_schema_encodes_the_loader_output_and_operation_contracts()
+    {
+        var schema = JsonNode.Parse(File.ReadAllText(Path.Combine(
+            RepositoryRoot, "eval", "legal", "schema", "scenario.schema.json")))!;
+        var outputs = schema["properties"]!["expectedOutputs"]!;
+        Assert.Equal(9, outputs["minItems"]!.GetValue<int>());
+        Assert.Equal(9, outputs["maxItems"]!.GetValue<int>());
+        Assert.True(outputs["uniqueItems"]!.GetValue<bool>());
+        Assert.Equal(9, schema["$defs"]!["expectedOutput"]!["oneOf"]!.AsArray().Count);
+        var serialized = schema.ToJsonString();
+        Assert.DoesNotContain("failForTest", serialized, StringComparison.Ordinal);
+        Assert.Contains("\"maxItems\":16", serialized.Replace(" ", string.Empty,
+            StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("\"maxItems\":32", serialized.Replace(" ", string.Empty,
+            StringComparison.Ordinal), StringComparison.Ordinal);
     }
 
     private static void AssertInvalidScenario(
@@ -1236,6 +1534,7 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.True(Directory.Exists(score.ArtifactDirectory));
         foreach (var id in new[]
         {
+            "scenario-contract-v1",
             "input-docx",
             "candidate-docx",
             "expected-docx",
@@ -1295,20 +1594,24 @@ public sealed class LegalWorkflowEvaluationTests
         Assert.Equal("docxodus.evaluation-bundle-manifest/2.0",
             bundle["schemaVersion"]!.GetValue<string>());
         Assert.Equal("legal-workflow-evaluation", bundle["bundleKind"]!.GetValue<string>());
+        Assert.Contains("docxodus.evaluation-bundle-run-id/1.0",
+            bundle["runIdAlgorithm"]!.GetValue<string>(), StringComparison.Ordinal);
         var bundleIds = bundle["artifacts"]!.AsArray()
             .Select(value => value!["id"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain("evaluation-bundle-manifest-v2", bundleIds);
         Assert.DoesNotContain("artifact-status", bundleIds);
         Assert.DoesNotContain("artifact-index-markdown", bundleIds);
         Assert.DoesNotContain("artifact-index-html", bundleIds);
-        var fingerprintComponents = new List<string>
+        var fingerprint = new JsonObject
         {
-            bundle["scenarioId"]!.GetValue<string>(),
-            score.Kind.ToString(),
-            bundle["status"]!.GetValue<string>(),
+            ["schemaVersion"] = "docxodus.evaluation-bundle-run-id/1.0",
+            ["scenarioId"] = bundle["scenarioId"]!.DeepClone(),
+            ["scoreKind"] = bundle["scoreKind"]!.DeepClone(),
+            ["status"] = bundle["status"]!.DeepClone(),
+            ["operations"] = bundle["operations"]!.DeepClone(),
+            ["metricStatus"] = bundle["metricStatus"]!.DeepClone(),
+            ["artifacts"] = bundle["artifacts"]!.DeepClone(),
         };
-        fingerprintComponents.AddRange(bundle["operations"]!.AsArray()
-            .Select(value => value!.GetValue<string>()));
         foreach (var artifact in bundle["artifacts"]!.AsArray())
         {
             var value = artifact!;
@@ -1323,12 +1626,10 @@ public sealed class LegalWorkflowEvaluationTests
                 Assert.Equal(size, new FileInfo(artifactPath).Length);
                 Assert.Equal(sha256, Sha256File(artifactPath));
             }
-            fingerprintComponents.Add($"{value["id"]!.GetValue<string>()}:"
-                + $"{value["status"]!.GetValue<string>()}:{sha256}:{size}");
         }
-        var fingerprintInput = string.Join("\n", fingerprintComponents);
         var expectedRunId = Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)))
+            System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes(fingerprint.ToJsonString())))
             .ToLowerInvariant();
         Assert.Equal(expectedRunId, bundle["runId"]!.GetValue<string>());
         var status = JsonNode.Parse(File.ReadAllText(statusRecord.Path!))!;
@@ -1352,6 +1653,7 @@ public sealed class LegalWorkflowEvaluationTests
             Assert.Contains("model-planning candidates", deliveryReceipt.UnavailableReason!,
                 StringComparison.Ordinal);
         }
+        AssertArtifactTreeMatchesInventory(score);
     }
 
     private static ArtifactRecord AssertArtifactContract(
@@ -1381,7 +1683,13 @@ public sealed class LegalWorkflowEvaluationTests
             var id = artifact["artifactId"]!.GetValue<string>();
             var scoreId = id == "clean-docx" ? "candidate-docx" : id;
             var record = Assert.Single(score.Artifacts, value => value.Id == scoreId);
-            supplied.Add(id, File.ReadAllBytes(record.Path!));
+            var relative = artifact["relativePath"]!.GetValue<string>();
+            var declaredPath = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(receiptPath)!,
+                relative.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.Equal(Path.GetFullPath(record.Path!), declaredPath);
+            Assert.True(File.Exists(declaredPath), declaredPath);
+            supplied.Add(id, File.ReadAllBytes(declaredPath));
         }
         return supplied;
     }
@@ -1389,15 +1697,77 @@ public sealed class LegalWorkflowEvaluationTests
     private static void AssertDeterministicContainer(byte[] bytes)
     {
         using var archive = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+        Assert.True(string.IsNullOrEmpty(archive.Comment));
         var names = archive.Entries.Select(value => value.FullName).ToList();
         Assert.Equal(names.Order(StringComparer.Ordinal), names);
         Assert.All(archive.Entries, entry =>
-            Assert.Equal(new DateTime(2000, 1, 1), entry.LastWriteTime.DateTime));
+        {
+            Assert.True(string.IsNullOrEmpty(entry.Comment));
+            Assert.Equal(new DateTime(2000, 1, 1), entry.LastWriteTime.DateTime);
+            Assert.Equal(entry.FullName.EndsWith('/')
+                    ? 0x41ED << 16 | 0x10
+                    : unchecked((int)(0x81A4u << 16)),
+                entry.ExternalAttributes);
+        });
+        AssertCentralDirectoryCreatorPlatform(bytes, expectedPlatform: 3);
+    }
+
+    private static void AssertCentralDirectoryCreatorPlatform(
+        byte[] bytes, byte expectedPlatform)
+    {
+        var archive = bytes.AsSpan();
+        var endOffset = -1;
+        for (var offset = archive.Length - 22; offset >= Math.Max(0, archive.Length - 65557);
+             offset--)
+        {
+            if (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                    archive.Slice(offset, 4)) != 0x06054B50)
+                continue;
+            var commentLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+                archive.Slice(offset + 20, 2));
+            if (offset + 22 + commentLength == archive.Length)
+            {
+                endOffset = offset;
+                break;
+            }
+        }
+        Assert.True(endOffset >= 0, "EOCD record was not found");
+        var size = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+            archive.Slice(endOffset + 12, 4)));
+        var position = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+            archive.Slice(endOffset + 16, 4)));
+        var end = checked(position + size);
+        while (position < end)
+        {
+            Assert.Equal(0x02014B50u,
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                    archive.Slice(position, 4)));
+            Assert.Equal(expectedPlatform, archive[position + 5]);
+            position = checked(position + 46
+                + System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+                    archive.Slice(position + 28, 2))
+                + System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+                    archive.Slice(position + 30, 2))
+                + System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+                    archive.Slice(position + 32, 2)));
+        }
+        Assert.Equal(end, position);
     }
 
     private static string Sha256File(string path) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))
             .ToLowerInvariant();
+
+    private static void AssertArtifactTreeMatchesInventory(EvaluationScore score)
+    {
+        var expected = score.Artifacts.Where(value => value.Path is not null)
+            .Select(value => Path.GetFullPath(value.Path!))
+            .ToHashSet(PathComparer);
+        var actual = Directory.EnumerateFiles(score.ArtifactDirectory!, "*",
+                SearchOption.AllDirectories)
+            .Select(Path.GetFullPath).ToHashSet(PathComparer);
+        Assert.Equal(expected.Order(PathComparer), actual.Order(PathComparer));
+    }
 
     private static void CreateDirectorySymlinkOrSkip(string linkPath, string targetPath)
     {
@@ -1411,6 +1781,74 @@ public sealed class LegalWorkflowEvaluationTests
             throw Xunit.Sdk.SkipException.ForSkip(
                 $"symbolic links are unavailable: {exception.Message}");
         }
+    }
+
+    private static void CreateFileSymlinkOrSkip(string linkPath, string targetPath)
+    {
+        try
+        {
+            File.CreateSymbolicLink(linkPath, targetPath);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                $"symbolic links are unavailable: {exception.Message}");
+        }
+    }
+
+    private static XDocument ReadZipXml(byte[] package, string entryName)
+    {
+        using var archive = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read);
+        using var stream = archive.GetEntry(entryName)!.Open();
+        return XDocument.Load(stream, LoadOptions.PreserveWhitespace);
+    }
+
+    private static byte[] RewriteZipEntry(
+        byte[] package, string entryName, Func<byte[], byte[]> rewrite)
+    {
+        using var source = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read);
+        using var output = new MemoryStream();
+        using (var target = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var sourceEntry in source.Entries)
+            {
+                var targetEntry = target.CreateEntry(sourceEntry.FullName,
+                    CompressionLevel.Optimal);
+                targetEntry.LastWriteTime = sourceEntry.LastWriteTime;
+                targetEntry.ExternalAttributes = sourceEntry.ExternalAttributes;
+                using var input = sourceEntry.Open();
+                using var copy = new MemoryStream();
+                input.CopyTo(copy);
+                var bytes = sourceEntry.FullName == entryName
+                    ? rewrite(copy.ToArray())
+                    : copy.ToArray();
+                using var destination = targetEntry.Open();
+                destination.Write(bytes);
+            }
+        }
+        return output.ToArray();
+    }
+
+    private static byte[] ZipWithAttributes(
+        int externalAttributes,
+        string archiveComment,
+        string entryComment,
+        CompressionLevel compressionLevel)
+    {
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            archive.Comment = archiveComment;
+            var entry = archive.CreateEntry("word/document.xml", compressionLevel);
+            entry.LastWriteTime = new DateTimeOffset(2024, 1, 2, 3, 4, 6, TimeSpan.Zero);
+            entry.ExternalAttributes = externalAttributes;
+            entry.Comment = entryComment;
+            using var writer = new StreamWriter(entry.Open(),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            writer.Write("<document/>");
+        }
+        return stream.ToArray();
     }
 
     private static byte[] Zip(params (string Name, string Content)[] entries)
@@ -1430,7 +1868,9 @@ public sealed class LegalWorkflowEvaluationTests
 
     private sealed class StubArtifactRenderer(
         bool available,
-        long? differentPixels = 0) : IEvaluationArtifactRenderer
+        long? differentPixels = 0,
+        int pageCount = 1,
+        bool createOrphan = false) : IEvaluationArtifactRenderer
     {
         public int RenderCalls { get; private set; }
         public int CompareCalls { get; private set; }
@@ -1446,10 +1886,18 @@ public sealed class LegalWorkflowEvaluationTests
                 return new RenderedDocumentEvidence(
                     null, Array.Empty<string>(), "stub renderer unavailable");
             var pdf = Path.Combine(artifactDirectory, outputPrefix + ".pdf");
-            var page = Path.Combine(artifactDirectory, outputPrefix + "-page-001.png");
             File.WriteAllBytes(pdf, Encoding.ASCII.GetBytes("%PDF-1.4\n% deterministic stub\n"));
-            File.WriteAllBytes(page, new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
-            return new RenderedDocumentEvidence(pdf, new[] { page }, null);
+            var pages = Enumerable.Range(1, pageCount).Select(index =>
+            {
+                var page = Path.Combine(artifactDirectory,
+                    $"{outputPrefix}-page-{index:D3}.png");
+                File.WriteAllBytes(page, StubPng);
+                return page;
+            }).ToList();
+            if (createOrphan)
+                File.WriteAllText(Path.Combine(artifactDirectory, "renderer-orphan.tmp"),
+                    "must not be published");
+            return new RenderedDocumentEvidence(pdf, pages, null);
         }
 
         public RenderedVisualDiffEvidence ComparePages(
@@ -1461,11 +1909,40 @@ public sealed class LegalWorkflowEvaluationTests
             if (!available)
                 return new RenderedVisualDiffEvidence(
                     Array.Empty<string>(), "stub renderer unavailable", null);
-            Assert.Single(targetPages);
-            Assert.Single(candidatePages);
+            Assert.Equal(pageCount, targetPages.Count);
+            Assert.Equal(pageCount, candidatePages.Count);
             var path = Path.Combine(artifactDirectory, "candidate-target-diff-page-001.png");
-            File.WriteAllBytes(path, new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+            File.WriteAllBytes(path, StubPng);
             return new RenderedVisualDiffEvidence(new[] { path }, null, differentPixels);
         }
+
+        private static readonly byte[] StubPng = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
     }
+
+    private sealed class HostileArtifactRenderer(bool returnEscapePath)
+        : IEvaluationArtifactRenderer
+    {
+        public RenderedDocumentEvidence RenderDocument(
+            string artifactDirectory,
+            string sourceDocxPath,
+            string outputPrefix)
+        {
+            if (!returnEscapePath)
+                throw new InvalidOperationException(
+                    $"renderer boom in {artifactDirectory}{Path.DirectorySeparatorChar}private");
+            return new RenderedDocumentEvidence(
+                Path.Combine(Path.GetDirectoryName(artifactDirectory)!, "candidate.docx"),
+                Array.Empty<string>(), null);
+        }
+
+        public RenderedVisualDiffEvidence ComparePages(
+            string artifactDirectory,
+            IReadOnlyList<string> targetPages,
+            IReadOnlyList<string> candidatePages) =>
+            throw new InvalidOperationException("visual comparer should not be reached");
+    }
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }

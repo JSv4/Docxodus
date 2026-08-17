@@ -48,9 +48,9 @@ internal sealed record Options(
         for (var index = 0; index < args.Length; index++)
         {
             var argument = args[index];
-            if (argument is "--render" or "--keep-passes")
+            if (argument == "--render")
             {
-                if (argument == "--render") render = true;
+                render = true;
                 continue;
             }
             if (!ValueOptions.Contains(argument) || index + 1 >= args.Length)

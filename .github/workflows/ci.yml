@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # Stacked pull requests target another feature branch until the stack lands.
+  # Run the same gate for every PR base so intermediate stack heads are tested.
+  pull_request: {}
 
 permissions:
   contents: read
@@ -40,7 +41,12 @@ jobs:
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
       - name: Run tests
-        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
+        # The dedicated legal-eval workflow runs fast coverage on every PR and the full tier on
+        # schedule/dispatch. Keep the generic suite from silently running the opt-in full corpus.
+        run: >-
+          dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal
+          --filter LegalEvalTier!=Full
+          --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         uses: actions/upload-artifact@v7
