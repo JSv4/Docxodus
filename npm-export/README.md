@@ -121,6 +121,8 @@ unverified outcome. Missing legal embedding evidence fails regardless of strictn
 
 Reports expose requested stacks and face attributes, selected family/face, status, source, format,
 file digest/version, coverage, metric compatibility, and a canonical license-evidence identity.
+Each requested stack also records whether a member was a named family or an unquoted CSS generic;
+quoted generic words remain named families and generic fallbacks are not matched as configured names.
 The accompanying `fontIdentity` binds the resolver contract, substitution contract, and complete
 resolution decision set. A separate `fontReadiness` array records the exact final CSS request key,
 bounded sample commitment, and availability used for offline reopen and JS-disabled PDF parity.
@@ -152,6 +154,12 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
   `docxodus/export-browser`; `@docxodus/export` owns filesystem discovery, licensing policy, and the
   Playwright bridge. Unattested system fonts remain `browserObserved` and cannot satisfy strict
   mode. A caller-owned browser is at most `callerAttested`, never `nodeVerified`.
+- Node verifies the browser's staged HTML report against the API-entry source snapshot, normalized
+  options, effective limits, and canonical runtime graph. PDF output is selected and bound only
+  after the exact Chromium bytes pass the Node PDF verifier.
+- Injected browsers report only browser-observable environment facts; client OS/architecture are
+  neither published nor hashed as remote-browser identity. An optional executable digest is
+  accepted only when the runtime can actually expose and match it.
 - The `original` review profile remains fail-closed until issue #444 completes its projection.
 - The broader generated-PDF fidelity ratchet is extended by issue #443.
 

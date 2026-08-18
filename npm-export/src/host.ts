@@ -583,6 +583,7 @@ async function main(): Promise<void> {
         fontPolicy.fontDirectories,
         fontPolicy.fontLicenseAttestations,
         DEFAULT_EXPORT_RESOURCE_LIMITS,
+        controller.signal,
       );
     }
 

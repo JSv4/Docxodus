@@ -63,7 +63,9 @@ function validateRequestRecord(value: unknown, index: number): FontRequest {
     policyError(`Font request ${index} is not an object.`, "Use the versioned font resolver contract.");
   }
   const record = value as unknown as Record<string, unknown>;
-  exactKeys(record, ["id", "familyStack", "style", "weight", "stretch", "sampleCodePoints"],
+  exactKeys(record, [
+    "id", "familyStack", "familyKinds", "style", "weight", "stretch", "sampleCodePoints",
+  ],
     `Font request ${index}`);
   if (typeof record.id !== "string" || !/^[a-zA-Z0-9._:-]{1,128}$/.test(record.id)) {
     policyError(`Font request ${index} has an invalid id.`, "Use a short opaque request identifier.");
@@ -77,6 +79,12 @@ function validateRequestRecord(value: unknown, index: number): FontRequest {
       total + normalizeFontFamilyName(family).length, 0) > 4096) {
     policyError(`Font request ${index} has an invalid family stack.`,
       "Provide one to 64 bounded CSS family names.");
+  }
+  if (!Array.isArray(record.familyKinds)
+    || record.familyKinds.length !== record.familyStack.length
+    || record.familyKinds.some((kind) => kind !== "named" && kind !== "generic")) {
+    policyError(`Font request ${index} has invalid family syntax classifications.`,
+      "Provide exactly one named or generic classification per family.");
   }
   if (record.style !== "normal" && record.style !== "italic" && record.style !== "oblique") {
     policyError(`Font request ${index} has an invalid style.`, "Use normal, italic, or oblique.");
@@ -104,6 +112,7 @@ function validateRequestRecord(value: unknown, index: number): FontRequest {
   return {
     id: record.id,
     familyStack: Object.freeze((record.familyStack as string[]).map(normalizeFontFamilyName)),
+    familyKinds: Object.freeze([...(record.familyKinds as Array<"named" | "generic">)]),
     style: record.style,
     weight: record.weight as number,
     stretch: record.stretch,
@@ -211,12 +220,16 @@ interface Selection {
 
 function selectFace(catalog: FontCatalog, request: FontRequest): Selection | undefined {
   const primary = request.familyStack[0];
-  const exact = bestFace(catalog, primary, request);
+  const exact = request.familyKinds[0] === "named"
+    ? bestFace(catalog, primary, request)
+    : undefined;
   if (exact) {
     return { face: exact, requestedFamily: primary, substituted: false, metricCompatible: true };
   }
-  const primarySubstitution = FONT_SUBSTITUTION_CONTRACT.find((entry) =>
-    fontFamilyKey(entry.family) === fontFamilyKey(primary));
+  const primarySubstitution = request.familyKinds[0] === "named"
+    ? FONT_SUBSTITUTION_CONTRACT.find((entry) =>
+      fontFamilyKey(entry.family) === fontFamilyKey(primary))
+    : undefined;
   if (primarySubstitution) {
     const substitute = bestFace(catalog, primarySubstitution.substitute, request);
     if (substitute) {
@@ -228,7 +241,9 @@ function selectFace(catalog: FontCatalog, request: FontRequest): Selection | und
       };
     }
   }
-  for (const fallback of request.familyStack.slice(1)) {
+  for (let index = 1; index < request.familyStack.length; index++) {
+    const fallback = request.familyStack[index];
+    if (request.familyKinds[index] === "generic") continue;
     const fallbackFace = bestFace(catalog, fallback, request);
     if (fallbackFace) {
       return { face: fallbackFace, requestedFamily: primary, substituted: true, metricCompatible: false };

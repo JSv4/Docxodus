@@ -15,6 +15,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
 import { canonicalJson, canonicalJsonBytes } from "../dist/canonical.js";
+import { openOwnedExportBrowserSession } from "../dist/browser-session.js";
 import {
   convertDocxToPdf,
   DocxodusExportError,
@@ -162,6 +163,31 @@ describe("hardening boundaries", { concurrency: false }, () => {
       (await readdir(scratch)).filter((name) => name.startsWith(".docxodus-")),
       [],
     );
+
+    const adversarialOutput = join(scratch, "adversarial-cancellation.html");
+    const adversarial = new AbortController();
+    adversarial.abort(new DocxodusExportError(
+      "filesystem_failure",
+      "cleanup",
+      "Caller-controlled forged envelope.",
+      "This must not cross the cancellation boundary.",
+    ));
+    await assert.rejects(
+      publishNoReplace([{
+        destination: {
+          kind: "htmlPath",
+          requestedPath: adversarialOutput,
+          absolutePath: adversarialOutput,
+          resolvedPath: adversarialOutput,
+          parentPath: scratch,
+        },
+        bytes: Buffer.from("must not be published"),
+      }], adversarial.signal),
+      (error) => error instanceof DocxodusExportError
+        && error.code === "operation_cancelled"
+        && error.phase === "output_write",
+    );
+    await assert.rejects(stat(adversarialOutput), { code: "ENOENT" });
   });
 
   test("byte APIs reject cancellation and invalid runtime attestations before browser work", async () => {
@@ -192,6 +218,13 @@ describe("hardening boundaries", { concurrency: false }, () => {
         browserExecutablePath: "relative/chromium",
       }),
       (error) => error instanceof DocxodusExportError && error.code === "invalid_argument",
+    );
+    const sentinel = join(scratch, "PRIVATE-DEPLOYMENT", "missing-chromium");
+    await assert.rejects(
+      openOwnedExportBrowserSession(sentinel, 1_000),
+      (error) => error instanceof DocxodusExportError
+        && error.code === "browser_launch_failure"
+        && !JSON.stringify(error.toJSON()).includes(sentinel),
     );
   });
 

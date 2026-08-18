@@ -1,4 +1,5 @@
 import type { Browser } from "playwright-core";
+import { DEFAULT_EXPORT_RESOURCE_LIMITS } from "docxodus/export-browser";
 import type {
   CommentProfile,
   CompleteRenderReport,
@@ -16,6 +17,7 @@ import type {
   RenderWarning,
   ReviewProfile,
 } from "docxodus/export-browser";
+import { canonicalJson } from "./canonical.js";
 
 export const CURRENT_RENDER_REPORT_SCHEMA =
   "https://docxodus.dev/schemas/render/render-report/v3" as const;
@@ -42,6 +44,73 @@ function reportKeys(value: Record<string, unknown>, allowed: readonly string[]):
 
 function reportStrings(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+/** Validate the closed, paginated PageMap crossing the browser/Node boundary. */
+export function isCurrentPageMap(
+  value: unknown,
+  limits: ExportResourceLimits,
+): value is PaginatedHtmlResult["pageMap"] {
+  const map = reportRecord(value);
+  if (!map || !reportKeys(map, [
+    "schemaVersion", "mode", "availability", "documentVersion", "rendererFingerprint",
+    "pages", "fragments",
+  ]) || map.schemaVersion !== 1 || map.mode !== "paginated" || map.availability !== "available"
+    || !Number.isSafeInteger(map.documentVersion) || (map.documentVersion as number) < 0
+    || typeof map.rendererFingerprint !== "string"
+    || !/^[0-9a-f]{64}$/.test(map.rendererFingerprint)
+    || !Array.isArray(map.pages) || map.pages.length < 1 || map.pages.length > limits.finalPages
+    || !Array.isArray(map.fragments) || map.fragments.length > limits.domNodes) return false;
+  const pages = new Map<number, { width: number; height: number }>();
+  for (let index = 0; index < map.pages.length; index++) {
+    const page = reportRecord(map.pages[index]);
+    if (!page || !reportKeys(page, [
+      "pageNumber", "pageInSection", "width", "height", "sectionIndex", "pageName",
+    ]) || page.pageNumber !== index + 1
+      || !Number.isSafeInteger(page.pageInSection) || (page.pageInSection as number) < 1
+      || typeof page.width !== "number" || !Number.isFinite(page.width) || page.width <= 0
+      || typeof page.height !== "number" || !Number.isFinite(page.height) || page.height <= 0
+      || !Number.isSafeInteger(page.sectionIndex) || (page.sectionIndex as number) < 0
+      || typeof page.pageName !== "string" || page.pageName.length < 1
+      || page.pageName.length > 512) return false;
+    pages.set(index + 1, { width: page.width, height: page.height });
+  }
+  const fragmentIds = new Set<string>();
+  const nextFragmentIndex = new Map<string, number>();
+  for (const candidate of map.fragments) {
+    const fragment = reportRecord(candidate);
+    const geometry = fragment ? reportRecord(fragment.geometry) : undefined;
+    const page = fragment && Number.isSafeInteger(fragment.pageNumber)
+      ? pages.get(fragment.pageNumber as number)
+      : undefined;
+    if (!fragment || !reportKeys(fragment, [
+      "fragmentId", "anchorId", "fragmentIndex", "pageNumber", "geometry", "story",
+      "inTableCell",
+    ]) || typeof fragment.fragmentId !== "string" || fragment.fragmentId.length < 1
+      || fragment.fragmentId.length > limits.opcUriCharacters + 128
+      || fragmentIds.has(fragment.fragmentId)
+      || typeof fragment.anchorId !== "string" || fragment.anchorId.length < 1
+      || fragment.anchorId.length > limits.opcUriCharacters
+      || !Number.isSafeInteger(fragment.fragmentIndex) || (fragment.fragmentIndex as number) < 0
+      || !page
+      || fragment.fragmentId !==
+        `p${fragment.pageNumber}-f${fragment.fragmentIndex}-${fragment.anchorId}`
+      || !geometry || !reportKeys(geometry, ["x", "y", "width", "height"])
+      || ![geometry.x, geometry.y, geometry.width, geometry.height].every((entry) =>
+        typeof entry === "number" && Number.isFinite(entry))
+      || (geometry.x as number) < 0 || (geometry.y as number) < 0
+      || (geometry.width as number) < 0 || (geometry.height as number) < 0
+      || (geometry.x as number) + (geometry.width as number) > page.width + 0.1
+      || (geometry.y as number) + (geometry.height as number) > page.height + 0.1
+      || !["body", "header", "footer", "footnote", "endnote", "comment"]
+        .includes(String(fragment.story))
+      || typeof fragment.inTableCell !== "boolean") return false;
+    const expectedIndex = nextFragmentIndex.get(fragment.anchorId) ?? 0;
+    if (fragment.fragmentIndex !== expectedIndex) return false;
+    nextFragmentIndex.set(fragment.anchorId, expectedIndex + 1);
+    fragmentIds.add(fragment.fragmentId);
+  }
+  return true;
 }
 
 export function isCurrentCompleteRenderReport(value: unknown): value is CompleteRenderReport {
@@ -94,7 +163,8 @@ export function isCurrentCompleteRenderReport(value: unknown): value is Complete
     || !["warn", "strict"].includes(String(policy.unsupportedContent))
     || typeof policy.strictFonts !== "boolean" || !integer(policy.timeoutMs, 1)
     || !limits || !reportKeys(limits, limitKeys)
-    || !limitKeys.every((key) => integer(limits[key], 1))) return false;
+    || !limitKeys.every((key) => integer(limits[key], 1)
+      && (limits[key] as number) <= DEFAULT_EXPORT_RESOURCE_LIMITS[key])) return false;
   const profileRequiresDerived = ["final", "original"].includes(String(options.reviewProfile))
     && options.reviewProfileAlreadyApplied === false;
   if (profileRequiresDerived !== (derived !== undefined)
@@ -136,17 +206,21 @@ export function isCurrentCompleteRenderReport(value: unknown): value is Complete
   const fontsValid = Array.isArray(report.fonts) && report.fonts.every((font) => {
     const item = reportRecord(font);
     if (!item || !reportKeys(item, [
-      "requestId", "requestedFamily", "requestedFamilies", "requestedStyle", "requestedWeight",
-      "requestedStretch", "sampleCodePointCount", "sampleDigest", "resolvedFamily", "resolvedFace",
+      "requestId", "requestedFamily", "requestedFamilies", "requestedFamilyKinds", "requestedStyle",
+      "requestedWeight", "requestedStretch", "sampleCodePointCount", "sampleDigest", "resolvedFamily", "resolvedFace",
       "status", "source", "format", "fileSha256", "version", "faceMatch", "metricCompatible",
       "glyphCoverage", "missingCodePointCount", "browserFallbackAvailable", "licenseEvidence",
-    ]) || typeof item.requestId !== "string" || !/^font-[0-9]{4,}$/.test(item.requestId)
+    ]) || typeof item.requestId !== "string" || item.requestId.length > 128
+      || !/^font-[0-9]{4,}$/.test(item.requestId)
       || typeof item.requestedFamily !== "string" || item.requestedFamily.length === 0
       || item.requestedFamily.length > 512
       || !reportStrings(item.requestedFamilies) || item.requestedFamilies.length === 0
-      || item.requestedFamilies.length > 256
+      || item.requestedFamilies.length > 64
       || item.requestedFamilies.some((family) => family.length === 0 || family.length > 512)
       || !item.requestedFamilies.includes(item.requestedFamily)
+      || !reportStrings(item.requestedFamilyKinds)
+      || item.requestedFamilyKinds.length !== item.requestedFamilies.length
+      || item.requestedFamilyKinds.some((kind) => kind !== "named" && kind !== "generic")
       || !["normal", "italic", "oblique"].includes(String(item.requestedStyle))
       || !integer(item.requestedWeight, 1) || (item.requestedWeight as number) > 1000
       || !finite(item.requestedStretch, 50) || (item.requestedStretch as number) > 200
@@ -378,6 +452,16 @@ export function isCurrentFailedRenderReport(value: unknown): value is FailedRend
   // unavailable evidence are replaced here and validated independently below.
   const commonCandidate = {
     ...base,
+    ...(["final", "original"].includes(String(options?.reviewProfile))
+      && options?.reviewProfileAlreadyApplied === false
+      && report.derivedProfileSource === undefined
+      ? {
+          // Complete reports require this derived snapshot, while a failure
+          // may occur before profile derivation. Supply a guard-only witness;
+          // the original failed report remains unchanged.
+          derivedProfileSource: { rawPackageBytesDigest: zeroDigest, byteLength: 1 },
+        }
+      : {}),
     fontIdentity: report.fontIdentity ?? {
       resolverContract: "https://docxodus.dev/contracts/font-resolver/v1",
       substitutionContractVersion: 1,
@@ -482,6 +566,11 @@ export function isCurrentFailedRenderReport(value: unknown): value is FailedRend
     || ["detail", "partUri", "anchorId", "resource"].some((key) =>
       failure[key] !== undefined && typeof failure[key] !== "string")
     || (failure.pending !== undefined && !reportStrings(failure.pending))) return false;
+  const expectedTerminalStatus = failure.code === "operation_cancelled" ? "cancelled" : "failed";
+  if (!report.readiness.some((entry) => {
+    const item = reportRecord(entry);
+    return item?.status === expectedTerminalStatus;
+  })) return false;
 
   const environment = report.environment === undefined
     ? undefined : reportRecord(report.environment);
@@ -571,6 +660,12 @@ export function isCurrentFailedRenderReport(value: unknown): value is FailedRend
       || typeof item.detail !== "string" || item.detail.length === 0) return false;
     unavailableFields.add(String(item.field));
   }
+  if ((bindings?.htmlDigest !== undefined && unavailableFields.has("bindings.htmlDigest"))
+    || (bindings?.pdfDigest !== undefined && unavailableFields.has("bindings.pdfDigest"))
+    || (bindings?.pdfDigest !== undefined
+      ? bindings.pdfByteDeterministic !== false || bindings.volatilePdfMetadata === undefined
+      : bindings?.pdfByteDeterministic !== undefined
+        || bindings?.volatilePdfMetadata !== undefined)) return false;
   return true;
 }
 
@@ -756,6 +851,15 @@ export interface BrowserMaterializationFailure {
   report?: FailedRenderReport;
 }
 
+export interface BrowserFailureReportExpectation {
+  source: CompleteRenderReport["source"];
+  options: CompleteRenderReport["options"];
+  retainedPolicy?: {
+    strictFonts: boolean;
+    runtimePolicyDigest: string;
+  };
+}
+
 export function exportError(
   code: DocxodusExportErrorCode,
   phase: ExportPhase,
@@ -804,27 +908,121 @@ const PHASES = new Set<ExportPhase>([
   "cleanup",
 ]);
 
-export function fromBrowserFailure(value: BrowserMaterializationFailure): DocxodusExportError {
-  const report = isCurrentFailedRenderReport(value.report)
+function rebindFailedReportOutputs(
+  source: FailedRenderReport,
+  requestedOutputs: readonly RenderOutput[],
+  stripStagedPdfEvidence = false,
+): FailedRenderReport | undefined {
+  const report = structuredClone(source);
+  if (stripStagedPdfEvidence && report.partial?.bindings) {
+    delete report.partial.bindings.pdfDigest;
+    delete report.partial.bindings.pdfByteDeterministic;
+    delete report.partial.bindings.volatilePdfMetadata;
+  }
+  report.options.outputs = [
+    ...(requestedOutputs.includes("html") ? ["html" as const] : []),
+    ...(requestedOutputs.includes("pdf") ? ["pdf" as const] : []),
+  ];
+  if (report.partial?.bindings) {
+    if (!requestedOutputs.includes("html")) delete report.partial.bindings.htmlDigest;
+    if (!requestedOutputs.includes("pdf")) {
+      delete report.partial.bindings.pdfDigest;
+      delete report.partial.bindings.pdfByteDeterministic;
+      delete report.partial.bindings.volatilePdfMetadata;
+    }
+  }
+  const existing = new Map(report.unavailable.map((entry) => [entry.field, entry]));
+  const htmlExisting = existing.get("bindings.htmlDigest");
+  const pdfExisting = existing.get("bindings.pdfDigest");
+  const artifactFailureReached = report.failure.phase === "pdf_print"
+    || report.failure.phase === "output_verification"
+    || report.failure.phase === "output_write"
+    || report.failure.phase === "filesystem_commit"
+    || report.failure.phase === "cleanup";
+  const requestedReason = artifactFailureReached ? "failedVerification" as const : "notReached" as const;
+  report.unavailable = [
+    ...report.unavailable.filter(({ field }) =>
+      field !== "bindings.htmlDigest" && field !== "bindings.pdfDigest"),
+    ...(requestedOutputs.includes("html") && report.partial?.bindings?.htmlDigest !== undefined
+      ? [] : [requestedOutputs.includes("html")
+      ? htmlExisting && htmlExisting.reasonCode !== "notRequested"
+        ? htmlExisting
+        : {
+            field: "bindings.htmlDigest" as const,
+            reasonCode: requestedReason,
+            detail: "HTML output was requested but browser materialization did not complete.",
+          }
+      : {
+          field: "bindings.htmlDigest" as const,
+          reasonCode: "notRequested" as const,
+          detail: "HTML output was not selected for this operation.",
+        }]),
+    ...(requestedOutputs.includes("pdf") && report.partial?.bindings?.pdfDigest !== undefined
+      ? [] : [requestedOutputs.includes("pdf")
+      ? pdfExisting && pdfExisting.reasonCode !== "notRequested"
+        ? pdfExisting
+        : {
+            field: "bindings.pdfDigest" as const,
+            reasonCode: requestedReason,
+            detail: "PDF output was requested but browser materialization did not complete.",
+          }
+      : {
+          field: "bindings.pdfDigest" as const,
+          reasonCode: "notRequested" as const,
+          detail: "PDF output was not selected for this operation.",
+        }]),
+  ];
+  return isCurrentFailedRenderReport(report) ? report : undefined;
+}
+
+export function fromBrowserFailure(
+  value: BrowserMaterializationFailure,
+  requestedOutputs?: readonly RenderOutput[],
+  expectation?: BrowserFailureReportExpectation,
+): DocxodusExportError {
+  const validatedReport = isCurrentFailedRenderReport(value.report)
+    && (expectation === undefined
+      || (canonicalJson(value.report.source) === canonicalJson(expectation.source)
+        && canonicalJson(value.report.options) === canonicalJson(expectation.options)))
     ? structuredClone(value.report)
     : undefined;
-  const code = ERROR_CODES.has(value.code as DocxodusExportErrorCode)
+  let report = validatedReport && requestedOutputs
+    ? rebindFailedReportOutputs(validatedReport, requestedOutputs, true)
+    : validatedReport;
+  if (report && expectation?.retainedPolicy) {
+    report.options.policy.strictFonts = expectation.retainedPolicy.strictFonts;
+    report.options.runtimePolicyDigest = expectation.retainedPolicy.runtimePolicyDigest;
+    if (!isCurrentFailedRenderReport(report)) report = undefined;
+  }
+  // A validated report is the authoritative failure envelope. Never combine
+  // it with independently supplied bridge fields that could contradict the
+  // retained audit record.
+  const code = report?.failure.code ?? (ERROR_CODES.has(value.code as DocxodusExportErrorCode)
     ? value.code as DocxodusExportErrorCode
-    : "conversion_failure";
-  const phase = PHASES.has(value.phase as ExportPhase)
+    : "conversion_failure");
+  const phase = report?.failure.phase ?? (PHASES.has(value.phase as ExportPhase)
     ? value.phase as ExportPhase
-    : "docx_conversion";
+    : "docx_conversion");
+  const fallbackString = (candidate: unknown, fallback: string): string =>
+    typeof candidate === "string" && candidate.length > 0 ? candidate : fallback;
+  const optionalString = (candidate: unknown): string | undefined =>
+    typeof candidate === "string" ? candidate : undefined;
+  const pending = Array.isArray(value.pending) && value.pending.every((entry) => typeof entry === "string")
+    ? [...value.pending]
+    : undefined;
   return new DocxodusExportError(
     code,
     phase,
-    value.message ?? "The browser materializer failed without a message.",
-    value.remediation ?? "Inspect the render report and source document.",
+    report?.failure.message
+      ?? fallbackString(value.message, "The browser materializer failed without a message."),
+    report?.failure.remediation
+      ?? fallbackString(value.remediation, "Inspect the render report and source document."),
     {
-      detail: value.detail,
-      pending: value.pending ?? report?.failure.pending,
-      partUri: value.partUri ?? report?.failure.partUri,
-      anchorId: value.anchorId ?? report?.failure.anchorId,
-      resource: value.resource ?? report?.failure.resource,
+      detail: report?.failure.detail ?? optionalString(value.detail),
+      pending: report?.failure.pending ?? pending,
+      partUri: report?.failure.partUri ?? optionalString(value.partUri),
+      anchorId: report?.failure.anchorId ?? optionalString(value.anchorId),
+      resource: report?.failure.resource ?? optionalString(value.resource),
       report,
     },
   );
@@ -901,8 +1099,26 @@ export function failedReportFromComplete(
 export function attachFailedReport(
   error: unknown,
   report: CompleteRenderReport | undefined,
+  requestedOutputs?: readonly RenderOutput[],
+  retainedPolicy?: BrowserFailureReportExpectation["retainedPolicy"],
+  stripStagedPdfEvidence = false,
 ): unknown {
-  if (!(error instanceof DocxodusExportError) || error.report || !report) return error;
+  if (!(error instanceof DocxodusExportError)) return error;
+  const existing = isCurrentFailedRenderReport(error.report)
+    ? structuredClone(error.report)
+    : undefined;
+  const synthesized = existing ?? (report && isCurrentCompleteRenderReport(report)
+    ? failedReportFromComplete(report, error)
+    : undefined);
+  let failedReport = synthesized && requestedOutputs
+    ? rebindFailedReportOutputs(synthesized, requestedOutputs, stripStagedPdfEvidence)
+    : synthesized;
+  if (failedReport && retainedPolicy) {
+    failedReport.options.policy.strictFonts = retainedPolicy.strictFonts;
+    failedReport.options.runtimePolicyDigest = retainedPolicy.runtimePolicyDigest;
+    if (!isCurrentFailedRenderReport(failedReport)) failedReport = undefined;
+  }
+  if (!failedReport && error.report === undefined) return error;
   return new DocxodusExportError(error.code, error.phase, error.message, error.remediation, {
     detail: error.detail,
     pending: error.pending,
@@ -910,7 +1126,7 @@ export function attachFailedReport(
     anchorId: error.anchorId,
     resource: error.resource,
     cause: error.cause,
-    report: failedReportFromComplete(report, error),
+    report: failedReport && isCurrentFailedRenderReport(failedReport) ? failedReport : undefined,
     committedDestinations: error.committedDestinations,
   });
 }

@@ -40,8 +40,10 @@ import {
   exportError,
   hasCurrentRenderReportDiscriminator,
   isCurrentCompleteRenderReport,
+  isCurrentPageMap,
 } from "./contracts.js";
 import {
+  createFileDeadlineSignal,
   prepareDestinations,
   publishNoReplace,
   readStableInputFile,
@@ -116,7 +118,7 @@ function materialDigest(domain: string, value: unknown): string {
   return sha256(`${domain}\0${canonicalJson(value)}`);
 }
 
-function nonEmptyString(value: unknown, label: string): string {
+function nonEmptyString(value: unknown, label: string, maximum = 1024): string {
   if (typeof value !== "string" || value.trim() === "" || !wellFormed(value)) {
     exportError(
       "invalid_argument",
@@ -125,9 +127,9 @@ function nonEmptyString(value: unknown, label: string): string {
       "Correct the runtime attestation and retry.",
     );
   }
-  if (value.length > 1024 || /[\u0000-\u001f\u007f]/u.test(value)) {
-    exportError("invalid_document", "input_validation", `${label} is not a bounded plain string.`,
-      "Use at most 1024 printable characters.");
+  if (value.length > maximum || /[\u0000-\u001f\u007f]/u.test(value)) {
+    exportError("invalid_argument", "input_validation", `${label} is not a bounded plain string.`,
+      `Use at most ${maximum} printable characters.`);
   }
   return value;
 }
@@ -231,9 +233,11 @@ function validateEnvironmentAttestation(
       exportError("invalid_argument", "input_validation", `hostFonts[${index}].stretch is invalid.`,
         "Use a CSS stretch percentage from 50 through 200.");
     }
-    const family = normalizeFontFamilyName(nonEmptyString(item.family, `hostFonts[${index}].family`));
+    const family = normalizeFontFamilyName(
+      nonEmptyString(item.family, `hostFonts[${index}].family`, 512),
+    );
     const postscriptName = normalizeFontFamilyName(
-      nonEmptyString(item.postscriptName, `hostFonts[${index}].postscriptName`),
+      nonEmptyString(item.postscriptName, `hostFonts[${index}].postscriptName`, 512),
     );
     const faceKey = canonicalJson([
       family.toLowerCase(),
@@ -260,7 +264,7 @@ function validateEnvironmentAttestation(
       weight: item.weight as number,
       stretch: item.stretch,
       fileSha256,
-      version: nonEmptyString(item.version, `hostFonts[${index}].version`),
+      version: nonEmptyString(item.version, `hostFonts[${index}].version`, 512),
     };
   });
   return Object.freeze({
@@ -670,12 +674,22 @@ function snapshotNodeOptions<T extends NodeExportOptions>(options: T): T {
       ? { limits: { ...options.limits } }
       : {}),
     ...(Array.isArray(options.fontDirectories)
-      ? { fontDirectories: [...options.fontDirectories] }
+      ? {
+        fontDirectories: options.fontDirectories.map((directory) =>
+          typeof directory === "string" ? resolve(directory) : directory),
+      }
       : {}),
     ...(Array.isArray(options.fontLicenseAttestations)
       ? {
         fontLicenseAttestations: options.fontLicenseAttestations.map((entry) =>
-          entry && typeof entry === "object" ? { ...entry } : entry),
+          entry && typeof entry === "object"
+            ? {
+                ...entry,
+                ...(Array.isArray(entry.permittedOutputs)
+                  ? { permittedOutputs: [...entry.permittedOutputs] }
+                  : {}),
+              }
+            : entry),
       }
       : {}),
     ...(environment && typeof environment === "object" && !Array.isArray(environment)
@@ -777,6 +791,32 @@ function normalizedTimeout(options: NodeExportOptions): number {
   return timeout;
 }
 
+function enforceOperationBoundary(
+  deadline: number,
+  signal: AbortSignal | undefined,
+  phase: "package_preflight" | "output_verification" | "output_write",
+  pending: string,
+): void {
+  if (signal?.aborted) {
+    exportError(
+      "operation_cancelled",
+      phase,
+      `Export was cancelled during ${phase}.`,
+      "Retry with a non-aborted signal.",
+      { pending: [pending], cause: signal.reason },
+    );
+  }
+  if (performance.now() >= deadline) {
+    exportError(
+      "readiness_timeout",
+      phase,
+      `Export timed out during ${phase}.`,
+      "Increase timeoutMs or reduce document/runtime complexity.",
+      { pending: [pending] },
+    );
+  }
+}
+
 function browserOptions(
   options: NodeExportOptions,
 ): Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver"> {
@@ -801,8 +841,8 @@ function runtimeEnvironment(
 ): CompleteRenderReport["environment"] {
   const browserProduct = runtime.chromiumProduct;
   const browserBuild = runtime.browserVersion;
+  const browserObserved = report.environment.observed;
   const observed: ExportRuntimeObservedFacts = {
-    ...report.environment.observed,
     runtimeKind: "nodeChromium",
     playwrightVersion: runtime.playwrightVersion,
     browserProduct,
@@ -810,12 +850,19 @@ function runtimeEnvironment(
     ...(runtime.executableDigest === undefined
       ? {}
       : { executableSha256: runtime.executableDigest }),
-    launchFlags: [...runtime.launchFlags],
-    operatingSystem: runtime.platform,
-    architecture: runtime.architecture,
-    networkIsolation: runtime.launchMode === "injected"
-      ? "contextRestricted"
-      : "ownedProcessRestricted",
+    ...(runtime.launchMode === "injected" ? {} : { launchFlags: [...runtime.launchFlags] }),
+    ...(runtime.launchMode === "injected" ? {} : {
+      operatingSystem: runtime.platform,
+      architecture: runtime.architecture,
+    }),
+    locale: browserObserved.locale,
+    timezone: browserObserved.timezone,
+    viewport: [...browserObserved.viewport] as [number, number],
+    deviceScaleFactor: browserObserved.deviceScaleFactor,
+    media: { ...browserObserved.media },
+    networkIsolation: runtime.launchMode === "pinned"
+      ? "ownedProcessRestricted"
+      : "contextRestricted",
   };
   const nodeFontsVerified = report.fonts.every((font) =>
     strictFontResolution(font, runtime, undefined)
@@ -831,17 +878,14 @@ function runtimeEnvironment(
     : "unbaselined";
   if (!attestation) {
     return {
-      ...report.environment,
+      rendererFingerprint: report.environment.rendererFingerprint,
       verification: baselineVerification,
       fidelityTier,
       observed,
     };
   }
 
-  const attestedFamilies = new Set(attestation.hostFonts.map((font) =>
-    font.family.normalize("NFC").toLowerCase()));
-  const uncoveredFont = report.fonts.find((font) => font.source === "browser"
-    && !attestedFamilies.has((font.resolvedFamily ?? font.requestedFamily).normalize("NFC").toLowerCase()));
+  const uncoveredFont = uncoveredBrowserFont(report, attestation);
   const flagsMatch = runtime.launchMode === "injected"
     || (runtime.launchFlags.length === attestation.launchFlags.length
       && runtime.launchFlags.every((flag, index) => flag === attestation.launchFlags[index]));
@@ -866,7 +910,7 @@ function runtimeEnvironment(
   }
   if (digestUnobservable) {
     return {
-      ...report.environment,
+      rendererFingerprint: report.environment.rendererFingerprint,
       verification: baselineVerification,
       fidelityTier,
       observed,
@@ -883,7 +927,7 @@ function runtimeEnvironment(
     basis: attestation.basis,
   };
   return {
-    ...report.environment,
+    rendererFingerprint: report.environment.rendererFingerprint,
     verification: "callerAttested",
     fidelityTier,
     observed,
@@ -892,15 +936,56 @@ function runtimeEnvironment(
   };
 }
 
+function runtimePolicyDigest(
+  runtime: BrowserRuntimeIdentity,
+  limits: ExportResourceLimits,
+  strictFonts: boolean,
+  timeoutMs: number,
+  unsupportedContent: "warn" | "strict",
+): string {
+  return materialDigest("docxodus:runtime-policy:v1", {
+    assetGraphDigest: runtime.assetManifestDigest,
+    assetPackageVersion: runtime.packageVersion,
+    isolation: {
+      attachedSameOriginFrame: true,
+      scripts: "denied",
+      automaticNetwork: "denied",
+      sandbox: ["allow-same-origin"],
+    },
+    limits,
+    strictFonts,
+    timeoutMs,
+    unsupportedContent,
+  });
+}
+
+function layoutDigest(options: NodeExportOptions): string {
+  return materialDigest("docxodus:layout-options:v1", {
+    title: options.title ?? "",
+    reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied ?? false,
+    commentProfile: options.commentProfile,
+    pagination: {
+      mode: "paginated",
+      scale: 1,
+      pageGap: 0,
+      showPageNumbers: false,
+      fragmentParagraphs: true,
+      cssPrefix: "page-",
+    },
+  });
+}
+
 function verifyBrowserOutcome(
   browser: BrowserRenderOutcome,
   requested: readonly RenderOutput[],
+  sourceBytes: Uint8Array,
+  options: NodeExportOptions,
+  limits: ExportResourceLimits,
+  timeoutMs: number,
+  stagedStrictFonts: boolean,
 ): void {
   const materialization = browser.materialization;
-  const expectedOutputs = [
-    ...(requested.includes("html") ? ["html" as const] : []),
-    ...(requested.includes("pdf") ? ["pdf" as const] : []),
-  ];
   const report = materialization.renderReport;
   if (!isCurrentCompleteRenderReport(report)) {
     const version = hasCurrentRenderReportDiscriminator(report)
@@ -914,15 +999,41 @@ function verifyBrowserOutcome(
     );
   }
   const pageMapDigest = sha256(canonicalJson(materialization.pageMap));
-  const outputsMatch = canonicalJson(report.options.outputs) === canonicalJson(expectedOutputs);
+  const expectedOptions = {
+    reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied ?? false,
+    commentProfile: options.commentProfile,
+    title: options.title ?? "",
+    outputs: ["html"],
+    layoutDigest: layoutDigest(options),
+    runtimePolicyDigest: runtimePolicyDigest(
+      browser.runtime,
+      limits,
+      stagedStrictFonts,
+      timeoutMs,
+      options.unsupportedContent ?? "warn",
+    ),
+    policy: {
+      unsupportedContent: options.unsupportedContent ?? "warn",
+      strictFonts: stagedStrictFonts,
+      timeoutMs,
+      limits,
+    },
+  };
   const pageInventoriesMatch = canonicalJson(report.pages) === canonicalJson(materialization.pageMap.pages);
-  if (!Number.isSafeInteger(materialization.pageCount) || materialization.pageCount < 1
+  if (!isCurrentPageMap(materialization.pageMap, limits)
+    || !Number.isSafeInteger(materialization.pageCount) || materialization.pageCount < 1
     || materialization.pageCount !== materialization.pageMap.pages.length
     || materialization.pageCount !== report.pages.length
     || materialization.rendererFingerprint !== materialization.pageMap.rendererFingerprint
     || materialization.rendererFingerprint !== report.environment.rendererFingerprint
     || report.bindings.pageMapDigest !== pageMapDigest
-    || !outputsMatch || !pageInventoriesMatch
+    || report.source.rawPackageBytesDigest !== sha256(sourceBytes)
+    || report.source.byteLength !== sourceBytes.byteLength
+    || report.source.documentVersion !== (options.documentVersion ?? 0)
+    || materialization.pageMap.documentVersion !== (options.documentVersion ?? 0)
+    || canonicalJson(report.options) !== canonicalJson(expectedOptions)
+    || !pageInventoriesMatch
     || canonicalJson(materialization.warnings) !== canonicalJson(report.warnings)) {
     exportError(
       "output_verification_failure",
@@ -931,25 +1042,21 @@ function verifyBrowserOutcome(
       "Use matching hardened docxodus and @docxodus/export package versions.",
     );
   }
-  if (expectedOutputs.includes("html")) {
-    if (materialization.html === undefined
-      || report.bindings.htmlDigest !== sha256(materialization.html)) {
-      exportError(
-        "output_verification_failure",
-        "output_verification",
-        "The browser materializer HTML bytes do not match the reported digest.",
-        "Use the exact finalized standalone HTML returned by the verified materializer.",
-      );
-    }
-  } else if (materialization.html !== undefined || report.bindings.htmlDigest !== undefined) {
+  if (report.bindings.htmlDigest !== sha256(browser.stagedHtml)
+    || (requested.includes("html")
+      ? materialization.html !== browser.stagedHtml
+      : materialization.html !== undefined)
+    || report.bindings.pdfDigest !== undefined
+    || report.bindings.pdfByteDeterministic !== undefined
+    || report.bindings.volatilePdfMetadata !== undefined) {
     exportError(
       "output_verification_failure",
       "output_verification",
-      "The browser materializer returned an unrequested HTML artifact or digest.",
-      "Bind reports only to selected output artifacts.",
+      "The browser materializer HTML staging bytes do not match the browser report.",
+      "Use the exact finalized standalone HTML returned by the verified materializer.",
     );
   }
-  if (expectedOutputs.includes("pdf") !== (browser.pdf !== undefined)) {
+  if (requested.includes("pdf") !== (browser.pdf !== undefined)) {
     exportError(
       "output_verification_failure",
       "output_verification",
@@ -983,8 +1090,15 @@ function applyHostFontAttestation(
   if (!attestation || !runtimeAttestationMatches(runtime, attestation)) return;
   let changed = false;
   report.fonts = report.fonts.map((font): FontResolution => {
-    if (font.source !== "browser" || font.status !== "unverified") return font;
-    const family = font.resolvedFamily ?? font.requestedFamily;
+    if (font.source !== "browser"
+      || (font.status !== "unverified"
+        && !(font.status === "missing" && font.browserFallbackAvailable === true))) return font;
+    const requestedIndex = font.requestedFamilies.indexOf(font.requestedFamily);
+    // CSS generic keywords identify a browser-selected fallback class, not a
+    // literal host family. Only a syntactically named family can be promoted
+    // to an exact attested face (quoted "serif" remains a named family).
+    if (requestedIndex < 0 || font.requestedFamilyKinds[requestedIndex] !== "named") return font;
+    const family = font.requestedFamily;
     const match = attestation.hostFonts.find((candidate) =>
       normalizeFontFamilyName(candidate.family).toLowerCase()
         === normalizeFontFamilyName(family).toLowerCase()
@@ -993,8 +1107,9 @@ function applyHostFontAttestation(
       && candidate.stretch === font.requestedStretch);
     if (!match) return font;
     changed = true;
+    const { browserFallbackAvailable: _browserFallbackAvailable, ...base } = font;
     return {
-      ...font,
+      ...base,
       status: "resolved",
       source: "attested",
       resolvedFamily: match.family,
@@ -1056,12 +1171,34 @@ function strictFontResolution(
       && face.postscriptName === font.resolvedFace);
 }
 
-function reconcileHostFontWarnings(report: CompleteRenderReport): void {
-  const stillUnverified = report.fonts.some((font) =>
-    font.status === "unverified" || font.source === "browser");
-  if (!stillUnverified) {
-    report.warnings = report.warnings.filter(({ code }) => code !== "font_environment_unverified");
-  }
+function uncoveredBrowserFont(
+  report: CompleteRenderReport,
+  attestation: RenderEnvironmentAttestation | undefined,
+): FontResolution | undefined {
+  if (!attestation) return report.fonts.find((font) => font.source === "browser");
+  const attestedFamilies = new Set(attestation.hostFonts.map((font) =>
+    normalizeFontFamilyName(font.family).toLowerCase()));
+  // Exact available faces have already been promoted. A truly missing family
+  // is consistent with its absence from the exhaustive host inventory; an
+  // available or same-family-but-unbound browser result is not.
+  return report.fonts.find((font) => font.source === "browser"
+    && (font.status !== "missing"
+      || font.browserFallbackAvailable === true
+      || attestedFamilies.has(normalizeFontFamilyName(font.requestedFamily).toLowerCase())));
+}
+
+function reconcileHostFontWarnings(
+  report: CompleteRenderReport,
+  attestation: RenderEnvironmentAttestation | undefined,
+): void {
+  const stillUnverified = uncoveredBrowserFont(report, attestation) !== undefined;
+  report.warnings = report.warnings.filter((warning) => {
+    if (warning.code === "font_environment_unverified") return stillUnverified;
+    if (warning.code !== "font_unavailable" || warning.resource === undefined) return true;
+    return report.fonts.some((font) => font.status === "missing"
+      && normalizeFontFamilyName(font.requestedFamily).toLowerCase()
+        === normalizeFontFamilyName(warning.resource!).toLowerCase());
+  });
 }
 
 function enforceStrictFontPolicy(
@@ -1095,10 +1232,14 @@ function finalRendererFingerprint(
       const rightKey = canonicalJson(right);
       return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
     });
+  const { platform, architecture, ...portableRuntime } = runtime;
+  const fingerprintRuntime = runtime.launchMode === "injected"
+    ? portableRuntime
+    : { ...portableRuntime, platform, architecture };
   return sha256(canonicalJson({
     schemaVersion: 1,
     browserMaterializerFingerprint,
-    runtime,
+    runtime: fingerprintRuntime,
     environment: {
       verification,
       ...(verification === "callerAttested" && attestation
@@ -1114,6 +1255,8 @@ function finalRendererFingerprint(
         }
         : {}),
     },
+    runtimePolicyDigest: report.options.runtimePolicyDigest,
+    policy: report.options.policy,
     fontIdentity: report.fontIdentity,
     fonts,
   }));
@@ -1149,6 +1292,23 @@ async function prepareFontsBeforeBrowser(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     await runtime.prepareFonts(controller.signal);
+    if (callerSignal?.aborted) {
+      exportError(
+        "operation_cancelled",
+        "font_loading",
+        "Export was cancelled while validating the configured font catalog.",
+        "Retry with a non-aborted signal.",
+        { pending: ["configured font catalog"] },
+      );
+    }
+    if (performance.now() >= deadline) {
+      exportError(
+        "readiness_timeout",
+        "font_loading",
+        "Export timed out while validating the configured font catalog.",
+        "Increase timeoutMs or reduce the configured font catalog.",
+      );
+    }
   } catch (error) {
     if (controller.signal.aborted) {
       if (callerSignal?.aborted) {
@@ -1179,6 +1339,7 @@ async function renderOwned(
   options: NodeExportOptions,
   outputs: readonly RenderOutput[],
   allowOutputs: boolean,
+  operationDeadline?: number,
 ): Promise<RenderBatchResult> {
   const requested = validateOutputs(outputs);
   nodeOptionsPreflight(options, allowOutputs);
@@ -1189,13 +1350,15 @@ async function renderOwned(
     ...(options.limits ?? {}),
   });
   const runtime = validateRuntime(options, effectiveLimits, requested);
-  const deadline = performance.now() + timeoutMs;
+  const deadline = operationDeadline ?? performance.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes
     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.pdfOutputBytes;
   const parserLimit = options.limits?.pdfParserExpandedBytes
     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.pdfParserExpandedBytes;
   let report: CompleteRenderReport | undefined;
+  let lastCompleteReport: CompleteRenderReport | undefined;
   try {
+    enforceOperationBoundary(deadline, options.signal, "package_preflight", "browser render");
     await prepareFontsBeforeBrowser(runtime, deadline, options.signal);
     const attestation = runtime.environmentAttestation;
     const deferStrictFontPolicy = options.strictFonts === true
@@ -1210,15 +1373,40 @@ async function renderOwned(
       runtime,
       requested.includes("html"),
       requested.includes("pdf"),
+      options.strictFonts ?? false,
       deadline,
       pdfLimit,
       options.signal,
     );
-    verifyBrowserOutcome(browser, requested);
+    const stagedStrictFonts = deferStrictFontPolicy ? false : options.strictFonts ?? false;
+    verifyBrowserOutcome(
+      browser,
+      requested,
+      sourceBytes,
+      options,
+      effectiveLimits,
+      timeoutMs,
+      stagedStrictFonts,
+    );
     report = structuredClone(browser.materialization.renderReport);
+    lastCompleteReport = structuredClone(report);
     applyHostFontAttestation(report, browser.runtime, attestation);
-    reconcileHostFontWarnings(report);
+    reconcileHostFontWarnings(report, attestation);
+    if (deferStrictFontPolicy) {
+      report.options.policy.strictFonts = true;
+      report.options.runtimePolicyDigest = runtimePolicyDigest(
+        browser.runtime,
+        effectiveLimits,
+        true,
+        timeoutMs,
+        options.unsupportedContent ?? "warn",
+      );
+    }
+    if (isCurrentCompleteRenderReport(report)) lastCompleteReport = structuredClone(report);
     const environment = runtimeEnvironment(report, browser.runtime, attestation);
+    report.environment = { ...environment };
+    if (isCurrentCompleteRenderReport(report)) lastCompleteReport = structuredClone(report);
+    if (options.strictFonts) enforceStrictFontPolicy(report, browser.runtime, attestation);
     const rendererFingerprint = finalRendererFingerprint(
       browser.materialization.rendererFingerprint,
       browser.runtime,
@@ -1232,7 +1420,6 @@ async function renderOwned(
     report.environment = {
       ...environment,
     };
-    report.options.outputs = [...requested];
     const pageMapJson = canonicalJson(pageMap);
     enforceSerializedLimit(
       pageMapJson,
@@ -1241,13 +1428,13 @@ async function renderOwned(
     );
     report.bindings.pageMapDigest = sha256(pageMapJson);
     report.bindings.artifactRequestIds = [];
+    if (isCurrentCompleteRenderReport(report)) lastCompleteReport = structuredClone(report);
+    report.options.outputs = [...requested];
     if (requested.includes("html")) {
       report.bindings.htmlDigest = sha256(browser.materialization.html!);
     } else {
       delete report.bindings.htmlDigest;
     }
-    if (options.strictFonts) enforceStrictFontPolicy(report, browser.runtime, attestation);
-
     if (browser.pdf) {
       if (browser.pdf.byteLength > pdfLimit) {
         exportError(
@@ -1257,7 +1444,13 @@ async function renderOwned(
           "Lower document complexity or select a larger permitted limit.",
         );
       }
-      const verified = await verifyPdf(browser.pdf, report.pages, parserLimit);
+      const verified = await verifyPdf(
+        browser.pdf,
+        report.pages,
+        parserLimit,
+        deadline,
+        options.signal,
+      );
       report.bindings.pdfDigest = verified.digest;
       report.bindings.pdfByteDeterministic = false;
       report.bindings.volatilePdfMetadata = verified.volatileMetadata;
@@ -1282,6 +1475,12 @@ async function renderOwned(
       options.limits?.renderReportOutputBytes ?? DEFAULT_EXPORT_RESOURCE_LIMITS.renderReportOutputBytes,
       "renderReportOutputBytes",
     );
+    enforceOperationBoundary(
+      deadline,
+      options.signal,
+      "output_verification",
+      "final artifact and report serialization",
+    );
 
     return {
       ...(browser.materialization.html === undefined ? {} : { html: browser.materialization.html }),
@@ -1304,7 +1503,8 @@ async function renderOwned(
       );
     throw attachFailedReport(
       normalized,
-      report && isCurrentCompleteRenderReport(report) ? report : undefined,
+      lastCompleteReport,
+      requested,
     );
   }
 }
@@ -1313,6 +1513,7 @@ export function renderDocxArtifacts(
   document: Uint8Array,
   options: RenderBatchOptions,
 ): Promise<RenderBatchResult> {
+  const startedAt = performance.now();
   nodeOptionsPreflight(options, true);
   const ownedOptions = snapshotNodeOptions(options);
   const sourceBytes = ownedInput(document, ownedOptions);
@@ -1321,6 +1522,7 @@ export function renderDocxArtifacts(
     ownedOptions,
     (ownedOptions as RenderBatchOptions | undefined)?.outputs as readonly RenderOutput[],
     true,
+    startedAt + normalizedTimeout(ownedOptions),
   );
 }
 
@@ -1328,10 +1530,17 @@ export function convertDocxToPdf(
   document: Uint8Array,
   options: NodeExportOptions,
 ): Promise<PdfExportResult> {
+  const startedAt = performance.now();
   nodeOptionsPreflight(options, false);
   const ownedOptions = snapshotNodeOptions(options);
   const sourceBytes = ownedInput(document, ownedOptions);
-  return renderOwned(sourceBytes, ownedOptions, ["pdf"], false).then((result) => {
+  return renderOwned(
+    sourceBytes,
+    ownedOptions,
+    ["pdf"],
+    false,
+    startedAt + normalizedTimeout(ownedOptions),
+  ).then((result) => {
     if (!result.pdf) {
       exportError("pdf_write_failure", "pdf_print", "PDF output was not returned.",
         "Report this invariant failure.");
@@ -1344,10 +1553,17 @@ export function convertDocxToStandaloneHtml(
   document: Uint8Array,
   options: NodeExportOptions,
 ): Promise<PaginatedHtmlResult> {
+  const startedAt = performance.now();
   nodeOptionsPreflight(options, false);
   const ownedOptions = snapshotNodeOptions(options);
   const sourceBytes = ownedInput(document, ownedOptions);
-  return renderOwned(sourceBytes, ownedOptions, ["html"], false).then((result) => {
+  return renderOwned(
+    sourceBytes,
+    ownedOptions,
+    ["html"],
+    false,
+    startedAt + normalizedTimeout(ownedOptions),
+  ).then((result) => {
     if (result.html === undefined) {
       exportError("conversion_failure", "output_verification", "HTML output was not returned.",
         "Report this invariant failure.");
@@ -1361,67 +1577,109 @@ export async function renderDocxFile(
   destinations: RenderFileDestinations,
   options: NodeExportOptions,
 ): Promise<RenderFileResult> {
+  const startedAt = performance.now();
   nodeOptionsPreflight(options, false);
   const ownedOptions = snapshotNodeOptions(options);
   const ownedDestinations = snapshotDestinations(destinations);
-  const maximumBytes = ownedOptions.limits?.compressedDocxBytes
-    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.compressedDocxBytes;
-  const input = await readStableInputFile(inputPath, maximumBytes);
-  const prepared = await prepareDestinations(input, ownedDestinations);
-  const outputs: RenderOutput[] = [];
-  if (ownedDestinations.htmlPath) outputs.push("html");
-  if (ownedDestinations.pdfPath) outputs.push("pdf");
-  const result = await renderOwned(input.bytes, ownedOptions, outputs, false);
-  const payloads: Record<keyof RenderFileDestinations, Uint8Array | undefined> = {
-    htmlPath: result.html === undefined ? undefined : Buffer.from(result.html, "utf8"),
-    pdfPath: result.pdf,
-    pageMapPath: ownedDestinations.pageMapPath ? canonicalJsonBytes(result.pageMap) : undefined,
-    reportPath: ownedDestinations.reportPath ? canonicalJsonBytes(result.renderReport) : undefined,
-  };
-  const order: Array<keyof RenderFileDestinations> = [
-    "htmlPath",
-    "pdfPath",
-    "pageMapPath",
-    "reportPath",
-  ];
+  const deadline = startedAt + normalizedTimeout(ownedOptions);
+  const fileBoundary = createFileDeadlineSignal(deadline, ownedOptions.signal);
   try {
-    const publications = [];
-    for (const kind of order) {
-      const destination = prepared.find((entry) => entry.kind === kind);
-      if (!destination) continue;
-      const bytes = payloads[kind];
-      if (!bytes) {
-        exportError("output_write_failure", "output_write", `${kind} bytes are unavailable.`,
-          "Report this invariant failure.");
+    enforceOperationBoundary(deadline, ownedOptions.signal, "package_preflight", "input file snapshot");
+    const maximumBytes = ownedOptions.limits?.compressedDocxBytes
+      ?? DEFAULT_EXPORT_RESOURCE_LIMITS.compressedDocxBytes;
+    const input = await readStableInputFile(inputPath, maximumBytes, fileBoundary.signal);
+    enforceOperationBoundary(deadline, ownedOptions.signal, "package_preflight", "input file snapshot");
+    const prepared = await prepareDestinations(input, ownedDestinations, fileBoundary.signal);
+    enforceOperationBoundary(deadline, ownedOptions.signal, "package_preflight", "destination preflight");
+    fileBoundary.dispose();
+    const outputs: RenderOutput[] = [];
+    if (ownedDestinations.htmlPath) outputs.push("html");
+    if (ownedDestinations.pdfPath) outputs.push("pdf");
+    const result = await renderOwned(input.bytes, ownedOptions, outputs, false, deadline);
+    const publicationBoundary = createFileDeadlineSignal(deadline, ownedOptions.signal);
+    const payloads: Record<keyof RenderFileDestinations, Uint8Array | undefined> = {
+      htmlPath: result.html === undefined ? undefined : Buffer.from(result.html, "utf8"),
+      pdfPath: result.pdf,
+      pageMapPath: ownedDestinations.pageMapPath ? canonicalJsonBytes(result.pageMap) : undefined,
+      reportPath: ownedDestinations.reportPath ? canonicalJsonBytes(result.renderReport) : undefined,
+    };
+    const order: Array<keyof RenderFileDestinations> = [
+      "htmlPath",
+      "pdfPath",
+      "pageMapPath",
+      "reportPath",
+    ];
+    try {
+      enforceOperationBoundary(
+        deadline,
+        ownedOptions.signal,
+        "output_write",
+        "artifact publication",
+      );
+      const publications = [];
+      for (const kind of order) {
+        const destination = prepared.find((entry) => entry.kind === kind);
+        if (!destination) continue;
+        const bytes = payloads[kind];
+        if (!bytes) {
+          exportError("output_write_failure", "output_write", `${kind} bytes are unavailable.`,
+            "Report this invariant failure.");
+        }
+        publications.push({ destination, bytes });
       }
-      publications.push({ destination, bytes });
+      const committed = await publishNoReplace(publications, publicationBoundary.signal);
+      try {
+        enforceOperationBoundary(
+          deadline,
+          ownedOptions.signal,
+          "output_write",
+          "artifact publication",
+        );
+      } catch (error) {
+        if (!(error instanceof DocxodusExportError)) throw error;
+        throw new DocxodusExportError(error.code, error.phase, error.message, error.remediation, {
+          detail: error.detail,
+          pending: error.pending,
+          cause: error.cause,
+          committedDestinations: committed,
+        });
+      }
+    } catch (error) {
+      if (error instanceof DocxodusExportError) {
+        const reported = attachFailedReport(error, result.renderReport) as DocxodusExportError;
+        throw new DocxodusExportError(
+          reported.code,
+          reported.phase,
+          reported.message,
+          reported.remediation,
+          {
+            detail: reported.detail,
+            pending: reported.pending,
+            partUri: reported.partUri,
+            anchorId: reported.anchorId,
+            resource: reported.resource,
+            cause: reported.cause,
+            report: reported.report,
+            committedDestinations: reported.committedDestinations,
+          },
+        );
+      }
+      const normalized = new DocxodusExportError(
+        "filesystem_failure",
+        "filesystem_commit",
+        "Artifact publication failed unexpectedly.",
+        "Inspect the retained cause and destination filesystem.",
+        { cause: error },
+      );
+      throw attachFailedReport(normalized, result.renderReport);
+    } finally {
+      publicationBoundary.dispose();
     }
-    await publishNoReplace(publications, ownedOptions.signal);
-  } catch (error) {
-    if (error instanceof DocxodusExportError) {
-      const reported = attachFailedReport(error, result.renderReport) as DocxodusExportError;
-      throw new DocxodusExportError(reported.code, reported.phase, reported.message, reported.remediation, {
-        detail: reported.detail,
-        pending: reported.pending,
-        partUri: reported.partUri,
-        anchorId: reported.anchorId,
-        resource: reported.resource,
-        cause: reported.cause,
-        report: reported.report,
-        committedDestinations: reported.committedDestinations,
-      });
-    }
-    const normalized = new DocxodusExportError(
-      "filesystem_failure",
-      "filesystem_commit",
-      "Artifact publication failed unexpectedly.",
-      "Inspect the retained cause and destination filesystem.",
-      { cause: error },
-    );
-    throw attachFailedReport(normalized, result.renderReport);
+    return {
+      ...result,
+      written: Object.fromEntries(prepared.map((entry) => [entry.kind, entry.resolvedPath])),
+    };
+  } finally {
+    fileBoundary.dispose();
   }
-  return {
-    ...result,
-    written: Object.fromEntries(prepared.map((entry) => [entry.kind, entry.resolvedPath])),
-  };
 }

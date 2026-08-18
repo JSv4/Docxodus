@@ -6,6 +6,7 @@ import {
   fontFamilyKey,
   normalizeFontFamilyName,
   type FontConfigurationIdentity,
+  type FontFamilyKind,
   type FontFaceStyle,
   type FontFileFormat,
   type FontRequest,
@@ -59,6 +60,7 @@ interface TextFaceUse {
 
 interface MutableRequest {
   familyStack: string[];
+  familyKinds: FontFamilyKind[];
   style: FontFaceStyle;
   weight: number;
   stretch: number;
@@ -230,18 +232,23 @@ function cssEscape(source: string, start: number): { value: string; end: number 
   return { value: source[cursor], end: cursor + 1 };
 }
 
-/** Parse a computed CSS font-family value without splitting quoted or escaped commas. */
-export function parseCssFontFamily(value: string): string[] {
+interface ParsedFontFamily {
+  name: string;
+  kind: FontFamilyKind;
+}
+
+function parseCssFontFamilyTokens(value: string): ParsedFontFamily[] {
   if (!isWellFormedUnicode(value)) {
     throw new BrowserFontError(
       "invalid_response",
       "A computed font-family value contains an unpaired UTF-16 surrogate.",
     );
   }
-  const families: string[] = [];
+  const families: ParsedFontFamily[] = [];
   let familyCharacters = 0;
   let family = "";
   let quote = "";
+  let quoted = false;
   let cursor = 0;
   const finish = (): void => {
     const normalized = normalizeFontFamilyName(family);
@@ -270,9 +277,13 @@ export function parseCssFontFamily(value: string): string[] {
           "fontFamilyCharacters",
         );
       }
-      families.push(normalized);
+      families.push({
+        name: normalized,
+        kind: quoted || !GENERIC_FAMILIES.has(fontFamilyKey(normalized)) ? "named" : "generic",
+      });
     }
     family = "";
+    quoted = false;
   };
   while (cursor < value.length) {
     const character = value[cursor];
@@ -290,6 +301,7 @@ export function parseCssFontFamily(value: string): string[] {
     }
     if (character === "\"" || character === "'") {
       quote = character;
+      quoted = true;
       cursor++;
       continue;
     }
@@ -303,6 +315,11 @@ export function parseCssFontFamily(value: string): string[] {
   }
   finish();
   return families;
+}
+
+/** Parse a computed CSS font-family value without splitting quoted or escaped commas. */
+export function parseCssFontFamily(value: string): string[] {
+  return parseCssFontFamilyTokens(value).map(({ name }) => name);
 }
 
 function faceStyle(value: string): FontFaceStyle {
@@ -332,6 +349,7 @@ function faceStretch(value: string): number {
 function requestKey(request: Omit<MutableRequest, "sampleCodePoints">): string {
   return canonicalJson({
     familyStack: request.familyStack,
+    familyKinds: request.familyKinds,
     stretch: request.stretch,
     style: request.style,
     weight: request.weight,
@@ -363,10 +381,11 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
     if (!participatesInRendering(element, view)) continue;
     renderedTextNodeCount++;
     const computed = view.getComputedStyle(element);
-    const familyStack = parseCssFontFamily(computed.fontFamily);
-    if (familyStack.length === 0) continue;
+    const parsedFamilies = parseCssFontFamilyTokens(computed.fontFamily);
+    if (parsedFamilies.length === 0) continue;
     const descriptor = {
-      familyStack,
+      familyStack: parsedFamilies.map(({ name }) => name),
+      familyKinds: parsedFamilies.map(({ kind }) => kind),
       style: faceStyle(computed.fontStyle),
       weight: faceWeight(computed.fontWeight),
       stretch: faceStretch(computed.fontStretch),
@@ -409,6 +428,7 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
     return Object.freeze({
       id,
       familyStack: Object.freeze([...request.familyStack]),
+      familyKinds: Object.freeze([...request.familyKinds]),
       style: request.style,
       weight: request.weight,
       stretch: request.stretch,
@@ -790,7 +810,8 @@ async function validateResolverResponse(
       throw new BrowserFontError("invalid_response", `outcomes[${index}].resolvedFamily does not match its face.`);
     }
     if (status === "resolved"
-      && (fontFamilyKey(requestedFamily) !== fontFamilyKey(request.familyStack[0])
+      && (request.familyKinds[0] !== "named"
+        || fontFamilyKey(requestedFamily) !== fontFamilyKey(request.familyStack[0])
         || !resolvedFamily
         || fontFamilyKey(resolvedFamily) !== fontFamilyKey(request.familyStack[0]))) {
       throw new BrowserFontError(
@@ -891,19 +912,26 @@ function cssString(value: string): string {
     .replace(/[\n\r\f]/g, (character) => `\\${character.codePointAt(0)!.toString(16)} `)}"`;
 }
 
-function serializeFamilyStack(families: readonly string[]): string {
-  return families.map((family) => GENERIC_FAMILIES.has(fontFamilyKey(family))
+function serializeFamilyStack(
+  families: readonly string[],
+  kinds: readonly FontFamilyKind[] = families.map(() => "named" as const),
+): string {
+  return families.map((family, index) => kinds[index] === "generic"
     ? fontFamilyKey(family)
     : cssString(family)).join(", ");
 }
 
-function fontSpecification(request: FontRequest, families: readonly string[]): string {
+function fontSpecification(
+  request: FontRequest,
+  families: readonly string[],
+  kinds?: readonly FontFamilyKind[],
+): string {
   // Chromium's FontFace descriptor accepts percentage stretches, but
   // FontFaceSet.load() still parses the legacy font shorthand and rejects
   // percentage tokens. Preserve exact standard widths through their keyword;
   // an uncommon percentage remains enforced by the installed @font-face rule.
   const stretch = Array.from(FONT_STRETCH_PERCENT).find(([, value]) => value === request.stretch)?.[0];
-  return `${request.style} ${request.weight}${stretch ? ` ${stretch}` : ""} 12px ${serializeFamilyStack(families)}`;
+  return `${request.style} ${request.weight}${stretch ? ` ${stretch}` : ""} 12px ${serializeFamilyStack(families, kinds)}`;
 }
 
 function responseIdentityMaterial(response: ValidatedResponse["response"]): unknown {
@@ -938,12 +966,14 @@ function faceRule(family: string, face: FontResolverFace): string {
 }
 
 function baseResolution(request: FontRequest): Pick<FontResolution,
-  "requestId" | "requestedFamily" | "requestedFamilies" | "requestedStyle" | "requestedWeight"
+  "requestId" | "requestedFamily" | "requestedFamilies" | "requestedFamilyKinds"
+  | "requestedStyle" | "requestedWeight"
   | "requestedStretch" | "sampleCodePointCount"> {
   return {
     requestId: request.id,
     requestedFamily: request.familyStack[0],
     requestedFamilies: [...request.familyStack],
+    requestedFamilyKinds: [...request.familyKinds],
     requestedStyle: request.style,
     requestedWeight: request.weight,
     requestedStretch: request.stretch,
@@ -962,7 +992,7 @@ async function observedFonts(
   if (document.fonts) {
     await forEachBounded(inventory.requests, async (request) => {
       const sample = String.fromCodePoint(...request.sampleCodePoints.slice(0, 4096)) || " ";
-      const specification = fontSpecification(request, request.familyStack);
+      const specification = fontSpecification(request, request.familyStack, request.familyKinds);
       try {
         await abortable(document.fonts.load(specification, sample), signal);
         probes.set(request.id, document.fonts.check(specification, sample));
@@ -1015,6 +1045,7 @@ async function configuredFonts(
   const resolverRequests = Object.freeze(inventory.requests.map((request) => Object.freeze({
     id: request.id,
     familyStack: Object.freeze([...request.familyStack]),
+    familyKinds: Object.freeze([...request.familyKinds]),
     style: request.style,
     weight: request.weight,
     stretch: request.stretch,
@@ -1107,7 +1138,7 @@ async function configuredFonts(
     for (const use of usesByRequest.get(request.id) ?? []) {
       use.element.style.setProperty(
         "font-family",
-        `${cssString(synthetic)}, ${serializeFamilyStack(request.familyStack)}`,
+        `${cssString(synthetic)}, ${serializeFamilyStack(request.familyStack, request.familyKinds)}`,
         "important",
       );
     }
@@ -1130,7 +1161,7 @@ async function configuredFonts(
             for (const use of usesByRequest.get(request.id) ?? []) restoreUse(use);
           }
         } else {
-          const specification = fontSpecification(request, request.familyStack);
+          const specification = fontSpecification(request, request.familyStack, request.familyKinds);
           const sample = String.fromCodePoint(...request.sampleCodePoints.slice(0, 4096)) || " ";
           await abortable(document.fonts.load(specification, sample), signal);
           fallbackAvailable.set(request.id, document.fonts.check(specification, sample));
@@ -1161,6 +1192,7 @@ async function configuredFonts(
     const browserFallbackAvailable = !selected && outcome.status === "missing"
       ? fallbackAvailable.get(request.id) === true
       : undefined;
+    const glyphCoverage = selected ? outcome.glyphCoverage : "unverified";
     resolutions.push({
       ...baseResolution(request),
       sampleDigest: await digestJson(request.sampleCodePoints),
@@ -1180,7 +1212,7 @@ async function configuredFonts(
       } : {}),
       ...(outcome.faceMatch ? { faceMatch: outcome.faceMatch } : {}),
       ...(outcome.metricCompatible === undefined ? {} : { metricCompatible: outcome.metricCompatible }),
-      ...(outcome.glyphCoverage ? { glyphCoverage: outcome.glyphCoverage } : {}),
+      ...(glyphCoverage ? { glyphCoverage } : {}),
       ...(outcome.missingCodePoints ? { missingCodePointCount: outcome.missingCodePoints.length } : {}),
       ...(browserFallbackAvailable === undefined ? {} : { browserFallbackAvailable }),
     });

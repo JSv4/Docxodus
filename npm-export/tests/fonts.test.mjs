@@ -71,11 +71,15 @@ async function fontDirectory(name = "configured-fonts") {
 }
 
 function request(overrides = {}) {
+  const familyStack = overrides.familyStack ?? ["Docxodus Canvas Mono", "monospace"];
+  const genericFamilies = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy"]);
   return {
     schemaVersion: 1,
     requests: [{
       id: "face-1",
-      familyStack: ["Docxodus Canvas Mono", "monospace"],
+      familyStack,
+      familyKinds: overrides.familyKinds
+        ?? familyStack.map((family) => genericFamilies.has(family) ? "generic" : "named"),
       style: "normal",
       weight: 400,
       stretch: 100,
@@ -121,6 +125,19 @@ describe("verified Node font runtime", () => {
       glyphCoverage: "complete",
     }]);
     assert.equal(digest(Buffer.from(resolved.faces[0].bytesBase64, "base64")), fileSha256);
+
+    const generic = resolveCatalogRequests(catalog, request({
+      familyStack: ["Docxodus Canvas Mono"],
+      familyKinds: ["generic"],
+    }).requests);
+    assert.deepEqual(generic, {
+      outcomes: [{
+        requestId: "face-1",
+        requestedFamily: "Docxodus Canvas Mono",
+        status: "missing",
+      }],
+      faces: [],
+    });
 
     const manifestText = JSON.stringify(pathFreeCatalogManifest(catalog));
     assert.equal(manifestText.includes(directory), false);

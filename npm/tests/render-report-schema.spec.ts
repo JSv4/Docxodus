@@ -50,7 +50,7 @@ test.describe('render-report v3 font schema', () => {
       'requestKey', 'requestedFamily', 'available',
     ]);
     expect(Object.keys(properties).sort()).toEqual([
-      'available', 'requestedFamily', 'requestKey',
+      'available', 'requestKey', 'requestedFamily',
     ]);
     expect(properties.requestKey.pattern).toBe('^[0-9a-f]{64}$');
     expect(properties.available.type).toBe('boolean');
@@ -65,14 +65,14 @@ test.describe('render-report v3 font schema', () => {
 
     expect(resolution.additionalProperties).toBe(false);
     expect(strings(resolution, 'required')).toEqual([
-      'requestId', 'requestedFamily', 'requestedFamilies', 'requestedStyle',
+      'requestId', 'requestedFamily', 'requestedFamilies', 'requestedFamilyKinds', 'requestedStyle',
       'requestedWeight', 'requestedStretch', 'sampleCodePointCount', 'sampleDigest',
       'status', 'source',
     ]);
     expect(Object.keys(properties).sort()).toEqual([
       'browserFallbackAvailable', 'faceMatch', 'fileSha256', 'format', 'glyphCoverage', 'licenseEvidence',
       'metricCompatible', 'missingCodePointCount', 'requestId', 'requestedFamilies',
-      'requestedFamily', 'requestedStretch', 'requestedStyle', 'requestedWeight',
+      'requestedFamily', 'requestedFamilyKinds', 'requestedStretch', 'requestedStyle', 'requestedWeight',
       'resolvedFace', 'resolvedFamily', 'sampleCodePointCount', 'sampleDigest', 'source',
       'status', 'version',
     ].sort());
@@ -81,6 +81,20 @@ test.describe('render-report v3 font schema', () => {
     ]);
     expect(properties.source.enum).toEqual(['browser', 'configured', 'attested']);
     expect(properties.requestedStyle.enum).toEqual(['normal', 'italic', 'oblique']);
+    expect((properties.requestedFamilyKinds.items as SchemaNode).enum).toEqual(['named', 'generic']);
+    const equalLengthBranches = resolution.oneOf as SchemaNode[];
+    expect(equalLengthBranches).toHaveLength(64);
+    equalLengthBranches.forEach((branch, index) => {
+      const branchProperties = objectProperties(branch);
+      expect(branchProperties.requestedFamilies).toMatchObject({
+        minItems: index + 1,
+        maxItems: index + 1,
+      });
+      expect(branchProperties.requestedFamilyKinds).toMatchObject({
+        minItems: index + 1,
+        maxItems: index + 1,
+      });
+    });
     expect(properties.format.enum).toEqual(['ttf', 'otf', 'woff', 'woff2']);
     expect(properties.faceMatch.enum).toEqual(['exact', 'synthesized']);
     expect(properties.glyphCoverage.enum).toEqual(['complete', 'partial', 'unverified']);
@@ -88,6 +102,24 @@ test.describe('render-report v3 font schema', () => {
     expect(properties.licenseEvidence).toEqual({ $ref: '#/$defs/fontLicenseEvidence' });
     expect(properties).not.toHaveProperty('path');
     expect(properties).not.toHaveProperty('bytesBase64');
+  });
+
+  test('requires the complete PDF digest and volatility contract together', () => {
+    const requiredSets: string[][] = [];
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      const record = value as SchemaNode;
+      if (Array.isArray(record.required)) requiredSets.push(record.required as string[]);
+      Object.values(record).forEach(visit);
+    };
+    visit(definitions.complete);
+    expect(requiredSets).toContainEqual([
+      'pdfDigest', 'pdfByteDeterministic', 'volatilePdfMetadata',
+    ]);
   });
 
   test('freezes the resolver and license evidence identities', () => {

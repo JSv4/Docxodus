@@ -74,6 +74,7 @@ export const FONT_SUBSTITUTION_CONTRACT_MATERIAL = Object.freeze({
 });
 
 export type FontFaceStyle = "normal" | "italic" | "oblique";
+export type FontFamilyKind = "named" | "generic";
 export type FontFileFormat = "ttf" | "otf" | "woff" | "woff2";
 export type FontMediaType = "font/ttf" | "font/otf" | "font/woff" | "font/woff2";
 export type FontResolutionStatus =
@@ -91,6 +92,8 @@ export type FontEmbeddingKind = "installable" | "previewPrint" | "editable" | "a
 export interface FontRequest {
   id: string;
   familyStack: readonly string[];
+  /** One syntax classification per family; quoted generic words remain named families. */
+  familyKinds: readonly FontFamilyKind[];
   style: FontFaceStyle;
   weight: number;
   /** CSS font-stretch as a percentage, where 100 is normal width. */
@@ -165,6 +168,7 @@ export interface FontResolution {
   requestId: string;
   requestedFamily: string;
   requestedFamilies: readonly string[];
+  requestedFamilyKinds: readonly FontFamilyKind[];
   requestedStyle: FontFaceStyle;
   requestedWeight: number;
   requestedStretch: number;

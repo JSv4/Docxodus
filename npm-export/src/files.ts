@@ -14,6 +14,30 @@ import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "no
 import type { RenderFileDestinations } from "./contracts.js";
 import { DocxodusExportError, exportError } from "./contracts.js";
 
+const INTERNAL_DEADLINE_ABORT = Symbol("docxodus-file-deadline");
+
+export function createFileDeadlineSignal(
+  deadline: number,
+  callerSignal?: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const onCallerAbort = (): void => controller.abort(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  if (callerSignal?.aborted) onCallerAbort();
+  const timer = setTimeout(
+    () => controller.abort(INTERNAL_DEADLINE_ABORT),
+    Math.max(0, deadline - performance.now()),
+  );
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    dispose(): void {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
 export interface StableInputFile {
   bytes: Uint8Array;
   absolutePath: string;
@@ -60,7 +84,9 @@ function portablePathKey(path: string): string {
 export async function readStableInputFile(
   inputPath: string,
   maximumBytes: number,
+  signal?: AbortSignal,
 ): Promise<StableInputFile> {
+  throwIfAborted(signal, "package_preflight", "input file snapshot");
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
     exportError(
       "invalid_argument",
@@ -77,7 +103,9 @@ export async function readStableInputFile(
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(absolutePath, "r");
+    throwIfAborted(signal, "package_preflight", "input file snapshot");
     const realPathBefore = await realpath(absolutePath);
+    throwIfAborted(signal, "package_preflight", "input file snapshot");
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) {
       exportError("invalid_document", "input_validation", "The input path is not a regular file.",
@@ -95,15 +123,18 @@ export async function readStableInputFile(
     const bytes = new Uint8Array(length);
     let offset = 0;
     while (offset < length) {
+      throwIfAborted(signal, "package_preflight", "input file snapshot");
       const { bytesRead } = await handle.read(bytes, offset, length - offset, offset);
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
+    throwIfAborted(signal, "package_preflight", "input file snapshot");
     const probe = new Uint8Array(1);
     const extra = await handle.read(probe, 0, 1, offset);
     const after = await handle.stat({ bigint: true });
     const pathAfter = await stat(absolutePath, { bigint: true });
     const realPathAfter = await realpath(absolutePath);
+    throwIfAborted(signal, "package_preflight", "input file snapshot");
     if (!sameIdentity(before, after)
       || !sameIdentity(after, pathAfter)
       || realPathBefore !== realPathAfter
@@ -134,7 +165,9 @@ export async function readStableInputFile(
 export async function prepareDestinations(
   input: StableInputFile,
   destinations: RenderFileDestinations,
+  signal?: AbortSignal,
 ): Promise<PreparedDestination[]> {
+  throwIfAborted(signal, "package_preflight", "destination preflight");
   for (const [kind, value] of Object.entries(destinations)) {
     if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
       exportError(
@@ -161,6 +194,7 @@ export async function prepareDestinations(
   const inputKey = portablePathKey(input.realPath);
   const prepared: PreparedDestination[] = [];
   for (const [kind, requestedPath] of entries) {
+    throwIfAborted(signal, "package_preflight", "destination preflight");
     const absolutePath = resolve(requestedPath);
     const parentPath = await realpath(dirname(absolutePath)).catch((cause) =>
       exportError(
@@ -170,6 +204,7 @@ export async function prepareDestinations(
         "Create the parent directory before rendering.",
         { cause },
       ));
+    throwIfAborted(signal, "package_preflight", "destination preflight");
     const resolvedPath = normalize(join(parentPath, basename(absolutePath)));
     const pathKey = portablePathKey(resolvedPath);
     if (!isAbsolute(resolvedPath) || pathKey === inputKey) {
@@ -212,20 +247,38 @@ export async function prepareDestinations(
         );
       }
     }
+    throwIfAborted(signal, "package_preflight", "destination preflight");
     prepared.push({ kind, requestedPath, absolutePath, resolvedPath, parentPath });
   }
   return prepared;
 }
 
-function throwIfPublicationAborted(signal: AbortSignal | undefined): void {
+function throwIfAborted(
+  signal: AbortSignal | undefined,
+  phase: "package_preflight" | "output_write",
+  pending: string,
+): void {
   if (!signal?.aborted) return;
+  if (signal.reason === INTERNAL_DEADLINE_ABORT) {
+    throw new DocxodusExportError(
+      "readiness_timeout",
+      phase,
+      `Export timed out during ${phase}.`,
+      "Increase timeoutMs or reduce document/runtime complexity.",
+      { pending: [pending] },
+    );
+  }
   throw new DocxodusExportError(
     "operation_cancelled",
-    "output_write",
-    "Artifact publication was cancelled.",
+    phase,
+    `Export was cancelled during ${phase}.`,
     "Retry with a non-aborted signal and new destination paths.",
-    { cause: signal.reason, pending: ["artifact publication"] },
+    { cause: signal.reason, pending: [pending] },
   );
+}
+
+function throwIfPublicationAborted(signal: AbortSignal | undefined): void {
+  throwIfAborted(signal, "output_write", "artifact publication");
 }
 
 async function stageArtifact(

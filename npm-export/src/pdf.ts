@@ -102,7 +102,30 @@ export async function verifyPdf(
   bytes: Uint8Array,
   expectedPages: CompleteRenderReport["pages"],
   maximumParserBytes: number,
+  deadline = Number.POSITIVE_INFINITY,
+  signal?: AbortSignal,
 ): Promise<VerifiedPdf> {
+  const checkBoundary = (): void => {
+    if (signal?.aborted) {
+      exportError(
+        "operation_cancelled",
+        "output_verification",
+        "Export was cancelled while verifying PDF output.",
+        "Retry with a non-aborted signal.",
+        { pending: ["PDF verification"], cause: signal.reason },
+      );
+    }
+    if (performance.now() >= deadline) {
+      exportError(
+        "readiness_timeout",
+        "output_verification",
+        "Export timed out while verifying PDF output.",
+        "Increase timeoutMs or reduce PDF complexity.",
+        { pending: ["PDF verification"] },
+      );
+    }
+  };
+  checkBoundary();
   if (!Number.isSafeInteger(maximumParserBytes) || maximumParserBytes <= 0
     || bytes.byteLength > maximumParserBytes) {
     exportError(
@@ -158,6 +181,7 @@ export async function verifyPdf(
       { cause },
     );
   }
+  checkBoundary();
 
   if (pdf.isEncrypted) {
     exportError(
@@ -178,6 +202,7 @@ export async function verifyPdf(
   }
 
   pages.forEach((page, index) => {
+    checkBoundary();
     const expected = expectedPages[index];
     const rawUserUnit = inheritedPageNumber(page, "UserUnit");
     const userUnit = rawUserUnit ?? 1;
@@ -241,6 +266,7 @@ export async function verifyPdf(
       "Use tagged PDF printing with the supported Chromium revision.",
     );
   }
+  checkBoundary();
 
   return {
     digest: createHash("sha256").update(bytes).digest("hex"),

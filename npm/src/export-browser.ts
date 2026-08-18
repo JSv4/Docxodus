@@ -81,6 +81,7 @@ export { inventoryDocumentFontRequests, parseCssFontFamily } from "./font-runtim
 export type {
   FontConfigurationIdentity,
   FontEmbeddingKind,
+  FontFamilyKind,
   FontFaceMatch,
   FontFaceStyle,
   FontFileFormat,
@@ -2143,6 +2144,7 @@ function recordFontResolution(
   state.fonts.push(...result.resolutions.map((resolution) => ({
     ...resolution,
     requestedFamilies: [...resolution.requestedFamilies],
+    requestedFamilyKinds: [...resolution.requestedFamilyKinds],
     ...(resolution.licenseEvidence
       ? { licenseEvidence: { ...resolution.licenseEvidence } }
       : {}),
@@ -3103,6 +3105,7 @@ function reportBase(
     fonts: state.fonts.map((font) => ({
       ...font,
       requestedFamilies: [...font.requestedFamilies],
+      requestedFamilyKinds: [...font.requestedFamilyKinds],
       ...(font.licenseEvidence ? { licenseEvidence: { ...font.licenseEvidence } } : {}),
     })),
     fontReadiness: state.fontReadiness.map((font) => ({ ...font })),

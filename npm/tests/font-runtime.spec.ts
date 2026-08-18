@@ -180,6 +180,7 @@ async function convertWithAdversarialResolver(
         && Object.isFrozen(request.requests)
         && request.requests.every((item: any) => Object.isFrozen(item)
           && Object.isFrozen(item.familyStack)
+          && Object.isFrozen(item.familyKinds)
           && Object.isFrozen(item.sampleCodePoints));
       const faces = request.requests.map((item: any) => ({
         id: `fixture-${item.id}`,
@@ -315,12 +316,34 @@ test.describe('browser configured font runtime', () => {
     expect(requests).toHaveLength(2);
     expect(requests.map((request: any) => request.id)).toEqual(['font-0001', 'font-0002']);
     expect(requests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ familyStack: ['Inner Face', 'monospace'], style: 'italic', weight: 700 }),
-      expect.objectContaining({ familyStack: ['Outer Face', 'serif'], style: 'normal', weight: 400 }),
+      expect.objectContaining({
+        familyStack: ['Inner Face', 'monospace'],
+        familyKinds: ['named', 'generic'],
+        style: 'italic',
+        weight: 700,
+      }),
+      expect.objectContaining({
+        familyStack: ['Outer Face', 'serif'],
+        familyKinds: ['named', 'generic'],
+        style: 'normal',
+        weight: 400,
+      }),
     ]));
     expect(requests.flatMap((request: any) => request.sampleCodePoints)).toEqual(
       expect.arrayContaining(['A'.codePointAt(0), 'B'.codePointAt(0)]),
     );
+  });
+
+  test('keeps quoted generic words distinct from CSS generic families', async ({ page }) => {
+    const requests = await page.evaluate(() => (window as any).DocxodusStandalone.inventoryFontFixture(
+      '<span style="font-family:serif">A</span>'
+      + '<span style="font-family:&quot;serif&quot;">B</span>',
+    ));
+    expect(requests).toHaveLength(2);
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ familyStack: ['serif'], familyKinds: ['generic'] }),
+      expect.objectContaining({ familyStack: ['serif'], familyKinds: ['named'] }),
+    ]));
   });
 
   test('fails closed when the canonical inventory bounds are exceeded', async ({ page }) => {
@@ -401,6 +424,7 @@ test.describe('browser configured font runtime', () => {
     expect(result.renderReport.fonts.every((font: any) =>
       font.status === 'missing'
       && font.source === 'browser'
+      && font.glyphCoverage === 'unverified'
       && font.browserFallbackAvailable === true)).toBe(true);
     expect(result.renderReport.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'font_unavailable', phase: 'font_loading' }),

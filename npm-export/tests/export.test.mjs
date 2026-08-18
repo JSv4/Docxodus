@@ -938,6 +938,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
           requestId: font.requestId,
           requestedFamily: font.requestedFamily,
           requestedFamilies: font.requestedFamilies,
+          requestedFamilyKinds: font.requestedFamilyKinds,
           requestedStyle: font.requestedStyle,
           requestedWeight: font.requestedWeight,
           requestedStretch: font.requestedStretch,
@@ -1162,10 +1163,18 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await assert.rejects(
       render(attestation({ chromiumBuild: "mismatched-browser-build" })),
       (error) => error instanceof DocxodusExportError
-        && error.code === "resource_policy_failure"
-        && error.phase === "font_loading"
+        && error.code === "output_verification_failure"
+        && error.phase === "output_verification"
         && error.report?.warnings.some((warning) =>
-          warning.code === "font_environment_unverified" && warning.severity === "error"),
+          warning.code === "font_environment_unverified" && warning.severity === "warning"),
+    );
+
+    await assert.rejects(
+      render(attestation({ hostFonts: [{ ...usedFace, weight: 700 }] })),
+      (error) => error instanceof DocxodusExportError
+        && error.code === "output_verification_failure"
+        && error.phase === "output_verification"
+        && error.detail?.includes("unattestedFont=Arial"),
     );
   });
 

@@ -66,6 +66,7 @@ interface BrowserExportResult {
       requestId: string;
       requestedFamily: string;
       requestedFamilies: string[];
+      requestedFamilyKinds: Array<'named' | 'generic'>;
       status: string;
       source: string;
     }>;
@@ -796,6 +797,7 @@ test.describe('standalone paginated HTML', () => {
     expect(falseClaim.phase).toBe('package_preflight');
     expect(falseClaim.report.status).toBe('failed');
     expect(falseClaim.report.derivedProfileSource).toBeUndefined();
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, falseClaim.report)).toEqual([]);
   });
 
   test('fails exact source identity and caller-lowered package ceilings closed', async ({ page }) => {
@@ -809,6 +811,7 @@ test.describe('standalone paginated HTML', () => {
     expect(mismatch.code).toBe('source_digest_mismatch');
     expect(mismatch.phase).toBe('package_preflight');
     expect(mismatch.report.source.rawPackageBytesDigest).toBe(digest(source));
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, mismatch.report)).toEqual([]);
 
     const limited = await page.evaluate(async (bytes) =>
       (window as any).DocxodusStandalone.convertFailure(bytes, {
@@ -820,6 +823,7 @@ test.describe('standalone paginated HTML', () => {
     expect(limited.phase).toBe('package_preflight');
     expect(limited.report.options.policy.limits.opcEntries).toBe(1);
     expect(limited.report.readiness.at(-1).status).toBe('failed');
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, limited.report)).toEqual([]);
   });
 
   test('honors AbortSignal and always removes its isolated render realm', async ({ page }) => {
@@ -861,7 +865,9 @@ test.describe('standalone paginated HTML', () => {
     }));
     expect(outcome.result.renderReport.fonts.length).toBeGreaterThan(0);
     expect(outcome.result.renderReport.fonts.every((font: any) =>
-      font.status === 'missing' && /^[0-9a-f]{64}$/.test(font.requestKey))).toBe(true);
+      font.status === 'missing'
+      && /^font-[0-9]{4,}$/.test(font.requestId)
+      && /^[0-9a-f]{64}$/.test(font.sampleDigest))).toBe(true);
   });
 
   test('reports a failed supported-image decode according to warn or strict policy', async ({ page }, testInfo) => {
@@ -896,6 +902,7 @@ test.describe('standalone paginated HTML', () => {
       status: 'omitted',
       readiness: 'failed',
     }));
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, strictFailure.report)).toEqual([]);
     await testInfo.attach('image-readiness-policy.json', {
       body: Buffer.from(`${JSON.stringify({
         warning: warned.renderReport,
@@ -928,6 +935,7 @@ test.describe('standalone paginated HTML', () => {
       field: 'bindings.pdfDigest',
       reasonCode: 'notRequested',
     }));
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, failure.report)).toEqual([]);
     await testInfo.attach('failed-render-report.json', {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
       contentType: 'application/json',
@@ -947,6 +955,7 @@ test.describe('standalone paginated HTML', () => {
     expect(failure.report.status).toBe('failed');
     expect(failure.report.failure.message).toContain('body content is clipped');
     expect(failure.report.readiness.at(-1).status).toBe('failed');
+    expect(schemaErrors(reportSchemaV3, reportSchemaV3, failure.report)).toEqual([]);
     await testInfo.attach('clipped-content-render-report.json', {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
       contentType: 'application/json',

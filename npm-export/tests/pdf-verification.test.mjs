@@ -80,4 +80,20 @@ describe("PDF physical-page verification", () => {
         && /invalid \/Rotate 45/.test(error.message),
     );
   });
+
+  test("preserves cancellation and deadline taxonomy around parser work", async () => {
+    const bytes = await savePdf();
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled by test"));
+    await assert.rejects(
+      verifyPdf(bytes, [EXPECTED_PAGE], bytes.byteLength, Number.POSITIVE_INFINITY, controller.signal),
+      (error) => error?.code === "operation_cancelled"
+        && error.phase === "output_verification",
+    );
+    await assert.rejects(
+      verifyPdf(bytes, [EXPECTED_PAGE], bytes.byteLength, performance.now() - 1),
+      (error) => error?.code === "readiness_timeout"
+        && error.phase === "output_verification",
+    );
+  });
 });

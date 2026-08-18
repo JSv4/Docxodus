@@ -279,6 +279,7 @@ export {
 export type {
   FontConfigurationIdentity,
   FontEmbeddingKind,
+  FontFamilyKind,
   FontFaceMatch,
   FontFaceStyle,
   FontFileFormat,

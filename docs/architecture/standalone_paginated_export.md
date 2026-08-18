@@ -702,7 +702,9 @@ length/digest/media-type/license checked before injection.
 
 After profile projection and before pagination, the browser inventories every final text-bearing
 node. Requests are deduplicated by ordered family stack, style, numeric weight, percentage stretch,
-and a bounded sorted set of Unicode scalar samples. The Node adapter discovers TTF, OTF, WOFF, and
+CSS family syntax, and a bounded sorted set of Unicode scalar samples. Quoted words such as
+`"serif"` remain named families; unquoted CSS generic families remain browser fallbacks and are
+never matched to configured face metadata merely by spelling. The Node adapter discovers TTF, OTF, WOFF, and
 WOFF2 files in each explicit font directory, snapshots each file once, reads family/face and glyph
 metadata from those bytes, hashes them, and injects license-permitted faces as data webfonts into
 the isolated page. Generated `@font-face` rules remain in standalone HTML so the reopened PDF check
@@ -908,6 +910,7 @@ interface FontResolution {
   requestId: string;
   requestedFamily: string;
   requestedFamilies: string[];
+  requestedFamilyKinds: ("named" | "generic")[];
   requestedStyle: "normal" | "italic" | "oblique";
   requestedWeight: number;
   requestedStretch: number;
@@ -1081,8 +1084,10 @@ type RenderReport = CompleteRenderReport | FailedRenderReport;
 ```
 
 Page widths/heights and PageMap geometry are finite points. `callerAttested` requires a bounded
-attestation whose observable runtime fields match and whose executable digest is present; otherwise
-verification remains `browserObserved`. Verification strength is separate from `fidelityTier`: a
+attestation whose observable runtime fields match. An executable digest is optional: when an
+injected runtime cannot expose one, an attestation that supplies it cannot be verified and the
+result remains `browserObserved`; an attestation that omits it makes no executable-byte claim.
+Verification strength is separate from `fidelityTier`: a
 fully node-verified Windows render is still `experimental` until its ratchet is baselined. The
 observed/attested facts or their canonical referenced evidence make the fingerprint reproducible;
 a one-way hash alone is not presented as a recipe.
@@ -1092,6 +1097,9 @@ omission/defaulting exists only at API input. `outputs` is unique and in canonic
 order. The browser HTML call reports `["html"]`, each Node convenience call reports its one output,
 and a metadata-only batch reports `[]`. Complete-report schema conditionals require `htmlDigest` and
 `pdfDigest` exactly when their output is selected and permit PDF volatility fields only with PDF.
+The Node adapter validates the browser's complete `["html"]` staging report against its own source,
+normalized policy, effective limits, and canonical runtime graph before changing the output set;
+PDF fields are added only after the exact printed bytes pass Node verification.
 On failure, `unavailable` contains exactly one reason for every unavailable fingerprint/PageMap or
 selected payload binding; unselected payloads are represented by `notRequested` and cannot appear
 in `partial.bindings`. This makes a standalone report sufficient to validate its own bindings.

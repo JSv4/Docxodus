@@ -1352,7 +1352,9 @@
             "properties": {
               "bindings": {
                 "required": [
-                  "pdfDigest"
+                  "pdfDigest",
+                  "pdfByteDeterministic",
+                  "volatilePdfMetadata"
                 ]
               }
             }
@@ -1774,6 +1776,7 @@
         "requestId",
         "requestedFamily",
         "requestedFamilies",
+        "requestedFamilyKinds",
         "requestedStyle",
         "requestedWeight",
         "requestedStretch",
@@ -1796,11 +1799,22 @@
         "requestedFamilies": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 256,
+          "maxItems": 64,
           "items": {
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          }
+        },
+        "requestedFamilyKinds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "enum": [
+              "named",
+              "generic"
+            ]
           }
         },
         "requestedStyle": {
@@ -2088,6 +2102,776 @@
               "required": [
                 "missingCodePointCount"
               ]
+            }
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "requestedFamilyKinds": {
+              "minItems": 1,
+              "maxItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "requestedFamilyKinds": {
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "requestedFamilyKinds": {
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "requestedFamilyKinds": {
+              "minItems": 4,
+              "maxItems": 4
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 5,
+              "maxItems": 5
+            },
+            "requestedFamilyKinds": {
+              "minItems": 5,
+              "maxItems": 5
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 6,
+              "maxItems": 6
+            },
+            "requestedFamilyKinds": {
+              "minItems": 6,
+              "maxItems": 6
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 7,
+              "maxItems": 7
+            },
+            "requestedFamilyKinds": {
+              "minItems": 7,
+              "maxItems": 7
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 8,
+              "maxItems": 8
+            },
+            "requestedFamilyKinds": {
+              "minItems": 8,
+              "maxItems": 8
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 9,
+              "maxItems": 9
+            },
+            "requestedFamilyKinds": {
+              "minItems": 9,
+              "maxItems": 9
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 10,
+              "maxItems": 10
+            },
+            "requestedFamilyKinds": {
+              "minItems": 10,
+              "maxItems": 10
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 11,
+              "maxItems": 11
+            },
+            "requestedFamilyKinds": {
+              "minItems": 11,
+              "maxItems": 11
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 12,
+              "maxItems": 12
+            },
+            "requestedFamilyKinds": {
+              "minItems": 12,
+              "maxItems": 12
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 13,
+              "maxItems": 13
+            },
+            "requestedFamilyKinds": {
+              "minItems": 13,
+              "maxItems": 13
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 14,
+              "maxItems": 14
+            },
+            "requestedFamilyKinds": {
+              "minItems": 14,
+              "maxItems": 14
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 15,
+              "maxItems": 15
+            },
+            "requestedFamilyKinds": {
+              "minItems": 15,
+              "maxItems": 15
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 16,
+              "maxItems": 16
+            },
+            "requestedFamilyKinds": {
+              "minItems": 16,
+              "maxItems": 16
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 17,
+              "maxItems": 17
+            },
+            "requestedFamilyKinds": {
+              "minItems": 17,
+              "maxItems": 17
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 18,
+              "maxItems": 18
+            },
+            "requestedFamilyKinds": {
+              "minItems": 18,
+              "maxItems": 18
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 19,
+              "maxItems": 19
+            },
+            "requestedFamilyKinds": {
+              "minItems": 19,
+              "maxItems": 19
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 20,
+              "maxItems": 20
+            },
+            "requestedFamilyKinds": {
+              "minItems": 20,
+              "maxItems": 20
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 21,
+              "maxItems": 21
+            },
+            "requestedFamilyKinds": {
+              "minItems": 21,
+              "maxItems": 21
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 22,
+              "maxItems": 22
+            },
+            "requestedFamilyKinds": {
+              "minItems": 22,
+              "maxItems": 22
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 23,
+              "maxItems": 23
+            },
+            "requestedFamilyKinds": {
+              "minItems": 23,
+              "maxItems": 23
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 24,
+              "maxItems": 24
+            },
+            "requestedFamilyKinds": {
+              "minItems": 24,
+              "maxItems": 24
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 25,
+              "maxItems": 25
+            },
+            "requestedFamilyKinds": {
+              "minItems": 25,
+              "maxItems": 25
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 26,
+              "maxItems": 26
+            },
+            "requestedFamilyKinds": {
+              "minItems": 26,
+              "maxItems": 26
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 27,
+              "maxItems": 27
+            },
+            "requestedFamilyKinds": {
+              "minItems": 27,
+              "maxItems": 27
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 28,
+              "maxItems": 28
+            },
+            "requestedFamilyKinds": {
+              "minItems": 28,
+              "maxItems": 28
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 29,
+              "maxItems": 29
+            },
+            "requestedFamilyKinds": {
+              "minItems": 29,
+              "maxItems": 29
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 30,
+              "maxItems": 30
+            },
+            "requestedFamilyKinds": {
+              "minItems": 30,
+              "maxItems": 30
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 31,
+              "maxItems": 31
+            },
+            "requestedFamilyKinds": {
+              "minItems": 31,
+              "maxItems": 31
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 32,
+              "maxItems": 32
+            },
+            "requestedFamilyKinds": {
+              "minItems": 32,
+              "maxItems": 32
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 33,
+              "maxItems": 33
+            },
+            "requestedFamilyKinds": {
+              "minItems": 33,
+              "maxItems": 33
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 34,
+              "maxItems": 34
+            },
+            "requestedFamilyKinds": {
+              "minItems": 34,
+              "maxItems": 34
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 35,
+              "maxItems": 35
+            },
+            "requestedFamilyKinds": {
+              "minItems": 35,
+              "maxItems": 35
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 36,
+              "maxItems": 36
+            },
+            "requestedFamilyKinds": {
+              "minItems": 36,
+              "maxItems": 36
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 37,
+              "maxItems": 37
+            },
+            "requestedFamilyKinds": {
+              "minItems": 37,
+              "maxItems": 37
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 38,
+              "maxItems": 38
+            },
+            "requestedFamilyKinds": {
+              "minItems": 38,
+              "maxItems": 38
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 39,
+              "maxItems": 39
+            },
+            "requestedFamilyKinds": {
+              "minItems": 39,
+              "maxItems": 39
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 40,
+              "maxItems": 40
+            },
+            "requestedFamilyKinds": {
+              "minItems": 40,
+              "maxItems": 40
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 41,
+              "maxItems": 41
+            },
+            "requestedFamilyKinds": {
+              "minItems": 41,
+              "maxItems": 41
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 42,
+              "maxItems": 42
+            },
+            "requestedFamilyKinds": {
+              "minItems": 42,
+              "maxItems": 42
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 43,
+              "maxItems": 43
+            },
+            "requestedFamilyKinds": {
+              "minItems": 43,
+              "maxItems": 43
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 44,
+              "maxItems": 44
+            },
+            "requestedFamilyKinds": {
+              "minItems": 44,
+              "maxItems": 44
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 45,
+              "maxItems": 45
+            },
+            "requestedFamilyKinds": {
+              "minItems": 45,
+              "maxItems": 45
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 46,
+              "maxItems": 46
+            },
+            "requestedFamilyKinds": {
+              "minItems": 46,
+              "maxItems": 46
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 47,
+              "maxItems": 47
+            },
+            "requestedFamilyKinds": {
+              "minItems": 47,
+              "maxItems": 47
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 48,
+              "maxItems": 48
+            },
+            "requestedFamilyKinds": {
+              "minItems": 48,
+              "maxItems": 48
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 49,
+              "maxItems": 49
+            },
+            "requestedFamilyKinds": {
+              "minItems": 49,
+              "maxItems": 49
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 50,
+              "maxItems": 50
+            },
+            "requestedFamilyKinds": {
+              "minItems": 50,
+              "maxItems": 50
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 51,
+              "maxItems": 51
+            },
+            "requestedFamilyKinds": {
+              "minItems": 51,
+              "maxItems": 51
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 52,
+              "maxItems": 52
+            },
+            "requestedFamilyKinds": {
+              "minItems": 52,
+              "maxItems": 52
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 53,
+              "maxItems": 53
+            },
+            "requestedFamilyKinds": {
+              "minItems": 53,
+              "maxItems": 53
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 54,
+              "maxItems": 54
+            },
+            "requestedFamilyKinds": {
+              "minItems": 54,
+              "maxItems": 54
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 55,
+              "maxItems": 55
+            },
+            "requestedFamilyKinds": {
+              "minItems": 55,
+              "maxItems": 55
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 56,
+              "maxItems": 56
+            },
+            "requestedFamilyKinds": {
+              "minItems": 56,
+              "maxItems": 56
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 57,
+              "maxItems": 57
+            },
+            "requestedFamilyKinds": {
+              "minItems": 57,
+              "maxItems": 57
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 58,
+              "maxItems": 58
+            },
+            "requestedFamilyKinds": {
+              "minItems": 58,
+              "maxItems": 58
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 59,
+              "maxItems": 59
+            },
+            "requestedFamilyKinds": {
+              "minItems": 59,
+              "maxItems": 59
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 60,
+              "maxItems": 60
+            },
+            "requestedFamilyKinds": {
+              "minItems": 60,
+              "maxItems": 60
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 61,
+              "maxItems": 61
+            },
+            "requestedFamilyKinds": {
+              "minItems": 61,
+              "maxItems": 61
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 62,
+              "maxItems": 62
+            },
+            "requestedFamilyKinds": {
+              "minItems": 62,
+              "maxItems": 62
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 63,
+              "maxItems": 63
+            },
+            "requestedFamilyKinds": {
+              "minItems": 63,
+              "maxItems": 63
+            }
+          }
+        },
+        {
+          "properties": {
+            "requestedFamilies": {
+              "minItems": 64,
+              "maxItems": 64
+            },
+            "requestedFamilyKinds": {
+              "minItems": 64,
+              "maxItems": 64
             }
           }
         }

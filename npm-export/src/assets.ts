@@ -4,6 +4,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DocxodusExportError, exportError } from "./contracts.js";
+import { canonicalJson } from "./canonical.js";
 import { decodeStrictUtf8, strictJsonParse } from "./strict-json.js";
 
 const RUNTIME_ASSET_GRAPH_MAX_BYTES = 1024 * 1024;
@@ -19,6 +20,84 @@ const ASSET_MEDIA_TYPES: Readonly<Record<string, string>> = Object.freeze({
   ".json": "application/json",
   ".wasm": "application/wasm",
 });
+
+class AssetLoadCancelled extends Error {}
+
+function throwIfAssetLoadCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw new AssetLoadCancelled("Runtime asset loading was cancelled.");
+}
+
+export function createSharedAbortableLoader<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+): (signal?: AbortSignal) => Promise<T> {
+  interface ActiveLoad {
+    controller: AbortController;
+    promise: Promise<T>;
+    waiters: number;
+  }
+  let cached: T | undefined;
+  let hasCached = false;
+  let active: ActiveLoad | undefined;
+  return (signal?: AbortSignal): Promise<T> => {
+    if (signal?.aborted) {
+      return Promise.reject(new DocxodusExportError(
+        "operation_cancelled",
+        "wasm_initialization",
+        "Export was cancelled while loading the verified runtime asset graph.",
+        "Retry with a non-aborted signal.",
+        { pending: ["verified runtime asset graph"] },
+      ));
+    }
+    if (hasCached) return Promise.resolve(cached as T);
+    if (!active) {
+      const controller = new AbortController();
+      const state: ActiveLoad = {
+        controller,
+        promise: undefined as unknown as Promise<T>,
+        waiters: 0,
+      };
+      state.promise = operation(controller.signal).then((value) => {
+        if (!controller.signal.aborted) {
+          cached = value;
+          hasCached = true;
+        }
+        return value;
+      }).finally(() => {
+        if (active === state) active = undefined;
+      });
+      // The final waiter may cancel before the operation observes the shared
+      // abort; keep that late rejection handled without caching its result.
+      void state.promise.catch(() => undefined);
+      active = state;
+    }
+    const state = active;
+    state.waiters++;
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        state.waiters--;
+        if (state.waiters === 0 && active === state) state.controller.abort();
+        action();
+      };
+      const onAbort = (): void => finish(() => reject(new DocxodusExportError(
+        "operation_cancelled",
+        "wasm_initialization",
+        "Export was cancelled while loading the verified runtime asset graph.",
+        "Retry with a non-aborted signal.",
+        { pending: ["verified runtime asset graph"] },
+      )));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      state.promise.then(
+        (value) => finish(() => resolve(value)),
+        (error) => finish(() => reject(error)),
+      );
+    });
+  };
+}
 
 interface ExportAssetEntry {
   path: string;
@@ -49,6 +128,7 @@ export interface VerifiedAssetGraph {
   assets: ReadonlyMap<string, ServedAsset>;
   packageVersion: string;
   manifestDigest: string;
+  coordinatorDigest: string;
 }
 
 const BOOTSTRAP_HTML = `<!doctype html>
@@ -122,6 +202,16 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+export function runtimeAssetGraphDigest(
+  manifest: Pick<ExportAssetManifest, "schemaVersion" | "packageVersion" | "assets">,
+): string {
+  return sha256(Buffer.from(canonicalJson({
+    schemaVersion: manifest.schemaVersion,
+    packageVersion: manifest.packageVersion,
+    assets: manifest.assets,
+  }), "utf8"));
+}
+
 function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev
     && left.ino === right.ino
@@ -130,9 +220,15 @@ function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
     && left.ctimeNs === right.ctimeNs;
 }
 
-async function readBoundedStableFile(path: string, maximum: number): Promise<Buffer> {
+async function readBoundedStableFile(
+  path: string,
+  maximum: number,
+  signal: AbortSignal,
+): Promise<Buffer> {
+  throwIfAssetLoadCancelled(signal);
   const handle = await open(path, "r");
   try {
+    throwIfAssetLoadCancelled(signal);
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) throw new Error("not a regular file");
     if (before.size > BigInt(maximum)) throw new Error(`file exceeds ${maximum} bytes`);
@@ -140,14 +236,17 @@ async function readBoundedStableFile(path: string, maximum: number): Promise<Buf
     const bytes = Buffer.allocUnsafe(length);
     let offset = 0;
     while (offset < length) {
+      throwIfAssetLoadCancelled(signal);
       const { bytesRead } = await handle.read(bytes, offset, length - offset, offset);
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
+    throwIfAssetLoadCancelled(signal);
     const probe = Buffer.allocUnsafe(1);
     const extra = await handle.read(probe, 0, 1, offset);
     const after = await handle.stat({ bigint: true });
     const pathAfter = await stat(path, { bigint: true });
+    throwIfAssetLoadCancelled(signal);
     if (offset !== length || extra.bytesRead !== 0
       || !sameIdentity(before, after) || !sameIdentity(after, pathAfter)) {
       throw new Error("file changed while it was being read");
@@ -277,8 +376,15 @@ function safeAssetFile(packageRoot: string, assetPath: string): string {
   return candidate;
 }
 
-function requireContainedRealPath(packageRoot: string, candidate: string, label: string): Promise<string> {
+function requireContainedRealPath(
+  packageRoot: string,
+  candidate: string,
+  label: string,
+  signal: AbortSignal,
+): Promise<string> {
+  throwIfAssetLoadCancelled(signal);
   return realpath(candidate).then((resolvedPath) => {
+    throwIfAssetLoadCancelled(signal);
     const fromRoot = relative(packageRoot, resolvedPath);
     if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${sep}`)
       || isAbsolute(fromRoot)) {
@@ -291,6 +397,7 @@ function requireContainedRealPath(packageRoot: string, candidate: string, label:
     }
     return resolvedPath;
   }).catch((cause) => {
+    if (cause instanceof AssetLoadCancelled) throw cause;
     if (cause instanceof DocxodusExportError) throw cause;
     return exportError(
       "unsupported_runtime",
@@ -302,17 +409,10 @@ function requireContainedRealPath(packageRoot: string, candidate: string, label:
   });
 }
 
-let cachedGraph: Promise<VerifiedAssetGraph> | undefined;
+export const loadVerifiedAssetGraph = createSharedAbortableLoader(loadVerifiedAssetGraphCore);
 
-export function loadVerifiedAssetGraph(): Promise<VerifiedAssetGraph> {
-  cachedGraph ??= loadVerifiedAssetGraphCore().catch((error) => {
-    cachedGraph = undefined;
-    throw error;
-  });
-  return cachedGraph;
-}
-
-async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
+async function loadVerifiedAssetGraphCore(signal: AbortSignal): Promise<VerifiedAssetGraph> {
+  throwIfAssetLoadCancelled(signal);
   let manifestUrl: string;
   let materializerUrl: string;
   try {
@@ -339,7 +439,9 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
   let manifestFile: string;
   try {
     manifestFile = await realpath(fileURLToPath(manifestUrl));
+    throwIfAssetLoadCancelled(signal);
   } catch (cause) {
+    if (cause instanceof AssetLoadCancelled) throw cause;
     exportError(
       "unsupported_runtime",
       "wasm_initialization",
@@ -353,11 +455,17 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
     packageRoot,
     fileURLToPath(materializerUrl),
     "The public browser materializer",
+    signal,
   );
   let manifestBytes: Buffer;
   try {
-    manifestBytes = await readBoundedStableFile(manifestFile, RUNTIME_ASSET_GRAPH_MAX_BYTES);
+    manifestBytes = await readBoundedStableFile(
+      manifestFile,
+      RUNTIME_ASSET_GRAPH_MAX_BYTES,
+      signal,
+    );
   } catch (cause) {
+    if (cause instanceof AssetLoadCancelled) throw cause;
     exportError(
       "unsupported_runtime",
       "wasm_initialization",
@@ -367,16 +475,19 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
     );
   }
   const manifest = parseManifest(manifestBytes);
+  throwIfAssetLoadCancelled(signal);
   let companionPackage: CompanionPackageManifest;
   try {
     const packageBytes = await readBoundedStableFile(
       fileURLToPath(new URL("../package.json", import.meta.url)),
       PACKAGE_MANIFEST_MAX_BYTES,
+      signal,
     );
     companionPackage = strictJsonParse(
       decodeStrictUtf8(packageBytes, "The @docxodus/export package manifest"),
     ) as CompanionPackageManifest;
   } catch (cause) {
+    if (cause instanceof AssetLoadCancelled) throw cause;
     exportError(
       "unsupported_runtime",
       "wasm_initialization",
@@ -404,6 +515,7 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
   const seen = new Set<string>();
 
   for (const entry of manifest.assets) {
+    throwIfAssetLoadCancelled(signal);
     if (!entry || typeof entry.path !== "string" || typeof entry.mediaType !== "string"
       || !Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0
       || typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)
@@ -420,6 +532,7 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
       packageRoot,
       safeAssetFile(packageRoot, entry.path),
       `Runtime asset ${entry.path}`,
+      signal,
     );
     let bytes: Buffer;
     try {
@@ -427,8 +540,9 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
       if (!fileInfo.isFile() || fileInfo.size !== entry.byteLength) {
         throw new Error("not a regular file of the declared length");
       }
-      bytes = await readBoundedStableFile(file, entry.byteLength);
+      bytes = await readBoundedStableFile(file, entry.byteLength, signal);
     } catch (cause) {
+      if (cause instanceof AssetLoadCancelled) throw cause;
       exportError(
         "unsupported_runtime",
         "wasm_initialization",
@@ -450,11 +564,13 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
       contentType: entry.mediaType,
     });
   }
+  throwIfAssetLoadCancelled(signal);
 
   const declaredMaterializer = await requireContainedRealPath(
     packageRoot,
     safeAssetFile(packageRoot, "./export-browser.bundle.js"),
     "The declared browser materializer",
+    signal,
   );
   if (materializerFile !== declaredMaterializer) {
     exportError(
@@ -480,10 +596,20 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
     body: Buffer.from(BOOTSTRAP_JS),
     contentType: "text/javascript; charset=utf-8",
   });
+  throwIfAssetLoadCancelled(signal);
 
   return Object.freeze({
     assets: served,
     packageVersion: manifest.packageVersion,
-    manifestDigest: sha256(manifestBytes),
+    // Match the browser materializer's canonical graph identity exactly;
+    // pretty-printing or key order in export-assets.json is not semantic.
+    manifestDigest: runtimeAssetGraphDigest(manifest),
+    // These Node-only coordinator resources are served outside the package
+    // manifest. Bind their exact bytes into the final Node fingerprint too.
+    coordinatorDigest: sha256(Buffer.from(canonicalJson({
+      schemaVersion: 1,
+      indexHtmlSha256: sha256(Buffer.from(BOOTSTRAP_HTML, "utf8")),
+      bootstrapJsSha256: sha256(Buffer.from(BOOTSTRAP_JS, "utf8")),
+    }), "utf8")),
   });
 }

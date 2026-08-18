@@ -9,15 +9,20 @@ import {
   cssSecurityTokens,
   dataUrlInfo,
   DEFAULT_EXPORT_RESOURCE_LIMITS,
+  DEFAULT_EXPORT_TIMEOUT_MS,
+  type CompleteRenderReport,
   type FontResolverRequest,
   type PaginatedHtmlOptions,
 } from "docxodus/export-browser";
-import { loadVerifiedAssetGraph } from "./assets.js";
+import { loadVerifiedAssetGraph, type VerifiedAssetGraph } from "./assets.js";
+import { canonicalJson, sha256 as nodeSha256 } from "./canonical.js";
 import type {
+  BrowserFailureReportExpectation,
   BrowserMaterializationFailure,
   BrowserMaterializationSuccess,
   ExportPhase,
   NodeExportRuntime,
+  RenderOutput,
   ValidatedNodeExportRuntime,
 } from "./contracts.js";
 import {
@@ -25,9 +30,13 @@ import {
   DocxodusExportError,
   exportError,
   fromBrowserFailure,
+  isCurrentCompleteRenderReport,
+  isCurrentPageMap,
 } from "./contracts.js";
 
 const PLAYWRIGHT_VERSION = "1.57.0";
+/** Chromium build declared by playwright-core 1.57.0 browsers.json. */
+export const PINNED_CHROMIUM_BUILD = "143.0.7499.4";
 const EXECUTABLE_BYTES_MAX = 1024 * 1024 * 1024;
 const FILE_READ_CHUNK_BYTES = 64 * 1024;
 const PDF_STREAM_CHUNK_BYTES = 64 * 1024;
@@ -46,6 +55,106 @@ const LAUNCH_FLAGS = Object.freeze([
   "--no-default-browser-check",
   "--no-first-run",
 ]);
+
+function materialDigest(domain: string, value: unknown): string {
+  return nodeSha256(`${domain}\0${canonicalJson(value)}`);
+}
+
+function failureReportExpectation(
+  sourceBytes: Uint8Array,
+  options: Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver">,
+  graph: VerifiedAssetGraph,
+  finalStrictFonts: boolean,
+): BrowserFailureReportExpectation {
+  const limits = { ...DEFAULT_EXPORT_RESOURCE_LIMITS, ...(options.limits ?? {}) };
+  const timeoutMs = options.timeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
+  const stagedStrictFonts = options.strictFonts ?? false;
+  const unsupportedContent = options.unsupportedContent ?? "warn";
+  const layoutDigest = materialDigest("docxodus:layout-options:v1", {
+    title: options.title ?? "",
+    reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied ?? false,
+    commentProfile: options.commentProfile,
+    pagination: {
+      mode: "paginated",
+      scale: 1,
+      pageGap: 0,
+      showPageNumbers: false,
+      fragmentParagraphs: true,
+      cssPrefix: "page-",
+    },
+  });
+  const runtimePolicy = (strictFonts: boolean): string => materialDigest(
+    "docxodus:runtime-policy:v1",
+    {
+      assetGraphDigest: graph.manifestDigest,
+      assetPackageVersion: graph.packageVersion,
+      isolation: {
+        attachedSameOriginFrame: true,
+        scripts: "denied",
+        automaticNetwork: "denied",
+        sandbox: ["allow-same-origin"],
+      },
+      limits,
+      strictFonts,
+      timeoutMs,
+      unsupportedContent,
+    },
+  );
+  const expectedOptions: CompleteRenderReport["options"] = {
+    reviewProfile: options.reviewProfile,
+    reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied ?? false,
+    commentProfile: options.commentProfile,
+    title: options.title ?? "",
+    outputs: ["html"],
+    layoutDigest,
+    runtimePolicyDigest: runtimePolicy(stagedStrictFonts),
+    policy: {
+      unsupportedContent,
+      strictFonts: stagedStrictFonts,
+      timeoutMs,
+      limits,
+    },
+  };
+  return {
+    source: {
+      rawPackageBytesDigest: nodeSha256(sourceBytes),
+      byteLength: sourceBytes.byteLength,
+      documentVersion: options.documentVersion ?? 0,
+    },
+    options: expectedOptions,
+    retainedPolicy: {
+      strictFonts: finalStrictFonts,
+      runtimePolicyDigest: runtimePolicy(finalStrictFonts),
+    },
+  };
+}
+
+function stagedMaterializationMatches(
+  materialization: BrowserMaterializationSuccess,
+  stagedHtml: string,
+  expectation: BrowserFailureReportExpectation,
+): boolean {
+  const report = materialization.renderReport;
+  return isCurrentCompleteRenderReport(report)
+    && isCurrentPageMap(materialization.pageMap, expectation.options.policy.limits)
+    && canonicalJson(report.source) === canonicalJson(expectation.source)
+    && canonicalJson(report.options) === canonicalJson(expectation.options)
+    && materialization.pageCount === materialization.pageMap.pages.length
+    && materialization.pageCount === report.pages.length
+    && materialization.pageMap.documentVersion === expectation.source.documentVersion
+    && materialization.rendererFingerprint === materialization.pageMap.rendererFingerprint
+    && materialization.rendererFingerprint === report.environment.rendererFingerprint
+    && report.environment.verification === "browserObserved"
+    && report.environment.fidelityTier === "unbaselined"
+    && report.environment.attested === undefined
+    && report.environment.attestationDigest === undefined
+    && report.environment.observed.runtimeKind === "browser"
+    && report.bindings.pageMapDigest === nodeSha256(canonicalJson(materialization.pageMap))
+    && report.bindings.htmlDigest === nodeSha256(stagedHtml)
+    && canonicalJson(report.pages) === canonicalJson(materialization.pageMap.pages)
+    && canonicalJson(materialization.warnings) === canonicalJson(report.warnings);
+}
 const EXPORT_PHASES = new Set<ExportPhase>([
   "input_validation", "package_preflight", "browser_launch", "wasm_initialization",
   "docx_conversion", "font_loading", "image_decoding", "chart_svg_materialization",
@@ -68,6 +177,7 @@ export interface BrowserRuntimeIdentity {
   launchFlags: readonly string[];
   playwrightVersion: string;
   assetManifestDigest: string;
+  coordinatorDigest: string;
   packageVersion: string;
   platform: NodeJS.Platform;
   architecture: string;
@@ -76,6 +186,8 @@ export interface BrowserRuntimeIdentity {
 
 export interface BrowserRenderOutcome {
   materialization: BrowserMaterializationSuccess;
+  /** Canonical browser HTML bound by the staged report, even for PDF-only calls. */
+  stagedHtml: string;
   pdf?: Uint8Array;
   runtime: BrowserRuntimeIdentity;
   requestLog: RequestLogEntry[];
@@ -221,7 +333,12 @@ async function bounded<T>(
           ));
         }, timeoutMs);
       }));
-    return await Promise.race(contenders);
+    const result = await Promise.race(contenders);
+    // Timers cannot fire while synchronous parsing or hashing blocks the event
+    // loop. Re-check the monotonic boundary before accepting a late result.
+    if (signal?.aborted) throw cancellationError(phase, pending);
+    remaining(deadline, phase);
+    return result;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (signal && abortListener) signal.removeEventListener("abort", abortListener);
@@ -303,7 +420,7 @@ async function digestExecutable(
     return exportError(
       "browser_launch_failure",
       "browser_launch",
-      `The configured Chromium executable cannot be verified: ${path}`,
+      "The configured Chromium executable cannot be verified.",
       "Provide a readable Chromium executable built for this host.",
       { cause },
     );
@@ -404,6 +521,16 @@ async function launchBrowser(
       signal,
       () => launchPromise!,
     );
+    if (!explicit && browser.version() !== PINNED_CHROMIUM_BUILD) {
+      await browser.close().catch(() => undefined);
+      exportError(
+        "unsupported_runtime",
+        "browser_launch",
+        "The package-managed Chromium build does not match the pinned Playwright runtime.",
+        "Reinstall matching @playwright/browser-chromium and playwright-core packages.",
+        { detail: `expected=${PINNED_CHROMIUM_BUILD}; observed=${browser.version()}` },
+      );
+    }
     const executableAfter = await stat(executable.path, { bigint: true });
     if (!sameIdentity(executable.identity, executableAfter)) {
       await browser.close().catch(() => undefined);
@@ -766,6 +893,17 @@ export async function validatePrintDocument(
       }));
       return results;
     };
+    const scalarPrefix = (value: string, maximum: number): { text: string; count: number } => {
+      let text = "";
+      let count = 0;
+      if (maximum <= 0) return { text, count };
+      for (const scalar of value) {
+        if (count >= maximum) break;
+        text += scalar;
+        count++;
+      }
+      return { text, count };
+    };
     let resourceMutationVersion = 0;
     const resourceObserver = new MutationObserver(() => { resourceMutationVersion++; });
     resourceObserver.observe(document.documentElement, {
@@ -804,13 +942,13 @@ export async function validatePrintDocument(
             familySpec,
           ].join(" ");
           const remaining = Math.max(0, readinessLimits.fontSampleCodePoints - sampled);
-          const addition = Array.from(text).slice(0, Math.min(256, remaining)).join("");
+          const addition = scalarPrefix(text, Math.min(256, remaining));
           const existing = candidates.get(specification);
-          if (existing && addition) {
-            const candidateRemaining = Math.max(0, 256 - Array.from(existing.sample).length);
-            const appended = Array.from(addition).slice(0, candidateRemaining).join("");
-            existing.sample += appended;
-            sampled += Array.from(appended).length;
+          if (existing && addition.text) {
+            const candidateRemaining = Math.max(0, 256 - scalarPrefix(existing.sample, 256).count);
+            const appended = scalarPrefix(addition.text, candidateRemaining);
+            existing.sample += appended.text;
+            sampled += appended.count;
           } else if (!existing) {
             if (candidates.size >= readinessLimits.fontRequests) {
               throw new ReadinessFailure(
@@ -819,15 +957,15 @@ export async function validatePrintDocument(
                 [`font-request-limit:${readinessLimits.fontRequests}`],
               );
             }
-            const sample = addition || " ";
-            sampled += Array.from(addition).length;
+            const sample = addition.text || " ";
+            sampled += addition.count;
             candidates.set(specification, { family: label(familySpec, "sans-serif"), sample });
           }
         }
         const entries = Array.from(candidates, ([specification, value]) => ({ specification, ...value }))
           .sort((left, right) => left.specification < right.specification ? -1 : 1);
         fontPending = entries.map(({ family }) => `font:${family}`);
-        const probes = await Promise.all(entries.map(async ({ specification, family, sample }) => {
+        const probes = await mapPool(entries, async ({ specification, family, sample }) => {
           const requestKey = await sha256(
             "docxodus:font-request:v1",
             JSON.stringify({ specification, sample }),
@@ -842,7 +980,7 @@ export async function validatePrintDocument(
           } catch {
             return { requestKey, requestedFamily: family, available: false };
           }
-        }));
+        });
         await document.fonts.ready;
         fontPending = [];
         return probes;
@@ -1501,11 +1639,20 @@ export async function renderInBrowser(
   runtime: ValidatedNodeExportRuntime,
   includeHtml: boolean,
   includePdf: boolean,
+  finalStrictFonts: boolean,
   deadline: number,
   pdfMaximumBytes: number,
   signal?: AbortSignal,
 ): Promise<BrowserRenderOutcome> {
   let graph: Awaited<ReturnType<typeof loadVerifiedAssetGraph>>;
+  const assetLoadController = new AbortController();
+  const onAssetCallerAbort = (): void => assetLoadController.abort();
+  signal?.addEventListener("abort", onAssetCallerAbort, { once: true });
+  if (signal?.aborted) onAssetCallerAbort();
+  const assetLoadTimer = setTimeout(
+    () => assetLoadController.abort(),
+    Math.max(0, deadline - performance.now()),
+  );
   try {
     graph = await bounded(
       undefined,
@@ -1513,7 +1660,7 @@ export async function renderInBrowser(
       "wasm_initialization",
       "verified runtime asset loading",
       signal,
-      loadVerifiedAssetGraph,
+      () => loadVerifiedAssetGraph(assetLoadController.signal),
     );
   } catch (cause) {
     if (cause instanceof DocxodusExportError) throw cause;
@@ -1524,6 +1671,10 @@ export async function renderInBrowser(
       "Reinstall matching versions of docxodus and @docxodus/export.",
       { cause },
     );
+  } finally {
+    clearTimeout(assetLoadTimer);
+    signal?.removeEventListener("abort", onAssetCallerAbort);
+    assetLoadController.abort();
   }
   // A routed HTTPS origin provides the browser materializer the secure context
   // required by Web Crypto without opening a listening socket or consulting DNS.
@@ -1554,11 +1705,18 @@ export async function renderInBrowser(
   let launch: Awaited<ReturnType<typeof launchBrowser>> | undefined;
   let outcome: BrowserRenderOutcome | undefined;
   let materialization: BrowserMaterializationSuccess | undefined;
+  let stagedReportVerified = false;
   let primaryError: unknown;
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
   let lastReadinessProgress: ReadinessProgress | undefined;
   const fontAbortController = new AbortController();
+  const failureExpectation = failureReportExpectation(
+    sourceBytes,
+    browserOptions,
+    graph,
+    finalStrictFonts,
+  );
 
   try {
     launch = await launchBrowser(runtime, deadline, signal);
@@ -1596,11 +1754,13 @@ export async function renderInBrowser(
       );
     }
     currentPhase = "wasm_initialization";
-    await context.routeWebSocket("**/*", async (webSocket) => {
+    await bounded(context, deadline, "wasm_initialization", "WebSocket route policy", signal, () =>
+      context!.routeWebSocket("**/*", async (webSocket) => {
       recordDenied(webSocket.url(), "GET", "websocket");
       await webSocket.close({ code: 1008, reason: "Docxodus closed runtime graph" });
-    });
-    await context.route("**/*", async (route) => {
+      }));
+    await bounded(context, deadline, "wasm_initialization", "HTTP route policy", signal, () =>
+      context!.route("**/*", async (route) => {
       const request = route.request();
       let url: URL;
       try {
@@ -1654,7 +1814,7 @@ export async function renderInBrowser(
           ...asset.headers,
         },
       });
-    });
+      }));
 
     const page = await bounded(
       context,
@@ -1673,7 +1833,8 @@ export async function renderInBrowser(
       void download.cancel();
     });
     if (runtime.fontResolver) {
-      await page.exposeBinding("__docxodusResolveFonts", async (
+      await bounded(context, deadline, "wasm_initialization", "font resolver binding", signal, () =>
+        page.exposeBinding("__docxodusResolveFonts", async (
         _source,
         request: FontResolverRequest,
       ): Promise<FontBindingResponse> => {
@@ -1694,15 +1855,16 @@ export async function renderInBrowser(
             );
           return { ok: false, error: normalized.toJSON() };
         }
-      });
+        }));
     }
-    await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
+    await bounded(context, deadline, "wasm_initialization", "readiness progress binding", signal, () =>
+      page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
       const progress = parseReadinessProgress(value);
       if (progress) {
         lastReadinessProgress = progress;
         currentPhase = lastReadinessProgress.phase;
       }
-    });
+      }));
     page.setDefaultTimeout(remaining(deadline, "wasm_initialization"));
     await bounded(context, deadline, "wasm_initialization", "browser materializer bootstrap", signal, async () => {
       await page.goto(`${origin}/index.html`, { waitUntil: "load" });
@@ -1740,7 +1902,10 @@ export async function renderInBrowser(
       () => lastReadinessProgress,
     );
     if (!bridgeResponse.ok || !bridgeResponse.result) {
-      throw fromBrowserFailure(bridgeResponse.error ?? {});
+      throw fromBrowserFailure(bridgeResponse.error ?? {}, [
+        ...(includeHtml ? ["html" as const] : []),
+        ...(includePdf ? ["pdf" as const] : []),
+      ] satisfies readonly RenderOutput[], failureExpectation);
     }
     if (inputReads !== 1) {
       exportError(
@@ -1761,11 +1926,26 @@ export async function renderInBrowser(
       );
     }
     materialization = bridgeResponse.result;
-    materialization.renderReport.options.outputs = [
-      ...(includeHtml ? ["html" as const] : []),
-      ...(includePdf ? ["pdf" as const] : []),
-    ];
-    if (!includeHtml) delete materialization.renderReport.bindings.htmlDigest;
+    const stagedHtml = materialization.html ?? pdfHtml;
+    if (typeof stagedHtml !== "string"
+      || (materialization.html !== undefined && pdfHtml !== undefined
+        && materialization.html !== pdfHtml)) {
+      exportError(
+        "output_verification_failure",
+        "output_verification",
+        "The browser materializer returned inconsistent finalized HTML snapshots.",
+        "Use the single canonical browser snapshot for HTML and PDF staging.",
+      );
+    }
+    if (!stagedMaterializationMatches(materialization, stagedHtml, failureExpectation)) {
+      exportError(
+        "output_verification_failure",
+        "output_verification",
+        "The browser materializer returned an unbound or inconsistent staged report.",
+        "Use matching hardened docxodus and @docxodus/export package versions.",
+      );
+    }
+    stagedReportVerified = true;
 
     let pdf: Uint8Array | undefined;
     if (includePdf) {
@@ -1797,11 +1977,13 @@ export async function renderInBrowser(
           void printContextPromise.then((lateContext) => lateContext.close()).catch(() => undefined);
           throw error;
         });
-        await printContext.routeWebSocket("**/*", async (webSocket) => {
+        await bounded(printContext, deadline, "pdf_print", "print WebSocket route policy", signal, () =>
+          printContext!.routeWebSocket("**/*", async (webSocket) => {
           recordDenied(webSocket.url(), "GET", "websocket");
           await webSocket.close({ code: 1008, reason: "Docxodus closed print snapshot" });
-        });
-        await printContext.route("**/*", async (route) => {
+          }));
+        await bounded(printContext, deadline, "pdf_print", "print HTTP route policy", signal, () =>
+          printContext!.route("**/*", async (route) => {
           const request = route.request();
           let url: URL;
           try {
@@ -1839,7 +2021,7 @@ export async function renderInBrowser(
               "X-Content-Type-Options": "nosniff",
             },
           });
-        });
+          }));
         const printPage = await bounded(
           printContext,
           deadline,
@@ -1856,13 +2038,14 @@ export async function renderInBrowser(
           recordDenied(download.url(), "GET", "download");
           void download.cancel();
         });
-        await exposePrintReadinessBindings(printPage, (value: unknown) => {
+        await bounded(printContext, deadline, "pdf_print", "print readiness bindings", signal, () =>
+          exposePrintReadinessBindings(printPage, (value: unknown) => {
           const progress = parseReadinessProgress(value);
           if (progress) {
             lastReadinessProgress = progress;
             currentPhase = progress.phase;
           }
-        });
+          }));
         printPage.setDefaultTimeout(remaining(deadline, "pdf_print"));
         lastReadinessProgress = {
           phase: "pdf_print",
@@ -1981,6 +2164,7 @@ export async function renderInBrowser(
     }
     outcome = {
       materialization: bridgeResponse.result,
+      stagedHtml,
       pdf,
       requestLog,
       runtime: {
@@ -1991,6 +2175,7 @@ export async function renderInBrowser(
         launchFlags: launch.launchMode === "injected" ? [] : LAUNCH_FLAGS,
         playwrightVersion: PLAYWRIGHT_VERSION,
         assetManifestDigest: graph.manifestDigest,
+        coordinatorDigest: graph.coordinatorDigest,
         packageVersion: graph.packageVersion,
         platform: process.platform,
         architecture: process.arch,
@@ -2013,7 +2198,11 @@ export async function renderInBrowser(
         "Inspect the retained cause and retry with the pinned supported runtime.",
         { cause: error },
       );
-    primaryError = attachFailedReport(normalized, materialization?.renderReport);
+    primaryError = attachFailedReport(normalized,
+      stagedReportVerified ? materialization?.renderReport : undefined, [
+      ...(includeHtml ? ["html" as const] : []),
+      ...(includePdf ? ["pdf" as const] : []),
+    ], failureExpectation.retainedPolicy, true);
   } finally {
     fontAbortController.abort(new Error("The browser render context has closed."));
     const cleanupFailures: unknown[] = [];
@@ -2069,7 +2258,11 @@ export async function renderInBrowser(
       "Verify temporary-directory permissions and retry.",
       { cause: cleanupError },
     );
-    throw attachFailedReport(error, materialization?.renderReport);
+    throw attachFailedReport(error,
+      stagedReportVerified ? materialization?.renderReport : undefined, [
+      ...(includeHtml ? ["html" as const] : []),
+      ...(includePdf ? ["pdf" as const] : []),
+    ], failureExpectation.retainedPolicy, true);
   }
   if (!outcome) {
     exportError(
