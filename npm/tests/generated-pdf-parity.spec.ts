@@ -1,20 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   GATING_DISPOSITION_KINDS,
@@ -23,7 +21,6 @@ import {
 import {
   PDF_PARITY_CORPUS,
   REQUIRED_PDF_PARITY_CATEGORIES,
-  type PdfLinkExpectation,
   type PdfParityCorpusEntry,
 } from './visual-parity/pdf-corpus.js';
 import {
@@ -35,6 +32,7 @@ import {
 import {
   PDF_RASTER_CONTRACT,
   PDF_RASTER_CONTRACT_SHA256,
+  PDF_PARITY_LIMITS,
   inspectPdf,
   rasterizePdf,
   sha256File,
@@ -44,12 +42,10 @@ import {
 import { decodePng, encodePng } from './visual-parity/png.js';
 import {
   FONT_CONTRACT_FILE,
-  assertFontContract,
   fontContractReport,
 } from './visual-parity/font-contract.js';
 import {
   assertLibreOfficeContract,
-  popplerVersionOutput,
 } from './visual-parity/environment-contract.js';
 import {
   assertRecordUpdateProvenance,
@@ -58,6 +54,27 @@ import {
   readRecord,
   serializeRecord,
 } from './visual-parity/ratchet.js';
+import {
+  assertSafeCaseId,
+  prepareExternalOutputRoot,
+  resolveTrackedRegularFile,
+} from './visual-parity/benchmark-paths.js';
+import {
+  commandVersion,
+  pinExecutable,
+  resolveExecutable,
+} from './visual-parity/toolchain.js';
+import {
+  assertBuildOwningLifecycle,
+  captureGeneratedPdfBuildEvidence,
+} from './visual-parity/build-provenance.js';
+import { assertSupportedPdfResult } from './visual-parity/pdf-result.js';
+import { exactLinkEvidence, type LinkEvidence } from './visual-parity/pdf-links.js';
+
+assertBuildOwningLifecycle(
+  process.env.DOCXODUS_GENERATED_PDF_PARITY === '1',
+  process.env.npm_lifecycle_event,
+);
 
 test.skip(process.env.DOCXODUS_GENERATED_PDF_PARITY !== '1',
   'set DOCXODUS_GENERATED_PDF_PARITY=1 on a host with LibreOffice and Poppler');
@@ -117,14 +134,6 @@ interface TextExtractorEvidence {
   passed: boolean;
 }
 
-interface LinkEvidence {
-  expected: PdfLinkExpectation[];
-  observed: Array<{ kind: string; value?: string; unsafeValue?: string }>;
-  missing: PdfLinkExpectation[];
-  unsupportedAnnotations: number;
-  passed: boolean;
-}
-
 interface SemanticEvidence {
   candidate: {
     pdfjs: TextExtractorEvidence;
@@ -163,6 +172,8 @@ interface PdfParityCaseResult {
   pageCountDelta: number;
   physicalGeometryPassed: boolean;
   semanticChecksPassed: boolean;
+  vectorContentPassed: boolean;
+  vectorPathOperations?: { candidate: number; reference: number };
   severity: VisualSeverity;
   rendererFingerprint?: string;
   environmentFingerprint?: string;
@@ -189,29 +200,13 @@ function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function commandVersion(command: string, args: string[]): string {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  if (result.error) return String(result.error);
-  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
-}
-
-function executableEvidence(command: string, versionArgs: string[]): Record<string, string> {
-  const path = execFileSync('which', [command], { encoding: 'utf8' }).trim();
-  const resolvedPath = realpathSync(path);
-  return {
-    command,
-    executable: basename(resolvedPath),
-    executableSha256: sha256File(resolvedPath),
-    version: commandVersion(command, versionArgs),
-  };
-}
-
 function writeJsonAtomic(path: string, value: unknown): void {
-  const temporary = `${path}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeTextAtomic(path: string, value: string): void {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, value, { flag: 'wx', mode: 0o600 });
   renameSync(temporary, path);
 }
 
@@ -252,7 +247,7 @@ function writeViewer(outputRoot: string, state: RunState, cases: PdfParityCaseRe
   const ciLink = existsSync(join(outputRoot, 'ci-context.json'))
     ? '<li><a href="ci-context.json">CI context</a></li>'
     : '';
-  writeFileSync(join(outputRoot, 'index.html'), `<!doctype html>
+  writeTextAtomic(join(outputRoot, 'index.html'), `<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Docxodus generated-PDF parity evidence</title>
 <style>
@@ -268,19 +263,7 @@ ${caseSections || '<p>No case artifacts have materialized yet. Inspect the run/f
 function initializeOutputRoot(retry: number): string {
   const configuredOutputRoot = resolve(process.env.DOCXODUS_GENERATED_PDF_PARITY_OUTPUT
     ?? join(tmpdir(), 'docxodus-generated-pdf-parity'));
-  const relativeToRepo = relative(repoRoot, configuredOutputRoot);
-  if (relativeToRepo === '' || (!relativeToRepo.startsWith('..') && !isAbsolute(relativeToRepo))) {
-    throw new Error(`Generated-PDF parity artifacts must stay outside the repository: ${configuredOutputRoot}`);
-  }
-  const outputRoot = retry === 0
-    ? configuredOutputRoot
-    : join(configuredOutputRoot, `retry-${retry}`);
-  mkdirSync(outputRoot, { recursive: true, mode: 0o700 });
-  const unexpected = readdirSync(outputRoot).filter((name) => !BOOTSTRAP_ARTIFACTS.has(name));
-  if (unexpected.length) {
-    throw new Error(`Generated-PDF parity output contains stale artifacts: ${unexpected.join(', ')}`);
-  }
-  return outputRoot;
+  return prepareExternalOutputRoot(repoRoot, configuredOutputRoot, retry, BOOTSTRAP_ARTIFACTS);
 }
 
 function selectedCorpus(): PdfParityCorpusEntry[] {
@@ -294,12 +277,10 @@ function selectedCorpus(): PdfParityCorpusEntry[] {
   return selected;
 }
 
-function assertPinnedSource(entry: PdfParityCorpusEntry): Uint8Array {
-  const path = resolve(repoRoot, entry.source.path);
-  if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
-    throw new Error(`${entry.id} source must be a tracked regular file: ${entry.source.path}`);
-  }
-  execFileSync('git', ['ls-files', '--error-unmatch', entry.source.path], {
+function assertPinnedSource(entry: PdfParityCorpusEntry, gitExecutable: string): Uint8Array {
+  assertSafeCaseId(entry.id);
+  const path = resolveTrackedRegularFile(repoRoot, entry.source.path);
+  execFileSync(gitExecutable, ['ls-files', '--error-unmatch', entry.source.path], {
     cwd: repoRoot,
     stdio: 'pipe',
   });
@@ -308,12 +289,20 @@ function assertPinnedSource(entry: PdfParityCorpusEntry): Uint8Array {
   if (digest !== entry.source.sha256) {
     throw new Error(`${entry.id} source SHA-256 changed (${digest} != ${entry.source.sha256}).`);
   }
-  const blob = execFileSync('git', ['hash-object', entry.source.path], {
+  const blob = execFileSync(gitExecutable, ['hash-object', entry.source.path], {
     cwd: repoRoot,
     encoding: 'utf8',
   }).trim();
   if (blob !== entry.source.gitBlob) {
     throw new Error(`${entry.id} source Git blob changed (${blob} != ${entry.source.gitBlob}).`);
+  }
+  const headBlob = execFileSync(gitExecutable, ['rev-parse', `HEAD:${entry.source.path}`], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  if (headBlob !== entry.source.gitBlob) {
+    throw new Error(`${entry.id} manifest does not bind the fixture at HEAD (${headBlob} != ${entry.source.gitBlob}).`);
   }
   return bytes;
 }
@@ -364,12 +353,17 @@ async function referenceSource(
   return { path, sha256: sha256(bytes) };
 }
 
-function renderReferencePdf(sourcePath: string, work: string, destination: string): Uint8Array {
+function renderReferencePdf(
+  libreofficeExecutable: string,
+  sourcePath: string,
+  work: string,
+  destination: string,
+): Uint8Array {
   const pdfDirectory = join(work, 'reference-pdf');
   const profileDirectory = join(work, 'libreoffice-profile');
   mkdirSync(pdfDirectory, { recursive: true, mode: 0o700 });
   mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
-  execFileSync('libreoffice', [
+  execFileSync(libreofficeExecutable, [
     `-env:UserInstallation=${pathToFileURL(profileDirectory).href}`,
     '--headless', '--nologo', '--nodefault', '--nofirststartwizard', '--norestore',
     '--convert-to', 'pdf:writer_pdf_Export', '--outdir', pdfDirectory, sourcePath,
@@ -380,6 +374,11 @@ function renderReferencePdf(sourcePath: string, work: string, destination: strin
   });
   const produced = join(pdfDirectory, `${basename(sourcePath).replace(/\.docx$/i, '')}.pdf`);
   if (!existsSync(produced)) throw new Error(`LibreOffice did not produce ${produced}.`);
+  const producedMetadata = lstatSync(produced);
+  if (!producedMetadata.isFile() || producedMetadata.isSymbolicLink()
+    || producedMetadata.size > PDF_PARITY_LIMITS.maximumPdfBytes) {
+    throw new Error(`LibreOffice PDF is not a bounded regular non-symlink file: ${produced}`);
+  }
   const bytes = new Uint8Array(readFileSync(produced));
   writeFileSync(destination, bytes);
   return bytes;
@@ -408,51 +407,17 @@ function textEvidence(text: string, entry: PdfParityCorpusEntry): TextExtractorE
   };
 }
 
-function popplerText(path: string): string {
-  return execFileSync('pdftotext', ['-enc', 'UTF-8', '-nopgbrk', path, '-'], {
+function popplerText(pdftotextExecutable: string, path: string): string {
+  return execFileSync(pdftotextExecutable, ['-enc', 'UTF-8', '-nopgbrk', path, '-'], {
     encoding: 'utf8',
     env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TZ: 'UTC' },
     timeout: 120_000,
+    maxBuffer: 6 * 1024 * 1024,
   });
-}
-
-function canonicalUrl(value: string): string {
-  try {
-    return new URL(value).href;
-  } catch {
-    return value;
-  }
-}
-
-function linkEvidence(inspection: PdfInspection, entry: PdfParityCorpusEntry): LinkEvidence {
-  const expected = [...(entry.semantics.links ?? [])];
-  const observed = inspection.pages.flatMap((page) => page.hyperlinks.map((annotation) => ({
-    kind: annotation.target.kind,
-    ...(annotation.target.kind === 'unsupported' ? {} : { value: annotation.target.value }),
-    ...(annotation.target.kind === 'url' && annotation.target.unsafeValue
-      ? { unsafeValue: annotation.target.unsafeValue }
-      : {}),
-  })));
-  const missing = expected.filter((link) => {
-    if (link.kind === 'external') {
-      return !observed.some((target) => target.kind === 'url'
-        && [target.value, target.unsafeValue].filter((value): value is string => Boolean(value))
-          .some((value) => canonicalUrl(value) === canonicalUrl(link.exactTarget)));
-    }
-    return !observed.some((target) => target.kind === 'destination'
-      && target.value === link.anchor);
-  });
-  const unsupportedAnnotations = observed.filter((target) => target.kind === 'unsupported').length;
-  return {
-    expected,
-    observed,
-    missing,
-    unsupportedAnnotations,
-    passed: missing.length === 0 && unsupportedAnnotations === 0,
-  };
 }
 
 function semanticEvidence(
+  pdftotextExecutable: string,
   candidatePath: string,
   candidateInspection: PdfInspection,
   referencePath: string,
@@ -460,10 +425,10 @@ function semanticEvidence(
   entry: PdfParityCorpusEntry,
 ): SemanticEvidence {
   const candidatePdfjs = textEvidence(candidateInspection.searchableText, entry);
-  const candidatePoppler = textEvidence(popplerText(candidatePath), entry);
-  const candidateLinks = linkEvidence(candidateInspection, entry);
+  const candidatePoppler = textEvidence(popplerText(pdftotextExecutable, candidatePath), entry);
+  const candidateLinks = exactLinkEvidence(candidateInspection, entry);
   const referencePdfjs = textEvidence(referenceInspection.searchableText, entry);
-  const referencePoppler = textEvidence(popplerText(referencePath), entry);
+  const referencePoppler = textEvidence(popplerText(pdftotextExecutable, referencePath), entry);
   return {
     candidate: {
       pdfjs: candidatePdfjs,
@@ -525,7 +490,8 @@ function hasHardParityFailure(result: PdfParityCaseResult): boolean {
   return result.error !== undefined
     || result.pageCountDelta !== 0
     || !result.physicalGeometryPassed
-    || !result.semanticChecksPassed;
+    || !result.semanticChecksPassed
+    || !result.vectorContentPassed;
 }
 
 function gatesStrictRasterRun(result: PdfParityCaseResult): boolean {
@@ -541,6 +507,7 @@ function summarizeCases(cases: PdfParityCaseResult[]) {
     pageCountMismatches: cases.filter((entry) => entry.pageCountDelta !== 0).length,
     physicalGeometryFailures: cases.filter((entry) => !entry.physicalGeometryPassed).length,
     semanticFailures: cases.filter((entry) => !entry.semanticChecksPassed).length,
+    vectorFailures: cases.filter((entry) => !entry.vectorContentPassed).length,
     errors: cases.filter((entry) => entry.error !== undefined).length,
     severityCounts: Object.fromEntries(severityOrder.map((level) => [
       level,
@@ -567,8 +534,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
   // Capture the source identity before any benchmark-owned write. Record updates intentionally
   // dirty the repository at the end of a successful run; recomputing status while writing the
   // final artifact would therefore mislabel a verified clean source as dirty.
-  const sourceCommit = commandVersion('git', ['rev-parse', 'HEAD']);
-  const sourceWorkingTreeDirty = commandVersion('git', ['status', '--porcelain']).length > 0;
+  const git = pinExecutable('git', ['--version']);
+  const sourceCommit = commandVersion(git.path, ['rev-parse', 'HEAD']);
+  const sourceTree = commandVersion(git.path, ['rev-parse', 'HEAD^{tree}']);
+  const sourceWorkingTreeStatus = commandVersion(git.path, ['status', '--porcelain']);
+  const sourceWorkingTreeDirty = sourceWorkingTreeStatus.length > 0;
   const cases: PdfParityCaseResult[] = [];
   let phase = 'artifact-initialization';
   let environment: Record<string, unknown> = {};
@@ -593,6 +563,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       measurementPipeline: 'generated-pdf-v1',
       generatedAt: state.updatedAt,
       gitCommit: sourceCommit,
+      gitTree: sourceTree,
       workingTreeDirty: sourceWorkingTreeDirty,
       rasterContract: {
         ...PDF_RASTER_CONTRACT,
@@ -617,28 +588,37 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
   persist();
   try {
     phase = 'environment-preflight';
-    assertFontContract();
-    const fontContract = fontContractReport(repoRoot);
-    const libreofficeVersion = assertLibreOfficeContract();
-    const poppler = popplerVersionOutput();
-    const pdftotext = commandVersion('pdftotext', ['-v']);
-    const exportEntry = resolve(repoRoot, 'npm-export/dist/index.js');
-    if (!existsSync(exportEntry)) {
-      throw new Error(`Build @docxodus/export before the benchmark: missing ${exportEntry}`);
-    }
+    const tools = {
+      fcMatch: pinExecutable('fc-match', ['--version']),
+      libreoffice: pinExecutable('libreoffice', ['--version']),
+      pdftoppm: pinExecutable('pdftoppm', ['-v']),
+      pdftotext: pinExecutable('pdftotext', ['-v']),
+    };
+    const fontContract = fontContractReport(repoRoot, tools.fcMatch.path);
+    const libreofficeVersion = assertLibreOfficeContract(tools.libreoffice.evidence.version);
+    const poppler = tools.pdftoppm.evidence.version.split('\n')[0].trim();
+    const pdftotext = tools.pdftotext.evidence.version;
+    const build = captureGeneratedPdfBuildEvidence(repoRoot);
+    const exportEntry = resolveTrackedRegularFile(repoRoot, 'npm-export/dist/index.js');
     const exporter = await import(pathToFileURL(exportEntry).href) as ExportModule;
     if (typeof exporter.convertDocxToPdf !== 'function') {
       throw new Error('The supported @docxodus/export entry point does not export convertDocxToPdf.');
     }
-    const playwrightCoreEntry = resolve(repoRoot, 'npm-export/node_modules/playwright-core/index.mjs');
+    const playwrightCoreEntry = resolveTrackedRegularFile(
+      repoRoot,
+      'npm-export/node_modules/playwright-core/index.mjs',
+    );
     const exporterPlaywright = await import(pathToFileURL(playwrightCoreEntry).href) as {
       chromium: { executablePath(): string; launch(options: Record<string, unknown>): Promise<{
         version(): string;
         close(): Promise<void>;
       }> };
     };
-    const chromiumExecutablePath = exporterPlaywright.chromium.executablePath();
-    const chromiumProbe = await exporterPlaywright.chromium.launch({ headless: true });
+    const chromiumExecutablePath = resolveExecutable(exporterPlaywright.chromium.executablePath());
+    const chromiumProbe = await exporterPlaywright.chromium.launch({
+      headless: true,
+      executablePath: chromiumExecutablePath,
+    });
     const chromiumVersion = chromiumProbe.version();
     await chromiumProbe.close();
     environment = {
@@ -649,13 +629,21 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         sha256: sha256File(chromiumExecutablePath),
       },
       node: process.version,
+      source: { commit: sourceCommit, tree: sourceTree, workingTreeDirty: sourceWorkingTreeDirty },
+      build,
+      moduleEntries: {
+        exporter: sha256File(exportEntry),
+        playwrightCore: sha256File(playwrightCoreEntry),
+      },
       libreoffice: libreofficeVersion,
       pdftoppm: poppler,
       pdftotext,
       tools: {
-        libreoffice: executableEvidence('libreoffice', ['--version']),
-        pdftoppm: executableEvidence('pdftoppm', ['-v']),
-        pdftotext: executableEvidence('pdftotext', ['-v']),
+        git: git.evidence,
+        fcMatch: tools.fcMatch.evidence,
+        libreoffice: tools.libreoffice.evidence,
+        pdftoppm: tools.pdftoppm.evidence,
+        pdftotext: tools.pdftotext.evidence,
       },
       fontContract,
       locale: 'C.UTF-8',
@@ -666,6 +654,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
 
     for (const [caseIndex, entry] of corpus.entries()) {
       phase = `case:${entry.id}`;
+      assertSafeCaseId(entry.id);
       const caseOutput = join(outputRoot, entry.id);
       mkdirSync(caseOutput, { recursive: true, mode: 0o700 });
       const work = mkdtempSync(join(tmpdir(), `docxodus-generated-pdf-${entry.id}-`));
@@ -679,7 +668,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       let docxodusPages = 0;
       let libreofficePages = 0;
       try {
-        const source = assertPinnedSource(entry);
+        const source = assertPinnedSource(entry, git.path);
         sourceSha256 = sha256(source);
         writeFileSync(join(caseOutput, 'source.docx'), source);
         const projectedReference = await referenceSource(page, entry, source, caseOutput);
@@ -687,12 +676,16 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
 
         const candidate = await exporter.convertDocxToPdf(source, {
           ...entry.profiles.candidate,
-          browserExecutablePath: chromiumExecutablePath,
           expectedSourceDigest: sourceSha256,
           unsupportedContent: 'warn',
           timeoutMs: 120_000,
         });
-        docxodusPages = candidate.pageCount;
+        const verifiedCandidate = assertSupportedPdfResult(candidate, {
+          sourceSha256,
+          reviewProfile: entry.profiles.candidate.reviewProfile,
+          commentProfile: entry.profiles.candidate.commentProfile,
+        });
+        docxodusPages = verifiedCandidate.pageCount;
         const candidatePdfPath = join(caseOutput, 'docxodus.pdf');
         writeFileSync(candidatePdfPath, candidate.pdf);
         writeJsonAtomic(join(caseOutput, 'render-report.json'), candidate.renderReport);
@@ -713,11 +706,27 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         }
 
         const referencePdfPath = join(caseOutput, 'reference.pdf');
-        const referencePdf = renderReferencePdf(projectedReference.path, work, referencePdfPath);
+        const referencePdf = renderReferencePdf(
+          tools.libreoffice.path,
+          projectedReference.path,
+          work,
+          referencePdfPath,
+        );
         artifacts.referencePdf = `${entry.id}/reference.pdf`;
 
         const candidateInspection = await inspectPdf(candidate.pdf);
         const referenceInspection = await inspectPdf(referencePdf);
+        if (candidateInspection.pageCount !== verifiedCandidate.pageCount) {
+          throw new Error(`${entry.id}: export API and independent PDF parser disagree on page count.`);
+        }
+        for (const [pageIndex, pageMapPage] of verifiedCandidate.pages.entries()) {
+          const pdfPage = candidateInspection.pages[pageIndex];
+          if (!pdfPage
+            || Math.abs(pageMapPage.width - pdfPage.mediaBox.width) > PHYSICAL_GEOMETRY_TOLERANCE_POINTS
+            || Math.abs(pageMapPage.height - pdfPage.mediaBox.height) > PHYSICAL_GEOMETRY_TOLERANCE_POINTS) {
+            throw new Error(`${entry.id}: PageMap page ${pageIndex + 1} does not bind the PDF MediaBox.`);
+          }
+        }
         docxodusPages = candidateInspection.pageCount;
         libreofficePages = referenceInspection.pageCount;
         writeJsonAtomic(join(caseOutput, 'candidate-inspection.json'), candidateInspection);
@@ -726,6 +735,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         artifacts.referenceInspection = `${entry.id}/reference-inspection.json`;
 
         const semantic = semanticEvidence(
+          tools.pdftotext.path,
           candidatePdfPath,
           candidateInspection,
           referencePdfPath,
@@ -734,6 +744,15 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         );
         writeJsonAtomic(join(caseOutput, 'semantic.json'), semantic);
         artifacts.semantic = `${entry.id}/semantic.json`;
+        const vectorContentPassed = !(entry.categories as readonly string[]).includes('charts')
+          || candidateInspection.vectorPathOperations > 0;
+        writeJsonAtomic(join(caseOutput, 'vector-content.json'), {
+          required: (entry.categories as readonly string[]).includes('charts'),
+          passed: vectorContentPassed,
+          candidateConstructPathOperations: candidateInspection.vectorPathOperations,
+          referenceConstructPathOperations: referenceInspection.vectorPathOperations,
+        });
+        artifacts.vectorContent = `${entry.id}/vector-content.json`;
 
         const geometry = compareGeometry(candidateInspection, referenceInspection);
         const physicalGeometryPassed = candidateInspection.pageCount === referenceInspection.pageCount
@@ -746,11 +765,19 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         });
         artifacts.physicalGeometry = `${entry.id}/physical-geometry.json`;
 
-        const candidateRaster = rasterizePdf(candidatePdfPath, join(caseOutput, 'docxodus'));
-        const referenceRaster = rasterizePdf(referencePdfPath, join(caseOutput, 'libreoffice'));
+        const candidateRaster = rasterizePdf(candidatePdfPath, join(caseOutput, 'docxodus'), {
+          executablePath: tools.pdftoppm.path,
+        });
+        const referenceRaster = rasterizePdf(referencePdfPath, join(caseOutput, 'libreoffice'), {
+          executablePath: tools.pdftoppm.path,
+        });
         if (candidateRaster.contractSha256 !== referenceRaster.contractSha256
           || candidateRaster.contractSha256 !== PDF_RASTER_CONTRACT_SHA256) {
           throw new Error(`${entry.id}: candidate/reference raster contracts differ.`);
+        }
+        if (candidateRaster.pages.length !== candidateInspection.pageCount
+          || referenceRaster.pages.length !== referenceInspection.pageCount) {
+          throw new Error(`${entry.id}: PDF parser and rasterizer disagree on page count.`);
         }
 
         const environmentFingerprint = sha256(JSON.stringify({
@@ -813,6 +840,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
           pageCountDelta: candidateRaster.pages.length - referenceRaster.pages.length,
           physicalGeometryPassed,
           semanticChecksPassed: semantic.passed,
+          vectorContentPassed,
+          vectorPathOperations: {
+            candidate: candidateInspection.vectorPathOperations,
+            reference: referenceInspection.vectorPathOperations,
+          },
           severity,
           rendererFingerprint: candidate.rendererFingerprint,
           environmentFingerprint,
@@ -855,6 +887,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
           pageCountDelta: docxodusPages - libreofficePages,
           physicalGeometryPassed: false,
           semanticChecksPassed: false,
+          vectorContentPassed: false,
           severity: 'severe',
           artifacts,
           artifactSha256: {},
@@ -881,42 +914,26 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       pageCountDelta: entry.pageCountDelta,
       physicalGeometryPassed: entry.physicalGeometryPassed,
       semanticChecksPassed: entry.semanticChecksPassed,
+      vectorContentPassed: entry.vectorContentPassed,
       error: entry.error,
-    })), 'generated-PDF conversion, page-count, physical-geometry, and semantic contracts '
+    })), 'generated-PDF conversion, page-count, physical-geometry, semantic, and chart-vector contracts '
       + 'are unconditional; raster severity and disposition cannot waive them').toEqual([]);
 
-    phase = 'ratchet';
+    phase = 'ratchet-comparison';
     const complete = !process.env.DOCXODUS_GENERATED_PDF_PARITY_FILTER;
-    if (process.env.DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD === '1') {
-      if (!complete) {
-        throw new Error('Refusing to write a partial generated-PDF ratchet record; unset the filter.');
-      }
-      assertRecordUpdateProvenance(summary);
-      const finalSourceCommit = commandVersion('git', ['rev-parse', 'HEAD']);
-      const finalSourceWorkingTreeDirty = commandVersion('git', ['status', '--porcelain']).length > 0;
-      assertRecordUpdateProvenance({
-        ...summary,
-        gitCommit: finalSourceCommit,
-        workingTreeDirty: finalSourceWorkingTreeDirty,
-      });
-      if (finalSourceCommit !== summary.gitCommit) {
-        throw new Error('Refusing to refresh a parity ratchet after HEAD changed during the benchmark.');
-      }
-      const record = buildRecord(summary, new Date().toISOString().slice(0, 10));
-      record.description = 'Generated-PDF visual-fidelity regression ratchet (issue #443). '
-        + 'Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and '
-        + 'fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.';
-      writeFileSync(GENERATED_PDF_RATCHET_RECORD_FILE, serializeRecord(record));
-      console.log(`Generated-PDF ratchet record refreshed: ${GENERATED_PDF_RATCHET_RECORD_FILE}`);
-    } else if (process.env.DOCXODUS_VISUAL_PARITY_RATCHET !== '0') {
-      const record = readRecord(GENERATED_PDF_RATCHET_RECORD_FILE);
-      if (!record) {
-        throw new Error('Generated-PDF ratchet record is missing. Run a complete benchmark with '
-          + 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 and commit the numbers-only record.');
-      }
-      const comparison = compareToRecord(record, summary, { expectComplete: complete });
-      writeJsonAtomic(join(outputRoot, 'ratchet-comparison.json'), comparison);
-      console.log(`Generated-PDF ratchet [${comparison.status}]: ${comparison.message}`);
+    const updateRecord = process.env.DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD === '1';
+    if (updateRecord && !complete) {
+      throw new Error('Refusing to write a partial generated-PDF ratchet record; unset the filter.');
+    }
+    const existingRecord = readRecord(GENERATED_PDF_RATCHET_RECORD_FILE);
+    if (!existingRecord) {
+      throw new Error('Generated-PDF ratchet record is missing. Run a complete benchmark with '
+        + 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 and commit the numbers-only record.');
+    }
+    const comparison = compareToRecord(existingRecord, summary, { expectComplete: complete });
+    writeJsonAtomic(join(outputRoot, 'ratchet-comparison.json'), comparison);
+    console.log(`Generated-PDF ratchet [${comparison.status}]: ${comparison.message}`);
+    if (!updateRecord && process.env.DOCXODUS_VISUAL_PARITY_RATCHET !== '0') {
       expect(comparison.status, comparison.message).toBe('ok');
     }
 
@@ -928,6 +945,45 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         disposition: entry.disposition.kind,
       })), 'strict generated-PDF parity additionally rejects renderer-owned severe raster '
         + 'differences').toEqual([]);
+    }
+
+    phase = 'evidence-stability';
+    const finalSourceCommit = commandVersion(git.path, ['rev-parse', 'HEAD']);
+    const finalSourceTree = commandVersion(git.path, ['rev-parse', 'HEAD^{tree}']);
+    const finalWorkingTreeStatus = commandVersion(git.path, ['status', '--porcelain']);
+    if (finalSourceCommit !== sourceCommit || finalSourceTree !== sourceTree
+      || finalWorkingTreeStatus !== sourceWorkingTreeStatus) {
+      throw new Error('Source commit, tree, or working-tree state changed during the benchmark.');
+    }
+    if (JSON.stringify(captureGeneratedPdfBuildEvidence(repoRoot)) !== JSON.stringify(build)
+      || JSON.stringify(fontContractReport(repoRoot, tools.fcMatch.path)) !== JSON.stringify(fontContract)
+      || sha256File(exportEntry) !== (environment.moduleEntries as Record<string, string>).exporter
+      || sha256File(playwrightCoreEntry)
+        !== (environment.moduleEntries as Record<string, string>).playwrightCore
+      || sha256File(chromiumExecutablePath)
+        !== (environment.chromiumExecutable as Record<string, string>).sha256) {
+      throw new Error('The built exporter, browser assets, module entries, or Chromium changed during the run.');
+    }
+    for (const tool of [git, tools.fcMatch, tools.libreoffice, tools.pdftoppm, tools.pdftotext]) {
+      if (sha256File(tool.path) !== tool.evidence.executableSha256) {
+        throw new Error(`Pinned executable changed during the run: ${tool.evidence.command}`);
+      }
+    }
+
+    if (updateRecord) {
+      phase = 'record-update';
+      assertRecordUpdateProvenance(summary);
+      assertRecordUpdateProvenance({
+        ...summary,
+        gitCommit: finalSourceCommit,
+        workingTreeDirty: finalWorkingTreeStatus.length > 0,
+      });
+      const record = buildRecord(summary, new Date().toISOString().slice(0, 10));
+      record.description = 'Generated-PDF visual-fidelity regression ratchet (issue #443). '
+        + 'Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and '
+        + 'fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.';
+      writeTextAtomic(GENERATED_PDF_RATCHET_RECORD_FILE, serializeRecord(record));
+      console.log(`Generated-PDF ratchet record refreshed: ${GENERATED_PDF_RATCHET_RECORD_FILE}`);
     }
 
     phase = 'complete';

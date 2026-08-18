@@ -26,6 +26,19 @@ test.describe('visual parity metrics', () => {
     expect(encodePng(decoded)).toEqual(encoded);
   });
 
+  test('PNG decoding rejects corrupt chunks and trailing bytes', () => {
+    const encoded = encodePng(image(2, 2));
+    const corruptHeader = Buffer.from(encoded);
+    corruptHeader[16] ^= 1;
+    expect(() => decodePng(corruptHeader)).toThrow(/CRC/);
+    expect(() => decodePng(Buffer.concat([encoded, Buffer.from([0])]))).toThrow(/trailing bytes/);
+  });
+
+  test('PNG dimensions are bounded before allocation or inflation', () => {
+    expect(() => encodePng({ width: 4_000_001, height: 1, data: new Uint8Array() }))
+      .toThrow(/pixel limit/);
+  });
+
   test('identical pages are exact, structurally identical, and close', () => {
     const original = image(32, 32, { x: 8, y: 8, width: 10, height: 12 });
     const comparison = compareImages(original, original);

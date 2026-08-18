@@ -70,6 +70,8 @@ export interface InternalPdfLinkExpectation {
   sourceText: string;
   anchor: string;
   destinationText: string;
+  /** Chromium emits one logical internal link as this exact consecutive annotation group. */
+  expectedPdfAnnotations: number;
 }
 
 export interface ExternalPdfLinkExpectation {
@@ -77,6 +79,9 @@ export interface ExternalPdfLinkExpectation {
   sourceText: string;
   relationshipId: string;
   exactTarget: string;
+  /** Exact URI representation delivered in the PDF after Chromium URL serialization. */
+  expectedPdfTarget: string;
+  expectedPdfAnnotations: number;
 }
 
 export type PdfLinkExpectation = InternalPdfLinkExpectation | ExternalPdfLinkExpectation;
@@ -143,6 +148,7 @@ const LEGAL_CONTRACT_INTERNAL_LINKS = [
   sourceText,
   anchor,
   destinationText,
+  expectedPdfAnnotations: 5,
 }));
 
 /**
@@ -393,6 +399,8 @@ export const PDF_PARITY_CORPUS = {
           sourceText: "EricWhite.com",
           relationshipId: "rId4",
           exactTarget: "http://www.ericwhite.com",
+          expectedPdfTarget: "http://www.ericwhite.com/",
+          expectedPdfAnnotations: 1,
         }],
       },
       disposition: {

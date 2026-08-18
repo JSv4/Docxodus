@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PDF_PARITY_CORPUS,
@@ -12,12 +12,18 @@ import {
   type PdfLinkExpectation,
   type PdfParityCorpusEntry,
 } from "./visual-parity/pdf-corpus.js";
+import {
+  assertSafeCaseId,
+  resolveTrackedRegularFile,
+} from "./visual-parity/benchmark-paths.js";
+import { pinExecutable } from "./visual-parity/toolchain.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const gitObjectPattern = /^[0-9a-f]{40}$/;
 const pdfCases: readonly PdfParityCorpusEntry[] = PDF_PARITY_CORPUS.cases;
+const git = pinExecutable("git", ["--version"]);
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -102,7 +108,8 @@ function byId(id: string): PdfParityCorpusEntry {
 }
 
 function sourceParts(id: string): Map<string, Buffer> {
-  return zipParts(resolve(repoRoot, byId(id).source.path));
+  const entry = byId(id);
+  return zipParts(resolveTrackedRegularFile(repoRoot, entry.source.path));
 }
 
 function packageText(parts: Map<string, Buffer>): string {
@@ -128,6 +135,7 @@ test.describe("versioned generated-PDF corpus", () => {
     expect(REQUIRED_PDF_PARITY_CATEGORIES.filter((category) => !covered.has(category))).toEqual([]);
 
     for (const entry of pdfCases) {
+      assertSafeCaseId(entry.id);
       expect(entry.rationale.trim(), `${entry.id} corpus rationale`).not.toBe("");
       expect(entry.disposition.rationale.trim(), `${entry.id} disposition rationale`).not.toBe("");
       expect(entry.semantics.requiredText.length, `${entry.id} searchable text contract`).toBeGreaterThan(0);
@@ -147,41 +155,46 @@ test.describe("versioned generated-PDF corpus", () => {
       sourceText: "EricWhite.com",
       relationshipId: "rId4",
       exactTarget: "http://www.ericwhite.com",
+      expectedPdfTarget: "http://www.ericwhite.com/",
+      expectedPdfAnnotations: 1,
     }]);
   });
 
   test("pins every tracked fixture and generator to exact repository bytes", () => {
     const checkedGenerators = new Set<string>();
     for (const entry of pdfCases) {
-      expect(isAbsolute(entry.source.path), `${entry.id} path must be repository-relative`).toBe(false);
-      const path = resolve(repoRoot, entry.source.path);
-      const relativePath = relative(repoRoot, path);
-      expect(relativePath.startsWith(".."), `${entry.id} path escapes the repository`).toBe(false);
-      expect(lstatSync(path).isFile(), `${entry.id} must name a regular file`).toBe(true);
-      expect(lstatSync(path).isSymbolicLink(), `${entry.id} must not name a symlink`).toBe(false);
-      execFileSync("git", ["ls-files", "--error-unmatch", entry.source.path], {
+      const path = resolveTrackedRegularFile(repoRoot, entry.source.path);
+      execFileSync(git.path, ["ls-files", "--error-unmatch", entry.source.path], {
         cwd: repoRoot,
         stdio: "pipe",
       });
       expect(sha256(readFileSync(path)), `${entry.id} fixture SHA-256`).toBe(entry.source.sha256);
-      expect(execFileSync("git", ["hash-object", entry.source.path], {
+      expect(execFileSync(git.path, ["hash-object", entry.source.path], {
         cwd: repoRoot,
         encoding: "utf8",
       }).trim(), `${entry.id} fixture Git blob`).toBe(entry.source.gitBlob);
+      expect(execFileSync(git.path, ["rev-parse", `HEAD:${entry.source.path}`], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      }).trim(), `${entry.id} fixture blob at HEAD`).toBe(entry.source.gitBlob);
 
       const generator = entry.source.provenance.generator;
       if (!generator || checkedGenerators.has(generator.path)) continue;
       checkedGenerators.add(generator.path);
-      const generatorPath = resolve(repoRoot, generator.path);
-      execFileSync("git", ["ls-files", "--error-unmatch", generator.path], {
+      const generatorPath = resolveTrackedRegularFile(repoRoot, generator.path);
+      execFileSync(git.path, ["ls-files", "--error-unmatch", generator.path], {
         cwd: repoRoot,
         stdio: "pipe",
       });
       expect(sha256(readFileSync(generatorPath)), `${generator.path} SHA-256`).toBe(generator.sha256);
-      expect(execFileSync("git", ["hash-object", generator.path], {
+      expect(execFileSync(git.path, ["hash-object", generator.path], {
         cwd: repoRoot,
         encoding: "utf8",
       }).trim(), `${generator.path} Git blob`).toBe(generator.gitBlob);
+      expect(execFileSync(git.path, ["rev-parse", `HEAD:${generator.path}`], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      }).trim(), `${generator.path} blob at HEAD`).toBe(generator.gitBlob);
       expect(generator.rationale.trim()).not.toBe("");
     }
   });

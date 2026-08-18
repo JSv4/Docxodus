@@ -74,6 +74,23 @@ test.describe('the committed generated-PDF parity ratchet', () => {
       .toEqual([record!.environment.fontContractSha256]);
   });
 
+  test('the public generated-PDF command owns both builds before it launches Playwright', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const command = packageJson.scripts['test:generated-pdf-parity'];
+    expect(command).toContain('npm run build');
+    expect(command).toContain('npm --prefix ../npm-export run build');
+    expect(command).toContain('npm run pretest');
+    expect(command).toContain('playwright test generated-pdf-parity.spec.ts');
+    expect(command.indexOf('npm run build')).toBeLessThan(
+      command.indexOf('npm --prefix ../npm-export run build'),
+    );
+    expect(command.indexOf('npm --prefix ../npm-export run build')).toBeLessThan(
+      command.indexOf('playwright test generated-pdf-parity.spec.ts'),
+    );
+  });
+
   test('agrees with the corpus about every reviewable disposition', () => {
     const record = readRecord(recordFile)!;
     for (const entry of record.cases) {

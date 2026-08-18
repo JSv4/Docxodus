@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   PDFDocument,
   PDFName,
+  PDFNumber,
   PDFString,
   StandardFonts,
 } from 'pdf-lib';
@@ -67,6 +68,8 @@ test.describe('generated-PDF visual parity helpers', () => {
       '-thinlinemode', 'none',
       '-aa', 'yes',
       '-aaVector', 'yes',
+      '-f', '1',
+      '-l', '33',
       '-forcenum',
       '-q',
       '/tmp/source.pdf',
@@ -75,6 +78,33 @@ test.describe('generated-PDF visual parity helpers', () => {
     expect(args).not.toContain('-gray');
     expect(args).not.toContain('-mono');
     expect(args).not.toContain('-cropbox');
+  });
+
+  test('applies UserUnit and page rotation without discarding nonzero box origins', async () => {
+    const pdf = await PDFDocument.create();
+    const rotated90 = pdf.addPage([100, 200]);
+    rotated90.setMediaBox(10, 20, 30, 40);
+    rotated90.setCropBox(12, 22, 20, 30);
+    rotated90.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+    rotated90.node.set(PDFName.of('Rotate'), PDFNumber.of(90));
+    const rotated270 = pdf.addPage([100, 200]);
+    rotated270.setMediaBox(5, 7, 20, 30);
+    rotated270.node.set(PDFName.of('UserUnit'), PDFNumber.of(3));
+    rotated270.node.set(PDFName.of('Rotate'), PDFNumber.of(270));
+
+    const inspection = await inspectPdf(new Uint8Array(await pdf.save({ useObjectStreams: false })));
+
+    expect(inspection.pages[0]).toMatchObject({
+      userUnit: 2,
+      rotation: 90,
+      mediaBox: { x: 20, y: 40, width: 80, height: 60 },
+      cropBox: { x: 24, y: 44, width: 60, height: 40 },
+    });
+    expect(inspection.pages[1]).toMatchObject({
+      userUnit: 3,
+      rotation: 270,
+      mediaBox: { x: 15, y: 21, width: 90, height: 60 },
+    });
   });
 
   test('inspects actual per-page boxes, selectable text, exact link targets, and hashes', async () => {

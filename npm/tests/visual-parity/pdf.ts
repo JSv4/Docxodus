@@ -2,13 +2,33 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   statSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
+import type { PDFObject, PDFPage } from 'pdf-lib';
 import { getDocument, OPS, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+/**
+ * Resource ceilings for the fixed release corpus. These are deliberately far above its current
+ * largest artifacts while preventing a broken renderer/parser from turning CI into an unbounded
+ * PDF, raster, text, annotation, or operator-list expansion.
+ */
+export const PDF_PARITY_LIMITS = Object.freeze({
+  maximumPdfBytes: 32 * 1024 * 1024,
+  maximumPages: 32,
+  maximumRasterBytesPerPage: 16 * 1024 * 1024,
+  maximumTotalRasterBytes: 128 * 1024 * 1024,
+  maximumRasterPixelsPerPage: 4_000_000,
+  maximumTextCharacters: 5_000_000,
+  maximumAnnotationsPerPage: 4_096,
+  maximumOperatorEntriesPerPage: 1_000_000,
+  maximumPhysicalPagePoints: 14_400,
+  maximumHyperlinkTargetCharacters: 8_192,
+});
 
 /**
  * The one raster contract used for both the Docxodus PDF and its reference PDF.
@@ -30,6 +50,11 @@ export const PDF_RASTER_CONTRACT = Object.freeze({
   freeType: true as const,
   thinLineMode: 'none' as const,
   forcePageNumber: true as const,
+  maximumPages: PDF_PARITY_LIMITS.maximumPages,
+  maximumPdfBytes: PDF_PARITY_LIMITS.maximumPdfBytes,
+  maximumRasterBytesPerPage: PDF_PARITY_LIMITS.maximumRasterBytesPerPage,
+  maximumTotalRasterBytes: PDF_PARITY_LIMITS.maximumTotalRasterBytes,
+  maximumRasterPixelsPerPage: PDF_PARITY_LIMITS.maximumRasterPixelsPerPage,
 });
 
 function sha256(bytes: Uint8Array | string): string {
@@ -41,6 +66,7 @@ export const PDF_RASTER_CONTRACT_SHA256 = sha256(JSON.stringify(PDF_RASTER_CONTR
 export interface RasterArtifact {
   pageNumber: number;
   path: string;
+  bytes: number;
   sha256: string;
 }
 
@@ -54,6 +80,8 @@ export interface RasterizedPdf {
 export interface RasterizePdfOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  /** Absolute executable already resolved and hashed by the benchmark preflight. */
+  executablePath?: string;
 }
 
 function escapedRegExp(value: string): string {
@@ -67,7 +95,18 @@ function numberedPngs(outputPrefix: string): Array<{ pageNumber: number; path: s
   return readdirSync(directory)
     .map((name) => ({ name, match: name.match(pattern) }))
     .filter((entry): entry is { name: string; match: RegExpMatchArray } => entry.match !== null)
-    .map((entry) => ({ pageNumber: Number(entry.match[1]), path: join(directory, entry.name) }))
+    .map((entry) => {
+      const pageNumber = Number(entry.match[1]);
+      const path = join(directory, entry.name);
+      if (!Number.isSafeInteger(pageNumber) || pageNumber < 1) {
+        throw new Error(`pdftoppm produced an invalid page number at ${path}`);
+      }
+      const metadata = lstatSync(path);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error(`pdftoppm raster output is not a regular non-symlink file: ${path}`);
+      }
+      return { pageNumber, path };
+    })
     .sort((left, right) => left.pageNumber - right.pageNumber);
 }
 
@@ -82,6 +121,8 @@ export function popplerRasterArguments(pdfPath: string, outputPrefix: string): r
     '-thinlinemode', PDF_RASTER_CONTRACT.thinLineMode,
     '-aa', PDF_RASTER_CONTRACT.fontAntialiasing ? 'yes' : 'no',
     '-aaVector', PDF_RASTER_CONTRACT.vectorAntialiasing ? 'yes' : 'no',
+    '-f', '1',
+    '-l', String(PDF_RASTER_CONTRACT.maximumPages + 1),
     '-forcenum',
     '-q',
     input,
@@ -104,17 +145,27 @@ export function rasterizePdf(
   }
   const resolvedPdf = resolve(pdfPath);
   const resolvedPrefix = resolve(outputPrefix);
-  if (!existsSync(resolvedPdf) || !statSync(resolvedPdf).isFile()) {
+  if (!existsSync(resolvedPdf) || !lstatSync(resolvedPdf).isFile()
+    || lstatSync(resolvedPdf).isSymbolicLink()) {
     throw new Error(`PDF raster input is not a regular file: ${resolvedPdf}`);
   }
-  if (!existsSync(dirname(resolvedPrefix)) || !statSync(dirname(resolvedPrefix)).isDirectory()) {
+  const pdfBytes = statSync(resolvedPdf).size;
+  if (pdfBytes > PDF_RASTER_CONTRACT.maximumPdfBytes) {
+    throw new Error(`PDF raster input exceeds ${PDF_RASTER_CONTRACT.maximumPdfBytes} bytes: ${pdfBytes}`);
+  }
+  if (!existsSync(dirname(resolvedPrefix)) || !lstatSync(dirname(resolvedPrefix)).isDirectory()
+    || lstatSync(dirname(resolvedPrefix)).isSymbolicLink()) {
     throw new Error(`PDF raster output directory does not exist: ${dirname(resolvedPrefix)}`);
   }
   if (numberedPngs(resolvedPrefix).length > 0) {
     throw new Error(`Refusing to mix stale raster pages for prefix: ${resolvedPrefix}`);
   }
 
-  execFileSync(PDF_RASTER_CONTRACT.tool, [...popplerRasterArguments(resolvedPdf, resolvedPrefix)], {
+  const executable = options.executablePath ?? PDF_RASTER_CONTRACT.tool;
+  if (options.executablePath !== undefined && !isAbsolute(options.executablePath)) {
+    throw new Error('The pinned pdftoppm executable path must be absolute.');
+  }
+  execFileSync(executable, [...popplerRasterArguments(resolvedPdf, resolvedPrefix)], {
     env: options.env,
     stdio: 'pipe',
     timeout: options.timeoutMs ?? 120_000,
@@ -123,9 +174,29 @@ export function rasterizePdf(
   if (pages.length === 0) {
     throw new Error(`pdftoppm produced no PNG pages for: ${resolvedPdf}`);
   }
+  if (pages.length > PDF_RASTER_CONTRACT.maximumPages) {
+    throw new Error(`pdftoppm produced more than ${PDF_RASTER_CONTRACT.maximumPages} pages.`);
+  }
+  let totalRasterBytes = 0;
   pages.forEach((page, index) => {
     if (page.pageNumber !== index + 1) {
       throw new Error(`pdftoppm produced a non-contiguous page sequence at ${page.path}`);
+    }
+    const size = statSync(page.path).size;
+    if (size > PDF_RASTER_CONTRACT.maximumRasterBytesPerPage) {
+      throw new Error(`Raster page exceeds ${PDF_RASTER_CONTRACT.maximumRasterBytesPerPage} bytes: ${page.path}`);
+    }
+    totalRasterBytes += size;
+    if (totalRasterBytes > PDF_RASTER_CONTRACT.maximumTotalRasterBytes) {
+      throw new Error(`Raster output exceeds ${PDF_RASTER_CONTRACT.maximumTotalRasterBytes} total bytes.`);
+    }
+    const header = readFileSync(page.path).subarray(0, 24);
+    const isPng = header.length === 24
+      && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const width = isPng ? header.readUInt32BE(16) : 0;
+    const height = isPng ? header.readUInt32BE(20) : 0;
+    if (!width || !height || width * height > PDF_RASTER_CONTRACT.maximumRasterPixelsPerPage) {
+      throw new Error(`Raster page has invalid or excessive dimensions at ${page.path}: ${width}x${height}`);
     }
   });
   return {
@@ -134,6 +205,7 @@ export function rasterizePdf(
     contractSha256: PDF_RASTER_CONTRACT_SHA256,
     pages: pages.map((page) => ({
       ...page,
+      bytes: statSync(page.path).size,
       sha256: sha256(readFileSync(page.path)),
     })),
   };
@@ -156,8 +228,20 @@ export interface PdfHyperlinkAnnotation {
   rectangle?: readonly number[];
 }
 
+function annotationRectangle(value: unknown): readonly number[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length !== 4
+    || !value.every((coordinate) => typeof coordinate === 'number'
+      && Number.isFinite(coordinate) && Math.abs(coordinate) <= 1_000_000)) {
+    throw new Error('PDF link annotation has an invalid or excessive rectangle.');
+  }
+  return Object.freeze([...value] as number[]);
+}
+
 export interface PdfPageInspection {
   pageNumber: number;
+  userUnit: number;
+  rotation: number;
   mediaBox: PdfBox;
   cropBox: PdfBox;
   text: string;
@@ -217,12 +301,51 @@ function pdfBox(box: { x: number; y: number; width: number; height: number }): P
   return { x: box.x, y: box.y, width: box.width, height: box.height };
 }
 
+function inheritedPageNumber(page: PDFPage, name: string): number | undefined {
+  const value = page.node.getInheritableAttribute(PDFName.of(name));
+  if (value === undefined) return undefined;
+  const resolved = page.node.context.lookup(value) as PDFObject | undefined;
+  if (!(resolved instanceof PDFNumber)) {
+    throw new Error(`PDF page attribute /${name} is not a number.`);
+  }
+  return resolved.asNumber();
+}
+
+/**
+ * Scale a page-space box and orient its dimensions. x/y deliberately remain the scaled raw PDF
+ * box origin: /Rotate changes the displayed axes but not the page dictionary's coordinate-space
+ * origin. Keeping rotation as a separate field avoids inventing a viewer-specific translation.
+ */
+function scaledOrientedPdfBox(
+  box: { x: number; y: number; width: number; height: number },
+  userUnit: number,
+  rotation: number,
+): PdfBox {
+  const swapsAxes = rotation === 90 || rotation === 270;
+  const physical = pdfBox({
+    x: box.x * userUnit,
+    y: box.y * userUnit,
+    width: (swapsAxes ? box.height : box.width) * userUnit,
+    height: (swapsAxes ? box.width : box.height) * userUnit,
+  });
+  if (!Object.values(physical).every(Number.isFinite)
+    || physical.width <= 0 || physical.height <= 0
+    || Math.abs(physical.x) > PDF_PARITY_LIMITS.maximumPhysicalPagePoints
+    || Math.abs(physical.y) > PDF_PARITY_LIMITS.maximumPhysicalPagePoints
+    || physical.width > PDF_PARITY_LIMITS.maximumPhysicalPagePoints
+    || physical.height > PDF_PARITY_LIMITS.maximumPhysicalPagePoints) {
+    throw new Error(`PDF page has invalid or excessive physical geometry: ${JSON.stringify(physical)}`);
+  }
+  return physical;
+}
+
 function destinationValue(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
-    return JSON.stringify(value) ?? String(value);
+    const serialized = JSON.stringify(value) ?? String(value);
+    return serialized.slice(0, PDF_PARITY_LIMITS.maximumHyperlinkTargetCharacters);
   } catch {
-    return String(value);
+    return String(value).slice(0, PDF_PARITY_LIMITS.maximumHyperlinkTargetCharacters);
   }
 }
 
@@ -261,6 +384,20 @@ async function hyperlinkTarget(
   annotation: Record<string, unknown>,
 ): Promise<PdfHyperlinkTarget> {
   if (typeof annotation.url === 'string') {
+    if (annotation.url.length > PDF_PARITY_LIMITS.maximumHyperlinkTargetCharacters
+      || (typeof annotation.unsafeUrl === 'string'
+        && annotation.unsafeUrl.length > PDF_PARITY_LIMITS.maximumHyperlinkTargetCharacters)) {
+      return { kind: 'unsupported', reason: 'link target exceeds the inspection limit' };
+    }
+    let protocol: string;
+    try {
+      protocol = new URL(annotation.url).protocol.toLowerCase();
+    } catch {
+      return { kind: 'unsupported', reason: 'link target is not an absolute URL' };
+    }
+    if (!['http:', 'https:', 'mailto:'].includes(protocol)) {
+      return { kind: 'unsupported', reason: `link target uses disallowed protocol ${protocol}` };
+    }
     return {
       kind: 'url',
       value: annotation.url,
@@ -307,7 +444,8 @@ function semanticResult(
     || missingFragments.length > 0
     || presentForbiddenFragments.length > 0;
   const hyperlinksRequired = requiredTargets.length > 0;
-  const hyperlinksFailed = missingTargets.length > 0;
+  const hyperlinksFailed = missingTargets.length > 0
+    || (hyperlinksRequired && targets.some((target) => target.kind === 'unsupported'));
   return {
     passed: !textFailed && !hyperlinksFailed,
     selectableText: {
@@ -341,6 +479,9 @@ export async function inspectPdf(
   bytes: Uint8Array,
   expectations: PdfSemanticExpectations = {},
 ): Promise<PdfInspection> {
+  if (bytes.byteLength < 16 || bytes.byteLength > PDF_PARITY_LIMITS.maximumPdfBytes) {
+    throw new Error(`PDF inspection input must be 16..${PDF_PARITY_LIMITS.maximumPdfBytes} bytes.`);
+  }
   const owned = new Uint8Array(bytes);
   const geometryDocument = await PDFDocument.load(new Uint8Array(owned), {
     ignoreEncryption: false,
@@ -348,12 +489,19 @@ export async function inspectPdf(
     throwOnInvalidObject: true,
   });
   const geometryPages = geometryDocument.getPages();
+  if (geometryPages.length < 1 || geometryPages.length > PDF_PARITY_LIMITS.maximumPages) {
+    throw new Error(`PDF inspection page count must be 1..${PDF_PARITY_LIMITS.maximumPages}.`);
+  }
   const loading = getDocument({
     data: new Uint8Array(owned),
-    useSystemFonts: true,
+    useSystemFonts: false,
+    disableFontFace: true,
+    stopAtErrors: true,
+    maxImageSize: PDF_PARITY_LIMITS.maximumRasterPixelsPerPage,
+    canvasMaxAreaInBytes: PDF_PARITY_LIMITS.maximumRasterBytesPerPage,
   });
-  const pdf = await loading.promise;
   try {
+    const pdf = await loading.promise;
     if (pdf.numPages !== geometryPages.length) {
       throw new Error(
         `PDF parsers disagree on page count (${pdf.numPages} != ${geometryPages.length}).`,
@@ -362,28 +510,53 @@ export async function inspectPdf(
     const pages: PdfPageInspection[] = [];
     const allHyperlinks: PdfHyperlinkAnnotation[] = [];
     let vectorPathOperations = 0;
+    let totalTextCharacters = 0;
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
       const text = content.items.map((item) => 'str' in item ? item.str : '').join(' ');
+      totalTextCharacters += text.length;
+      if (totalTextCharacters > PDF_PARITY_LIMITS.maximumTextCharacters) {
+        throw new Error(`PDF selectable text exceeds ${PDF_PARITY_LIMITS.maximumTextCharacters} characters.`);
+      }
       const annotations = await page.getAnnotations();
+      if (annotations.length > PDF_PARITY_LIMITS.maximumAnnotationsPerPage) {
+        throw new Error(`PDF page ${pageNumber} exceeds the annotation limit.`);
+      }
       const linkAnnotations = annotations
         .filter((annotation) => annotation.subtype === 'Link')
       const hyperlinks = await Promise.all(linkAnnotations
-        .map(async (annotation): Promise<PdfHyperlinkAnnotation> => ({
-          target: await hyperlinkTarget(pdf, annotation as Record<string, unknown>),
-          ...(Array.isArray(annotation.rect)
-            ? { rectangle: Object.freeze(annotation.rect.map(Number)) }
-            : {}),
-        })));
+        .map(async (annotation): Promise<PdfHyperlinkAnnotation> => {
+          const rectangle = annotationRectangle(annotation.rect);
+          return {
+            target: await hyperlinkTarget(pdf, annotation as Record<string, unknown>),
+            ...(rectangle === undefined ? {} : { rectangle }),
+          };
+        }));
       const operations = await page.getOperatorList();
+      if (operations.fnArray.length > PDF_PARITY_LIMITS.maximumOperatorEntriesPerPage) {
+        throw new Error(`PDF page ${pageNumber} exceeds the operator-list limit.`);
+      }
       const pagePaths = operations.fnArray.filter((operation) => operation === OPS.constructPath).length;
+      const geometryPage = geometryPages[pageNumber - 1];
+      const userUnit = inheritedPageNumber(geometryPage, 'UserUnit') ?? 1;
+      if (!Number.isFinite(userUnit) || userUnit < 1 || userUnit > 75_000) {
+        throw new Error(`PDF page ${pageNumber} has invalid /UserUnit ${String(userUnit)}.`);
+      }
+      const rawRotation = inheritedPageNumber(geometryPage, 'Rotate') ?? 0;
+      if (!Number.isFinite(rawRotation) || !Number.isInteger(rawRotation)
+        || rawRotation % 90 !== 0) {
+        throw new Error(`PDF page ${pageNumber} has invalid /Rotate ${String(rawRotation)}.`);
+      }
+      const rotation = ((rawRotation % 360) + 360) % 360;
       vectorPathOperations += pagePaths;
       allHyperlinks.push(...hyperlinks);
       pages.push({
         pageNumber,
-        mediaBox: pdfBox(geometryPages[pageNumber - 1].getMediaBox()),
-        cropBox: pdfBox(geometryPages[pageNumber - 1].getCropBox()),
+        userUnit,
+        rotation,
+        mediaBox: scaledOrientedPdfBox(geometryPage.getMediaBox(), userUnit, rotation),
+        cropBox: scaledOrientedPdfBox(geometryPage.getCropBox(), userUnit, rotation),
         text,
         textSha256: sha256(text),
         hyperlinks,

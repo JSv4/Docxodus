@@ -141,14 +141,18 @@ declared once in `environment-contract.ts` and enforced twice:
   can never be misread as a renderer regression, and can never refresh the record.
 
 CI installs the contract build from the TDF archive rather than `ubuntu-latest` apt (which
-carries whatever the runner image's Ubuntu shipped — 24.2 on 24.04). The pure spec
+carries whatever the runner image's Ubuntu shipped — 24.2 on 24.04). Before extraction, CI
+verifies the archive's detached TDF signature and requires the exact pinned issuer fingerprint
+`C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3`. The pure spec
 `visual-parity-ratchet.spec.ts` proves the failure message and asserts the declared version,
 the committed record's fingerprint, and the CI pin cannot drift apart, on every pull request,
 without LibreOffice installed.
 
-The repository currently contains no TDF-published checksum for that archive, so the workflow does
-not pretend to verify one. A checksum must be added only from an authoritative TDF checksum source
-and reviewed with the version bump; it must never be inferred from a locally downloaded archive.
+The 25.8 line is archived and no longer receives security updates. It is retained only because a
+visual ratchet must hold its reference renderer constant; CI uses it in a dedicated, read-only job
+against repository-pinned fixtures, with no untrusted document input. A future reference-version
+bump must update the archive URL, detached signature, key fingerprint, and measured records in one
+reviewed change.
 
 ## Required tools and version identity
 
@@ -188,8 +192,8 @@ Every paired page reports:
 - ink precision, recall, and F1 after a two-pixel dilation, which tolerate glyph antialiasing
   without tolerating missing, extra, or displaced layout;
 - raster width/height deltas and the bounded alignment offset; and
-- for the generated-PDF path, MediaBox/CropBox origins and dimensions in PDF points before either
-  artifact is rasterized.
+- for the generated-PDF path, inherited `UserUnit`/`Rotate` plus scaled, orientation-aware
+  MediaBox/CropBox origins and dimensions in physical PDF points before either artifact is rasterized.
 
 Severity is assigned by the worst signal:
 
@@ -201,8 +205,9 @@ Severity is assigned by the worst signal:
 | severe | below major | below major | above major | > 1 px |
 
 A page-count mismatch is always severe. The generated-PDF path unconditionally fails conversion,
-page-count, MediaBox/CropBox, selectable-text, and hyperlink-contract errors; raster similarity or a
-reviewed disposition cannot excuse a broken hard signal. `DOCXODUS_VISUAL_PARITY_STRICT=1`
+API/report/PageMap/PDF binding, page-count, MediaBox/CropBox, selectable-text, exact logical-link,
+and chart-vector errors; raster similarity or a reviewed disposition cannot excuse a broken hard
+signal. `DOCXODUS_VISUAL_PARITY_STRICT=1`
 additionally turns renderer-attributable severe raster cases into a failing gate (see the disposition
 contract below). This keeps the baseline useful while known environment deltas and reference
 deviations are tracked without waiving PDF correctness. Independently of strict mode, every run
@@ -255,12 +260,26 @@ DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 \
 npm run test:visual-parity
 ```
 
+The generated-PDF record is distinct and uses its own complete run:
+
+```bash
+DOCXODUS_GENERATED_PDF_PARITY_OUTPUT="$(mktemp -d)" \
+DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 \
+  npm --prefix npm run test:generated-pdf-parity
+```
+
 The update path refuses a filtered run and any dirty or unverified worktree. Commit the
 implementation first, then generate the record from that exact clean commit so `sourceCommit`
 identifies reproducible source rather than merely the base of local edits. A passing run still lists
 every improvement it measured, so a stale record announces itself. Set
 `DOCXODUS_VISUAL_PARITY_RATCHET=0` to observe without gating; the comparison is reported either
 way. A filtered run compares only the cases it measured.
+
+`sourceCommit` identifies the historical implementation that actually produced the stored numbers;
+it is not rewritten to a rebased commit by analogy. Each current run separately records `gitCommit`
+and `gitTree`, builds both packages itself, and compares the resulting PDFs to that historical
+ratchet. Refresh `sourceCommit` only through the complete clean update command above, after every
+hard/strict/evidence gate has passed.
 
 The comparison layer (`ratchet.ts`) is pure, and `visual-parity-ratchet.spec.ts` exercises it on
 **every** pull request — no LibreOffice, no renderer. That is what keeps "a deliberately introduced
@@ -323,15 +342,17 @@ failure message — but TDF-packaged builds bundle their own Caladea/Carlito/Lib
 under `share/fonts/truetype/`, which silently override the font contract inside LibreOffice
 only. Remove the bundled duplicates so both engines resolve the same system fonts (the wrapping
 probe fails naming the family if you forget — see the issue-#400 baseline entry).
+Verify the adjacent `.asc` signature with the exact key fingerprint printed by the failure message
+before extracting or installing the archive.
 
-Install and build the exact locked packages from the repository root. The companion's normal
-install fetches its pinned Chromium revision; do not use `--ignore-scripts` for this benchmark.
+Install the exact locked packages from the repository root. The companion's normal install fetches
+its pinned Chromium revision; do not use `--ignore-scripts` for this benchmark. The public PDF gate
+rebuilds both packages itself, in npm-then-exporter order, so a clean source commit cannot be paired
+with stale ignored `dist` bytes.
 
 ```bash
 npm --prefix npm ci
-npm --prefix npm run build
 npm --prefix npm-export ci
-npm --prefix npm-export run build
 npm --prefix npm exec -- playwright install --with-deps chromium
 ```
 
@@ -366,7 +387,9 @@ Open `index.html` first. It links the run context and summary, both original PDF
 rasters, red perceptual-difference overlays, physical geometry, selectable-text/link evidence, and
 per-case metrics. Artifact paths inside JSON are relative to the output root so the downloaded
 directory remains portable. Source, PDF, raster, and overlay evidence carries SHA-256 digests, and
-the summary records the source commit and whether the worktree was dirty.
+the summary records the source commit and tree, whether the worktree was dirty, the bounded built
+exporter graph, asset manifest, module entries, exact executable hashes, and package lock hashes.
+Those executable and build identities are rechecked after the run before a record can be updated.
 
 The generated-PDF runner writes progress incrementally. A failed case retains all PDFs and page
 evidence produced before the failure and receives structured failure evidence rather than being

@@ -28,6 +28,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: visual-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   visual-parity:
     runs-on: ubuntu-latest
@@ -108,8 +112,25 @@ jobs:
       # fails at start, with this same guidance, when they drift.
       - name: Install pinned LibreOffice 25.8.7.3 (reference-version contract)
         run: |
-          curl -sSL -o /tmp/libreoffice.tar.gz \
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 300000000 \
+            -o /tmp/libreoffice.tar.gz \
             "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+            -o /tmp/libreoffice.tar.gz.asc \
+            "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc"
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+            -o /tmp/libreoffice-signing-key.asc \
+            "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
+          libreoffice_gnupg_home="$(mktemp -d)"
+          chmod 700 "$libreoffice_gnupg_home"
+          gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --import /tmp/libreoffice-signing-key.asc
+          libreoffice_key_fingerprint="$(gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 \
+            | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$libreoffice_key_fingerprint" = "C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
+          gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz
           tar -xzf /tmp/libreoffice.tar.gz -C /tmp
           sudo dpkg -i /tmp/LibreOffice_*_Linux_x86-64_deb/DEBS/*.deb
           sudo rm -f /opt/libreoffice25.8/share/fonts/truetype/Carlito*.ttf \
