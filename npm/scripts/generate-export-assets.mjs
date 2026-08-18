@@ -14,20 +14,23 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const dist = join(packageRoot, 'dist');
 const framework = join(dist, 'wasm', '_framework');
-const reportSchemaSource = resolve(packageRoot, '..', 'docs', 'schemas', 'render-report-v1.schema.json');
-const reportSchemaDestination = join(dist, 'render-report-v1.schema.json');
+const reportSchemaSources = [1, 2].map((version) =>
+  resolve(packageRoot, '..', 'docs', 'schemas', `render-report-v${version}.schema.json`));
+const reportSchemaDestinations = [1, 2].map((version) =>
+  join(dist, `render-report-v${version}.schema.json`));
 const limitsContractSource = join(packageRoot, 'src', 'export-resource-limits-v1.json');
 const limitsContractDestination = join(dist, 'export-resource-limits-v1.json');
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
 
-copyFileSync(reportSchemaSource, reportSchemaDestination);
+reportSchemaSources.forEach((source, index) =>
+  copyFileSync(source, reportSchemaDestinations[index]));
 copyFileSync(limitsContractSource, limitsContractDestination);
 
 const requiredRoots = [
   join(dist, 'export-browser.bundle.js'),
   join(dist, 'docxodus.worker.js'),
   join(dist, 'pagination.bundle.js'),
-  reportSchemaDestination,
+  ...reportSchemaDestinations,
   limitsContractDestination,
 ];
 for (const file of requiredRoots) assert.ok(statSync(file).isFile(), `missing export asset: ${file}`);

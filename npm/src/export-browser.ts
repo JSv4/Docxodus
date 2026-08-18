@@ -24,6 +24,7 @@ import {
   type VersionInfo,
 } from "./types.js";
 import {
+  admitPrintVisualResources,
   awaitFinalPrintReadiness,
   documentFontReadiness,
   documentGraphicReadiness,
@@ -34,8 +35,19 @@ import {
   type PageTreeStabilityProbe,
   type VisualResourceProbe,
 } from "./print-readiness.js";
+import {
+  automaticUrlAllowed,
+  cssSecurityTokens,
+  dataUrlInfo,
+  standaloneSrcsetAllowed,
+} from "./standalone-resource-policy.js";
 
 export { awaitFinalPrintReadiness, PrintReadinessError } from "./print-readiness.js";
+export {
+  automaticUrlAllowed,
+  cssSecurityTokens,
+  dataUrlInfo,
+} from "./standalone-resource-policy.js";
 export type {
   FinalPrintReadinessResult,
   FontReadinessProbe,
@@ -163,6 +175,7 @@ export interface ReadinessOutcome {
 }
 
 export interface FontResolution {
+  requestKey: string;
   requestedFamily: string;
   requestedFamilyStack?: string[];
   resolvedFamily?: string;
@@ -180,6 +193,7 @@ export interface ResourceOutcome {
   kind: "image" | "svg" | "chart" | "external_link";
   status: "embedded" | "inline" | "allowed_user_link" | "omitted";
   readiness?: "complete" | "failed";
+  contentKey?: string;
   resource?: string;
   anchorId?: string;
   message?: string;
@@ -195,8 +209,8 @@ export interface UnsupportedContentOutcome {
 }
 
 export interface RenderReportBase {
-  schema: "https://docxodus.dev/schemas/render/render-report/v1";
-  schemaVersion: 1;
+  schema: "https://docxodus.dev/schemas/render/render-report/v2";
+  schemaVersion: 2;
   source: {
     rawPackageBytesDigest: string;
     byteLength: number;
@@ -454,13 +468,16 @@ interface RuntimeAssetIdentity {
 }
 
 class PageTreeInstabilityError extends Error {
-  constructor(message: string) {
+  readonly pending: readonly string[];
+
+  constructor(message: string, pending: readonly string[] = []) {
     super(message);
     this.name = "PageTreeInstabilityError";
+    this.pending = Object.freeze(boundedPendingResources(pending));
   }
 }
 
-const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v1" as const;
+const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v2" as const;
 const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
@@ -673,6 +690,23 @@ function monotonicNow(): number {
   return globalThis.performance?.now() ?? Date.now();
 }
 
+const PENDING_RESOURCE_DETAILS_MAX = 64;
+const PENDING_RESOURCE_LABEL_MAX = 512;
+
+function boundedPendingResources(resources: readonly string[]): string[] {
+  const bounded = resources.slice(0, PENDING_RESOURCE_DETAILS_MAX).map((resource, index) => {
+    const normalized = resource.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
+      || `resource-${index + 1}`;
+    return normalized.length <= PENDING_RESOURCE_LABEL_MAX
+      ? normalized
+      : `${normalized.slice(0, PENDING_RESOURCE_LABEL_MAX - 3)}...`;
+  });
+  if (resources.length > PENDING_RESOURCE_DETAILS_MAX) {
+    bounded.push(`... ${resources.length - PENDING_RESOURCE_DETAILS_MAX} more`);
+  }
+  return bounded;
+}
+
 async function runPhase<T>(
   state: ExecutionState,
   phase: ExportPhase,
@@ -681,10 +715,20 @@ async function runPhase<T>(
 ): Promise<T> {
   state.phase = phase;
   const started = monotonicNow();
-  const pending = (): string[] => [
-    ...(typeof pendingResources === "function" ? pendingResources() : pendingResources),
-  ];
-  const reportProgress = (status: "pending" | "complete" | "failed", resources: string[]): void => {
+  const pending = (): string[] => {
+    try {
+      return boundedPendingResources(
+        typeof pendingResources === "function" ? pendingResources() : pendingResources,
+      );
+    } catch {
+      return ["pending-resource-inventory"];
+    }
+  };
+  const reportProgress = (
+    status: "pending" | "complete" | "failed",
+    resources: string[],
+    reportedPhase: ExportPhase = phase,
+  ): void => {
     const reporter = (globalThis as typeof globalThis & {
       __docxodusReadinessProgress?: (snapshot: {
         phase: ExportPhase;
@@ -694,7 +738,7 @@ async function runPhase<T>(
     }).__docxodusReadinessProgress;
     if (typeof reporter === "function") {
       try {
-        void reporter({ phase, status, pending: [...resources] });
+        void reporter({ phase: reportedPhase, status, pending: [...resources] });
       } catch {
         // Progress is diagnostic-only; the readiness result remains authoritative.
       }
@@ -761,10 +805,11 @@ async function runPhase<T>(
         "Retry with a non-aborted signal.", { pending: pending() });
     }
     if (monotonicNow() >= state.deadline) {
+      const resources = pending();
       fail("readiness_timeout", phase, `Export timed out during ${phase}.`,
         "Increase timeoutMs or remove the pending resource.", {
-          detail: pending().join(", "),
-          pending: pending(),
+          detail: resources.join(", "),
+          pending: resources,
         });
     }
     state.readiness.push({
@@ -776,17 +821,36 @@ async function runPhase<T>(
     reportProgress("complete", []);
     return result;
   } catch (error) {
-    const resources = timedOutPending ?? pending();
+    const resources = timedOutPending
+      ?? (error instanceof PrintReadinessError ? [...error.pending] : pending());
+    const resolvedError = error instanceof PrintReadinessError
+      ? new DocxodusExportError(
+        error.reason === "resource_limit"
+          ? "resource_limit"
+          : error.message.includes("timed out")
+            ? "readiness_timeout"
+            : "output_verification_failure",
+        error.phase,
+        error.message,
+        error.reason === "resource_limit"
+          ? "Use a smaller document or raise the corresponding versioned readiness ceiling."
+          : "Remove the unstable resource or retry in the same verified browser environment.",
+        { pending: [...error.pending], cause: error },
+      )
+      : error;
+    const failurePhase = resolvedError instanceof DocxodusExportError
+      ? resolvedError.phase
+      : phase;
     state.readiness.push({
-      phase,
-      status: error instanceof DocxodusExportError && error.code === "operation_cancelled"
+      phase: failurePhase,
+      status: resolvedError instanceof DocxodusExportError && resolvedError.code === "operation_cancelled"
         ? "cancelled"
         : "failed",
       elapsedMs: Math.max(0, monotonicNow() - started),
       pending: resources,
     });
-    reportProgress("failed", resources);
-    throw error;
+    reportProgress("failed", resources, failurePhase);
+    throw resolvedError;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (abortListener && state.signal) state.signal.removeEventListener("abort", abortListener);
@@ -1722,45 +1786,6 @@ async function createIsolatedFrame(
   return frame;
 }
 
-const STANDALONE_DATA_MEDIA_TYPES = new Set([
-  "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp", "image/tiff",
-  "image/x-icon", "font/woff", "font/woff2", "font/ttf", "font/otf",
-  "application/font-woff", "application/vnd.ms-fontobject",
-]);
-
-function dataUrlInfo(value: string): { mediaType: string; byteLength: number } | undefined {
-  if (!value.startsWith("data:")) return undefined;
-  const comma = value.indexOf(",");
-  if (comma < 0) return undefined;
-  const metadata = value.slice(5, comma);
-  const segments = metadata.split(";");
-  const mediaType = (segments.shift() ?? "").toLowerCase();
-  if (mediaType === "" && value === "data:,") return { mediaType: "", byteLength: 0 };
-  if (!STANDALONE_DATA_MEDIA_TYPES.has(mediaType)) return undefined;
-  if (segments.some((segment) => segment.toLowerCase() !== "base64")) return undefined;
-  if (!segments.some((segment) => segment.toLowerCase() === "base64")) return undefined;
-  const payload = value.slice(comma + 1);
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload)) {
-    return undefined;
-  }
-  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-  return { mediaType, byteLength: payload.length / 4 * 3 - padding };
-}
-
-function automaticUrlAllowed(value: string, allowFragment = false): boolean {
-  const trimmed = value.trim();
-  return trimmed === "" || dataUrlInfo(trimmed) !== undefined
-    || (allowFragment && trimmed.startsWith("#"));
-}
-
-function standaloneSrcsetAllowed(value: string): boolean {
-  // Fail closed to one self-contained candidate. A loose comma split would
-  // misparse the comma that is part of every data URL and could retain a later
-  // network candidate.
-  const match = /^\s*(data:\S+?)(?:\s+(?:\d+(?:\.\d+)?x|\d+w))?\s*$/i.exec(value);
-  return !!match && dataUrlInfo(match[1]) !== undefined;
-}
-
 const SVG_URL_PRESENTATION_ATTRIBUTES = new Set([
   "clip-path", "cursor", "fill", "filter", "marker", "marker-end", "marker-mid",
   "marker-start", "mask", "stroke",
@@ -1784,237 +1809,6 @@ function policyWarning(
     });
   }
   addWarning(state, { ...warning, severity: "warning" });
-}
-
-interface CssSecurityToken {
-  kind: "import" | "substitution" | "url";
-  start: number;
-  end: number;
-  value: string;
-}
-
-function consumeCssEscape(source: string, start: number): { value: string; end: number } {
-  let cursor = start + 1;
-  if (cursor >= source.length) return { value: "\ufffd", end: cursor };
-  if (source[cursor] === "\r" && source[cursor + 1] === "\n") {
-    return { value: "", end: cursor + 2 };
-  }
-  if (source[cursor] === "\n" || source[cursor] === "\r" || source[cursor] === "\f") {
-    return { value: "", end: cursor + 1 };
-  }
-  const hexStart = cursor;
-  while (cursor < source.length && cursor - hexStart < 6 && /[0-9a-f]/i.test(source[cursor])) {
-    cursor++;
-  }
-  if (cursor > hexStart) {
-    const point = Number.parseInt(source.slice(hexStart, cursor), 16);
-    if (/\s/.test(source[cursor] ?? "")) {
-      if (source[cursor] === "\r" && source[cursor + 1] === "\n") cursor += 2;
-      else cursor++;
-    }
-    return {
-      value: point === 0 || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)
-        ? "\ufffd"
-        : String.fromCodePoint(point),
-      end: cursor,
-    };
-  }
-  return { value: source[cursor], end: cursor + 1 };
-}
-
-function consumeCssName(source: string, start: number): { value: string; end: number } {
-  let value = "";
-  let cursor = start;
-  while (cursor < source.length) {
-    const character = source[cursor];
-    if (character === "\\") {
-      const escape = consumeCssEscape(source, cursor);
-      value += escape.value;
-      cursor = escape.end;
-    } else if (/[a-z0-9_-]/i.test(character) || character.charCodeAt(0) >= 0x80) {
-      value += character;
-      cursor++;
-    } else {
-      break;
-    }
-  }
-  return { value, end: cursor };
-}
-
-function consumeCssComment(source: string, start: number): number {
-  const end = source.indexOf("*/", start + 2);
-  return end < 0 ? source.length : end + 2;
-}
-
-function consumeCssString(source: string, start: number): number {
-  const quote = source[start];
-  let cursor = start + 1;
-  while (cursor < source.length) {
-    if (source[cursor] === quote) return cursor + 1;
-    // CSS bad-string recovery ends at an unescaped newline and resumes tokenization
-    // afterward. Swallowing the remainder would hide later declarations from the audit.
-    if (source[cursor] === "\n" || source[cursor] === "\r" || source[cursor] === "\f") {
-      return cursor;
-    }
-    if (source[cursor] === "\\") cursor = consumeCssEscape(source, cursor).end;
-    else cursor++;
-  }
-  return cursor;
-}
-
-function consumeCssFunction(source: string, openParenthesis: number): number {
-  let depth = 0;
-  let cursor = openParenthesis;
-  while (cursor < source.length) {
-    if (source.startsWith("/*", cursor)) {
-      cursor = consumeCssComment(source, cursor);
-    } else if (source[cursor] === "\"" || source[cursor] === "'") {
-      cursor = consumeCssString(source, cursor);
-    } else if (source[cursor] === "\\") {
-      cursor = consumeCssEscape(source, cursor).end;
-    } else if (source[cursor] === "(") {
-      depth++;
-      cursor++;
-    } else if (source[cursor] === ")") {
-      depth--;
-      cursor++;
-      if (depth === 0) return cursor;
-    } else {
-      cursor++;
-    }
-  }
-  return cursor;
-}
-
-function decodeCssEscapedText(source: string, stripComments: boolean): string {
-  let decoded = "";
-  for (let cursor = 0; cursor < source.length;) {
-    if (stripComments && source.startsWith("/*", cursor)) {
-      cursor = consumeCssComment(source, cursor);
-    } else if (source[cursor] === "\\") {
-      const escape = consumeCssEscape(source, cursor);
-      decoded += escape.value;
-      cursor = escape.end;
-    } else {
-      decoded += source[cursor++];
-    }
-  }
-  return decoded;
-}
-
-function decodeCssUrlComponent(source: string): string {
-  const trimmed = source.trim();
-  if (trimmed.length >= 2 && (trimmed[0] === "\"" || trimmed[0] === "'")
-    && trimmed.at(-1) === trimmed[0]) {
-    // Comment delimiters are ordinary payload bytes inside a CSS string.
-    return decodeCssEscapedText(trimmed.slice(1, -1), false);
-  }
-  return decodeCssEscapedText(trimmed, true).trim();
-}
-
-/** Tokenize the security-relevant CSS grammar while honoring escapes, strings, and comments. */
-function cssSecurityTokens(css: string): CssSecurityToken[] {
-  const tokens: CssSecurityToken[] = [];
-  const functionStack: string[] = [];
-  for (let cursor = 0; cursor < css.length;) {
-    if (css.startsWith("/*", cursor)) {
-      cursor = consumeCssComment(css, cursor);
-      continue;
-    }
-    if (css[cursor] === "\"" || css[cursor] === "'") {
-      const end = consumeCssString(css, cursor);
-      const context = functionStack.at(-1);
-      const isImageSource = context === "image-set" || context === "-webkit-image-set";
-      if (isImageSource
-        && end > cursor && css[end - 1] === css[cursor]) {
-        tokens.push({
-          kind: "url",
-          start: cursor,
-          end,
-          value: decodeCssEscapedText(css.slice(cursor + 1, end - 1), false),
-        });
-      }
-      cursor = Math.max(end, cursor + 1);
-      continue;
-    }
-    if (css[cursor] === "@") {
-      const name = consumeCssName(css, cursor + 1);
-      if (name.value.toLowerCase() === "import") {
-        let end = name.end;
-        let depth = 0;
-        while (end < css.length) {
-          if (css.startsWith("/*", end)) end = consumeCssComment(css, end);
-          else if (css[end] === "\"" || css[end] === "'") end = consumeCssString(css, end);
-          else if (css[end] === "(") { depth++; end++; }
-          else if (css[end] === ")") { depth = Math.max(0, depth - 1); end++; }
-          else if (css[end] === ";" && depth === 0) { end++; break; }
-          else end++;
-        }
-        tokens.push({ kind: "import", start: cursor, end, value: css.slice(cursor, end) });
-        cursor = end;
-        continue;
-      }
-    }
-    if (css[cursor] === "\\" || /[a-z_-]/i.test(css[cursor]) || css.charCodeAt(cursor) >= 0x80) {
-      const name = consumeCssName(css, cursor);
-      if (name.value.toLowerCase() === "url" && css[name.end] === "(") {
-        let end = name.end + 1;
-        while (end < css.length) {
-          if (css.startsWith("/*", end)) end = consumeCssComment(css, end);
-          else if (css[end] === "\"" || css[end] === "'") end = consumeCssString(css, end);
-          else if (css[end] === "\\") end = consumeCssEscape(css, end).end;
-          else if (css[end++] === ")") break;
-        }
-        const innerEnd = css[end - 1] === ")" ? end - 1 : end;
-        tokens.push({
-          kind: "url",
-          start: cursor,
-          end,
-          value: decodeCssUrlComponent(css.slice(name.end + 1, innerEnd)),
-        });
-        cursor = end;
-        continue;
-      }
-      if (css[name.end] === "(") {
-        const functionName = name.value.toLowerCase();
-        const isImageSource = functionStack.some(
-          (context) => context === "image-set" || context === "-webkit-image-set",
-        );
-        if (isImageSource
-          && (functionName === "var" || functionName === "env" || functionName === "if")) {
-          // A substitution can resolve to a quoted image-set source, including a
-          // custom property declared elsewhere. It cannot be proven standalone
-          // from the authored token stream, so remove the entire substitution.
-          const end = consumeCssFunction(css, name.end);
-          tokens.push({
-            kind: "substitution",
-            start: cursor,
-            end,
-            value: css.slice(cursor, end),
-          });
-          cursor = end;
-          continue;
-        }
-        functionStack.push(functionName);
-        cursor = name.end + 1;
-        continue;
-      }
-      cursor = Math.max(name.end, cursor + 1);
-      continue;
-    }
-    if (css[cursor] === "(") {
-      functionStack.push("");
-      cursor++;
-      continue;
-    }
-    if (css[cursor] === ")") {
-      functionStack.pop();
-      cursor++;
-      continue;
-    }
-    cursor++;
-  }
-  return tokens;
 }
 
 function sanitizeCss(
@@ -2074,6 +1868,37 @@ function sanitizeCss(
   return "";
 }
 
+function freezeCssMotion(document: Document): void {
+  const removeMotionDeclarations = (style: CSSStyleDeclaration): void => {
+    for (const property of Array.from(style)) {
+      const normalized = property.toLowerCase();
+      if (normalized.startsWith("animation") || normalized.startsWith("transition")) {
+        style.removeProperty(property);
+      }
+    }
+  };
+  const visitRules = (rules: CSSRuleList): void => {
+    for (const rule of Array.from(rules)) {
+      if ("style" in rule && (rule as CSSStyleRule).style) {
+        removeMotionDeclarations((rule as CSSStyleRule).style);
+      }
+      if ("cssRules" in rule) {
+        visitRules((rule as CSSGroupingRule).cssRules);
+      }
+    }
+  };
+  for (const styleElement of Array.from(document.querySelectorAll<HTMLStyleElement>("style"))) {
+    if (styleElement.dataset.docxodusStaticReadiness === "v1") continue;
+    const sheet = styleElement.sheet;
+    if (!sheet) continue;
+    visitRules(sheet.cssRules);
+    styleElement.textContent = Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
+  }
+  for (const element of Array.from(document.querySelectorAll<HTMLElement>("[style]"))) {
+    removeMotionDeclarations(element.style);
+  }
+}
+
 function sanitizeConvertedDocument(
   target: Document,
   convertedHtml: string,
@@ -2103,6 +1928,19 @@ function sanitizeConvertedDocument(
   }
   for (const meta of Array.from(parsed.querySelectorAll<HTMLMetaElement>("meta[http-equiv]"))) {
     meta.remove();
+  }
+  const svgAnimationElements = new Set([
+    "animate", "animatemotion", "animatetransform", "set", "discard",
+  ]);
+  for (const animation of Array.from(parsed.querySelectorAll<Element>("svg *"))
+    .filter((element) => svgAnimationElements.has(element.localName.toLowerCase()))) {
+    animation.remove();
+    policyWarning(state, options, {
+      code: "svg_animation_omitted",
+      phase: "docx_conversion",
+      message: "An SVG animation element was removed from deterministic standalone output.",
+      remediation: "Materialize the required SVG state as static drawable content before export.",
+    });
   }
   for (const style of Array.from(parsed.querySelectorAll<HTMLStyleElement>("style"))) {
     style.textContent = sanitizeCss(style.textContent ?? "", state, options, "stylesheet");
@@ -2174,6 +2012,20 @@ function sanitizeConvertedDocument(
         continue;
       }
       if ((name === "href" && element.localName !== "a") || urlAttributes.has(name)) {
+        if (element.namespaceURI === "http://www.w3.org/2000/svg"
+          && element.localName === "use"
+          && (name === "href" || name === "xlink:href")
+          && (!attribute.value.trim().startsWith("#") || attribute.value.trim().length === 1)) {
+          element.removeAttribute(attribute.name);
+          policyWarning(state, options, {
+            code: "external_svg_use_omitted",
+            phase: "docx_conversion",
+            message: "An external or empty SVG use reference was removed.",
+            remediation: "Reference an existing same-document SVG fragment.",
+            resource: attribute.value,
+          });
+          continue;
+        }
         const allowFragment = element.namespaceURI === "http://www.w3.org/2000/svg";
         if (!automaticUrlAllowed(attribute.value, allowFragment)) {
           element.removeAttribute(attribute.name);
@@ -2207,7 +2059,12 @@ function sanitizeConvertedDocument(
   for (const style of Array.from(parsed.head.querySelectorAll("style"))) {
     target.head.appendChild(target.importNode(style, true));
   }
+  const staticReadinessStyle = target.createElement("style");
+  staticReadinessStyle.dataset.docxodusStaticReadiness = "v1";
+  staticReadinessStyle.textContent = "*,*::before,*::after{animation:none!important;transition:none!important}";
+  target.head.appendChild(staticReadinessStyle);
   target.body.replaceChildren(...Array.from(parsed.body.childNodes, (node) => target.importNode(node, true)));
+  freezeCssMotion(target);
 }
 
 function inventoryConvertedContent(
@@ -2242,6 +2099,7 @@ function recordFontReadiness(
 ): void {
   for (const probe of probes) {
     addFont(state, {
+      requestKey: probe.requestKey,
       requestedFamily: probe.requestedFamily,
       status: probe.available ? "unverified" : "missing",
       source: "browser",
@@ -2292,19 +2150,21 @@ function recordImageReadiness(
   state: ExecutionState,
   options: NormalizedOptions,
 ): void {
-  probes.forEach((probe, index) => {
-    const image = images[index];
+  let htmlImageIndex = 0;
+  probes.forEach((probe) => {
+    const image = probe.source === "html-image" ? images[htmlImageIndex++] : undefined;
     const source = image?.getAttribute("src") ?? "";
     const metadata = /^data:([^;,]+)/i.exec(source);
     addResource(state, {
       kind: "image",
       status: probe.status === "complete" ? "embedded" : "omitted",
       readiness: probe.status,
+      contentKey: probe.contentKey,
       resource: probe.resource,
       ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
       ...(probe.message ? { message: probe.message } : {}),
-      mediaType: metadata?.[1],
-      byteLength: estimateDataUrlBytes(source),
+      mediaType: probe.mediaType ?? metadata?.[1],
+      byteLength: probe.byteLength ?? estimateDataUrlBytes(source),
     });
     if (probe.status === "failed") {
       if (image) replaceFailedVisual(image, probe.resource);
@@ -2316,6 +2176,16 @@ function recordImageReadiness(
         ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
         resource: probe.resource,
       });
+      if (probe.source !== "html-image") {
+        fail("resource_policy_failure", "image_decoding",
+          `A ${probe.source} dependency did not produce decoded pixels: ${probe.resource}.`,
+          "Embed a supported image and ensure every CSS/SVG reference resolves before export.", {
+            detail: probe.message,
+            anchorId: probe.anchorId,
+            resource: probe.resource,
+            pending: [`image:${probe.resource}`],
+          });
+      }
     }
   });
 }
@@ -2334,17 +2204,19 @@ function recordGraphicReadiness(
   state: ExecutionState,
   options: NormalizedOptions,
 ): void {
-  probes.forEach((probe, index) => {
+  let graphicIndex = 0;
+  probes.forEach((probe) => {
     addResource(state, {
       kind: probe.kind,
       status: probe.status === "complete" ? "inline" : "omitted",
       readiness: probe.status,
+      contentKey: probe.contentKey,
       resource: probe.resource,
       ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
       ...(probe.message ? { message: probe.message } : {}),
     });
     if (probe.status === "failed") {
-      const element = elements[index];
+      const element = probe.source === "graphic" ? elements[graphicIndex] : undefined;
       if (element) replaceFailedVisual(element, probe.resource);
       policyWarning(state, options, {
         code: "graphic_materialization_failed",
@@ -2354,8 +2226,31 @@ function recordGraphicReadiness(
         ...(probe.anchorId ? { anchorId: probe.anchorId } : {}),
         resource: probe.resource,
       });
+      if (probe.source === "svg-use") {
+        fail("resource_policy_failure", "chart_svg_materialization",
+          `An SVG use reference did not resolve to drawable local content: ${probe.resource}.`,
+          "Use a same-document fragment that names an existing drawable SVG target.", {
+            detail: probe.message,
+            anchorId: probe.anchorId,
+            resource: probe.resource,
+            pending: [`materialization:${probe.resource}`],
+          });
+      }
     }
+    if (probe.source === "graphic") graphicIndex++;
   });
+}
+
+function rewriteCssFragmentUrls(value: string, targets: ReadonlyMap<string, string>): string {
+  const tokens = cssSecurityTokens(value);
+  let rewritten = value;
+  for (const token of [...tokens].reverse()) {
+    if (token.kind !== "url" || !token.value.startsWith("#")) continue;
+    const target = targets.get(token.value.slice(1));
+    if (!target) continue;
+    rewritten = `${rewritten.slice(0, token.start)}url("#${target}")${rewritten.slice(token.end)}`;
+  }
+  return rewritten;
 }
 
 function normalizeFragmentTargets(
@@ -2381,7 +2276,7 @@ function normalizeFragmentTargets(
   for (const page of pages) {
     const localTargets = new Map<string, string>();
     pageTargets.set(page, localTargets);
-    for (const element of Array.from(page.querySelectorAll<HTMLElement>("[id]"))) {
+    const allocate = (element: Element): void => {
       const original = element.id;
       const occurrence = occurrences.get(original) ?? 0;
       occurrences.set(original, occurrence + 1);
@@ -2391,6 +2286,38 @@ function normalizeFragmentTargets(
       element.id = resolved;
       if (!localTargets.has(original)) localTargets.set(original, resolved);
       if (!globalTargets.has(original)) globalTargets.set(original, resolved);
+    };
+    const svgRoots = Array.from(page.querySelectorAll<SVGSVGElement>("svg"))
+      .filter((svg) => svg.parentElement?.closest("svg") === null);
+    for (const svg of svgRoots) {
+      const svgTargets = new Map<string, string>();
+      const identified = [
+        ...(svg.hasAttribute("id") ? [svg] : []),
+        ...Array.from(svg.querySelectorAll<SVGElement>("[id]")),
+      ];
+      for (const element of identified) {
+        const original = element.id;
+        allocate(element);
+        if (!svgTargets.has(original)) svgTargets.set(original, element.id);
+      }
+      for (const element of [svg, ...Array.from(svg.querySelectorAll<SVGElement>("*"))]) {
+        if (element.localName === "use") {
+          for (const name of ["href", "xlink:href"]) {
+            const value = element.getAttribute(name);
+            if (!value?.startsWith("#")) continue;
+            const target = svgTargets.get(value.slice(1));
+            if (target) element.setAttribute(name, `#${target}`);
+          }
+        }
+        for (const name of [...SVG_URL_PRESENTATION_ATTRIBUTES, "style"]) {
+          const value = element.getAttribute(name);
+          if (value) element.setAttribute(name, rewriteCssFragmentUrls(value, svgTargets));
+        }
+      }
+    }
+    for (const element of Array.from(page.querySelectorAll<HTMLElement>("[id]"))) {
+      if (element.closest("svg")) continue;
+      allocate(element);
     }
   }
 
@@ -2568,6 +2495,33 @@ function restoreAttemptState(state: ExecutionState, checkpoint: AttemptStateChec
   state.unsupportedContent.length = checkpoint.unsupportedContent;
 }
 
+async function pristineAttemptAgreementSignature(
+  pageTreeSignature: string,
+  state: ExecutionState,
+): Promise<string> {
+  const fonts = state.fonts.map((font) => ({
+    requestKey: font.requestKey,
+    available: font.status !== "missing",
+  })).sort((left, right) => compareCodeUnits(left.requestKey, right.requestKey));
+  const resources = state.resources
+    .filter((resource) => resource.kind !== "external_link")
+    .map((resource) => ({
+      kind: resource.kind,
+      status: resource.status,
+      readiness: resource.readiness,
+      contentKey: resource.contentKey,
+      resource: resource.resource,
+      anchorId: resource.anchorId,
+      mediaType: resource.mediaType,
+      byteLength: resource.byteLength,
+    }))
+    .sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
+  return canonicalMaterialDigest(
+    "docxodus:pristine-attempt-agreement:v1",
+    { pageTreeSignature, fonts, resources },
+  );
+}
+
 function serializeDocument(document: Document): string {
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
@@ -2710,7 +2664,7 @@ async function rendererIdentity(
     runtimeVersion,
     paginatorContractVersion: 1,
     pageMapSchemaVersion: 1,
-    renderReportSchemaVersion: 1,
+    renderReportSchemaVersion: 2,
     layoutDigest,
     runtimePolicyDigest,
     fontConfigurationDigest: fontDigest,
@@ -2824,14 +2778,65 @@ async function verifyOfflineReopen(
   html: string,
   expectedPageMap: PageMap,
   state: ExecutionState,
+  signal: AbortSignal,
 ): Promise<void> {
   const frame = await createIsolatedFrame(hostDocument, state, html, "output_verification");
   try {
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
-    await awaitFinalPrintReadiness(reopened, {
+    const reopenedReadiness = await awaitFinalPrintReadiness(reopened, {
       timeoutMs: Math.max(1, state.deadline - monotonicNow()),
+      signal,
+      limits: {
+        fontRequests: state.limits.fontRequests,
+        fontSampleCodePoints: state.limits.fontSampleCodePoints,
+        visualResources: state.limits.automaticResources,
+        domNodes: state.limits.domNodes,
+        automaticResourceBytes: state.limits.automaticResourceBytes,
+      },
     });
+    const expectedFonts = state.fonts.map((font) => ({
+      requestKey: font.requestKey,
+      available: font.status !== "missing",
+    })).sort((left, right) => compareCodeUnits(left.requestKey, right.requestKey));
+    const reopenedFonts = reopenedReadiness.fonts.map((font) => ({
+      requestKey: font.requestKey,
+      available: font.available,
+    })).sort((left, right) => compareCodeUnits(left.requestKey, right.requestKey));
+    if (canonicalJson(expectedFonts) !== canonicalJson(reopenedFonts)) {
+      fail("output_verification_failure", "font_loading",
+        "The reopened standalone document changed its exact font-request inventory or availability.",
+        "Use the same embedded/configured fonts through materialization and offline reopen.", {
+          pending: boundedPendingResources(reopenedReadiness.fonts
+            .map((font) => `font:${font.requestedFamily}:${font.requestKey.slice(0, 12)}`)),
+        });
+    }
+    const expectedVisualResources = state.resources
+      .filter((resource) => resource.kind !== "external_link" && resource.readiness === "complete")
+      .map((resource) => ({
+        kind: resource.kind,
+        resource: resource.resource ?? "",
+        readiness: resource.readiness,
+        contentKey: resource.contentKey,
+      }))
+      .sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
+    const reopenedVisualResources = [
+      ...reopenedReadiness.images,
+      ...reopenedReadiness.graphics,
+    ].map((resource) => ({
+      kind: resource.kind,
+      resource: resource.resource,
+      readiness: resource.status,
+      contentKey: resource.contentKey,
+    })).sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
+    if (canonicalJson(expectedVisualResources) !== canonicalJson(reopenedVisualResources)) {
+      fail("output_verification_failure", "output_verification",
+        "The reopened standalone document changed its ready visual-resource inventory.",
+        "Materialize every image and graphic before recording the report and final page tree.", {
+          pending: boundedPendingResources(reopenedVisualResources.map((resource) =>
+            `${resource.kind}:${resource.resource}`)),
+        });
+    }
     countDomNodes(reopened, state.limits.domNodes, "output_verification");
     const resources = automaticResourceCount(reopened);
     enforceLimit(resources.count, state.limits.automaticResources,
@@ -2932,7 +2937,7 @@ function reportBase(
 ): RenderReportBase {
   return {
     schema: REPORT_SCHEMA,
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: {
       rawPackageBytesDigest: manifest.rawPackageBytesDigest.value.toLowerCase(),
       byteLength: sourceBytes.byteLength,
@@ -3245,24 +3250,49 @@ export async function convertDocxToPaginatedHtml(
         const renderDocument = frame.contentDocument!;
         sanitizeConvertedDocument(renderDocument, convertedHtml, state, options);
         inventoryConvertedContent(renderDocument, state, options);
+        const readinessEvidenceCheckpoint = checkpointAttemptState(state);
 
-        const fontTask = documentFontReadiness(renderDocument);
+        const readinessLimits = {
+          fontRequests: options.limits.fontRequests,
+          fontSampleCodePoints: options.limits.fontSampleCodePoints,
+          visualResources: options.limits.automaticResources,
+          domNodes: options.limits.domNodes,
+          automaticResourceBytes: options.limits.automaticResourceBytes,
+        };
+        const fontTask = documentFontReadiness(renderDocument, readinessLimits);
+        const imageTask = documentImageReadiness(renderDocument, readinessLimits);
+        const graphicTask = documentGraphicReadiness(renderDocument, readinessLimits);
         await runPhase(state, "font_loading", fontTask.pending, async (signal) => {
           recordFontReadiness(await fontTask.wait(signal), state, options);
         });
-        const images = Array.from(renderDocument.images);
-        const imageTask = documentImageReadiness(renderDocument);
         await runPhase(state, "image_decoding", imageTask.pending, async (signal) => {
-          recordImageReadiness(images, await imageTask.wait(signal), state, options);
+          await admitPrintVisualResources(renderDocument, readinessLimits, signal);
+          const probes = await imageTask.wait(signal);
+          const images = Array.from(renderDocument.images);
+          if (images.length !== probes.filter(({ source }) => source === "html-image").length) {
+            throw new PrintReadinessError(
+              "image_decoding",
+              "The image inventory changed after its final readiness probe.",
+              ["image-inventory"],
+            );
+          }
+          recordImageReadiness(images, probes, state, options);
         });
-        const graphics = graphicElements(renderDocument);
-        const graphicTask = documentGraphicReadiness(renderDocument);
         await runPhase(
           state,
           "chart_svg_materialization",
           graphicTask.pending,
           async (signal) => {
-            recordGraphicReadiness(graphics, await graphicTask.wait(signal), state, options);
+            const probes = await graphicTask.wait(signal);
+            const graphics = graphicElements(renderDocument);
+            if (graphics.length !== probes.filter(({ source }) => source === "graphic").length) {
+              throw new PrintReadinessError(
+                "chart_svg_materialization",
+                "The graphic inventory changed after its final readiness probe.",
+                ["graphic-inventory"],
+              );
+            }
+            recordGraphicReadiness(graphics, probes, state, options);
           },
         );
 
@@ -3318,6 +3348,7 @@ export async function convertDocxToPaginatedHtml(
 
         await runPhase(state, "running_story_placement", ["headers, footers, and notes"], () => {
           finalizePageTree(renderDocument, pages, state, options);
+          freezeCssMotion(renderDocument);
           // Running-story placement changes the visible fragment set. This is
           // the sole identity-writing normalization pass; PageMap measurement
           // below remains read-only.
@@ -3331,37 +3362,98 @@ export async function convertDocxToPaginatedHtml(
         enforceLimit(automaticResources.bytes, options.limits.automaticResourceBytes,
           "automaticResourceBytes", "running_story_placement");
 
+        // Bind the report and attempt agreement to the exact finalized page DOM,
+        // not merely the pre-pagination staging tree. Preserve deterministic
+        // omitted-resource evidence for visuals already replaced by placeholders.
+        const failedVisualEvidence = state.resources
+          .slice(readinessEvidenceCheckpoint.resources)
+          .filter((resource) => resource.readiness === "failed");
+        state.fonts.length = readinessEvidenceCheckpoint.fonts;
+        state.resources.length = readinessEvidenceCheckpoint.resources;
+        state.resources.push(...failedVisualEvidence);
+        const finalFontTask = documentFontReadiness(renderDocument, readinessLimits);
+        const finalImageTask = documentImageReadiness(renderDocument, readinessLimits);
+        const finalGraphicTask = documentGraphicReadiness(renderDocument, readinessLimits);
+        await runPhase(state, "font_loading", finalFontTask.pending, async (signal) => {
+          recordFontReadiness(await finalFontTask.wait(signal), state, options);
+        });
+        await runPhase(state, "image_decoding", finalImageTask.pending, async (signal) => {
+          await admitPrintVisualResources(renderDocument, readinessLimits, signal);
+          const probes = await finalImageTask.wait(signal);
+          const images = Array.from(renderDocument.images);
+          if (images.length !== probes.filter(({ source }) => source === "html-image").length) {
+            throw new PrintReadinessError(
+              "image_decoding",
+              "The finalized image inventory changed after its readiness probe.",
+              ["image-inventory"],
+            );
+          }
+          recordImageReadiness(images, probes, state, options);
+        });
+        await runPhase(
+          state,
+          "chart_svg_materialization",
+          finalGraphicTask.pending,
+          async (signal) => {
+            const probes = await finalGraphicTask.wait(signal);
+            const graphics = graphicElements(renderDocument);
+            if (graphics.length !== probes.filter(({ source }) => source === "graphic").length) {
+              throw new PrintReadinessError(
+                "chart_svg_materialization",
+                "The finalized graphic inventory changed after its readiness probe.",
+                ["graphic-inventory"],
+              );
+            }
+            recordGraphicReadiness(graphics, probes, state, options);
+          },
+        );
+
         const stabilityTask = pageTreeReadiness(renderDocument, pages);
-        const stability = await runPhase(
+        const stableAttempt = await runPhase(
           state,
           "page_tree_stability",
           stabilityTask.pending,
-          async (signal): Promise<PageTreeStabilityProbe> => {
+          async (signal): Promise<{
+            stability: PageTreeStabilityProbe;
+            agreementSignature: string;
+          }> => {
             try {
-              return await stabilityTask.wait(signal);
+              const stability = await stabilityTask.wait(signal);
+              if (signal.aborted) throw new DOMException("Print readiness was aborted", "AbortError");
+              return {
+                stability,
+                agreementSignature: await pristineAttemptAgreementSignature(
+                  stability.signature,
+                  state,
+                ),
+              };
             } catch (error) {
               if (error instanceof PrintReadinessError) {
-                throw new PageTreeInstabilityError(error.message);
+                throw new PageTreeInstabilityError(error.message, error.pending);
               }
               throw error;
             }
           },
         );
+        const { agreementSignature } = stableAttempt;
         if (stableReferenceSignature === undefined) {
-          stableReferenceSignature = stability.signature;
+          stableReferenceSignature = agreementSignature;
           frame.remove();
           frame = undefined;
           restoreAttemptState(state, attemptCheckpoint);
           if (pageTreeRetries > 0) addPageTreeRetryWarning(state);
           continue;
         }
-        if (stableReferenceSignature !== stability.signature) {
+        if (stableReferenceSignature !== agreementSignature) {
           // A mismatch resets the reference: publication requires two
           // consecutive pristine-tree attempts with the same signature.
-          stableReferenceSignature = stability.signature;
-          throw new PageTreeInstabilityError(
-            "Consecutive layouts created from the same pristine converted HTML produced different final page trees",
-          );
+          stableReferenceSignature = agreementSignature;
+          pageTreeRetries++;
+          frame.remove();
+          frame = undefined;
+          restoreAttemptState(state, attemptCheckpoint);
+          addPageTreeRetryWarning(state);
+          continue;
         }
         finalized = { frame, document: renderDocument, engine, pages };
         break;
@@ -3369,10 +3461,18 @@ export async function convertDocxToPaginatedHtml(
         frame?.remove();
         frame = undefined;
         if (!(error instanceof PageTreeInstabilityError)) throw error;
+        // An attempt that was internally unstable cannot participate in the
+        // two-consecutive-pristine-layout agreement.
+        stableReferenceSignature = undefined;
         pageTreeRetries++;
         restoreAttemptState(state, attemptCheckpoint);
         addPageTreeRetryWarning(state);
-        if (attempt === 3) throw error;
+        if (attempt === 3) {
+          fail("pagination_failure", "page_tree_stability", error.message,
+            "Remove asynchronous layout inputs or report the source document to Docxodus.", {
+              pending: [...error.pending],
+            });
+        }
       }
     }
     if (!finalized) {
@@ -3449,8 +3549,8 @@ export async function convertDocxToPaginatedHtml(
     htmlWasMaterialized = true;
     enforceLimit(utf8ByteLength(html), options.limits.htmlOutputBytes,
       "htmlOutputBytes", "output_verification");
-    await runPhase(state, "output_verification", ["offline reopen"], () =>
-      verifyOfflineReopen(globalThis.document, html, pageMap, state));
+    await runPhase(state, "output_verification", ["offline reopen"], (signal) =>
+      verifyOfflineReopen(globalThis.document, html, pageMap, state, signal));
     const htmlDigest = await runPhase(state, "output_verification", ["HTML digest"], () =>
       sha256(utf8Bytes(html)));
 

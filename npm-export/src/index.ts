@@ -28,9 +28,13 @@ import type {
 } from "./contracts.js";
 import { isAbsolute, resolve } from "node:path";
 import {
+  CURRENT_RENDER_REPORT_SCHEMA,
+  CURRENT_RENDER_REPORT_SCHEMA_VERSION,
   attachFailedReport,
   DocxodusExportError,
   exportError,
+  hasCurrentRenderReportDiscriminator,
+  isCurrentCompleteRenderReport,
 } from "./contracts.js";
 import {
   prepareDestinations,
@@ -813,6 +817,17 @@ function verifyBrowserOutcome(
     ...(requested.includes("pdf") ? ["pdf" as const] : []),
   ];
   const report = materialization.renderReport;
+  if (!isCurrentCompleteRenderReport(report)) {
+    const version = hasCurrentRenderReportDiscriminator(report)
+      ? "a malformed v2 complete report"
+      : "an unsupported report discriminator";
+    exportError(
+      "output_verification_failure",
+      "output_verification",
+      `The browser materializer returned ${version}; expected ${CURRENT_RENDER_REPORT_SCHEMA} version ${CURRENT_RENDER_REPORT_SCHEMA_VERSION}.`,
+      "Use matching hardened docxodus and @docxodus/export package versions; legacy v1 is validation-only.",
+    );
+  }
   const pageMapDigest = sha256(canonicalJson(materialization.pageMap));
   const outputsMatch = canonicalJson(report.options.outputs) === canonicalJson(expectedOutputs);
   const pageInventoriesMatch = canonicalJson(report.pages) === canonicalJson(materialization.pageMap.pages);
@@ -886,7 +901,7 @@ async function renderOwned(
   sourcePreflight(sourceBytes, options);
   const runtime = validateRuntime(options);
   const timeoutMs = normalizedTimeout(options);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes
     ?? DEFAULT_EXPORT_RESOURCE_LIMITS.pdfOutputBytes;
   const parserLimit = options.limits?.pdfParserExpandedBytes

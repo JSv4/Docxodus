@@ -16,6 +16,7 @@ const fontBytes = readFileSync(join(
 const imageBytes = Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#0ea5e9"/></svg>',
 );
+const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 async function ready(page: Page): Promise<void> {
   await page.goto('/standalone-export-harness.html');
@@ -84,14 +85,14 @@ test.describe('deterministic print readiness barrier', () => {
     expect(outcome.result.images).toEqual([
       expect.objectContaining({
         kind: 'image',
-        resource: 'delayed-readiness-image',
+        resource: 'html-image:delayed-readiness-image',
         status: 'complete',
       }),
     ]);
     expect(outcome.result.graphics).toEqual([
       expect.objectContaining({
         kind: 'chart',
-        resource: 'delayed-chart',
+        resource: 'graphic:chart:delayed-chart',
         status: 'complete',
       }),
     ]);
@@ -125,7 +126,7 @@ test.describe('deterministic print readiness barrier', () => {
     expect(outcome.elapsedMs).toBeLessThan(1_000);
     expect(outcome.error).toEqual(expect.objectContaining({
       phase: 'chart_svg_materialization',
-      pending: ['materialization:delayed-chart'],
+      pending: ['materialization:graphic:chart:delayed-chart'],
     }));
     expect(outcome.error.message).toContain('timed out during chart_svg_materialization');
     await testInfo.attach('print-readiness-timeout.json', {
@@ -210,5 +211,232 @@ test.describe('deterministic print readiness barrier', () => {
     expect(second.ok).toBe(true);
     expect(second.result.pageTree.pageCount).toBe(first.result.pageTree.pageCount);
     expect(second.result.pageTree.signature).toBe(first.result.pageTree.signature);
+  });
+
+  test('uses a monotonic clock even when the wall clock is perturbed', async ({ page }) => {
+    const outcome = await page.evaluate(async () => {
+      const originalDateNow = Date.now;
+      try {
+        Date.now = () => Number.MAX_SAFE_INTEGER;
+        (window as any).DocxodusStandalone.startReadinessProbe({ timeoutMs: 2_000 });
+        (window as any).DocxodusStandalone.releaseReadinessGraphic();
+        return await (window as any).DocxodusStandalone.finishReadinessProbe();
+      } finally {
+        Date.now = originalDateNow;
+      }
+    });
+    expect(outcome.ok).toBe(true);
+  });
+
+  test('aborts a pending phase promptly with no readiness timeout', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).DocxodusStandalone.startReadinessProbe({ timeoutMs: 5_000 });
+      (window as any).DocxodusStandalone.abortReadinessProbe();
+    });
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(false);
+    expect(outcome.elapsedMs).toBeLessThan(1_000);
+    expect(outcome.error).toEqual(expect.objectContaining({ name: 'AbortError' }));
+  });
+
+  test('tracks a replacement graphic rather than a stale element snapshot', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).DocxodusStandalone.startReadinessProbe({ timeoutMs: 2_000 });
+      (window as any).DocxodusStandalone.replaceReadinessGraphic();
+    });
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(true);
+    expect(outcome.result.graphics).toEqual([
+      expect.objectContaining({ resource: 'graphic:chart:delayed-chart', status: 'complete' }),
+    ]);
+  });
+
+  test('rejects a visual-resource inventory one over the configured bound', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 2_000,
+        additionalImages: 1,
+        limits: { visualResources: 1 },
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphic();
+    });
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toEqual(expect.objectContaining({
+      phase: 'chart_svg_materialization',
+      reason: 'resource_limit',
+      pending: ['visual-resource-limit:1'],
+    }));
+  });
+
+  test('does not miss a broken image inserted by a later graphic producer', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).DocxodusStandalone.startReadinessProbe({ timeoutMs: 2_000 });
+      (window as any).DocxodusStandalone.releaseReadinessGraphicWithLateBrokenImage();
+    });
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toEqual(expect.objectContaining({
+      phase: 'image_decoding',
+      pending: ['image:html-image:late-broken-image'],
+    }));
+  });
+
+  test('bounds a resource chain that never reaches a global fixed point', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).DocxodusStandalone.startReadinessProbe({ timeoutMs: 5_000 });
+      (window as any).DocxodusStandalone.releaseReadinessGraphicWithUnsettledResourceChain();
+    });
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(false);
+    expect(outcome.elapsedMs).toBeLessThan(5_000);
+    expect(outcome.error).toEqual(expect.objectContaining({
+      phase: 'page_tree_stability',
+      pending: expect.arrayContaining(['resource-fixed-point:8/8']),
+    }));
+    expect(outcome.error.message).toContain('did not settle within 8 passes');
+  });
+
+  test('probes every CSS image-set candidate and a late background inserted by a graphic', async ({ page }) => {
+    await page.evaluate((png) => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 3_000,
+        backgroundCss: `image-set(url(${png}) 1x, url(${png}) 2x)`,
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphicWithLateBackground(`url(${png})`);
+    }, tinyPng);
+    const outcome = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(outcome.ok).toBe(true);
+    const backgrounds = outcome.result.images.filter((probe: any) =>
+      probe.source === 'css-background');
+    expect(backgrounds.length).toBeGreaterThanOrEqual(3);
+    expect(backgrounds.every((probe: any) =>
+      probe.status === 'complete' && /^[0-9a-f]{64}$/.test(probe.contentKey))).toBe(true);
+  });
+
+  test('rejects broken CSS pixels and bounds computed-style observation work', async ({ page }) => {
+    await page.evaluate((png) => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 2_000,
+        // DPR 1 selects the valid candidate; readiness must still decode the
+        // corrupt, non-selected image-set candidate.
+        backgroundCss: `image-set('${png}' 1x, 'data:image/png;base64,AAAA' 2x)`,
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphic();
+    }, tinyPng);
+    const broken = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(broken.ok).toBe(false);
+    expect(broken.error).toEqual(expect.objectContaining({
+      phase: 'image_decoding',
+      pending: ['image:css-background:p:main:background'],
+    }));
+
+    await page.evaluate((png) => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 2_000,
+        backgroundCss: `url(${png})`,
+        limits: { automaticResourceBytes: 16 },
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphic();
+    }, tinyPng);
+    const bounded = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(bounded.ok).toBe(false);
+    expect(bounded.error).toEqual(expect.objectContaining({
+      phase: 'image_decoding',
+      reason: 'resource_limit',
+      pending: ['css-background-code-unit-limit:16'],
+    }));
+
+    await page.evaluate((png) => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 2_000,
+        backgroundCss: `url(${png})`,
+        backgroundCopies: 2,
+        // One canonical computed value fits, but charging every painted
+        // occurrence makes two uses exceed this bound even though tokenization
+        // and digesting are cached by unique value.
+        limits: { automaticResourceBytes: 150 },
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphic();
+    }, tinyPng);
+    const repeated = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(repeated.ok).toBe(false);
+    expect(repeated.error).toEqual(expect.objectContaining({
+      phase: 'image_decoding',
+      reason: 'resource_limit',
+      pending: ['css-background-code-unit-limit:150'],
+    }));
+  });
+
+  test('decodes SVG image pixels and rejects missing or external SVG use targets', async ({ page }) => {
+    await page.evaluate((png) => {
+      (window as any).DocxodusStandalone.startReadinessProbe({
+        timeoutMs: 2_000,
+        svgImageUrl: png,
+        svgUseHref: '#readiness-use-target',
+      });
+      (window as any).DocxodusStandalone.releaseReadinessGraphic();
+    }, tinyPng);
+    const valid = await page.evaluate(() =>
+      (window as any).DocxodusStandalone.finishReadinessProbe());
+    expect(valid.ok).toBe(true);
+    expect(valid.result.images).toContainEqual(expect.objectContaining({
+      source: 'svg-image', status: 'complete',
+    }));
+    expect(valid.result.graphics).toContainEqual(expect.objectContaining({
+      source: 'svg-use', status: 'complete',
+    }));
+
+    for (const href of ['#missing-readiness-target', 'https://example.invalid/icon.svg#shape']) {
+      await page.evaluate((target) => {
+        (window as any).DocxodusStandalone.startReadinessProbe({
+          timeoutMs: 2_000,
+          svgUseHref: target,
+        });
+        (window as any).DocxodusStandalone.releaseReadinessGraphic();
+      }, href);
+      const invalid = await page.evaluate(() =>
+        (window as any).DocxodusStandalone.finishReadinessProbe());
+      expect(invalid.ok).toBe(false);
+      expect(invalid.error).toEqual(expect.objectContaining({
+        phase: 'chart_svg_materialization',
+        pending: ['materialization:svg-use:p:main:svg-use'],
+      }));
+    }
+  });
+
+  test('keys same-family font requests by face attributes and exact accumulated sample', async ({ page }) => {
+    const run = async (tail: string) => {
+      await page.evaluate((fontTail) => {
+        (window as any).DocxodusStandalone.startReadinessProbe({
+          timeoutMs: 2_000,
+          fontEvidence: true,
+          fontTail,
+        });
+        (window as any).DocxodusStandalone.releaseReadinessGraphic();
+      }, tail);
+      return page.evaluate(() => (window as any).DocxodusStandalone.finishReadinessProbe());
+    };
+    const first = await run('Beta');
+    const second = await run('Delta');
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const firstEvidence = first.result.fonts.filter((probe: any) =>
+      probe.requestedFamily.includes('Docxodus Evidence'));
+    const secondEvidence = second.result.fonts.filter((probe: any) =>
+      probe.requestedFamily.includes('Docxodus Evidence'));
+    expect(firstEvidence).toHaveLength(2);
+    expect(new Set(firstEvidence.map((probe: any) => probe.requestKey)).size).toBe(2);
+    expect(firstEvidence.map((probe: any) => probe.requestKey).sort())
+      .not.toEqual(secondEvidence.map((probe: any) => probe.requestKey).sort());
   });
 });

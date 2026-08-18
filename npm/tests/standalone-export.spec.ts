@@ -10,6 +10,14 @@ import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const testFiles = join(here, '..', '..', 'TestFiles');
+const reportSchemaV1Bytes = readFileSync(
+  join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
+);
+const reportSchemaV1 = JSON.parse(reportSchemaV1Bytes.toString('utf8'));
+const reportSchemaV2 = JSON.parse(readFileSync(
+  join(here, '..', '..', 'docs', 'schemas', 'render-report-v2.schema.json'),
+  'utf8',
+));
 
 interface BrowserExportResult {
   html: string;
@@ -27,6 +35,8 @@ interface BrowserExportResult {
     fragments: unknown[];
   };
   renderReport: {
+    schema: 'https://docxodus.dev/schemas/render/render-report/v2';
+    schemaVersion: 2;
     status: 'complete';
     source: { rawPackageBytesDigest: string };
     derivedProfileSource?: { rawPackageBytesDigest: string; byteLength: number };
@@ -47,7 +57,7 @@ interface BrowserExportResult {
       pending: string[];
       diagnostics?: Array<{ code: string; count: number }>;
     }>;
-    fonts: Array<{ requestedFamily: string; status: string; source: string }>;
+    fonts: Array<{ requestKey: string; requestedFamily: string; status: string; source: string }>;
     resources: Array<{
       kind: string;
       status: string;
@@ -73,13 +83,116 @@ function digest(value: Uint8Array | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-test('freezes the closed render-report v1 schema and exact resource-limit vocabulary', () => {
-  const schema = JSON.parse(readFileSync(
-    join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
-    'utf8',
-  ));
+function schemaErrors(
+  root: any,
+  schema: any,
+  value: any,
+  path = '$',
+): string[] {
+  if (typeof schema === 'boolean') return schema ? [] : [`${path}: rejected`];
+  if (!schema || typeof schema !== 'object') return [];
+  const errors: string[] = [];
+  if (schema.$ref) {
+    const target = schema.$ref.split('/').slice(1).reduce(
+      (current: any, token: string) => current[token.replace(/~1/g, '/').replace(/~0/g, '~')],
+      root,
+    );
+    errors.push(...schemaErrors(root, target, value, path));
+  }
+  const equal = (left: unknown, right: unknown) => canonical(left) === canonical(right);
+  if ('const' in schema && !equal(value, schema.const)) errors.push(`${path}: const`);
+  if (schema.enum && !schema.enum.some((entry: unknown) => equal(value, entry))) {
+    errors.push(`${path}: enum`);
+  }
+  const typeMatches = schema.type === undefined
+    || (schema.type === 'object' && value !== null && typeof value === 'object' && !Array.isArray(value))
+    || (schema.type === 'array' && Array.isArray(value))
+    || (schema.type === 'string' && typeof value === 'string')
+    || (schema.type === 'number' && typeof value === 'number' && Number.isFinite(value))
+    || (schema.type === 'integer' && Number.isSafeInteger(value))
+    || (schema.type === 'boolean' && typeof value === 'boolean')
+    || (schema.type === 'null' && value === null);
+  if (!typeMatches) return [...errors, `${path}: type ${schema.type}`];
+  if (schema.allOf) schema.allOf.forEach((entry: any) =>
+    errors.push(...schemaErrors(root, entry, value, path)));
+  if (schema.anyOf && !schema.anyOf.some((entry: any) =>
+    schemaErrors(root, entry, value, path).length === 0)) errors.push(`${path}: anyOf`);
+  if (schema.oneOf) {
+    const matches = schema.oneOf.filter((entry: any) =>
+      schemaErrors(root, entry, value, path).length === 0).length;
+    if (matches !== 1) errors.push(`${path}: oneOf(${matches})`);
+  }
+  if (schema.not && schemaErrors(root, schema.not, value, path).length === 0) {
+    errors.push(`${path}: not`);
+  }
+  if (schema.if) {
+    const branch = schemaErrors(root, schema.if, value, path).length === 0
+      ? schema.then
+      : schema.else;
+    if (branch) errors.push(...schemaErrors(root, branch, value, path));
+  }
+  if (typeof value === 'string') {
+    if (schema.minLength !== undefined && value.length < schema.minLength) {
+      errors.push(`${path}: minLength`);
+    }
+    if (schema.pattern && !(new RegExp(schema.pattern).test(value))) errors.push(`${path}: pattern`);
+  }
+  if (typeof value === 'number') {
+    if (schema.minimum !== undefined && value < schema.minimum) errors.push(`${path}: minimum`);
+    if (schema.maximum !== undefined && value > schema.maximum) errors.push(`${path}: maximum`);
+    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) {
+      errors.push(`${path}: exclusiveMinimum`);
+    }
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${path}: minItems`);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${path}: maxItems`);
+    schema.prefixItems?.forEach((entry: any, index: number) => {
+      if (index < value.length) errors.push(...schemaErrors(root, entry, value[index], `${path}[${index}]`));
+    });
+    if (schema.items && typeof schema.items === 'object') value.forEach((entry, index) =>
+      errors.push(...schemaErrors(root, schema.items, entry, `${path}[${index}]`)));
+    if (schema.contains) {
+      const matches = value.filter((entry, index) =>
+        schemaErrors(root, schema.contains, entry, `${path}[${index}]`).length === 0).length;
+      if (matches < (schema.minContains ?? 1) || matches > (schema.maxContains ?? Infinity)) {
+        errors.push(`${path}: contains(${matches})`);
+      }
+    }
+  }
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    for (const key of schema.required ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) errors.push(`${path}.${key}: required`);
+    }
+    for (const [key, entry] of Object.entries(schema.properties ?? {})) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        errors.push(...schemaErrors(root, entry, value[key], `${path}.${key}`));
+      }
+    }
+    if (schema.additionalProperties === false) {
+      const allowed = new Set(Object.keys(schema.properties ?? {}));
+      for (const key of Object.keys(value)) if (!allowed.has(key)) errors.push(`${path}.${key}: additional`);
+    }
+  }
+  return errors;
+}
+
+test('keeps frozen render-report v1 disjoint from the closed v2 readiness schema', () => {
+  const v1Bytes = reportSchemaV1Bytes;
+  const v1 = reportSchemaV1;
+  const schema = reportSchemaV2;
   const limits = JSON.parse(readFileSync(join(here, '..', 'src', 'export-resource-limits-v1.json'), 'utf8'));
   const definitions = schema.$defs;
+  expect(digest(v1Bytes)).toBe('50476223d2707ebd178a08239273af14b5dd9fb47504a7f152e17230f13accad');
+  expect(v1.$id).toBe('https://docxodus.dev/schemas/render/render-report/v1');
+  expect(v1.$defs.complete.properties.schemaVersion.const).toBe(1);
+  expect(v1.$defs.baseProperties.readiness.items.properties.diagnostics).toBeUndefined();
+  expect(v1.$defs.baseProperties.resources.items.properties.readiness).toBeUndefined();
+  expect(schema.$id).toBe('https://docxodus.dev/schemas/render/render-report/v2');
+  expect(definitions.complete.properties.schemaVersion.const).toBe(2);
+  expect(definitions.complete.properties.schema.const).not.toBe(
+    v1.$defs.complete.properties.schema.const,
+  );
   expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
   expect(schema.oneOf).toEqual([
     { $ref: '#/$defs/complete' },
@@ -103,6 +216,38 @@ test('freezes the closed render-report v1 schema and exact resource-limit vocabu
   expect(definitions.errorCode.enum).toEqual(expect.arrayContaining([
     'invalid_argument', 'source_digest_mismatch', 'document_version_unrepresentable',
     'operation_cancelled', 'resource_limit',
+  ]));
+  const readinessItem = definitions.baseProperties.readiness.items;
+  const paginationRule = readinessItem.allOf.find((entry: any) =>
+    entry.if?.properties?.phase?.const === 'pagination');
+  expect(paginationRule.then.required).toContain('diagnostics');
+  expect(paginationRule.else).toEqual({ not: { required: ['diagnostics'] } });
+  expect(readinessItem.properties.diagnostics).toEqual(expect.objectContaining({
+    minItems: 4,
+    maxItems: 4,
+  }));
+  expect(paginationRule.then.properties.diagnostics.allOf.map(
+    (entry: any) => entry.contains.properties.code.const,
+  )).toEqual([
+    'sections_processed',
+    'page_runs_processed',
+    'source_anchors_inventoried',
+    'note_references_inventoried',
+  ]);
+  const resourceRules = definitions.baseProperties.resources.items.allOf;
+  const externalLinkRule = resourceRules.find((entry: any) =>
+    entry.if?.properties?.kind?.const === 'external_link');
+  expect(externalLinkRule.then.not.anyOf).toEqual([
+    { required: ['readiness'] },
+    { required: ['contentKey'] },
+  ]);
+  expect(resourceRules).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      if: { properties: { readiness: { const: 'failed' } }, required: ['readiness'] },
+      then: expect.objectContaining({
+        properties: expect.objectContaining({ status: { const: 'omitted' } }),
+      }),
+    }),
   ]));
 });
 
@@ -278,6 +423,29 @@ test.describe('standalone paginated HTML', () => {
     expect(result.rendererFingerprint).toBe(result.pageMap.rendererFingerprint);
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
+    expect(result.renderReport).toEqual(expect.objectContaining({
+      schema: 'https://docxodus.dev/schemas/render/render-report/v2',
+      schemaVersion: 2,
+    }));
+    expect(schemaErrors(reportSchemaV2, reportSchemaV2, result.renderReport)).toEqual([]);
+    expect(schemaErrors(reportSchemaV1, reportSchemaV1, result.renderReport)).not.toEqual([]);
+    const legacyV1Report = structuredClone(result.renderReport) as any;
+    legacyV1Report.schema = 'https://docxodus.dev/schemas/render/render-report/v1';
+    legacyV1Report.schemaVersion = 1;
+    legacyV1Report.readiness.forEach((entry: any) => { delete entry.diagnostics; });
+    legacyV1Report.resources.forEach((entry: any) => {
+      delete entry.readiness;
+      delete entry.contentKey;
+      delete entry.anchorId;
+      delete entry.message;
+    });
+    legacyV1Report.fonts.forEach((entry: any) => { delete entry.requestKey; });
+    expect(schemaErrors(reportSchemaV1, reportSchemaV1, legacyV1Report)).toEqual([]);
+    expect(schemaErrors(reportSchemaV2, reportSchemaV2, legacyV1Report)).not.toEqual([]);
+    expect(schemaErrors(reportSchemaV2, reportSchemaV2, {
+      ...result.renderReport,
+      schemaVersion: 1,
+    })).not.toEqual([]);
     expect(result.renderReport.fonts.every((font) =>
       font.requestedFamily.length > 0
       && font.status === 'unverified'
@@ -307,6 +475,8 @@ test.describe('standalone paginated HTML', () => {
       diagnostics: expect.arrayContaining([
         expect.objectContaining({ code: 'sections_processed', count: 1 }),
         expect.objectContaining({ code: 'page_runs_processed', count: 1 }),
+        expect.objectContaining({ code: 'source_anchors_inventoried' }),
+        expect.objectContaining({ code: 'note_references_inventoried' }),
       ]),
     }));
     expect(result.renderReport.source.rawPackageBytesDigest).toBe(digest(source));
@@ -633,6 +803,24 @@ test.describe('standalone paginated HTML', () => {
     expect(outcome.after).toBe(outcome.before);
   });
 
+  test('requires pristine attempts to agree on font outcomes as well as page markup', async ({ page }) => {
+    const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const outcome = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertWithAlternatingFontOutcomes(bytes, {
+        reviewProfile: 'final',
+        commentProfile: 'hidden',
+        timeoutMs: 15_000,
+      }), Array.from(source));
+    expect(outcome.contextCount).toBeGreaterThanOrEqual(4);
+    expect(outcome.result.renderReport.warnings).toContainEqual(expect.objectContaining({
+      code: 'page_tree_retry',
+      phase: 'page_tree_stability',
+    }));
+    expect(outcome.result.renderReport.fonts.length).toBeGreaterThan(0);
+    expect(outcome.result.renderReport.fonts.every((font: any) =>
+      font.status === 'missing' && /^[0-9a-f]{64}$/.test(font.requestKey))).toBe(true);
+  });
+
   test('reports a failed supported-image decode according to warn or strict policy', async ({ page }, testInfo) => {
     const source = generateCorruptImageDocx();
     const warned = await convert(page, source, false, { unsupportedContent: 'warn' });
@@ -795,6 +983,8 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
   expect(result.readiness.diagnostics).toEqual(expect.arrayContaining([
     expect.objectContaining({ code: 'sections_processed', count: 1 }),
     expect.objectContaining({ code: 'page_runs_processed', count: 1 }),
+    expect.objectContaining({ code: 'source_anchors_inventoried' }),
+    expect.objectContaining({ code: 'note_references_inventoried' }),
   ]));
   expect(result.authoredWidth).toBe('612pt');
   expect(result.width).toBeGreaterThan(0);

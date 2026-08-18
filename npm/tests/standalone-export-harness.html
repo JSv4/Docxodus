@@ -18,6 +18,8 @@
     let readinessProbe;
     let readinessSettled = true;
     let activeGraphic;
+    let readinessAbortController;
+    let readinessChainFrame;
 
     function resetReadinessFixture(options) {
       document.getElementById('readiness-fixture')?.remove();
@@ -30,16 +32,37 @@
       const image = options.imageUrl
         ? `<img alt="delayed-readiness-image" src="${options.imageUrl}" width="32" height="32">`
         : '';
+      const background = options.backgroundCss
+        ? Array.from({ length: options.backgroundCopies ?? 1 }, (_, index) =>
+          `<div data-source-anchor-id="${index === 0 ? 'p:main:background' : `p:main:background-${index + 1}`}"
+            style="width:32px;height:32px;background-image:${options.backgroundCss}"></div>`).join('')
+        : '';
+      const svgImage = options.svgImageUrl
+        ? `<svg viewBox="0 0 32 32"><image data-source-anchor-id="p:main:svg-image" href="${options.svgImageUrl}" width="32" height="32"></image></svg>`
+        : '';
+      const svgUse = options.svgUseHref
+        ? `<svg viewBox="0 0 32 32"><defs><rect id="readiness-use-target" width="16" height="16"></rect></defs><use data-source-anchor-id="p:main:svg-use" href="${options.svgUseHref}"></use></svg>`
+        : '';
+      const fontEvidence = options.fontEvidence
+        ? `<p class="font-evidence" style="font-family:'Docxodus Evidence',serif;font-weight:400">Alpha${options.fontTail ?? 'Beta'}</p>
+           <p class="font-evidence" style="font-family:'Docxodus Evidence',serif;font-weight:700">Gamma</p>`
+        : '';
       fixture.innerHTML = `${style}<div class="page-box" data-page-number="1"
         data-section-index="0" style="width:612pt;height:792pt">
         <p class="readiness-font" data-source-anchor-id="p:main:readiness">Delayed readiness text</p>
-        ${image}
+        ${image}${background}${svgImage}${svgUse}${fontEvidence}
         <svg data-docxodus-materialization="chart"
           data-docxodus-materialization-state="pending"
           data-docxodus-materialization-id="delayed-chart"></svg>
       </div>`;
       document.body.appendChild(fixture);
-      activeGraphic = fixture.querySelector('svg');
+      activeGraphic = fixture.querySelector('[data-docxodus-materialization]');
+      for (let index = 0; index < (options.additionalImages ?? 0); index++) {
+        const extraImage = document.createElement('img');
+        extraImage.alt = `admitted-image-${index + 1}`;
+        extraImage.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22%3E%3Crect width=%221%22 height=%221%22/%3E%3C/svg%3E';
+        fixture.querySelector('.page-box').appendChild(extraImage);
+      }
     }
 
     async function runReadinessProbe(options) {
@@ -48,10 +71,21 @@
         const result = await awaitFinalPrintReadiness(document, {
           timeoutMs: options.timeoutMs,
           quietIntervalMs: options.quietIntervalMs ?? 100,
+          signal: readinessAbortController?.signal,
+          limits: options.limits,
         });
         return { ok: true, elapsedMs: performance.now() - started, result };
       } catch (error) {
-        if (!(error instanceof PrintReadinessError)) throw error;
+        if (!(error instanceof PrintReadinessError)) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            return {
+              ok: false,
+              elapsedMs: performance.now() - started,
+              error: { name: error.name, message: error.message },
+            };
+          }
+          throw error;
+        }
         return {
           ok: false,
           elapsedMs: performance.now() - started,
@@ -59,9 +93,12 @@
             phase: error.phase,
             message: error.message,
             pending: Array.from(error.pending),
+            reason: error.reason,
           },
         };
       } finally {
+        if (readinessChainFrame !== undefined) cancelAnimationFrame(readinessChainFrame);
+        readinessChainFrame = undefined;
         readinessSettled = true;
       }
     }
@@ -118,11 +155,47 @@
           else globalThis.__docxodusReadinessProgress = previousProgress;
         }
       },
+      convertWithAlternatingFontOutcomes: async (bytes, options) => {
+        let contextCount = 0;
+        const patchFrame = (frame) => frame.addEventListener('load', () => {
+          const prototype = frame.contentWindow?.FontFaceSet?.prototype;
+          if (!prototype) return;
+          const context = ++contextCount;
+          Object.defineProperty(prototype, 'check', {
+            configurable: true,
+            value() {
+              // Attempt one differs; attempts two/three and offline reopen agree.
+              return context === 1;
+            },
+          });
+        }, { once: true });
+        const observer = new MutationObserver((records) => {
+          for (const record of records) {
+            for (const node of record.addedNodes) {
+              if (node instanceof HTMLIFrameElement && node.dataset.docxodusExportRealm === 'v1') {
+                patchFrame(node);
+              }
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        try {
+          const result = await convertDocxToPaginatedHtml(
+            new Uint8Array(bytes),
+            { wasmBasePath: './', ...options },
+          );
+          return { result, contextCount };
+        } finally {
+          observer.disconnect();
+        }
+      },
       startReadinessProbe: (options) => {
         resetReadinessFixture(options);
+        readinessAbortController = new AbortController();
         readinessSettled = false;
         readinessProbe = runReadinessProbe(options);
       },
+      abortReadinessProbe: () => readinessAbortController?.abort(),
       releaseReadinessGraphic: () => {
         if (!activeGraphic) throw new Error('No readiness graphic is active.');
         activeGraphic.setAttribute('viewBox', '0 0 32 32');
@@ -138,6 +211,50 @@
           const page = document.querySelector('#readiness-fixture .page-box');
           page?.setAttribute('data-delayed-layout', 'complete');
         }, delayMs);
+      },
+      replaceReadinessGraphic: () => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        const replacement = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        replacement.setAttribute('data-docxodus-materialization', 'chart');
+        replacement.setAttribute('data-docxodus-materialization-state', 'complete');
+        replacement.setAttribute('data-docxodus-materialization-id', 'delayed-chart');
+        replacement.setAttribute('viewBox', '0 0 32 32');
+        replacement.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.replaceWith(replacement);
+        activeGraphic = replacement;
+      },
+      releaseReadinessGraphicWithLateBrokenImage: () => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        const broken = document.createElement('img');
+        broken.alt = 'late-broken-image';
+        broken.src = 'data:image/png;base64,AAAA';
+        activeGraphic.parentElement.appendChild(broken);
+        activeGraphic.setAttribute('viewBox', '0 0 32 32');
+        activeGraphic.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.setAttribute('data-docxodus-materialization-state', 'complete');
+      },
+      releaseReadinessGraphicWithLateBackground: (backgroundImage) => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        const background = document.createElement('div');
+        background.dataset.sourceAnchorId = 'p:main:late-background';
+        background.style.cssText = `width:32px;height:32px;background-image:${backgroundImage}`;
+        activeGraphic.parentElement.appendChild(background);
+        activeGraphic.setAttribute('viewBox', '0 0 32 32');
+        activeGraphic.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.setAttribute('data-docxodus-materialization-state', 'complete');
+      },
+      releaseReadinessGraphicWithUnsettledResourceChain: () => {
+        if (!activeGraphic) throw new Error('No readiness graphic is active.');
+        activeGraphic.setAttribute('viewBox', '0 0 32 32');
+        activeGraphic.innerHTML = '<rect width="32" height="32" fill="#4f46e5"></rect>';
+        activeGraphic.setAttribute('data-docxodus-materialization-state', 'complete');
+        let generation = 0;
+        const mutate = () => {
+          document.querySelector('#readiness-fixture .page-box')
+            ?.setAttribute('data-resource-chain-generation', String(++generation));
+          readinessChainFrame = requestAnimationFrame(mutate);
+        };
+        readinessChainFrame = requestAnimationFrame(mutate);
       },
       readinessProbeSettled: () => readinessSettled,
       finishReadinessProbe: () => readinessProbe,

@@ -22,6 +22,10 @@ import {
   renderDocxArtifacts,
   renderDocxFile,
 } from "../dist/index.js";
+import {
+  exposePrintReadinessBindings,
+  validatePrintDocument,
+} from "../dist/browser-session.js";
 import { canonicalJson } from "../dist/canonical.js";
 import {
   generateLongFootnoteDocx,
@@ -42,11 +46,16 @@ const baseOptions = Object.freeze({
   commentProfile: "hidden",
   timeoutMs: 120_000,
 });
+const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 let browser;
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function domainDigest(domain, value) {
+  return digest(Buffer.from(`${domain}\0${value}`));
 }
 
 async function writeJson(path, value) {
@@ -359,6 +368,191 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(browser.contexts().length, contextsBefore);
   });
 
+  test("runs canonical print resource bindings with page JavaScript disabled", {
+    timeout: 30_000,
+  }, async () => {
+    const context = await browser.newContext({
+      javaScriptEnabled: false,
+      serviceWorkers: "block",
+      reducedMotion: "reduce",
+      colorScheme: "light",
+    });
+    const page = await context.newPage();
+    const requests = [];
+    let printReads = 0;
+    const origin = "https://print-readiness-test.docxodus.invalid";
+    const path = "/final.html";
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style id="print-style">
+      @page print-test { size: 612pt 792pt; margin: 0 }
+      .page-box { box-sizing: border-box; width: 612pt; height: 792pt; page: print-test }
+      .print-css, .print-svg { display: none }
+      @media print {
+        .print-css { display: block; width: 16px; height: 16px;
+          background-image: image-set('${tinyPng}' 1x, '${tinyPng}' 2x) }
+        .print-svg { display: block }
+      }
+    </style></head><body><main class="page-box" data-page-number="1"
+      data-page-in-section="1" data-section-index="0" data-page-width-pt="612"
+      data-page-height-pt="792">
+      <div class="print-css" data-source-anchor-id="p:body:print-css"></div>
+      <svg class="print-svg" data-source-anchor-id="p:body:print-svg"
+        viewBox="0 0 32 32" width="32" height="32">
+        <defs><rect id="print-target" width="8" height="8"></rect></defs>
+        <image href="${tinyPng}" x="8" width="8" height="8"></image>
+        <use href="#print-target" x="16"></use>
+      </svg>
+    </main></body></html>`;
+    await context.route("**/*", async (route) => {
+      const request = route.request();
+      requests.push(request.url());
+      if (request.url() === `${origin}${path}` && request.method() === "GET" && printReads++ === 0) {
+        await route.fulfill({
+          status: 200,
+          body: html,
+          contentType: "text/html; charset=utf-8",
+          headers: {
+            "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'",
+          },
+        });
+      } else {
+        await route.abort("blockedbyclient");
+      }
+    });
+    try {
+      // These are the exact host-owned production bindings. Their successful
+      // use by validatePrintDocument proves they remain callable when page
+      // JavaScript itself is disabled.
+      await exposePrintReadinessBindings(page);
+      await page.goto(`${origin}${path}`, { waitUntil: "load" });
+      await page.emulateMedia({ media: "print", colorScheme: "light", reducedMotion: "reduce" });
+      const observed = await page.evaluate(() => {
+        const pageElement = document.querySelector(".page-box");
+        const svg = document.querySelector("svg");
+        const image = document.querySelector("svg image");
+        const target = document.getElementById("print-target");
+        if (!pageElement || !svg || !image || !target) throw new Error("print fixture is incomplete");
+        const rect = pageElement.getBoundingClientRect();
+        return {
+          width: rect.width * 72 / 96,
+          height: rect.height * 72 / 96,
+          pageName: getComputedStyle(pageElement).page,
+          svgMarkup: svg.outerHTML,
+          imageMarkup: image.outerHTML,
+          targetMarkup: target.outerHTML,
+        };
+      });
+      const targetDigest = domainDigest("docxodus:svg-use-target:v1", observed.targetMarkup);
+      const expectedResources = [
+        {
+          kind: "image",
+          status: "embedded",
+          resource: "svg-image:p:body:print-svg",
+          readiness: "complete",
+          contentKey: domainDigest(
+            "docxodus:visual-resource:v1",
+            JSON.stringify({ source: "svg-image", material: JSON.stringify({
+              url: tinyPng,
+              markup: observed.imageMarkup,
+            }) }),
+          ),
+        },
+        {
+          kind: "svg",
+          status: "inline",
+          resource: "graphic:svg:p:body:print-svg",
+          readiness: "complete",
+          contentKey: domainDigest(
+            "docxodus:visual-resource:v1",
+            JSON.stringify({ source: "graphic", markup: observed.svgMarkup }),
+          ),
+        },
+        {
+          kind: "svg",
+          status: "inline",
+          resource: "svg-use:p:body:print-svg",
+          readiness: "complete",
+          contentKey: domainDigest(
+            "docxodus:visual-resource:v1",
+            JSON.stringify({ source: "svg-use", href: "#print-target", targetDigest }),
+          ),
+        },
+      ];
+      await validatePrintDocument(
+        page,
+        {
+          schemaVersion: 1,
+          mode: "paginated",
+          availability: "available",
+          documentVersion: 1,
+          rendererFingerprint: "print-readiness-test",
+          pages: [{
+            pageNumber: 1,
+            pageInSection: 1,
+            width: observed.width,
+            height: observed.height,
+            sectionIndex: 0,
+            pageName: observed.pageName,
+          }],
+          fragments: [],
+        },
+        5_000,
+        {
+          fontRequests: 16,
+          fontSampleCodePoints: 128,
+          visualResources: 16,
+          domNodes: 32,
+          automaticResourceBytes: 32_768,
+        },
+        [],
+        expectedResources,
+      );
+      assert.equal(printReads, 1);
+      assert.deepEqual(requests, [`${origin}${path}`]);
+
+      await page.evaluate(() => {
+        const style = document.getElementById("print-style");
+        if (!style) throw new Error("print fixture style is missing");
+        style.textContent += "@media print{.print-css{background-image:url(data:image/png;base64,AAAA)}}";
+      });
+      await assert.rejects(
+        validatePrintDocument(
+          page,
+          {
+            schemaVersion: 1,
+            mode: "paginated",
+            availability: "available",
+            documentVersion: 1,
+            rendererFingerprint: "print-readiness-test",
+            pages: [{
+              pageNumber: 1,
+              pageInSection: 1,
+              width: observed.width,
+              height: observed.height,
+              sectionIndex: 0,
+              pageName: observed.pageName,
+            }],
+            fragments: [],
+          },
+          5_000,
+          {
+            fontRequests: 16,
+            fontSampleCodePoints: 128,
+            visualResources: 16,
+            domNodes: 32,
+            automaticResourceBytes: 32_768,
+          },
+          [],
+          expectedResources,
+        ),
+        (error) => error instanceof DocxodusExportError
+          && error.phase === "image_decoding"
+          && error.code === "output_verification_failure",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   test("materializes one immutable batch into searchable tagged PDF and offline HTML", { timeout: 180_000 }, async () => {
     const source = new Uint8Array(await readFile(join(fixtures, "CA", "CA001-Plain.docx")));
     const sourceDigest = digest(source);
@@ -384,6 +578,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(result.renderReport.bindings.pageMapDigest,
       digest(Buffer.from(canonicalJson(result.pageMap))));
     assert.deepEqual(result.renderReport.options.outputs, ["html", "pdf"]);
+    assert.equal(result.renderReport.options.policy.timeoutMs, baseOptions.timeoutMs);
     assert.equal(result.renderReport.options.reviewProfileAlreadyApplied, true);
     assert.equal(result.renderReport.environment.verification, "browserObserved");
     assert.deepEqual(result.renderReport.bindings.artifactRequestIds, []);
@@ -482,6 +677,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.deepEqual(repeated.pageMap, result.pageMap);
     assert.deepEqual(repeated.renderReport.pages, result.renderReport.pages);
     assert.equal(repeated.rendererFingerprint, result.rendererFingerprint);
+    assert.equal(repeated.renderReport.options.policy.timeoutMs, baseOptions.timeoutMs);
     assert.match(result.html, /column-count:\s*2/i);
 
     const normalInspection = await inspectPdf(result.pdf);

@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import {
+  automaticUrlAllowed,
+  cssSecurityTokens,
+  dataUrlInfo,
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   type PaginatedHtmlOptions,
 } from "docxodus/export-browser";
@@ -28,6 +31,8 @@ const FILE_READ_CHUNK_BYTES = 64 * 1024;
 const PDF_STREAM_CHUNK_BYTES = 64 * 1024;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const DENIED_REQUEST_DETAILS_MAX = 64;
+const READINESS_PENDING_DETAILS_MAX = 64;
+const READINESS_PENDING_LABEL_MAX = 512;
 const LAUNCH_FLAGS = Object.freeze([
   "--disable-background-networking",
   "--disable-component-update",
@@ -38,6 +43,12 @@ const LAUNCH_FLAGS = Object.freeze([
   "--metrics-recording-only",
   "--no-default-browser-check",
   "--no-first-run",
+]);
+const EXPORT_PHASES = new Set<ExportPhase>([
+  "input_validation", "package_preflight", "browser_launch", "wasm_initialization",
+  "docx_conversion", "font_loading", "image_decoding", "chart_svg_materialization",
+  "pagination", "running_story_placement", "page_tree_stability", "pdf_print",
+  "output_verification", "output_write", "filesystem_commit", "cleanup",
 ]);
 
 export interface RequestLogEntry {
@@ -79,21 +90,6 @@ interface ReadinessProgress {
   pending: string[];
 }
 
-interface PdfActivationResponse {
-  ok: boolean;
-  readiness?: {
-    pageCount: number;
-    signature: string;
-    quietIntervalMs: number;
-    animationFrames: number;
-  };
-  error?: {
-    phase: ExportPhase;
-    message: string;
-    pending: string[];
-  };
-}
-
 export interface OwnedExportBrowserSession {
   browser: Browser;
   close(): Promise<void>;
@@ -112,31 +108,64 @@ interface HostOwnedBrowserIdentity {
 
 const HOST_OWNED_BROWSERS = new WeakMap<Browser, HostOwnedBrowserIdentity>();
 
-function timeoutError(phase: ExportPhase, pending: string) {
+function boundedPending(pending: string | readonly string[]): string[] {
+  const values = typeof pending === "string" ? [pending] : pending;
+  const bounded = values.slice(0, READINESS_PENDING_DETAILS_MAX).map((value, index) => {
+    const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
+      || `resource-${index + 1}`;
+    return normalized.length <= READINESS_PENDING_LABEL_MAX
+      ? normalized
+      : `${normalized.slice(0, READINESS_PENDING_LABEL_MAX - 3)}...`;
+  });
+  if (values.length > READINESS_PENDING_DETAILS_MAX) {
+    bounded.push(`... ${values.length - READINESS_PENDING_DETAILS_MAX} more`);
+  }
+  return bounded;
+}
+
+function parseReadinessProgress(value: unknown): ReadinessProgress | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const progress = value as Partial<ReadinessProgress>;
+  if (typeof progress.phase !== "string" || !EXPORT_PHASES.has(progress.phase as ExportPhase)
+    || (progress.status !== "pending" && progress.status !== "complete" && progress.status !== "failed")
+    || !Array.isArray(progress.pending)
+    || !progress.pending.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  return {
+    phase: progress.phase as ExportPhase,
+    status: progress.status,
+    pending: boundedPending(progress.pending),
+  };
+}
+
+function timeoutError(phase: ExportPhase, pending: string | readonly string[]) {
+  const resources = boundedPending(pending);
   return new DocxodusExportError(
     "readiness_timeout",
     phase,
     `Export timed out during ${phase}.`,
     "Increase timeoutMs or reduce document/runtime complexity.",
-    { detail: pending, pending: [pending] },
+    { detail: resources.join(", "), pending: resources },
   );
 }
 
 function cancellationError(
-  phase: "browser_launch" | "wasm_initialization" | "pdf_print",
-  pending: string,
+  phase: ExportPhase,
+  pending: string | readonly string[],
 ): DocxodusExportError {
+  const resources = boundedPending(pending);
   return new DocxodusExportError(
     "operation_cancelled",
     phase,
     `Export was cancelled during ${phase}.`,
     "Retry with a non-aborted signal.",
-    { pending: [pending] },
+    { pending: resources },
   );
 }
 
 function remaining(deadline: number, phase: "browser_launch" | "wasm_initialization" | "pdf_print"): number {
-  const value = deadline - Date.now();
+  const value = deadline - performance.now();
   if (value <= 0) throw timeoutError(phase, phase);
   return value;
 }
@@ -155,26 +184,34 @@ async function bounded<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   try {
-    const contenders: Array<Promise<T>> = [operation()];
-    contenders.push(new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          void context?.close().catch(() => undefined);
-          const progress = readinessProgress?.();
-          reject(timeoutError(
-            progress?.phase ?? phase,
-            progress && progress.pending.length > 0 ? progress.pending.join(", ") : pending,
-          ));
-        }, timeoutMs);
-      }));
+    const contenders: Array<Promise<T>> = [];
     if (signal) {
       contenders.push(new Promise<never>((_, reject) => {
         abortListener = () => {
           void context?.close().catch(() => undefined);
-          reject(cancellationError(phase, pending));
+          const reported = readinessProgress?.();
+          const progress = reported?.status === "pending" ? reported : undefined;
+          reject(cancellationError(
+            progress?.phase ?? phase,
+            progress && progress.pending.length > 0 ? progress.pending : pending,
+          ));
         };
         signal.addEventListener("abort", abortListener, { once: true });
+        if (signal.aborted) abortListener();
       }));
     }
+    if (!signal?.aborted) contenders.push(operation());
+    contenders.push(new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          void context?.close().catch(() => undefined);
+          const reported = readinessProgress?.();
+          const progress = reported?.status === "pending" ? reported : undefined;
+          reject(timeoutError(
+            progress?.phase ?? phase,
+            progress && progress.pending.length > 0 ? progress.pending : pending,
+          ));
+        }, timeoutMs);
+      }));
     return await Promise.race(contenders);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -436,7 +473,7 @@ export async function openOwnedExportBrowserSession(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<OwnedExportBrowserSession> {
-  const launch = await launchBrowser({ browserExecutablePath }, Date.now() + timeoutMs, signal);
+  const launch = await launchBrowser({ browserExecutablePath }, performance.now() + timeoutMs, signal);
   if (!launch.owned || !launch.temporaryDirectory || !launch.temporaryIdentity) {
     exportError(
       "browser_launch_failure",
@@ -486,21 +523,768 @@ function safeDiagnosticUrl(value: string): string {
   }
 }
 
-async function validatePrintDocument(
+/**
+ * Install the host-owned bindings used by the script-disabled print verifier.
+ * This stays in the same module as the verifier so tests can exercise the
+ * exact production bridge without widening the package's public entry point.
+ */
+export async function exposePrintReadinessBindings(
+  page: Page,
+  onProgress?: (value: unknown) => void,
+): Promise<void> {
+  await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
+    onProgress?.(value);
+  });
+  await page.exposeBinding("__docxodusCssSecurityTokens", (_source, value: unknown) => {
+    if (typeof value !== "string") return [];
+    return cssSecurityTokens(value).map((token) => {
+      const info = token.kind === "url" ? dataUrlInfo(token.value.trim()) : undefined;
+      return {
+        kind: token.kind,
+        value: token.value,
+        allowed: token.kind === "url" && automaticUrlAllowed(token.value),
+        ...(info ? { mediaType: info.mediaType, byteLength: info.byteLength } : {}),
+      };
+    });
+  });
+  await page.exposeBinding("__docxodusAutomaticImageUrl", (_source, value: unknown) => {
+    if (typeof value !== "string" || !automaticUrlAllowed(value)) return undefined;
+    const info = dataUrlInfo(value.trim());
+    return info?.mediaType.startsWith("image/") ? info : undefined;
+  });
+}
+
+export async function validatePrintDocument(
   page: Page,
   expectedPageMap: BrowserMaterializationSuccess["pageMap"],
+  timeoutMs: number,
+  limits: {
+    fontRequests: number;
+    fontSampleCodePoints: number;
+    visualResources: number;
+    domNodes: number;
+    automaticResourceBytes: number;
+  },
+  expectedFonts: BrowserMaterializationSuccess["renderReport"]["fonts"],
+  expectedResources: BrowserMaterializationSuccess["renderReport"]["resources"],
 ): Promise<void> {
-  const audit = await page.evaluate(async () => {
-    await document.fonts.ready;
-    await Promise.all(Array.from(document.images, async (image) => {
-      if (!image.complete) {
-        await new Promise<void>((resolve) => {
-          image.addEventListener("load", () => resolve(), { once: true });
-          image.addEventListener("error", () => resolve(), { once: true });
-        });
+  const readiness = await page.evaluate(async ({
+    timeoutMs: readinessTimeoutMs,
+    limits: readinessLimits,
+    expectedFonts: expectedFontOutcomes,
+    expectedResources: expectedVisualOutcomes,
+  }) => {
+    type Phase = "font_loading" | "image_decoding" | "chart_svg_materialization" | "page_tree_stability";
+    class ReadinessFailure extends Error {
+      constructor(
+        readonly code: "readiness_timeout" | "resource_limit" | "output_verification_failure",
+        readonly phase: Phase,
+        message: string,
+        readonly pending: string[],
+      ) {
+        super(message);
       }
-      if (typeof image.decode === "function") await image.decode().catch(() => undefined);
-    }));
+    }
+    const deadline = performance.now() + readinessTimeoutMs;
+    const pendingLimit = 64;
+    const labelLimit = 512;
+    const bound = (values: readonly string[]): string[] => {
+      const result = values.slice(0, pendingLimit).map((value, index) => {
+        const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
+          || `resource-${index + 1}`;
+        return normalized.length <= labelLimit
+          ? normalized
+          : `${normalized.slice(0, labelLimit - 3)}...`;
+      });
+      if (values.length > pendingLimit) result.push(`... ${values.length - pendingLimit} more`);
+      return result;
+    };
+    const publish = async (phase: Phase, status: "pending" | "complete" | "failed", pending: string[]) => {
+      const reporter = (globalThis as typeof globalThis & {
+        __docxodusReadinessProgress?: (value: {
+          phase: Phase;
+          status: "pending" | "complete" | "failed";
+          pending: string[];
+        }) => unknown;
+      }).__docxodusReadinessProgress;
+      if (typeof reporter !== "function") return;
+      try {
+        await reporter({ phase, status, pending: bound(pending) });
+      } catch {
+        // Progress is diagnostic-only.
+      }
+    };
+    const abortError = () => new DOMException("Print readiness was aborted", "AbortError");
+    const wait = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
+      if (signal.aborted) throw abortError();
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, milliseconds);
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(abortError());
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      });
+    };
+    const frame = (signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const request = requestAnimationFrame(() => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      });
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cancelAnimationFrame(request);
+        reject(abortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    const run = async <T>(
+      phase: Phase,
+      pending: () => string[],
+      operation: (signal: AbortSignal) => Promise<T>,
+    ): Promise<T> => {
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        throw new ReadinessFailure(
+          "readiness_timeout", phase, `Print readiness timed out during ${phase}.`, bound(pending()),
+        );
+      }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await publish(phase, "pending", pending());
+      try {
+        const result = await Promise.race([
+          operation(controller.signal),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              const resources = bound(pending());
+              controller.abort();
+              reject(new ReadinessFailure(
+                "readiness_timeout", phase, `Print readiness timed out during ${phase}.`, resources,
+              ));
+            }, remainingMs);
+          }),
+        ]);
+        await publish(phase, "complete", []);
+        return result;
+      } catch (error) {
+        await publish(phase, "failed", error instanceof ReadinessFailure ? error.pending : pending());
+        throw error;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        controller.abort();
+      }
+    };
+    const label = (value: string, fallback: string): string => {
+      const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim() || fallback;
+      return normalized.length <= 256 ? normalized : `${normalized.slice(0, 253)}...`;
+    };
+    const sha256 = async (domain: string, value: string): Promise<string> => {
+      const material = new TextEncoder().encode(`${domain}\u0000${value}`);
+      const digest = await crypto.subtle.digest("SHA-256", material);
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    };
+    type CssImageToken = {
+      kind: "import" | "substitution" | "url";
+      value: string;
+      allowed: boolean;
+      mediaType?: string;
+      byteLength?: number;
+    };
+    const cssTokens = async (value: string): Promise<CssImageToken[]> => {
+      const binding = (globalThis as typeof globalThis & {
+        __docxodusCssSecurityTokens?: (css: string) => Promise<CssImageToken[]>;
+      }).__docxodusCssSecurityTokens;
+      if (typeof binding !== "function") {
+        throw new ReadinessFailure(
+          "output_verification_failure", "image_decoding",
+          "The canonical CSS resource tokenizer is unavailable in the print context.",
+          ["css-background-tokenizer"],
+        );
+      }
+      return binding(value);
+    };
+    const imageUrlInfo = async (value: string): Promise<{
+      mediaType: string;
+      byteLength: number;
+    } | undefined> => {
+      const binding = (globalThis as typeof globalThis & {
+        __docxodusAutomaticImageUrl?: (url: string) => Promise<{
+          mediaType: string;
+          byteLength: number;
+        } | undefined>;
+      }).__docxodusAutomaticImageUrl;
+      return typeof binding === "function" ? binding(value) : undefined;
+    };
+    const resourceAnchor = (element: Element): string | undefined =>
+      element.closest<HTMLElement>("[data-source-anchor-id]")?.dataset.sourceAnchorId;
+    const uniqueLabels = (labels: string[]): string[] => {
+      const totals = new Map<string, number>();
+      const seen = new Map<string, number>();
+      labels.forEach((entry) => totals.set(entry, (totals.get(entry) ?? 0) + 1));
+      return labels.map((entry) => {
+        if ((totals.get(entry) ?? 0) === 1) return entry;
+        const occurrence = (seen.get(entry) ?? 0) + 1;
+        seen.set(entry, occurrence);
+        return `${entry}#${occurrence}`;
+      });
+    };
+    const mapPool = async <T, U>(
+      values: readonly T[],
+      operation: (value: T, index: number) => Promise<U>,
+    ): Promise<U[]> => {
+      const results = new Array<U>(values.length);
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(16, values.length) }, async () => {
+        while (cursor < values.length) {
+          const index = cursor++;
+          results[index] = await operation(values[index], index);
+        }
+      }));
+      return results;
+    };
+    let resourceMutationVersion = 0;
+    const resourceObserver = new MutationObserver(() => { resourceMutationVersion++; });
+    resourceObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: [
+        "src", "srcset", "href", "xlink:href", "style", "class", "data-docxodus-materialization",
+        "data-docxodus-materialization-state", "data-docxodus-materialization-id",
+      ],
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    try {
+      let fontPending = ["font-inventory", "document.fonts.ready"];
+      const fonts = await run("font_loading", () => fontPending, async (signal) => {
+        const candidates = new Map<string, { family: string; sample: string }>();
+        let sampled = 0;
+        let visited = 0;
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (++visited % 1_024 === 0) await wait(0, signal);
+          const element = node.parentElement;
+          const text = node.textContent?.trim();
+          if (!element || !text || element.closest("script,style,template,noscript")) continue;
+          const style = getComputedStyle(element);
+          if (style.display === "none" || style.visibility === "hidden"
+            || style.contentVisibility === "hidden") continue;
+          const familySpec = style.fontFamily.trim();
+          if (!familySpec) continue;
+          const specification = [
+            style.fontStyle || "normal",
+            style.fontVariant || "normal",
+            style.fontWeight || "400",
+            style.fontStretch || "normal",
+            style.fontSize || "12px",
+            familySpec,
+          ].join(" ");
+          const remaining = Math.max(0, readinessLimits.fontSampleCodePoints - sampled);
+          const addition = Array.from(text).slice(0, Math.min(256, remaining)).join("");
+          const existing = candidates.get(specification);
+          if (existing && addition) {
+            const candidateRemaining = Math.max(0, 256 - Array.from(existing.sample).length);
+            const appended = Array.from(addition).slice(0, candidateRemaining).join("");
+            existing.sample += appended;
+            sampled += Array.from(appended).length;
+          } else if (!existing) {
+            if (candidates.size >= readinessLimits.fontRequests) {
+              throw new ReadinessFailure(
+                "resource_limit", "font_loading",
+                `Font readiness exceeded its ${readinessLimits.fontRequests}-request limit.`,
+                [`font-request-limit:${readinessLimits.fontRequests}`],
+              );
+            }
+            const sample = addition || " ";
+            sampled += Array.from(addition).length;
+            candidates.set(specification, { family: label(familySpec, "sans-serif"), sample });
+          }
+        }
+        const entries = Array.from(candidates, ([specification, value]) => ({ specification, ...value }))
+          .sort((left, right) => left.specification < right.specification ? -1 : 1);
+        fontPending = entries.map(({ family }) => `font:${family}`);
+        const probes = await Promise.all(entries.map(async ({ specification, family, sample }) => {
+          const requestKey = await sha256(
+            "docxodus:font-request:v1",
+            JSON.stringify({ specification, sample }),
+          );
+          try {
+            await document.fonts.load(specification, sample);
+            return {
+              requestKey,
+              requestedFamily: family,
+              available: document.fonts.check(specification, sample),
+            };
+          } catch {
+            return { requestKey, requestedFamily: family, available: false };
+          }
+        }));
+        await document.fonts.ready;
+        fontPending = [];
+        return probes;
+      });
+      const expected = expectedFontOutcomes.map((font) => ({
+        requestKey: font.requestKey,
+        available: font.status !== "missing",
+      })).sort((left, right) => left.requestKey < right.requestKey ? -1 : 1);
+      const actual = fonts.map((font) => ({
+        requestKey: font.requestKey,
+        available: font.available,
+      })).sort((left, right) => left.requestKey < right.requestKey ? -1 : 1);
+      if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+        throw new ReadinessFailure(
+          "output_verification_failure", "font_loading",
+          "The print document changed its exact font-request inventory or availability.",
+          bound(fonts.map((font) =>
+            `font:${font.requestedFamily}:${font.requestKey.slice(0, 12)}`)),
+        );
+      }
+
+      let imagePending = ["image-inventory"];
+      const imageProbes = await run("image_decoding", () => imagePending, async (signal) => {
+        type Dependency = {
+          source: "html-image" | "css-background" | "svg-image";
+          element: Element;
+          url: string;
+          fallbackLabel: string;
+          contentMaterial: string;
+          image?: HTMLImageElement;
+        };
+        const dependencies: Dependency[] = [];
+        const admit = (dependency: Dependency): void => {
+          if (dependencies.length >= readinessLimits.visualResources) {
+            throw new ReadinessFailure(
+              "resource_limit", "image_decoding",
+              `Image readiness exceeded its ${readinessLimits.visualResources}-resource limit.`,
+              [`image-resource-limit:${readinessLimits.visualResources}`],
+            );
+          }
+          dependencies.push(dependency);
+        };
+        Array.from(document.images).forEach((image, index) => {
+          const base = image.alt.trim() || resourceAnchor(image) || `image-${index + 1}`;
+          admit({
+            source: "html-image",
+            element: image,
+            image,
+            url: image.currentSrc || image.getAttribute("src") || "",
+            fallbackLabel: label(`html-image:${label(base, `image-${index + 1}`)}`, `html-image-${index + 1}`),
+            contentMaterial: JSON.stringify({
+              src: image.getAttribute("src") ?? "",
+              srcset: image.getAttribute("srcset") ?? "",
+            }),
+          });
+        });
+        const elements = Array.from(document.querySelectorAll<Element>("body, body *"));
+        if (elements.length > readinessLimits.domNodes) {
+          throw new ReadinessFailure(
+            "resource_limit", "image_decoding",
+            `CSS background readiness exceeded its ${readinessLimits.domNodes}-element work limit.`,
+            [`css-background-element-limit:${readinessLimits.domNodes}`],
+          );
+        }
+        const backgrounds = new Map<string, { tokens: CssImageToken[]; digest: string }>();
+        let backgroundCodeUnits = 0;
+        for (const [elementIndex, element] of elements.entries()) {
+          if ((elementIndex + 1) % 256 === 0) await wait(0, signal);
+          for (const pseudo of [null, "::before", "::after"] as const) {
+            const style = getComputedStyle(element, pseudo);
+            if (style.display === "none" || style.visibility === "hidden"
+              || style.contentVisibility === "hidden"
+              || (pseudo !== null && (style.content === "none" || style.content === "normal"))) continue;
+            const background = style.backgroundImage.trim();
+            if (!background || background === "none") continue;
+            backgroundCodeUnits += background.length;
+            if (backgroundCodeUnits > readinessLimits.automaticResourceBytes) {
+              throw new ReadinessFailure(
+                "resource_limit", "image_decoding",
+                `CSS background readiness exceeded its ${readinessLimits.automaticResourceBytes}-code-unit work limit.`,
+                [`css-background-code-unit-limit:${readinessLimits.automaticResourceBytes}`],
+              );
+            }
+            let evidence = backgrounds.get(background);
+            if (!evidence) {
+              evidence = {
+                tokens: await cssTokens(background),
+                digest: await sha256("docxodus:computed-background:v1", background),
+              };
+              backgrounds.set(background, evidence);
+            }
+            for (const [urlIndex, token] of evidence.tokens.entries()) {
+              if (token.kind !== "url" || token.value.trim() === "data:,") continue;
+              const pseudoLabel = pseudo === null ? "element" : pseudo.slice(2);
+              admit({
+                source: "css-background",
+                element,
+                url: token.value.trim(),
+                fallbackLabel: label(
+                  `css-background:${resourceAnchor(element) || `${elementIndex + 1}-${pseudoLabel}-${urlIndex + 1}`}`,
+                  `css-background-${elementIndex + 1}-${pseudoLabel}-${urlIndex + 1}`,
+                ),
+                contentMaterial: JSON.stringify({
+                  backgroundDigest: evidence.digest,
+                  pseudo: pseudoLabel,
+                  urlIndex,
+                }),
+              });
+            }
+          }
+        }
+        Array.from(document.querySelectorAll<SVGImageElement>("svg image"))
+          .forEach((element, index) => {
+            const url = (element.getAttribute("href")
+              ?? element.getAttribute("xlink:href") ?? "").trim();
+            admit({
+              source: "svg-image",
+              element,
+              url,
+              fallbackLabel: label(
+                `svg-image:${resourceAnchor(element) || index + 1}`,
+                `svg-image-${index + 1}`,
+              ),
+              contentMaterial: JSON.stringify({ url, markup: element.outerHTML }),
+            });
+          });
+        const labels = uniqueLabels(dependencies.map(({ fallbackLabel }) => fallbackLabel));
+        const combinedVisualCount = dependencies.length
+          + Array.from(new Set(Array.from(document.querySelectorAll<Element>(
+            "svg,[data-docxodus-materialization]",
+          )))).filter((element) => element.closest("[data-docxodus-materialization]") === element
+            || !element.parentElement?.closest("[data-docxodus-materialization]")).length
+          + document.querySelectorAll("svg use").length;
+        if (combinedVisualCount > readinessLimits.visualResources) {
+          throw new ReadinessFailure(
+            "resource_limit", "image_decoding",
+            `Combined visual readiness exceeded its ${readinessLimits.visualResources}-resource limit.`,
+            [`visual-resource-limit:${readinessLimits.visualResources}`],
+          );
+        }
+        imagePending = labels.map((entry) => `image:${entry}`);
+        const cssDecodeCache = new Map<string, Promise<void>>();
+        const probes = await mapPool(dependencies, async (dependency, index) => {
+          const pending = imagePending[index];
+          try {
+            if (dependency.image) {
+              if (typeof dependency.image.decode === "function") await dependency.image.decode();
+              if (signal.aborted) throw abortError();
+              if (!dependency.image.complete || dependency.image.naturalWidth <= 0
+                || dependency.image.naturalHeight <= 0) {
+                throw new Error("the browser reported no decoded pixels");
+              }
+            } else {
+              const info = await imageUrlInfo(dependency.url);
+              if (!info) throw new Error("the image reference is not an allowed embedded image data URL");
+              if (dependency.source === "svg-image") {
+                const svgImage = dependency.element as SVGImageElement & { decode?: () => Promise<void> };
+                if (typeof svgImage.decode !== "function") {
+                  throw new Error("SVG image decoding is unavailable");
+                }
+                await svgImage.decode();
+                const bounds = svgImage.getBBox();
+                if (!(bounds.width > 0 && bounds.height > 0)) {
+                  throw new Error("the SVG image produced no drawable bounds");
+                }
+              } else {
+                let decoding = cssDecodeCache.get(dependency.url);
+                if (!decoding) {
+                  decoding = (async () => {
+                    const image = new Image();
+                    try {
+                      image.src = dependency.url;
+                      await image.decode();
+                      if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+                        throw new Error("the browser reported no decoded pixels");
+                      }
+                    } finally {
+                      image.removeAttribute("src");
+                    }
+                  })();
+                  cssDecodeCache.set(dependency.url, decoding);
+                }
+                await decoding;
+              }
+            }
+            return {
+              kind: "image" as const,
+              resource: labels[index],
+              readiness: "complete" as const,
+              contentKey: await sha256(
+                "docxodus:visual-resource:v1",
+                JSON.stringify({ source: dependency.source, material: dependency.contentMaterial }),
+              ),
+            };
+          } catch (error) {
+            if (signal.aborted) throw error;
+            throw new ReadinessFailure(
+              "output_verification_failure", "image_decoding",
+              `Image dependency failed in the print document: ${labels[index]}.`, [pending],
+            );
+          }
+        });
+        imagePending = [];
+        return probes;
+      });
+
+      let graphicPending = ["graphic-inventory"];
+      const graphicProbes = await run("chart_svg_materialization", () => graphicPending, async (signal) => {
+        while (true) {
+          const graphics = Array.from(new Set(Array.from(document.querySelectorAll<Element>(
+            "svg,[data-docxodus-materialization]",
+          )))).filter((element) => element.closest("[data-docxodus-materialization]") === element
+            || !element.parentElement?.closest("[data-docxodus-materialization]"));
+          const uses = Array.from(document.querySelectorAll<SVGUseElement>("svg use"));
+          if (imageProbes.length + graphics.length + uses.length > readinessLimits.visualResources) {
+            throw new ReadinessFailure(
+              "resource_limit", "chart_svg_materialization",
+              `Combined visual readiness exceeded its ${readinessLimits.visualResources}-resource limit.`,
+              [`visual-resource-limit:${readinessLimits.visualResources}`],
+            );
+          }
+          graphicPending = graphics.flatMap((element, index) =>
+            element.getAttribute("data-docxodus-materialization-state") === "pending"
+              ? [`materialization:${label(
+                element.getAttribute("data-docxodus-materialization-id") || `graphic-${index + 1}`,
+                `graphic-${index + 1}`,
+              )}`]
+              : []);
+          if (graphicPending.length > 0) {
+            await frame(signal);
+            continue;
+          }
+          const graphicLabels = uniqueLabels(graphics.map((element, index) => {
+            const kind = element.getAttribute("data-docxodus-materialization") === "chart"
+              || element.classList.contains("chart")
+              || element.closest("[class*='chart']") !== null ? "chart" : "svg";
+            const base = element.getAttribute("data-docxodus-materialization-id")?.trim()
+              || resourceAnchor(element) || `${kind}-${index + 1}`;
+            return label(`graphic:${kind}:${label(base, `${kind}-${index + 1}`)}`, `graphic-${index + 1}`);
+          }));
+          const probes = await mapPool(graphics, async (element, index) => {
+            const state = element.getAttribute("data-docxodus-materialization-state");
+            const id = graphicLabels[index];
+            if (element.hasAttribute("data-docxodus-materialization") && state !== "complete") {
+              throw new ReadinessFailure(
+                "output_verification_failure", "chart_svg_materialization",
+                `Graphic materialization is not complete: ${id}.`, [`materialization:${id}`],
+              );
+            }
+            const svg = element.localName === "svg"
+              ? element as SVGSVGElement
+              : element.querySelector<SVGSVGElement>("svg");
+            const width = Number.parseFloat(svg?.getAttribute("width") ?? "");
+            const height = Number.parseFloat(svg?.getAttribute("height") ?? "");
+            if (!svg || (!svg.hasAttribute("viewBox") && !(width > 0 && height > 0))
+              || !svg.querySelector(
+                "path,rect,circle,ellipse,line,polyline,polygon,text,image,use,foreignObject",
+              )) {
+              throw new ReadinessFailure(
+                "output_verification_failure", "chart_svg_materialization",
+                `Graphic is incomplete in the print document: ${id}.`, [`materialization:${id}`],
+              );
+            }
+            const kind = element.getAttribute("data-docxodus-materialization") === "chart"
+              || element.classList.contains("chart")
+              || element.closest("[class*='chart']") !== null ? "chart" as const : "svg" as const;
+            return {
+              kind,
+              resource: id,
+              readiness: "complete" as const,
+              contentKey: await sha256(
+                "docxodus:visual-resource:v1",
+                JSON.stringify({ source: "graphic", markup: element.outerHTML }),
+              ),
+            };
+          });
+          const useLabels = uniqueLabels(uses.map((element, index) => label(
+            `svg-use:${resourceAnchor(element) || index + 1}`,
+            `svg-use-${index + 1}`,
+          )));
+          const targetDigests = new Map<Element, string>();
+          let targetMarkupCodeUnits = 0;
+          for (const [index, element] of uses.entries()) {
+            const href = (element.getAttribute("href")
+              ?? element.getAttribute("xlink:href") ?? "").trim();
+            let target: Element | null = null;
+            if (href.startsWith("#") && href.length > 1) {
+              let id = href.slice(1);
+              try { id = decodeURIComponent(id); } catch { id = ""; }
+              if (id) target = document.getElementById(id);
+            }
+            const drawable = target && (target.matches(
+              "path,rect,circle,ellipse,line,polyline,polygon,text,image,use,foreignObject",
+            ) || target.querySelector(
+              "path,rect,circle,ellipse,line,polyline,polygon,text,image,use,foreignObject",
+            ));
+            let bounds: DOMRect | SVGRect | undefined;
+            try { bounds = element.getBBox(); } catch { bounds = undefined; }
+            if (!target || target === element || target.contains(element) || !drawable
+              || !bounds || !(bounds.width > 0 || bounds.height > 0)) {
+              throw new ReadinessFailure(
+                "output_verification_failure", "chart_svg_materialization",
+                `SVG use did not resolve to drawable local content: ${useLabels[index]}.`,
+                [`materialization:${useLabels[index]}`],
+              );
+            }
+            let targetDigest = targetDigests.get(target);
+            if (!targetDigest) {
+              const markup = target.outerHTML;
+              targetMarkupCodeUnits += markup.length;
+              if (targetMarkupCodeUnits > readinessLimits.automaticResourceBytes) {
+                throw new ReadinessFailure(
+                  "resource_limit", "chart_svg_materialization",
+                  `SVG use readiness exceeded its ${readinessLimits.automaticResourceBytes}-code-unit work limit.`,
+                  [`svg-use-target-code-unit-limit:${readinessLimits.automaticResourceBytes}`],
+                );
+              }
+              targetDigest = await sha256("docxodus:svg-use-target:v1", markup);
+              targetDigests.set(target, targetDigest);
+            }
+            probes.push({
+              kind: "svg" as const,
+              resource: useLabels[index],
+              readiness: "complete" as const,
+              contentKey: await sha256(
+                "docxodus:visual-resource:v1",
+                JSON.stringify({ source: "svg-use", href, targetDigest }),
+              ),
+            });
+          }
+          graphicPending = [];
+          return probes;
+        }
+      });
+
+      const expectedVisuals = expectedVisualOutcomes
+        .filter((resource) => resource.kind !== "external_link"
+          && resource.readiness === "complete"
+          && !resource.resource?.startsWith("css-background:"))
+        .map((resource) => ({
+          kind: resource.kind,
+          resource: resource.resource ?? "",
+          readiness: resource.readiness,
+          contentKey: resource.contentKey,
+        })).sort((left, right) => JSON.stringify(left) < JSON.stringify(right) ? -1 : 1);
+      const actualVisuals = [...imageProbes, ...graphicProbes]
+        .filter((resource) => !resource.resource.startsWith("css-background:"))
+        .sort((left, right) => JSON.stringify(left) < JSON.stringify(right) ? -1 : 1);
+      if (JSON.stringify(expectedVisuals) !== JSON.stringify(actualVisuals)) {
+        throw new ReadinessFailure(
+          "output_verification_failure", "chart_svg_materialization",
+          "The print document changed its exact visual-resource inventory or outcomes.",
+          bound(actualVisuals.map((resource) => `${resource.kind}:${resource.resource}`)),
+        );
+      }
+
+      const pages = Array.from(document.querySelectorAll<HTMLElement>(".page-box"));
+      if (pages.length === 0) {
+        throw new ReadinessFailure(
+          "output_verification_failure", "page_tree_stability",
+          "The final print document contains no page boxes.", ["page-tree:missing"],
+        );
+      }
+      resourceMutationVersion += resourceObserver.takeRecords().length;
+      const resourceVersion = resourceMutationVersion;
+      let treePending = [`page-tree:${pages.length}-pages`, "quiet-interval:100ms"];
+      await run("page_tree_stability", () => treePending, async (signal) => {
+        let mutations = 0;
+        let resizes = 0;
+        const mutationsObserver = new MutationObserver((records) => { mutations += records.length; });
+        const resizeObserver = typeof ResizeObserver === "function"
+          ? new ResizeObserver((records) => { resizes += records.length; })
+          : undefined;
+        const signature = async () => {
+          const geometry = pages.map((pageElement) => {
+            const rect = pageElement.getBoundingClientRect();
+            return [rect.left, rect.top, rect.width, rect.height, pageElement.scrollWidth, pageElement.scrollHeight];
+          });
+          const serialized = JSON.stringify({ geometry, pages: pages.map((entry) => entry.outerHTML) });
+          const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
+          return Array.from(new Uint8Array(digest), (value) =>
+            value.toString(16).padStart(2, "0")).join("");
+        };
+        mutationsObserver.observe(document.documentElement, {
+          attributes: true, characterData: true, childList: true, subtree: true,
+        });
+        pages.forEach((entry) => resizeObserver?.observe(entry));
+        try {
+          await frame(signal);
+          await frame(signal);
+          const first = await signature();
+          mutations = 0;
+          resizes = 0;
+          await wait(100, signal);
+          await frame(signal);
+          await frame(signal);
+          const second = await signature();
+          if (first !== second || mutations !== 0 || resizes !== 0) {
+            throw new ReadinessFailure(
+              "output_verification_failure", "page_tree_stability",
+              `The print page tree changed during its quiet interval (mutations=${mutations}, resizes=${resizes}).`,
+              [`page-tree:${pages.length}-pages`],
+            );
+          }
+          treePending = [];
+        } finally {
+          mutationsObserver.disconnect();
+          resizeObserver?.disconnect();
+        }
+      });
+      resourceMutationVersion += resourceObserver.takeRecords().length;
+      if (resourceMutationVersion !== resourceVersion) {
+        throw new ReadinessFailure(
+          "output_verification_failure", "page_tree_stability",
+          "The print resource inventory changed after readiness completed.",
+          [`page-tree:${pages.length}-pages`],
+        );
+      }
+      return { ok: true as const };
+    } catch (error) {
+      const failure = error instanceof ReadinessFailure
+        ? error
+        : new ReadinessFailure(
+          "output_verification_failure", "page_tree_stability",
+          error instanceof Error ? error.message : String(error),
+          ["print-readiness"],
+        );
+      return {
+        ok: false as const,
+        failure: {
+          code: failure.code,
+          phase: failure.phase,
+          message: failure.message,
+          pending: bound(failure.pending),
+        },
+      };
+    } finally {
+      resourceObserver.disconnect();
+    }
+  }, { timeoutMs, limits, expectedFonts, expectedResources });
+  if (!readiness.ok) {
+    exportError(
+      readiness.failure.code,
+      readiness.failure.phase,
+      readiness.failure.message,
+      "Inspect the exact reopened print document and its pending resources.",
+      { pending: readiness.failure.pending, detail: readiness.failure.pending.join(", ") },
+    );
+  }
+
+  const audit = await page.evaluate(async () => {
     const pages = Array.from(document.querySelectorAll<HTMLElement>(".page-box"));
     const fragments: Array<{
       fragmentId: string;
@@ -879,16 +1663,9 @@ export async function renderInBrowser(
       void download.cancel();
     });
     await page.exposeBinding("__docxodusReadinessProgress", (_source, value: unknown) => {
-      const progress = value as Partial<ReadinessProgress>;
-      if (typeof progress.phase === "string"
-        && (progress.status === "pending" || progress.status === "complete" || progress.status === "failed")
-        && Array.isArray(progress.pending)
-        && progress.pending.every((entry) => typeof entry === "string")) {
-        lastReadinessProgress = {
-          phase: progress.phase as ExportPhase,
-          status: progress.status,
-          pending: [...progress.pending],
-        };
+      const progress = parseReadinessProgress(value);
+      if (progress) {
+        lastReadinessProgress = progress;
         currentPhase = lastReadinessProgress.phase;
       }
     });
@@ -919,12 +1696,10 @@ export async function renderInBrowser(
         return bridge.render(inputUrl, options, wantsHtml, wantsPdf);
       }, {
         inputUrl: `${origin}${inputPath}`,
-        options: {
-          ...browserOptions,
-          // Let the in-browser coordinator publish its exact phase/pending report
-          // before the hard Node watchdog closes the context.
-          timeoutMs: Math.max(1, remaining(deadline, "wasm_initialization") - 250),
-        },
+        // Preserve the caller's requested timeout in the report, policy digest,
+        // and renderer fingerprint. The Node watchdog still enforces the one
+        // absolute operation deadline around this browser work.
+        options: browserOptions,
         wantsHtml: includeHtml,
         wantsPdf: includePdf,
       }),
@@ -1047,7 +1822,19 @@ export async function renderInBrowser(
           recordDenied(download.url(), "GET", "download");
           void download.cancel();
         });
+        await exposePrintReadinessBindings(printPage, (value: unknown) => {
+          const progress = parseReadinessProgress(value);
+          if (progress) {
+            lastReadinessProgress = progress;
+            currentPhase = progress.phase;
+          }
+        });
         printPage.setDefaultTimeout(remaining(deadline, "pdf_print"));
+        lastReadinessProgress = {
+          phase: "pdf_print",
+          status: "pending",
+          pending: ["final print-document readiness", "Chromium PDF stream"],
+        };
         pdf = await bounded(
           printContext,
           deadline,
@@ -1066,7 +1853,25 @@ export async function renderInBrowser(
                 colorScheme: "light",
                 reducedMotion: "reduce",
               });
-              await validatePrintDocument(printPage, materialization!.pageMap);
+              await validatePrintDocument(
+                printPage,
+                materialization!.pageMap,
+                Math.max(1, remaining(deadline, "pdf_print") - 100),
+                {
+                  fontRequests: browserOptions.limits?.fontRequests
+                    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.fontRequests,
+                  fontSampleCodePoints: browserOptions.limits?.fontSampleCodePoints
+                    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.fontSampleCodePoints,
+                  visualResources: browserOptions.limits?.automaticResources
+                    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.automaticResources,
+                  domNodes: browserOptions.limits?.domNodes
+                    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.domNodes,
+                  automaticResourceBytes: browserOptions.limits?.automaticResourceBytes
+                    ?? DEFAULT_EXPORT_RESOURCE_LIMITS.automaticResourceBytes,
+                },
+                materialization!.renderReport.fonts,
+                materialization!.renderReport.resources,
+              );
               if (printReads !== 1) {
                 exportError(
                   "resource_policy_failure",
@@ -1075,6 +1880,12 @@ export async function renderInBrowser(
                   "Use the single-read closed print context.",
                 );
               }
+              lastReadinessProgress = {
+                phase: "pdf_print",
+                status: "pending",
+                pending: ["Chromium PDF stream"],
+              };
+              currentPhase = "pdf_print";
               return await printPdfStream(printContext!, printPage, pdfMaximumBytes);
             } catch (cause) {
               if (cause instanceof DocxodusExportError) throw cause;
@@ -1087,6 +1898,7 @@ export async function renderInBrowser(
               );
             }
           },
+          () => lastReadinessProgress,
         );
         materialization.renderReport.readiness.push({
           phase: "pdf_print",
@@ -1095,15 +1907,19 @@ export async function renderInBrowser(
           pending: [],
         });
       } catch (error) {
+        const failurePhase = error instanceof DocxodusExportError ? error.phase : "pdf_print";
+        const failurePending = error instanceof DocxodusExportError && error.pending
+          ? boundedPending(error.pending)
+          : boundedPending(error instanceof DocxodusExportError && error.detail
+            ? error.detail
+            : "offline finalized HTML and Chromium PDF printing");
         materialization.renderReport.readiness.push({
-          phase: "pdf_print",
+          phase: failurePhase,
           status: error instanceof DocxodusExportError && error.code === "operation_cancelled"
             ? "cancelled"
             : "failed",
           elapsedMs: Math.max(0, performance.now() - printStarted),
-          pending: [error instanceof DocxodusExportError && error.detail
-            ? error.detail
-            : "offline finalized HTML and Chromium PDF printing"],
+          pending: failurePending,
         });
         throw error;
       }

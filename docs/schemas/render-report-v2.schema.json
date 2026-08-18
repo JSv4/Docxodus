@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docxodus.dev/schemas/render/render-report/v1",
-  "title": "Docxodus render report v1",
+  "$id": "https://docxodus.dev/schemas/render/render-report/v2",
+  "title": "Docxodus render report v2",
   "oneOf": [
     { "$ref": "#/$defs/complete" },
     { "$ref": "#/$defs/failed" }
@@ -86,6 +86,22 @@
         "width": { "type": "number", "exclusiveMinimum": 0 },
         "height": { "type": "number", "exclusiveMinimum": 0 },
         "sectionIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "paginationDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "count"],
+      "properties": {
+        "code": {
+          "enum": [
+            "sections_processed", "page_runs_processed", "source_anchors_inventoried",
+            "note_references_inventoried"
+          ]
+        },
+        "severity": { "const": "info" },
+        "message": { "type": "string", "minLength": 1 },
+        "count": { "type": "integer", "minimum": 0 }
       }
     },
     "bindings": {
@@ -206,8 +222,8 @@
       }
     },
     "baseProperties": {
-      "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
-      "schemaVersion": { "const": 1 },
+      "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v2" },
+      "schemaVersion": { "const": 2 },
       "source": {
         "type": "object",
         "additionalProperties": false,
@@ -272,8 +288,39 @@
             "phase": { "$ref": "#/$defs/phase" },
             "status": { "enum": ["complete", "failed", "cancelled"] },
             "elapsedMs": { "type": "number", "minimum": 0 },
-            "pending": { "type": "array", "items": { "type": "string" } }
-          }
+            "pending": { "type": "array", "items": { "type": "string" } },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": { "$ref": "#/$defs/paginationDiagnostic" }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": ["phase", "status"],
+                "properties": {
+                  "phase": { "const": "pagination" },
+                  "status": { "const": "complete" }
+                }
+              },
+              "then": {
+                "required": ["diagnostics"],
+                "properties": {
+                  "diagnostics": {
+                    "allOf": [
+                      { "contains": { "properties": { "code": { "const": "sections_processed" } }, "required": ["code"] } },
+                      { "contains": { "properties": { "code": { "const": "page_runs_processed" } }, "required": ["code"] } },
+                      { "contains": { "properties": { "code": { "const": "source_anchors_inventoried" } }, "required": ["code"] } },
+                      { "contains": { "properties": { "code": { "const": "note_references_inventoried" } }, "required": ["code"] } }
+                    ]
+                  }
+                }
+              },
+              "else": { "not": { "required": ["diagnostics"] } }
+            }
+          ]
         }
       },
       "fonts": {
@@ -281,8 +328,9 @@
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requestedFamily", "status", "source"],
+          "required": ["requestKey", "requestedFamily", "status", "source"],
           "properties": {
+            "requestKey": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "requestedFamily": { "type": "string", "minLength": 1 },
             "requestedFamilyStack": {
               "type": "array", "items": { "type": "string", "minLength": 1 }
@@ -302,10 +350,58 @@
           "properties": {
             "kind": { "enum": ["image", "svg", "chart", "external_link"] },
             "status": { "enum": ["embedded", "inline", "allowed_user_link", "omitted"] },
+            "readiness": { "enum": ["complete", "failed"] },
+            "contentKey": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "resource": { "type": "string" },
+            "anchorId": { "type": "string", "minLength": 1 },
+            "message": { "type": "string", "minLength": 1 },
             "mediaType": { "type": "string", "minLength": 1 },
             "byteLength": { "type": "integer", "minimum": 0 }
-          }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "kind": { "const": "external_link" } }, "required": ["kind"] },
+              "then": {
+                "properties": { "status": { "enum": ["allowed_user_link", "omitted"] } },
+                "not": {
+                  "anyOf": [
+                    { "required": ["readiness"] },
+                    { "required": ["contentKey"] }
+                  ]
+                }
+              },
+              "else": {
+                "required": ["readiness", "contentKey"],
+                "properties": { "status": { "enum": ["embedded", "inline", "omitted"] } }
+              }
+            },
+            {
+              "if": { "properties": { "status": { "const": "embedded" } }, "required": ["status"] },
+              "then": { "properties": { "kind": { "const": "image" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "inline" } }, "required": ["status"] },
+              "then": { "properties": { "kind": { "enum": ["svg", "chart"] } } }
+            },
+            {
+              "if": { "properties": { "readiness": { "const": "complete" } }, "required": ["readiness"] },
+              "then": {
+                "oneOf": [
+                  { "properties": { "kind": { "const": "image" }, "status": { "const": "embedded" } } },
+                  { "properties": { "kind": { "enum": ["svg", "chart"] }, "status": { "const": "inline" } } }
+                ]
+              }
+            },
+            {
+              "if": { "properties": { "readiness": { "const": "failed" } }, "required": ["readiness"] },
+              "then": {
+                "properties": {
+                  "kind": { "enum": ["image", "svg", "chart"] },
+                  "status": { "const": "omitted" }
+                }
+              }
+            }
+          ]
         }
       },
       "unsupportedContent": {
@@ -333,15 +429,23 @@
         "unsupportedContent", "warnings", "fontIdentity", "status", "environment", "pages", "bindings"
       ],
       "properties": {
-        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
-        "schemaVersion": { "const": 1 },
+        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v2" },
+        "schemaVersion": { "const": 2 },
         "source": { "$ref": "#/$defs/baseProperties/source" },
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },
         "readiness": {
           "allOf": [
             { "$ref": "#/$defs/baseProperties/readiness" },
-            { "items": { "properties": { "status": { "const": "complete" } } } }
+            { "items": { "properties": { "status": { "const": "complete" } } } },
+            {
+              "contains": {
+                "properties": { "phase": { "const": "pagination" } },
+                "required": ["phase"]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
           ]
         },
         "fonts": { "$ref": "#/$defs/baseProperties/fonts" },
@@ -422,8 +526,8 @@
         "unsupportedContent", "warnings", "status", "failure", "unavailable"
       ],
       "properties": {
-        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v1" },
-        "schemaVersion": { "const": 1 },
+        "schema": { "const": "https://docxodus.dev/schemas/render/render-report/v2" },
+        "schemaVersion": { "const": 2 },
         "source": { "$ref": "#/$defs/baseProperties/source" },
         "derivedProfileSource": { "$ref": "#/$defs/baseProperties/derivedProfileSource" },
         "options": { "$ref": "#/$defs/baseProperties/options" },

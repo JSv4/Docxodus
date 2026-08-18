@@ -655,10 +655,11 @@ console.log(result.pageCount, result.pageMap, result.renderReport);
 
 The exporter copies caller bytes before its first asynchronous boundary, verifies them with the
 package manifest API, performs layout in an attached script-disabled frame, embeds or removes every
-automatic resource, and reopens the serialized result to verify fonts, decoded images, chart/SVG
-completion, stable page count, and physical geometry. Readiness uses one bounded deadline and names
+automatic resource, and reopens the serialized result to verify exact keyed font requests, HTML/CSS/SVG
+pixels (including every `image-set` candidate), local SVG references, chart/SVG completion, stable
+page count, and physical geometry. Readiness uses one bounded deadline and names
 the exact phase and pending resources on timeout; pagination reports its page count and diagnostics
-explicitly, and two matching stable-tree signatures are required before publication.
+explicitly, and two matching page-tree plus font/resource-outcome signatures are required before publication.
 External HTTPS/mail/tel links remain user-activated links and are inventoried in the report; the
 exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
 resources instead of returning a nominally complete artifact.
@@ -670,7 +671,9 @@ fails until issue #442 supplies attestable font resolution. The normal browser r
 
 By default the worker loads from `dist/wasm/` beside the package entry point. A deployment that
 hosts those files elsewhere may pass `wasmBasePath`. `docxodus/export-assets.json` is the closed,
-SHA-256-addressed runtime asset graph, and `docxodus/render-report.schema.json` is the report schema.
+SHA-256-addressed runtime asset graph, and `docxodus/render-report.schema.json` is the current v2
+report schema. Frozen v1 and current v2 are also available explicitly as
+`docxodus/render-report-v1.schema.json` and `docxodus/render-report-v2.schema.json`.
 
 ## Hosting WASM Files
 

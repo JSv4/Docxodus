@@ -620,10 +620,15 @@ verification (and staging/commit for the file API):
 13. `output_verification`
 14. `output_write` / `filesystem_commit` for path calls
 
-The coordinator explicitly loads every computed font family/sample and then awaits
-`document.fonts.ready`; images decode in parallel and produce structured complete/failed resource
-outcomes. Chart/SVG producers use `data-docxodus-materialization`, `-state`, and `-id` attributes;
-the barrier waits for all `pending` producers and validates the resulting SVG. Pagination returns
+The coordinator explicitly loads every bounded computed font request (style, variant, weight,
+stretch, size, family stack, and accumulated sample) and commits its exact `FontFaceSet.load/check`
+contract to a per-request SHA-256 key before awaiting `document.fonts.ready`. HTML images, SVG
+`<image>` pixels, and every CSSOM-computed `background-image`/`image-set` candidate decode through a
+bounded worker pool; the latter reuse the same escape/comment-aware URL tokenizer and data-URL
+allowlist as sanitization. SVG `<use>` accepts only drawable same-document targets and must produce
+nonempty stable bounds. CSS and SVG animation inputs are made static before readiness. Chart/SVG
+producers use `data-docxodus-materialization`, `-state`, and `-id` attributes; the barrier waits for
+all `pending` producers and validates the resulting SVG. Pagination returns
 an explicit ready result with page count and inventory diagnostics. Pagination always
 begins from pristine converted HTML. After pagination, the materializer creates and attaches the
 sanitized fixed page tree described above before the final ResizeObserver, mutation-counter, and
@@ -631,10 +636,14 @@ geometry checks. Those signals must remain unchanged for two animation frames an
 quiet interval. If any resource, cleanup, final-style, or layout signal changes the page-tree
 signature, the materializer discards the mutated document, recreates it from pristine HTML, and
 paginates again. It allows at most three attempts and returns only after two consecutive stable
-attempts produce the same sanitized page-tree signature; only then does it measure a fresh PageMap
-and serialize.
-The Node PDF path re-runs the font, image, graphic, and stable-tree barriers in the exact reopened
-document Chromium prints and verifies that its page count is unchanged. Otherwise export fails
+attempts produce the same sanitized page-tree plus exact font/visual-outcome agreement signature;
+only then does it measure a fresh PageMap and serialize. The authoritative evidence is collected
+again from the finalized post-pagination DOM, so cloned running stories and rewritten SVG fragment
+targets cannot be omitted from the agreement or report.
+The Node PDF path re-runs the font, CSS/image, graphic/SVG-reference, and stable-tree barriers in the
+exact reopened document Chromium prints, compares exact font request keys/outcomes bidirectionally,
+and verifies that its page count is unchanged. Print-media-only CSS pixels are admitted and decoded
+in that context rather than incorrectly equated with the screen-media HTML manifest. Otherwise export fails
 with the exact phase and pending resources. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
@@ -811,8 +820,10 @@ HTML/PDF/report/PageMap destination and `filesystem_failure` for stage or commit
 
 ## Render report schema
 
-`RenderReport` is canonical JSON with schema
-`https://docxodus.dev/schemas/render/render-report/v1`. The initial public shape is:
+`RenderReport` is canonical JSON. The initial public shape remains frozen at
+`https://docxodus.dev/schemas/render/render-report/v1`; the current writer emits
+`https://docxodus.dev/schemas/render/render-report/v2`, which adds bounded print-readiness and
+pagination evidence without silently widening the closed v1 schema. The current public shape is:
 
 ```ts
 interface RenderWarning {
@@ -827,9 +838,18 @@ interface RenderWarning {
   resource?: string;
 }
 
+interface FontResolution {
+  requestKey: Sha256Hex; // exact FontFaceSet.load/check specification + sample commitment
+  requestedFamily: string; // bounded diagnostic label only
+  requestedFamilyStack?: readonly string[];
+  resolvedFamily?: string;
+  status: "resolved" | "substituted" | "missing" | "unverified";
+  source: "browser" | "embedded" | "configured";
+}
+
 interface RenderReportBase {
-  schema: "https://docxodus.dev/schemas/render/render-report/v1";
-  schemaVersion: 1;
+  schema: "https://docxodus.dev/schemas/render/render-report/v2";
+  schemaVersion: 2;
   source: { rawPackageBytesDigest: Sha256Hex; byteLength: number; documentVersion: number };
   derivedProfileSource?: { rawPackageBytesDigest: Sha256Hex; byteLength: number };
   options: {
@@ -852,12 +872,25 @@ interface RenderReportBase {
     status: "complete" | "failed" | "cancelled";
     elapsedMs: number;
     pending: readonly string[];
+    diagnostics?: readonly PaginationDiagnostic[]; // complete pagination only; exactly four codes
   }>;
   fontIdentity?: FontConfigurationIdentity;
   fonts: readonly FontResolution[];
   resources: readonly ResourceOutcome[];
   unsupportedContent: readonly UnsupportedContentOutcome[];
   warnings: readonly RenderWarning[];
+}
+
+interface ResourceOutcome {
+  kind: "image" | "svg" | "chart" | "external_link";
+  status: "embedded" | "inline" | "allowed_user_link" | "omitted";
+  readiness?: "complete" | "failed"; // visual resources only
+  contentKey?: Sha256Hex; // required for visual resources; exact bounded source commitment
+  resource?: string;
+  anchorId?: string;
+  message?: string;
+  mediaType?: string;
+  byteLength?: number;
 }
 
 interface ExportRuntimeObservedFacts {
@@ -987,13 +1020,16 @@ closed attested evidence above and the digest of the complete versioned input at
 attestation without `executableSha256` may still be inventoried, but cannot raise verification above
 `browserObserved`.
 
-#438 lands the writer and the complete closed JSON Schema above, including the resolved
-`reviewProfileAlreadyApplied`, final font-resolution definitions, all font/sidecar limit keys, and
-environment evidence needed by #442/#444. Those later issues populate the reserved fields; they do
-not change the meaning, required fields, or closed enums under the same v1 IDs. The #501--#508 stack
-must either bring that final shape forward before #501 merges or use an explicitly draft schema ID
-until #508 freezes v1. Compatibility tests validate old-writer/new-schema and new-writer/frozen-v1
-cases, and reject reports that only a later private schema accepts.
+#438 lands the complete closed v1 JSON Schema, including resolved
+`reviewProfileAlreadyApplied`, font-resolution definitions, font/sidecar limit keys, and
+environment evidence needed by #442/#444. V1 remains byte-for-byte available for legacy validation.
+#505 introduces v2 because its pagination diagnostics and visual-readiness fields cannot be added to
+an `additionalProperties: false` v1 report compatibly. New browser and Node writers emit v2; the Node
+materializer boundary rejects any non-v2 report rather than guessing across versions. There is no
+public API that ingests a caller-supplied render report. Frozen v1 is retained only for validating
+legacy output, while the default package schema export points at v2. Compatibility tests preserve a
+representative v1 contract, prove the v1/v2 discriminators are disjoint, validate v2 evidence, and
+reject schema/version mismatches.
 
 The report is a separate sidecar;
 HTML and PDF do not embed it, avoiding a digest cycle while the report binds their bytes. Failed
