@@ -2672,7 +2672,8 @@ class RevisionListEntry:
     ``Session.list_revisions``.
 
     ``id`` is an opaque, deterministic ``rev2-…`` identity; ``constituent_ids`` exposes
-    the native Word ids. ``family`` identifies the exact atomic operation while ``type``
+    the native Word ids and ``constituent_keys`` their QName-qualified identities,
+    which stay distinct where roles legally reuse a numeric id. ``family`` identifies the exact atomic operation while ``type``
     is its coarse display class. Part/scope and every affected anchor are included.
     Unsafe native topology remains listed through ``resolution_status`` and
     ``diagnostic`` and fails closed when resolution is requested.
@@ -2683,7 +2684,9 @@ class RevisionListEntry:
     author: str
     family: str = "unsupported"
     constituent_ids: tuple[str, ...] = ()
+    constituent_keys: tuple[str, ...] = ()
     date: str | None = None
+    date_utc: str | None = None
     text: str = ""
     part_uri: str = ""
     scope: str = ""
@@ -2699,8 +2702,10 @@ class RevisionListEntry:
             type=d.get("type", ""),
             family=d.get("family", "unsupported"),
             constituent_ids=tuple(d.get("constituentIds", ())),
+            constituent_keys=tuple(d.get("constituentKeys", ())),
             author=d.get("author", "unknown"),
             date=d.get("date"),
+            date_utc=d.get("dateUtc"),
             text=d.get("text", ""),
             part_uri=d.get("partUri", ""),
             scope=d.get("scope", ""),

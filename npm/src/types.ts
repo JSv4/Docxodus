@@ -2142,8 +2142,15 @@ export interface RevisionListEntry {
   type: SessionRevisionType;
   family: RevisionFamily;
   constituentIds: string[];
+  /**
+   * QName-qualified native carrier identities. Unlike `constituentIds`, these
+   * distinguish revision roles which legally use the same numeric `w:id` value.
+   */
+  constituentKeys: string[];
   author: string;
   date?: string;
+  /** The `w16du:dateUtc` timestamp, when the markup carries one. */
+  dateUtc?: string;
   text: string;
   partUri: string;
   scope: string;
