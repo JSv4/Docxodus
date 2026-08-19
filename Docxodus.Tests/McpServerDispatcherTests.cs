@@ -2701,4 +2701,26 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Empty(Parse(Dispatcher.Call(_store, "docxodus_comment", J(
             $$"""{"sessionId":{{sessionArg}},"action":"list"}"""))).GetProperty("comments").EnumerateArray());
     }
+
+    [Fact]
+    public void MCP151_ManifestDispatchesAndRejectsEveryAnchorIdValue()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+
+        var manifest = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"manifest"}""")));
+        Assert.Equal("https://docxodus.dev/schemas/verification/package-manifest/v1",
+            manifest.GetProperty("schema").GetString());
+        Assert.Equal("opc", manifest.GetProperty("packageKind").GetString());
+
+        foreach (var anchorValue in new[]
+                 { "null", "false", "42", "{}", "[]", "\"p:body:any\"" })
+        {
+            Assert.Throws<FormatException>(() => Dispatcher.Call(
+                _store,
+                "docxodus_get_content",
+                J($$"""{"sessionId":{{sessionArg}},"format":"manifest","anchorId":{{anchorValue}}}""")));
+        }
+    }
 }

@@ -43,6 +43,7 @@ import type {
   PageCitationRequest,
   PageMapRegistrationResult,
   PageMapStatus,
+  PackageManifest,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   TableBorderSpec,
@@ -148,6 +149,14 @@ export class DocxSession {
   /** Monotonic document version (0 at open; +1 per committed mutation/undo/redo). */
   getVersion(): number {
     return (JSON.parse(this.wasm.GetVersion(this.handle)) as { version: number }).version;
+  }
+
+  /**
+   * Verification manifest for the current logical checkpoint. Unsaved edits are included and
+   * the read does not mutate package bytes, caches, history, or the document version.
+   */
+  getPackageManifest(): PackageManifest {
+    return JSON.parse(this.wasm.GetPackageManifest(this.handle)) as PackageManifest;
   }
 
   /** Register a browser-materialized PageMap without changing the document version. */

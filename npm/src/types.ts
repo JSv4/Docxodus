@@ -792,11 +792,134 @@ export interface CompareResult {
   revisions: Revision[];
 }
 
+/** Algorithm-labelled digest in a verification artifact. */
+export interface VerificationDigest {
+  algorithm: string;
+  /** Lower-case hexadecimal digest bytes. */
+  value: string;
+}
+
+/** Stable package location attached to a verification finding. */
+export interface ChangeLocation {
+  entryUri: string | null;
+  ownerUri: string | null;
+  relationshipId: string | null;
+  targetUri: string | null;
+  propertyPath: string | null;
+}
+
+export type VerificationFindingSeverity = "info" | "warning" | "error";
+
+/** Machine-readable package validation or safety finding. */
+export interface VerificationFinding {
+  code: string;
+  severity: VerificationFindingSeverity;
+  message: string;
+  location: ChangeLocation | null;
+}
+
+/** One physical ZIP entry. Duplicate names remain separate occurrences. */
+export interface PackageManifestEntry {
+  uri: string;
+  occurrence: number;
+  contentType: string | null;
+  contentTypeSource: "override" | "default" | "implicit" | "unresolved";
+  /** Exact declared uncompressed byte length as a base-10 integer string. */
+  size: string;
+  /** Exact compressed ZIP byte length as a base-10 integer string. */
+  compressedSize: string;
+  rawBytesDigest: VerificationDigest | null;
+  normalizedXmlDigest: VerificationDigest | null;
+  isXml: boolean;
+  /** null when central-directory encryption flags could not be parsed authoritatively. */
+  isEncrypted: boolean | null;
+}
+
+export interface PackageContentTypeDeclaration {
+  kind: "default" | "override";
+  key: string;
+  contentType: string;
+  occurrence: number;
+}
+
+export interface PackageRelationship {
+  ownerUri: string;
+  id: string;
+  type: string;
+  target: string;
+  targetMode: "Internal" | "External";
+  resolvedTargetUri: string | null;
+  isTargetPresent: boolean | null;
+}
+
+export interface PackageRevisionCounts {
+  insertions: number;
+  deletions: number;
+  moveFrom: number;
+  moveTo: number;
+  propertyChanges: number;
+  structuralChanges: number;
+  otherChanges: number;
+  total: number;
+}
+
+export interface PackageAnnotationCounts {
+  comments: number;
+  commentReplies: number;
+  threadedCommentMetadata: number;
+  resolvedComments: number;
+  people: number;
+  docxodusAnnotations: number;
+}
+
+export interface PackageManifestFacts {
+  mainDocumentUri: string | null;
+  isStrictOoxml: boolean;
+  isMacroEnabled: boolean;
+  hasCoreProperties: boolean;
+  hasExtendedProperties: boolean;
+  hasCustomProperties: boolean;
+  sectionCount: number;
+  paragraphCount: number;
+  tableCount: number;
+  headerPartCount: number;
+  footerPartCount: number;
+  footnoteCount: number;
+  endnoteCount: number;
+  styleCount: number;
+  numberingDefinitionCount: number;
+  themePartCount: number;
+  mediaPartCount: number;
+  customXmlPartCount: number;
+  drawingCount: number;
+  altChunkCount: number;
+  fieldCount: number;
+  revisions: PackageRevisionCounts;
+  annotations: PackageAnnotationCounts;
+}
+
+/** Deterministic schema-v1 description of a DOCX/OPC package. */
+export interface PackageManifest {
+  schema: "https://docxodus.dev/schemas/verification/package-manifest/v1";
+  schemaVersion: 1;
+  packageKind: "opc" | "zip" | "zip-encrypted" | "ole-encrypted" | "ole" | "malformed";
+  isValid: boolean;
+  rawPackageBytesDigest: VerificationDigest;
+  orderedOpcContentDigest: VerificationDigest | null;
+  normalizedSemanticDigest: VerificationDigest | null;
+  entries: readonly PackageManifestEntry[];
+  contentTypes: readonly PackageContentTypeDeclaration[];
+  relationships: readonly PackageRelationship[];
+  facts: PackageManifestFacts;
+  findings: readonly VerificationFinding[];
+}
+
 /**
  * Internal WASM exports structure
  */
 export interface DocxodusWasmExports {
   DocumentConverter: {
+    GeneratePackageManifest: (bytes: Uint8Array) => string;
     ConvertDocxToHtml: (bytes: Uint8Array) => string;
     RenderBlockHtml: (
       bytes: Uint8Array,
@@ -1055,6 +1178,7 @@ export interface DocxodusWasmExports {
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     GetPackageContentHash?: (handle: number) => string;
+    GetPackageManifest: (handle: number) => string;
     RenderPreviewHtml?: (handle: number) => string;
     RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
     CheckPreconditions: (handle: number, preconditionsJson: string) => string;
@@ -3441,6 +3565,7 @@ export interface DocumentMetadata {
  */
 export type WorkerRequestType =
   | "init"
+  | "generatePackageManifest"
   | "convertDocxToHtml"
   | "compareDocuments"
   | "compareDocumentsToHtml"
@@ -3449,6 +3574,7 @@ export type WorkerRequestType =
   | "getVersion"
   | "prepare"
   | "sessionOpen"
+  | "sessionGetPackageManifest"
   | "sessionClose"
   | "sessionAddAnnotation"
   | "sessionRemoveAnnotation"
@@ -3479,10 +3605,16 @@ export interface WorkerInitRequest extends WorkerRequestBase {
  */
 export interface WorkerConvertRequest extends WorkerRequestBase {
   type: "convertDocxToHtml";
-  /** Document bytes (transferred, not copied) */
+  /** Private exact-view copy of the caller's document bytes, transferred to the worker. */
   documentBytes: Uint8Array;
   /** Conversion options */
   options?: ConversionOptions;
+}
+
+/** Generate a deterministic package manifest without opening a live session. */
+export interface WorkerGeneratePackageManifestRequest extends WorkerRequestBase {
+  type: "generatePackageManifest";
+  documentBytes: Uint8Array;
 }
 
 /**
@@ -3551,10 +3683,16 @@ export interface WorkerPrepareRequest extends WorkerRequestBase {
  */
 export interface WorkerSessionOpenRequest extends WorkerRequestBase {
   type: "sessionOpen";
-  /** Document bytes transferred to the worker */
+  /** Private exact-view copy of the caller's document bytes, transferred to the worker. */
   documentBytes: Uint8Array;
   /** Session settings as JSON */
   settingsJson?: string;
+}
+
+/** Generate a manifest from the current logical checkpoint of a worker session. */
+export interface WorkerSessionGetPackageManifestRequest extends WorkerRequestBase {
+  type: "sessionGetPackageManifest";
+  handle: number;
 }
 
 /**
@@ -3614,6 +3752,7 @@ export interface WorkerSessionMoveAnnotationRequest extends WorkerRequestBase {
  */
 export type WorkerRequest =
   | WorkerInitRequest
+  | WorkerGeneratePackageManifestRequest
   | WorkerConvertRequest
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
@@ -3622,6 +3761,7 @@ export type WorkerRequest =
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
   | WorkerSessionOpenRequest
+  | WorkerSessionGetPackageManifestRequest
   | WorkerSessionCloseRequest
   | WorkerSessionAddAnnotationRequest
   | WorkerSessionRemoveAnnotationRequest
@@ -3654,6 +3794,11 @@ export interface WorkerConvertResponse extends WorkerResponseBase {
   type: "convertDocxToHtml";
   /** The converted HTML string */
   html?: string;
+}
+
+export interface WorkerGeneratePackageManifestResponse extends WorkerResponseBase {
+  type: "generatePackageManifest";
+  manifest?: PackageManifest;
 }
 
 /**
@@ -3717,6 +3862,12 @@ export interface WorkerSessionOpenResponse extends WorkerResponseBase {
   handle?: number;
 }
 
+/** Response containing the current worker-session package manifest. */
+export interface WorkerSessionGetPackageManifestResponse extends WorkerResponseBase {
+  type: "sessionGetPackageManifest";
+  manifest?: PackageManifest;
+}
+
 /**
  * Response from sessionClose request.
  */
@@ -3743,6 +3894,7 @@ export interface WorkerSessionEditResponse extends WorkerResponseBase {
  */
 export type WorkerResponse =
   | WorkerInitResponse
+  | WorkerGeneratePackageManifestResponse
   | WorkerConvertResponse
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
@@ -3751,6 +3903,7 @@ export type WorkerResponse =
   | WorkerGetVersionResponse
   | WorkerPrepareResponse
   | WorkerSessionOpenResponse
+  | WorkerSessionGetPackageManifestResponse
   | WorkerSessionCloseResponse
   | WorkerSessionEditResponse;
 

@@ -268,6 +268,16 @@ function DocumentComparer() {
 
 ## API Reference
 
+### Package verification
+
+`generatePackageManifest(document)` inspects supplied bytes without opening an editable package;
+`session.getPackageManifest()` describes the current logical session checkpoint, including unsaved
+edits, without advancing its version. Both return the same schema-v1 `PackageManifest` with exact
+package, ordered OPC-content, and normalized-semantic SHA-256 identities plus entries,
+relationships, facts, and structured findings. Worker users can call
+`worker.generatePackageManifest(document)` or `await workerSession.getPackageManifest()`. See
+[`package_manifests.md`](../docs/architecture/package_manifests.md) for the normalization boundary.
+
 ### Stateful inspection and editing
 
 `openDocxSession(bytes)` exposes the live document rather than a one-shot conversion. Inspect the

@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Xml.Linq;
 using Docxodus;
+using Docxodus.Internal;
 using DocumentFormat.OpenXml.Packaging;
 
 namespace DocxodusWasm;
@@ -20,6 +21,15 @@ public partial class DocumentConverter
     /// This limit helps prevent memory exhaustion from malicious or extremely large documents.
     /// </summary>
     private const int MaxDocumentSizeBytes = 100 * 1024 * 1024;
+
+    /// <summary>
+    /// Generate a deterministic, non-mutating verification manifest for supplied DOCX bytes.
+    /// Malformed, encrypted, and structurally invalid packages are reported as structured
+    /// findings in the returned JSON rather than opened as editable documents.
+    /// </summary>
+    [JSExport]
+    public static string GeneratePackageManifest(byte[] docxBytes) =>
+        VerificationOps.GeneratePackageManifest(docxBytes);
 
     /// <summary>
     /// Validates input document bytes.

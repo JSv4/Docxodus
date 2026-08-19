@@ -5,6 +5,7 @@ import type {
   VersionInfo,
   ErrorResponse,
   CompareResult,
+  PackageManifest,
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
@@ -134,6 +135,17 @@ export type {
   TableInsertOptions,
   TableMergeContent,
   TableShadingScope,
+  PackageManifest,
+  PackageManifestEntry,
+  PackageManifestFacts,
+  PackageRelationship,
+  PackageContentTypeDeclaration,
+  PackageRevisionCounts,
+  PackageAnnotationCounts,
+  VerificationDigest,
+  VerificationFinding,
+  VerificationFindingSeverity,
+  ChangeLocation,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";
 export { PlaceholderKinds, ContextBoundary } from "./types.js";
@@ -559,6 +571,21 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
   }
   const buffer = await input.arrayBuffer();
   return new Uint8Array(buffer);
+}
+
+/**
+ * Generate a deterministic, non-mutating verification manifest from DOCX bytes.
+ * Invalid, malformed, and encrypted packages are represented by structured findings.
+ */
+export async function generatePackageManifest(
+  document: File | Uint8Array,
+): Promise<PackageManifest> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+  await yieldToMain();
+  return JSON.parse(
+    exports.DocumentConverter.GeneratePackageManifest(bytes),
+  ) as PackageManifest;
 }
 
 /**

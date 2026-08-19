@@ -48,6 +48,9 @@ internal static class Dispatcher
         "save" => Save(args),
         "convert_to_html" => ConvertToHtml(args),
         "session_to_html" => SessionToHtml(args),
+        "generate_package_manifest" => VerificationOps.GeneratePackageManifest(
+            Convert.FromBase64String(Str(args, "docxB64"))),
+        "get_package_manifest" => VerificationOps.GetPackageManifest(Handle(args)),
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),

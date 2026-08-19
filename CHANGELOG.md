@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic, non-mutating DOCX package manifests (#456).** Added a versioned
+  verification artifact that inventories every OPC entry and content type, preserves duplicate
+  occurrences, resolves every package/part relationship, reports dangling references and
+  malformed/encrypted packages, extracts renderer-relevant facts, and separates exact package,
+  ordered OPC-content, and normalized-semantic SHA-256 identities. XML normalization ignores only
+  documented serialization choices through an explicit known-content-type allowlist, preserves
+  unknown vendor-extension/custom XML whitespace and `xml:space`, and
+  keeps Strict and Transitional namespaces distinct. Available from .NET, live sessions,
+  WASM/npm (including workers), the stdio Python host/client, and MCP
+  `docxodus_get_content(format: "manifest")`.
+
+  `isValid` is a claim about the package, so it is reserved for defects a real file does not
+  have: package-absolute relationship targets (`Target="/word/document.xml"`, the form the Open
+  XML SDK writes) resolve normally, and empty directory-only ZIP entries — which 7-Zip, Windows'
+  *Send to → Compressed folder*, and several Word templates emit — are a `directory_entry`
+  warning, inventoried with a trailing-slash URI and excluded from both content digests; a
+  trailing-slash entry with payload is invalid and remains in both identities. ZIP64 entry sizes
+  are decimal strings on the JSON wire, avoiding silent precision loss in JavaScript. ASCII ZIP
+  item names are mapped losslessly to Unicode logical OPC names without collapsing reserved or
+  opaque percent escapes. A
+  finding whose real cause is one unreadable file is reported once against that file rather than
+  once per part: an unusable `[Content_Types].xml` yields `content_types_unreadable` instead of
+  `missing_content_type` on every entry, and an unparsed `.rels` part yields
+  `relationship_part_unreadable` instead of `dangling_relationship` on every reference it owns.
+  Breaching the entry-count limit now suppresses both content digests, because an inspection that
+  stopped early cannot distinguish two packages that differ only past the cut, and declared
+  expansion is summed over the whole central directory so the two limits cannot be played against
+  each other. A part that declares an XML content type but whose bytes are not XML now
+  contributes those bytes to `normalizedSemanticDigest` rather than voiding the package's
+  identity; a part merely *skipped* by `MaxXmlPartBytes` still leaves the digest `null`, because
+  a larger budget would have normalized it and the identity must not depend on the caller's
+  options. See
+  [`docs/architecture/package_manifests.md`](docs/architecture/package_manifests.md), including
+  its **Known limits of schema v1** section.
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
   `transactionId` (non-blank, at most 256 Unicode scalar values). The first
@@ -394,6 +428,23 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **npm — a Web Worker call no longer detaches the caller's `Uint8Array`.** Every
+  `createWorkerDocxodus` entry point that takes document bytes (`convertDocxToHtml`,
+  `compareDocuments`, the session opens, and the new `generatePackageManifest`) put the
+  caller's own buffer in the worker `postMessage` transfer list, so after the call the array
+  the caller still held was zero-length and unusable — and when the caller passed a
+  `subarray`, the transfer additionally shipped the unrelated prefix and suffix bytes of the
+  backing buffer. Worker requests now transfer an exact-view clone. The cost is one copy per
+  call; the previous behaviour silently destroyed caller-owned data. Covered by
+  `npm/tests/worker.spec.ts` ("Uint8Array subviews are cloned exactly before transfer").
+- **Fuzzing harnesses for the package-manifest parser (`tools/manifest-fuzz/`).** A
+  self-contained feedback-driven havoc fuzzer, an AFL++/SharpFuzz coverage-guided harness, and
+  a full-oracle corpus replayer, all enforcing the generator's contract on arbitrary bytes:
+  never throws, byte-identical determinism, no caller-buffer mutation, canonical JSON always
+  parses, no hangs — under both default and adversarially small safety limits. The baseline
+  campaign (~484M executions: 180.4M havoc + 303.5M coverage-guided + a 24,049-input frontier
+  replay) recorded zero contract violations; the README documents the runbooks and the
+  positive-control procedure that validates the crash detector itself.
 - **Tracked insertions are part of a paragraph's visible text, so an agent can re-find
   the edit it just made.** Under `TrackedChangeMode.RenderInline`, text a mutation
   inserted landed inside `w:ins`, and `InlineRuns` — the shared walk behind the flat

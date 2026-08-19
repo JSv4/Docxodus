@@ -32,6 +32,10 @@ from .enums import (
     HyperlinkKind,
     LineSpacingRule,
     MutationBatchMode,
+    PackageContentTypeDeclarationKind,
+    PackageContentTypeSource,
+    PackageKind,
+    PackageRelationshipTargetMode,
     ParagraphAlignment,
     PlaceholderKind,
     PlaceholderKinds,
@@ -41,6 +45,7 @@ from .enums import (
     TableRowHeightRule,
     TableVerticalMergeRole,
     TrackedChangeMode,
+    VerificationFindingSeverity,
     WhitespaceMode,
 )
 
@@ -66,6 +71,7 @@ __all__ = [
     "MutationBatchResult",
     "BlockMetadata",
     "BulkEditResult",
+    "ChangeLocation",
     "FillOptions",
     "FindOptions",
     "HeaderFooterRef",
@@ -95,6 +101,15 @@ __all__ = [
     "TemplatePlaceholder",
     "MarkdownProjection",
     "DocxSessionSettings",
+    "PackageAnnotationCounts",
+    "PackageContentTypeDeclaration",
+    "PackageManifest",
+    "PackageManifestEntry",
+    "PackageManifestFacts",
+    "PackageRelationship",
+    "PackageRevisionCounts",
+    "VerificationDigest",
+    "VerificationFinding",
     "WmlToMarkdownConverterSettings",
     "DocumentAnnotation",
     "AnnotationUpdate",
@@ -146,6 +161,293 @@ __all__ = [
     "RetainedTableAnchor",
     "TableAnchorMapping",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Package verification manifests
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationDigest:
+    """Algorithm-labelled lower-case hexadecimal digest."""
+
+    algorithm: str
+    value: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "VerificationDigest":
+        return cls(algorithm=str(d["algorithm"]), value=str(d["value"]))
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeLocation:
+    """Stable package location attached to a verification finding."""
+
+    entry_uri: str | None = None
+    owner_uri: str | None = None
+    relationship_id: str | None = None
+    target_uri: str | None = None
+    property_path: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ChangeLocation":
+        return cls(
+            entry_uri=d.get("entryUri"),
+            owner_uri=d.get("ownerUri"),
+            relationship_id=d.get("relationshipId"),
+            target_uri=d.get("targetUri"),
+            property_path=d.get("propertyPath"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationFinding:
+    code: str
+    severity: VerificationFindingSeverity
+    message: str
+    location: ChangeLocation | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "VerificationFinding":
+        location = d.get("location")
+        return cls(
+            code=str(d["code"]),
+            severity=VerificationFindingSeverity(str(d["severity"])),
+            message=str(d["message"]),
+            location=ChangeLocation._from_wire(location) if isinstance(location, Mapping) else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageManifestEntry:
+    uri: str
+    occurrence: int
+    content_type: str | None
+    content_type_source: PackageContentTypeSource
+    size: int
+    compressed_size: int
+    raw_bytes_digest: VerificationDigest | None
+    normalized_xml_digest: VerificationDigest | None
+    is_xml: bool
+    is_encrypted: bool | None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageManifestEntry":
+        raw = d.get("rawBytesDigest")
+        normalized = d.get("normalizedXmlDigest")
+        return cls(
+            uri=str(d["uri"]),
+            occurrence=int(d["occurrence"]),
+            content_type=d.get("contentType"),
+            content_type_source=PackageContentTypeSource(str(d["contentTypeSource"])),
+            size=int(d["size"]),
+            compressed_size=int(d["compressedSize"]),
+            raw_bytes_digest=VerificationDigest._from_wire(raw) if isinstance(raw, Mapping) else None,
+            normalized_xml_digest=(
+                VerificationDigest._from_wire(normalized)
+                if isinstance(normalized, Mapping)
+                else None
+            ),
+            is_xml=bool(d["isXml"]),
+            is_encrypted=(
+                bool(d["isEncrypted"]) if d.get("isEncrypted") is not None else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageContentTypeDeclaration:
+    kind: PackageContentTypeDeclarationKind
+    key: str
+    content_type: str
+    occurrence: int
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageContentTypeDeclaration":
+        return cls(
+            kind=PackageContentTypeDeclarationKind(str(d["kind"])),
+            key=str(d["key"]),
+            content_type=str(d["contentType"]),
+            occurrence=int(d["occurrence"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageRelationship:
+    owner_uri: str
+    id: str
+    type: str
+    target: str
+    target_mode: PackageRelationshipTargetMode
+    resolved_target_uri: str | None
+    is_target_present: bool | None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageRelationship":
+        present = d.get("isTargetPresent")
+        return cls(
+            owner_uri=str(d["ownerUri"]),
+            id=str(d["id"]),
+            type=str(d["type"]),
+            target=str(d["target"]),
+            target_mode=PackageRelationshipTargetMode(str(d["targetMode"])),
+            resolved_target_uri=d.get("resolvedTargetUri"),
+            is_target_present=bool(present) if present is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageRevisionCounts:
+    insertions: int = 0
+    deletions: int = 0
+    move_from: int = 0
+    move_to: int = 0
+    property_changes: int = 0
+    structural_changes: int = 0
+    other_changes: int = 0
+    total: int = 0
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageRevisionCounts":
+        return cls(
+            insertions=int(d.get("insertions", 0)),
+            deletions=int(d.get("deletions", 0)),
+            move_from=int(d.get("moveFrom", 0)),
+            move_to=int(d.get("moveTo", 0)),
+            property_changes=int(d.get("propertyChanges", 0)),
+            structural_changes=int(d.get("structuralChanges", 0)),
+            other_changes=int(d.get("otherChanges", 0)),
+            total=int(d.get("total", 0)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageAnnotationCounts:
+    comments: int = 0
+    comment_replies: int = 0
+    threaded_comment_metadata: int = 0
+    resolved_comments: int = 0
+    people: int = 0
+    docxodus_annotations: int = 0
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageAnnotationCounts":
+        return cls(
+            comments=int(d.get("comments", 0)),
+            comment_replies=int(d.get("commentReplies", 0)),
+            threaded_comment_metadata=int(d.get("threadedCommentMetadata", 0)),
+            resolved_comments=int(d.get("resolvedComments", 0)),
+            people=int(d.get("people", 0)),
+            docxodus_annotations=int(d.get("docxodusAnnotations", 0)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageManifestFacts:
+    main_document_uri: str | None
+    is_strict_ooxml: bool
+    is_macro_enabled: bool
+    has_core_properties: bool
+    has_extended_properties: bool
+    has_custom_properties: bool
+    section_count: int
+    paragraph_count: int
+    table_count: int
+    header_part_count: int
+    footer_part_count: int
+    footnote_count: int
+    endnote_count: int
+    style_count: int
+    numbering_definition_count: int
+    theme_part_count: int
+    media_part_count: int
+    custom_xml_part_count: int
+    drawing_count: int
+    alt_chunk_count: int
+    field_count: int
+    revisions: PackageRevisionCounts
+    annotations: PackageAnnotationCounts
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageManifestFacts":
+        return cls(
+            main_document_uri=d.get("mainDocumentUri"),
+            is_strict_ooxml=bool(d["isStrictOoxml"]),
+            is_macro_enabled=bool(d["isMacroEnabled"]),
+            has_core_properties=bool(d["hasCoreProperties"]),
+            has_extended_properties=bool(d["hasExtendedProperties"]),
+            has_custom_properties=bool(d["hasCustomProperties"]),
+            section_count=int(d["sectionCount"]),
+            paragraph_count=int(d["paragraphCount"]),
+            table_count=int(d["tableCount"]),
+            header_part_count=int(d["headerPartCount"]),
+            footer_part_count=int(d["footerPartCount"]),
+            footnote_count=int(d["footnoteCount"]),
+            endnote_count=int(d["endnoteCount"]),
+            style_count=int(d["styleCount"]),
+            numbering_definition_count=int(d["numberingDefinitionCount"]),
+            theme_part_count=int(d["themePartCount"]),
+            media_part_count=int(d["mediaPartCount"]),
+            custom_xml_part_count=int(d["customXmlPartCount"]),
+            drawing_count=int(d["drawingCount"]),
+            alt_chunk_count=int(d["altChunkCount"]),
+            field_count=int(d["fieldCount"]),
+            revisions=PackageRevisionCounts._from_wire(d.get("revisions", {})),
+            annotations=PackageAnnotationCounts._from_wire(d.get("annotations", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageManifest:
+    """Deterministic schema-v1 description of a DOCX/OPC package."""
+
+    schema: str
+    schema_version: int
+    package_kind: PackageKind
+    is_valid: bool
+    raw_package_bytes_digest: VerificationDigest
+    ordered_opc_content_digest: VerificationDigest | None
+    normalized_semantic_digest: VerificationDigest | None
+    entries: tuple[PackageManifestEntry, ...]
+    content_types: tuple[PackageContentTypeDeclaration, ...]
+    relationships: tuple[PackageRelationship, ...]
+    facts: PackageManifestFacts
+    findings: tuple[VerificationFinding, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "PackageManifest":
+        ordered = d.get("orderedOpcContentDigest")
+        semantic = d.get("normalizedSemanticDigest")
+        return cls(
+            schema=str(d["schema"]),
+            schema_version=int(d["schemaVersion"]),
+            package_kind=PackageKind(str(d["packageKind"])),
+            is_valid=bool(d["isValid"]),
+            raw_package_bytes_digest=VerificationDigest._from_wire(
+                d["rawPackageBytesDigest"]
+            ),
+            ordered_opc_content_digest=(
+                VerificationDigest._from_wire(ordered)
+                if isinstance(ordered, Mapping)
+                else None
+            ),
+            normalized_semantic_digest=(
+                VerificationDigest._from_wire(semantic)
+                if isinstance(semantic, Mapping)
+                else None
+            ),
+            entries=tuple(PackageManifestEntry._from_wire(x) for x in d.get("entries", ())),
+            content_types=tuple(
+                PackageContentTypeDeclaration._from_wire(x)
+                for x in d.get("contentTypes", ())
+            ),
+            relationships=tuple(
+                PackageRelationship._from_wire(x) for x in d.get("relationships", ())
+            ),
+            facts=PackageManifestFacts._from_wire(d["facts"]),
+            findings=tuple(VerificationFinding._from_wire(x) for x in d.get("findings", ())),
+        )
 
 
 # ---------------------------------------------------------------------------

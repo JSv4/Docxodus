@@ -1,7 +1,8 @@
 """Enums mirroring the C# ``Docxodus`` types.
 
-String-valued enums use the **snake_case wire value** as the enum value, matching
-``DocxSessionJson`` output. Flag enums use the **integer bit value** from the C#
+String-valued enums use the exact wire value as the enum value, matching
+``DocxSessionJson`` output (most are snake_case; protocol-defined values retain
+their specified casing). Flag enums use the **integer bit value** from the C#
 ``[Flags]`` declaration. The Python wrapper sends these as ints/strings exactly
 as the .NET host expects.
 """
@@ -40,7 +41,54 @@ __all__ = [
     "TableAnchorEntityKind",
     "TableRowHeightRule",
     "TableVerticalMergeRole",
+    "PackageContentTypeDeclarationKind",
+    "PackageContentTypeSource",
+    "PackageKind",
+    "PackageRelationshipTargetMode",
+    "VerificationFindingSeverity",
 ]
+
+
+class VerificationFindingSeverity(str, Enum):
+    """Severity of a package-manifest verification finding."""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class PackageKind(str, Enum):
+    """Container classification reported by a package manifest."""
+
+    OPC = "opc"
+    ZIP = "zip"
+    ZIP_ENCRYPTED = "zip-encrypted"
+    OLE_ENCRYPTED = "ole-encrypted"
+    OLE = "ole"
+    MALFORMED = "malformed"
+
+
+class PackageContentTypeSource(str, Enum):
+    """How an entry's OPC content type was resolved."""
+
+    OVERRIDE = "override"
+    DEFAULT = "default"
+    IMPLICIT = "implicit"
+    UNRESOLVED = "unresolved"
+
+
+class PackageContentTypeDeclarationKind(str, Enum):
+    """Kind of OPC content-type declaration."""
+
+    DEFAULT = "default"
+    OVERRIDE = "override"
+
+
+class PackageRelationshipTargetMode(str, Enum):
+    """Whether an OPC relationship target is package-internal or external."""
+
+    INTERNAL = "Internal"
+    EXTERNAL = "External"
 
 
 class Position(str, Enum):

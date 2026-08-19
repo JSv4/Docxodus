@@ -12,6 +12,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
+using Docxodus.Verification;
 using DocumentFormat.OpenXml.Packaging;
 using GridCell = Docxodus.Internal.TableGridCell;
 
@@ -12154,6 +12155,19 @@ public sealed partial class DocxSession : IDisposable
             clone.Save();
         }
         return ZipPackageOutputNormalizer.Normalize(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Describe the session's current logical OPC package without mutating it. The manifest is
+    /// generated from an isolated checkpoint clone which overlays dirty XML caches, so unsaved
+    /// edits are included while the live package bytes, caches, history, and version stay intact.
+    /// </summary>
+    /// <param name="options">Optional safety limits for ZIP/XML inspection.</param>
+    /// <returns>A deterministic schema-v1 package manifest.</returns>
+    public PackageManifest GetPackageManifest(PackageManifestOptions? options = null)
+    {
+        ThrowIfDisposed();
+        return PackageManifestGenerator.Generate(SerializePackageCheckpoint(), options);
     }
 
     /// <summary>

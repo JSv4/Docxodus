@@ -77,6 +77,57 @@ test.describe("Docxodus Web Worker Tests", () => {
 
       console.log("Worker terminated successfully");
     }, { timeout: 60000 });
+
+    test("Uint8Array subviews are cloned exactly before transfer", async ({ page }) => {
+      const bytes = Array.from(readTestFile("HC006-Test-01.docx"));
+      const result = await page.evaluate(async (documentBytes) => {
+        await (window as any).createDocxodusWorker();
+        const backing = new Uint8Array(documentBytes.length + 8);
+        backing.fill(0xa5);
+        const view = backing.subarray(3, 3 + documentBytes.length);
+        view.set(documentBytes);
+        const expected = Array.from(view);
+        const expectedDigest = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", view))
+        ).map(value => value.toString(16).padStart(2, "0")).join("");
+
+        const manifest = await (window as any).DocxodusWorker
+          .generatePackageManifest(view);
+        const session = await (window as any).DocxodusWorker.openDocxSession(view);
+        const sessionManifest = await session.getPackageManifest();
+        await session.close();
+        let unchanged = false;
+        try {
+          unchanged = view.byteLength === documentBytes.length
+            && backing.byteLength === documentBytes.length + 8
+            && Array.from(view).every((value, index) => value === expected[index])
+            && backing[0] === 0xa5
+            && backing[backing.length - 1] === 0xa5;
+        } catch {
+          unchanged = false;
+        }
+        return {
+          packageKind: manifest.packageKind,
+          isValid: manifest.isValid,
+          rawDigest: manifest.rawPackageBytesDigest.value,
+          expectedDigest,
+          entrySizeType: typeof manifest.entries[0]?.size,
+          sessionSchema: sessionManifest.schema,
+          sessionIsValid: sessionManifest.isValid,
+          unchanged,
+        };
+      }, bytes);
+
+      expect(result.packageKind).toBe("opc");
+      expect(result.isValid).toBe(true);
+      expect(result.rawDigest).toBe(result.expectedDigest);
+      expect(result.entrySizeType).toBe("string");
+      expect(result.sessionSchema).toBe(
+        "https://docxodus.dev/schemas/verification/package-manifest/v1"
+      );
+      expect(result.sessionIsValid).toBe(true);
+      expect(result.unchanged).toBe(true);
+    }, { timeout: 60000 });
   });
 
   test.describe("Non-blocking Behavior", () => {

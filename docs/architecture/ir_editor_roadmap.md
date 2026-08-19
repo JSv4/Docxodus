@@ -135,7 +135,7 @@ save/reopen fidelity, and RenderHtml ≡ bytes-path parity.
 **Problem:** the initial full convert (~0.7–2.4 s) and session ops run on the main thread →
 the UI freezes on open and on big docs. (Per-edit is already ~10 ms.)
 **Approach:** extend the Web Worker surface (`docxodus.worker.ts` / `worker-proxy.ts`) to
-carry session open/edit/render-block/save, transfer bytes zero-copy; the main thread holds
+carry session open/edit/render-block/save, transfer a private exact-view byte copy; the main thread holds
 only the DOM. Keep the synchronous `DocxEditor` API working by awaiting worker round-trips.
 **Acceptance:** opening and editing a large doc never blocks the main thread > ~16 ms;
 existing editor tests pass through the worker path.

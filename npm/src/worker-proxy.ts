@@ -23,6 +23,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
   WorkerConvertResponse,
+  WorkerGeneratePackageManifestResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
@@ -30,6 +31,7 @@ import type {
   WorkerGetVersionResponse,
   WorkerPrepareResponse,
   WorkerSessionOpenResponse,
+  WorkerSessionGetPackageManifestResponse,
   WorkerSessionEditResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
@@ -43,6 +45,7 @@ import type {
   AnnotationUpdate,
   CharSpan,
   EditResult,
+  PackageManifest,
 } from "./types.js";
 
 /**
@@ -57,7 +60,9 @@ function generateId(): string {
  */
 async function toBytes(document: File | Uint8Array): Promise<Uint8Array> {
   if (document instanceof Uint8Array) {
-    return document;
+    // Transfer only an exact-view clone. Transferring the caller's buffer would detach it,
+    // and transferring a subarray's backing buffer would also send unrelated prefix/suffix bytes.
+    return new Uint8Array(document);
   }
   const buffer = await document.arrayBuffer();
   return new Uint8Array(buffer);
@@ -91,6 +96,9 @@ function deriveWasmBasePath(): string {
  * {@link close} when finished to free the in-worker handle.
  */
 export interface WorkerDocxSession {
+  /** Generate a deterministic manifest of the session's current logical checkpoint. */
+  getPackageManifest(): Promise<PackageManifest>;
+
   /**
    * Add an annotation to the document at the given anchor.
    * @param anchorId - Markdown-projection anchor id of the target block
@@ -149,6 +157,9 @@ export interface WorkerDocxSession {
  * in a Web Worker for non-blocking UI.
  */
 export interface WorkerDocxodus {
+  /** Generate a deterministic, non-mutating verification manifest. */
+  generatePackageManifest(document: File | Uint8Array): Promise<PackageManifest>;
+
   /**
    * Convert a DOCX document to HTML.
    * @param document - DOCX file as File object or Uint8Array
@@ -237,7 +248,8 @@ export interface WorkerDocxodus {
 
   /**
    * Open a {@link WorkerDocxSession} for surgical annotation editing inside
-   * the worker. The document bytes are transferred to the worker (zero-copy).
+   * the worker. Uint8Array inputs are copied once so the caller's buffer remains attached and
+   * subarray boundaries are preserved; the private copy is then transferred.
    *
    * Always call {@link WorkerDocxSession.close} when you are done to release
    * the in-worker session handle.
@@ -388,6 +400,21 @@ export async function createWorkerDocxodus(
 
   // Return the WorkerDocxodus instance
   return {
+    async generatePackageManifest(
+      document: File | Uint8Array
+    ): Promise<PackageManifest> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
+        {
+          id: generateId(),
+          type: "generatePackageManifest",
+          documentBytes: bytes,
+        },
+        [bytes.buffer]
+      );
+      return response.manifest!;
+    },
+
     async convertDocxToHtml(
       document: File | Uint8Array,
       options?: ConversionOptions
@@ -526,6 +553,18 @@ export async function createWorkerDocxodus(
       const handle = openResponse.handle;
 
       return {
+        async getPackageManifest(): Promise<PackageManifest> {
+          const res = await sendRequest<WorkerSessionGetPackageManifestResponse>({
+            id: generateId(),
+            type: "sessionGetPackageManifest",
+            handle,
+          });
+          if (!res.success || !res.manifest) {
+            throw new Error(res.error ?? "sessionGetPackageManifest failed");
+          }
+          return res.manifest;
+        },
+
         async addAnnotation(
           anchorId: string,
           span: CharSpan | null,

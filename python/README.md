@@ -175,9 +175,16 @@ Tests share the Docxodus monorepo's `TestFiles/` corpus so divergence between Py
 
 The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` as a snake-case method:
 
+Package verification is available statelessly as `generate_package_manifest(docx_bytes)` and for
+the current logical checkpoint as `session.get_package_manifest()`. Both return frozen typed
+dataclasses for the schema documented in
+[`package_manifests.md`](../docs/architecture/package_manifests.md); validation failures are
+structured findings rather than editable-package exceptions. Closed wire vocabularies decode to
+`str` enums, and decimal-string ZIP64 sizes decode to exact Python `int` values.
+
 | Tier | Methods |
 |---|---|
-| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `execute_batch`, `preview_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
+| **Lifecycle** | `save`, `close`, `undo`, `redo`, `get_version`, `get_package_manifest`, `execute_batch`, `preview_batch`, `to_html`, `register_page_map`, `get_page_map_status`, `get_page_citation` |
 | **Projection** | `project`, `project_anchor` |
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **Inspection** | `list_styles`, `get_formatting`, `list_inline_spans`, `get_block_metadata`, `get_block_metadatas`, `get_list_membership`, `get_section_info` |

@@ -98,7 +98,8 @@ Main Thread                           Web Worker
 ### Key Design Decisions
 
 1. **Separate WASM instance**: Worker loads its own dotnet.js runtime
-2. **Transferable bytes**: Document `Uint8Array` is transferred (zero-copy)
+2. **Caller-safe transferable bytes**: an exact-view copy of each document `Uint8Array` is
+   transferred, preserving caller ownership and subarray boundaries
 3. **Streaming-ready API**: Message structure supports future chunked output
 
 ### Files

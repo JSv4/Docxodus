@@ -97,6 +97,11 @@ public static partial class DocxSessionBridge
     public static string GetPackageContentHash(int handle) =>
         DocxSessionOps.GetPackageContentHash(handle);
 
+    /// <summary>Canonical verification manifest for the current logical session checkpoint.</summary>
+    [JSExport]
+    public static string GetPackageManifest(int handle) =>
+        VerificationOps.GetPackageManifest(handle);
+
     /// <summary>Read-only optimistic guard evaluation. A successful result applies no mutation.</summary>
     [JSExport]
     public static string CheckPreconditions(int handle, string preconditionsJson) =>
