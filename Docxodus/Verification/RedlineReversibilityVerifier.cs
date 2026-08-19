@@ -1269,18 +1269,6 @@ public static class RedlineReversibilityVerifier
     private static string RevisionSortKey(RedlineRevisionIdentity item) =>
         item.PartUri + "\n" + item.Family + "\n" + item.Id;
 
-    private static RedlineProofFinding DuplicateIdentityFinding(
-        string inputName,
-        string id,
-        IReadOnlyList<RedlineRevisionIdentity> identities) => Finding(
-        "duplicate_revision_identity",
-        VerificationFindingSeverity.Error,
-        $"The {inputName} revision inventory contains duplicate stable ID '{id}'.",
-        new ChangeLocation { EntryUri = identities[0].PartUri },
-        identities[0].AnchorId,
-        new[] { id },
-        "Repair ambiguous native revision IDs before proving reversibility.");
-
     private static RedlineProofFinding RevisionConflictFinding(
         RedlineRevisionIdentity baseline,
         RedlineRevisionIdentity redline) => Finding(
