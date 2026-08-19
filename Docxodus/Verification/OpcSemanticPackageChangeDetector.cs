@@ -109,7 +109,19 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 inspected.Xml,
                 entry.ContentType,
                 entry.Size,
-                entry.RawBytesDigest));
+                entry.RawBytesDigest,
+                Scope: null));
+        }
+
+        var headerFooterScopes = HeaderFooterScopesByPartUri(
+            inspection.Manifest.Relationships, parts);
+        foreach (var name in parts.Keys.ToArray())
+        {
+            var part = parts[name];
+            parts[name] = part with
+            {
+                Scope = ComputeScope(name, part.ContentType, headerFooterScopes),
+            };
         }
 
         var relationshipData = ReadRelationships(inspection.Manifest.Relationships, parts);
@@ -992,7 +1004,9 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             after?.Scope,
             isMove ? $"package:{(int)exemplar.Family}:{before!.Key}:{after!.Key}" : null,
             before?.Value ?? SemanticValue.Absent,
-            after?.Value ?? SemanticValue.Absent));
+            after?.Value ?? SemanticValue.Absent,
+            PackageLocationBefore: isMove ? EntityLocationKey(before!) : null,
+            PackageLocationAfter: isMove ? EntityLocationKey(after!) : null));
     }
 
     private static string EntityExactKey(Entity entity) => string.Join(
@@ -1183,9 +1197,11 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             || name.StartsWith("word/embeddings/", StringComparison.Ordinal);
     }
 
-    private static string ContentTypeEssence(Part part)
+    private static string ContentTypeEssence(Part part) => ContentTypeEssenceOf(part.ContentType);
+
+    private static string ContentTypeEssenceOf(string? declaredContentType)
     {
-        var value = part.ContentType ?? string.Empty;
+        var value = declaredContentType ?? string.Empty;
         var semicolon = value.IndexOf(';');
         return (semicolon < 0 ? value : value[..semicolon]).ToLowerInvariant();
     }
@@ -1273,11 +1289,81 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             : $"{kind}:{ScopeForPart(part)}:{unid}";
     }
 
-    private static string? ScopeForPart(Part part)
+    private static string? ScopeForPart(Part part) => part.Scope;
+
+    /// <summary>
+    /// hdr{N}/ftr{N} scope names assigned by main-part relationship DOCUMENT order — the same
+    /// enumeration the SDK's <c>HeaderParts</c>/<c>FooterParts</c> (and therefore IR scope
+    /// naming) follows — so one change set never carries two contradictory header-numbering
+    /// vocabularies. The manifest's relationship list is sorted for determinism, so document
+    /// order is recovered from the owning .rels part's XML; a part referenced more than once
+    /// keeps its first number, exactly like part-collection order.
+    /// </summary>
+    private static Dictionary<string, string> HeaderFooterScopesByPartUri(
+        IReadOnlyList<PackageRelationship> relationships,
+        IReadOnlyDictionary<string, Part> parts)
     {
-        var pathScope = ScopeForPart(PartUri(part.Name));
+        var scopes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var mainPart = relationships.FirstOrDefault(relationship =>
+            relationship.OwnerUri == "/"
+            && relationship.TargetMode == "Internal"
+            && IsOfficeRelationshipType(relationship.Type, "officeDocument"))?.ResolvedTargetUri;
+        if (mainPart is null) return scopes;
+        var byId = new Dictionary<string, PackageRelationship>(StringComparer.Ordinal);
+        foreach (var relationship in relationships)
+        {
+            if (relationship.OwnerUri == mainPart
+                && relationship.TargetMode == "Internal"
+                && relationship.ResolvedTargetUri is not null)
+                byId.TryAdd(relationship.Id, relationship);
+        }
+
+        int headers = 0;
+        int footers = 0;
+        foreach (var id in RelationshipIdsInDocumentOrder(mainPart, parts))
+        {
+            if (!byId.TryGetValue(id, out var relationship)) continue;
+            var target = relationship.ResolvedTargetUri!;
+            if (scopes.ContainsKey(target)) continue;
+            if (IsOfficeRelationshipType(relationship.Type, "header"))
+                scopes[target] = "hdr" + ++headers;
+            else if (IsOfficeRelationshipType(relationship.Type, "footer"))
+                scopes[target] = "ftr" + ++footers;
+        }
+        return scopes;
+    }
+
+    private static IReadOnlyList<string> RelationshipIdsInDocumentOrder(
+        string ownerPartUri,
+        IReadOnlyDictionary<string, Part> parts)
+    {
+        var ownerName = ownerPartUri.TrimStart('/');
+        var slash = ownerName.LastIndexOf('/');
+        var relsName = slash < 0
+            ? "_rels/" + ownerName + ".rels"
+            : ownerName[..(slash + 1)] + "_rels/" + ownerName[(slash + 1)..] + ".rels";
+        if (!parts.TryGetValue(relsName, out var relsPart) || relsPart.Xml?.Root is null)
+            return Array.Empty<string>();
+        return relsPart.Xml.Root.Elements()
+            .Where(element => element.Name.LocalName == "Relationship")
+            .Select(element => (string?)element.Attribute("Id"))
+            .OfType<string>()
+            .ToList();
+    }
+
+    private static bool IsOfficeRelationshipType(string type, string name) =>
+        type == OfficeRelationshipNamespace + "/" + name
+        || type == StrictOfficeRelationshipNamespace + "/" + name;
+
+    private static string? ComputeScope(
+        string name,
+        string? declaredContentType,
+        IReadOnlyDictionary<string, string> headerFooterScopes)
+    {
+        if (headerFooterScopes.TryGetValue(PartUri(name), out var mapped)) return mapped;
+        var pathScope = ScopeForPart(PartUri(name));
         if (pathScope is not null) return pathScope;
-        var contentType = ContentTypeEssence(part);
+        var contentType = ContentTypeEssenceOf(declaredContentType);
         if (contentType.Contains("wordprocessingml.document.main+xml", StringComparison.Ordinal)
             || contentType.Contains("ms-word.document.macroenabled.main+xml", StringComparison.Ordinal)
             || contentType.Contains("ms-word.template.macroenabledtemplate.main+xml", StringComparison.Ordinal))
@@ -1392,7 +1478,8 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         XDocument? Xml,
         string? ContentType,
         long Size,
-        VerificationDigest? RawBytesDigest);
+        VerificationDigest? RawBytesDigest,
+        string? Scope);
 
     private sealed record RelationshipInfo(
         string Owner,

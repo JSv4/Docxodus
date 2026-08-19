@@ -98,7 +98,12 @@ internal sealed record SemanticChangeDraft(
     string? RightScope,
     string? MoveId,
     SemanticValue Before,
-    SemanticValue After);
+    SemanticValue After,
+    // Set only on package-detector Move drafts: both sides' full location keys, so the engine
+    // can ask the IR alignment whether the "relocation" is just the containing block's
+    // content-derived Unid changing in place. Never serialized into the public schema.
+    string? PackageLocationBefore = null,
+    string? PackageLocationAfter = null);
 
 /// <summary>
 /// Keeps projection from the shared package-manifest inspection separate from the public semantic
@@ -172,7 +177,11 @@ internal static class SemanticDiffEngine
         projector.CompareRegistries();
         projector.CompareComments();
 
-        drafts.AddRange(packageChanges);
+        // The IR edit script is the alignment authority: a package fact whose "new location" is
+        // the same aligned block (its content-derived Unid merely re-hashed under a text edit or
+        // duplicate-shift) has not moved, so its Move record is dropped rather than published.
+        drafts.AddRange(packageChanges.Where(draft =>
+            !IsAlignedRelocation(draft, projector.AlignedBlockIdentities)));
 
         var changes = drafts.Select((draft, index) => new SemanticChange
         {
@@ -197,6 +206,57 @@ internal static class SemanticDiffEngine
             ? RevisionProcessor.AcceptRevisions(document)
             : document;
 
+    /// <summary>
+    /// True when a package-detector Move draft's before-location equals its after-location once
+    /// every anchor component is resolved through the IR block alignment — i.e. the fact sits in
+    /// the same aligned block on both sides and only that block's content hash changed.
+    /// </summary>
+    private static bool IsAlignedRelocation(
+        SemanticChangeDraft draft,
+        IReadOnlyDictionary<string, string> alignedBlockIdentities)
+    {
+        if (draft.Operation != SemanticChangeOperation.Move
+            || draft.PackageLocationBefore is null
+            || draft.PackageLocationAfter is null)
+            return false;
+        var before = draft.PackageLocationBefore.Split('\u001f');
+        var after = draft.PackageLocationAfter.Split('\u001f');
+        if (before.Length != after.Length) return false;
+        for (int index = 0; index < before.Length; index++)
+        {
+            var beforeIdentity = AnchorIdentity(before[index]);
+            var afterIdentity = AnchorIdentity(after[index]);
+            if (beforeIdentity is null != afterIdentity is null) return false;
+            if (beforeIdentity is null)
+            {
+                if (!string.Equals(before[index], after[index], StringComparison.Ordinal))
+                    return false;
+                continue;
+            }
+            if (string.Equals(beforeIdentity, afterIdentity, StringComparison.Ordinal)) continue;
+            if (!alignedBlockIdentities.TryGetValue(beforeIdentity, out var aligned)
+                || !string.Equals(aligned, afterIdentity, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// "scope:unid" identity of an anchor-shaped component, or null for paths/names/uris. The
+    /// kind token is deliberately dropped: the IR derives it from presentation (p vs h vs li)
+    /// while the package detector always says "p", and identity is scope + Unid.
+    /// </summary>
+    private static string? AnchorIdentity(string component)
+    {
+        var parts = component.Split(':');
+        if (parts.Length != 3 || parts[2].Length != 32) return null;
+        foreach (var letter in parts[0])
+            if (!char.IsAsciiLetterLower(letter)) return null;
+        foreach (var digit in parts[2])
+            if (!char.IsAsciiHexDigitLower(digit)) return null;
+        return parts[0].Length == 0 ? null : parts[1] + ":" + parts[2];
+    }
+
     private sealed class Projector
     {
         private readonly IrDocument _left;
@@ -214,6 +274,23 @@ internal static class SemanticDiffEngine
             _right = right;
             _settings = settings;
             _changes = changes;
+        }
+
+        /// <summary>
+        /// Every left→right "scope:unid" block identity the edit script aligned in place
+        /// (equal, modified, format-only, split/merge, and move pairs, including rows and
+        /// cells), collected during projection for the package-Move suppression check.
+        /// </summary>
+        public Dictionary<string, string> AlignedBlockIdentities { get; } =
+            new(StringComparer.Ordinal);
+
+        private void RecordAlignment(string? leftAnchor, string? rightAnchor)
+        {
+            if (leftAnchor is null || rightAnchor is null) return;
+            var leftIdentity = AnchorIdentity(leftAnchor);
+            var rightIdentity = AnchorIdentity(rightAnchor);
+            if (leftIdentity is null || rightIdentity is null) return;
+            AlignedBlockIdentities.TryAdd(leftIdentity, rightIdentity);
         }
 
         public void Project(IrEditScript script)
@@ -444,6 +521,14 @@ internal static class SemanticDiffEngine
 
             foreach (var op in ops)
             {
+                RecordAlignment(op.LeftAnchor, op.RightAnchor);
+                if (op.Kind == IrEditOpKind.MergeBlock && op.SplitMergeAnchors is { } mergedLefts)
+                    foreach (var mergedLeft in mergedLefts)
+                        RecordAlignment(mergedLeft, op.RightAnchor);
+                if (op.Kind == IrEditOpKind.SplitBlock && op.SplitMergeAnchors is { } splitRights)
+                    foreach (var splitRight in splitRights)
+                        RecordAlignment(op.LeftAnchor, splitRight);
+
                 if (op.Kind == IrEditOpKind.EqualBlock)
                     continue;
 
@@ -452,6 +537,7 @@ internal static class SemanticDiffEngine
                     if (op.IsMoveSource == true) continue;
                     moveSources.TryGetValue(op.MoveGroupId ?? -1, out var source);
                     var leftAnchor = source?.LeftAnchor;
+                    RecordAlignment(leftAnchor, op.RightAnchor);
                     var leftBlock = Find(_left, leftAnchor);
                     var rightBlock = Find(_right, op.RightAnchor);
                     Add(SemanticChangeOperation.Move, SemanticChangeFamily.BlockStructure, partUri,
@@ -1141,6 +1227,7 @@ internal static class SemanticDiffEngine
             if (left is null || right is null) return;
             var la = left.Anchor.ToString();
             var ra = right.Anchor.ToString();
+            RecordAlignment(la, ra);
             if (left.GridBefore != right.GridBefore || left.GridAfter != right.GridAfter)
             {
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.TableSpan, part,
@@ -1156,6 +1243,7 @@ internal static class SemanticDiffEngine
             IReadOnlyList<IrCellOp> effectiveCellOps = cellOps ?? PositionalCellOps(left, right);
             foreach (var cellOp in effectiveCellOps)
             {
+                RecordAlignment(cellOp.LeftCellAnchor, cellOp.RightCellAnchor);
                 var lc = left.Cells.FirstOrDefault(cell => cell.Anchor.ToString() == cellOp.LeftCellAnchor);
                 var rc = right.Cells.FirstOrDefault(cell => cell.Anchor.ToString() == cellOp.RightCellAnchor);
                 if (lc is null)
