@@ -36,6 +36,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
     private const string StrictOfficeRelationshipNamespace =
         "http://purl.oclc.org/ooxml/officeDocument/relationships";
     private const string AnnotationNamespace = "http://docxodus.dev/annotations/v1";
+    private const string Word2010Namespace = "http://schemas.microsoft.com/office/word/2010/wordml";
 
     public IReadOnlyList<SemanticChangeDraft> Compare(
         byte[] leftBytes,
@@ -261,9 +262,10 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                         part.Xml,
                         PartUri(part.Name),
                         ignoreFormattingWhitespace: !preserveWhitespace,
-                        includeAttribute: ExcludeGeneratedUnid,
+                        includeAttribute: IncludeSemanticAttribute,
                         attributeValueNormalizer: RelationshipAttributeNormalizer(
-                            PartUri(part.Name), relationshipData.ByOwnerAndId)).Value;
+                            PartUri(part.Name), relationshipData.ByOwnerAndId),
+                            includeElement: IncludeSemanticElement).Value;
                 var contentType = ContentTypeFor(part);
                 var digest = SemanticValue.Digest(
                     "SHA-256",
@@ -535,7 +537,8 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 ignoreFormattingWhitespace: true,
                 includeAttribute: IncludeRevisionAttribute,
                 attributeValueNormalizer: RelationshipAttributeNormalizer(
-                    partUri, relationships));
+                    partUri, relationships),
+                    includeElement: IncludeSemanticElement);
             var value = ValueObj(
                 ("kind", SemanticValue.String(kind)),
                 ("author", SemanticValue.String(WordAttr(revision, "author"))),
@@ -579,13 +582,17 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 .FirstOrDefault(element => element.Name.NamespaceName == AnnotationNamespace
                     && element.Name.LocalName == "range")?
                 .Attribute("bookmarkName")?.Value;
+            // Whitespace-insensitive like the envelope digest below: the annotation vocabulary is
+            // attribute-only with no text leaves, so indentation is pure serialization, and any
+            // single-annotation write reindents the whole part.
             var normalized = XmlSemanticNormalizer.Digest(
                 annotation,
                 partUri,
-                ignoreFormattingWhitespace: false,
-                includeAttribute: ExcludeGeneratedUnid,
+                ignoreFormattingWhitespace: true,
+                includeAttribute: IncludeSemanticAttribute,
                 attributeValueNormalizer: RelationshipAttributeNormalizer(
-                    partUri, relationships));
+                    partUri, relationships),
+                    includeElement: IncludeSemanticElement);
             var value = ValueObj(
                 ("id", SemanticValue.String(id)),
                 ("labelId", SemanticValue.String(UnqualifiedAttr(annotation, "labelId"))),
@@ -623,9 +630,10 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             ResidualDocument(part.Xml, root, envelope),
             partUri,
             ignoreFormattingWhitespace: true,
-            includeAttribute: ExcludeGeneratedUnid,
+            includeAttribute: IncludeSemanticAttribute,
             attributeValueNormalizer: RelationshipAttributeNormalizer(
-                partUri, relationships));
+                partUri, relationships),
+                includeElement: IncludeSemanticElement);
         var envelopeValue = ValueObj(("normalizedDigest", SemanticValue.Digest(
             envelopeDigest.Algorithm,
             envelopeDigest.Value,
@@ -670,7 +678,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         }
 
         bool hasSemanticEnvelope = root.Attributes().Any(attribute =>
-                !attribute.IsNamespaceDeclaration && ExcludeGeneratedUnid(attribute))
+                !attribute.IsNamespaceDeclaration && IncludeSemanticAttribute(attribute))
             || root.Nodes().Any(node => IsMeaningfulResidualNode(
                 node, IsModeledRootChild))
             || part.Xml.Nodes().Any(node => node != root
@@ -682,9 +690,10 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             ResidualDocument(part.Xml, root, envelope),
             partUri,
             ignoreFormattingWhitespace: true,
-            includeAttribute: ExcludeGeneratedUnid,
+            includeAttribute: IncludeSemanticAttribute,
             attributeValueNormalizer: RelationshipAttributeNormalizer(
-                partUri, relationships));
+                partUri, relationships),
+                includeElement: IncludeSemanticElement);
         var value = ValueObj(("normalizedDigest", SemanticValue.Digest(
             normalized.Algorithm,
             normalized.Value,
@@ -729,8 +738,12 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 .ToArray();
             if (extensionAttributes.Length == 0 && semanticNodes.Length == 0) continue;
 
+            // Records deliberately carry no block anchor: the deterministic Unid is a content
+            // hash, so an anchored record would flip this digest on every text edit of the
+            // containing paragraph even though the extension fact itself never changed. The
+            // anchor-relative path plus the fact's own content is the identity; equal records
+            // are interchangeable, so the multiset digest below stays deterministic without it.
             var anchorElement = NearestAnchorElement(element);
-            var anchor = AnchorFor(anchorElement, part);
             var path = anchorElement is null
                 ? ElementPath(root, element)
                 : RelativeElementPath(anchorElement, element);
@@ -743,7 +756,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     new XAttribute(attribute));
                 records.Add(new XElement(
                     residualNamespace + "attribute",
-                    new XAttribute("anchor", anchor ?? ScopeForPart(part) ?? partUri),
                     new XAttribute("path", path),
                     new XAttribute("name", ExpandedName(attribute.Name)),
                     source));
@@ -753,7 +765,6 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             {
                 records.Add(new XElement(
                     residualNamespace + "node",
-                    new XAttribute("anchor", anchor ?? ScopeForPart(part) ?? partUri),
                     new XAttribute("path", path),
                     new XAttribute("ordinal", position),
                     CloneNode(node)));
@@ -763,18 +774,19 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         if (records.Count == 0) return null;
         var orderedRecords = records
             .OrderBy(record => record.Name.LocalName, StringComparer.Ordinal)
-            .ThenBy(record => (string?)record.Attribute("anchor"), StringComparer.Ordinal)
             .ThenBy(record => (string?)record.Attribute("path"), StringComparer.Ordinal)
             .ThenBy(record => (string?)record.Attribute("name"), StringComparer.Ordinal)
             .ThenBy(record => (int?)record.Attribute("ordinal"))
+            .ThenBy(record => record.ToString(SaveOptions.DisableFormatting), StringComparer.Ordinal)
             .ToArray();
         var normalized = XmlSemanticNormalizer.Digest(
             new XDocument(new XElement(residualNamespace + "story", orderedRecords)),
             partUri,
             ignoreFormattingWhitespace: false,
-            includeAttribute: ExcludeGeneratedUnid,
+            includeAttribute: IncludeSemanticAttribute,
             attributeValueNormalizer: RelationshipAttributeNormalizer(
-                partUri, relationships));
+                partUri, relationships),
+                includeElement: IncludeSemanticElement);
         var value = ValueObj(("normalizedDigest", SemanticValue.Digest(
             normalized.Algorithm,
             normalized.Value,
@@ -797,7 +809,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
 
     private static bool IsStoryExtensionAttribute(XAttribute attribute)
     {
-        if (attribute.IsNamespaceDeclaration || !ExcludeGeneratedUnid(attribute)) return false;
+        if (attribute.IsNamespaceDeclaration || !IncludeSemanticAttribute(attribute)) return false;
         var namespaceName = attribute.Name.NamespaceName;
         return namespaceName.Length > 0
             && !IsWordNamespace(namespaceName)
@@ -1002,11 +1014,30 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         entity.Location.EntryUri ?? entity.Location.OwnerUri ?? string.Empty,
         entity.GroupKey ?? entity.Location.PropertyPath ?? string.Empty);
 
-    private static bool ExcludeGeneratedUnid(XAttribute attribute) =>
-        attribute.Name != PtOpenXml.Unid;
+    /// <summary>
+    /// Attribute filter shared by every detector digest, fingerprint, and residual: serialization
+    /// bookkeeping — the generated pt14 Unid, the Word rsid stamp family, and Word-regenerated
+    /// w14 paragraph/text ids — is rewritten by ordinary resaves without any meaning change, so no
+    /// semantic identity may depend on it.
+    /// </summary>
+    private static bool IncludeSemanticAttribute(XAttribute attribute) =>
+        attribute.Name != PtOpenXml.Unid
+        && !(IsWordNamespace(attribute.Name.NamespaceName)
+            && attribute.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
+        && !(attribute.Name.NamespaceName == Word2010Namespace
+            && attribute.Name.LocalName is "paraId" or "textId");
+
+    /// <summary>
+    /// Element-form counterpart of <see cref="IncludeSemanticAttribute"/>: the settings
+    /// <c>w:rsids</c> registry and per-style <c>w:rsid</c> stamps carry the same bookkeeping as
+    /// elements, so digested part content drops those subtrees.
+    /// </summary>
+    private static bool IncludeSemanticElement(XElement element) =>
+        !(IsWordNamespace(element.Name.NamespaceName)
+            && element.Name.LocalName is "rsid" or "rsids");
 
     private static bool IncludeRevisionAttribute(XAttribute attribute) =>
-        ExcludeGeneratedUnid(attribute)
+        IncludeSemanticAttribute(attribute)
         && !(attribute.Name.LocalName == "id"
             && IsWordNamespace(attribute.Name.NamespaceName));
 
@@ -1039,9 +1070,10 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 part.Xml,
                 partUri,
                 ignoreFormattingWhitespace: true,
-                includeAttribute: ExcludeGeneratedUnid,
+                includeAttribute: IncludeSemanticAttribute,
                 attributeValueNormalizer: RelationshipAttributeNormalizer(
-                    partUri, relationships));
+                    partUri, relationships),
+                    includeElement: IncludeSemanticElement);
         string fingerprint = normalized.Value;
         var contentType = ContentTypeFor(part);
         var digest = SemanticValue.Digest(
