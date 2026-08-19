@@ -280,6 +280,15 @@ item after the cutoff is not falsely reported absent and does not change `packag
 expansion is also summed over the whole central directory, so a package cannot dodge the size
 budget by breaching the entry-count limit.
 
+## Fuzzing
+
+The generator parses untrusted bytes with hand-written ZIP central-directory, OPC grammar, and
+CFB validation layers, so its contract is additionally enforced by fuzzing harnesses in
+`tools/manifest-fuzz/` (feedback-driven havoc, AFL++ coverage-guided, and a full-oracle corpus
+replayer). The baseline campaign of ~484M executions against the initial implementation
+recorded zero contract violations; see that directory's README for the oracle, runbooks, and
+evidence. Re-run a campaign when `Docxodus/Verification/` changes.
+
 ## Examples
 
 ```csharp

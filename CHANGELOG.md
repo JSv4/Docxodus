@@ -437,6 +437,14 @@ All notable changes to this project will be documented in this file.
   backing buffer. Worker requests now transfer an exact-view clone. The cost is one copy per
   call; the previous behaviour silently destroyed caller-owned data. Covered by
   `npm/tests/worker.spec.ts` ("Uint8Array subviews are cloned exactly before transfer").
+- **Fuzzing harnesses for the package-manifest parser (`tools/manifest-fuzz/`).** A
+  self-contained feedback-driven havoc fuzzer, an AFL++/SharpFuzz coverage-guided harness, and
+  a full-oracle corpus replayer, all enforcing the generator's contract on arbitrary bytes:
+  never throws, byte-identical determinism, no caller-buffer mutation, canonical JSON always
+  parses, no hangs — under both default and adversarially small safety limits. The baseline
+  campaign (~484M executions: 180.4M havoc + 303.5M coverage-guided + a 24,049-input frontier
+  replay) recorded zero contract violations; the README documents the runbooks and the
+  positive-control procedure that validates the crash detector itself.
 - **Tracked insertions are part of a paragraph's visible text, so an agent can re-find
   the edit it just made.** Under `TrackedChangeMode.RenderInline`, text a mutation
   inserted landed inside `w:ins`, and `InlineRuns` — the shared walk behind the flat
