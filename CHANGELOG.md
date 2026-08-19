@@ -68,9 +68,20 @@ All notable changes to this project will be documented in this file.
   The existing redline, revision,
   edit-script JSON, and `DocxSession.GetDiff` APIs are unchanged. Available through
   .NET, WASM/npm, the Python host/client, and MCP
-  (`docxodus_get_content format:"semantic_changes"`). Session comparison retains
-  the exact opening package when `CaptureInitialProjection` is enabled and inspects
-  an isolated logical checkpoint. Design and measured 1,000-paragraph guard:
+  (`docxodus_get_content format:"semantic_changes"`). Session comparison keeps the
+  opening package when `CaptureInitialProjection` is enabled (the MCP open tool can
+  decline with `captureInitialProjection:false`) and compares its checkpoint
+  serialization against an isolated checkpoint of the current state, so an
+  unedited session reports zero changes for any openable package. The surface
+  shares the sibling entry points' read pipeline — strict→transitional and
+  `mc:AlternateContent` normalization plus the `OnCompatibilityWarning`/
+  `ThrowOnCompatibilityWarning` gate — and the package safety limits are
+  `PackageManifestOptions` defaults, declared once. Serialization bookkeeping
+  (rsids, `w14:paraId`/`textId`, annotation-part indentation) is never a change;
+  package records use the IR's `hdr{N}`/`ftr{N}` scope vocabulary; and a
+  bookmark/revision/binding whose containing block the IR aligned in place is
+  never a `move`. The header/footer path grammar pins the `w:type` kind vocabulary
+  (`default`/`first`/`even`). Design and measured 1,000-paragraph guard:
   [`docs/architecture/semantic_diff.md`](docs/architecture/semantic_diff.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
@@ -461,6 +472,18 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Package manifests recognize the content-type spellings Word writes, and VML parts
+  digest as XML** (issues #512, #513). Five allowlist/counter spellings in the manifest
+  generator could never match a real package — glossary
+  (`wordprocessingml.document.glossary+xml`), commentsExtended/commentsIds/people
+  (`wordprocessingml.*`, not `vnd.ms-word.*`), and stylesWithEffects
+  (`vnd.ms-word.stylesWithEffects+xml`) — silently disabling documented whitespace
+  suppression, glossary story facts, and the threaded-comment/people facts (always zero).
+  `IsXml` additionally recognizes the declared `vmlDrawing` content type (the one OOXML XML
+  part type without a `+xml` suffix), so a reindent-only VML resave no longer flips the
+  normalized semantic identity. The semantic package detector consumes the same corrected
+  vocabulary for its opaque-part whitespace policy, so the manifest normalizer and the
+  semantic diff can never disagree about the same part bytes.
 - **npm — a Web Worker call no longer detaches the caller's `Uint8Array`.** Every
   `createWorkerDocxodus` entry point that takes document bytes (`convertDocxToHtml`,
   `compareDocuments`, the session opens, and the new `generatePackageManifest`) put the

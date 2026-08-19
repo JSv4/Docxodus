@@ -133,7 +133,24 @@ The package supplement deliberately suppresses representation-only differences:
 
 - ZIP order, timestamps, compression, XML declaration/BOM, namespace prefixes,
   attribute order, and insignificant whitespace in known Word-owned metadata
-  parts do not create changes;
+  parts do not create changes. "Known Word-owned" is the manifest generator's
+  content-type vocabulary (`IsKnownOoxmlXmlContentType`) — one policy for the
+  manifest's normalized identity and the semantic diff, so the two surfaces
+  cannot disagree about the same part bytes;
+- serialization bookkeeping is never semantic content: the rsid attribute family
+  and `w:rsid(s)` elements, Word-regenerated `w14:paraId`/`w14:textId`, generated
+  pt14 Unids, and annotations-part indentation are excluded from every detector
+  digest and fingerprint;
+- package records speak the IR's anchor vocabulary. Header/footer scopes are
+  `hdr{N}`/`ftr{N}` assigned by main-part relationship document order (the SDK's
+  part-collection enumeration order), and the header/footer path grammar pins the
+  `w:type` kind tokens `default`/`first`/`even`;
+- a `move` must survive the alignment authority: the projector collects every
+  left→right block identity the edit script aligned in place, and a package
+  fact whose location differs only because its containing block's content-derived
+  Unid re-hashed (text edit, duplicate-shift) is dropped rather than reported as
+  a `move`. A fact genuinely relocated to a different aligned block keeps its
+  `move` and `moveId`;
 - relationship ids are not identity, and owner-relative and package-absolute
   internal relationship targets resolve to one canonical part URI. Relationship
   references are also compared at their owning XML locations: a coordinated `rId`
@@ -180,3 +197,17 @@ edit-script JSON, tracked-revision list, produced redline, or projection-based
 `DocxSession.GetDiff` shapes. This separation lets verification consumers adopt a
 durable audit schema without turning the renderer's internal edit script into a
 permanent cross-version contract.
+
+The read pipeline is the sibling entry points' own: strict-conformance packages
+are normalized to transitional and `mc:AlternateContent` is resolved before any
+IR read (shared `DocxDiff.PreAccept`), and the configured
+`OnCompatibilityWarning`/`ThrowOnCompatibilityWarning` gate runs exactly as it
+does for `Compare`/`GetRevisions` (shared `DocxDiff.PreflightCompatibility`).
+
+`DocxSession.GetSemanticChanges` compares like against like: the retained opening
+package is rendered through the same checkpoint serialization as the current
+side (lazily, cached), so SDK clone normalization — dropped orphan parts, stray
+content-type-less entries — is never reported as a document change and cannot
+fail only one side's preflight. An unedited session reports zero changes for any
+openable package. The MCP open tool accepts `captureInitialProjection: false`
+for long-lived servers that never ask for baselines.
