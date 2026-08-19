@@ -29,10 +29,11 @@ var sessionChanges = session.GetSemanticChanges();
 
 `SemanticDiffOptions` carries the existing `DocxDiffSettings`, enables the package
 supplement by default, and exposes its shared `PackageManifestOptions` as
-`PackageOptions`. The semantic defaults are 10,000 ZIP entries, 64 MiB of
-decompressed data per entry and per parsed XML part, 256 MiB of aggregate
-decompressed data, a 1,000:1 maximum compression ratio, and 2,048 decoded
-characters per canonical package URI. XML nesting is capped at 256 elements before
+`PackageOptions`. The defaults are `PackageManifestOptions`' own — declared once,
+so the semantic surface and `GetPackageManifest` on the same session can never
+disagree about what a safe package is: 10,000 ZIP entries, 1 GiB of decompressed
+data per entry and in aggregate, 32 MiB per parsed XML part, a 1,000:1 maximum
+compression ratio, and 2,048 decoded characters per canonical package URI. XML nesting is capped at 256 elements before
 recursive normalization. Integer and byte bounds must be positive; the
 ratio must also be finite. Entry
 names reject backslashes, control characters, malformed escaping, traversal, and

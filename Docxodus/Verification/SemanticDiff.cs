@@ -26,17 +26,11 @@ public sealed record SemanticDiffOptions
 
     /// <summary>
     /// Shared package-manifest safety policy used for the mandatory preflight and, when enabled,
-    /// the package-level semantic supplement.
+    /// the package-level semantic supplement. Defaults are declared once, on
+    /// <see cref="PackageManifestOptions"/> itself, so the semantic surface and the manifest
+    /// surface of the same session can never disagree about what a safe package is.
     /// </summary>
-    public PackageManifestOptions PackageOptions { get; init; } = new()
-    {
-        MaxEntryCount = 10_000,
-        MaxEntryUncompressedBytes = 64L * 1024 * 1024,
-        MaxTotalUncompressedBytes = 256L * 1024 * 1024,
-        MaxXmlPartBytes = 64L * 1024 * 1024,
-        MaxCompressionRatio = 1_000,
-        MaxUriLength = 2_048,
-    };
+    public PackageManifestOptions PackageOptions { get; init; } = new();
 }
 
 /// <summary>
@@ -164,8 +158,13 @@ internal static class SemanticDiffEngine
         IReadOnlyList<SemanticChangeDraft> packageChanges)
     {
         var settings = options.DiffSettings ?? new DocxDiffSettings();
-        var left = PreAccept(originalLeft, settings);
-        var right = PreAccept(originalRight, settings);
+        // The exact normalization and compatibility gate of every sibling DocxDiff entry point:
+        // strict→transitional + mc:AlternateContent resolution before ANY read, then the caller's
+        // configured preflight. Without these, strict packages crash the IR read and a caller's
+        // ThrowOnCompatibilityWarning contract is silently dead on the audit surface.
+        var left = DocxDiff.PreAccept(settings, originalLeft);
+        var right = DocxDiff.PreAccept(settings, originalRight);
+        DocxDiff.PreflightCompatibility(settings, left, right);
         var diffSettings = settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
         var leftIr = IrReader.Read(left, ReadOptions);
         var rightIr = IrReader.Read(right, ReadOptions);
@@ -200,11 +199,6 @@ internal static class SemanticDiffEngine
         }).ToArray();
         return new SemanticChangeSet(changes);
     }
-
-    private static WmlDocument PreAccept(WmlDocument document, DocxDiffSettings settings) =>
-        settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
-            ? RevisionProcessor.AcceptRevisions(document)
-            : document;
 
     /// <summary>
     /// True when a package-detector Move draft's before-location equals its after-location once
@@ -350,7 +344,7 @@ internal static class SemanticDiffEngine
                         ?? "/word/document.xml";
                     Add(
                         StoryOperation(story), family, part,
-                        $"{(story.IsHeader ? "header" : "footer")}[section={story.SectionIndex},kind={story.Kind}]",
+                        $"{(story.IsHeader ? "header" : "footer")}[section={story.SectionIndex},kind={HeaderFooterKindToken(story.Kind)}]",
                         null, null, story.LeftScopeName, story.ScopeName, null,
                         StoryValue(leftStory), StoryValue(rightStory));
                     ProjectOps(story.Ops, part, story.LeftScopeName, story.ScopeName);
@@ -758,7 +752,13 @@ internal static class SemanticDiffEngine
                 right.Anchor.Scope,
                 emitFormatChanges: !needsCharacterFormatComparison);
             if (needsCharacterFormatComparison)
+            {
+                // The span-merged run comparison covers text runs only, so atomic tokens
+                // (tabs, breaks, images, note references) need their own aligned pass here —
+                // exactly the pass the tokenDiff-is-null branch already runs.
+                CompareAtomicTokenFormats(left, right, part);
                 CompareRunFormats(left, right, part);
+            }
         }
 
         private void ProjectSplitMergeTokenChanges(
@@ -1751,7 +1751,19 @@ internal static class SemanticDiffEngine
             ("blocks", SemanticValue.Array(story.Scope.Blocks.Select(BlockValue))),
             ("bindings", SemanticValue.Array(story.References.Select(binding => Obj(
                 ("sectionIndex", SemanticValue.Integer(binding.SectionIndex)),
-                ("kind", SemanticValue.String(binding.Kind.ToString().ToLowerInvariant())))))));
+                ("kind", SemanticValue.String(HeaderFooterKindToken(binding.Kind))))))));
+
+    /// <summary>
+    /// Pinned v1 wire vocabulary for the header/footer occurrence kind — the <c>w:type</c>
+    /// value set. An explicit switch, never the internal enum's <c>ToString()</c>: renaming an
+    /// enum member must not silently change emitted paths or values.
+    /// </summary>
+    private static string HeaderFooterKindToken(IrHeaderFooterKind kind) => kind switch
+    {
+        IrHeaderFooterKind.First => "first",
+        IrHeaderFooterKind.Even => "even",
+        _ => "default",
+    };
 
     private static SemanticValue RowValue(IrRow? row) => row is null
         ? SemanticValue.Absent

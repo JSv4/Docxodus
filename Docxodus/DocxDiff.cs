@@ -441,7 +441,9 @@ public static class DocxDiff
     /// is set. When engaged and a warning is found, invokes the callback then optionally throws
     /// <see cref="DocxDiffCompatibilityException"/>.
     /// </summary>
-    private static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
+    // Internal: SemanticDiffEngine shares this gate so the audit surface honors the same
+    // OnCompatibilityWarning/ThrowOnCompatibilityWarning contract as every sibling entry point.
+    internal static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
     {
         if (settings.OnCompatibilityWarning == null && !settings.ThrowOnCompatibilityWarning)
             return;
@@ -509,7 +511,9 @@ public static class DocxDiff
     /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
     /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
     /// </summary>
-    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
+    // Internal: SemanticDiffEngine shares this normalization so strict-conformance and
+    // mc:AlternateContent inputs reach the IR exactly as they do on every sibling entry point.
+    internal static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
     {
         // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
         // transitional before ANY read — Word does the same on open. No-op for transitional docs.
