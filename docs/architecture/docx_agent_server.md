@@ -222,7 +222,7 @@ Three lifecycle tools, four read/preview tools, and twelve grouped-intent tools.
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below) | `{ sessionId, path }` — `path` is the **resolved** location |
+| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below), `captureInitialProjection?` (default true; false frees the per-session baseline copy of the opening package and makes `semantic_changes`/diff formats refuse) | `{ sessionId, path }` — `path` is the **resolved** location |
 | `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from), `persistAnchorIds?` (per-call override of the session's open-time setting; absent = use it) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
 

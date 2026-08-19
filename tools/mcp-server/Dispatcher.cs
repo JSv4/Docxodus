@@ -96,6 +96,10 @@ internal static class Dispatcher
             UndoMemoryBudgetBytes = LongOpt(
                 args, "undoMemoryBudgetBytes", settingDefaults.UndoMemoryBudgetBytes),
             PersistAnchorIds = BoolOpt(args, "persistAnchorIds", false),
+            // A long-lived server can opt out of retaining every session's opening package;
+            // semantic_changes and the markdown diff then refuse with the setting's name.
+            CaptureInitialProjection = BoolOpt(
+                args, "captureInitialProjection", settingDefaults.CaptureInitialProjection),
         };
 
         var session = store.Open(bytes, location, settings);

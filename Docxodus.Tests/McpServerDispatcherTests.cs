@@ -2738,4 +2738,22 @@ public class McpServerDispatcherTests : IDisposable
                 J($$"""{"sessionId":{{sessionArg}},"format":"manifest","anchorId":{{anchorValue}}}""")));
         }
     }
+
+    [Fact]
+    public void MCP152_Open_CaptureInitialProjectionFalse_DisablesSemanticBaselineRetention()
+    {
+        // A long-lived server must be able to open sessions without retaining a baseline copy
+        // of every document's opening package. The trade is explicit: semantic_changes (and
+        // markdown diff) then refuse with the setting's name.
+        var opened = Parse(Dispatcher.Call(_store, "docxodus_open", J(
+            $$"""{"path":{{JsonSerializer.Serialize(_tempPath)}},"captureInitialProjection":false}""")));
+        var sessionArg = JsonSerializer.Serialize(opened.GetProperty("sessionId").GetString());
+
+        var ex = Assert.ThrowsAny<Exception>(() => Dispatcher.Call(
+            _store,
+            "docxodus_get_content",
+            J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes"}""")));
+
+        Assert.Contains("CaptureInitialProjection", ex.Message, StringComparison.Ordinal);
+    }
 }
