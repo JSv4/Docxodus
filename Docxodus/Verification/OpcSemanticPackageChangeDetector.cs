@@ -267,7 +267,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             .OrderBy(part => part.Name, StringComparer.Ordinal)
             .Select(part =>
             {
-                var preserveWhitespace = PreserveWhitespaceInOpaqueXml(part.Name);
+                var preserveWhitespace = PreserveWhitespaceInOpaqueXml(part);
                 var fingerprint = part.Xml is null
                     ? part.RawBytesDigest!.Value
                     : XmlSemanticNormalizer.Digest(
@@ -1119,12 +1119,13 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             ValueFingerprint(identity));
     }
 
-    private static bool PreserveWhitespaceInOpaqueXml(string name) =>
-        // Word-owned XML parts are declarative element/attribute vocabularies where indentation is
-        // serialization. Unknown/vendor parts, especially customXml, may use whitespace as data and
-        // therefore receive a whitespace-preserving fingerprint.
-        name is not ("word/settings.xml" or "word/webSettings.xml" or "word/fontTable.xml")
-        && !name.StartsWith("docProps/", StringComparison.Ordinal);
+    private static bool PreserveWhitespaceInOpaqueXml(Part part) =>
+        // Known OOXML XML parts (the generator's shared content-type vocabulary) are declarative
+        // element/attribute markup where indentation is serialization. Unknown/vendor parts,
+        // especially customXml payloads, may use whitespace as data and therefore keep a
+        // whitespace-preserving fingerprint. One policy with the manifest normalizer: the two
+        // surfaces must never disagree about the same part bytes.
+        !PackageManifestGenerator.IsKnownOoxmlXmlContentType(part.ContentType);
 
     private static bool IsOpaqueCandidate(Part part)
     {

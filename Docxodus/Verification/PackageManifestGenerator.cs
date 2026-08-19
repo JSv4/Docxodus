@@ -58,12 +58,12 @@ public static class PackageManifestGenerator
         "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.stylesWithEffects+xml",
+        "application/vnd.ms-word.stylesWithEffects+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.glossaryDocument+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml",
         "application/vnd.ms-word.document.macroEnabled.main+xml",
         "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
     };
@@ -85,9 +85,9 @@ public static class PackageManifestGenerator
         "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
         "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
         "application/vnd.openxmlformats-officedocument.vmlDrawing",
-        "application/vnd.ms-word.commentsExt+xml",
-        "application/vnd.ms-word.commentsIds+xml",
-        "application/vnd.ms-word.people+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml",
         "application/vnd.ms-office.chartstyle+xml",
         "application/vnd.ms-office.chartcolorstyle+xml",
     };
@@ -968,7 +968,7 @@ public static class PackageManifestGenerator
             if (IsCommentsPart(work))
                 comments += wordElements.Count(element => element.Name.LocalName == "comment");
 
-            var exElements = IsMime(work, "application/vnd.ms-word.commentsExt+xml")
+            var exElements = IsContentType(work, "commentsExtended")
                 ? elements.Where(element => element.Name.LocalName == "commentEx"
                     && element.Name.NamespaceName == Word2012Namespace).ToList()
                 : new List<XElement>();
@@ -977,7 +977,7 @@ public static class PackageManifestGenerator
                 !string.IsNullOrEmpty(ElementNamespaceAttribute(element, "paraIdParent")));
             resolvedComments += exElements.Count(element =>
                 IsOn(ElementNamespaceAttribute(element, "done")));
-            if (IsMime(work, "application/vnd.ms-word.people+xml"))
+            if (IsContentType(work, "people"))
                 people += elements.Count(element => element.Name.LocalName == "person"
                     && element.Name.NamespaceName == Word2012Namespace);
             if (root.Name.NamespaceName == AnnotationNamespace
@@ -1189,7 +1189,12 @@ public static class PackageManifestGenerator
             var essence = MediaTypeEssence(contentType);
             return essence.EndsWith("+xml", StringComparison.OrdinalIgnoreCase)
                 || essence.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
-                || essence.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
+                || essence.Equals("text/xml", StringComparison.OrdinalIgnoreCase)
+                // The one OOXML XML part type without a +xml suffix. Without this, every
+                // properly declared VML part is digested as opaque bytes and a reindent-only
+                // resave flips the normalized semantic identity (issue #513).
+                || essence.Equals("application/vnd.openxmlformats-officedocument.vmlDrawing",
+                    StringComparison.OrdinalIgnoreCase);
         }
         return uri.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
             || uri.EndsWith(".vml", StringComparison.OrdinalIgnoreCase);
@@ -1198,8 +1203,17 @@ public static class PackageManifestGenerator
     private static bool IsKnownOoxmlXml(EntryWork work) =>
         PartNameComparer.Equals(work.Uri, ContentTypesUri)
         || IsRelationshipPart(work.Uri)
-        || (work.ContentType is not null
-            && KnownOoxmlXmlContentTypes.Contains(MediaTypeEssence(work.ContentType)));
+        || IsKnownOoxmlXmlContentType(work.ContentType);
+
+    /// <summary>
+    /// Shared part policy: a declared content type in the known OOXML XML vocabulary means
+    /// whitespace is serialization, not data. The semantic package detector consumes this too,
+    /// so the manifest's normalized identity and the semantic diff can never disagree about the
+    /// same part bytes.
+    /// </summary>
+    internal static bool IsKnownOoxmlXmlContentType(string? contentType) =>
+        contentType is not null
+        && KnownOoxmlXmlContentTypes.Contains(MediaTypeEssence(contentType));
 
     private static bool IsRelationshipPart(string uri) =>
         XmlSemanticNormalizer.IsRelationshipPart(uri);
@@ -1851,7 +1865,7 @@ public static class PackageManifestGenerator
         || IsContentType(work, "footnotes")
         || IsContentType(work, "endnotes")
         || IsContentType(work, "comments")
-        || IsContentType(work, "glossaryDocument");
+        || IsContentType(work, "document.glossary");
 
     private static bool IsWordprocessingMainPart(EntryWork work) =>
         IsMime(work, "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
