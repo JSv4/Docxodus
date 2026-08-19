@@ -3165,7 +3165,10 @@ internal static class IrReader
             var docDefaultsRPr = CloneOrNull(
                 docDefaults?.Element(W + "rPrDefault")?.Element(W + "rPr"));
 
-            return new IrStyleRegistry(styles, defaultParagraphStyleId, docDefaultsPPr, docDefaultsRPr);
+            return new IrStyleRegistry(styles, defaultParagraphStyleId, docDefaultsPPr, docDefaultsRPr)
+            {
+                PartUri = stylesPart.Uri,
+            };
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {
@@ -3276,7 +3279,10 @@ internal static class IrReader
                 }
             }
 
-            return new IrNumberingRegistry(nums, abstractNums);
+            return new IrNumberingRegistry(nums, abstractNums)
+            {
+                PartUri = numberingPart.Uri,
+            };
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {
@@ -3309,7 +3315,10 @@ internal static class IrReader
 
             if (major is null && minor is null)
                 return IrThemeFonts.Empty;
-            return new IrThemeFonts(major, minor);
+            return new IrThemeFonts(major, minor)
+            {
+                PartUri = themePart.Uri,
+            };
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {

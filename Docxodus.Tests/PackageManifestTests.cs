@@ -927,6 +927,54 @@ public class PackageManifestTests
           <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
         """ + "<!--" + new string('q', 3000) + "--></Types>";
 
+    [Fact]
+    public void PM043_PerEntryLimit_CoversDeclaredAndActualExpansion()
+    {
+        var entries = MinimalEntries().ToList();
+        entries.Add(("word/data/payload.bin", Enumerable.Repeat((byte)0x5a, 2_048).ToArray()));
+        var package = BuildZip(entries, CompressionLevel.NoCompression, DefaultTimestamp);
+        var options = new PackageManifestOptions
+        {
+            MaxEntryCount = 100,
+            MaxEntryUncompressedBytes = 1_024,
+            MaxTotalUncompressedBytes = 1024 * 1024,
+            MaxXmlPartBytes = 1024 * 1024,
+            MaxCompressionRatio = 10_000,
+            MaxUriLength = 2_048,
+        };
+
+        var declared = PackageManifestGenerator.Generate(package, options);
+        Assert.Contains(declared.Findings, finding =>
+            finding.Code == "entry_size_limit_exceeded"
+            && finding.Location?.EntryUri == "/word/data/payload.bin");
+
+        var forged = PackageManifestGenerator.Generate(
+            RewriteCentralUncompressedSizes(package,
+                new Dictionary<string, uint> { ["word/data/payload.bin"] = 1 }),
+            options);
+        Assert.DoesNotContain(forged.Findings, finding =>
+            finding.Code == "total_expansion_limit_exceeded");
+        Assert.Contains(forged.Findings, finding =>
+            finding.Code == "entry_size_limit_exceeded"
+            && finding.Location?.EntryUri == "/word/data/payload.bin");
+        Assert.Null(forged.OrderedOpcContentDigest);
+    }
+
+    [Fact]
+    public void PM044_InternalInspection_ReusesManifestPassWithoutRawPayloadCopies()
+    {
+        var inspection = PackageManifestGenerator.Inspect(BuildRichPackage());
+
+        Assert.True(inspection.Manifest.IsValid);
+        Assert.Equal(inspection.Manifest.Entries.Count, inspection.Entries.Count);
+        var document = Assert.Single(inspection.Entries,
+            entry => entry.Uri == "/word/document.xml");
+        Assert.True(document.PayloadWasRead);
+        Assert.NotNull(document.Xml?.Root);
+        Assert.Equal(document.ManifestEntry.RawBytesDigest,
+            inspection.Manifest.Entries.Single(entry => entry.Uri == document.Uri).RawBytesDigest);
+    }
+
     private static readonly DateTimeOffset DefaultTimestamp =
         new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -1019,8 +1067,8 @@ public class PackageManifestTests
           <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
           <Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>
           <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
-          <Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.ms-word.commentsExt+xml"/>
-          <Override PartName="/word/people.xml" ContentType="application/vnd.ms-word.people+xml"/>
+          <Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>
+          <Override PartName="/word/people.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"/>
           <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
           <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
           <Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>

@@ -175,8 +175,10 @@ A null lower-level digest means the comparison is unavailable, not unequal.
 ## Normative XML normalization
 
 Schema v1 parses with DTD processing prohibited, no external resolver, preserved comments,
-processing instructions, and whitespace, and a configured character ceiling. Its digest token
-stream applies these rules:
+processing instructions, and whitespace, a configured character ceiling, and a fixed maximum
+element depth of 256. The depth ceiling applies again at digest entry points so a caller-supplied
+tree cannot reach recursive normalization with adversarial nesting. Its digest token stream applies
+these rules:
 
 - XML declarations, BOM/encoding choice, namespace-prefix spelling *in element and attribute
   names*, and namespace-declaration placement are ignored. Namespace prefixes in the recognized
@@ -236,6 +238,7 @@ OPC resolution. `ToJson(indented: true)` is for display and is not the canonical
 | Limit | Default |
 |---|---:|
 | central-directory entries | 10,000 |
+| uncompressed bytes per entry | 1 GiB |
 | total declared uncompressed bytes | 1 GiB |
 | XML part bytes parsed | 32 MiB |
 | per-entry expansion ratio | 1,000:1 |
@@ -250,11 +253,12 @@ empty/dot/trailing-dot segments, interleaved part names, and paths that escape t
 Logical reserved escapes stay escaped, so distinct names such as `a%40b.xml` and `a@b.xml` never
 collapse. Overrides and relationship targets are already logical IRIs and therefore do not receive
 the physical ZIP decoding step. Part-name equivalence folds ASCII case only; Unicode IRI
-characters retain their code-point identity. Both declared and actual decompressed bytes are bounded: every
-entry has a saturating `compressedSize × MaxCompressionRatio` ceiling and all reads share the
-package budget. ZIP traversal/absolute/backslash paths, count/size/ratio breaches, CRC mismatches,
-DTDs, encrypted entries, unreadable payloads, malformed MIME types, duplicate/conflicting metadata,
-and relationship faults are returned in
+characters retain their code-point identity. Both declared and actual decompressed bytes are
+bounded: every entry has an absolute `MaxEntryUncompressedBytes` ceiling, a saturating
+`compressedSize × MaxCompressionRatio` ceiling, and all reads share the package budget. ZIP
+traversal/absolute/backslash paths, count/size/ratio breaches, CRC mismatches, DTDs, encrypted
+entries, unreadable payloads, malformed MIME types, duplicate/conflicting metadata, and
+relationship faults are returned in
 `findings`. Each finding has a stable snake-case code, `info`/`warning`/`error` severity, a human
 message, and a reusable `ChangeLocation` (entry, owner, relationship, target, or property path).
 Consumers should branch on `code`, not message text.

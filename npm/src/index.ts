@@ -12,6 +12,11 @@ import type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  SemanticChange,
+  SemanticChangeFamily,
+  SemanticChangeOperation,
+  SemanticChangeSet,
+  SemanticValue,
   // DocxDiff consolidate (composite N-way)
   DocxDiffReviewer,
   DocxDiffConsolidateSettings,
@@ -326,6 +331,11 @@ export type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  SemanticChange,
+  SemanticChangeFamily,
+  SemanticChangeOperation,
+  SemanticChangeSet,
+  SemanticValue,
   // DocxDiff consolidate (composite N-way)
   DocxDiffReviewer,
   DocxDiffConsolidateSettings,
@@ -1183,6 +1193,36 @@ export async function docxDiffGetEditScript(
   }
 
   return result;
+}
+
+/**
+ * Compare two DOCX documents and return the stable, versioned semantic-change
+ * schema. This is the audit/verification surface; it classifies document meaning
+ * beyond the renderer's internal edit script and preserves unknown package changes.
+ */
+export async function docxDiffGetSemanticChanges(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<SemanticChangeSet> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetSemanticChangesJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get semantic changes: ${error.error}`);
+  }
+
+  return JSON.parse(result) as SemanticChangeSet;
 }
 
 /**

@@ -143,6 +143,12 @@ __all__ = [
     "DocxDiffSettings",
     "DocxDiffRevision",
     "DocxDiffFormatChange",
+    "SemanticChangeOperation",
+    "SemanticChangeFamily",
+    "SemanticValueKind",
+    "SemanticValue",
+    "SemanticChange",
+    "SemanticChangeSet",
     "DocxDiffReviewer",
     "DocxDiffConsolidateSettings",
     "DocxDiffConflictCompetitor",
@@ -2817,6 +2823,223 @@ class DocxDiffRevision:
         )
 
 
+class SemanticChangeOperation(str, Enum):
+    """Stable v1 operation names in a :class:`SemanticChangeSet`."""
+
+    INSERT = "insert"
+    DELETE = "delete"
+    MOVE = "move"
+    MODIFY = "modify"
+
+
+class SemanticChangeFamily(str, Enum):
+    """Stable v1 semantic-change families."""
+
+    TEXT = "text"
+    BLOCK_STRUCTURE = "block_structure"
+    RUN_FORMATTING = "run_formatting"
+    PARAGRAPH_FORMATTING = "paragraph_formatting"
+    STYLE = "style"
+    NUMBERING = "numbering"
+    LIST = "list"
+    TABLE = "table"
+    TABLE_ROW = "table_row"
+    TABLE_CELL = "table_cell"
+    TABLE_SPAN = "table_span"
+    TABLE_WIDTH = "table_width"
+    TABLE_STYLE = "table_style"
+    SECTION = "section"
+    PAGE_SETUP = "page_setup"
+    HEADER = "header"
+    FOOTER = "footer"
+    FIELD = "field"
+    FOOTNOTE = "footnote"
+    ENDNOTE = "endnote"
+    COMMENT = "comment"
+    HYPERLINK = "hyperlink"
+    BOOKMARK = "bookmark"
+    CONTENT_CONTROL = "content_control"
+    IMAGE = "image"
+    MEDIA = "media"
+    RELATIONSHIP = "relationship"
+    REVISION = "revision"
+    ANNOTATION = "annotation"
+    OPAQUE_PACKAGE_PART = "opaque_package_part"
+
+
+class SemanticValueKind(str, Enum):
+    """Discriminator for the closed semantic value union."""
+
+    ABSENT = "absent"
+    STRING = "string"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    DIGEST = "digest"
+    OBJECT = "object"
+    ARRAY = "array"
+
+
+class FrozenSemanticObject(Mapping[str, "SemanticValue"]):
+    """Immutable, hashable member mapping of an object-kind :class:`SemanticValue`.
+
+    Canonical JSON fixes the member order, so ordered equality and the hash both
+    follow it. Reads like a ``dict`` (``value["styleId"]``, iteration, ``len``);
+    writes raise ``TypeError`` like every other frozen wire mirror.
+    """
+
+    __slots__ = ("_items", "_lookup")
+
+    def __init__(self, items: Sequence[tuple[str, "SemanticValue"]]):
+        object.__setattr__(self, "_items", tuple(items))
+        object.__setattr__(self, "_lookup", dict(self._items))
+
+    def __getitem__(self, key: str) -> "SemanticValue":
+        return self._lookup[key]
+
+    def __iter__(self):
+        return iter(name for name, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FrozenSemanticObject):
+            return self._items == other._items
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._items)
+
+    def __repr__(self) -> str:
+        return f"FrozenSemanticObject({dict(self._items)!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticValue:
+    """Closed typed value used for one semantic change's before/after state.
+
+    Version 1 integer values stay within JavaScript's exactly representable
+    ``[-(2**53-1), 2**53-1]`` range so all supported clients retain identity.
+    """
+
+    kind: SemanticValueKind
+    value: str | bool | int | FrozenSemanticObject | tuple["SemanticValue", ...] | None = None
+    algorithm: str | None = None
+    profile: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticValue":
+        kind = SemanticValueKind(str(d["kind"]))
+        raw = d.get("value")
+        # Schema v1 requires the "value" member for every kind except absent (and
+        # "algorithm"/"value" for digests); a payload missing them is corrupt, and
+        # decoding it as empty content would be indistinguishable from genuine data.
+        if kind is SemanticValueKind.OBJECT:
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"semantic object requires a members object, got {raw!r}")
+            value: Any = FrozenSemanticObject(
+                [(str(name), cls._from_wire(member)) for name, member in raw.items()]
+            )
+        elif kind is SemanticValueKind.ARRAY:
+            if raw is None or isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+                raise ValueError(f"semantic array requires an items array, got {raw!r}")
+            value = tuple(cls._from_wire(member) for member in raw)
+        elif kind is SemanticValueKind.ABSENT:
+            if raw is not None:
+                raise ValueError(f"absent semantic value carries no value, got {raw!r}")
+            value = None
+        elif kind is SemanticValueKind.INTEGER:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                raise ValueError(f"semantic integer must be an integer, got {raw!r}")
+            if not -(2**53 - 1) <= raw <= 2**53 - 1:
+                raise ValueError(f"semantic integer is outside the v1 safe range: {raw}")
+            value = raw
+        elif kind is SemanticValueKind.STRING:
+            if not isinstance(raw, str):
+                raise ValueError(f"semantic string must be a string, got {raw!r}")
+            value = raw
+        elif kind is SemanticValueKind.BOOLEAN:
+            if not isinstance(raw, bool):
+                raise ValueError(f"semantic boolean must be a boolean, got {raw!r}")
+            value = raw
+        else:  # SemanticValueKind.DIGEST
+            if not isinstance(raw, str) or not raw:
+                raise ValueError(f"semantic digest requires a non-empty value, got {raw!r}")
+            algorithm = d.get("algorithm")
+            if not isinstance(algorithm, str) or not algorithm:
+                raise ValueError(
+                    f"semantic digest requires a non-empty algorithm, got {algorithm!r}"
+                )
+            value = raw
+        return cls(
+            kind=kind,
+            value=value,
+            algorithm=d.get("algorithm"),
+            profile=d.get("profile"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticChange:
+    """One deterministic, part- and anchor-addressed semantic change."""
+
+    id: str
+    operation: SemanticChangeOperation
+    family: SemanticChangeFamily
+    part_uri: str
+    path: str
+    before: SemanticValue
+    after: SemanticValue
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+    left_scope: str | None = None
+    right_scope: str | None = None
+    move_id: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticChange":
+        return cls(
+            id=str(d["id"]),
+            operation=SemanticChangeOperation(str(d["operation"])),
+            family=SemanticChangeFamily(str(d["family"])),
+            part_uri=str(d["partUri"]),
+            path=str(d["path"]),
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+            left_scope=d.get("leftScope"),
+            right_scope=d.get("rightScope"),
+            move_id=d.get("moveId"),
+            before=SemanticValue._from_wire(d["before"]),
+            after=SemanticValue._from_wire(d["after"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticChangeSet:
+    """Version 1 of the public ``docxodus.semantic-changes`` schema."""
+
+    schema: str
+    schema_version: int
+    change_count: int
+    changes: tuple[SemanticChange, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticChangeSet":
+        schema = str(d.get("schema", ""))
+        schema_version = int(d.get("schemaVersion", 0))
+        if schema != "docxodus.semantic-changes" or schema_version != 1:
+            raise ValueError(
+                f"unsupported semantic-change schema {schema!r} version {schema_version}"
+            )
+        changes = tuple(SemanticChange._from_wire(change) for change in d.get("changes", ()))
+        change_count = int(d.get("changeCount", len(changes)))
+        if change_count != len(changes):
+            raise ValueError(
+                f"semantic-change count {change_count} does not match {len(changes)} entries"
+            )
+        return cls(schema, schema_version, change_count, changes)
+
+
 # ---------------------------------------------------------------------------
 # DocxDiff consolidate — multi-reviewer composite diff
 # ---------------------------------------------------------------------------
@@ -3045,6 +3268,8 @@ class DocxSessionSettings:
     revision_author: str | None = None
     persist_anchor_ids: bool = False
     smart_quotes: bool = False
+    #: Capture the initial projection for ``get_diff`` and retain exact opening
+    #: package bytes for ``get_semantic_changes``. Disable to avoid both costs.
     capture_initial_projection: bool = True
     projection_settings: WmlToMarkdownConverterSettings | None = None
 

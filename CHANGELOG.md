@@ -12,7 +12,9 @@ All notable changes to this project will be documented in this file.
   ordered OPC-content, and normalized-semantic SHA-256 identities. XML normalization ignores only
   documented serialization choices through an explicit known-content-type allowlist, preserves
   unknown vendor-extension/custom XML whitespace and `xml:space`, and
-  keeps Strict and Transitional namespaces distinct. Available from .NET, live sessions,
+  keeps Strict and Transitional namespaces distinct. Declared and actual payload reads now also
+  have a configurable absolute per-entry byte ceiling alongside the aggregate and compression-ratio
+  limits. Available from .NET, live sessions,
   WASM/npm (including workers), the stdio Python host/client, and MCP
   `docxodus_get_content(format: "manifest")`.
 
@@ -39,6 +41,48 @@ All notable changes to this project will be documented in this file.
   options. See
   [`docs/architecture/package_manifests.md`](docs/architecture/package_manifests.md), including
   its **Known limits of schema v1** section.
+- **Stable, comprehensive semantic DOCX diff (#457).** `SemanticDiff.Compare` and
+  `DocxDiff.GetSemanticChanges` return the versioned, deterministic
+  `docxodus.semantic-changes` schema with owning part/path, side-specific anchors
+  and scopes, `insert`/`delete`/`move`/`modify`, and closed typed before/after
+  values. Coverage spans text/structure/formatting/styles/numbering, tables,
+  sections and page setup, all story/note/comment families, links/bookmarks/SDTs,
+  images/media/relationships, revisions/annotations, and opaque package parts.
+  Serialization-only XML, coordinated relationship-id rewrites, and
+  relative-versus-absolute internal relationship targets are suppressed, while
+  target swaps at relationship-reference locations remain visible. Unknown XML
+  remains visible with whitespace-, comment-, and processing-instruction-preserving
+  normalized digests; full-part style/numbering/theme residuals cover values outside
+  the typed IR registries. Package inspection reuses #456's manifest generator, XML normalizer,
+  relationship resolution, safety limits, and finding locations; it runs before SDK parsing and has
+  configurable entry-count, part-URI, per-entry, aggregate-decompressed-byte, and
+  compression-ratio bounds, with duplicate part names and relationship ids rejected. Invalid
+  manifests fail closed even when the package-change supplement is disabled.
+  Typed table and cell values are read from that table's own `w:tblPr`/`w:tblGrid` and that cell's
+  own `w:tcPr`, so a nested table's style, width, and column widths are reported against the nested
+  table's anchor instead of the containing one. Integers that a package can carry outside the v1
+  safe range — `wp:extent/@cx`, `w:gridCol/@w`, `w:bookmarkStart/@w:colFirst`, and declared entry
+  sizes — are emitted losslessly as decimal strings rather than failing the comparison.
+  The formal v1 JSON Schema is published at
+  [`docs/schemas/semantic-changes-v1.schema.json`](docs/schemas/semantic-changes-v1.schema.json).
+  The existing redline, revision,
+  edit-script JSON, and `DocxSession.GetDiff` APIs are unchanged. Available through
+  .NET, WASM/npm, the Python host/client, and MCP
+  (`docxodus_get_content format:"semantic_changes"`). Session comparison keeps the
+  opening package when `CaptureInitialProjection` is enabled (the MCP open tool can
+  decline with `captureInitialProjection:false`) and compares its checkpoint
+  serialization against an isolated checkpoint of the current state, so an
+  unedited session reports zero changes for any openable package. The surface
+  shares the sibling entry points' read pipeline — strict→transitional and
+  `mc:AlternateContent` normalization plus the `OnCompatibilityWarning`/
+  `ThrowOnCompatibilityWarning` gate — and the package safety limits are
+  `PackageManifestOptions` defaults, declared once. Serialization bookkeeping
+  (rsids, `w14:paraId`/`textId`, annotation-part indentation) is never a change;
+  package records use the IR's `hdr{N}`/`ftr{N}` scope vocabulary; and a
+  bookmark/revision/binding whose containing block the IR aligned in place is
+  never a `move`. The header/footer path grammar pins the `w:type` kind vocabulary
+  (`default`/`first`/`even`). Design and measured 1,000-paragraph guard:
+  [`docs/architecture/semantic_diff.md`](docs/architecture/semantic_diff.md).
 - **Idempotent mutation transaction identities for the MCP server** (issue #449).
   An applying `docxodus_mutations` batch may carry a caller-chosen root
   `transactionId` (non-blank, at most 256 Unicode scalar values). The first
@@ -428,6 +472,18 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Package manifests recognize the content-type spellings Word writes, and VML parts
+  digest as XML** (issues #512, #513). Five allowlist/counter spellings in the manifest
+  generator could never match a real package — glossary
+  (`wordprocessingml.document.glossary+xml`), commentsExtended/commentsIds/people
+  (`wordprocessingml.*`, not `vnd.ms-word.*`), and stylesWithEffects
+  (`vnd.ms-word.stylesWithEffects+xml`) — silently disabling documented whitespace
+  suppression, glossary story facts, and the threaded-comment/people facts (always zero).
+  `IsXml` additionally recognizes the declared `vmlDrawing` content type (the one OOXML XML
+  part type without a `+xml` suffix), so a reindent-only VML resave no longer flips the
+  normalized semantic identity. The semantic package detector consumes the same corrected
+  vocabulary for its opaque-part whitespace policy, so the manifest normalizer and the
+  semantic diff can never disagree about the same part bytes.
 - **npm — a Web Worker call no longer detaches the caller's `Uint8Array`.** Every
   `createWorkerDocxodus` entry point that takes document bytes (`convertDocxToHtml`,
   `compareDocuments`, the session opens, and the new `generatePackageManifest`) put the

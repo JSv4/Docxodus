@@ -222,7 +222,7 @@ Three lifecycle tools, four read/preview tools, and twelve grouped-intent tools.
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below) | `{ sessionId, path }` — `path` is the **resolved** location |
+| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below), `captureInitialProjection?` (default true; false frees the per-session baseline copy of the opening package and makes `semantic_changes`/diff formats refuse) | `{ sessionId, path }` — `path` is the **resolved** location |
 | `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from), `persistAnchorIds?` (per-call override of the session's open-time setting; absent = use it) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
 
@@ -237,6 +237,8 @@ with resolved high-signal properties), `formatting` (explicit direct/effective p
 formatting for `anchorId`), `spans` (enumerable mutation-compatible inline spans for `anchorId`),
 `manifest` (the full deterministic OPC inventory, three package identities, relationships, facts,
 and validation findings described in [`package_manifests.md`](package_manifests.md)),
+`semantic_changes` (the document-wide, versioned semantic change set from the opening package to
+the current logical checkpoint),
 and `info` (`GetEditSummary` plus the `SectionInfo` governing `anchorId`, or the first body block
 when it is omitted). `anchorId` is required for `formatting`/`spans` and forbidden for `manifest`,
 which always covers the complete logical package; otherwise it optionally scopes
@@ -246,6 +248,10 @@ reads include every projected package story, including `hdr*`/`ftr*`; an `anchor
 `set_header_text` or `set_footer_text` can also be handed straight back to markdown, text, or HTML
 read-back. (The unscoped continuous HTML render is body-oriented; use the story anchor for
 header/footer HTML.)
+
+`semantic_changes` requires the opening baseline captured by the default
+`captureInitialProjection: true` setting and rejects `anchorId`; a partial subtree would violate the
+schema's package-wide completeness contract. See [`semantic_diff.md`](semantic_diff.md).
 
 The read surface is designed for inspect-before-edit workflows: style ids returned by `styles`,
 anchors returned by list/section/formatting records, and `(anchorId, span)` pairs returned by

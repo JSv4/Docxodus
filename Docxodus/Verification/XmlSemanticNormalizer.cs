@@ -11,6 +11,13 @@ using System.Xml.Linq;
 
 namespace Docxodus.Verification;
 
+internal sealed class XmlDepthLimitException : XmlException
+{
+    public XmlDepthLimitException(string message) : base(message)
+    {
+    }
+}
+
 /// <summary>
 /// XML infoset normalizer used by package-manifest schema v1.
 ///
@@ -26,6 +33,11 @@ namespace Docxodus.Verification;
 /// </summary>
 internal static class XmlSemanticNormalizer
 {
+    // Recursive canonical emission must have a process-safe structural bound independent of the
+    // byte/character ceilings. 256 is far above normal OPC/OOXML nesting while keeping hostile
+    // documents comfortably below the runtime stack limit.
+    internal const int MaxElementDepth = 256;
+
     private const string ContentTypesUri = "/[Content_Types].xml";
     private const string XmlSchemaInstanceNamespace =
         "http://www.w3.org/2001/XMLSchema-instance";
@@ -50,14 +62,20 @@ internal static class XmlSemanticNormalizer
         };
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = XmlReader.Create(stream, settings);
-        return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        EnsureBoundedDepth(document);
+        return document;
     }
 
     internal static VerificationDigest Digest(
         XDocument document,
         string entryUri,
-        bool ignoreFormattingWhitespace)
+        bool ignoreFormattingWhitespace,
+        Func<XAttribute, bool>? includeAttribute = null,
+        Func<XAttribute, string>? attributeValueNormalizer = null,
+        Func<XElement, bool>? includeElement = null)
     {
+        EnsureBoundedDepth(document);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         WriteByte(hash, (byte)'D');
         // XML permits only production-S whitespace outside the document element. It is document
@@ -65,6 +83,7 @@ internal static class XmlSemanticNormalizer
         foreach (var node in document.Nodes().Where(node =>
                      node is not XText text || !IsXmlWhitespace(text.Value)))
             WriteNode(hash, node, entryUri, ignoreFormattingWhitespace,
+                includeAttribute, attributeValueNormalizer, includeElement,
                 isDocumentRoot: true, preserveSpace: false);
         return new VerificationDigest
         {
@@ -73,11 +92,58 @@ internal static class XmlSemanticNormalizer
         };
     }
 
+    internal static VerificationDigest Digest(
+        XElement element,
+        string entryUri,
+        bool ignoreFormattingWhitespace,
+        Func<XAttribute, bool>? includeAttribute = null,
+        Func<XAttribute, string>? attributeValueNormalizer = null,
+        Func<XElement, bool>? includeElement = null)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        EnsureBoundedDepth(element);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        WriteByte(hash, (byte)'D');
+        // Hash the attached element directly. Cloning it into a new XDocument discards namespace
+        // bindings inherited from ancestors, making equivalent xsi:type/mc prefix spellings differ.
+        WriteElement(hash, element, entryUri, ignoreFormattingWhitespace,
+            includeAttribute, attributeValueNormalizer, includeElement,
+            isDocumentRoot: true, inheritedPreserveSpace: false);
+        return new VerificationDigest
+        {
+            Algorithm = "SHA-256",
+            Value = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(),
+        };
+    }
+
+    private static void EnsureBoundedDepth(XContainer container)
+    {
+        var pending = new Stack<(XElement Element, int Depth)>();
+        if (container is XElement element)
+            pending.Push((element, 1));
+        else
+            foreach (var root in container.Elements())
+                pending.Push((root, 1));
+
+        while (pending.Count > 0)
+        {
+            var (current, depth) = pending.Pop();
+            if (depth > MaxElementDepth)
+                throw new XmlDepthLimitException(
+                    $"XML element nesting exceeds the {MaxElementDepth} level safety limit.");
+            foreach (var child in current.Elements())
+                pending.Push((child, depth + 1));
+        }
+    }
+
     private static void WriteNode(
         IncrementalHash hash,
         XNode node,
         string entryUri,
         bool ignoreFormattingWhitespace,
+        Func<XAttribute, bool>? includeAttribute,
+        Func<XAttribute, string>? attributeValueNormalizer,
+        Func<XElement, bool>? includeElement,
         bool isDocumentRoot = false,
         bool preserveSpace = false)
     {
@@ -85,6 +151,7 @@ internal static class XmlSemanticNormalizer
         {
             case XElement element:
                 WriteElement(hash, element, entryUri, ignoreFormattingWhitespace,
+                    includeAttribute, attributeValueNormalizer, includeElement,
                     isDocumentRoot, preserveSpace);
                 break;
             case XCData cdata:
@@ -119,13 +186,17 @@ internal static class XmlSemanticNormalizer
         XElement element,
         string entryUri,
         bool ignoreFormattingWhitespace,
+        Func<XAttribute, bool>? includeAttribute,
+        Func<XAttribute, string>? attributeValueNormalizer,
+        Func<XElement, bool>? includeElement,
         bool isDocumentRoot,
         bool inheritedPreserveSpace)
     {
         WriteByte(hash, (byte)'E');
         WriteName(hash, element.Name);
         var attributes = element.Attributes()
-            .Where(attribute => !attribute.IsNamespaceDeclaration)
+            .Where(attribute => !attribute.IsNamespaceDeclaration
+                && (includeAttribute?.Invoke(attribute) ?? true))
             // An element cannot carry two attributes with the same expanded name, so namespace
             // plus local name is already a total order.
             .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
@@ -135,15 +206,17 @@ internal static class XmlSemanticNormalizer
         foreach (var attribute in attributes)
         {
             WriteName(hash, attribute.Name);
-            WriteAttributeValue(hash, element, attribute);
+            WriteAttributeValue(hash, element, attribute, attributeValueNormalizer);
         }
 
         var space = element.Attribute(XNamespace.Xml + "space")?.Value;
         var preserveSpace = string.Equals(space, "preserve", StringComparison.Ordinal)
             || (inheritedPreserveSpace && !string.Equals(space, "default", StringComparison.Ordinal));
         IEnumerable<XNode> children = CoalesceAdjacentText(element.Nodes());
+        if (includeElement is not null)
+            children = children.Where(node => node is not XElement child || includeElement(child));
         if (ignoreFormattingWhitespace && !preserveSpace
-            && children.OfType<XElement>().Any())
+            && (isDocumentRoot || children.OfType<XElement>().Any()))
         {
             children = children.Where(node =>
                 node is not XText text || !IsXmlWhitespace(text.Value));
@@ -157,6 +230,7 @@ internal static class XmlSemanticNormalizer
         WriteInt32(hash, materialized.Count);
         foreach (var child in materialized)
             WriteNode(hash, child, entryUri, ignoreFormattingWhitespace,
+                includeAttribute, attributeValueNormalizer, includeElement,
                 preserveSpace: preserveSpace);
         WriteByte(hash, (byte)'e');
     }
@@ -203,6 +277,7 @@ internal static class XmlSemanticNormalizer
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         WriteElement(hash, element, entryUri: string.Empty, ignoreFormattingWhitespace: true,
+            includeAttribute: null, attributeValueNormalizer: null, includeElement: null,
             isDocumentRoot: false, inheritedPreserveSpace: false);
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
@@ -210,11 +285,13 @@ internal static class XmlSemanticNormalizer
     private static void WriteAttributeValue(
         IncrementalHash hash,
         XElement context,
-        XAttribute attribute)
+        XAttribute attribute,
+        Func<XAttribute, string>? attributeValueNormalizer)
     {
+        var value = attributeValueNormalizer?.Invoke(attribute) ?? attribute.Value;
         if (attribute.Name.NamespaceName == XmlSchemaInstanceNamespace
             && attribute.Name.LocalName == "type"
-            && TryResolveQName(context, attribute.Value, out var typeName))
+            && TryResolveQName(context, value, out var typeName))
         {
             WriteByte(hash, (byte)'Q');
             WriteName(hash, typeName);
@@ -228,7 +305,7 @@ internal static class XmlSemanticNormalizer
             && attribute.Name.LocalName == "Requires"
             && context.Name.NamespaceName == MarkupCompatibilityNamespace;
         if (isPrefixList
-            && TryResolvePrefixList(context, attribute.Value, out var namespaceNames))
+            && TryResolvePrefixList(context, value, out var namespaceNames))
         {
             WriteByte(hash, (byte)'P');
             WriteInt32(hash, namespaceNames.Count);
@@ -240,7 +317,7 @@ internal static class XmlSemanticNormalizer
         if (isMcAttribute
             && attribute.Name.LocalName is
                 "PreserveAttributes" or "PreserveElements" or "ProcessContent"
-            && TryResolveQNameList(context, attribute.Value, out var names))
+            && TryResolveQNameList(context, value, out var names))
         {
             WriteByte(hash, (byte)'L');
             WriteInt32(hash, names.Count);
@@ -250,7 +327,7 @@ internal static class XmlSemanticNormalizer
         }
 
         WriteByte(hash, (byte)'V');
-        WriteString(hash, attribute.Value);
+        WriteString(hash, value);
     }
 
     private static bool TryResolveQName(XElement context, string value, out XName name)

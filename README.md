@@ -63,6 +63,10 @@ cites are the final document's.
 - **The diff is also data.** `GetRevisions()` returns typed revisions carrying stable
   `kind:scope:unid` anchors; `GetEditScriptJson()` returns the whole edit script as JSON, so you can
   drive a review UI or an approval workflow without parsing OOXML.
+- **Semantic verification.** `GetSemanticChanges()` returns a deterministic, versioned change set
+  for text, formatting, styles, numbering, tables, sections, stories, review data, relationships,
+  media, and opaque package changes while suppressing serialization-only noise;
+  `GetSemanticChangesJson()` emits its JSON representation.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
@@ -256,6 +260,7 @@ reading first:
 | Doc | What it covers |
 |---|---|
 | [`ir_diff_engine.md`](docs/architecture/ir_diff_engine.md) | `DocxDiff` — pipeline, edit script, settings, parity with Word |
+| [`semantic_diff.md`](docs/architecture/semantic_diff.md) | Stable semantic-change schema, package coverage, canonicalization, and limits |
 | [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
 | [`native_content_controls.md`](docs/architecture/native_content_controls.md) | Native Word content-control registry, fills, binding/lock safety, and transports |
 | [`markdown_projection.md`](docs/architecture/markdown_projection.md) | The projection spec and anchor format |

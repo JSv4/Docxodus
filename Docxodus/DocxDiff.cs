@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
+using Docxodus.Verification;
 
 namespace Docxodus;
 
@@ -160,6 +161,44 @@ public static class DocxDiff
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
         return IrEditScriptJson.Write(script);
     }
+
+    /// <summary>
+    /// Compare two documents and return the stable, versioned semantic change schema. Unlike
+    /// <see cref="GetEditScriptJson"/>, which exposes the renderer's internal block script, this
+    /// projection classifies document meaning (text, formatting, lists, tables, sections, notes,
+    /// relationships, media, annotations, and opaque package parts) for audit and verification.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        WmlDocument left, WmlDocument right, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(left, right, options);
+
+    /// <summary>
+    /// Raw-byte counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// The bounded package preflight runs before either byte array is opened by the Open XML SDK.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        byte[] leftBytes, byte[] rightBytes, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(leftBytes, rightBytes, options);
+
+    /// <summary>
+    /// JSON counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// Field order, change order, and generated
+    /// change ids are deterministic for semantically identical inputs.
+    /// </summary>
+    public static string GetSemanticChangesJson(
+        WmlDocument left,
+        WmlDocument right,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(left, right, options, indented);
+
+    /// <summary>JSON counterpart of the raw-byte <see cref="GetSemanticChanges(byte[],byte[],SemanticDiffOptions?)"/>.</summary>
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(leftBytes, rightBytes, options, indented);
 
     /// <summary>
     /// Consolidate the edits of N reviewers — each an independently revised copy of the SAME
@@ -402,7 +441,9 @@ public static class DocxDiff
     /// is set. When engaged and a warning is found, invokes the callback then optionally throws
     /// <see cref="DocxDiffCompatibilityException"/>.
     /// </summary>
-    private static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
+    // Internal: SemanticDiffEngine shares this gate so the audit surface honors the same
+    // OnCompatibilityWarning/ThrowOnCompatibilityWarning contract as every sibling entry point.
+    internal static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
     {
         if (settings.OnCompatibilityWarning == null && !settings.ThrowOnCompatibilityWarning)
             return;
@@ -470,7 +511,9 @@ public static class DocxDiff
     /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
     /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
     /// </summary>
-    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
+    // Internal: SemanticDiffEngine shares this normalization so strict-conformance and
+    // mc:AlternateContent inputs reach the IR exactly as they do on every sibling entry point.
+    internal static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
     {
         // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
         // transitional before ANY read — Word does the same on open. No-op for transitional docs.

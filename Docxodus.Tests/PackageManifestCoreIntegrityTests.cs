@@ -135,6 +135,16 @@ public class PackageManifestCoreIntegrityTests
 
         Assert.Equal(firstDigest, sameDigest);
         Assert.NotEqual(firstDigest, reboundDigest);
+
+        var subtreeFirst = XmlSemanticNormalizer.Parse(Utf8(
+            "<root xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
+            "xmlns:a=\"urn:type\"><child xsi:type=\"a:Thing\"/></root>"), 10_000);
+        var subtreeSame = XmlSemanticNormalizer.Parse(Utf8(
+            "<root xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
+            "xmlns:b=\"urn:type\"><child xsi:type=\"b:Thing\"/></root>"), 10_000);
+        Assert.Equal(
+            XmlSemanticNormalizer.Digest(subtreeFirst.Root!.Element("child")!, "/custom.xml", false),
+            XmlSemanticNormalizer.Digest(subtreeSame.Root!.Element("child")!, "/custom.xml", false));
     }
 
     [Fact]
@@ -379,6 +389,30 @@ public class PackageManifestCoreIntegrityTests
         Assert.Equal(
             first.Entries.Select(entry => (entry.Uri, entry.Occurrence)),
             reordered.Entries.Select(entry => (entry.Uri, entry.Occurrence)));
+    }
+
+    [Fact]
+    public void PM058_DeepXmlIsRejectedBeforeRecursiveNormalization()
+    {
+        var xml = new StringBuilder("<root>");
+        for (var depth = 0; depth < XmlSemanticNormalizer.MaxElementDepth + 1; depth++)
+            xml.Append("<n>");
+        xml.Append('x');
+        for (var depth = 0; depth < XmlSemanticNormalizer.MaxElementDepth + 1; depth++)
+            xml.Append("</n>");
+        xml.Append("</root>");
+        var package = BuildZip(
+            ("[Content_Types].xml", Utf8(Types(
+                "<Override PartName=\"/deep.xml\" ContentType=\"application/xml\"/>"))),
+            ("deep.xml", Utf8(xml.ToString())));
+
+        var manifest = PackageManifestGenerator.Generate(package);
+
+        Assert.False(manifest.IsValid);
+        Assert.Contains(manifest.Findings, finding =>
+            finding.Code == "xml_depth_limit_exceeded"
+            && finding.Location?.EntryUri == "/deep.xml");
+        Assert.Null(manifest.NormalizedSemanticDigest);
     }
 
     private static byte[] DirectoryPayloadPackage(byte payload) => BuildZip(

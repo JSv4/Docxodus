@@ -5,16 +5,17 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Docxodus.Verification;
 
 namespace Docxodus.Internal;
 
 /// <summary>
 /// Single owner of the <see cref="DocxDiff"/> wire contract. Both the WASM
 /// bridge (<c>DocxDiffBridge</c>) and the stdio Python host
-/// (<c>tools/python-host</c> dispatcher) route the three diff entry points —
-/// Compare, GetRevisions, GetEditScriptJson — through here, so the JSON shapes
-/// for settings (in) and revisions (out) live in exactly one place. This
-/// mirrors the role <see cref="HtmlConversionOps"/> plays for HTML conversion.
+/// (<c>tools/python-host</c> dispatcher) route the shared diff entry points —
+/// Compare, GetRevisions, GetEditScriptJson, and GetSemanticChangesJson — through
+/// here, so the JSON shapes for settings (in) and revisions (out) live in exactly
+/// one place. This mirrors the role <see cref="HtmlConversionOps"/> plays for HTML conversion.
 ///
 /// <para>Settings arrive as a JSON object (the transport mirror of
 /// <see cref="DocxDiffSettings"/>); every field is optional and an omitted
@@ -44,6 +45,21 @@ internal static class DocxDiffOps
     {
         var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
         return DocxDiff.GetEditScriptJson(left, right, settings);
+    }
+
+    /// <summary>
+    /// Compare two DOCX byte arrays and return the public semantic-change schema as compact JSON.
+    /// Compact output is the canonical wire form shared by WASM, npm, Python, and MCP.
+    /// </summary>
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes, byte[] rightBytes, string? settingsJson)
+    {
+        var settings = ParseSettings(settingsJson);
+        return SemanticDiff.CompareJson(
+            leftBytes,
+            rightBytes,
+            new SemanticDiffOptions { DiffSettings = settings },
+            indented: false);
     }
 
     /// <summary>

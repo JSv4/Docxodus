@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/schemas/semantic-changes-v1.schema.json",
+  "title": "Docxodus semantic change set v1",
+  "description": "The stable JSON representation emitted by SemanticChangeSet.ToJson().",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "changeCount",
+    "changes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "docxodus.semantic-changes"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "changeCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "operation",
+        "family",
+        "partUri",
+        "path",
+        "leftAnchor",
+        "rightAnchor",
+        "leftScope",
+        "rightScope",
+        "moveId",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^chg-[0-9]{6,}$"
+        },
+        "operation": {
+          "enum": [
+            "insert",
+            "delete",
+            "move",
+            "modify"
+          ]
+        },
+        "family": {
+          "enum": [
+            "text",
+            "block_structure",
+            "run_formatting",
+            "paragraph_formatting",
+            "style",
+            "numbering",
+            "list",
+            "table",
+            "table_row",
+            "table_cell",
+            "table_span",
+            "table_width",
+            "table_style",
+            "section",
+            "page_setup",
+            "header",
+            "footer",
+            "field",
+            "footnote",
+            "endnote",
+            "comment",
+            "hyperlink",
+            "bookmark",
+            "content_control",
+            "image",
+            "media",
+            "relationship",
+            "revision",
+            "annotation",
+            "opaque_package_part"
+          ]
+        },
+        "partUri": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string"
+        },
+        "leftAnchor": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "rightAnchor": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "leftScope": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "rightScope": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "moveId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "before": {
+          "$ref": "#/$defs/value"
+        },
+        "after": {
+          "$ref": "#/$defs/value"
+        }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/absentValue"
+        },
+        {
+          "$ref": "#/$defs/stringValue"
+        },
+        {
+          "$ref": "#/$defs/booleanValue"
+        },
+        {
+          "$ref": "#/$defs/integerValue"
+        },
+        {
+          "$ref": "#/$defs/digestValue"
+        },
+        {
+          "$ref": "#/$defs/objectValue"
+        },
+        {
+          "$ref": "#/$defs/arrayValue"
+        }
+      ]
+    },
+    "absentValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "absent"
+        }
+      }
+    },
+    "stringValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "booleanValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "boolean"
+        },
+        "value": {
+          "type": "boolean"
+        }
+      }
+    },
+    "integerValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "integer"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "digestValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "algorithm",
+        "profile",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "digest"
+        },
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "objectValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "object"
+        },
+        "value": {
+          "type": "object",
+          "propertyNames": {
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/value"
+          }
+        }
+      }
+    },
+    "arrayValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "array"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        }
+      }
+    }
+  }
+}

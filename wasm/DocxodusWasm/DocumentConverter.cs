@@ -25,11 +25,28 @@ public partial class DocumentConverter
     /// <summary>
     /// Generate a deterministic, non-mutating verification manifest for supplied DOCX bytes.
     /// Malformed, encrypted, and structurally invalid packages are reported as structured
-    /// findings in the returned JSON rather than opened as editable documents.
+    /// findings in the returned JSON rather than opened as editable documents. Same guard and
+    /// error shape as every other byte-accepting export: the size ceiling applies before any
+    /// hashing/ZIP walk, and an unexpected failure surfaces as the documented error JSON, not a
+    /// raw thrown JS error.
     /// </summary>
     [JSExport]
-    public static string GeneratePackageManifest(byte[] docxBytes) =>
-        VerificationOps.GeneratePackageManifest(docxBytes);
+    public static string GeneratePackageManifest(byte[] docxBytes)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        try
+        {
+            return VerificationOps.GeneratePackageManifest(docxBytes);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
 
     /// <summary>
     /// Validates input document bytes.

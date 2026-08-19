@@ -96,6 +96,10 @@ internal static class Dispatcher
             UndoMemoryBudgetBytes = LongOpt(
                 args, "undoMemoryBudgetBytes", settingDefaults.UndoMemoryBudgetBytes),
             PersistAnchorIds = BoolOpt(args, "persistAnchorIds", false),
+            // A long-lived server can opt out of retaining every session's opening package;
+            // semantic_changes and the markdown diff then refuse with the setting's name.
+            CaptureInitialProjection = BoolOpt(
+                args, "captureInitialProjection", settingDefaults.CaptureInitialProjection),
         };
 
         var session = store.Open(bytes, location, settings);
@@ -209,6 +213,14 @@ internal static class Dispatcher
 
             case "version":
                 return DocxSessionOps.GetVersionJson(session.Handle);
+
+            case "semantic_changes":
+                // This read is package-wide. Reject the property itself, including null and
+                // non-string values, rather than letting OptStr turn an invalid scoped request
+                // into an apparently successful whole-document response.
+                if (args.TryGetProperty("anchorId", out _))
+                    throw new McpToolException("semantic_changes is document-wide and does not accept anchorId");
+                return DocxSessionOps.GetSemanticChanges(session.Handle);
 
             case "check_preconditions":
                 return DocxSessionOps.CheckPreconditions(

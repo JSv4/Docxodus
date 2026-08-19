@@ -21,8 +21,11 @@ from docx_scalpel import (
     convert_docx_to_html,
     docx_diff_accept_revisions,
     docx_diff_compare,
+    docx_diff_get_semantic_changes,
     docx_diff_reject_revisions,
+    open_session,
 )
+from docx_scalpel.types import SemanticChangeFamily, SemanticChangeOperation
 
 # (left, right) WC pairs whose edits land in body text, so the HTML-projection oracle
 # sees a genuine difference between the two sides.
@@ -101,3 +104,22 @@ def test_docx_diff_settings_input_revision_policies_to_wire() -> None:
     ).to_wire()
     assert wire["preAcceptInputRevisions"] is True
     assert wire["preserveInputRevisions"] is True
+
+
+def test_semantic_change_schema_round_trips_through_stateless_and_session_hosts(
+    test_files_dir: Path,
+) -> None:
+    left = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    changes = docx_diff_get_semantic_changes(left, right)
+    assert changes.schema == "docxodus.semantic-changes"
+    assert changes.schema_version == 1
+    assert changes.change_count == len(changes.changes) > 0
+    assert any(change.family is SemanticChangeFamily.TEXT for change in changes.changes)
+    assert all(change.operation in SemanticChangeOperation for change in changes.changes)
+
+    with open_session(left) as session:
+        baseline = session.get_semantic_changes()
+        assert baseline.schema_version == 1
+        assert baseline.changes == ()

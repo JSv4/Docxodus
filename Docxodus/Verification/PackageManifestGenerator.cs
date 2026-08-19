@@ -58,12 +58,12 @@ public static class PackageManifestGenerator
         "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.stylesWithEffects+xml",
+        "application/vnd.ms-word.stylesWithEffects+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.glossaryDocument+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml",
         "application/vnd.ms-word.document.macroEnabled.main+xml",
         "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
     };
@@ -85,15 +85,30 @@ public static class PackageManifestGenerator
         "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
         "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
         "application/vnd.openxmlformats-officedocument.vmlDrawing",
-        "application/vnd.ms-word.commentsExt+xml",
-        "application/vnd.ms-word.commentsIds+xml",
-        "application/vnd.ms-word.people+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml",
         "application/vnd.ms-office.chartstyle+xml",
         "application/vnd.ms-office.chartcolorstyle+xml",
     };
 
     /// <summary>Generate a schema-v1 package manifest.</summary>
-    public static PackageManifest Generate(byte[] packageBytes, PackageManifestOptions? options = null)
+    public static PackageManifest Generate(byte[] packageBytes, PackageManifestOptions? options = null) =>
+        GenerateInspection(packageBytes, options, includeInspectionEntries: false).Manifest;
+
+    /// <summary>
+    /// Generate a manifest and retain parsed XML from that same bounded inspection pass for
+    /// internal verification consumers. No archive, stream, or duplicate raw payload escapes.
+    /// </summary>
+    internal static PackageManifestInspection Inspect(
+        byte[] packageBytes,
+        PackageManifestOptions? options = null) =>
+        GenerateInspection(packageBytes, options, includeInspectionEntries: true);
+
+    private static PackageManifestInspection GenerateInspection(
+        byte[] packageBytes,
+        PackageManifestOptions? options,
+        bool includeInspectionEntries)
     {
         ArgumentNullException.ThrowIfNull(packageBytes);
         options ??= new PackageManifestOptions();
@@ -102,25 +117,30 @@ public static class PackageManifestGenerator
         var rawDigest = Digest(packageBytes);
         var findings = new List<VerificationFinding>();
         if (packageBytes.AsSpan().StartsWith(OleSignature))
-            return OleManifest(packageBytes, rawDigest, findings);
+            return new PackageManifestInspection(
+                OleManifest(packageBytes, rawDigest, findings),
+                Array.Empty<PackageManifestInspectionEntry>());
 
         try
         {
             using var stream = new MemoryStream(packageBytes, writable: false);
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
-            return GenerateZipManifest(archive, packageBytes, rawDigest, options, findings);
+            return GenerateZipManifest(
+                archive, packageBytes, rawDigest, options, findings, includeInspectionEntries);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or ArgumentException
             or OverflowException)
         {
             AddFinding(findings, "malformed_package", VerificationFindingSeverity.Error,
                 $"The supplied bytes are not a readable ZIP/OPC package ({ex.GetType().Name}).");
-            return FinalizeManifest(
-                "malformed", rawDigest, null, null,
-                Array.Empty<PackageManifestEntry>(),
-                Array.Empty<PackageContentTypeDeclaration>(),
-                Array.Empty<PackageRelationship>(),
-                new PackageManifestFacts(), findings);
+            return new PackageManifestInspection(
+                FinalizeManifest(
+                    "malformed", rawDigest, null, null,
+                    Array.Empty<PackageManifestEntry>(),
+                    Array.Empty<PackageContentTypeDeclaration>(),
+                    Array.Empty<PackageRelationship>(),
+                    new PackageManifestFacts(), findings),
+                Array.Empty<PackageManifestInspectionEntry>());
         }
     }
 
@@ -130,12 +150,13 @@ public static class PackageManifestGenerator
         PackageManifestOptions? options = null,
         bool indented = false) => Generate(packageBytes, options).ToJson(indented);
 
-    private static PackageManifest GenerateZipManifest(
+    private static PackageManifestInspection GenerateZipManifest(
         ZipArchive archive,
         byte[] packageBytes,
         VerificationDigest rawDigest,
         PackageManifestOptions options,
-        List<VerificationFinding> findings)
+        List<VerificationFinding> findings,
+        bool includeInspectionEntries)
     {
         var archiveEntries = archive.Entries.ToList();
         var centralMetadata = TryReadCentralDirectoryMetadata(packageBytes, archiveEntries.Count);
@@ -204,6 +225,15 @@ public static class PackageManifestGenerator
                     "ZIP entry metadata could not be read.", new ChangeLocation { EntryUri = uri });
             }
 
+            var entryLimitExceeded = length > options.MaxEntryUncompressedBytes;
+            if (entryLimitExceeded)
+            {
+                AddFinding(findings, "entry_size_limit_exceeded",
+                    VerificationFindingSeverity.Error,
+                    $"Declared entry size exceeds the " +
+                    $"{options.MaxEntryUncompressedBytes.ToString(CultureInfo.InvariantCulture)} byte limit.",
+                    new ChangeLocation { EntryUri = uri });
+            }
             bool? encrypted = centralMetadata is not null && index < centralMetadata.Count
                 ? centralMetadata[index].IsEncrypted
                 : null;
@@ -251,6 +281,7 @@ public static class PackageManifestGenerator
                     ? centralMetadata[index].Crc32
                     : null,
                 RatioExceeded = ratioExceeded,
+                EntryLimitExceeded = entryLimitExceeded,
             });
         }
 
@@ -314,7 +345,8 @@ public static class PackageManifestGenerator
         VerificationDigest? orderedContentDigest = null;
         if (!totalLimitExceeded && !entryCountExceeded
             && works.All(work => work.RawBytesDigest is not null
-                && work.IsEncrypted == false && !work.RatioExceeded))
+                && work.IsEncrypted == false && !work.RatioExceeded
+                && !work.EntryLimitExceeded))
         {
             orderedContentDigest = ComputeOrderedContentDigest(works);
         }
@@ -330,9 +362,11 @@ public static class PackageManifestGenerator
             semanticDigest = ComputeSemanticDigest(works);
         }
 
-        var entryModels = works
+        var orderedWorks = works
             .OrderBy(work => work.Uri, StringComparer.Ordinal)
             .ThenBy(work => work.Occurrence)
+            .ToList();
+        var entryModels = orderedWorks
             .Select(work => new PackageManifestEntry
             {
                 Uri = work.Uri,
@@ -353,8 +387,18 @@ public static class PackageManifestGenerator
         var packageKind = isEncrypted
             ? "zip-encrypted"
             : hasContentTypes ? "opc" : "zip";
-        return FinalizeManifest(packageKind, rawDigest, orderedContentDigest, semanticDigest,
+        var manifest = FinalizeManifest(
+            packageKind, rawDigest, orderedContentDigest, semanticDigest,
             entryModels, contentTypeMap.Declarations, relationships, facts, findings);
+        if (!includeInspectionEntries)
+            return new PackageManifestInspection(
+                manifest, Array.Empty<PackageManifestInspectionEntry>());
+
+        var inspectedEntries = orderedWorks
+            .Select((work, index) => new PackageManifestInspectionEntry(
+                entryModels[index], work.Xml))
+            .ToList();
+        return new PackageManifestInspection(manifest, inspectedEntries);
     }
 
     private static PackageManifest OleManifest(
@@ -440,7 +484,8 @@ public static class PackageManifestGenerator
             return ContentTypeMap.Empty;
 
         var selected = candidates[0];
-        if (selected.IsEncrypted != false || selected.RatioExceeded)
+        if (selected.IsEncrypted != false || selected.RatioExceeded
+            || selected.EntryLimitExceeded)
             return ContentTypeMap.Empty;
         if (selected.Size > options.MaxXmlPartBytes)
         {
@@ -456,6 +501,7 @@ public static class PackageManifestGenerator
             var bytes = ReadAllBounded(
                 selected.ArchiveEntry,
                 options.MaxXmlPartBytes,
+                options.MaxEntryUncompressedBytes,
                 ExpansionCeiling(selected.CompressedSize, options.MaxCompressionRatio),
                 readBudget);
             selected.PreloadedBytes = bytes;
@@ -469,6 +515,14 @@ public static class PackageManifestGenerator
             AddFinding(findings, SafetyFindingCode(ex.Kind),
                 VerificationFindingSeverity.Error,
                 SafetyFindingMessage(ex.Kind, "[Content_Types].xml"),
+                new ChangeLocation { EntryUri = ContentTypesUri });
+            return ContentTypeMap.Empty;
+        }
+        catch (XmlDepthLimitException)
+        {
+            selected.XmlLimitReported = true;
+            AddFinding(findings, "xml_depth_limit_exceeded", VerificationFindingSeverity.Error,
+                $"[Content_Types].xml exceeds the {XmlSemanticNormalizer.MaxElementDepth.ToString(CultureInfo.InvariantCulture)} level XML nesting limit.",
                 new ChangeLocation { EntryUri = ContentTypesUri });
             return ContentTypeMap.Empty;
         }
@@ -488,7 +542,7 @@ public static class PackageManifestGenerator
         ActualReadBudget readBudget,
         List<VerificationFinding> findings)
     {
-        if (work.IsEncrypted != false || work.RatioExceeded)
+        if (work.IsEncrypted != false || work.RatioExceeded || work.EntryLimitExceeded)
             return true;
         if (work.ReadBlocked)
             return true;
@@ -535,6 +589,8 @@ public static class PackageManifestGenerator
                 if (read > expansionRemaining)
                     throw new ManifestSafetyException(SafetyLimitKind.EntryExpansion);
                 expansionRemaining -= read;
+                if (read > options.MaxEntryUncompressedBytes - readTotal)
+                    throw new ManifestSafetyException(SafetyLimitKind.EntrySize);
                 if (!readBudget.TryConsume(read))
                     throw new ManifestSafetyException(SafetyLimitKind.TotalExpansion);
                 if (readTotal > long.MaxValue - read)
@@ -608,6 +664,13 @@ public static class PackageManifestGenerator
             work.Xml = document;
             work.NormalizedXmlDigest = XmlSemanticNormalizer.Digest(
                 document, work.Uri, IsKnownOoxmlXml(work));
+        }
+        catch (XmlDepthLimitException)
+        {
+            work.XmlLimitReported = true;
+            AddFinding(findings, "xml_depth_limit_exceeded", VerificationFindingSeverity.Error,
+                $"XML entry exceeds the {XmlSemanticNormalizer.MaxElementDepth.ToString(CultureInfo.InvariantCulture)} level nesting limit.",
+                new ChangeLocation { EntryUri = work.Uri });
         }
         catch (Exception ex) when (ex is XmlException or InvalidOperationException)
         {
@@ -905,7 +968,7 @@ public static class PackageManifestGenerator
             if (IsCommentsPart(work))
                 comments += wordElements.Count(element => element.Name.LocalName == "comment");
 
-            var exElements = IsMime(work, "application/vnd.ms-word.commentsExt+xml")
+            var exElements = IsContentType(work, "commentsExtended")
                 ? elements.Where(element => element.Name.LocalName == "commentEx"
                     && element.Name.NamespaceName == Word2012Namespace).ToList()
                 : new List<XElement>();
@@ -914,7 +977,7 @@ public static class PackageManifestGenerator
                 !string.IsNullOrEmpty(ElementNamespaceAttribute(element, "paraIdParent")));
             resolvedComments += exElements.Count(element =>
                 IsOn(ElementNamespaceAttribute(element, "done")));
-            if (IsMime(work, "application/vnd.ms-word.people+xml"))
+            if (IsContentType(work, "people"))
                 people += elements.Count(element => element.Name.LocalName == "person"
                     && element.Name.NamespaceName == Word2012Namespace);
             if (root.Name.NamespaceName == AnnotationNamespace
@@ -1126,7 +1189,12 @@ public static class PackageManifestGenerator
             var essence = MediaTypeEssence(contentType);
             return essence.EndsWith("+xml", StringComparison.OrdinalIgnoreCase)
                 || essence.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
-                || essence.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
+                || essence.Equals("text/xml", StringComparison.OrdinalIgnoreCase)
+                // The one OOXML XML part type without a +xml suffix. Without this, every
+                // properly declared VML part is digested as opaque bytes and a reindent-only
+                // resave flips the normalized semantic identity (issue #513).
+                || essence.Equals("application/vnd.openxmlformats-officedocument.vmlDrawing",
+                    StringComparison.OrdinalIgnoreCase);
         }
         return uri.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
             || uri.EndsWith(".vml", StringComparison.OrdinalIgnoreCase);
@@ -1135,8 +1203,17 @@ public static class PackageManifestGenerator
     private static bool IsKnownOoxmlXml(EntryWork work) =>
         PartNameComparer.Equals(work.Uri, ContentTypesUri)
         || IsRelationshipPart(work.Uri)
-        || (work.ContentType is not null
-            && KnownOoxmlXmlContentTypes.Contains(MediaTypeEssence(work.ContentType)));
+        || IsKnownOoxmlXmlContentType(work.ContentType);
+
+    /// <summary>
+    /// Shared part policy: a declared content type in the known OOXML XML vocabulary means
+    /// whitespace is serialization, not data. The semantic package detector consumes this too,
+    /// so the manifest's normalized identity and the semantic diff can never disagree about the
+    /// same part bytes.
+    /// </summary>
+    internal static bool IsKnownOoxmlXmlContentType(string? contentType) =>
+        contentType is not null
+        && KnownOoxmlXmlContentTypes.Contains(MediaTypeEssence(contentType));
 
     private static bool IsRelationshipPart(string uri) =>
         XmlSemanticNormalizer.IsRelationshipPart(uri);
@@ -1682,7 +1759,8 @@ public static class PackageManifestGenerator
 
     private static byte[] ReadAllBounded(
         ZipArchiveEntry entry,
-        long maximum,
+        long xmlMaximum,
+        long entryMaximum,
         long expansionMaximum,
         ActualReadBudget readBudget)
     {
@@ -1695,9 +1773,11 @@ public static class PackageManifestGenerator
         {
             if (read > expansionMaximum - total)
                 throw new ManifestSafetyException(SafetyLimitKind.EntryExpansion);
+            if (read > entryMaximum - total)
+                throw new ManifestSafetyException(SafetyLimitKind.EntrySize);
             if (!readBudget.TryConsume(read))
                 throw new ManifestSafetyException(SafetyLimitKind.TotalExpansion);
-            if (read > maximum - total)
+            if (read > xmlMaximum - total)
                 throw new ManifestSafetyException(SafetyLimitKind.XmlSize);
             total += read;
             output.Write(buffer, 0, read);
@@ -1723,6 +1803,7 @@ public static class PackageManifestGenerator
     private static string SafetyFindingCode(SafetyLimitKind kind) => kind switch
     {
         SafetyLimitKind.EntryExpansion => "compression_ratio_limit_exceeded",
+        SafetyLimitKind.EntrySize => "entry_size_limit_exceeded",
         SafetyLimitKind.XmlSize => "xml_size_limit_exceeded",
         _ => "entry_expansion_limit_exceeded",
     };
@@ -1731,6 +1812,8 @@ public static class PackageManifestGenerator
     {
         SafetyLimitKind.EntryExpansion =>
             $"{subject} produced more actual bytes than compressed size × MaxCompressionRatio permits.",
+        SafetyLimitKind.EntrySize =>
+            $"{subject} produced more actual bytes than MaxEntryUncompressedBytes permits.",
         SafetyLimitKind.XmlSize => $"{subject} exceeded the configured XML parsing limit.",
         _ => $"{subject} exceeded the remaining total package expansion budget.",
     };
@@ -1782,7 +1865,7 @@ public static class PackageManifestGenerator
         || IsContentType(work, "footnotes")
         || IsContentType(work, "endnotes")
         || IsContentType(work, "comments")
-        || IsContentType(work, "glossaryDocument");
+        || IsContentType(work, "document.glossary");
 
     private static bool IsWordprocessingMainPart(EntryWork work) =>
         IsMime(work, "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
@@ -2534,6 +2617,7 @@ public static class PackageManifestGenerator
         required public bool RatioExceeded { get; init; }
         public bool XmlLimitReported { get; set; }
         public bool XmlUnparsable { get; set; }
+        required public bool EntryLimitExceeded { get; init; }
         public int Occurrence { get; set; }
         public long ActualSize { get; set; }
         public string? ContentType { get; set; }
@@ -2787,6 +2871,7 @@ public static class PackageManifestGenerator
     private enum SafetyLimitKind
     {
         EntryExpansion,
+        EntrySize,
         TotalExpansion,
         XmlSize,
     }

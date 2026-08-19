@@ -226,13 +226,28 @@ public class McpServerDispatcherTests : IDisposable
         var sessionId = OpenSession();
         var sessionArg = JsonSerializer.Serialize(sessionId);
 
-        foreach (var format in new[] { "markdown", "html", "text", "blocks", "info" })
+        foreach (var format in new[]
+            { "markdown", "html", "text", "blocks", "info", "semantic_changes" })
         {
             var result = Dispatcher.Call(_store, "docxodus_get_content",
                 J($$"""{"sessionId":{{sessionArg}},"format":"{{format}}"}"""));
             Assert.False(string.IsNullOrEmpty(result));
             using var doc = JsonDocument.Parse(result); // must be valid JSON
             Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+            if (format == "semantic_changes")
+            {
+                Assert.Equal("docxodus.semantic-changes",
+                    doc.RootElement.GetProperty("schema").GetString());
+                Assert.Equal(1, doc.RootElement.GetProperty("schemaVersion").GetInt32());
+                Assert.Equal(0, doc.RootElement.GetProperty("changeCount").GetInt32());
+            }
+        }
+
+        foreach (var forbiddenAnchor in new[] { "\"ignored\"", "null", "{}" })
+        {
+            Assert.Throws<McpToolException>(() => Dispatcher.Call(_store,
+                "docxodus_get_content",
+                J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes","anchorId":{{forbiddenAnchor}}}""")));
         }
     }
 
@@ -2722,5 +2737,23 @@ public class McpServerDispatcherTests : IDisposable
                 "docxodus_get_content",
                 J($$"""{"sessionId":{{sessionArg}},"format":"manifest","anchorId":{{anchorValue}}}""")));
         }
+    }
+
+    [Fact]
+    public void MCP152_Open_CaptureInitialProjectionFalse_DisablesSemanticBaselineRetention()
+    {
+        // A long-lived server must be able to open sessions without retaining a baseline copy
+        // of every document's opening package. The trade is explicit: semantic_changes (and
+        // markdown diff) then refuse with the setting's name.
+        var opened = Parse(Dispatcher.Call(_store, "docxodus_open", J(
+            $$"""{"path":{{JsonSerializer.Serialize(_tempPath)}},"captureInitialProjection":false}""")));
+        var sessionArg = JsonSerializer.Serialize(opened.GetProperty("sessionId").GetString());
+
+        var ex = Assert.ThrowsAny<Exception>(() => Dispatcher.Call(
+            _store,
+            "docxodus_get_content",
+            J($$"""{"sessionId":{{sessionArg}},"format":"semantic_changes"}""")));
+
+        Assert.Contains("CaptureInitialProjection", ex.Message, StringComparison.Ordinal);
     }
 }

@@ -1843,8 +1843,10 @@ public sealed class DocxSessionSettings
     /// <summary>
     /// When <c>true</c> (default), the session projects the document at construction
     /// time and stashes the result so <see cref="DocxSession.GetDiff"/> can compare
-    /// initial vs. current. Costs ~200ms at construction for a 100-page doc; turn
-    /// off to skip the upfront cost when you don't plan to call <c>GetDiff</c>.
+    /// initial vs. current. It also retains an exact copy of the opening package for
+    /// <see cref="DocxSession.GetSemanticChanges"/>. Costs ~200ms plus one package copy
+    /// at construction for a 100-page doc; turn off to skip the upfront time/memory when
+    /// you don't plan to call either comparison API.
     /// </summary>
     public bool CaptureInitialProjection { get; init; } = true;
 }
@@ -1859,6 +1861,8 @@ public sealed partial class DocxSession : IDisposable
     private WordprocessingDocument? _doc;
     private MarkdownProjection? _cachedProjection;
     private MarkdownProjection? _initialProjection;
+    private byte[]? _initialPackageBytes;
+    private byte[]? _initialCheckpointBytes;
     private bool _disposed;
     private long _version;
     private PageMap? _registeredPageMap;
@@ -1929,7 +1933,10 @@ public sealed partial class DocxSession : IDisposable
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
 
         if (_settings.CaptureInitialProjection && !skipInitialProjectionCapture)
+        {
+            _initialPackageBytes = docxBytes.ToArray();
             _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        }
     }
 
     public Exception? LastInternalError { get; private set; }
@@ -3680,6 +3687,10 @@ public sealed partial class DocxSession : IDisposable
                 _lastFormatRevisionTicks = snapshot.LastFormatRevisionTicks ?? _lastFormatRevisionTicks,
                 _nextTransactionId = _nextTransactionId,
                 _initialProjection = CloneProjection(_initialProjection),
+                // The baseline arrays are never mutated after capture, so the throwaway shadow
+                // shares the references instead of copying a full package per preview.
+                _initialPackageBytes = _initialPackageBytes,
+                _initialCheckpointBytes = _initialCheckpointBytes,
                 _trackedChanges = _trackedChanges,
                 _revisionAuthor = _revisionAuthor,
             };
@@ -5079,6 +5090,44 @@ public sealed partial class DocxSession : IDisposable
                 $"DiffFormat.{format} is not a recognized value."),
         };
     }
+
+    /// <summary>
+    /// Compare the exact package supplied at session construction with the session's current logical
+    /// package and return the stable semantic-change schema. The current checkpoint includes dirty
+    /// in-memory part caches without mutating or saving the live session.
+    /// </summary>
+    /// <remarks>
+    /// Requires <see cref="DocxSessionSettings.CaptureInitialProjection"/> to have been enabled at
+    /// construction time. The same switch owns both initial projection and initial package capture so
+    /// existing callers can disable all baseline memory/cost with one setting.
+    /// </remarks>
+    public Verification.SemanticChangeSet GetSemanticChanges(
+        Verification.SemanticDiffOptions? options = null)
+    {
+        lock (_mutationGate)
+        {
+            ThrowIfDisposed();
+            if (_initialPackageBytes is null)
+                throw new InvalidOperationException(
+                    "GetSemanticChanges requires CaptureInitialProjection = true in DocxSessionSettings.");
+
+            // The baseline flows through the SAME checkpoint serialization as the current side
+            // (lazily, cached). Comparing the raw opening bytes against an SDK-cloned checkpoint
+            // reported clone normalization itself as document changes — an orphan part the clone
+            // drops became a spurious Delete, and a stray content-type-less entry the session
+            // opened fine failed only the right side's preflight.
+            _initialCheckpointBytes ??= NormalizeOpeningPackage(_initialPackageBytes);
+            var currentPackageBytes = SerializePackageCheckpoint();
+            return Verification.SemanticDiff.Compare(
+                _initialCheckpointBytes,
+                currentPackageBytes,
+                options);
+        }
+    }
+
+    /// <summary>Compact canonical JSON counterpart of <see cref="GetSemanticChanges"/>.</summary>
+    public string GetSemanticChangesJson(Verification.SemanticDiffOptions? options = null) =>
+        GetSemanticChanges(options).ToCanonicalJson();
 
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
     {
@@ -12130,14 +12179,29 @@ public sealed partial class DocxSession : IDisposable
     /// topology. Every cached XDocument is then overlaid on its clone counterpart so edits that
     /// have not yet reached a part stream are represented in the checkpoint as well.
     /// </summary>
-    private byte[] SerializePackageCheckpoint()
+    private byte[] SerializePackageCheckpoint() => SerializeCheckpointOf(_doc!);
+
+    /// <summary>
+    /// The opening package rendered through the same checkpoint pipeline the current side uses,
+    /// so <see cref="GetSemanticChanges"/> compares like against like. Opened read-only from the
+    /// retained bytes; a freshly opened package has no cached XDocuments, so the overlay below
+    /// is a no-op for it.
+    /// </summary>
+    private static byte[] NormalizeOpeningPackage(byte[] packageBytes)
+    {
+        using var source = new MemoryStream(packageBytes, writable: false);
+        using var document = WordprocessingDocument.Open(source, isEditable: false);
+        return SerializeCheckpointOf(document);
+    }
+
+    private static byte[] SerializeCheckpointOf(WordprocessingDocument source)
     {
         using var stream = new MemoryStream();
-        using (var clone = _doc!.Clone(stream, isEditable: true))
+        using (var clone = source.Clone(stream, isEditable: true))
         {
             var cloneParts = EnumeratePackageParts(clone)
                 .ToDictionary(part => part.Uri.ToString(), StringComparer.Ordinal);
-            foreach (var sourcePart in EnumeratePackageParts(_doc!))
+            foreach (var sourcePart in EnumeratePackageParts(source))
             {
                 var cached = sourcePart.Annotation<XDocument>();
                 if (cached is null) continue;
