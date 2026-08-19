@@ -2879,6 +2879,41 @@ class SemanticValueKind(str, Enum):
     ARRAY = "array"
 
 
+class FrozenSemanticObject(Mapping[str, "SemanticValue"]):
+    """Immutable, hashable member mapping of an object-kind :class:`SemanticValue`.
+
+    Canonical JSON fixes the member order, so ordered equality and the hash both
+    follow it. Reads like a ``dict`` (``value["styleId"]``, iteration, ``len``);
+    writes raise ``TypeError`` like every other frozen wire mirror.
+    """
+
+    __slots__ = ("_items", "_lookup")
+
+    def __init__(self, items: Sequence[tuple[str, "SemanticValue"]]):
+        object.__setattr__(self, "_items", tuple(items))
+        object.__setattr__(self, "_lookup", dict(self._items))
+
+    def __getitem__(self, key: str) -> "SemanticValue":
+        return self._lookup[key]
+
+    def __iter__(self):
+        return iter(name for name, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FrozenSemanticObject):
+            return self._items == other._items
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._items)
+
+    def __repr__(self) -> str:
+        return f"FrozenSemanticObject({dict(self._items)!r})"
+
+
 @dataclass(frozen=True, slots=True)
 class SemanticValue:
     """Closed typed value used for one semantic change's before/after state.
@@ -2888,7 +2923,7 @@ class SemanticValue:
     """
 
     kind: SemanticValueKind
-    value: str | bool | int | Mapping[str, "SemanticValue"] | tuple["SemanticValue", ...] | None = None
+    value: str | bool | int | FrozenSemanticObject | tuple["SemanticValue", ...] | None = None
     algorithm: str | None = None
     profile: str | None = None
 
@@ -2896,14 +2931,22 @@ class SemanticValue:
     def _from_wire(cls, d: Mapping[str, Any]) -> "SemanticValue":
         kind = SemanticValueKind(str(d["kind"]))
         raw = d.get("value")
+        # Schema v1 requires the "value" member for every kind except absent (and
+        # "algorithm"/"value" for digests); a payload missing them is corrupt, and
+        # decoding it as empty content would be indistinguishable from genuine data.
         if kind is SemanticValueKind.OBJECT:
-            value: Any = {
-                str(name): cls._from_wire(member)
-                for name, member in (raw or {}).items()
-            }
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"semantic object requires a members object, got {raw!r}")
+            value: Any = FrozenSemanticObject(
+                [(str(name), cls._from_wire(member)) for name, member in raw.items()]
+            )
         elif kind is SemanticValueKind.ARRAY:
-            value = tuple(cls._from_wire(member) for member in (raw or ()))
+            if raw is None or isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+                raise ValueError(f"semantic array requires an items array, got {raw!r}")
+            value = tuple(cls._from_wire(member) for member in raw)
         elif kind is SemanticValueKind.ABSENT:
+            if raw is not None:
+                raise ValueError(f"absent semantic value carries no value, got {raw!r}")
             value = None
         elif kind is SemanticValueKind.INTEGER:
             if isinstance(raw, bool) or not isinstance(raw, int):
@@ -2911,7 +2954,22 @@ class SemanticValue:
             if not -(2**53 - 1) <= raw <= 2**53 - 1:
                 raise ValueError(f"semantic integer is outside the v1 safe range: {raw}")
             value = raw
-        else:
+        elif kind is SemanticValueKind.STRING:
+            if not isinstance(raw, str):
+                raise ValueError(f"semantic string must be a string, got {raw!r}")
+            value = raw
+        elif kind is SemanticValueKind.BOOLEAN:
+            if not isinstance(raw, bool):
+                raise ValueError(f"semantic boolean must be a boolean, got {raw!r}")
+            value = raw
+        else:  # SemanticValueKind.DIGEST
+            if not isinstance(raw, str) or not raw:
+                raise ValueError(f"semantic digest requires a non-empty value, got {raw!r}")
+            algorithm = d.get("algorithm")
+            if not isinstance(algorithm, str) or not algorithm:
+                raise ValueError(
+                    f"semantic digest requires a non-empty algorithm, got {algorithm!r}"
+                )
             value = raw
         return cls(
             kind=kind,
