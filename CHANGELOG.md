@@ -58,6 +58,11 @@ All notable changes to this project will be documented in this file.
   configurable entry-count, part-URI, per-entry, aggregate-decompressed-byte, and
   compression-ratio bounds, with duplicate part names and relationship ids rejected. Invalid
   manifests fail closed even when the package-change supplement is disabled.
+  Typed table and cell values are read from that table's own `w:tblPr`/`w:tblGrid` and that cell's
+  own `w:tcPr`, so a nested table's style, width, and column widths are reported against the nested
+  table's anchor instead of the containing one. Integers that a package can carry outside the v1
+  safe range — `wp:extent/@cx`, `w:gridCol/@w`, `w:bookmarkStart/@w:colFirst`, and declared entry
+  sizes — are emitted losslessly as decimal strings rather than failing the comparison.
   The formal v1 JSON Schema is published at
   [`docs/schemas/semantic-changes-v1.schema.json`](docs/schemas/semantic-changes-v1.schema.json).
   The existing redline, revision,

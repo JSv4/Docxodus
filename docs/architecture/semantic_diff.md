@@ -98,6 +98,12 @@ Before/after data is a closed union: `absent`, `string`, `boolean`, `integer`,
 their semantic order. Version 1 integers are restricted to the inclusive
 ECMAScript-safe range −9,007,199,254,740,991 through 9,007,199,254,740,991 so a
 canonical value crosses .NET, Python, and JavaScript JSON clients without rounding.
+Several OOXML attributes — `wp:extent/@cx`, `w:gridCol/@w`, `w:bookmarkStart/@w:colFirst`,
+and declared ZIP entry sizes — parse as unbounded 64-bit values, so a crafted package can
+exceed that range. Such a value is projected as a lossless decimal `string` rather than an
+`integer`: the range stays a hard guarantee for the `integer` kind, one value's kind degrades
+instead of the comparison failing, and two distinct out-of-range values stay distinguishable.
+Modeled state that is already 32-bit typed keeps the range check as an assertion.
 Digest values separate the cryptographic algorithm from
 the normalization domain, for example:
 

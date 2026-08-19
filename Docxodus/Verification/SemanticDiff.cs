@@ -1463,8 +1463,10 @@ internal static class SemanticDiffEngine
 
         private void CompareTableTypedProperties(IrTable left, IrTable right, string part)
         {
-            var leftStyle = AttributeValue(left.Source.Element, "tblStyle", "val");
-            var rightStyle = AttributeValue(right.Source.Element, "tblStyle", "val");
+            var leftProperties = Child(left.Source.Element, "tblPr");
+            var rightProperties = Child(right.Source.Element, "tblPr");
+            var leftStyle = AttributeValue(leftProperties, "tblStyle", "val");
+            var rightStyle = AttributeValue(rightProperties, "tblStyle", "val");
             if (leftStyle != rightStyle)
             {
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.TableStyle, part,
@@ -1472,8 +1474,8 @@ internal static class SemanticDiffEngine
                     left.Anchor.Scope, right.Anchor.Scope, null,
                     SemanticValue.String(leftStyle), SemanticValue.String(rightStyle));
             }
-            var leftWidth = ElementValue(left.Source.Element, "tblW", "w", "type");
-            var rightWidth = ElementValue(right.Source.Element, "tblW", "w", "type");
+            var leftWidth = ElementValue(leftProperties, "tblW", "w", "type");
+            var rightWidth = ElementValue(rightProperties, "tblW", "w", "type");
             if (ValueKey(leftWidth) != ValueKey(rightWidth))
             {
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.TableWidth, part,
@@ -1484,8 +1486,8 @@ internal static class SemanticDiffEngine
 
         private void CompareCellWidth(IrCell left, IrCell right, string part)
         {
-            var before = ElementValue(left.Source.Element, "tcW", "w", "type");
-            var after = ElementValue(right.Source.Element, "tcW", "w", "type");
+            var before = ElementValue(Child(left.Source.Element, "tcPr"), "tcW", "w", "type");
+            var after = ElementValue(Child(right.Source.Element, "tcPr"), "tcW", "w", "type");
             if (ValueKey(before) == ValueKey(after)) return;
             Add(SemanticChangeOperation.Modify, SemanticChangeFamily.TableWidth, part,
                 "table.cell.width", left.Anchor.ToString(), right.Anchor.ToString(),
@@ -1595,8 +1597,8 @@ internal static class SemanticDiffEngine
                             ("bytesDigest", Digest(image.ImageBytesHash, "raw-media-bytes")),
                             ("drawingDigest", Digest(image.DrawingDigest,
                                 "docxodus-ir-drawing-v1")),
-                            ("widthEmu", SemanticValue.Integer(image.WidthEmu)),
-                            ("heightEmu", SemanticValue.Integer(image.HeightEmu)),
+                            ("widthEmu", SemanticValue.IntegerFromDocument(image.WidthEmu)),
+                            ("heightEmu", SemanticValue.IntegerFromDocument(image.HeightEmu)),
                             ("altText", SemanticValue.String(image.AltText))));
                     break;
                 case IrOpaqueInline opaque:
@@ -1689,6 +1691,9 @@ internal static class SemanticDiffEngine
         ("gridSpan", SemanticValue.Integer(cell.GridSpan)),
         ("verticalMerge", SemanticValue.String(cell.VMerge.ToString().ToLowerInvariant())));
 
+    // These projections read int-typed modeled IR state, which cannot leave the v1 safe range, so
+    // they call SemanticValue.Integer directly and keep its range check live as an assertion. Only
+    // values parsed straight out of document bytes as long go through IntegerFromDocument.
     private static SemanticValue ParagraphFormatValue(IrParaFormat format) => Obj(
         ("styleId", SemanticValue.String(format.StyleId)),
         ("justification", SemanticValue.String(format.Justification?.ToString().ToLowerInvariant())),
@@ -1828,20 +1833,28 @@ internal static class SemanticDiffEngine
 
     private static SemanticValue TableGridValue(IrTable table)
     {
-        var columns = table.Source.Element?
-            .Descendants()
+        var columns = (Child(table.Source.Element, "tblGrid")?.Elements()
+                ?? Enumerable.Empty<XElement>())
             .Where(element => element.Name.LocalName == "gridCol")
-            .Select(element => SemanticValue.Integer(ParseLong(element.Attributes()
-                .FirstOrDefault(attribute => attribute.Name.LocalName == "w")?.Value)))
-            ?? Enumerable.Empty<SemanticValue>();
+            .Select(element => SemanticValue.IntegerFromDocument(ParseLong(element.Attributes()
+                .FirstOrDefault(attribute => attribute.Name.LocalName == "w")?.Value)));
         return Obj(
             ("columnsTwips", SemanticValue.Array(columns)),
             ("digest", Digest(table.TblGridDigest, "docxodus-ir-table-grid-v1")));
     }
 
-    private static SemanticValue ElementValue(XElement? root, string child, params string[] attributes)
+    /// <summary>
+    /// The first direct child with this local name. Property projection never sweeps arbitrary
+    /// descendants: a nested table carries its own <c>w:tblPr</c>/<c>w:tblGrid</c> and a row carries
+    /// <c>w:tblPrEx</c>, so a descendant search would attribute an inner value to the outer table or
+    /// cell whose anchor the change record names.
+    /// </summary>
+    private static XElement? Child(XElement? parent, string localName) =>
+        parent?.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
+
+    private static SemanticValue ElementValue(XElement? parent, string child, params string[] attributes)
     {
-        var element = root?.DescendantsAndSelf().FirstOrDefault(node => node.Name.LocalName == child);
+        var element = Child(parent, child);
         if (element is null) return SemanticValue.Absent;
         return SemanticValue.Object(attributes.Select(name => new SemanticProperty(
             name,
@@ -1849,9 +1862,9 @@ internal static class SemanticDiffEngine
                 attribute.Name.LocalName == name)?.Value))));
     }
 
-    private static string? AttributeValue(XElement? root, string child, string attribute)
+    private static string? AttributeValue(XElement? parent, string child, string attribute)
     {
-        var element = root?.DescendantsAndSelf().FirstOrDefault(node => node.Name.LocalName == child);
+        var element = Child(parent, child);
         return element?.Attributes().FirstOrDefault(item => item.Name.LocalName == attribute)?.Value;
     }
 

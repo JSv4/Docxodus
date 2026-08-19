@@ -138,6 +138,24 @@ public sealed class SemanticValue
     }
 
     /// <summary>
+    /// Project an integer that originates in document bytes rather than in modeled IR state.
+    /// OOXML attributes such as <c>wp:extent/@cx</c>, <c>w:gridCol/@w</c>, and
+    /// <c>w:bookmarkStart/@w:colFirst</c> parse as unbounded <see cref="long"/> values, so a crafted
+    /// package can carry one outside the v1 safe range. Such a value is emitted losslessly as an
+    /// invariant decimal string instead of throwing: one value's kind degrades, the comparison still
+    /// completes, and no two distinct out-of-range values collapse into the same record.
+    /// Modeled state that is already <see cref="int"/>-typed calls <see cref="Integer"/> directly so
+    /// its range check stays live as an assertion.
+    /// </summary>
+    internal static SemanticValue IntegerFromDocument(long? value)
+    {
+        if (value is null) return Absent;
+        if (value is < MinSafeInteger or > MaxSafeInteger)
+            return String(value.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return new SemanticValue(SemanticValueKind.Integer, integerValue: value);
+    }
+
+    /// <summary>
     /// Create a digest value. <paramref name="algorithm"/> names the cryptographic algorithm
     /// (for example <c>SHA-256</c>); <paramref name="profile"/> separately identifies the
     /// domain-specific canonicalization or normalization used before hashing.

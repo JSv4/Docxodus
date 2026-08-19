@@ -606,7 +606,8 @@ export type SemanticChangeFamily =
 
 /**
  * Closed typed value used in {@link SemanticChange.before} and `after`.
- * Schema v1 integers stay within `Number.MIN_SAFE_INTEGER..Number.MAX_SAFE_INTEGER`.
+ * Schema v1 integers stay within `Number.MIN_SAFE_INTEGER..Number.MAX_SAFE_INTEGER`; a document
+ * value outside that range arrives as a decimal `string` rather than a rounded `integer`.
  */
 export type SemanticValue =
   | { kind: "absent" }

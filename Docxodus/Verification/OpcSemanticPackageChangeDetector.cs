@@ -154,7 +154,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
             {
                 var value = ValueObj(
                     ("contentType", SemanticValue.String(ContentTypeFor(part))),
-                    ("size", SemanticValue.Integer(part.Size)),
+                    ("size", SemanticValue.IntegerFromDocument(part.Size)),
                     ("digest", SemanticValue.Digest(
                         part.RawBytesDigest!.Algorithm,
                         part.RawBytesDigest.Value,
@@ -274,7 +274,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                 var value = part.Xml is null
                     ? ValueObj(
                         ("contentType", SemanticValue.String(contentType)),
-                        ("size", SemanticValue.Integer(part.Size)),
+                        ("size", SemanticValue.IntegerFromDocument(part.Size)),
                         ("normalizedDigest", digest))
                     : ValueObj(
                         ("contentType", SemanticValue.String(contentType)),
@@ -478,16 +478,16 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
                     : RelativeElementPath(endAnchorElement, end);
                 var value = ValueObj(
                     ("name", SemanticValue.String(name)),
-                    ("columnFirst", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colFirst")))),
-                    ("columnLast", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colLast")))),
+                    ("columnFirst", SemanticValue.IntegerFromDocument(ParseLong(WordAttr(bookmark, "colFirst")))),
+                    ("columnLast", SemanticValue.IntegerFromDocument(ParseLong(WordAttr(bookmark, "colLast")))),
                     ("startAnchor", SemanticValue.String(anchor)),
                     ("endAnchor", SemanticValue.String(endAnchor)),
                     ("startPath", SemanticValue.String(startPath)),
                     ("endPath", SemanticValue.String(endPath)));
                 var fingerprint = ValueFingerprint(ValueObj(
                     ("name", SemanticValue.String(name)),
-                    ("columnFirst", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colFirst")))),
-                    ("columnLast", SemanticValue.Integer(ParseLong(WordAttr(bookmark, "colLast"))))));
+                    ("columnFirst", SemanticValue.IntegerFromDocument(ParseLong(WordAttr(bookmark, "colFirst")))),
+                    ("columnLast", SemanticValue.IntegerFromDocument(ParseLong(WordAttr(bookmark, "colLast"))))));
                 yield return new Entity(
                     $"bookmark:{partUri}:{name}:{ordinal++}",
                     SemanticChangeFamily.Bookmark,
@@ -1051,7 +1051,7 @@ internal sealed class OpcSemanticPackageChangeDetector : ISemanticPackageChangeD
         var value = part.Xml is null
             ? ValueObj(
                 ("contentType", SemanticValue.String(contentType)),
-                ("size", SemanticValue.Integer(part.Size)),
+                ("size", SemanticValue.IntegerFromDocument(part.Size)),
                 ("normalizedDigest", digest))
             : ValueObj(
                 ("contentType", SemanticValue.String(contentType)),
