@@ -1918,8 +1918,11 @@ namespace Docxodus
             // separator remains the calibrated two-inch rule above. Both the
             // converter-produced story wrapper and the paginator fallback carry
             // the same kind attribute so measurement and paint select one rule.
-            sb.AppendLine($".{prefix}footnotes [data-footnote-separator=\"continuation\"] > hr,");
-            sb.AppendLine($".{prefix}footnotes > hr[data-footnote-separator=\"continuation\"] {{");
+            // Descendant selectors only: this CSS is serialized as XML, so a `>`
+            // child combinator ships as `&gt;` and the browser drops the rule
+            // (GeneratedCssEscapingTests).
+            sb.AppendLine($".{prefix}footnotes [data-footnote-separator=\"continuation\"] hr,");
+            sb.AppendLine($".{prefix}footnotes hr[data-footnote-separator=\"continuation\"] {{");
             sb.AppendLine("    width: 100%;");
             sb.AppendLine("}");
 
