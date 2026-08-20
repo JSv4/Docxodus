@@ -126,10 +126,19 @@ function framedRequest(value) {
   return Buffer.concat([header, payload]);
 }
 
+// Blob frames carry exact raw bytes, not JSON. Encoding them like the control frame would
+// send a {"type":"Buffer","data":[...]} rendering whose length no longer matches the
+// declaration the host verifies against.
+function framedBlob(bytes) {
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(bytes.byteLength);
+  return Buffer.concat([header, bytes]);
+}
+
 function framedProtocolRequest(value, blobs = []) {
   return Buffer.concat([
     framedRequest(value),
-    ...blobs.map((blob) => framedRequest(blob)),
+    ...blobs.map((blob) => framedBlob(Buffer.from(blob))),
   ]);
 }
 
