@@ -6,6 +6,7 @@ import type {
   ErrorResponse,
   CompareResult,
   PackageManifest,
+  DeliverableVerificationResult,
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
@@ -147,6 +148,23 @@ export type {
   PackageContentTypeDeclaration,
   PackageRevisionCounts,
   PackageAnnotationCounts,
+  DeliverableVerificationResult,
+  DeliverableVerificationMode,
+  DeliverableVerificationDecision,
+  DeliverableFindingDisposition,
+  DeliverableFindingCategory,
+  DeliverableCheckStatus,
+  DeliverablePackageChangeKind,
+  DeliverableArtifactRole,
+  DeliverableArtifactAvailability,
+  DeliverableSemanticChangeFamily,
+  DeliverablePackageIdentity,
+  DeliverableCheckResult,
+  DeliverableFinding,
+  DeliverablePackageChange,
+  DeliverableSemanticChange,
+  DeliverableSemanticDelta,
+  DeliverableArtifactMetadata,
   VerificationDigest,
   VerificationFinding,
   VerificationFindingSeverity,
@@ -596,6 +614,30 @@ export async function generatePackageManifest(
   return JSON.parse(
     exports.DocumentConverter.GeneratePackageManifest(bytes),
   ) as PackageManifest;
+}
+
+/**
+ * Run the default bounded deliverable-verification policy on exact DOCX bytes.
+ * Invalid, malformed, encrypted, and safety-limited packages are returned as
+ * structured report findings rather than editable-session errors. When supplied,
+ * the exact baseline bytes are used to classify pre-existing, new, and resolved findings.
+ */
+export async function verifyDeliverable(
+  document: File | Uint8Array,
+  baseline?: File | Uint8Array,
+): Promise<DeliverableVerificationResult> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+  const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
+  await yieldToMain();
+  return JSON.parse(
+    baselineBytes === undefined
+      ? exports.DocumentConverter.VerifyDeliverable(bytes)
+      : exports.DocumentConverter.VerifyDeliverableWithBaseline(
+          baselineBytes,
+          bytes,
+        ),
+  ) as DeliverableVerificationResult;
 }
 
 /**

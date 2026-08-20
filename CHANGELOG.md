@@ -484,6 +484,20 @@ All notable changes to this project will be documented in this file.
   normalized semantic identity. The semantic package detector consumes the same corrected
   vocabulary for its opaque-part whitespace policy, so the manifest normalizer and the
   semantic diff can never disagree about the same part bytes.
+- **Selectively rejecting a move no longer strands the moved text as orphaned
+  `w:delText` (#515).** The comparison engine serializes move-source runs as `w:delText`
+  inside `w:moveFrom` (delete-grade, unlike Word's own `w:t` serialization), but
+  `AcceptRevision`/`RejectRevision`'s resolver only performed the `delText → t` restore
+  when unwrapping a surviving `w:del`. Rejecting an engine-generated move therefore
+  removed the `w:moveFrom` wrapper and left its payload behind as schema-orphaned
+  `w:delText` — on `WC004-Large` ~1.3k characters of restored text were missing from the
+  rejected body, and the stranded nodes then surfaced as phantom unresolvable "delete"
+  revisions in the live registry. A surviving `w:moveFrom` now restores its payload
+  exactly like a surviving `w:del`, matching `RevisionProcessor.RejectRevisions`'s
+  unconditional `delText → t` transform; Word-authored moves (already `w:t`) are
+  unaffected. Covered by the WC004-Large rows of
+  `RedlineReversibilityFixtureSweepTests` (RRS004 content round-trip + RRS005 regression
+  pin on the corruption shape).
 - **npm — a Web Worker call no longer detaches the caller's `Uint8Array`.** Every
   `createWorkerDocxodus` entry point that takes document bytes (`convertDocxToHtml`,
   `compareDocuments`, the session opens, and the new `generatePackageManifest`) put the

@@ -12,6 +12,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
+using Docxodus.Internal;
 using Docxodus.Verification;
 using DocumentFormat.OpenXml.Packaging;
 using GridCell = Docxodus.Internal.TableGridCell;
@@ -1338,8 +1339,14 @@ public sealed record RevisionListEntry
     required public string Type { get; init; }
     required public RevisionFamily Family { get; init; }
     required public IReadOnlyList<string> ConstituentIds { get; init; }
+    /// <summary>
+    /// QName-qualified native carrier identities. Unlike <see cref="ConstituentIds"/>, these
+    /// distinguish revision roles which legally use the same numeric <c>w:id</c> value.
+    /// </summary>
+    required public IReadOnlyList<string> ConstituentKeys { get; init; }
     required public string Author { get; init; }
     public string? Date { get; init; }
+    public string? DateUtc { get; init; }
     required public string Text { get; init; }
     required public string PartUri { get; init; }
     required public string Scope { get; init; }
@@ -1849,6 +1856,36 @@ public sealed class DocxSessionSettings
     /// you don't plan to call either comparison API.
     /// </summary>
     public bool CaptureInitialProjection { get; init; } = true;
+
+    /// <summary>
+    /// Verification-only mode: resolution may remove only artifacts attributable to the selected
+    /// revision. Ordinary editing retains its historical cleanup behavior.
+    /// </summary>
+    internal bool ProofSafeRevisionResolution { get; init; }
+
+    /// <summary>Numbering instances present in the proof path's expected baseline.</summary>
+    internal IReadOnlyList<int> ProtectedRevisionNumberingIds { get; init; } = Array.Empty<int>();
+
+    /// <summary>Abstract numbering definitions present in the proof path's expected endpoint.</summary>
+    internal IReadOnlyList<int> ProtectedRevisionAbstractNumberingIds { get; init; }
+        = Array.Empty<int>();
+
+    /// <summary>
+    /// Owner-part/relationship-id pairs present in the proof path's expected endpoint. A
+    /// generated revision may reuse an otherwise orphaned endpoint relationship; resolving the
+    /// revision must not erase that pre-existing package state.
+    /// </summary>
+    internal IReadOnlyCollection<string> ProtectedRevisionRelationshipKeys { get; init; }
+        = Array.Empty<string>();
+
+    /// <summary>
+    /// Empty optional property shells present in the proof path's expected endpoint. Resolution
+    /// may remove a selected revision's now-empty direct shell only when that shell kind is not
+    /// represented in the endpoint. This is deliberately conservative: exact package comparison
+    /// remains the final guard when multiple shells of the same kind exist.
+    /// </summary>
+    internal IReadOnlyCollection<string> ProtectedRevisionEmptyContainerKeys { get; init; }
+        = Array.Empty<string>();
 }
 
 // ─── Session ───────────────────────────────────────────────────────────────
@@ -1963,118 +2000,19 @@ public sealed partial class DocxSession : IDisposable
         PageMapRegistrationResult Fail(PageMapRegistrationError error, string message) =>
             new() { Success = false, Error = error, Message = message };
 
-        if (pageMap.SchemaVersion != PageMap.CurrentSchemaVersion)
-            return Fail(PageMapRegistrationError.UnsupportedSchemaVersion,
-                $"unsupported PageMap schemaVersion {pageMap.SchemaVersion}; expected {PageMap.CurrentSchemaVersion}");
-        if (pageMap.DocumentVersion != _version)
-            return Fail(PageMapRegistrationError.StaleDocumentVersion,
-                $"PageMap documentVersion {pageMap.DocumentVersion} does not match session version {_version}");
-        if (!Enum.IsDefined(pageMap.Mode) || !Enum.IsDefined(pageMap.Availability))
-            return Fail(PageMapRegistrationError.InvalidMap, "PageMap mode or availability discriminator is invalid");
-        if (string.IsNullOrWhiteSpace(pageMap.RendererFingerprint))
-            return Fail(PageMapRegistrationError.InvalidMap, "rendererFingerprint must be non-empty");
-        if (pageMap.Pages is null || pageMap.Fragments is null)
-            return Fail(PageMapRegistrationError.InvalidMap, "PageMap pages and fragments arrays are required");
-        if (expectedRendererFingerprint is not null
-            && !string.Equals(pageMap.RendererFingerprint, expectedRendererFingerprint, StringComparison.Ordinal))
-            return Fail(PageMapRegistrationError.RendererFingerprintMismatch,
-                "PageMap rendererFingerprint does not match the expected renderer");
+        var portable = PageMapContract.ValidatePortable(
+            pageMap, _version, expectedRendererFingerprint);
+        if (!portable.Success)
+            return portable;
 
-        if (pageMap.Mode == PageMapMode.Continuous)
-        {
-            if (pageMap.Availability != PageMapAvailability.Unavailable
-                || pageMap.Pages.Count != 0 || pageMap.Fragments.Count != 0)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "continuous PageMaps must be unavailable and contain no pages or fragments");
-        }
-        else if (pageMap.Availability != PageMapAvailability.Available)
-        {
-            return Fail(PageMapRegistrationError.InvalidMap,
-                "paginated PageMaps must be explicitly available");
-        }
-        else if (pageMap.Pages.Count == 0 || pageMap.Fragments.Count == 0)
-        {
-            return Fail(PageMapRegistrationError.InvalidMap,
-                "an available paginated PageMap must contain at least one page and fragment");
-        }
-
-        var pagesByNumber = new Dictionary<int, PageMapPage>();
-        var seenSectionIndices = new HashSet<int>();
-        PageMapPage? previousPage = null;
-        for (var pageIndex = 0; pageIndex < pageMap.Pages.Count; pageIndex++)
-        {
-            var page = pageMap.Pages[pageIndex];
-            if (page is null)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "PageMap pages cannot contain null entries");
-            if (page.PageNumber < 1 || page.PageInSection < 1
-                || !double.IsFinite(page.Width) || page.Width <= 0
-                || !double.IsFinite(page.Height) || page.Height <= 0
-                || string.IsNullOrWhiteSpace(page.PageName)
-                || page.SectionIndex is < 0)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "pages require non-negative sectionIndex, positive numbering, a pageName, and finite positive geometry");
-            if (page.PageNumber != pageIndex + 1)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "pages must appear in contiguous document order starting at 1");
-
-            if (pageIndex == 0)
-            {
-                if (page.PageInSection != 1)
-                    return Fail(PageMapRegistrationError.InvalidMap,
-                        "the first page must start at pageInSection 1");
-                if (page.SectionIndex is int firstSection) seenSectionIndices.Add(firstSection);
-            }
-            else if (page.PageInSection == 1)
-            {
-                if (page.SectionIndex is int newSection
-                    && !seenSectionIndices.Add(newSection))
-                    return Fail(PageMapRegistrationError.InvalidMap,
-                        $"sectionIndex {newSection} appears in multiple discontiguous page runs");
-                if (page.SectionIndex == previousPage!.SectionIndex
-                    && page.SectionIndex is not null)
-                    return Fail(PageMapRegistrationError.InvalidMap,
-                        $"pageInSection resets within sectionIndex {page.SectionIndex}");
-            }
-            else if (page.PageInSection != previousPage!.PageInSection + 1
-                || page.SectionIndex != previousPage.SectionIndex)
-            {
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "pageInSection must be contiguous and reset to 1 when the section changes");
-            }
-
-            pagesByNumber[page.PageNumber] = page;
-            previousPage = page;
-        }
-
-        var fragmentIds = new HashSet<string>(StringComparer.Ordinal);
-        var fragmentSequence = new Dictionary<string, (int NextIndex, int LastPage)>(StringComparer.Ordinal);
-        var lastFragmentPage = 0;
         foreach (var fragment in pageMap.Fragments)
         {
-            if (fragment is null || fragment.Geometry is null)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "PageMap fragments and fragment geometry cannot be null");
-            if (string.IsNullOrWhiteSpace(fragment.FragmentId)
-                || !fragmentIds.Add(fragment.FragmentId)
-                || string.IsNullOrWhiteSpace(fragment.AnchorId)
-                || !Enum.IsDefined(fragment.Story)
-                || fragment.FragmentIndex < 0
-                || !pagesByNumber.ContainsKey(fragment.PageNumber)
-                || !ValidRect(fragment.Geometry))
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "fragments require unique ids, canonical anchors, mapped pages, and finite non-negative geometry");
-            if (fragment.PageNumber < lastFragmentPage)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    "PageMap fragments must appear in nondecreasing page order");
-            lastFragmentPage = fragment.PageNumber;
-
             var target = FindAnchor(fragment.AnchorId);
             if (target is null || !string.Equals(target.Anchor.Id, fragment.AnchorId, StringComparison.Ordinal))
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap fragment refers to unknown or non-canonical anchor: {fragment.AnchorId}");
 
-            if (!StoryMatchesScope(fragment.Story, target.Anchor.Scope))
+            if (!PageMapContract.StoryMatchesScope(fragment.Story, target.Anchor.Scope))
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap story does not match anchor scope: {fragment.AnchorId}");
 
@@ -2095,22 +2033,6 @@ public sealed partial class DocxSession : IDisposable
                 return Fail(PageMapRegistrationError.InvalidMap,
                     $"PageMap inTableCell does not match anchor ownership: {fragment.AnchorId}");
 
-            var page = pagesByNumber[fragment.PageNumber];
-            const double geometryTolerance = 0.25;
-            if (fragment.Geometry.X + fragment.Geometry.Width > page.Width + geometryTolerance
-                || fragment.Geometry.Y + fragment.Geometry.Height > page.Height + geometryTolerance)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    $"PageMap fragment geometry exceeds page {fragment.PageNumber}");
-
-            if (!fragmentSequence.TryGetValue(fragment.AnchorId, out var sequence))
-                sequence = (NextIndex: 0, LastPage: fragment.PageNumber);
-            if (fragment.FragmentIndex != sequence.NextIndex)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    $"PageMap fragmentIndex values must appear contiguously from 0: {fragment.AnchorId}");
-            if (fragment.PageNumber < sequence.LastPage)
-                return Fail(PageMapRegistrationError.InvalidMap,
-                    $"PageMap fragment pages run backward for anchor: {fragment.AnchorId}");
-            fragmentSequence[fragment.AnchorId] = (sequence.NextIndex + 1, fragment.PageNumber);
         }
 
         _registeredPageMap = pageMap with
@@ -2180,45 +2102,8 @@ public sealed partial class DocxSession : IDisposable
         if (status.Availability == PageMapAvailability.Unavailable)
             return UnavailableCitation(anchorId, request, status.UnavailableReason!.Value);
 
-        var fragments = _registeredPageMap!.Fragments
-            .Where(fragment => string.Equals(fragment.AnchorId, anchorId, StringComparison.Ordinal))
-            .OrderBy(fragment => fragment.PageNumber)
-            .ThenBy(fragment => fragment.FragmentIndex)
-            .ToArray();
-        if (fragments.Length == 0)
-            return UnavailableCitation(anchorId, request, PageCitationUnavailableReason.AnchorNotMapped);
-        var citedPageNumbers = fragments.Select(fragment => fragment.PageNumber).ToHashSet();
-        var pages = _registeredPageMap.Pages
-            .Where(page => citedPageNumbers.Contains(page.PageNumber))
-            .OrderBy(page => page.PageNumber)
-            .ToArray();
-        return new PageCitation
-        {
-            AnchorId = anchorId,
-            Availability = PageMapAvailability.Available,
-            DocumentVersion = _version,
-            RendererFingerprint = request.RendererFingerprint,
-            Pages = pages,
-            Fragments = fragments,
-        };
+        return PageMapContract.ProjectCitation(_registeredPageMap!, anchorId, request);
     }
-
-    private static bool ValidRect(PageMapRect rect) =>
-        rect is not null
-        && double.IsFinite(rect.X) && rect.X >= 0
-        && double.IsFinite(rect.Y) && rect.Y >= 0
-        && double.IsFinite(rect.Width) && rect.Width > 0
-        && double.IsFinite(rect.Height) && rect.Height > 0;
-
-    private static bool StoryMatchesScope(PageMapStory story, string scope) => story switch
-    {
-        PageMapStory.Header => scope.StartsWith("hdr", StringComparison.Ordinal),
-        PageMapStory.Footer => scope.StartsWith("ftr", StringComparison.Ordinal),
-        PageMapStory.Footnote => scope == "fn",
-        PageMapStory.Endnote => scope == "en",
-        PageMapStory.Comment => scope == "cmt",
-        _ => scope == "body",
-    };
 
     private bool CommentHasTableCellPresentation(XElement? source)
     {
@@ -2716,24 +2601,100 @@ public sealed partial class DocxSession : IDisposable
     /// markup remains visible with a diagnostic and cannot be resolved accidentally.
     /// </summary>
     public IReadOnlyList<RevisionListEntry> ListRevisions()
+        => GetRevisionInventory().Entries;
+
+    /// <summary>
+    /// Build the public revision view and the exact native carrier count from one registry pass.
+    /// The latter counts units and range markers rather than UI groups, so coalescing cannot hide
+    /// adversarial work from verification callers.
+    /// </summary>
+    internal (IReadOnlyList<RevisionListEntry> Entries, long NativeElementCount,
+        bool Complete, bool EvidenceComplete) GetRevisionInventory(
+            int maximumNativeElements = int.MaxValue,
+            int maximumEvidenceItems = int.MaxValue,
+            long maximumEvidenceTextCharacters = long.MaxValue)
     {
         ThrowIfDisposed();
-        _ = AnchorIndex(); // guarantees Unids so entries can carry block anchors
 
-        var registry = BuildRevisionRegistry();
+        // Count native carriers before grouping/sorting/hashing them. The manifest's compact
+        // facts intentionally do not model every range-marker family, so relying on it alone
+        // would let a single coalesced move name hide adversarial registry work.
+        var parts = RevisionStoryParts();
+        long carrierCount = 0;
+        foreach (var (_, root, _) in parts)
+        {
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if (!Internal.RevisionOps.IsNativeRevisionCarrierForInventory(element)) continue;
+                carrierCount++;
+                if (carrierCount > maximumNativeElements)
+                    return (Array.Empty<RevisionListEntry>(), carrierCount, false, true);
+            }
+        }
+
+        _ = AnchorIndex(); // guarantees Unids so entries can carry block anchors
+        var registry = BuildRevisionRegistry(parts);
         var result = new List<RevisionListEntry>(registry.Entries.Count);
+        int evidenceItems = 0;
+        long evidenceTextCharacters = 0;
+        long remainingAnchorTraversal = maximumEvidenceItems == int.MaxValue
+            ? long.MaxValue
+            : Math.Max(1024L, checked((long)maximumEvidenceItems * 8));
         foreach (var g in registry.Entries)
         {
-            var affected = RevisionGroupAnchors(g, g.PartUri);
+            var constituentIds = Internal.RevisionOps.ConstituentIds(g);
+            var constituentKeys = Internal.RevisionOps.ConstituentKeys(g);
+            if (evidenceItems > maximumEvidenceItems - constituentIds.Count
+                || evidenceItems + constituentIds.Count
+                    > maximumEvidenceItems - constituentKeys.Count)
+                return (Array.Empty<RevisionListEntry>(), carrierCount, true, false);
+            evidenceItems += constituentIds.Count + constituentKeys.Count;
+
+            bool AddText(params string?[] values)
+            {
+                foreach (var value in values)
+                {
+                    if (value is null) continue;
+                    if (evidenceTextCharacters
+                        > maximumEvidenceTextCharacters - value.Length)
+                        return false;
+                    evidenceTextCharacters += value.Length;
+                }
+                return true;
+            }
+
+            if (!AddText(
+                    g.Id, g.PartUri, g.Scope, g.Type, g.Author, g.Date, g.DateUtc,
+                    g.Diagnostic?.Code, g.Diagnostic?.Message)
+                || constituentIds.Any(value => !AddText(value))
+                || constituentKeys.Any(value => !AddText(value)))
+                return (Array.Empty<RevisionListEntry>(), carrierCount, true, false);
+
+            int remainingAnchors = maximumEvidenceItems - evidenceItems;
+            if (!TryRevisionGroupAnchors(
+                    g, g.PartUri, remainingAnchors,
+                    ref remainingAnchorTraversal, out var affected))
+                return (Array.Empty<RevisionListEntry>(), carrierCount, true, false);
+            evidenceItems += affected.Count;
+            if (affected.Any(anchor => !AddText(anchor.Id)))
+                return (Array.Empty<RevisionListEntry>(), carrierCount, true, false);
+
+            long remainingText = maximumEvidenceTextCharacters - evidenceTextCharacters;
+            var groupText = Internal.RevisionOps.GroupText(
+                g, remainingText, out var groupTextComplete);
+            if (!groupTextComplete || !AddText(groupText))
+                return (Array.Empty<RevisionListEntry>(), carrierCount, true, false);
             result.Add(new RevisionListEntry
             {
                 Id = g.Id,
                 Type = g.Type,
                 Family = g.Family,
-                ConstituentIds = Internal.RevisionOps.ConstituentIds(g),
+                ConstituentIds = constituentIds,
+                ConstituentKeys = constituentKeys,
                 Author = g.Author,
                 Date = g.Date,
-                Text = Internal.RevisionOps.GroupText(g),
+                DateUtc = g.DateUtc,
+                Text = groupText,
                 PartUri = g.PartUri,
                 Scope = g.Scope,
                 AnchorId = affected.Count == 0 ? null : affected[0].Id,
@@ -2742,7 +2703,7 @@ public sealed partial class DocxSession : IDisposable
                 Diagnostic = g.Diagnostic,
             });
         }
-        return result;
+        return (result, carrierCount, true, true);
     }
 
     /// <summary>Accept ONE revision by the id <see cref="ListRevisions"/> reported —
@@ -2783,9 +2744,11 @@ public sealed partial class DocxSession : IDisposable
 
         var partUri = group.PartUri;
         var owningPart = ResolvePart(partUri);
+        var relationshipCandidates = UnprotectedRevisionRelationshipIds(group, owningPart);
         var rejectedNumberingIds = accept
             ? Array.Empty<int>()
-            : NumberingIdsIntroducedBy(group);
+            : NumberingIdsIntroducedBy(group)
+                .Except(_settings.ProtectedRevisionNumberingIds).ToArray();
 
         // Capture the block anchors the resolution touches BEFORE applying — elements
         // detach during Apply and can no longer be resolved to a part afterwards.
@@ -2794,10 +2757,24 @@ public sealed partial class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var removedElements = registry.Resolve(group, accept);
+            var removedElements = registry.Resolve(
+                group,
+                accept,
+                _settings.ProofSafeRevisionResolution,
+                _settings.ProtectedRevisionEmptyContainerKeys);
+            // Numbering is intentionally outside ordinary projected saves: merely opening and
+            // saving a document must not reserialize numbering.xml. A revision in that part
+            // mutates its cached XDocument directly, so flush only that selected owner here.
+            if (owningPart is NumberingDefinitionsPart)
+                owningPart.PutXDocument();
             if (owningPart is not null)
-                SweepOrphanedStoryRelationships(owningPart);
-            if (!accept && rejectedNumberingIds.Count > 0)
+            {
+                if (_settings.ProofSafeRevisionResolution)
+                    SweepOrphanedStoryRelationships(owningPart, relationshipCandidates);
+                else
+                    SweepOrphanedStoryRelationships(owningPart);
+            }
+            if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
 
             var removed = new List<Anchor>();
@@ -2813,7 +2790,12 @@ public sealed partial class DocxSession : IDisposable
                 }
             }
 
-            InvalidateProjectionCache();
+            // Selective revision resolution must not normalize unrelated package state. The
+            // relationship sweep above is deliberately limited to ids carried by this group;
+            // a global image sweep here could erase a pre-existing orphan or hide an unrelated
+            // redline-only relationship from a whole-package reversibility proof.
+            InvalidateProjectionCache(
+                sweepOrphanedImages: !_settings.ProofSafeRevisionResolution);
             return new EditResult
             {
                 Success = true,
@@ -2845,17 +2827,46 @@ public sealed partial class DocxSession : IDisposable
 
         var modified = registry.Entries.SelectMany(g => RevisionGroupAnchors(g, g.PartUri))
             .GroupBy(a => a.Id, StringComparer.Ordinal).Select(g => g.First()).ToList();
-        IReadOnlyList<int> rejectedNumberingIds = accept
+        var relationshipCandidates = registry.Entries
+            .GroupBy(group => group.PartUri, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var owner = ResolvePart(group.Key);
+                    return (IReadOnlyCollection<string>)group
+                        .SelectMany(revision => UnprotectedRevisionRelationshipIds(revision, owner))
+                        .Distinct(StringComparer.Ordinal).ToArray();
+                },
+                StringComparer.Ordinal);
+        var rejectedNumberingIds = accept
             ? Array.Empty<int>()
-            : registry.Entries.SelectMany(NumberingIdsIntroducedBy).Distinct().ToList();
+            : registry.Entries.SelectMany(NumberingIdsIntroducedBy)
+                .Except(_settings.ProtectedRevisionNumberingIds).Distinct().ToArray();
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var removedElements = registry.ResolveAll(accept);
+            var removedElements = registry.ResolveAll(
+                accept,
+                _settings.ProofSafeRevisionResolution,
+                _settings.ProtectedRevisionEmptyContainerKeys);
             foreach (var story in RevisionStoryParts())
-                SweepOrphanedStoryRelationships(story.Part);
-            if (!accept && rejectedNumberingIds.Count > 0)
+            {
+                if (story.Part is NumberingDefinitionsPart)
+                    story.Part.PutXDocument();
+                if (_settings.ProofSafeRevisionResolution)
+                {
+                    if (relationshipCandidates.TryGetValue(
+                            story.Part.Uri.ToString(), out var candidates))
+                        SweepOrphanedStoryRelationships(story.Part, candidates);
+                }
+                else
+                {
+                    SweepOrphanedStoryRelationships(story.Part);
+                }
+            }
+            if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -2875,7 +2886,10 @@ public sealed partial class DocxSession : IDisposable
                 }
             }
 
-            InvalidateProjectionCache();
+            // ResolveAll has already swept only relationships referenced by the groups it
+            // resolved. Preserve every unrelated relationship for exact package semantics.
+            InvalidateProjectionCache(
+                sweepOrphanedImages: !_settings.ProofSafeRevisionResolution);
             return new EditResult
             {
                 Success = true,
@@ -2911,41 +2925,36 @@ public sealed partial class DocxSession : IDisposable
 
     private static IReadOnlyList<int> NumberingIdsIntroducedBy(
         Internal.RevisionOps.RevisionGroup group) =>
-        group.Units.Where(unit => unit.Kind == Internal.RevisionOps.UnitKind.NumberingPropertiesInsert)
+        group.Units.Where(unit =>
+                unit.Kind == Internal.RevisionOps.UnitKind.NumberingPropertiesInsert)
             .Select(unit => (string?)unit.Element.Parent?.Element(W.numId)?.Attribute(W.val))
             .Where(value => int.TryParse(value, out _))
-            .Select(value => int.Parse(value!, System.Globalization.CultureInfo.InvariantCulture))
+            .Select(value => int.Parse(
+                value!, System.Globalization.CultureInfo.InvariantCulture))
             .Distinct()
-            .ToList();
+            .ToArray();
 
-    /// <summary>Remove Docxodus-authored numbering instances made unreachable by rejecting their
-    /// native numPr insertion. Native revision markup cannot carry a package-part before-image;
-    /// pruning only our fixed-nsid definitions recovers exact package parity without touching
-    /// unrelated producer numbering.</summary>
-    private void PruneUnreferencedDocxodusNumbering(IReadOnlyCollection<int>? candidateIds)
+    /// <summary>
+    /// Remove Docxodus-authored numbering instances made unreachable by rejecting their native
+    /// numPr insertion. Proof sessions exclude definitions present in the selected baseline.
+    /// </summary>
+    private void PruneUnreferencedDocxodusNumbering(IReadOnlyCollection<int> candidateIds)
     {
         var main = _doc!.MainDocumentPart;
         var part = main?.NumberingDefinitionsPart;
         var root = part?.GetXDocument().Root;
-        if (main is null || part is null || root is null) return;
+        if (main is null || part is null || root is null || candidateIds.Count == 0) return;
 
-        // EnumerateProjectedParts already yields StyleDefinitionsPart, so numbering
-        // referenced only from a style definition is covered without a special case.
         var referenced = new HashSet<int>();
-        var referenceParts = EnumerateProjectedParts()
-            .Where(projected => !ReferenceEquals(projected, part));
-        foreach (var referencePart in referenceParts)
+        foreach (var referencePart in EnumerateProjectedParts()
+                     .Where(projected => !ReferenceEquals(projected, part)))
         {
             foreach (var numId in referencePart.GetXDocument().Descendants(W.numId))
                 if (int.TryParse((string?)numId.Attribute(W.val), out var value) && value > 0)
                     referenced.Add(value);
         }
 
-        var candidates = candidateIds?.ToHashSet() ?? root.Elements(W.num)
-            .Select(num => (string?)num.Attribute(W.numId))
-            .Where(value => int.TryParse(value, out _))
-            .Select(value => int.Parse(value!, System.Globalization.CultureInfo.InvariantCulture))
-            .ToHashSet();
+        var candidates = candidateIds.ToHashSet();
         bool changed = false;
         foreach (var num in root.Elements(W.num).ToList())
         {
@@ -2953,14 +2962,18 @@ public sealed partial class DocxSession : IDisposable
                 || !candidates.Contains(numId) || referenced.Contains(numId))
                 continue;
             var abstractId = (string?)num.Element(W.abstractNumId)?.Attribute(W.val);
-            var abstractNum = root.Elements(W.abstractNum)
-                .FirstOrDefault(candidate => (string?)candidate.Attribute(W.abstractNumId) == abstractId);
-            if (abstractNum is null || !Internal.NumberingFactory.IsDocxodusDefinition(abstractNum))
+            var abstractNum = root.Elements(W.abstractNum).FirstOrDefault(candidate =>
+                (string?)candidate.Attribute(W.abstractNumId) == abstractId);
+            if (abstractNum is null
+                || !_settings.ProofSafeRevisionResolution
+                    && !Internal.NumberingFactory.IsDocxodusDefinition(abstractNum))
                 continue;
 
             num.Remove();
             changed = true;
-            if (!root.Elements(W.num).Any(other =>
+            bool protectedAbstract = int.TryParse(abstractId, out var parsedAbstractId)
+                && _settings.ProtectedRevisionAbstractNumberingIds.Contains(parsedAbstractId);
+            if (!protectedAbstract && !root.Elements(W.num).Any(other =>
                     (string?)other.Element(W.abstractNumId)?.Attribute(W.val) == abstractId))
                 abstractNum.Remove();
         }
@@ -2970,63 +2983,263 @@ public sealed partial class DocxSession : IDisposable
         else part.PutXDocument();
     }
 
+    internal IReadOnlyList<int> DefinedNumberingIds()
+    {
+        ThrowIfDisposed();
+        return _doc?.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root?
+            .Elements(W.num)
+            .Select(element => (string?)element.Attribute(W.numId))
+            .Where(value => int.TryParse(value, out _))
+            .Select(value => int.Parse(
+                value!, System.Globalization.CultureInfo.InvariantCulture))
+            .Distinct().OrderBy(value => value).ToArray()
+            ?? Array.Empty<int>();
+    }
+
+    internal IReadOnlyList<int> DefinedAbstractNumberingIds()
+    {
+        ThrowIfDisposed();
+        return _doc?.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root?
+            .Elements(W.abstractNum)
+            .Select(element => (string?)element.Attribute(W.abstractNumId))
+            .Where(value => int.TryParse(value, out _))
+            .Select(value => int.Parse(
+                value!, System.Globalization.CultureInfo.InvariantCulture))
+            .Distinct().OrderBy(value => value).ToArray()
+            ?? Array.Empty<int>();
+    }
+
+    internal IReadOnlyCollection<string> RevisionRelationshipKeys()
+    {
+        ThrowIfDisposed();
+        return EnumeratePackageParts(_doc!)
+            .SelectMany(owner => owner.Parts
+                .Select(relationship => relationship.RelationshipId)
+                .Concat(owner.HyperlinkRelationships.Select(relationship => relationship.Id))
+                .Concat(owner.ExternalRelationships.Select(relationship => relationship.Id))
+                .Concat(owner.DataPartReferenceRelationships.Select(relationship => relationship.Id))
+                .Select(relationshipId => RevisionRelationshipKey(
+                    owner.Uri.ToString(), relationshipId)))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal IReadOnlyCollection<string> EmptyRevisionPropertyContainerKeys()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex();
+        return RevisionStoryParts()
+            .SelectMany(story => story.Root.DescendantsAndSelf()
+                .Where(element => Internal.RevisionOps.IsEmptyRemovablePropertyContainer(element))
+                .SelectMany(element => Internal.RevisionOps.EmptyPropertyContainerKeys(
+                    story.Part.Uri.ToString(), element)))
+            .Distinct()
+            .ToArray();
+    }
+
+    private static IReadOnlyCollection<string> RevisionRelationshipIds(
+        Internal.RevisionOps.RevisionGroup group,
+        OpenXmlPart? owner)
+    {
+        if (owner is null) return Array.Empty<string>();
+        var relationshipIds = owner.Parts.Select(relationship => relationship.RelationshipId)
+            .Concat(owner.HyperlinkRelationships.Select(relationship => relationship.Id))
+            .Concat(owner.ExternalRelationships.Select(relationship => relationship.Id))
+            .Concat(owner.DataPartReferenceRelationships.Select(relationship => relationship.Id))
+            .ToHashSet(StringComparer.Ordinal);
+        if (relationshipIds.Count == 0) return Array.Empty<string>();
+
+        var roots = group.Units.SelectMany(unit => new[]
+            {
+                unit.Element,
+                unit.MarkedCell,
+                unit.MarkedRow,
+                unit.StructuredWrapper,
+                unit.Kind == Internal.RevisionOps.UnitKind.PropsChange
+                    ? unit.Element.Parent : null,
+                unit.Kind == Internal.RevisionOps.UnitKind.ParaMark
+                    ? unit.Paragraph : null,
+            })
+            .Where(element => element is not null)
+            .Select(element => element!)
+            .Concat(group.Units.SelectMany(unit => unit.Element.Ancestors()
+                .Where(ancestor => ancestor.Attributes().Any(attribute =>
+                    !attribute.IsNamespaceDeclaration
+                    && relationshipIds.Contains(attribute.Value)))))
+            .Distinct();
+        return roots.SelectMany(root => root.DescendantsAndSelf())
+            .SelectMany(element => element.Attributes())
+            .Where(attribute => !attribute.IsNamespaceDeclaration
+                && (attribute.Name.Namespace == R.r
+                    || attribute.Name.NamespaceName
+                        == "http://purl.oclc.org/ooxml/officeDocument/relationships"
+                    || (attribute.Name.NamespaceName
+                            == "urn:schemas-microsoft-com:office:office"
+                        && attribute.Name.LocalName == "relid")))
+            .Select(attribute => attribute.Value)
+            .Where(relationshipIds.Contains)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private IReadOnlyCollection<string> UnprotectedRevisionRelationshipIds(
+        Internal.RevisionOps.RevisionGroup group,
+        OpenXmlPart? owner)
+    {
+        if (owner is null) return Array.Empty<string>();
+        var ownerUri = owner.Uri.ToString();
+        return RevisionRelationshipIds(group, owner)
+            .Where(relationshipId => !_settings.ProtectedRevisionRelationshipKeys.Contains(
+                RevisionRelationshipKey(ownerUri, relationshipId), StringComparer.Ordinal))
+            .ToArray();
+    }
+
+    private static string RevisionRelationshipKey(string ownerPartUri, string relationshipId) =>
+        ownerPartUri + "\n" + relationshipId;
+
     private List<Anchor> RevisionGroupAnchors(
         Internal.RevisionOps.RevisionGroup group, string partUri)
     {
-        var anchors = new List<Anchor>();
+        long unlimitedTraversal = long.MaxValue;
+        _ = TryRevisionGroupAnchors(
+            group, partUri, int.MaxValue, ref unlimitedTraversal, out var anchors);
+        return anchors;
+    }
+
+    private bool TryRevisionGroupAnchors(
+        Internal.RevisionOps.RevisionGroup group,
+        string partUri,
+        int maximumAnchors,
+        ref long remainingTraversal,
+        out List<Anchor> anchors)
+    {
+        var collected = new List<Anchor>();
+        anchors = collected;
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var preferredByUnid = new Dictionary<string, Anchor>(StringComparer.Ordinal);
+        var fallbackByUnid = new Dictionary<string, Anchor>(StringComparer.Ordinal);
+        foreach (var target in AnchorIndex().Values)
+        {
+            fallbackByUnid.TryAdd(target.Unid, target.Anchor);
+            if (target.PartUri == partUri)
+                preferredByUnid.TryAdd(target.Unid, target.Anchor);
+        }
+        Anchor? FindAnchor(string unid) => preferredByUnid.TryGetValue(unid, out var preferred)
+            ? preferred
+            : fallbackByUnid.GetValueOrDefault(unid);
+        bool TryAdd(Anchor anchor)
+        {
+            if (!seen.Add(anchor.Id)) return true;
+            if (collected.Count >= maximumAnchors) return false;
+            collected.Add(anchor);
+            return true;
+        }
+
         var structuralTables = group.Units.Where(u => u.Kind == Internal.RevisionOps.UnitKind.CellMark)
             .Select(u => u.Table).Where(t => t is not null).Select(t => t!).Distinct().ToList();
         foreach (var table in structuralTables)
         {
             foreach (var element in table.DescendantsAndSelf())
             {
+                if (!TryConsumeRevisionEvidenceTraversal(ref remainingTraversal)) return false;
                 var unid = (string?)element.Attribute(PtOpenXml.Unid);
-                if (unid is not null && AnchorForUnid(unid, partUri) is { } anchor
-                    && seen.Add(anchor.Id))
-                    anchors.Add(anchor);
+                if (unid is not null && FindAnchor(unid) is { } anchor
+                    && !TryAdd(anchor))
+                    return false;
             }
         }
 
         foreach (var unit in group.Units)
         {
+            int anchorCountBeforeUnit = collected.Count;
             var start = unit.MarkedCell ?? unit.Paragraph ?? unit.MarkedRow
                 ?? unit.StructuredWrapper ?? unit.Element;
             if (unit.StructuredWrapper is { } wrapper)
             {
                 foreach (var element in wrapper.DescendantsAndSelf())
                 {
+                    if (!TryConsumeRevisionEvidenceTraversal(ref remainingTraversal)) return false;
                     var descendantUnid = (string?)element.Attribute(PtOpenXml.Unid);
                     if (descendantUnid is not null
-                        && AnchorForUnid(descendantUnid, partUri) is { } descendantAnchor
-                        && seen.Add(descendantAnchor.Id))
-                        anchors.Add(descendantAnchor);
+                        && FindAnchor(descendantUnid) is { } descendantAnchor
+                        && !TryAdd(descendantAnchor))
+                        return false;
                 }
             }
             for (var element = start;
                 element is not null; element = element.Parent)
             {
+                if (!TryConsumeRevisionEvidenceTraversal(ref remainingTraversal)) return false;
                 var unid = (string?)element.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
-                if (AnchorForUnid(unid, partUri) is { } anchor && seen.Add(anchor.Id))
-                    anchors.Add(anchor);
-                break;
+                if (FindAnchor(unid) is { } anchor)
+                {
+                    if (!TryAdd(anchor)) return false;
+                    break;
+                }
+            }
+
+            if (collected.Count == anchorCountBeforeUnit
+                && unit.Element.Name == W.sectPrChange
+                && unit.Element.Ancestors(W.sectPr).FirstOrDefault() is { } sectionProperties
+                && sectionProperties.Parent?.Name == W.body)
+            {
+                var previousBlock = sectionProperties.ElementsBeforeSelf()
+                    .LastOrDefault(element => element.Name == W.p || element.Name == W.tbl);
+                if (previousBlock is not null)
+                {
+                    foreach (var element in previousBlock.DescendantsAndSelf())
+                    {
+                        if (!TryConsumeRevisionEvidenceTraversal(ref remainingTraversal)) return false;
+                        var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                        if (unid is not null
+                            && FindAnchor(unid) is { } anchor)
+                        {
+                            if (!TryAdd(anchor)) return false;
+                            break;
+                        }
+                    }
+                }
             }
         }
-        return anchors;
+        return true;
+    }
+
+    private static bool TryConsumeRevisionEvidenceTraversal(ref long remaining)
+    {
+        if (remaining == long.MaxValue) return true;
+        if (remaining == 0) return false;
+        remaining--;
+        return true;
     }
 
     private Internal.RevisionRegistry BuildRevisionRegistry()
     {
         var parts = RevisionStoryParts();
-        return Internal.RevisionRegistry.Build(parts.Select(p =>
+        return BuildRevisionRegistry(parts);
+    }
+
+    private static Internal.RevisionRegistry BuildRevisionRegistry(
+        IReadOnlyList<(OpenXmlPart Part, XElement Root, string Scope)> parts)
+    {
+        var registry = Internal.RevisionRegistry.Build(parts.Select(p =>
             new Internal.RevisionRegistry.Part(
                 p.Part.Uri.ToString(), p.Scope, p.Root)).ToList());
+        foreach (var group in registry.Entries.Where(group => group.Scope is
+                     "glossary" or "stylesWithEffects" or "glossaryStyles"
+                     or "glossaryStylesWithEffects" or "glossaryNumbering"))
+        {
+            group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+            group.Diagnostic = new RevisionDiagnostic(
+                "unsupported_revision_part",
+                "Revisions in this auxiliary style/glossary part are inventoried but selective resolution is unsupported.");
+        }
+        return registry;
     }
 
     /// <summary>The story parts revision markup lives in, in the fixed order the
-    /// revision enumeration indexes them (main, headers, footers, footnotes, endnotes
-    /// — the same set RevisionProcessor's whole-document accept/reject walks).</summary>
+    /// revision enumeration indexes them. Comments and styles are resolvable; glossary markup is
+    /// inventoried explicitly and marked unsupported rather than disappearing from proof evidence.</summary>
     private List<(OpenXmlPart Part, XElement Root, string Scope)> RevisionStoryParts()
     {
         var list = new List<(OpenXmlPart, XElement, string)>();
@@ -3045,6 +3258,25 @@ public sealed partial class DocxSession : IDisposable
         foreach (var footer in main.FooterParts) Add(footer, $"ftr{index++}");
         if (main.FootnotesPart is not null) Add(main.FootnotesPart, "fn");
         if (main.EndnotesPart is not null) Add(main.EndnotesPart, "en");
+        if (main.WordprocessingCommentsPart is not null)
+            Add(main.WordprocessingCommentsPart, "cmt");
+        if (main.StyleDefinitionsPart is not null)
+            Add(main.StyleDefinitionsPart, "styles");
+        if (main.NumberingDefinitionsPart is not null)
+            Add(main.NumberingDefinitionsPart, "numbering");
+        if (main.StylesWithEffectsPart is not null)
+            Add(main.StylesWithEffectsPart, "stylesWithEffects");
+        if (main.GlossaryDocumentPart is not null)
+        {
+            Add(main.GlossaryDocumentPart, "glossary");
+            if (main.GlossaryDocumentPart.StyleDefinitionsPart is not null)
+                Add(main.GlossaryDocumentPart.StyleDefinitionsPart, "glossaryStyles");
+            if (main.GlossaryDocumentPart.StylesWithEffectsPart is not null)
+                Add(main.GlossaryDocumentPart.StylesWithEffectsPart,
+                    "glossaryStylesWithEffects");
+            if (main.GlossaryDocumentPart.NumberingDefinitionsPart is not null)
+                Add(main.GlossaryDocumentPart.NumberingDefinitionsPart, "glossaryNumbering");
+        }
         return list;
     }
 
@@ -5129,6 +5361,60 @@ public sealed partial class DocxSession : IDisposable
     public string GetSemanticChangesJson(Verification.SemanticDiffOptions? options = null) =>
         GetSemanticChanges(options).ToCanonicalJson();
 
+    /// <summary>
+    /// Verify the session's normal clean-save bytes. When initial-package capture is enabled, the
+    /// exact opening bytes are also used as the baseline for finding disposition and delta policy.
+    /// Use <see cref="PrepareDeliverable"/> when the verified bytes will be written or transmitted.
+    /// </summary>
+    public Verification.DeliverableVerificationResult VerifyDeliverable(
+        Verification.DeliverableVerificationOptions? options = null,
+        Verification.SemanticChangeSet? expectedSemanticChanges = null,
+        IReadOnlyList<Verification.DeliverablePackageChangeExpectation>? expectedPackageChanges = null,
+        IReadOnlyList<Verification.DeliverableCompanionArtifactInput>? companionArtifacts = null)
+    {
+        return PrepareDeliverable(options, expectedSemanticChanges, expectedPackageChanges,
+            companionArtifacts).Report;
+    }
+
+    /// <summary>
+    /// Produce the exact normal clean-save package and verify that same immutable byte snapshot.
+    /// Returning the bytes with the report prevents a later serialization from drifting from the
+    /// package identity recorded by verification.
+    /// </summary>
+    public Verification.VerifiedDeliverable PrepareDeliverable(
+        Verification.DeliverableVerificationOptions? options = null,
+        Verification.SemanticChangeSet? expectedSemanticChanges = null,
+        IReadOnlyList<Verification.DeliverablePackageChangeExpectation>? expectedPackageChanges = null,
+        IReadOnlyList<Verification.DeliverableCompanionArtifactInput>? companionArtifacts = null)
+    {
+        lock (_mutationGate)
+        {
+            ThrowIfDisposed();
+            var deliverableBytes = Save(persistAnchorIds: false);
+            var report = Verification.DeliverableVerifier.VerifyDeliverable(
+                new Verification.DeliverableVerificationRequest
+                {
+                    DeliverableBytes = deliverableBytes,
+                    BaselineBytes = _initialPackageBytes?.ToArray(),
+                    ExpectedSemanticChanges = expectedSemanticChanges,
+                    ExpectedPackageChanges = expectedPackageChanges
+                        ?? Array.Empty<Verification.DeliverablePackageChangeExpectation>(),
+                    CompanionArtifacts = companionArtifacts
+                        ?? Array.Empty<Verification.DeliverableCompanionArtifactInput>(),
+                }, options);
+            return new Verification.VerifiedDeliverable
+            {
+                DeliverableBytes = deliverableBytes,
+                Report = report,
+            };
+        }
+    }
+
+    /// <summary>Compact canonical JSON counterpart of <see cref="VerifyDeliverable"/>.</summary>
+    public string VerifyDeliverableJson(
+        Verification.DeliverableVerificationOptions? options = null) =>
+        VerifyDeliverable(options).ToCanonicalJson();
+
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
     {
         // Key by (scope, Unid). Two reasons we cannot use Unid alone:
@@ -6001,7 +6287,9 @@ public sealed partial class DocxSession : IDisposable
     }
 
     private OpenXmlPart? ResolvePart(string partUri) =>
-        EnumerateProjectedParts().FirstOrDefault(p => p.Uri.ToString() == partUri);
+        EnumerateProjectedParts().FirstOrDefault(p => p.Uri.ToString() == partUri)
+        ?? RevisionStoryParts().Select(story => story.Part)
+            .FirstOrDefault(part => part.Uri.ToString() == partUri);
 
     private static RunFormatting ExtractFormatting(XElement run, OpenXmlPart? ownerPart)
     {
@@ -12007,9 +12295,10 @@ public sealed partial class DocxSession : IDisposable
     /// must not have it swept out from under a restore.
     /// </para>
     /// </remarks>
-    internal void InvalidateProjectionCache()
+    internal void InvalidateProjectionCache(bool sweepOrphanedImages = true)
     {
-        SweepOrphanedStoryImageRelationships();
+        if (sweepOrphanedImages)
+            SweepOrphanedStoryImageRelationships();
         ResetProjectionCache();
     }
 
@@ -12646,11 +12935,18 @@ public sealed partial class DocxSession : IDisposable
                 long highest = 0;
                 foreach (var story in RevisionStoryParts())
                     highest = Math.Max(highest, Internal.RevisionOps.MaxRevisionId(story.Root));
+                if (highest >= int.MaxValue)
+                    throw new InvalidOperationException(
+                        "The document has exhausted the supported positive w:id revision range.");
                 if (highest > _revisionCounter)
-                    _revisionCounter = (int)Math.Min(highest, int.MaxValue - 1);
+                    _revisionCounter = (int)highest;
             }
+
+            if (_revisionCounter >= int.MaxValue)
+                throw new InvalidOperationException(
+                    "The document has exhausted the supported positive w:id revision range.");
+            return ++_revisionCounter;
         }
-        return System.Threading.Interlocked.Increment(ref _revisionCounter);
     }
 
     private void ThrowIfDisposed()

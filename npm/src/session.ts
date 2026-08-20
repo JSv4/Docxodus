@@ -17,6 +17,7 @@ import type {
   DiffEntry,
   DocumentAnnotation,
   DocumentRange,
+  DeliverableVerificationResult,
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
@@ -1586,6 +1587,17 @@ export class DocxSession {
    */
   getSemanticChanges(): SemanticChangeSet {
     return JSON.parse(this.wasm.GetSemanticChanges(this.handle)) as SemanticChangeSet;
+  }
+
+  /**
+   * Run the default deliverable gate on this session's normal clean-save checkpoint.
+   * With initial projection capture enabled (the default), exact opening bytes are the
+   * baseline used for dispositions and semantic/package deltas.
+   */
+  verifyDeliverable(): DeliverableVerificationResult {
+    return JSON.parse(
+      this.wasm.VerifyDeliverable(this.handle),
+    ) as DeliverableVerificationResult;
   }
 
   // ─── Annotation-based anchor discovery (#132) ────────────────────────

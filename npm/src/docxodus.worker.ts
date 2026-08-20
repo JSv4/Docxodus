@@ -15,6 +15,7 @@ import type {
   WorkerInitRequest,
   WorkerConvertRequest,
   WorkerGeneratePackageManifestRequest,
+  WorkerVerifyDeliverableRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetSemanticChangesRequest,
@@ -23,6 +24,7 @@ import type {
   WorkerSessionOpenRequest,
   WorkerSessionGetPackageManifestRequest,
   WorkerSessionGetSemanticChangesRequest,
+  WorkerSessionVerifyDeliverableRequest,
   WorkerSessionCloseRequest,
   WorkerSessionAddAnnotationRequest,
   WorkerSessionRemoveAnnotationRequest,
@@ -39,6 +41,7 @@ import type {
   CommentRenderMode,
   EditResult,
   PackageManifest,
+  DeliverableVerificationResult,
   SemanticChangeSet,
 } from "./types.js";
 import { ComparisonEngine } from "./types.js";
@@ -132,6 +135,25 @@ function handleGeneratePackageManifest(
       request.documentBytes
     );
     return { manifest: JSON.parse(json) as PackageManifest };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleVerifyDeliverable(
+  request: WorkerVerifyDeliverableRequest
+): { verification?: DeliverableVerificationResult; error?: string } {
+  try {
+    const converter = ensureInitialized().DocumentConverter;
+    const json = request.baselineBytes === undefined
+      ? converter.VerifyDeliverable(request.documentBytes)
+      : converter.VerifyDeliverableWithBaseline(
+          request.baselineBytes,
+          request.documentBytes
+        );
+    return {
+      verification: JSON.parse(json) as DeliverableVerificationResult,
+    };
   } catch (error) {
     return { error: String(error) };
   }
@@ -492,6 +514,21 @@ function handleSessionGetSemanticChanges(
   }
 }
 
+function handleSessionVerifyDeliverable(
+  request: WorkerSessionVerifyDeliverableRequest
+): { verification?: DeliverableVerificationResult; error?: string } {
+  try {
+    const json = ensureInitialized().DocxSessionBridge.VerifyDeliverable(
+      request.handle
+    );
+    return {
+      verification: JSON.parse(json) as DeliverableVerificationResult,
+    };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 /**
  * Handle sessionClose request.
  */
@@ -683,6 +720,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
         break;
       }
 
+      case "verifyDeliverable": {
+        const result = handleVerifyDeliverable(
+          request as WorkerVerifyDeliverableRequest
+        );
+        response = {
+          id: request.id,
+          type: "verifyDeliverable",
+          success: !result.error,
+          verification: result.verification,
+          error: result.error,
+        };
+        break;
+      }
+
       case "convertDocxToHtml": {
         const convertRequest = request as WorkerConvertRequest;
         const result = handleConvert(convertRequest);
@@ -826,6 +877,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "sessionGetSemanticChanges",
           success: !result.error,
           semanticChanges: result.semanticChanges,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionVerifyDeliverable": {
+        const result = handleSessionVerifyDeliverable(
+          request as WorkerSessionVerifyDeliverableRequest
+        );
+        response = {
+          id: request.id,
+          type: "sessionVerifyDeliverable",
+          success: !result.error,
+          verification: result.verification,
           error: result.error,
         };
         break;

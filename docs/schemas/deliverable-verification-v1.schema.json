@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/verification/deliverable-verification/v1",
+  "title": "Docxodus deliverable verification report v1",
+  "description": "The deterministic JSON representation emitted by DeliverableVerificationResult.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaVersion",
+    "mode",
+    "decision",
+    "analysisCompleted",
+    "baselineCompared",
+    "baselinePackage",
+    "deliverablePackage",
+    "checks",
+    "findings",
+    "resolvedFindings",
+    "semanticDelta",
+    "packageChanges",
+    "companionArtifacts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "mode": {
+      "enum": ["standard", "strict", "reportOnly"]
+    },
+    "decision": {
+      "enum": ["passed", "passedWithPreExistingFindings", "failed", "notEvaluated"]
+    },
+    "analysisCompleted": {
+      "type": "boolean"
+    },
+    "baselineCompared": {
+      "type": "boolean"
+    },
+    "baselinePackage": {
+      "oneOf": [
+        { "$ref": "#/$defs/packageIdentity" },
+        { "type": "null" }
+      ]
+    },
+    "deliverablePackage": {
+      "$ref": "#/$defs/packageIdentity"
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "resolvedFindings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "semanticDelta": {
+      "oneOf": [
+        { "$ref": "#/$defs/semanticDelta" },
+        { "type": "null" }
+      ]
+    },
+    "packageChanges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/packageChange" }
+    },
+    "companionArtifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "const": "SHA-256" },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "nullableDigest": {
+      "oneOf": [
+        { "$ref": "#/$defs/digest" },
+        { "type": "null" }
+      ]
+    },
+    "packageIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "packageKind",
+        "manifestValid",
+        "rawPackageBytesDigest",
+        "orderedOpcContentDigest",
+        "normalizedSemanticDigest"
+      ],
+      "properties": {
+        "packageKind": { "type": "string", "minLength": 1 },
+        "manifestValid": { "type": "boolean" },
+        "rawPackageBytesDigest": { "$ref": "#/$defs/digest" },
+        "orderedOpcContentDigest": { "$ref": "#/$defs/nullableDigest" },
+        "normalizedSemanticDigest": { "$ref": "#/$defs/nullableDigest" }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryUri", "ownerUri", "relationshipId", "targetUri", "propertyPath"],
+      "properties": {
+        "entryUri": { "$ref": "#/$defs/nullableString" },
+        "ownerUri": { "$ref": "#/$defs/nullableString" },
+        "relationshipId": { "$ref": "#/$defs/nullableString" },
+        "targetUri": { "$ref": "#/$defs/nullableString" },
+        "propertyPath": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "nullableLocation": {
+      "oneOf": [
+        { "$ref": "#/$defs/location" },
+        { "type": "null" }
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "status", "findingCount", "diagnostic"],
+      "properties": {
+        "check": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["completed", "skippedPrerequisiteFailed", "unavailableEvidence"]
+        },
+        "findingCount": { "type": "integer", "minimum": 0 },
+        "diagnostic": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "findingId",
+        "code",
+        "category",
+        "severity",
+        "disposition",
+        "blocksDelivery",
+        "message",
+        "owningPartUri",
+        "location",
+        "anchorId",
+        "scope",
+        "xPath",
+        "remediation"
+      ],
+      "properties": {
+        "findingId": {
+          "type": "string",
+          "pattern": "^fnd-[0-9a-f]{64}$"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9_.]+$"
+        },
+        "category": {
+          "enum": ["package", "openXml", "relationship", "structure", "workflow", "delta", "render", "artifact"]
+        },
+        "severity": {
+          "enum": ["info", "warning", "error"]
+        },
+        "disposition": {
+          "enum": ["new", "preExisting", "resolved", "unclassified"]
+        },
+        "blocksDelivery": { "type": "boolean" },
+        "message": { "type": "string", "minLength": 1 },
+        "owningPartUri": { "type": "string", "minLength": 1 },
+        "location": { "$ref": "#/$defs/nullableLocation" },
+        "anchorId": { "$ref": "#/$defs/nullableString" },
+        "scope": { "$ref": "#/$defs/nullableString" },
+        "xPath": { "$ref": "#/$defs/nullableString" },
+        "remediation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "semanticDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "schemaVersion", "changeCount", "canonicalDigest", "changes"],
+      "properties": {
+        "schema": { "const": "docxodus.semantic-changes" },
+        "schemaVersion": { "const": 1 },
+        "changeCount": { "type": "integer", "minimum": 0 },
+        "canonicalDigest": { "$ref": "#/$defs/digest" },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/semanticChange" }
+        }
+      }
+    },
+    "semanticChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changeId", "fingerprint", "operation", "family", "partUri", "path", "leftAnchor", "rightAnchor"
+      ],
+      "properties": {
+        "changeId": { "type": "string", "pattern": "^chg-[0-9]{6,}$" },
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "operation": { "enum": ["insert", "delete", "move", "modify"] },
+        "family": {
+          "enum": [
+            "text", "blockStructure", "runFormatting", "paragraphFormatting", "style", "numbering", "list",
+            "table", "tableRow", "tableCell", "tableSpan", "tableWidth", "tableStyle", "section", "pageSetup",
+            "header", "footer", "field", "footnote", "endnote", "comment", "hyperlink", "bookmark",
+            "contentControl", "image", "media", "relationship", "revision", "annotation", "opaquePackagePart"
+          ]
+        },
+        "partUri": { "type": "string", "pattern": "^/" },
+        "path": { "type": "string" },
+        "leftAnchor": { "$ref": "#/$defs/nullableString" },
+        "rightAnchor": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "packageChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changeId", "kind", "location", "beforeDigest", "afterDigest", "beforeValue", "afterValue"],
+      "properties": {
+        "changeId": { "type": "string", "pattern": "^pkg-[0-9a-f]{64}$" },
+        "kind": {
+          "enum": [
+            "entryAdded", "entryRemoved", "entryModified",
+            "relationshipAdded", "relationshipRemoved", "relationshipModified"
+          ]
+        },
+        "location": { "$ref": "#/$defs/location" },
+        "beforeDigest": { "$ref": "#/$defs/nullableDigest" },
+        "afterDigest": { "$ref": "#/$defs/nullableDigest" },
+        "beforeValue": { "$ref": "#/$defs/nullableString" },
+        "afterValue": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId", "role", "mediaType", "availability", "byteLength", "digest",
+        "unavailableReason", "pageCount", "rendererFingerprint", "sourcePackageDigest",
+        "pageMapDigest", "renderDiagnosticCount"
+      ],
+      "properties": {
+        "artifactId": { "type": "string" },
+        "role": { "enum": ["html", "pdf", "pageMap", "pageImage", "renderReport", "other"] },
+        "mediaType": { "type": "string" },
+        "availability": { "enum": ["available", "unavailable"] },
+        "byteLength": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "digest": { "$ref": "#/$defs/nullableDigest" },
+        "unavailableReason": { "$ref": "#/$defs/nullableString" },
+        "pageCount": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rendererFingerprint": { "$ref": "#/$defs/nullableString" },
+        "sourcePackageDigest": { "$ref": "#/$defs/nullableDigest" },
+        "pageMapDigest": { "$ref": "#/$defs/nullableDigest" },
+        "renderDiagnosticCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

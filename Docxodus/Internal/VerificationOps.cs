@@ -20,4 +20,15 @@ internal static class VerificationOps
     /// <summary>Generate canonical manifest JSON for a live session's logical checkpoint.</summary>
     public static string GetPackageManifest(int handle) =>
         SessionRegistry.Get(handle).GetPackageManifest().ToJson();
+
+    /// <summary>Run the default deliverable-verification policy on exact supplied bytes.</summary>
+    public static string VerifyDeliverable(byte[] packageBytes) =>
+        DeliverableVerifier.VerifyDeliverable(packageBytes).ToCanonicalJson();
+
+    /// <summary>
+    /// Run the default deliverable-verification policy and classify the exact delivered bytes
+    /// relative to exact baseline bytes.
+    /// </summary>
+    public static string VerifyDeliverable(byte[] baselineBytes, byte[] packageBytes) =>
+        DeliverableVerifier.VerifyDeliverable(baselineBytes, packageBytes).ToCanonicalJson();
 }

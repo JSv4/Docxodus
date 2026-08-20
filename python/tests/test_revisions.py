@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from docx_scalpel import DocxSession, TrackedChangeMode, open_session
+from docx_scalpel import DocxSession, RevisionListEntry, TrackedChangeMode, open_session
 
 
 def _first_body_paragraph(session: DocxSession) -> str:
@@ -39,6 +39,11 @@ def test_list_revisions_reads_markup_identity(tour_plan_bytes: bytes) -> None:
         assert all(r.id.startswith("rev2-") for r in revisions)
         assert {r.family for r in revisions} == {"content_delete", "content_insert"}
         assert all(r.constituent_ids for r in revisions)
+        assert all(r.constituent_keys for r in revisions)
+        # Keys disambiguate carrier roles that may legally reuse a numeric id,
+        # so they are unique across the registry even where ids are not.
+        all_keys = [k for r in revisions for k in r.constituent_keys]
+        assert len(all_keys) == len(set(all_keys))
         assert all(r.part_uri == "/word/document.xml" for r in revisions)
         assert all(r.scope == "body" for r in revisions)
         assert all(r.affected_anchors for r in revisions)
@@ -114,3 +119,26 @@ def test_bulk_resolution_is_undoable(tour_plan_bytes: bytes) -> None:
             assert session.list_revisions() == ()
             assert session.undo()
             assert [r.id for r in session.list_revisions()] == before
+
+
+def test_revision_list_entry_wire_keeps_constituent_keys_and_date_utc() -> None:
+    """The typed client must surface constituentKeys/dateUtc, not drop them."""
+    entry = RevisionListEntry._from_wire(
+        {
+            "id": "rev2-abc",
+            "type": "insert",
+            "family": "content_insert",
+            "constituentIds": ["1"],
+            "constituentKeys": ["content:/word/document.xml:w:ins:1"],
+            "author": "Reviewer",
+            "date": "2026-01-01T00:00:00Z",
+            "dateUtc": "2026-01-01T05:00:00Z",
+            "text": "hi",
+            "partUri": "/word/document.xml",
+            "scope": "body",
+            "affectedAnchors": [],
+            "resolutionStatus": "supported",
+        }
+    )
+    assert entry.constituent_keys == ("content:/word/document.xml:w:ins:1",)
+    assert entry.date_utc == "2026-01-01T05:00:00Z"

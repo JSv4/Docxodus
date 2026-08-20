@@ -26,6 +26,15 @@ from .enums import (
     DocxDiffFormatComparison,
     DocxDiffRevisionGranularity,
     DocxDiffRevisionType,
+    DeliverableArtifactAvailability,
+    DeliverableArtifactRole,
+    DeliverableCheckStatus,
+    DeliverableFindingCategory,
+    DeliverableFindingDisposition,
+    DeliverablePackageChangeKind,
+    DeliverableSemanticChangeFamily,
+    DeliverableVerificationDecision,
+    DeliverableVerificationMode,
     EditErrorCode,
     EmptyParagraphMode,
     HeaderFooterKind,
@@ -110,6 +119,14 @@ __all__ = [
     "PackageRevisionCounts",
     "VerificationDigest",
     "VerificationFinding",
+    "DeliverablePackageIdentity",
+    "DeliverableCheckResult",
+    "DeliverableFinding",
+    "DeliverablePackageChange",
+    "DeliverableSemanticChange",
+    "DeliverableSemanticDelta",
+    "DeliverableArtifactMetadata",
+    "DeliverableVerificationResult",
     "WmlToMarkdownConverterSettings",
     "DocumentAnnotation",
     "AnnotationUpdate",
@@ -453,6 +470,316 @@ class PackageManifest:
             ),
             facts=PackageManifestFacts._from_wire(d["facts"]),
             findings=tuple(VerificationFinding._from_wire(x) for x in d.get("findings", ())),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Deliverable verification
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverablePackageIdentity:
+    package_kind: str
+    manifest_valid: bool
+    raw_package_bytes_digest: VerificationDigest
+    ordered_opc_content_digest: VerificationDigest | None = None
+    normalized_semantic_digest: VerificationDigest | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverablePackageIdentity":
+        ordered = d.get("orderedOpcContentDigest")
+        semantic = d.get("normalizedSemanticDigest")
+        return cls(
+            package_kind=str(d["packageKind"]),
+            manifest_valid=bool(d["manifestValid"]),
+            raw_package_bytes_digest=VerificationDigest._from_wire(
+                d["rawPackageBytesDigest"]
+            ),
+            ordered_opc_content_digest=(
+                VerificationDigest._from_wire(ordered)
+                if isinstance(ordered, Mapping)
+                else None
+            ),
+            normalized_semantic_digest=(
+                VerificationDigest._from_wire(semantic)
+                if isinstance(semantic, Mapping)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableCheckResult:
+    check: str
+    status: DeliverableCheckStatus
+    finding_count: int
+    diagnostic: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableCheckResult":
+        return cls(
+            check=str(d["check"]),
+            status=DeliverableCheckStatus(str(d["status"])),
+            finding_count=int(d["findingCount"]),
+            diagnostic=d.get("diagnostic"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableFinding:
+    finding_id: str
+    code: str
+    category: DeliverableFindingCategory
+    severity: VerificationFindingSeverity
+    disposition: DeliverableFindingDisposition
+    blocks_delivery: bool
+    message: str
+    owning_part_uri: str
+    remediation: str
+    location: ChangeLocation | None = None
+    anchor_id: str | None = None
+    scope: str | None = None
+    x_path: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableFinding":
+        location = d.get("location")
+        return cls(
+            finding_id=str(d["findingId"]),
+            code=str(d["code"]),
+            category=DeliverableFindingCategory(str(d["category"])),
+            severity=VerificationFindingSeverity(str(d["severity"])),
+            disposition=DeliverableFindingDisposition(str(d["disposition"])),
+            blocks_delivery=bool(d["blocksDelivery"]),
+            message=str(d["message"]),
+            owning_part_uri=str(d["owningPartUri"]),
+            remediation=str(d["remediation"]),
+            location=(
+                ChangeLocation._from_wire(location)
+                if isinstance(location, Mapping)
+                else None
+            ),
+            anchor_id=d.get("anchorId"),
+            scope=d.get("scope"),
+            x_path=d.get("xPath"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverablePackageChange:
+    change_id: str
+    kind: DeliverablePackageChangeKind
+    location: ChangeLocation
+    before_digest: VerificationDigest | None = None
+    after_digest: VerificationDigest | None = None
+    before_value: str | None = None
+    after_value: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverablePackageChange":
+        before = d.get("beforeDigest")
+        after = d.get("afterDigest")
+        return cls(
+            change_id=str(d["changeId"]),
+            kind=DeliverablePackageChangeKind(str(d["kind"])),
+            location=ChangeLocation._from_wire(d["location"]),
+            before_digest=(
+                VerificationDigest._from_wire(before)
+                if isinstance(before, Mapping)
+                else None
+            ),
+            after_digest=(
+                VerificationDigest._from_wire(after)
+                if isinstance(after, Mapping)
+                else None
+            ),
+            before_value=d.get("beforeValue"),
+            after_value=d.get("afterValue"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableSemanticChange:
+    change_id: str
+    fingerprint: str
+    operation: "SemanticChangeOperation"
+    family: DeliverableSemanticChangeFamily
+    part_uri: str
+    path: str
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableSemanticChange":
+        return cls(
+            change_id=str(d["changeId"]),
+            fingerprint=str(d["fingerprint"]),
+            operation=SemanticChangeOperation(str(d["operation"])),
+            family=DeliverableSemanticChangeFamily(str(d["family"])),
+            part_uri=str(d["partUri"]),
+            path=str(d["path"]),
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableSemanticDelta:
+    schema: str
+    schema_version: int
+    change_count: int
+    canonical_digest: VerificationDigest
+    changes: tuple[DeliverableSemanticChange, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableSemanticDelta":
+        schema = str(d.get("schema", ""))
+        schema_version = int(d.get("schemaVersion", 0))
+        if schema != "docxodus.semantic-changes" or schema_version != 1:
+            raise ValueError(
+                f"unsupported deliverable semantic schema {schema!r} version {schema_version}"
+            )
+        changes = tuple(
+            DeliverableSemanticChange._from_wire(change)
+            for change in d.get("changes", ())
+        )
+        change_count = int(d.get("changeCount", len(changes)))
+        if change_count != len(changes):
+            raise ValueError(
+                f"deliverable semantic count {change_count} does not match "
+                f"{len(changes)} entries"
+            )
+        return cls(
+            schema=schema,
+            schema_version=schema_version,
+            change_count=change_count,
+            canonical_digest=VerificationDigest._from_wire(d["canonicalDigest"]),
+            changes=changes,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableArtifactMetadata:
+    artifact_id: str
+    role: DeliverableArtifactRole
+    media_type: str
+    availability: DeliverableArtifactAvailability
+    render_diagnostic_count: int
+    byte_length: int | None = None
+    digest: VerificationDigest | None = None
+    unavailable_reason: str | None = None
+    page_count: int | None = None
+    renderer_fingerprint: str | None = None
+    source_package_digest: VerificationDigest | None = None
+    page_map_digest: VerificationDigest | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableArtifactMetadata":
+        digest = d.get("digest")
+        source = d.get("sourcePackageDigest")
+        page_map = d.get("pageMapDigest")
+        return cls(
+            artifact_id=str(d["artifactId"]),
+            role=DeliverableArtifactRole(str(d["role"])),
+            media_type=str(d["mediaType"]),
+            availability=DeliverableArtifactAvailability(str(d["availability"])),
+            render_diagnostic_count=int(d["renderDiagnosticCount"]),
+            byte_length=(
+                int(d["byteLength"]) if d.get("byteLength") is not None else None
+            ),
+            digest=(
+                VerificationDigest._from_wire(digest)
+                if isinstance(digest, Mapping)
+                else None
+            ),
+            unavailable_reason=d.get("unavailableReason"),
+            page_count=(
+                int(d["pageCount"]) if d.get("pageCount") is not None else None
+            ),
+            renderer_fingerprint=d.get("rendererFingerprint"),
+            source_package_digest=(
+                VerificationDigest._from_wire(source)
+                if isinstance(source, Mapping)
+                else None
+            ),
+            page_map_digest=(
+                VerificationDigest._from_wire(page_map)
+                if isinstance(page_map, Mapping)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableVerificationResult:
+    schema: str
+    schema_version: int
+    mode: DeliverableVerificationMode
+    decision: DeliverableVerificationDecision
+    analysis_completed: bool
+    baseline_compared: bool
+    deliverable_package: DeliverablePackageIdentity
+    checks: tuple[DeliverableCheckResult, ...]
+    findings: tuple[DeliverableFinding, ...]
+    resolved_findings: tuple[DeliverableFinding, ...]
+    package_changes: tuple[DeliverablePackageChange, ...]
+    companion_artifacts: tuple[DeliverableArtifactMetadata, ...]
+    baseline_package: DeliverablePackageIdentity | None = None
+    semantic_delta: DeliverableSemanticDelta | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliverableVerificationResult":
+        schema = str(d.get("schema", ""))
+        schema_version = int(d.get("schemaVersion", 0))
+        expected = "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+        if schema != expected or schema_version != 1:
+            raise ValueError(
+                f"unsupported deliverable-verification schema {schema!r} "
+                f"version {schema_version}"
+            )
+        baseline = d.get("baselinePackage")
+        semantic = d.get("semanticDelta")
+        return cls(
+            schema=schema,
+            schema_version=schema_version,
+            mode=DeliverableVerificationMode(str(d["mode"])),
+            decision=DeliverableVerificationDecision(str(d["decision"])),
+            analysis_completed=bool(d["analysisCompleted"]),
+            baseline_compared=bool(d["baselineCompared"]),
+            deliverable_package=DeliverablePackageIdentity._from_wire(
+                d["deliverablePackage"]
+            ),
+            checks=tuple(
+                DeliverableCheckResult._from_wire(item)
+                for item in d.get("checks", ())
+            ),
+            findings=tuple(
+                DeliverableFinding._from_wire(item)
+                for item in d.get("findings", ())
+            ),
+            resolved_findings=tuple(
+                DeliverableFinding._from_wire(item)
+                for item in d.get("resolvedFindings", ())
+            ),
+            package_changes=tuple(
+                DeliverablePackageChange._from_wire(item)
+                for item in d.get("packageChanges", ())
+            ),
+            companion_artifacts=tuple(
+                DeliverableArtifactMetadata._from_wire(item)
+                for item in d.get("companionArtifacts", ())
+            ),
+            baseline_package=(
+                DeliverablePackageIdentity._from_wire(baseline)
+                if isinstance(baseline, Mapping)
+                else None
+            ),
+            semantic_delta=(
+                DeliverableSemanticDelta._from_wire(semantic)
+                if isinstance(semantic, Mapping)
+                else None
+            ),
         )
 
 
@@ -2345,7 +2672,8 @@ class RevisionListEntry:
     ``Session.list_revisions``.
 
     ``id`` is an opaque, deterministic ``rev2-…`` identity; ``constituent_ids`` exposes
-    the native Word ids. ``family`` identifies the exact atomic operation while ``type``
+    the native Word ids and ``constituent_keys`` their QName-qualified identities,
+    which stay distinct where roles legally reuse a numeric id. ``family`` identifies the exact atomic operation while ``type``
     is its coarse display class. Part/scope and every affected anchor are included.
     Unsafe native topology remains listed through ``resolution_status`` and
     ``diagnostic`` and fails closed when resolution is requested.
@@ -2356,7 +2684,9 @@ class RevisionListEntry:
     author: str
     family: str = "unsupported"
     constituent_ids: tuple[str, ...] = ()
+    constituent_keys: tuple[str, ...] = ()
     date: str | None = None
+    date_utc: str | None = None
     text: str = ""
     part_uri: str = ""
     scope: str = ""
@@ -2372,8 +2702,10 @@ class RevisionListEntry:
             type=d.get("type", ""),
             family=d.get("family", "unsupported"),
             constituent_ids=tuple(d.get("constituentIds", ())),
+            constituent_keys=tuple(d.get("constituentKeys", ())),
             author=d.get("author", "unknown"),
             date=d.get("date"),
+            date_utc=d.get("dateUtc"),
             text=d.get("text", ""),
             part_uri=d.get("partUri", ""),
             scope=d.get("scope", ""),

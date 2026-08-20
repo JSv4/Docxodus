@@ -21,6 +21,33 @@ public sealed partial class DocxSession
         OwnedPartRelationships.SweepOrphanedImages(owner);
     }
 
+    /// <summary>
+    /// Remove only relationships that were referenced inside markup removed by
+    /// the current revision operation. A whole-part sweep would also delete unrelated orphaned
+    /// relationships that pre-dated the edit and violate package-preservation guarantees.
+    /// </summary>
+    private static void SweepOrphanedStoryRelationships(
+        OpenXmlPart owner,
+        IReadOnlyCollection<string> candidateIds)
+    {
+        if (candidateIds.Count == 0) return;
+        var candidates = candidateIds as HashSet<string>
+            ?? new HashSet<string>(candidateIds, StringComparer.Ordinal);
+        var referenced = OwnedPartRelationships.ReferencedRelationshipIds(owner, candidates);
+
+        foreach (var relationship in owner.Parts.ToList())
+            if (candidates.Contains(relationship.RelationshipId)
+                && !referenced.Contains(relationship.RelationshipId))
+                owner.DeletePart(relationship.RelationshipId);
+        foreach (var relationship in owner.HyperlinkRelationships.Cast<ReferenceRelationship>()
+                     .Concat(owner.DataPartReferenceRelationships).ToList())
+            if (candidates.Contains(relationship.Id) && !referenced.Contains(relationship.Id))
+                owner.DeleteReferenceRelationship(relationship.Id);
+        foreach (var relationship in owner.ExternalRelationships.ToList())
+            if (candidates.Contains(relationship.Id) && !referenced.Contains(relationship.Id))
+                owner.DeleteExternalRelationship(relationship.Id);
+    }
+
     /// <summary>Drop every image relationship that no attribute in its owning story part names.
     /// Runs on the mutation boundary (<see cref="InvalidateProjectionCache"/>), not on save: only
     /// a mutation can orphan a relationship, and serialization must stay read-only with respect

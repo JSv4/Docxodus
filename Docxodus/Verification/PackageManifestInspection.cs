@@ -11,7 +11,8 @@ namespace Docxodus.Verification;
 /// <summary>
 /// Internal, handle-free view of data materialized while generating a package manifest. Parsed XML
 /// trees are detached and exclusively owned by the inspection consumer, which may mutate them.
-/// Consumers must reject <see cref="Manifest"/> when it is invalid before using partial entries.
+/// Consumers may continue only after applying their own explicit bounded-read prerequisites;
+/// ordinary OPC defects do not by themselves make safely retained entry bytes unusable.
 /// </summary>
 internal sealed record PackageManifestInspection(
     PackageManifest Manifest,

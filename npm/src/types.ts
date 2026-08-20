@@ -988,12 +988,197 @@ export interface PackageManifest {
   findings: readonly VerificationFinding[];
 }
 
+// ============================================================================
+// Deliverable verification
+// ============================================================================
+
+/** Policy preset used by the default deliverable gate. */
+export type DeliverableVerificationMode = "standard" | "strict" | "reportOnly";
+
+/** Final policy decision in a deliverable-verification report. */
+export type DeliverableVerificationDecision =
+  | "passed"
+  | "passedWithPreExistingFindings"
+  | "failed"
+  | "notEvaluated";
+
+/** How a delivered finding relates to the exact opening/baseline package. */
+export type DeliverableFindingDisposition =
+  | "new"
+  | "preExisting"
+  | "resolved"
+  | "unclassified";
+
+export type DeliverableFindingCategory =
+  | "package"
+  | "openXml"
+  | "relationship"
+  | "structure"
+  | "workflow"
+  | "delta"
+  | "render"
+  | "artifact";
+
+export type DeliverableCheckStatus =
+  | "completed"
+  | "skippedPrerequisiteFailed"
+  | "unavailableEvidence";
+
+export type DeliverablePackageChangeKind =
+  | "entryAdded"
+  | "entryRemoved"
+  | "entryModified"
+  | "relationshipAdded"
+  | "relationshipRemoved"
+  | "relationshipModified";
+
+export type DeliverableArtifactRole =
+  | "html"
+  | "pdf"
+  | "pageMap"
+  | "pageImage"
+  | "renderReport"
+  | "other";
+
+export type DeliverableArtifactAvailability = "available" | "unavailable";
+
+/** Camel-case enum values used by the deliverable report's semantic summary. */
+export type DeliverableSemanticChangeFamily =
+  | "text"
+  | "blockStructure"
+  | "runFormatting"
+  | "paragraphFormatting"
+  | "style"
+  | "numbering"
+  | "list"
+  | "table"
+  | "tableRow"
+  | "tableCell"
+  | "tableSpan"
+  | "tableWidth"
+  | "tableStyle"
+  | "section"
+  | "pageSetup"
+  | "header"
+  | "footer"
+  | "field"
+  | "footnote"
+  | "endnote"
+  | "comment"
+  | "hyperlink"
+  | "bookmark"
+  | "contentControl"
+  | "image"
+  | "media"
+  | "relationship"
+  | "revision"
+  | "annotation"
+  | "opaquePackagePart";
+
+export interface DeliverablePackageIdentity {
+  packageKind: string;
+  manifestValid: boolean;
+  rawPackageBytesDigest: VerificationDigest;
+  orderedOpcContentDigest: VerificationDigest | null;
+  normalizedSemanticDigest: VerificationDigest | null;
+}
+
+export interface DeliverableCheckResult {
+  check: string;
+  status: DeliverableCheckStatus;
+  findingCount: number;
+  diagnostic: string | null;
+}
+
+export interface DeliverableFinding {
+  findingId: string;
+  code: string;
+  category: DeliverableFindingCategory;
+  severity: VerificationFindingSeverity;
+  disposition: DeliverableFindingDisposition;
+  blocksDelivery: boolean;
+  message: string;
+  owningPartUri: string;
+  location: ChangeLocation | null;
+  anchorId: string | null;
+  scope: string | null;
+  xPath: string | null;
+  remediation: string;
+}
+
+export interface DeliverablePackageChange {
+  changeId: string;
+  kind: DeliverablePackageChangeKind;
+  location: ChangeLocation;
+  beforeDigest: VerificationDigest | null;
+  afterDigest: VerificationDigest | null;
+  beforeValue: string | null;
+  afterValue: string | null;
+}
+
+export interface DeliverableSemanticChange {
+  changeId: string;
+  fingerprint: string;
+  operation: SemanticChangeOperation;
+  family: DeliverableSemanticChangeFamily;
+  partUri: string;
+  path: string;
+  leftAnchor: string | null;
+  rightAnchor: string | null;
+}
+
+export interface DeliverableSemanticDelta {
+  schema: "docxodus.semantic-changes";
+  schemaVersion: 1;
+  changeCount: number;
+  canonicalDigest: VerificationDigest;
+  changes: readonly DeliverableSemanticChange[];
+}
+
+export interface DeliverableArtifactMetadata {
+  artifactId: string;
+  role: DeliverableArtifactRole;
+  mediaType: string;
+  availability: DeliverableArtifactAvailability;
+  byteLength: number | null;
+  digest: VerificationDigest | null;
+  unavailableReason: string | null;
+  pageCount: number | null;
+  rendererFingerprint: string | null;
+  sourcePackageDigest: VerificationDigest | null;
+  pageMapDigest: VerificationDigest | null;
+  renderDiagnosticCount: number;
+}
+
+/** Canonical schema-v1 report returned by every default verification transport. */
+export interface DeliverableVerificationResult {
+  schema: "https://docxodus.dev/schemas/verification/deliverable-verification/v1";
+  schemaVersion: 1;
+  mode: DeliverableVerificationMode;
+  decision: DeliverableVerificationDecision;
+  analysisCompleted: boolean;
+  baselineCompared: boolean;
+  baselinePackage: DeliverablePackageIdentity | null;
+  deliverablePackage: DeliverablePackageIdentity;
+  checks: readonly DeliverableCheckResult[];
+  findings: readonly DeliverableFinding[];
+  resolvedFindings: readonly DeliverableFinding[];
+  semanticDelta: DeliverableSemanticDelta | null;
+  packageChanges: readonly DeliverablePackageChange[];
+  companionArtifacts: readonly DeliverableArtifactMetadata[];
+}
+
 /**
  * Internal WASM exports structure
  */
 export interface DocxodusWasmExports {
   DocumentConverter: {
     GeneratePackageManifest: (bytes: Uint8Array) => string;
+    VerifyDeliverable: (bytes: Uint8Array) => string;
+    VerifyDeliverableWithBaseline: (
+      baselineBytes: Uint8Array,
+      bytes: Uint8Array
+    ) => string;
     ConvertDocxToHtml: (bytes: Uint8Array) => string;
     RenderBlockHtml: (
       bytes: Uint8Array,
@@ -1470,6 +1655,7 @@ export interface DocxodusWasmExports {
     RemainingPlaceholders: (handle: number, kinds: number) => string;
     GetDiff: (handle: number, format: number) => string;
     GetSemanticChanges: (handle: number) => string;
+    VerifyDeliverable: (handle: number) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
@@ -1957,8 +2143,15 @@ export interface RevisionListEntry {
   type: SessionRevisionType;
   family: RevisionFamily;
   constituentIds: string[];
+  /**
+   * QName-qualified native carrier identities. Unlike `constituentIds`, these
+   * distinguish revision roles which legally use the same numeric `w:id` value.
+   */
+  constituentKeys: string[];
   author: string;
   date?: string;
+  /** The `w16du:dateUtc` timestamp, when the markup carries one. */
+  dateUtc?: string;
   text: string;
   partUri: string;
   scope: string;
@@ -3649,6 +3842,7 @@ export interface DocumentMetadata {
 export type WorkerRequestType =
   | "init"
   | "generatePackageManifest"
+  | "verifyDeliverable"
   | "convertDocxToHtml"
   | "compareDocuments"
   | "compareDocumentsToHtml"
@@ -3660,6 +3854,7 @@ export type WorkerRequestType =
   | "sessionOpen"
   | "sessionGetPackageManifest"
   | "sessionGetSemanticChanges"
+  | "sessionVerifyDeliverable"
   | "sessionClose"
   | "sessionAddAnnotation"
   | "sessionRemoveAnnotation"
@@ -3700,6 +3895,13 @@ export interface WorkerConvertRequest extends WorkerRequestBase {
 export interface WorkerGeneratePackageManifestRequest extends WorkerRequestBase {
   type: "generatePackageManifest";
   documentBytes: Uint8Array;
+}
+
+/** Run the default deliverable gate directly over exact supplied bytes. */
+export interface WorkerVerifyDeliverableRequest extends WorkerRequestBase {
+  type: "verifyDeliverable";
+  documentBytes: Uint8Array;
+  baselineBytes?: Uint8Array;
 }
 
 /**
@@ -3794,6 +3996,12 @@ export interface WorkerSessionGetSemanticChangesRequest extends WorkerRequestBas
   handle: number;
 }
 
+/** Run the default deliverable gate over a worker session's clean-save checkpoint. */
+export interface WorkerSessionVerifyDeliverableRequest extends WorkerRequestBase {
+  type: "sessionVerifyDeliverable";
+  handle: number;
+}
+
 /**
  * Close a worker DocxSession.
  */
@@ -3852,6 +4060,7 @@ export interface WorkerSessionMoveAnnotationRequest extends WorkerRequestBase {
 export type WorkerRequest =
   | WorkerInitRequest
   | WorkerGeneratePackageManifestRequest
+  | WorkerVerifyDeliverableRequest
   | WorkerConvertRequest
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
@@ -3863,6 +4072,7 @@ export type WorkerRequest =
   | WorkerSessionOpenRequest
   | WorkerSessionGetPackageManifestRequest
   | WorkerSessionGetSemanticChangesRequest
+  | WorkerSessionVerifyDeliverableRequest
   | WorkerSessionCloseRequest
   | WorkerSessionAddAnnotationRequest
   | WorkerSessionRemoveAnnotationRequest
@@ -3900,6 +4110,11 @@ export interface WorkerConvertResponse extends WorkerResponseBase {
 export interface WorkerGeneratePackageManifestResponse extends WorkerResponseBase {
   type: "generatePackageManifest";
   manifest?: PackageManifest;
+}
+
+export interface WorkerVerifyDeliverableResponse extends WorkerResponseBase {
+  type: "verifyDeliverable";
+  verification?: DeliverableVerificationResult;
 }
 
 /**
@@ -3981,6 +4196,11 @@ export interface WorkerSessionGetSemanticChangesResponse extends WorkerResponseB
   semanticChanges?: SemanticChangeSet;
 }
 
+export interface WorkerSessionVerifyDeliverableResponse extends WorkerResponseBase {
+  type: "sessionVerifyDeliverable";
+  verification?: DeliverableVerificationResult;
+}
+
 /**
  * Response from sessionClose request.
  */
@@ -4008,6 +4228,7 @@ export interface WorkerSessionEditResponse extends WorkerResponseBase {
 export type WorkerResponse =
   | WorkerInitResponse
   | WorkerGeneratePackageManifestResponse
+  | WorkerVerifyDeliverableResponse
   | WorkerConvertResponse
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
@@ -4019,6 +4240,7 @@ export type WorkerResponse =
   | WorkerSessionOpenResponse
   | WorkerSessionGetPackageManifestResponse
   | WorkerSessionGetSemanticChangesResponse
+  | WorkerSessionVerifyDeliverableResponse
   | WorkerSessionCloseResponse
   | WorkerSessionEditResponse;
 

@@ -33,16 +33,10 @@ public static class PackageManifestGenerator
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string StrictWordNamespace =
         "http://purl.oclc.org/ooxml/wordprocessingml/main";
-    private const string TransitionalOfficeRelationshipNamespace =
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    private const string StrictOfficeRelationshipNamespace =
-        "http://purl.oclc.org/ooxml/officeDocument/relationships";
-    private const string TransitionalOfficeRelationshipTypePrefix =
-        TransitionalOfficeRelationshipNamespace + "/";
-    private const string StrictOfficeRelationshipTypePrefix =
-        StrictOfficeRelationshipNamespace + "/";
     private const string Word2012Namespace =
         "http://schemas.microsoft.com/office/word/2012/wordml";
+    private const string Word2010Namespace =
+        "http://schemas.microsoft.com/office/word/2010/wordml";
     private static readonly AsciiCaseInsensitiveComparer PartNameComparer =
         AsciiCaseInsensitiveComparer.Instance;
     private static readonly uint[] Crc32Table = CreateCrc32Table();
@@ -916,8 +910,10 @@ public static class PackageManifestGenerator
         var resolvedComments = 0;
         var people = 0;
         var annotations = 0;
+        long nativeRevisionCarrierCount = 0;
+        var hasStrictRevisionMarkup = false;
         var isStrict = relationships.Any(relationship =>
-            relationship.Type.StartsWith(StrictOfficeRelationshipTypePrefix, StringComparison.Ordinal));
+            OpenXmlRelationshipVocabulary.IsStrictOfficeType(relationship.Type));
 
         foreach (var work in works.Where(work => work.Xml?.Root is not null))
         {
@@ -930,6 +926,13 @@ public static class PackageManifestGenerator
             var storyElements = IsWordprocessingStoryPart(work)
                 ? wordElements
                 : new List<XElement>();
+            var revisionCarriers = isWordPart
+                ? elements.Where(IsNativeRevisionCarrier).ToList()
+                : new List<XElement>();
+            nativeRevisionCarrierCount = checked(
+                nativeRevisionCarrierCount + revisionCarriers.Count);
+            hasStrictRevisionMarkup |= revisionCarriers.Any(element =>
+                element.Name.NamespaceName == StrictWordNamespace);
             isStrict |= isWordPart && wordElements.Any(element =>
                 element.Name.NamespaceName == StrictWordNamespace);
             paragraphCount += storyElements.Count(element => element.Name.LocalName == "p");
@@ -999,6 +1002,8 @@ public static class PackageManifestGenerator
         };
         return new PackageManifestFacts
         {
+            NativeRevisionCarrierCount = nativeRevisionCarrierCount,
+            HasStrictRevisionMarkup = hasStrictRevisionMarkup,
             MainDocumentUri = mainDocumentUri,
             IsStrictOoxml = isStrict,
             IsMacroEnabled = works.Any(work =>
@@ -1878,19 +1883,49 @@ public static class PackageManifestGenerator
         or "tblGridChange" or "tblPrChange" or "tblPrExChange" or "tcPrChange"
         or "trPrChange";
 
+    private static bool IsNativeRevisionCarrier(XElement element)
+    {
+        if (element.Name.NamespaceName == Word2010Namespace)
+        {
+            return element.Name.LocalName is "conflictIns" or "conflictDel"
+                or "customXmlConflictInsRangeStart" or "customXmlConflictInsRangeEnd"
+                or "customXmlConflictDelRangeStart" or "customXmlConflictDelRangeEnd";
+        }
+
+        if (!IsWordprocessingElement(element))
+            return false;
+
+        var localName = element.Name.LocalName;
+        if (localName is "delText" or "delInstrText")
+        {
+            return !element.Ancestors().Any(ancestor =>
+                IsWordprocessingElement(ancestor)
+                && ancestor.Name.LocalName is "del" or "moveFrom");
+        }
+
+        return localName is "ins" or "del" or "moveFrom" or "moveTo"
+            or "moveFromRangeStart" or "moveFromRangeEnd"
+            or "moveToRangeStart" or "moveToRangeEnd"
+            or "customXmlInsRangeStart" or "customXmlInsRangeEnd"
+            or "customXmlDelRangeStart" or "customXmlDelRangeEnd"
+            or "customXmlMoveFromRangeStart" or "customXmlMoveFromRangeEnd"
+            or "customXmlMoveToRangeStart" or "customXmlMoveToRangeEnd"
+            or "cellIns" or "cellDel" or "cellMerge"
+            || IsPropertyRevisionName(localName);
+    }
+
     private static bool IsCustomXmlRevisionRangeStart(string localName) => localName is
         "customXmlInsRangeStart" or "customXmlDelRangeStart"
         or "customXmlMoveFromRangeStart" or "customXmlMoveToRangeStart";
 
     private static bool IsOfficeRelationshipNamespace(string value) =>
-        value is TransitionalOfficeRelationshipNamespace or StrictOfficeRelationshipNamespace;
+        OpenXmlRelationshipVocabulary.IsOfficeNamespace(value);
 
     private static bool IsPackageRelationshipsNamespace(string value) =>
         value == TransitionalPackageRelationshipsNamespace;
 
     private static bool IsOfficeRelationshipType(string value, string localType) =>
-        value.Equals(TransitionalOfficeRelationshipTypePrefix + localType, StringComparison.Ordinal)
-        || value.Equals(StrictOfficeRelationshipTypePrefix + localType, StringComparison.Ordinal);
+        OpenXmlRelationshipVocabulary.IsOfficeType(value, localType);
 
     private static int CountPositiveDefinitions(IEnumerable<XElement> elements, string localName) =>
         elements.Count(element => element.Name.LocalName == localName
