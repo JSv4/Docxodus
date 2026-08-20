@@ -989,7 +989,10 @@ async function renderOwned(
   }
 }
 
-export function renderDocxArtifacts(
+// These are async so an input-validation failure rejects rather than throwing synchronously at
+// the call site; an async body still runs to its first await synchronously, so the caller's bytes
+// and options are still snapshotted at call time as the export contract requires.
+export async function renderDocxArtifacts(
   document: Uint8Array,
   options: RenderBatchOptions,
 ): Promise<RenderBatchResult> {
@@ -1004,7 +1007,7 @@ export function renderDocxArtifacts(
   );
 }
 
-export function convertDocxToPdf(
+export async function convertDocxToPdf(
   document: Uint8Array,
   options: NodeExportOptions,
 ): Promise<PdfExportResult> {
@@ -1020,7 +1023,7 @@ export function convertDocxToPdf(
   });
 }
 
-export function convertDocxToStandaloneHtml(
+export async function convertDocxToStandaloneHtml(
   document: Uint8Array,
   options: NodeExportOptions,
 ): Promise<PaginatedHtmlResult> {
