@@ -48,7 +48,7 @@ namespace Docxodus
             ChartPart chartPart;
             try
             {
-                chartPart = wordDoc.MainDocumentPart?.GetPartById(relationshipId) as ChartPart;
+                chartPart = GetOwningPart(wordDoc, drawing)?.GetPartById(relationshipId) as ChartPart;
             }
             catch (ArgumentOutOfRangeException)
             {

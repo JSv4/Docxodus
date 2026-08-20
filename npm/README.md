@@ -638,6 +638,44 @@ first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that re
 - First load fetches ~18 MB uncompressed across about 49 requests; subsequent loads hit the
   browser cache.
 
+## Standalone paginated HTML
+
+`docxodus/export-browser` turns a DOCX into a complete offline HTML document whose body contains
+the finalized fixed page boxes—not the hidden measurement tree. It returns the HTML together with
+the exact PageMap, renderer fingerprint, warnings, and a schema-v1 render report from that same
+sanitized tree.
+
+```ts
+import { convertDocxToPaginatedHtml } from 'docxodus/export-browser';
+
+const source = new Uint8Array(await file.arrayBuffer());
+const result = await convertDocxToPaginatedHtml(source, {
+  reviewProfile: 'final',
+  commentProfile: 'endnotes',
+  documentVersion: 12,
+  expectedSourceDigest: verifiedSha256,
+});
+
+download(new Blob([result.html], { type: 'text/html' }));
+console.log(result.pageCount, result.pageMap, result.renderReport);
+```
+
+The exporter copies caller bytes before its first asynchronous boundary, verifies them with the
+package manifest API, performs layout in an attached script-disabled frame, embeds or removes every
+automatic resource, and reopens the serialized result to verify page count and physical geometry.
+External HTTPS/mail/tel links remain user-activated links and are inventoried in the report; the
+exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
+resources instead of returning a nominally complete artifact.
+
+The browser surface currently supports `final` and `markup` revision profiles. `original` fails
+explicitly until the shared revision projection in issue #444 lands. Likewise, `strictFonts: true`
+fails until issue #442 supplies attestable font resolution. The normal browser result is labelled
+`browserObserved`; it is not presented as a verified host-font environment.
+
+By default the worker loads from `dist/wasm/` beside the package entry point. A deployment that
+hosts those files elsewhere may pass `wasmBasePath`. `docxodus/export-assets.json` is the closed,
+SHA-256-addressed runtime asset graph, and `docxodus/render-report.schema.json` is the report schema.
+
 ## Hosting WASM Files
 
 The WASM files need to be served from your web server. After building:

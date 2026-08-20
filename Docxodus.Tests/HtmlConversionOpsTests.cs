@@ -1528,6 +1528,19 @@ public class HtmlConversionOpsTests
         Assert.Contains("width: 120pt", html);
     }
 
+    [Fact]
+    public void HCO094_ExternalDrawingMlTextBoxRemapsPartLocalHyperlinks()
+    {
+        byte[] bytes = ExternalTextBoxDocxBytes();
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("href=\"https://correct.example/\"", html);
+        Assert.Contains("href=\"https://second.example/\"", html);
+        Assert.DoesNotContain("https://wrong.example/", html);
+    }
+
     // Old Office 2008 wps markup is not a namespace this renderer understands. Markup
     // Compatibility requires selecting its portable VML fallback rather than dropping the
     // entire logical text box.
@@ -1688,12 +1701,25 @@ public class HtmlConversionOpsTests
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.txbx+xml",
                 ".xml",
                 "rIdExternal");
+            externalTextBox.AddHyperlinkRelationship(
+                new Uri("https://correct.example/"), true, "rIdLink");
+            externalTextBox.AddHyperlinkRelationship(
+                new Uri("https://second.example/"), true, "rIdSecond");
+            main.AddHyperlinkRelationship(new Uri("https://wrong.example/"), true, "rIdLink");
+            // Force the first imported source relationship to reuse an id that is also a
+            // different source relationship. Rewriting while discovering mappings would
+            // accidentally remap the first link twice.
+            main.AddHyperlinkRelationship(new Uri("https://correct.example/"), true, "rIdSecond");
             using (var writer = new StreamWriter(externalTextBox.GetStream(FileMode.Create, FileAccess.Write)))
             {
                 writer.Write(
                     "<w14:txbx xmlns:w14=\"http://schemas.microsoft.com/office/word/2008/9/12/wordml\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
                     "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
-                    "<w:p><w:r><w:t>HCO075 external textbox text</w:t></w:r></w:p></w14:txbx>");
+                    "<w:p><w:hyperlink r:id=\"rIdLink\"><w:r><w:t>HCO075 external textbox text" +
+                    "</w:t></w:r></w:hyperlink><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>" +
+                    "<w:hyperlink r:id=\"rIdSecond\"><w:r><w:t>second external link" +
+                    "</w:t></w:r></w:hyperlink></w:p></w14:txbx>");
             }
 
             using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))

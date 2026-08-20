@@ -950,6 +950,7 @@ namespace Docxodus
             CalculateSpanWidthForTabs(wordDoc);
             ReverseTableBordersForRtlTables(wordDoc);
             AdjustTableBorders(wordDoc);
+            AnnotateOwningContentParts(wordDoc);
             XElement rootElement = wordDoc.MainDocumentPart.GetXDocument().Root;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart);
             AnnotateForSections(wordDoc);
@@ -2828,13 +2829,15 @@ namespace Docxodus
             {
                 try
                 {
+                    var ownerPart = GetOwningPart(wordDoc, element);
+                    var relationshipId = (string)element.Attribute(R.id);
+                    var relationship = ownerPart.HyperlinkRelationships
+                        .FirstOrDefault(candidate => candidate.Id == relationshipId);
+                    if (relationship == null)
+                        return element.Elements().Select(e =>
+                            ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
                     var a = new XElement(Xhtml.a,
-                        new XAttribute("href",
-                            wordDoc.MainDocumentPart
-                                .HyperlinkRelationships
-                                .First(x => x.Id == (string)element.Attribute(R.id))
-                                .Uri
-                            ),
+                        new XAttribute("href", relationship.Uri),
                         ConvertHyperlinkRuns(wordDoc, settings, element)
                         );
                     if (!a.Nodes().Any())
@@ -8948,6 +8951,7 @@ namespace Docxodus
                         if (textBoxContent == null)
                             continue;
 
+                        RemapExternalTextBoxRelationships(relatedPart, ownerPart, textBoxContent);
                         textBox.Add(textBoxContent);
                         changed = true;
                     }
@@ -9004,6 +9008,92 @@ namespace Docxodus
                 .Select(element => new XElement(element))
                 .ToList();
             return blocks.Count == 0 ? null : new XElement(W.txbxContent, blocks);
+        }
+
+        /// <summary>
+        /// External text-box XML is cloned into its referring story. Relationship ids in that
+        /// clone must move with it: ids are local to the external part and can legally collide
+        /// with unrelated ids in document.xml/header.xml. Import each referenced relationship
+        /// into the destination story and rewrite the clone before it is serialized there.
+        /// </summary>
+        private static void RemapExternalTextBoxRelationships(
+            OpenXmlPart sourcePart,
+            OpenXmlPart destinationPart,
+            XElement clonedContent)
+        {
+            var attributes = clonedContent.DescendantsAndSelf()
+                .Attributes()
+                .Where(attribute => attribute.Name.Namespace == R.r &&
+                    !string.IsNullOrWhiteSpace(attribute.Value))
+                .ToList();
+            var remappedIds = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var sourceId in attributes.Select(attribute => attribute.Value)
+                .Distinct(StringComparer.Ordinal))
+            {
+                string destinationId = null;
+                var hyperlink = sourcePart.HyperlinkRelationships
+                    .FirstOrDefault(relationship => relationship.Id == sourceId);
+                if (hyperlink != null)
+                {
+                    var existing = destinationPart.HyperlinkRelationships.FirstOrDefault(relationship =>
+                        relationship.IsExternal == hyperlink.IsExternal &&
+                        string.Equals(relationship.Uri?.OriginalString,
+                            hyperlink.Uri?.OriginalString, StringComparison.Ordinal));
+                    destinationId = (existing ?? destinationPart.AddHyperlinkRelationship(
+                        hyperlink.Uri, hyperlink.IsExternal)).Id;
+                }
+                else
+                {
+                    var external = sourcePart.ExternalRelationships
+                        .FirstOrDefault(relationship => relationship.Id == sourceId);
+                    if (external != null)
+                    {
+                        var existing = destinationPart.ExternalRelationships.FirstOrDefault(relationship =>
+                            relationship.RelationshipType == external.RelationshipType &&
+                            string.Equals(relationship.Uri?.OriginalString,
+                                external.Uri?.OriginalString, StringComparison.Ordinal));
+                        destinationId = (existing ?? destinationPart.AddExternalRelationship(
+                            external.RelationshipType, external.Uri)).Id;
+                    }
+                    else
+                    {
+                        var child = sourcePart.Parts
+                            .FirstOrDefault(pair => pair.RelationshipId == sourceId).OpenXmlPart;
+                        if (child != null)
+                        {
+                            var existing = destinationPart.Parts.FirstOrDefault(pair =>
+                                ReferenceEquals(pair.OpenXmlPart, child));
+                            try
+                            {
+                                destinationId = existing.OpenXmlPart != null
+                                    ? existing.RelationshipId
+                                    : destinationPart.CreateRelationshipToPart(child);
+                            }
+                            catch (Exception exception) when (exception is ArgumentException or
+                                InvalidOperationException or OpenXmlPackageException)
+                            {
+                                // Some producer-specific part types cannot be children of a story
+                                // part. Removing the dangling reference below preserves surrounding
+                                // text without allowing a same-id collision to select wrong content.
+                            }
+                        }
+                    }
+                }
+
+                if (destinationId != null)
+                    remappedIds[sourceId] = destinationId;
+            }
+
+            // Rewrite only after every mapping is known. A destination-generated id can
+            // legitimately equal a different source id; mutating during discovery would then
+            // remap the first relationship a second time to the wrong target.
+            foreach (var attribute in attributes.Where(attribute => attribute.Parent != null))
+            {
+                if (remappedIds.TryGetValue(attribute.Value, out var destinationId))
+                    attribute.Value = destinationId;
+                else
+                    attribute.Remove();
+            }
         }
 
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
@@ -9239,9 +9329,35 @@ namespace Docxodus
                 : null;
         }
 
+        /// <summary>
+        /// Relationships are scoped to the OOXML part that owns the source element. Header,
+        /// footer, note, and comment parts commonly reuse relationship ids from document.xml;
+        /// resolving through MainDocumentPart can therefore select the wrong resource or silently
+        /// drop a valid one.
+        /// </summary>
+        private static void AnnotateOwningContentParts(WordprocessingDocument wordDoc)
+        {
+            foreach (var owner in Internal.OwnedPartRelationships.StoryParts(wordDoc))
+            {
+                var part = owner.Part;
+                var root = part.GetXDocument().Root;
+                if (root == null || ReferenceEquals(root.Annotation<OpenXmlPart>(), part))
+                    continue;
+                root.RemoveAnnotations<OpenXmlPart>();
+                root.AddAnnotation(part);
+            }
+        }
+
+        private static OpenXmlPart GetOwningPart(WordprocessingDocument wordDoc, XElement element) =>
+            element?.AncestorsAndSelf().Select(candidate => candidate.Annotation<OpenXmlPart>())
+                .FirstOrDefault(part => part != null) ??
+            (element == null ? null : Internal.OwnedPartRelationships.FindOwner(wordDoc, element)?.Part) ??
+            wordDoc.MainDocumentPart;
+
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
+            var ownerPart = GetOwningPart(wordDoc, element);
             var containerElement = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             if (containerElement == null) return null;
@@ -9257,7 +9373,7 @@ namespace Docxodus
                 var rId = (string)hyperlinkElement.Attribute(R.id);
                 if (rId != null)
                 {
-                    var hyperlinkRel = wordDoc.MainDocumentPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
+                    var hyperlinkRel = ownerPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
                     if (hyperlinkRel != null)
                     {
                         hyperlinkUri = hyperlinkRel.Uri.ToString();
@@ -9280,7 +9396,7 @@ namespace Docxodus
             var imageRid = (string)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
             if (imageRid == null) return null;
 
-            var pp3 = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
+            var pp3 = ownerPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
             if (pp3 == null) return null;
 
             // Broken packages can point drawing image markup at any relationship target (for
@@ -9292,7 +9408,7 @@ namespace Docxodus
             // If the image markup points to a NULL image, then following will throw an ArgumentOutOfRangeException
             try
             {
-                imagePart = wordDoc.MainDocumentPart.GetPartById(imageRid) as ImagePart;
+                imagePart = ownerPart.GetPartById(imageRid) as ImagePart;
             }
             catch (ArgumentOutOfRangeException)
             {
@@ -9482,12 +9598,13 @@ namespace Docxodus
         private static XElement ProcessPictureOrObject(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
+            var ownerPart = GetOwningPart(wordDoc, element);
             var imageRid = (string)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 
             try
             {
-                var pp = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
+                var pp = ownerPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
                 if (pp == null) return null;
 
                 // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:

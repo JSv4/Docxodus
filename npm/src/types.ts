@@ -1168,6 +1168,15 @@ export interface DeliverableVerificationResult {
   companionArtifacts: readonly DeliverableArtifactMetadata[];
 }
 
+/** Effective #493 inspection limits applied while the manifest is being generated. */
+export interface PackageManifestInspectionLimits {
+  opcEntries: number;
+  expandedOpcBytes: number;
+  xmlPartBytes: number;
+  opcUriCharacters: number;
+  opcCompressionRatio: number;
+}
+
 /**
  * Internal WASM exports structure
  */
@@ -1178,6 +1187,14 @@ export interface DocxodusWasmExports {
     VerifyDeliverableWithBaseline: (
       baselineBytes: Uint8Array,
       bytes: Uint8Array
+    ) => string;
+    GeneratePackageManifestWithOptions: (
+      bytes: Uint8Array,
+      maxEntryCount: number,
+      maxTotalUncompressedBytes: number,
+      maxXmlPartBytes: number,
+      maxCompressionRatio: number,
+      maxUriLength: number,
     ) => string;
     ConvertDocxToHtml: (bytes: Uint8Array) => string;
     RenderBlockHtml: (
@@ -3843,6 +3860,7 @@ export type WorkerRequestType =
   | "init"
   | "generatePackageManifest"
   | "verifyDeliverable"
+  | "projectReviewProfile"
   | "convertDocxToHtml"
   | "compareDocuments"
   | "compareDocumentsToHtml"
@@ -3889,12 +3907,25 @@ export interface WorkerConvertRequest extends WorkerRequestBase {
   documentBytes: Uint8Array;
   /** Conversion options */
   options?: ConversionOptions;
+  /** Optional main-thread admission ceiling for the UTF-8 response. */
+  maximumOutputBytes?: number;
 }
 
 /** Generate a deterministic package manifest without opening a live session. */
 export interface WorkerGeneratePackageManifestRequest extends WorkerRequestBase {
   type: "generatePackageManifest";
   documentBytes: Uint8Array;
+  /** When present, these lower ceilings constrain #493 inspection itself. */
+  limits?: PackageManifestInspectionLimits;
+}
+
+/** Derive exact final/original package bytes before conversion. */
+export interface WorkerProjectReviewProfileRequest extends WorkerRequestBase {
+  type: "projectReviewProfile";
+  documentBytes: Uint8Array;
+  profile: "final" | "original";
+  /** Do not transfer a derived package larger than this many bytes. */
+  maximumOutputBytes?: number;
 }
 
 /** Run the default deliverable gate directly over exact supplied bytes. */
@@ -4061,6 +4092,7 @@ export type WorkerRequest =
   | WorkerInitRequest
   | WorkerGeneratePackageManifestRequest
   | WorkerVerifyDeliverableRequest
+  | WorkerProjectReviewProfileRequest
   | WorkerConvertRequest
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
@@ -4110,6 +4142,13 @@ export interface WorkerConvertResponse extends WorkerResponseBase {
 export interface WorkerGeneratePackageManifestResponse extends WorkerResponseBase {
   type: "generatePackageManifest";
   manifest?: PackageManifest;
+  /** Exact canonical JSON, retained for strict duplicate-property/schema validation. */
+  manifestJson?: string;
+}
+
+export interface WorkerProjectReviewProfileResponse extends WorkerResponseBase {
+  type: "projectReviewProfile";
+  documentBytes?: Uint8Array;
 }
 
 export interface WorkerVerifyDeliverableResponse extends WorkerResponseBase {
@@ -4229,6 +4268,7 @@ export type WorkerResponse =
   | WorkerInitResponse
   | WorkerGeneratePackageManifestResponse
   | WorkerVerifyDeliverableResponse
+  | WorkerProjectReviewProfileResponse
   | WorkerConvertResponse
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
@@ -4253,6 +4293,8 @@ export interface WorkerDocxodusOptions {
    * Defaults to auto-detection from module URL.
    */
   wasmBasePath?: string;
+  /** Abort the owned worker, including an initialization that has not completed. */
+  signal?: AbortSignal;
 }
 
 // ============================================================================

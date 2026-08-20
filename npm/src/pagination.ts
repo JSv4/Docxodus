@@ -314,6 +314,8 @@ export interface PaginationOptions {
    * entry points opt in explicitly.
    */
   fragmentParagraphs?: boolean;
+  /** Cooperative checkpoint for bounded non-yielding browser layout work. */
+  checkCancellation?: () => void;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -373,11 +375,14 @@ interface SectionPageNumbering {
 export class PaginationEngine {
   private stagingElement: HTMLElement;
   private containerElement: HTMLElement;
+  private document: Document;
+  private view: Window & typeof globalThis;
   private scale: number;
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
   private fragmentParagraphs: boolean;
+  private cancellationCheckpoint?: () => void;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
@@ -387,6 +392,7 @@ export class PaginationEngine {
   private pageNumbering: Map<number, SectionPageNumbering> = new Map();
   private lastPages: PageInfo[] = [];
   private expectedPageMapAnchorIds: Set<string> = new Set();
+  private state: "ready" | "running" | "complete" | "failed" = "ready";
 
   /**
    * Creates a new pagination engine.
@@ -400,13 +406,19 @@ export class PaginationEngine {
     container: HTMLElement | string,
     options: PaginationOptions = {}
   ) {
+    const ownerDocument =
+      typeof staging !== "string"
+        ? staging.ownerDocument
+        : typeof container !== "string"
+          ? container.ownerDocument
+          : globalThis.document;
     this.stagingElement =
       typeof staging === "string"
-        ? (document.getElementById(staging) as HTMLElement)
+        ? (ownerDocument.getElementById(staging) as HTMLElement)
         : staging;
     this.containerElement =
       typeof container === "string"
-        ? (document.getElementById(container) as HTMLElement)
+        ? (ownerDocument.getElementById(container) as HTMLElement)
         : container;
 
     if (!this.stagingElement) {
@@ -415,12 +427,22 @@ export class PaginationEngine {
     if (!this.containerElement) {
       throw new Error("Container element not found");
     }
+    if (this.stagingElement.ownerDocument !== this.containerElement.ownerDocument) {
+      throw new Error("Staging and container elements must belong to the same document");
+    }
+    const view = ownerDocument.defaultView;
+    if (!view) {
+      throw new Error("Pagination requires an attached document with a defaultView");
+    }
+    this.document = ownerDocument;
+    this.view = view as Window & typeof globalThis;
 
     this.scale = options.scale ?? 1;
     this.cssPrefix = options.cssPrefix ?? "page-";
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
+    this.cancellationCheckpoint = options.checkCancellation;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
@@ -433,8 +455,21 @@ export class PaginationEngine {
    * @returns PaginationResult with page information
    */
   paginate(): PaginationResult {
-    const pages: PageInfo[] = [];
-    let pageNumber = 1;
+    this.checkpoint();
+    if (this.state !== "ready") {
+      throw new Error(`PaginationEngine is one-shot and is already ${this.state}`);
+    }
+    if (!this.stagingElement.isConnected || !this.containerElement.isConnected) {
+      throw new Error("Pagination requires staging and container elements attached to their document");
+    }
+    if (this.document.documentElement.getBoundingClientRect().width <= 0) {
+      throw new Error("Pagination requires a browsing context with non-zero layout");
+    }
+    this.state = "running";
+
+    try {
+      const pages: PageInfo[] = [];
+      let pageNumber = 1;
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
@@ -465,13 +500,16 @@ export class PaginationEngine {
     const referencedFootnoteIds = new Set<string>();
     const referencedCommentIds = new Set<string>();
     for (const section of sectionsToProcess) {
+      this.checkpoint();
       this.collectExpectedSourceAnchors(section, this.expectedPageMapAnchorIds, true);
       for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-footnote-id]"))) {
+        this.checkpoint();
         if (reference.closest("#pagination-footnote-registry, #pagination-hf-registry")) continue;
         const id = reference.dataset.footnoteId;
         if (id) referencedFootnoteIds.add(id);
       }
       for (const reference of Array.from(section.querySelectorAll<HTMLElement>("[data-comment-id]"))) {
+        this.checkpoint();
         if (reference.closest(
           "#pagination-comment-margin-registry, #pagination-footnote-registry, #pagination-hf-registry",
         )) continue;
@@ -480,10 +518,12 @@ export class PaginationEngine {
       }
     }
     for (const id of referencedFootnoteIds) {
+      this.checkpoint();
       const source = this.footnoteRegistry.get(id);
       if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
     }
     for (const id of referencedCommentIds) {
+      this.checkpoint();
       const source = this.commentMarginRegistry.get(id);
       if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
     }
@@ -501,6 +541,7 @@ export class PaginationEngine {
     }
     const runs: PageRun[] = [];
     for (const section of sectionsToProcess) {
+      this.checkpoint();
       const dims = parseSectionDimensions(section);
       const previous = runs[runs.length - 1];
       if (
@@ -519,6 +560,7 @@ export class PaginationEngine {
     }
 
     for (const run of runs) {
+      this.checkpoint();
       // Make staging visible for measurement
       this.stagingElement.style.visibility = "hidden";
       this.stagingElement.style.position = "absolute";
@@ -527,6 +569,7 @@ export class PaginationEngine {
 
       const blocks: MeasuredBlock[] = [];
       for (const section of run.sections) {
+        this.checkpoint();
         // Set width for accurate line wrapping
         section.style.width = `${run.dims.contentWidth}pt`;
 
@@ -547,6 +590,7 @@ export class PaginationEngine {
 
       // Flow blocks into pages
       const sectionPages = this.flowToPages(blocks, run.dims, pageNumber, run.sectionIndex);
+      this.checkpoint();
       pages.push(...sectionPages);
       pageNumber += sectionPages.length;
     }
@@ -560,6 +604,7 @@ export class PaginationEngine {
     // Only running-story variants selected by a real page are expected to materialize. Read IDs
     // from registry sources, not presentation clones, so a failed clone remains detectable.
     for (const page of pages) {
+      this.checkpoint();
       const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
       const header = this.selectHeader(page.sectionIndex, pageInSection, page.pageNumber);
       const footer = this.selectFooter(page.sectionIndex, pageInSection, page.pageNumber);
@@ -571,18 +616,41 @@ export class PaginationEngine {
     // Full canonical source identities remain on all clones, including table cells.
     this.qualifyPageFragments(pages);
     this.transferVisibleFragmentTargets();
+    this.normalizeVisiblePageFragments(pages);
     this.lastPages = pages;
 
-    return {
-      totalPages: pages.length,
-      pages,
-      pageMap: this.layoutToken
-        ? this.materializePageMap(
-            this.layoutToken.documentVersion,
-            this.layoutToken.rendererFingerprint,
-          )
-        : undefined,
-    };
+      const result = {
+        totalPages: pages.length,
+        pages,
+        pageMap: this.layoutToken
+          ? this.materializePageMap(
+              this.layoutToken.documentVersion,
+              this.layoutToken.rendererFingerprint,
+            )
+          : undefined,
+      };
+      this.state = "complete";
+      return result;
+    } catch (error) {
+      this.state = "failed";
+      throw error;
+    }
+  }
+
+  private checkpoint(): void {
+    this.cancellationCheckpoint?.();
+  }
+
+  /**
+   * Normalize visible fragment identities after a caller applies final standalone styles.  This
+   * deliberately runs before the stability barrier; materializePageMap is read-only so PageMap
+   * measurement cannot mutate a tree after it was declared stable.
+   */
+  normalizePageMapFragmentIdentities(): void {
+    if (this.lastPages.length === 0) {
+      throw new Error("paginate() must complete before fragment identities can be normalized");
+    }
+    this.normalizeVisiblePageFragments(this.lastPages);
   }
 
   /**
@@ -614,6 +682,7 @@ export class PaginationEngine {
     const measuredAnchorIds = new Set<string>();
     const emittedFragmentCounts = new Map<string, number>();
     for (const page of this.lastPages) {
+      this.checkpoint();
       const pageRect = page.element.getBoundingClientRect();
       if (pageRect.width <= 0 || pageRect.height <= 0) {
         throw new Error(`page ${page.pageNumber} has no measurable geometry`);
@@ -623,6 +692,7 @@ export class PaginationEngine {
       const pointPerRenderedY = page.dimensions.pageHeight / pageRect.height;
       const nodes = page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]");
       for (const element of Array.from(nodes)) {
+        this.checkpoint();
         // Preserve the source-side exclusion contract on presentation clones as well. This
         // covers the node itself and any excluded/hidden/aria-hidden ancestor within the page.
         if (this.isDeliberatelyUnrenderedSource(element, page.element)) continue;
@@ -633,7 +703,7 @@ export class PaginationEngine {
         }
 
         const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
+        const style = this.view.getComputedStyle(element);
         const deliberatelyHidden = style.display === "none" || style.visibility === "hidden";
         if (deliberatelyHidden) continue;
         requiredAnchorIds.add(anchorId);
@@ -655,8 +725,13 @@ export class PaginationEngine {
         const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
         emittedFragmentCounts.set(anchorId, fragmentIndex + 1);
         const fragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
-        element.dataset.fragmentIndex = String(fragmentIndex);
-        element.dataset.pageFragmentId = fragmentId;
+        if (element.dataset.fragmentIndex !== String(fragmentIndex)
+          || element.dataset.pageFragmentId !== fragmentId
+          || element.dataset.pageNumber !== String(page.pageNumber)) {
+          throw new Error(
+            `page ${page.pageNumber} fragment identity changed after final-tree normalization`,
+          );
+        }
         fragments.push({
           fragmentId,
           anchorId,
@@ -690,6 +765,33 @@ export class PaginationEngine {
     };
   }
 
+  private normalizeVisiblePageFragments(pages: PageInfo[]): void {
+    const emittedFragmentCounts = new Map<string, number>();
+    for (const page of pages) {
+      this.checkpoint();
+      const pageRect = page.element.getBoundingClientRect();
+      for (const element of Array.from(
+        page.element.querySelectorAll<HTMLElement>("[data-source-anchor-id]"),
+      )) {
+        this.checkpoint();
+        if (this.isDeliberatelyUnrenderedSource(element, page.element)) continue;
+        const anchorId = element.dataset.sourceAnchorId;
+        if (!anchorId) continue;
+        const style = this.view.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const rect = element.getBoundingClientRect();
+        const visible = this.intersectWithClippingAncestors(element, page.element, pageRect, rect);
+        if (rect.width <= 0 || rect.height <= 0
+          || visible.right <= visible.left || visible.bottom <= visible.top) continue;
+        const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
+        emittedFragmentCounts.set(anchorId, fragmentIndex + 1);
+        element.dataset.pageNumber = String(page.pageNumber);
+        element.dataset.fragmentIndex = String(fragmentIndex);
+        element.dataset.pageFragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
+      }
+    }
+  }
+
   /**
    * Intersect an element with every ancestor that establishes an overflow clip before the page
    * root. getBoundingClientRect() reports layout outside those clips, which is not rendered and
@@ -711,7 +813,7 @@ export class PaginationEngine {
     for (let ancestor = element.parentElement;
       ancestor && ancestor !== page;
       ancestor = ancestor.parentElement) {
-      const style = window.getComputedStyle(ancestor);
+      const style = this.view.getComputedStyle(ancestor);
       const clipsX = clips(style.overflowX);
       const clipsY = clips(style.overflowY);
       if (!clipsX && !clipsY) continue;
@@ -934,6 +1036,7 @@ export class PaginationEngine {
     const children = Array.from(section.children) as HTMLElement[];
 
     for (const child of children) {
+      this.checkpoint();
       // Skip section dividers that are just wrappers
       if (child.dataset.sectionIndex !== undefined) {
         // Recursively get blocks from nested sections
@@ -957,7 +1060,7 @@ export class PaginationEngine {
       // Measure height and margins separately for proper margin collapsing calculation
       // getBoundingClientRect() returns content+padding+border, not margins
       const rect = child.getBoundingClientRect();
-      const style = window.getComputedStyle(child);
+      const style = this.view.getComputedStyle(child);
       const marginTopPx = parseFloat(style.marginTop) || 0;
       const marginBottomPx = parseFloat(style.marginBottom) || 0;
       const heightPt = pxToPt(rect.height);
@@ -1013,19 +1116,22 @@ export class PaginationEngine {
     }
 
     const blocks: MeasuredBlock[] = [];
-    const sectionStyle = window.getComputedStyle(section);
+    const sectionStyle = this.view.getComputedStyle(section);
     for (const rule of sectionChildren.filter((child) => child.tagName === "HR")) {
+      this.checkpoint();
       const clonedRule = rule.cloneNode(true) as HTMLElement;
       if (blocks.length === 0) clonedRule.style.marginTop = sectionStyle.marginTop;
       blocks.push(this.measureElement(clonedRule, dims));
     }
 
-    const listStyle = window.getComputedStyle(list);
+    const listStyle = this.view.getComputedStyle(list);
     for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+      this.checkpoint();
       const item = items[itemIndex];
       const ownerAnchorId = item.dataset.sourceAnchorId;
       const paragraphs = Array.from(item.children) as HTMLElement[];
       for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
+        this.checkpoint();
         const paragraph = paragraphs[paragraphIndex];
         // The flattened clone no longer has the section/ol/li ancestors that supplied the
         // source's computed layout. Validate while the real paragraph is still attached; the
@@ -1048,7 +1154,7 @@ export class PaginationEngine {
         if (ownerAnchorId && !Array.from(
           clone.querySelectorAll<HTMLElement>("[data-source-anchor-id]"),
         ).some((node) => node.dataset.sourceAnchorId === ownerAnchorId)) {
-          const owner = document.createElement("span");
+          const owner = this.document.createElement("span");
           owner.dataset.sourceAnchorId = ownerAnchorId;
           while (clone.firstChild) owner.appendChild(clone.firstChild);
           clone.appendChild(owner);
@@ -1068,7 +1174,7 @@ export class PaginationEngine {
             Number.isFinite(value) ? value : itemIndex + 1,
             listStyle.listStyleType,
           );
-          clone.insertBefore(document.createTextNode(`${marker}. `), clone.firstChild);
+          clone.insertBefore(this.document.createTextNode(`${marker}. `), clone.firstChild);
         }
         blocks.push(this.measureElement(clone, dims));
       }
@@ -1120,7 +1226,7 @@ export class PaginationEngine {
       child.classList.contains(`${this.cssPrefix}break`);
 
     const makeContainer = (slice: HTMLElement[]): HTMLElement => {
-      const container = document.createElement("div");
+      const container = this.document.createElement("div");
       container.style.columnCount = String(columnCount);
       container.style.columnGap = `${columnGapPt}pt`;
       for (const child of slice) {
@@ -1131,6 +1237,7 @@ export class PaginationEngine {
 
     let start = 0;
     while (start < children.length) {
+      this.checkpoint();
       if (isBreak(children[start])) {
         blocks.push(this.measureElement(children[start], dims));
         start++;
@@ -1143,6 +1250,7 @@ export class PaginationEngine {
       let container = makeContainer(children.slice(start, end));
       let measured = this.measureElement(container, dims);
       while (end < children.length && !isBreak(children[end])) {
+        this.checkpoint();
         const candidate = makeContainer(children.slice(start, end + 1));
         const candidateMeasured = this.measureElement(candidate, dims);
         if (candidateMeasured.heightPt > maxFragmentHeight) break;
@@ -1174,7 +1282,7 @@ export class PaginationEngine {
    * rows because wrapping and collapsed borders change the height of a fragment.
    */
   private measureElement(element: HTMLElement, dims: PageDimensions): MeasuredBlock {
-    const measurementHost = document.createElement("div");
+    const measurementHost = this.document.createElement("div");
     measurementHost.style.position = "absolute";
     measurementHost.style.visibility = "hidden";
     measurementHost.style.left = "-9999px";
@@ -1185,7 +1293,7 @@ export class PaginationEngine {
     this.stagingElement.appendChild(measurementHost);
 
     const rect = measuredElement.getBoundingClientRect();
-    const style = window.getComputedStyle(measuredElement);
+    const style = this.view.getComputedStyle(measuredElement);
     const measured: MeasuredBlock = {
       element,
       heightPt: pxToPt(rect.height),
@@ -1322,6 +1430,7 @@ export class PaginationEngine {
     const newIds: string[] = [];
 
     for (const block of blocks) {
+      this.checkpoint();
       for (const id of this.extractFootnoteRefs(block.element)) {
         if (!knownIds.has(id)) {
           knownIds.add(id);
@@ -1406,10 +1515,11 @@ export class PaginationEngine {
       return null;
     }
 
-    const table = wrapper.firstElementChild;
-    if (!(table instanceof HTMLTableElement)) {
+    const tableElement = wrapper.firstElementChild;
+    if (!tableElement || tableElement.localName !== "table") {
       return null;
     }
+    const table = tableElement as HTMLTableElement;
 
     const body = table.tBodies.length === 1 ? table.tBodies[0] : null;
     if (
@@ -1437,8 +1547,10 @@ export class PaginationEngine {
     const groups: HTMLTableRowElement[][] = [];
     let start = 0;
     while (start < rows.length) {
+      this.checkpoint();
       let end = start;
       while (end < rows.length) {
+        this.checkpoint();
         const candidate = this.createSimpleTableFragment(
           wrapper,
           table,
@@ -1516,7 +1628,7 @@ export class PaginationEngine {
    */
   private paragraphFragmentEndpoints(paragraph: HTMLElement): Array<{ node: Text; offset: number }> {
     const endpoints: Array<{ node: Text; offset: number }> = [];
-    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    const walker = this.document.createTreeWalker(paragraph, this.view.NodeFilter.SHOW_TEXT);
     let textNode: Text | null;
 
     while ((textNode = walker.nextNode() as Text | null)) {
@@ -1626,7 +1738,7 @@ export class PaginationEngine {
    * must invoke this while the paragraph is attached to the styled document.
    */
   private hasRangeFragmentSafeLayout(paragraph: HTMLElement): boolean {
-    const paragraphStyle = window.getComputedStyle(paragraph);
+    const paragraphStyle = this.view.getComputedStyle(paragraph);
     if (
       paragraphStyle.display !== "block" ||
       paragraphStyle.position !== "static" ||
@@ -1643,7 +1755,7 @@ export class PaginationEngine {
     }
 
     for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
-      const style = window.getComputedStyle(descendant);
+      const style = this.view.getComputedStyle(descendant);
       if (
         style.display !== "inline" ||
         style.position !== "static" ||
@@ -1718,9 +1830,10 @@ export class PaginationEngine {
     // Fragment height is monotonic for the deliberately narrow eligible subset,
     // so binary search avoids measuring every word in long body paragraphs.
     while (low <= high) {
+      this.checkpoint();
       const middle = Math.floor((low + high) / 2);
       const endpoint = endpoints[middle];
-      const headRange = document.createRange();
+      const headRange = this.document.createRange();
       headRange.setStart(paragraph, 0);
       headRange.setEnd(endpoint.node, endpoint.offset);
       const headContents = headRange.cloneContents();
@@ -1744,7 +1857,7 @@ export class PaginationEngine {
       return null;
     }
 
-    const tailRange = document.createRange();
+    const tailRange = this.document.createRange();
     tailRange.setStart(best.endpoint.node, best.endpoint.offset);
     tailRange.setEnd(paragraph, paragraph.childNodes.length);
     const tailContents = tailRange.cloneContents();
@@ -1922,7 +2035,7 @@ export class PaginationEngine {
     // its own font-size and line-height, so measuring without the class sizes the note
     // block against body type and the reserve can never match what is drawn.
     // Create a temporary measurement container
-    const measureContainer = document.createElement("div");
+    const measureContainer = this.document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
@@ -1930,13 +2043,14 @@ export class PaginationEngine {
     measureContainer.className = this.cssPrefix + "footnotes";
 
     // Add separator line (same as will be rendered)
-    const hr = document.createElement("hr");
+    const hr = this.document.createElement("hr");
     measureContainer.appendChild(hr);
 
     // Add continuation content first (if any)
     if (hasContinuation) {
-      const contWrapper = document.createElement("div");
+      const contWrapper = this.document.createElement("div");
       contWrapper.className = "footnote-continuation";
+      contWrapper.dataset.footnoteId = continuation!.footnoteId;
       if (continuation!.sourceAnchorId) {
         contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
       }
@@ -1948,6 +2062,7 @@ export class PaginationEngine {
 
     // Add footnotes
     for (const id of footnoteIds) {
+      this.checkpoint();
       const footnote = this.footnoteRegistry.get(id);
       if (footnote) {
         measureContainer.appendChild(footnote.cloneNode(true));
@@ -1978,7 +2093,7 @@ export class PaginationEngine {
       return 0;
     }
 
-    const measureContainer = document.createElement("div");
+    const measureContainer = this.document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
@@ -1986,7 +2101,7 @@ export class PaginationEngine {
     measureContainer.className = this.cssPrefix + "footnotes";
 
     // Add separator line
-    const hr = document.createElement("hr");
+    const hr = this.document.createElement("hr");
     measureContainer.appendChild(hr);
 
     // Add continuation content
@@ -2083,13 +2198,13 @@ export class PaginationEngine {
     let currentHeight = 0;
 
     // Measure separator line height
-    const hrMeasure = document.createElement("div");
+    const hrMeasure = this.document.createElement("div");
     hrMeasure.style.position = "absolute";
     hrMeasure.style.visibility = "hidden";
     hrMeasure.style.width = `${contentWidth}pt`;
     hrMeasure.style.left = "-9999px";
     hrMeasure.className = this.cssPrefix + "footnotes";
-    const hr = document.createElement("hr");
+    const hr = this.document.createElement("hr");
     hrMeasure.appendChild(hr);
     this.stagingElement.appendChild(hrMeasure);
     const hrHeight = pxToPt(hrMeasure.getBoundingClientRect().height);
@@ -2101,10 +2216,11 @@ export class PaginationEngine {
     const footnoteNumber = footnoteElement.querySelector(".footnote-number");
 
     for (let i = 0; i < children.length; i++) {
+      this.checkpoint();
       const child = children[i];
 
       // Measure this element
-      const measureContainer = document.createElement("div");
+      const measureContainer = this.document.createElement("div");
       measureContainer.style.position = "absolute";
       measureContainer.style.visibility = "hidden";
       measureContainer.style.width = `${contentWidth}pt`;
@@ -2121,6 +2237,7 @@ export class PaginationEngine {
       } else {
         // This and remaining elements overflow
         for (let j = i; j < children.length; j++) {
+          this.checkpoint();
           overflow.push(children[j].cloneNode(true) as HTMLElement);
         }
         break;
@@ -2137,7 +2254,7 @@ export class PaginationEngine {
     const footnote = this.footnoteRegistry.get(footnoteId);
     if (!footnote) return 0;
 
-    const measureContainer = document.createElement("div");
+    const measureContainer = this.document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
@@ -2182,7 +2299,7 @@ export class PaginationEngine {
       bands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO
     );
 
-    const footnotesDiv = document.createElement("div");
+    const footnotesDiv = this.document.createElement("div");
     footnotesDiv.className = `${this.cssPrefix}footnotes`;
     footnotesDiv.style.position = "absolute";
     // Notes sit at the FOOT OF THE BODY BAND, not at the bottom margin: a footer taller than
@@ -2196,12 +2313,12 @@ export class PaginationEngine {
     footnotesDiv.style.overflow = "hidden";
 
     // Add separator line
-    const hr = document.createElement("hr");
+    const hr = this.document.createElement("hr");
     footnotesDiv.appendChild(hr);
 
     // Add continuation content first (if any)
     if (hasContinuation) {
-      const contWrapper = document.createElement("div");
+      const contWrapper = this.document.createElement("div");
       contWrapper.className = "footnote-continuation";
       if (continuation!.sourceAnchorId) {
         contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
@@ -2220,7 +2337,7 @@ export class PaginationEngine {
         // Render partial footnote (only the fitting elements)
         const footnote = this.footnoteRegistry.get(id);
         if (footnote) {
-          const partialDiv = document.createElement("div");
+          const partialDiv = this.document.createElement("div");
           partialDiv.className = "footnote-item";
           partialDiv.dataset.footnoteId = id;
           if (footnote.dataset.sourceAnchorId) {
@@ -2234,7 +2351,7 @@ export class PaginationEngine {
           }
 
           // Add only the fitting content
-          const contentSpan = document.createElement("span");
+          const contentSpan = this.document.createElement("span");
           contentSpan.className = "footnote-content";
           for (const el of partial.fittingElements) {
             contentSpan.appendChild(el.cloneNode(true));
@@ -2370,7 +2487,7 @@ export class PaginationEngine {
     contentWidth: number
   ): number {
     // Create a temporary measurement container
-    const measureContainer = document.createElement("div");
+    const measureContainer = this.document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
@@ -2581,6 +2698,7 @@ export class PaginationEngine {
     };
 
     for (let i = 0; i < blocks.length; i++) {
+      this.checkpoint();
       const block = blocks[i];
 
       // Handle explicit page breaks
@@ -2769,6 +2887,7 @@ export class PaginationEngine {
 
           // Try to fit as much of each new footnote as possible in expanded area
           for (const footnoteId of newFootnoteIds) {
+            this.checkpoint();
             const footnote = this.footnoteRegistry.get(footnoteId);
             if (!footnote) continue;
 
@@ -2947,7 +3066,7 @@ export class PaginationEngine {
     const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
     for (const element of nodes) {
       element.removeAttribute("id");
-      if (element instanceof HTMLAnchorElement && element.getAttribute("href")?.startsWith("#")) {
+      if (element.localName === "a" && element.getAttribute("href")?.startsWith("#")) {
         element.removeAttribute("href");
         element.setAttribute("aria-disabled", "true");
         element.tabIndex = -1;
@@ -2989,7 +3108,7 @@ export class PaginationEngine {
         staticLeft: toPageX(staticRect.left),
         staticTop: toPageY(staticRect.top),
         lineHeight: paragraph
-          ? (parseFloat(getComputedStyle(paragraph).lineHeight) || staticRect.height) / pixelsPerPoint
+          ? (parseFloat(this.view.getComputedStyle(paragraph).lineHeight) || staticRect.height) / pixelsPerPoint
           : staticRect.height / pixelsPerPoint,
         paragraphLeft: toPageX(paragraphRect.left),
         paragraphTop: toPageY(paragraphRect.top),
@@ -3178,7 +3297,7 @@ export class PaginationEngine {
   ): PageInfo {
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
-    const pageBox = document.createElement("div");
+    const pageBox = this.document.createElement("div");
     pageBox.className = `${this.cssPrefix}box`;
     pageBox.style.width = `${dims.pageWidth}pt`;
     pageBox.style.height = `${dims.pageHeight}pt`;
@@ -3188,20 +3307,19 @@ export class PaginationEngine {
     // Zoom affects layout (no negative margin hack needed) and renders text more crisply
     // Note: zoom is non-standard but supported in all major browsers
     if (this.scale !== 1) {
-      // Try zoom first (better text quality), with transform as fallback
-      pageBox.style.zoom = String(this.scale);
-      // For browsers that don't support zoom, also set transform
-      // The zoom takes precedence in supporting browsers
-      pageBox.style.transform = `scale(${this.scale})`;
-      pageBox.style.transformOrigin = "top left";
-      // Compensate for transform not affecting layout (only needed if zoom not supported)
-      // Convert pt to px for consistent unit math
-      const heightReductionPt = dims.pageHeight * (1 - this.scale);
-      const widthReductionPt = dims.pageWidth * (1 - this.scale);
-      const heightReductionPx = ptToPx(heightReductionPt);
-      const widthReductionPx = ptToPx(widthReductionPt);
-      pageBox.style.marginRight = `-${widthReductionPx}px`;
-      pageBox.style.marginBottom = `${this.pageGap - heightReductionPx}px`;
+      if (this.view.CSS?.supports("zoom", "1")) {
+        pageBox.style.zoom = String(this.scale);
+      } else {
+        pageBox.style.transform = `scale(${this.scale})`;
+        pageBox.style.transformOrigin = "top left";
+        // Transform does not affect layout, so compensate for the natural box dimensions.
+        const heightReductionPt = dims.pageHeight * (1 - this.scale);
+        const widthReductionPt = dims.pageWidth * (1 - this.scale);
+        const heightReductionPx = ptToPx(heightReductionPt);
+        const widthReductionPx = ptToPx(widthReductionPt);
+        pageBox.style.marginRight = `-${widthReductionPx}px`;
+        pageBox.style.marginBottom = `${this.pageGap - heightReductionPx}px`;
+      }
     }
     // Hint browser for GPU compositing and layout isolation
     pageBox.style.willChange = "transform";
@@ -3219,7 +3337,7 @@ export class PaginationEngine {
     const headerSource = this.selectHeader(sectionIndex, pageInSection, pageNumber);
 
     if (headerSource) {
-      const headerDiv = document.createElement("div");
+      const headerDiv = this.document.createElement("div");
       headerDiv.className = `${this.cssPrefix}header`;
       headerDiv.style.position = "absolute";
       // `w:header` is the distance to the TOP of the story, and the story grows downward from
@@ -3248,7 +3366,7 @@ export class PaginationEngine {
     const contentAreaTop = bands.bodyTop;
     const contentAreaHeight = bands.bodyHeight;
 
-    const contentArea = document.createElement("div");
+    const contentArea = this.document.createElement("div");
     contentArea.className = `${this.cssPrefix}content`;
     contentArea.style.position = "absolute";
     contentArea.style.top = `${contentAreaTop}pt`;
@@ -3277,7 +3395,7 @@ export class PaginationEngine {
       }
     }
     if (pageCommentIds.length > 0) {
-      const marginColumn = document.createElement("aside");
+      const marginColumn = this.document.createElement("aside");
       marginColumn.className = `${this.cssPrefix}comment-margin`;
       marginColumn.style.position = "absolute";
       marginColumn.style.top = `${contentAreaTop}pt`;
@@ -3307,7 +3425,7 @@ export class PaginationEngine {
     // Add footer if available for this section/page
     const footerSource = this.selectFooter(sectionIndex, pageInSection, pageNumber);
     if (footerSource) {
-      const footerDiv = document.createElement("div");
+      const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
       footerDiv.style.position = "absolute";
       // `w:footer` is the distance to the BOTTOM of the story, and the story grows upward from
@@ -3333,7 +3451,7 @@ export class PaginationEngine {
 
     // Add page number (will be hidden by CSS if document has footer)
     if (this.showPageNumbers) {
-      const pageNum = document.createElement("div");
+      const pageNum = this.document.createElement("div");
       pageNum.className = `${this.cssPrefix}number`;
       pageNum.textContent = String(pageNumber);
       pageBox.appendChild(pageNum);
@@ -3405,9 +3523,11 @@ export function paginateHtml(
   container: HTMLElement | string,
   options: PaginationOptions = {}
 ): PaginationResult {
+  const ownerDocument =
+    typeof container === "string" ? globalThis.document : container.ownerDocument;
   const containerEl =
     typeof container === "string"
-      ? (document.getElementById(container) as HTMLElement)
+      ? (ownerDocument.getElementById(container) as HTMLElement)
       : container;
 
   if (!containerEl) {
