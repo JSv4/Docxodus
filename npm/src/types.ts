@@ -3917,6 +3917,11 @@ export interface WorkerGeneratePackageManifestRequest extends WorkerRequestBase 
   documentBytes: Uint8Array;
   /** When present, these lower ceilings constrain #493 inspection itself. */
   limits?: PackageManifestInspectionLimits;
+  /**
+   * Which representation the caller needs. A manifest near the entry ceiling is multi-megabyte,
+   * so returning both costs a parse plus a structured clone nobody reads. Defaults to `"both"`.
+   */
+  representation?: "object" | "json" | "both";
 }
 
 /** Derive exact final/original package bytes before conversion. */
@@ -4121,7 +4126,15 @@ export interface WorkerResponseBase {
   success: boolean;
   /** Error message if success is false */
   error?: string;
+  /**
+   * Machine-readable cause when success is false. Callers classify failures from this
+   * rather than by matching `error`, whose wording is not a contract.
+   */
+  errorCode?: WorkerErrorCode;
 }
+
+/** Closed set of machine-readable worker failure causes. */
+export type WorkerErrorCode = "resource_limit";
 
 /**
  * Response from init request.

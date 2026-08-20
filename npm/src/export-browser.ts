@@ -10,6 +10,7 @@ import limitsContractJson from "./export-resource-limits-v1.json";
 import { PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
+  workerErrorCode,
   type WorkerDocxodus,
 } from "./worker-proxy.js";
 import {
@@ -779,8 +780,14 @@ async function sha256(bytes: Uint8Array): Promise<string> {
     fail("unsupported_runtime", "output_verification", "Web Crypto SHA-256 is unavailable.",
       "Run the exporter in a secure, standards-compliant browser context.");
   }
-  const owned = new Uint8Array(bytes);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", owned.buffer);
+  // crypto.subtle.digest snapshots the BufferSource synchronously, so the view is safe to pass
+  // directly; copying first would double peak memory for ceiling-sized inputs. The cast only
+  // discharges TypeScript's SharedArrayBuffer union -- every buffer reaching here is a plain
+  // ArrayBuffer from fetch, TextEncoder, or an owned snapshot.
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    bytes as Uint8Array<ArrayBuffer>,
+  );
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
@@ -979,27 +986,35 @@ async function loadRuntimeAssetIdentity(
     wasmBasePath.endsWith("/") ? wasmBasePath : `${wasmBasePath}/`,
     import.meta.url,
   );
-  for (const asset of verifiedRuntimeAssets) {
+  // Assets are verified concurrently, but every outcome is captured rather than thrown so the
+  // reported failure is always the first asset in declaration order, not whichever lost the race.
+  const verifications = await Promise.all(verifiedRuntimeAssets.map(async (asset) => {
     const url = asset.path === "./docxodus.worker.js"
       ? new URL("./docxodus.worker.js", import.meta.url)
       : new URL(asset.path.slice("./wasm/".length), resolvedWasmBasePath);
-    const assetResponse = await globalThis.fetch(url, {
-      cache: "force-cache",
-      credentials: "same-origin",
-      signal,
-    });
-    if (!assetResponse.ok) {
-      fail("unsupported_runtime", "wasm_initialization",
-        `Runtime asset ${asset.path} could not be verified (${assetResponse.status}).`,
-        "Deploy every runtime asset named by export-assets.json.");
+    try {
+      const assetResponse = await globalThis.fetch(url, {
+        cache: "force-cache",
+        credentials: "same-origin",
+        signal,
+      });
+      if (!assetResponse.ok) {
+        return () => fail("unsupported_runtime", "wasm_initialization",
+          `Runtime asset ${asset.path} could not be verified (${assetResponse.status}).`,
+          "Deploy every runtime asset named by export-assets.json.");
+      }
+      const bytes = await boundedResponseBytes(assetResponse, asset.byteLength, `Runtime asset ${asset.path}`);
+      if (bytes.byteLength !== asset.byteLength || await sha256(bytes) !== asset.sha256) {
+        return () => fail("unsupported_runtime", "wasm_initialization",
+          `Runtime asset ${asset.path} does not match export-assets.json.`,
+          "Deploy the worker, WASM directory, browser bundle, and asset graph from one build.");
+      }
+      return undefined;
+    } catch (error) {
+      return () => { throw error; };
     }
-    const bytes = await boundedResponseBytes(assetResponse, asset.byteLength, `Runtime asset ${asset.path}`);
-    if (bytes.byteLength !== asset.byteLength || await sha256(bytes) !== asset.sha256) {
-      fail("unsupported_runtime", "wasm_initialization",
-        `Runtime asset ${asset.path} does not match export-assets.json.`,
-        "Deploy the worker, WASM directory, browser bundle, and asset graph from one build.");
-    }
-  }
+  }));
+  for (const raise of verifications) raise?.();
 
   return {
     packageVersion: manifest.packageVersion,
@@ -2204,8 +2219,10 @@ function inventoryBrowserObservedFonts(document: Document, state: ExecutionState
 }
 
 async function decodeImages(document: Document): Promise<void> {
-  for (const image of Array.from(document.images)) {
-    if (typeof image.decode === "function") await image.decode();
+  const images = Array.from(document.images);
+  await Promise.all(images.map((image) =>
+    typeof image.decode === "function" ? image.decode() : Promise.resolve()));
+  for (const image of images) {
     if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
       throw new Error(`Image failed to decode${image.alt ? `: ${image.alt}` : ""}`);
     }
@@ -2377,10 +2394,11 @@ function finalizePageTree(
 
 function assertNoClippedContent(document: Document): void {
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
+    if (footnotes.scrollHeight <= footnotes.clientHeight + 1) continue;
     const boundary = footnotes.getBoundingClientRect().bottom;
     const hasVisibleOverflow = Array.from(footnotes.querySelectorAll<HTMLElement>("*"))
       .some((element) => element.getBoundingClientRect().bottom > boundary + 1);
-    if (footnotes.scrollHeight > footnotes.clientHeight + 1 && hasVisibleOverflow) {
+    if (hasVisibleOverflow) {
       fail("pagination_failure", "running_story_placement",
         "A footnote continuation is clipped in the final page tree.",
         "Split the oversized footnote paragraph; full continuation support is tracked by issue #489.");
@@ -2813,9 +2831,12 @@ async function verifyOfflineReopen(
     }
 
     const actualFragments: PageMap["fragments"] = [];
+    const expectedByPageNumber = new Map(
+      expectedPageMap.pages.map((candidate) => [candidate.pageNumber, candidate]),
+    );
     for (const page of pages) {
       const pageNumber = Number.parseInt(page.dataset.pageNumber ?? "0", 10);
-      const expectedPage = expectedPageMap.pages.find((candidate) => candidate.pageNumber === pageNumber);
+      const expectedPage = expectedByPageNumber.get(pageNumber);
       if (!expectedPage) throw new Error(`offline output added page ${pageNumber}`);
       const pageRect = page.getBoundingClientRect();
       const pointPerRenderedX = expectedPage.width / pageRect.width;
@@ -3129,7 +3150,7 @@ export async function convertDocxToPaginatedHtml(
               options.limits.compressedDocxBytes,
             );
           } catch (error) {
-            if (String(error).includes("exceeds compressedDocxBytes")) {
+            if (workerErrorCode(error) === "resource_limit") {
               fail("resource_limit", "package_preflight",
                 "The derived review-profile package exceeds compressedDocxBytes.",
                 "Use a smaller document or remove revision history before export.");
@@ -3173,7 +3194,7 @@ export async function convertDocxToPaginatedHtml(
           options.limits.htmlOutputBytes,
         );
       } catch (error) {
-        if (String(error).includes("exceeds htmlOutputBytes")) {
+        if (workerErrorCode(error) === "resource_limit") {
           fail("resource_limit", "docx_conversion",
             "Converted HTML exceeds htmlOutputBytes before main-thread materialization.",
             "Use a smaller document or lower-complexity conversion profile.");
