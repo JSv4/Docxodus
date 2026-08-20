@@ -32,6 +32,12 @@ internal static class ZipPackageOutputNormalizer
     private const int RegularFilePermissions = 0x1A4 << 16; // -rw-r--r-- (0644)
     private const int DirectoryPermissions = 0x1ED << 16;   // drwxr-xr-x (0755)
 
+    // Word pins every OPC entry to the ZIP DOS epoch. System.IO.Packaging already emits
+    // epoch stamps, but the session's checkpoint clone serializes through ZipArchive,
+    // which stamps wall-clock time at 2-second DOS granularity - making the raw package
+    // digest of identical logical content time-dependent (issue #521).
+    private static readonly DateTimeOffset ZipEpoch = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     /// <summary>
     /// Returns a normalized copy of <paramref name="packageBytes"/>. Invalid/non-ZIP input passes
     /// through unchanged; callers at this boundary ordinarily supply an already-validated OPC
@@ -55,7 +61,7 @@ internal static class ZipPackageOutputNormalizer
                 {
                     var level = GetCompressionLevel(sourceEntry);
                     var targetEntry = target.CreateEntry(sourceEntry.FullName, level);
-                    targetEntry.LastWriteTime = sourceEntry.LastWriteTime;
+                    targetEntry.LastWriteTime = ZipEpoch;
                     targetEntry.Comment = sourceEntry.Comment;
                     targetEntry.ExternalAttributes = NormalizedExternalAttributes(sourceEntry);
 

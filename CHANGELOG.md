@@ -499,6 +499,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Live-session package digests are no longer timestamp-dependent** (issue #521).
+  The session's checkpoint clone serialized through `ZipArchive`, which stamps entries
+  with wall-clock time at 2-second DOS granularity, so two `GetPackageManifest()` calls
+  on identical logical content could disagree on `rawPackageBytesDigest` — an
+  intermittent CI flake and a hazard for any workflow comparing raw digests across
+  independent serializations (idempotent-retry and no-op-preview detection included).
+  `ZipPackageOutputNormalizer` now pins every entry timestamp to the ZIP DOS epoch,
+  which is exactly what Word writes; `Save()` output already carried epoch stamps via
+  `System.IO.Packaging`, so saved-package bytes are unchanged.
 - **Package manifests recognize the content-type spellings Word writes, and VML parts
   digest as XML** (issues #512, #513). Five allowlist/counter spellings in the manifest
   generator could never match a real package — glossary
