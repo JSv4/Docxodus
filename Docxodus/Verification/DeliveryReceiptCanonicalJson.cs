@@ -226,7 +226,10 @@ internal static class DeliveryReceiptCanonicalJson
                 "invalid_operation_arguments", $"{parameterName} is not valid JSON: {ex.Message}");
         }
 
-        using var document = JsonDocument.Parse(canonical);
+        using var document = JsonDocument.Parse(canonical, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
             throw new DeliveryReceiptValidationException(
@@ -645,7 +648,10 @@ public static class DeliveryChangeReceiptSerializer
         var payload = SerializePayload(receipt.Payload, validatedLimits);
         DeliveryReceiptValidation.ValidateDigest(receipt.ReceiptDigest, "receipt digest");
 
-        using var payloadDocument = JsonDocument.Parse(payload);
+        using var payloadDocument = JsonDocument.Parse(payload, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         using var stream = new DeliveryReceiptBoundedMemoryStream(
             validatedLimits.MaxReceiptJsonBytes,
             "receipt_resource_limit",
@@ -670,7 +676,10 @@ public static class DeliveryChangeReceiptSerializer
         if (!indented)
             return canonical;
 
-        using var canonicalDocument = JsonDocument.Parse(canonical);
+        using var canonicalDocument = JsonDocument.Parse(canonical, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         using var indentedStream = new DeliveryReceiptBoundedMemoryStream(
             validatedLimits.MaxReceiptJsonBytes,
             "receipt_resource_limit",

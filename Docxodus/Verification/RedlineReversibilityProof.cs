@@ -265,17 +265,17 @@ public sealed record RedlineReversibilityProof
                 WriteIndented = indented,
             };
             options.Converters.Add(new JsonStringEnumConverter<RedlineRevisionDisposition>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RedlineProofDirection>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RedlinePackageDivergenceKind>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RevisionFamily>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RevisionResolutionStatus>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<VerificationFindingSeverity>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             return new RedlineReversibilityProofJsonContext(options);
         }
     }

@@ -496,6 +496,7 @@ public class DeliveryChangeReceiptTests
         Assert.Equal(DeliveryArtifactVerificationStatus.DigestMismatch,
             Assert.Single(artifactResult.Artifacts,
                 artifact => artifact.ArtifactId == "pdf").Status);
+        Assert.Contains("artifact_digest_mismatch:pdf", artifactResult.Findings);
 
         var missing = DeliveryChangeReceiptVerifier.Verify(receipt,
             new Dictionary<string, byte[]>());
@@ -503,6 +504,7 @@ public class DeliveryChangeReceiptTests
         Assert.Equal(DeliveryArtifactVerificationStatus.Missing,
             Assert.Single(missing.Artifacts,
                 artifact => artifact.ArtifactId == "pdf").Status);
+        Assert.Contains("artifact_missing:pdf", missing.Findings);
 
         var tamperedReceipt = receipt.ToJson().Replace(
             "hashAndSummary", "fullEvidence", StringComparison.Ordinal);
@@ -2449,6 +2451,73 @@ public class DeliveryChangeReceiptTests
                     Schema = "https://example.invalid/not-the-owner-schema",
                     Digest = Digest(canonical),
                 })).Code);
+    }
+
+    [Fact]
+    public void DCR042_UndefinedIntegerEnumValues_AreRejectedAsEvidenceAndPayload()
+    {
+        var edit = SingleEdit("Reject undefined integer enums.");
+        var validation = DeliverableVerifier.VerifyDeliverable(
+            edit.BeforeBytes, edit.AfterBytes);
+        var canonical = validation.ToCanonicalUtf8Bytes();
+        Assert.True(DeliverableVerificationResult.IsExactCanonical(canonical));
+
+        var json = Encoding.UTF8.GetString(canonical);
+        Assert.Contains("\"mode\":\"standard\"", json);
+        var forged = Encoding.UTF8.GetBytes(json.Replace(
+            "\"mode\":\"standard\"", "\"mode\":9999"));
+        Assert.False(DeliverableVerificationResult.IsExactCanonical(forged));
+
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var payload = JsonNode.Parse(receipt.ToJson())!["payload"]!.AsObject();
+        payload["privacyProfile"] = 9999;
+        var result = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(payload), RequiredArtifactBytes(edit));
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void DCR043_VerifierRejectsNonNormalizedArtifactPaths()
+    {
+        var edit = SingleEdit("Portable path enforcement.");
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var payload = JsonNode.Parse(receipt.ToJson())!["payload"]!.AsObject();
+        var artifact = payload["artifacts"]!.AsArray()
+            .Single(item => item!["relativePath"] is not null)!.AsObject();
+        Assert.Equal("delivery/clean.docx", artifact["relativePath"]!.GetValue<string>());
+        artifact["relativePath"] = "delivery\\clean.docx";
+
+        var result = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(payload), RequiredArtifactBytes(edit));
+
+        Assert.False(result.IsValid);
+        Assert.Contains("unsafe_artifact_path", result.Findings);
+    }
+
+    [Fact]
+    public void DCR044_DeepOperationArguments_WithinLimitsSurviveTheFullPipeline()
+    {
+        var deepArguments =
+            string.Concat(Enumerable.Repeat("{\"a\":", 100)) + "1" + new string('}', 100);
+        var operation = DeliveryNormalizedOperation.Create(
+            "docx_edit", "replace_text", deepArguments);
+
+        var edit = SingleEdit("Deep argument payload.");
+        var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            edit.Result, edit.BeforeManifest, edit.AfterManifest, new[] { operation });
+        var builder = Builder(edit);
+        var entryId = builder.AddTransaction(contribution);
+        AddTransactionSemantic(builder, entryId, edit.BeforeBytes, edit.AfterBytes,
+            "semantic-source-to-delivered");
+        var receipt = builder.Build();
+
+        var result = DeliveryChangeReceiptVerifier.VerifyJson(
+            receipt.ToJson(), RequiredArtifactBytes(edit));
+        Assert.True(result.IsValid, string.Join("; ", result.Findings));
     }
 
     private static DeliveryChangeReceipt BuildWithProfile(

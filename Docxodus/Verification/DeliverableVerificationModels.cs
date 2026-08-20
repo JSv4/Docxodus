@@ -508,27 +508,27 @@ public sealed record DeliverableVerificationResult
             // source-generation switch emits enum member names verbatim, while schema v1's
             // durable wire vocabulary is camelCase.
             options.Converters.Add(new JsonStringEnumConverter<DeliverableVerificationMode>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableVerificationDecision>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableCheckStatus>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableFindingCategory>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<VerificationFindingSeverity>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableFindingDisposition>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverablePackageChangeKind>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<SemanticChangeOperation>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<SemanticChangeFamily>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableArtifactRole>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<DeliverableArtifactAvailability>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             return new DeliverableVerificationJsonContext(options);
         }
     }

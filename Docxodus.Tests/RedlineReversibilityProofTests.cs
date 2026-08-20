@@ -1285,6 +1285,26 @@ public class RedlineReversibilityProofTests
             finding.Code == "revision_evidence_limit_exceeded");
     }
 
+    [Fact]
+    public void RP051_IsExactCanonical_RejectsUndefinedIntegerEnumValues()
+    {
+        var baseline = Document("The original clause.");
+        var intendedFinal = Document("The revised clause.");
+        var redline = DocxDiff.Compare(
+            new WmlDocument("baseline.docx", baseline),
+            new WmlDocument("final.docx", intendedFinal),
+            new DocxDiffSettings { AuthorForRevisions = "Comparison Engine" }).DocumentByteArray;
+        var proof = RedlineReversibilityVerifier.Prove(baseline, intendedFinal, redline).Proof;
+        var canonical = proof.ToCanonicalUtf8Bytes();
+        Assert.True(RedlineReversibilityProof.IsExactCanonical(canonical));
+
+        var json = Encoding.UTF8.GetString(canonical);
+        Assert.Contains("\"disposition\":\"generated\"", json);
+        var forged = Encoding.UTF8.GetBytes(json.Replace(
+            "\"disposition\":\"generated\"", "\"disposition\":9999"));
+        Assert.False(RedlineReversibilityProof.IsExactCanonical(forged));
+    }
+
     private static void AssertResolutionClosure(RedlineProofPathResult path)
     {
         var accountedFor = path.ResolvedRevisionIds

@@ -1994,7 +1994,10 @@ public sealed class DeliveryChangeReceiptBuilder
 
     private static JsonElement ParseCanonical(byte[] canonical)
     {
-        using var document = JsonDocument.Parse(canonical);
+        using var document = JsonDocument.Parse(canonical, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         return document.RootElement.Clone();
     }
 
@@ -2008,7 +2011,10 @@ public sealed class DeliveryChangeReceiptBuilder
         var canonicalArray = DeliveryReceiptCanonicalJson.CanonicalizeBounded(
             Encoding.UTF8.GetBytes(json), _limits, _limits.MaxReceiptJsonBytes,
             "receipt_resource_limit");
-        using var document = JsonDocument.Parse(canonicalArray);
+        using var document = JsonDocument.Parse(canonicalArray, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         if (document.RootElement.ValueKind != JsonValueKind.Array
             || document.RootElement.GetArrayLength() != 1)
         {

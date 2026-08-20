@@ -59,7 +59,10 @@ public sealed class DeliveryNormalizedOperation
             throw new DeliveryReceiptValidationException(
                 "invalid_operation_arguments", $"argumentsJson is not valid JSON: {ex.Message}");
         }
-        using var document = JsonDocument.Parse(canonical);
+        using var document = JsonDocument.Parse(canonical, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
             throw new DeliveryReceiptValidationException(

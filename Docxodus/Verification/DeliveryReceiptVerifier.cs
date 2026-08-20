@@ -127,7 +127,10 @@ public static class DeliveryChangeReceiptVerifier
                 return Malformed("missing_payload");
             DeliveryReceiptResourceValidator.ValidatePayload(payload, limits);
             var knownPayload = DeliveryChangeReceiptSerializer.SerializePayload(payload, limits);
-            using var knownDocument = JsonDocument.Parse(knownPayload);
+            using var knownDocument = JsonDocument.Parse(knownPayload, new JsonDocumentOptions
+        {
+            MaxDepth = DeliveryReceiptLimits.MaxAllowedJsonDepth,
+        });
             if (!DeliveryReceiptCanonicalJson.ContainsCanonicalKnownProjection(
                     payloadElement, knownDocument.RootElement))
             {
@@ -1518,7 +1521,14 @@ public static class DeliveryChangeReceiptVerifier
             DeliveryReceiptValidation.RequireNonBlank(artifact.ArtifactId, "artifact id", 256);
             DeliveryReceiptValidation.RequireNonBlank(
                 artifact.MediaType, "artifact media type", 512);
-            DeliveryReceiptValidation.NormalizeRelativePath(artifact.RelativePath);
+            if (!string.Equals(
+                    DeliveryReceiptValidation.NormalizeRelativePath(artifact.RelativePath),
+                    artifact.RelativePath, StringComparison.Ordinal))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "unsafe_artifact_path",
+                    "Artifact display paths must be stored in normalized form.");
+            }
             DeliveryReceiptValidation.ValidateOptionalDigest(
                 artifact.PackageDigest, "artifact package digest");
             DeliveryReceiptValidation.ValidateOptionalDigest(
@@ -2006,7 +2016,7 @@ public static class DeliveryChangeReceiptVerifier
                 ActualDigest = actualDigest,
             });
             if (status != DeliveryArtifactVerificationStatus.Verified)
-                findings.Add($"artifact_{status.ToString().ToLowerInvariant()}:{artifact.ArtifactId}");
+                findings.Add($"artifact_{DocxSessionJson.EnumToSnake(status)}:{artifact.ArtifactId}");
         }
         return results;
     }

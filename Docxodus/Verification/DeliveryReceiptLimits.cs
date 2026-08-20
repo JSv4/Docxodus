@@ -17,7 +17,11 @@ public sealed record DeliveryReceiptLimits
     public int MaxPageMapBytes { get; init; } = 64 * 1024 * 1024;
     public int MaxArtifactBytes { get; init; } = 256 * 1024 * 1024;
     public long MaxTotalArtifactBytes { get; init; } = 512L * 1024 * 1024;
-    public int MaxJsonDepth { get; init; } = 128;
+    /// <summary>Hard ceiling for <see cref="MaxJsonDepth"/>; every secondary parse of
+    /// already-bounded canonical JSON must allow at least this depth.</summary>
+    internal const int MaxAllowedJsonDepth = 128;
+
+    public int MaxJsonDepth { get; init; } = MaxAllowedJsonDepth;
     public int MaxCollectionItems { get; init; } = 100_000;
     public int MaxTransactions { get; init; } = 10_000;
     public int MaxOperationsPerTransaction { get; init; } = 10_000;
@@ -38,7 +42,7 @@ public sealed record DeliveryReceiptLimits
         Positive(MaxArtifactBytes, nameof(MaxArtifactBytes));
         if (MaxTotalArtifactBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxTotalArtifactBytes));
-        if (MaxJsonDepth is < 1 or > 128)
+        if (MaxJsonDepth is < 1 or > MaxAllowedJsonDepth)
             throw new ArgumentOutOfRangeException(nameof(MaxJsonDepth));
         Positive(MaxCollectionItems, nameof(MaxCollectionItems));
         Positive(MaxTransactions, nameof(MaxTransactions));
