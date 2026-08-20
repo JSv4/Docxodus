@@ -1,5 +1,26 @@
 # Delivery change receipt
 
+## Why this exists
+
+When an automated system — increasingly an AI agent driving `DocxSession` through MCP —
+edits a document and hands back a delivery, the recipient has to take three claims on
+faith: that the delivered document is exactly what the recorded edits produced and nothing
+else changed; that every artifact (clean DOCX, redline, PDF, HTML, page citations) really
+corresponds to that exact document version; and that all of this can still be proven later,
+to an auditor, a counterparty, or a court, without re-running the pipeline.
+
+The delivery change receipt turns those claims into checkable facts. It is a signed-build-
+manifest equivalent for a document delivery: one canonical, hash-addressed JSON record that
+binds the source and delivered package identities to every requested operation, every
+transaction and its undo/redo lineage, the semantic before/after changes, an attribution of
+every package-level change as requested, derived, or unexpected, page citations pinned to
+the document version and render fingerprint that produced them, and the digest of every
+delivered artifact. The verifier is the other half of the feature: it re-derives everything
+from raw bytes, adversarially and offline, so a consumer can validate a delivery without
+trusting the producer — tampering with the receipt, an artifact, or the document fails
+verification with a specific finding. Privacy profiles let a producer prove *what changed
+and that nothing else did* without shipping document text at all.
+
 Issue #458 composes evidence that already belongs to the document transaction, package,
 semantic-diff, rendering, and verification layers. It does not create a second mutation
 engine or reinterpret those components' schemas.

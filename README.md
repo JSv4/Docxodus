@@ -71,6 +71,14 @@ cites are the final document's.
   validation, cross-part closure, workflow residue, baseline-aware findings, expected deltas, and
   digest-bound renderer artifacts into one canonical pass/failed report. Default report operations
   are also available through WASM/npm, Python, and MCP.
+- **Delivery change receipts.** `DeliveryChangeReceiptBuilder` binds one delivery into a
+  canonical, hash-addressed record — source/delivered package identities, every normalized
+  request and transaction with its undo/redo lineage, requested/derived/unexpected change
+  attribution, typed semantic evidence, page citations pinned to a render fingerprint, and
+  the digest of every artifact — and `DeliveryChangeReceiptVerifier` re-checks all of it
+  from raw bytes, so a recipient can verify what an automated edit did (and that nothing
+  else changed) without trusting the system that produced it. Core .NET today; the
+  cross-surface ripple is tracked in #520.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
