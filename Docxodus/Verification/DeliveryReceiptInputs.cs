@@ -209,10 +209,23 @@ public sealed class DeliveryTransactionContribution
             ValidateFingerprint(identity.RequestFingerprint);
         }
 
+        var beforeDocument = DeliveryDocumentIdentity.FromManifest(
+            beforeManifest, result.BaseVersion);
+        var afterDocument = DeliveryDocumentIdentity.FromManifest(
+            afterManifest, result.ResultVersion);
+        if (result.Preview
+            && DeliveryReceiptLineageValidator.SameIdentityExceptVersion(
+                beforeDocument, afterDocument))
+        {
+            // The engine consumes a version for any recorded mutation even when the net
+            // package is unchanged. A prediction never advances lineage, so an idempotent
+            // preview collapses to the canonical no-op shape the validator accepts.
+            afterDocument = beforeDocument;
+        }
         return new DeliveryTransactionContribution(
             result,
-            DeliveryDocumentIdentity.FromManifest(beforeManifest, result.BaseVersion),
-            DeliveryDocumentIdentity.FromManifest(afterManifest, result.ResultVersion),
+            beforeDocument,
+            afterDocument,
             materialized,
             identity);
     }
@@ -275,6 +288,28 @@ public sealed class DeliveryTransactionContribution
                 throw new DeliveryReceiptValidationException(
                     "invalid_batch_result",
                     "Failed atomic steps must be one preflight failure or an executed prefix.");
+            }
+        }
+
+        foreach (var step in steps)
+        {
+            foreach (var value in step.Results)
+            {
+                if (!value.Success
+                    && (value.Error is null
+                        || !Enum.IsDefined(value.Error.Code)
+                        || string.IsNullOrEmpty(value.Error.Message)))
+                {
+                    throw new DeliveryReceiptValidationException(
+                        "invalid_operation_result",
+                        "Every failed step result must carry a structured edit error.");
+                }
+                if (value.Success && value.Error is not null)
+                {
+                    throw new DeliveryReceiptValidationException(
+                        "invalid_operation_result",
+                        "Successful step results cannot carry an edit error.");
+                }
             }
         }
 

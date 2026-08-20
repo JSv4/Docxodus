@@ -2779,6 +2779,134 @@ public class DeliveryChangeReceiptTests
                 () => rogueBuilder.Build()).Code);
     }
 
+    [Fact]
+    public void DCR049_IdempotentPreview_BuildsAValidNoOpPrediction()
+    {
+        var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = Open(source);
+        var anchor = BodyParagraphs(session)[0];
+        MutationBatchStep[] Steps() => new[]
+        {
+            new MutationBatchStep("docx_edit", "replace_text",
+                s => s.ReplaceText(anchor, "Idempotent clause.")),
+        };
+        var commit = session.ExecuteBatch(Steps());
+        Assert.True(commit.Success, "commit failed");
+        var committedBytes = session.Save();
+        var committedManifest = Manifest(committedBytes);
+
+        var preview = session.PreviewBatch(Steps());
+        Assert.True(preview.Success, "preview failed");
+        Assert.True(preview.Preview);
+        Assert.Equal(commit.ResultVersion, preview.BaseVersion);
+        Assert.Equal(preview.BaseVersion + 1, preview.ResultVersion);
+
+        var operation = DeliveryNormalizedOperation.Create("docx_edit", "replace_text",
+            JsonSerializer.Serialize(new
+            {
+                anchorId = anchor,
+                markdown = "Idempotent clause.",
+            }));
+        var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            preview, committedManifest, committedManifest, new[] { operation });
+
+        var builder = new DeliveryChangeReceiptBuilder(committedManifest, preview.BaseVersion)
+            .SetDeliveredDocument(committedManifest, preview.BaseVersion);
+        AddCleanDocx(builder, committedBytes, committedManifest, preview.BaseVersion);
+        var noChange = new SemanticChangeSet(Array.Empty<SemanticChange>());
+        builder.AddSemanticChangeSet(
+            DeliverySemanticChangeSetInput.ForSourceToDelivered(noChange));
+        builder.AddTransaction(contribution);
+        var receipt = builder.Build();
+
+        var transaction = Assert.Single(receipt.Payload.Transactions);
+        Assert.Equal(DeliveryTransactionStatus.Prediction, transaction.Status);
+        Assert.Equal(transaction.BeforeDocument, transaction.AfterDocument);
+        var artifacts = new Dictionary<string, byte[]>
+        {
+            ["clean-docx"] = committedBytes,
+            ["semantic-source-to-delivered"] = noChange.ToCanonicalUtf8Bytes(),
+        };
+        var result = DeliveryChangeReceiptVerifier.Verify(receipt, artifacts);
+        Assert.True(result.IsValid, string.Join("; ", result.Findings));
+    }
+
+    [Fact]
+    public void DCR050_EveryFailedStepResult_RequiresAStructuredEditError()
+    {
+        var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = Open(source);
+        var beforeBytes = session.Save();
+        var beforeManifest = Manifest(beforeBytes);
+        var result = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep("docx_edit", "replace_text",
+                s => s.ReplaceText("p:body:missing00", "never lands")),
+            new MutationBatchStep("docx_edit", "custom",
+                s => new EditResult { Success = false }),
+        }, MutationBatchMode.BestEffort);
+        Assert.False(result.Success);
+        var afterBytes = session.Save();
+        var afterManifest = Manifest(afterBytes);
+        var operations = new[]
+        {
+            DeliveryNormalizedOperation.Create("docx_edit", "replace_text",
+                "{\"anchorId\":\"p:body:missing00\"}"),
+            DeliveryNormalizedOperation.Create("docx_edit", "custom", "{}"),
+        };
+
+        Assert.Equal("invalid_operation_result",
+            Assert.Throws<DeliveryReceiptValidationException>(() =>
+                DeliveryTransactionContribution.FromMutationBatchResult(
+                    result, beforeManifest, afterManifest, operations)).Code);
+    }
+
+    [Fact]
+    public void DCR051_LineageEventDocumentIdentities_AreValidatedAtBuildTime()
+    {
+        var edit = SingleEdit("Lineage identity validation.");
+        var builder = Builder(edit);
+        var entryId = AddTransactionWithSemantic(builder, edit);
+        var valid = DeliveryLineageEventInput.FromManifests(
+            DeliveryLineageAction.Undo, entryId,
+            edit.AfterManifest, edit.Result.ResultVersion,
+            edit.BeforeManifest, edit.Result.BaseVersion);
+
+        var malformed = valid with
+        {
+            BeforeDocument = valid.BeforeDocument with
+            {
+                NormalizedSemanticDigest = new VerificationDigest
+                {
+                    Algorithm = "SHA-256",
+                    Value = "NOT-A-DIGEST",
+                },
+            },
+        };
+
+        Assert.Equal("invalid_digest",
+            Assert.Throws<DeliveryReceiptValidationException>(
+                () => builder.AddLineageEvent(malformed)).Code);
+    }
+
+    [Fact]
+    public void DCR052_IdenticalSemanticEvidenceRetry_IsIdempotent()
+    {
+        var edit = SingleEdit("Idempotent semantic evidence.");
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        builder.AddSemanticChangeSet(DeliverySemanticChangeSetInput.ForSourceToDelivered(
+            SemanticChanges(edit.BeforeBytes, edit.AfterBytes)));
+
+        var receipt = builder.Build();
+
+        Assert.Single(receipt.Payload.SemanticChangeSets,
+            binding => binding.Scope == DeliverySemanticComparisonScope.SourceToDelivered);
+        var result = DeliveryChangeReceiptVerifier.Verify(
+            receipt, RequiredArtifactBytes(edit));
+        Assert.True(result.IsValid, string.Join("; ", result.Findings));
+    }
+
     private static DeliveryChangeReceipt BuildWithProfile(
         EditFixture edit,
         DeliveryReceiptPrivacyProfile profile)

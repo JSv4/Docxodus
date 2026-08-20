@@ -141,6 +141,8 @@ public sealed class DeliveryChangeReceiptBuilder
             throw new ArgumentOutOfRangeException(nameof(lineageEvent));
         DeliveryReceiptValidation.RequireNonBlank(
             lineageEvent.AffectedEntryId, "affected entry id", 256);
+        DeliveryReceiptValidation.ValidateDocument(lineageEvent.BeforeDocument);
+        DeliveryReceiptValidation.ValidateDocument(lineageEvent.AfterDocument);
         EnsureCollectionCapacity(_lineage.Count, "lineage events");
         _lineage.Add((_nextSequence++, lineageEvent));
         return this;
@@ -191,7 +193,18 @@ public sealed class DeliveryChangeReceiptBuilder
         {
             RegisterArtifact(artifactInput);
         }
-        _semanticChangeSets.Add((input, projection));
+        // An exact re-registration is an idempotent transport retry, mirroring the
+        // AddTransaction retry contract; the artifact-conflict check above has already
+        // rejected same-id registrations that differ in bytes or metadata.
+        bool duplicate = _semanticChangeSets.Any(entry =>
+            entry.Input.Scope == input.Scope
+            && string.Equals(entry.Input.ArtifactId, input.ArtifactId, StringComparison.Ordinal)
+            && string.Equals(entry.Input.TransactionEntryId, input.TransactionEntryId,
+                StringComparison.Ordinal)
+            && entry.Projection.CanonicalBytes.AsSpan().SequenceEqual(
+                projection.CanonicalBytes));
+        if (!duplicate)
+            _semanticChangeSets.Add((input, projection));
         return this;
     }
 
@@ -390,8 +403,8 @@ public sealed class DeliveryChangeReceiptBuilder
             requestFingerprint,
             contribution.BeforeDocument,
             contribution.AfterDocument,
-            result.BaseVersion,
-            result.ResultVersion,
+            contribution.BeforeDocument.DocumentVersion,
+            contribution.AfterDocument.DocumentVersion,
             contribution.Identity?.TransactionId,
             sequence);
 
@@ -427,8 +440,8 @@ public sealed class DeliveryChangeReceiptBuilder
             RequestFingerprint = requestFingerprint,
             Mode = result.Mode,
             Status = TransactionStatus(result),
-            BaseVersion = result.BaseVersion,
-            ResultVersion = result.ResultVersion,
+            BaseVersion = contribution.BeforeDocument.DocumentVersion,
+            ResultVersion = contribution.AfterDocument.DocumentVersion,
             BeforeDocument = contribution.BeforeDocument,
             AfterDocument = contribution.AfterDocument,
             ReportedPackageContentDigest = result.PackageHash is null

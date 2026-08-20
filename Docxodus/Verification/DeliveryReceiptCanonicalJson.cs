@@ -602,6 +602,31 @@ internal static class DeliveryReceiptValidation
         return string.Join('/', segments);
     }
 
+    /// <summary>The one validation of a document identity's shape; the builder applies it
+    /// at intake and the verifier re-applies it to untrusted payloads.</summary>
+    public static void ValidateDocument(DeliveryDocumentIdentity document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ValidatePortableNonNegativeInteger(
+            document.DocumentVersion, "invalid_document_version", "Document version");
+        if (!DeliveryPackageManifestAdapter.IsSupportedSchema(
+                document.PackageManifestSchema))
+        {
+            throw new DeliveryReceiptValidationException(
+                "unsupported_package_manifest", "Unsupported package-manifest schema.");
+        }
+        RequireNonBlank(document.PackageKind, "document package kind", 256);
+        if (!string.Equals(document.PackageKind, "opc", StringComparison.Ordinal))
+        {
+            throw new DeliveryReceiptValidationException(
+                "not_wordprocessing_package", "Document identity must be an OPC package.");
+        }
+        RequireOpcMainDocumentUri(document.MainDocumentUri, "main document URI");
+        ValidateDigest(document.RawPackageBytesDigest, "document package digest");
+        ValidateOptionalDigest(document.OrderedOpcContentDigest, "document content digest");
+        ValidateOptionalDigest(document.NormalizedSemanticDigest, "document semantic digest");
+    }
+
     public static bool DigestEquals(VerificationDigest? left, VerificationDigest? right) =>
         left is not null && right is not null
         && string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal)

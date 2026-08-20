@@ -236,7 +236,7 @@ internal static class DeliveryReceiptLineageValidator
         && OptionalDigestEquals(left.OrderedOpcContentDigest, right.OrderedOpcContentDigest)
         && OptionalDigestEquals(left.NormalizedSemanticDigest, right.NormalizedSemanticDigest);
 
-    private static bool SameIdentityExceptVersion(
+    internal static bool SameIdentityExceptVersion(
         DeliveryDocumentIdentity left,
         DeliveryDocumentIdentity right) =>
         string.Equals(left.PackageKind, right.PackageKind, StringComparison.Ordinal)

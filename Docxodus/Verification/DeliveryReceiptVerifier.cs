@@ -2221,33 +2221,8 @@ public static class DeliveryChangeReceiptVerifier
         && receiptCitation.Pages.SequenceEqual(projected.Pages)
         && receiptCitation.Fragments.SequenceEqual(projected.Fragments);
 
-    private static void ValidateDocument(DeliveryDocumentIdentity document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        DeliveryReceiptValidation.ValidatePortableNonNegativeInteger(
-            document.DocumentVersion, "invalid_document_version", "Document version");
-        if (!DeliveryPackageManifestAdapter.IsSupportedSchema(
-                document.PackageManifestSchema))
-        {
-            throw new DeliveryReceiptValidationException(
-                "unsupported_package_manifest", "Unsupported package-manifest schema.");
-        }
-        DeliveryReceiptValidation.RequireNonBlank(
-            document.PackageKind, "document package kind", 256);
-        if (!string.Equals(document.PackageKind, "opc", StringComparison.Ordinal))
-        {
-            throw new DeliveryReceiptValidationException(
-                "not_wordprocessing_package", "Document identity must be an OPC package.");
-        }
-        DeliveryReceiptValidation.RequireOpcMainDocumentUri(
-            document.MainDocumentUri, "main document URI");
-        DeliveryReceiptValidation.ValidateDigest(
-            document.RawPackageBytesDigest, "document package digest");
-        DeliveryReceiptValidation.ValidateOptionalDigest(
-            document.OrderedOpcContentDigest, "document content digest");
-        DeliveryReceiptValidation.ValidateOptionalDigest(
-            document.NormalizedSemanticDigest, "document semantic digest");
-    }
+    private static void ValidateDocument(DeliveryDocumentIdentity document) =>
+        DeliveryReceiptValidation.ValidateDocument(document);
 
     private static string ScopeFromAnchor(string anchorId)
     {
