@@ -422,6 +422,35 @@ class PackageManifestFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class PackageManifestInspectionLimits:
+    """Lowered safety ceilings applied while inspecting an untrusted package.
+
+    Each unset field keeps the engine default. Supplying a limit constrains the inspection
+    itself, rather than inspecting under the defaults and rejecting only afterwards.
+    """
+
+    opc_entries: int | None = None
+    expanded_opc_bytes: int | None = None
+    xml_part_bytes: int | None = None
+    opc_uri_characters: int | None = None
+    opc_compression_ratio: float | None = None
+
+    def _to_wire(self) -> dict[str, int | float]:
+        wire: dict[str, int | float] = {}
+        if self.opc_entries is not None:
+            wire["opcEntries"] = self.opc_entries
+        if self.expanded_opc_bytes is not None:
+            wire["expandedOpcBytes"] = self.expanded_opc_bytes
+        if self.xml_part_bytes is not None:
+            wire["xmlPartBytes"] = self.xml_part_bytes
+        if self.opc_uri_characters is not None:
+            wire["opcUriCharacters"] = self.opc_uri_characters
+        if self.opc_compression_ratio is not None:
+            wire["opcCompressionRatio"] = self.opc_compression_ratio
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
 class PackageManifest:
     """Deterministic schema-v1 description of a DOCX/OPC package."""
 

@@ -15,6 +15,7 @@ import type {
   WorkerInitRequest,
   WorkerConvertRequest,
   WorkerGeneratePackageManifestRequest,
+  WorkerErrorCode,
   WorkerVerifyDeliverableRequest,
   WorkerProjectReviewProfileRequest,
   WorkerCompareRequest,
@@ -144,7 +145,11 @@ function handleGeneratePackageManifest(
       : ensureInitialized().DocumentConverter.GeneratePackageManifest(
         request.documentBytes
       );
-    return { manifest: JSON.parse(json) as PackageManifest, manifestJson: json };
+    const representation = request.representation ?? "both";
+    return {
+      manifest: representation === "json" ? undefined : JSON.parse(json) as PackageManifest,
+      manifestJson: representation === "object" ? undefined : json,
+    };
   } catch (error) {
     return { error: String(error) };
   }
@@ -152,7 +157,7 @@ function handleGeneratePackageManifest(
 
 function handleProjectReviewProfile(
   request: WorkerProjectReviewProfileRequest,
-): { documentBytes?: Uint8Array; error?: string } {
+): { documentBytes?: Uint8Array; error?: string; errorCode?: WorkerErrorCode } {
   try {
     const result = request.profile === "final"
       ? ensureInitialized().DocxDiffBridge.AcceptRevisions(request.documentBytes)
@@ -165,6 +170,7 @@ function handleProjectReviewProfile(
       return {
         error: `Derived ${request.profile} package exceeds compressedDocxBytes ` +
           `(${result.byteLength} > ${request.maximumOutputBytes})`,
+        errorCode: "resource_limit",
       };
     }
     return { documentBytes: result };
@@ -226,7 +232,7 @@ function parseError(result: string): { error: string } {
  */
 function handleConvert(
   request: WorkerConvertRequest
-): { html?: string; error?: string } {
+): { html?: string; error?: string; errorCode?: WorkerErrorCode } {
   const exports = ensureInitialized();
   const options = request.options;
 
@@ -319,6 +325,7 @@ function handleConvert(
           return {
             error: `Converted HTML exceeds htmlOutputBytes ` +
               `(${byteLength} > ${request.maximumOutputBytes})`,
+            errorCode: "resource_limit",
           };
         }
       }
@@ -799,6 +806,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           success: !result.error,
           documentBytes: result.documentBytes,
           error: result.error,
+          errorCode: result.errorCode,
         };
         if (result.documentBytes) {
           self.postMessage(response, { transfer: [result.documentBytes.buffer as ArrayBuffer] });
@@ -816,6 +824,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           success: !result.error,
           html: result.html,
           error: result.error,
+          errorCode: result.errorCode,
         };
         break;
       }

@@ -420,6 +420,9 @@ All notable changes to this project will be documented in this file.
   recompile.
 
 ### Changed
+- **Manifest inspection limits reach the Python client (#523).** `generate_package_manifest`
+  accepts an optional `PackageManifestInspectionLimits`, so a stdio caller can constrain
+  inspection of an untrusted package the way the browser export already could.
 - **A batch step whose mutation records no edits is now a successful no-op (#458).**
   `MutationBatchStep.Mutation` may return an empty edit-result list; previously the
   step failed with `internal_error` and rolled an atomic batch back. This means an
@@ -507,6 +510,17 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Worker resource-limit failures are classified by code, not message text** (issue #523).
+  The standalone export matched worker error message wording to decide whether a failure was
+  a resource limit, so rewording a message would silently downgrade the typed `resource_limit`
+  code the export contract requires. Worker responses now carry a machine-readable
+  `errorCode`. The same pass removes redundant work on the export path: page verification
+  uses a map instead of a per-page linear scan, runtime assets are verified concurrently
+  while still reporting the first failure in declaration order, images decode in parallel,
+  the footnote clipping check runs its cheap guard before per-descendant geometry reads,
+  `sha256` no longer copies its input, the manifest worker returns only the representation
+  its caller requested, and pagination no longer stamps fragment identities that the export
+  path immediately overwrites.
 - **Live-session package digests are no longer timestamp-dependent** (issue #521).
   The session's checkpoint clone serialized through `ZipArchive`, which stamps entries
   with wall-clock time at 2-second DOS granularity, so two `GetPackageManifest()` calls

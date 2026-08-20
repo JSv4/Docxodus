@@ -55,7 +55,31 @@ import type {
   DeliverableVerificationResult,
   SemanticChangeSet,
   PackageManifestInspectionLimits,
+  WorkerErrorCode,
 } from "./types.js";
+
+/**
+ * Rejection carrying the worker's machine-readable cause. Callers classify failures with
+ * {@link workerErrorCode}; `message` is diagnostic text whose wording is not a contract.
+ */
+export class WorkerOperationError extends Error {
+  readonly code?: WorkerErrorCode;
+
+  constructor(message: string, code?: WorkerErrorCode) {
+    super(message);
+    this.name = "WorkerOperationError";
+    this.code = code;
+  }
+}
+
+function workerError(message?: string, code?: WorkerErrorCode): WorkerOperationError {
+  return new WorkerOperationError(message || "Unknown error", code);
+}
+
+/** Reads a worker failure's machine-readable cause, or undefined for any other error. */
+export function workerErrorCode(error: unknown): WorkerErrorCode | undefined {
+  return error instanceof WorkerOperationError ? error.code : undefined;
+}
 
 /**
  * Generate a unique request ID.
@@ -410,7 +434,7 @@ export async function createWorkerDocxodus(
       if (response.success) {
         pending.resolve(response);
       } else {
-        pending.reject(new Error(response.error || "Unknown error"));
+        pending.reject(workerError(response.error, response.errorCode));
       }
     }
   };
@@ -473,6 +497,7 @@ export async function createWorkerDocxodus(
           type: "generatePackageManifest",
           documentBytes: bytes,
           limits,
+          representation: "object",
         },
         [bytes.buffer]
       );
@@ -533,6 +558,7 @@ export async function createWorkerDocxodus(
           type: "generatePackageManifest",
           documentBytes: bytes,
           limits,
+          representation: "json",
         },
         [bytes.buffer],
       );

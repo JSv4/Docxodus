@@ -95,6 +95,7 @@ from .types import (
     PageMapRegistrationResult,
     PageMapStatus,
     PackageManifest,
+    PackageManifestInspectionLimits,
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
@@ -172,16 +173,20 @@ def convert_docx_to_html(
     return html
 
 
-def generate_package_manifest(data: bytes) -> PackageManifest:
+def generate_package_manifest(
+    data: bytes,
+    limits: PackageManifestInspectionLimits | None = None,
+) -> PackageManifest:
     """Generate a deterministic verification manifest directly from DOCX bytes.
 
     The operation is non-mutating. Invalid, malformed, and encrypted inputs return
-    structured findings instead of raising an editable-package error.
+    structured findings instead of raising an editable-package error. Supplying ``limits``
+    lowers the inspection ceilings applied while reading an untrusted package.
     """
-    result = _call(
-        "generate_package_manifest",
-        {"docxB64": base64.b64encode(data).decode("ascii")},
-    )
+    args: dict[str, object] = {"docxB64": base64.b64encode(data).decode("ascii")}
+    if limits is not None:
+        args["limits"] = limits._to_wire()
+    result = _call("generate_package_manifest", args)
     if not isinstance(result, Mapping):
         raise TypeError(f"generate_package_manifest: expected object, got {result!r}")
     return PackageManifest._from_wire(result)
