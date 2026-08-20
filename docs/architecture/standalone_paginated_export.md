@@ -411,9 +411,14 @@ unattested system font lowers the environment result to `browserObserved` and fa
 `browser` and `browserExecutablePath` are mutually exclusive. An explicit executable is snapshotted
 as a stable, bounded, ordinary executable file and hashed before launch; symlinks, devices,
 identity changes, relative executable paths, and security-weakening launch configurations fail.
-The owned supported runtime does not opt out of Chromium's process sandbox. An injected browser is
-caller-trusted and receives a fresh context, but it remains outside the process-sandbox and
-background-network guarantee because those launch facts are not observable.
+The owned supported runtime does not opt out of Chromium's process sandbox. A host that denies that
+sandbox — the AppArmor restriction on unprivileged user namespaces that Ubuntu 23.10 and later apply
+by default, most commonly — is therefore a launch failure the runtime cannot resolve on the
+operator's behalf, and `browser_launch_failure` names it as one: the message and remediation say the
+host policy has to change rather than sending the operator to inspect the executable and its shared
+libraries. An injected browser is caller-trusted and receives a fresh context, but it remains
+outside the process-sandbox and background-network guarantee because those launch facts are not
+observable.
 
 Schema-v1 fidelity support is maintained on the pinned Linux x64 release image, matching the
 existing visual ratchet environment. Windows x64, Linux arm64, and macOS x64/arm64 may use an explicit or injected
@@ -698,7 +703,17 @@ version failures retain their distinct codes across the host. Each error include
 `error`, failed phase, message, remediation, and optional bounded safe detail, pending resources,
 part URI, anchor, and resource. Causes/stacks may be retained on the local Node object but are never
 serialized automatically. Cleanup failure does not replace a primary failure; it is attached as a
-bounded secondary diagnostic. The public limit shape is:
+bounded secondary diagnostic.
+
+Retaining a cause is worth nothing if no surface reads it. The CLI therefore renders the whole
+chain — `cause` links and `AggregateError` members alike, so the wrapped cleanup failure is visible
+too — to stderr beneath the remediation, cycle-safe, depth-bounded, and given its own character
+budget so a long `detail` cannot crowd it out. Writing a cause to an operator's terminal is not
+serializing it: the chain never enters `detail`, `toJSON()`, or the render report, and the rendering
+is stripped of every escape sequence and control code point except the newlines the diagnostic
+itself needs.
+
+The public limit shape is:
 
 ```ts
 interface ExportResourceLimits {

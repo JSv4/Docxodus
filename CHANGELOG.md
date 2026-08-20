@@ -519,6 +519,22 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Chromium launch failures say why, and an unavailable sandbox is named as a host policy**
+  (issue #525). The Node export runtime already attached the real reason a launch failed to
+  `DocxodusExportError.cause`, but the CLI rendered only code, phase, message, remediation, and
+  detail, so the diagnostic was discarded at the one surface an operator reads. On any host that
+  restricts unprivileged user namespaces — Ubuntu 23.10 and later do by default — every export
+  failed with "Chromium could not be launched" plus a remediation pointing at the executable and
+  its shared libraries, which is exactly where the problem is not. `docxodus convert` now prints
+  the whole cause chain to stderr beneath the remediation, unwrapping `AggregateError` so a wrapped
+  cleanup failure is visible too, cycle-safe, depth-bounded, and holding its own character budget so
+  a long detail cannot crowd it out. The rendering strips every escape sequence and control code
+  point except newline, which Chromium's multi-line launch log needs. Causes still reach stderr
+  only: they never enter `detail`, `toJSON()`, or the render report. A launch that fails because the
+  host denies Chromium's process sandbox is additionally recognized as its own condition and
+  remediated as the host policy it is — the runtime never answers it by dropping `chromiumSandbox`,
+  so the operator is told which knob is actually theirs. Every surface that reports a remediation,
+  the framed host included, carries the corrected wording.
 - **Worker resource-limit failures are classified by code, not message text** (issue #523).
   The standalone export matched worker error message wording to decide whether a failure was
   a resource limit, so rewording a message would silently downgrade the typed `resource_limit`
