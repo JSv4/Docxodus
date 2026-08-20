@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Docxodus;
 using Docxodus.Internal;
+using Docxodus.Verification;
 
 namespace Docxodus.PyHost;
 
@@ -48,8 +49,7 @@ internal static class Dispatcher
         "save" => Save(args),
         "convert_to_html" => ConvertToHtml(args),
         "session_to_html" => SessionToHtml(args),
-        "generate_package_manifest" => VerificationOps.GeneratePackageManifest(
-            Convert.FromBase64String(Str(args, "docxB64"))),
+        "generate_package_manifest" => GeneratePackageManifest(args),
         "get_package_manifest" => VerificationOps.GetPackageManifest(Handle(args)),
         "verify_deliverable" => VerifyDeliverable(args),
 
@@ -593,6 +593,49 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("handle", out var h) || h.ValueKind != JsonValueKind.Number)
             throw new FormatException("args missing numeric \"handle\"");
         return h.GetInt32();
+    }
+
+    /// <summary>
+    /// Generate a manifest, optionally under the caller's lowered inspection ceilings so a
+    /// constrained caller limits the inspection itself rather than rejecting after expansion.
+    /// </summary>
+    private static string GeneratePackageManifest(JsonElement args)
+    {
+        var bytes = Convert.FromBase64String(Str(args, "docxB64"));
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("limits", out var limits)
+            || limits.ValueKind != JsonValueKind.Object)
+        {
+            return VerificationOps.GeneratePackageManifest(bytes);
+        }
+
+        var defaults = new PackageManifestOptions();
+        return VerificationOps.GeneratePackageManifest(bytes, new PackageManifestOptions
+        {
+            MaxEntryCount = IntOptional(limits, "opcEntries", defaults.MaxEntryCount),
+            MaxTotalUncompressedBytes = LongOptional(
+                limits, "expandedOpcBytes", defaults.MaxTotalUncompressedBytes),
+            MaxXmlPartBytes = LongOptional(limits, "xmlPartBytes", defaults.MaxXmlPartBytes),
+            MaxUriLength = IntOptional(limits, "opcUriCharacters", defaults.MaxUriLength),
+            MaxCompressionRatio = DoubleOptional(
+                limits, "opcCompressionRatio", defaults.MaxCompressionRatio),
+        });
+    }
+
+    private static long LongOptional(JsonElement args, string name, long fallback)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return fallback;
+        return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt64()
+            : fallback;
+    }
+
+    private static double DoubleOptional(JsonElement args, string name, double fallback)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return fallback;
+        return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetDouble()
+            : fallback;
     }
 
     private static string Str(JsonElement args, string name)

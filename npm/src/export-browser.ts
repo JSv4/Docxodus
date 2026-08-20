@@ -3235,6 +3235,10 @@ export async function convertDocxToPaginatedHtml(
           showPageNumbers: false,
           pageGap: 0,
           fragmentParagraphs: true,
+          // Running-story placement below changes the visible fragment set, and this path always
+          // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
+          // would be a second full forced-layout pass whose result is immediately overwritten.
+          deferFragmentIdentities: true,
           checkCancellation: () => {
             if (state.signal?.aborted) {
               fail("operation_cancelled", state.phase,

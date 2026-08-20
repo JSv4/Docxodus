@@ -316,6 +316,12 @@ export interface PaginationOptions {
   fragmentParagraphs?: boolean;
   /** Cooperative checkpoint for bounded non-yielding browser layout work. */
   checkCancellation?: () => void;
+  /**
+   * Skip fragment-identity stamping at the end of paginate(). Callers that mutate the page tree
+   * afterwards (running-story placement) and then call normalizePageMapFragmentIdentities() would
+   * otherwise pay the whole forced-layout pass twice and discard the first result. Default: false.
+   */
+  deferFragmentIdentities?: boolean;
   /** Exact invalidation tokens used to materialize an authoritative PageMap with the result. */
   layoutToken?: { documentVersion: number; rendererFingerprint: string };
 }
@@ -382,6 +388,7 @@ export class PaginationEngine {
   private showPageNumbers: boolean;
   private pageGap: number;
   private fragmentParagraphs: boolean;
+  private deferFragmentIdentities: boolean;
   private cancellationCheckpoint?: () => void;
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
@@ -442,6 +449,7 @@ export class PaginationEngine {
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
+    this.deferFragmentIdentities = options.deferFragmentIdentities ?? false;
     this.cancellationCheckpoint = options.checkCancellation;
     this.layoutToken = options.layoutToken;
     this.hfRegistry = new Map();
@@ -616,7 +624,7 @@ export class PaginationEngine {
     // Full canonical source identities remain on all clones, including table cells.
     this.qualifyPageFragments(pages);
     this.transferVisibleFragmentTargets();
-    this.normalizeVisiblePageFragments(pages);
+    if (!this.deferFragmentIdentities) this.normalizeVisiblePageFragments(pages);
     this.lastPages = pages;
 
       const result = {
