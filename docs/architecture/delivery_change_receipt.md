@@ -21,6 +21,47 @@ trusting the producer — tampering with the receipt, an artifact, or the docume
 verification with a specific finding. Privacy profiles let a producer prove *what changed
 and that nothing else did* without shipping document text at all.
 
+## Trust model
+
+Verification relocates trust; it does not remove it. Precisely:
+
+**Established by a passing verification, with no trust in the producer.**
+
+- Post-delivery integrity. The receipt digest covers the canonical payload and every
+  available artifact is bound by its own digest and byte length, so substituting or
+  editing the document, an artifact, or the receipt after delivery fails verification.
+- Internal consistency. A receipt cannot tell a partial story: every package-level
+  change carries an attribution — user-requested changes must reference a successful
+  retained operation, and unattributed changes are recorded as unexpected rather than
+  omitted; lineage must replay as a valid undo/redo state machine; citations must
+  project from the exact page-map bytes for the claimed document version and renderer
+  fingerprint; typed evidence must reconstruct byte-for-byte.
+- Re-derivable claims. The receipt identifies the source package and the delivered
+  bytes, so a consumer can recompute the semantic comparison with independent tooling
+  and compare it against the recorded change set. The redline-reversibility proof
+  records what accepting and rejecting every revision produces; a consumer can re-run
+  those operations on the delivered redline and check the recorded equivalences and
+  divergences directly.
+
+**Still trusted after a passing verification.**
+
+- The emission path at production time. A producer that fabricates a false delivery
+  together with internally consistent evidence for it produces a receipt that
+  verifies. Verification bounds what a lie must look like — a complete, mutually
+  consistent forgery spanning manifests, transactions, lineage, semantic evidence, and
+  artifacts — it does not prevent one.
+- The verifier implementation the consumer runs.
+
+**How that residue is reduced.**
+
+- The wire contract is a published, closed schema with fully specified
+  canonicalization, so independent verifier implementations are possible, and any two
+  must accept exactly the same bytes.
+- Determinism gives external mechanisms a stable target. Non-repudiation is out of
+  scope by design: a caller who needs it signs the canonical receipt bytes, and
+  anchoring the receipt digest in an external timestamped log pins the production
+  moment. Both depend on canonical bytes existing; neither is provided by this schema.
+
 Issue #458 composes evidence that already belongs to the document transaction, package,
 semantic-diff, rendering, and verification layers. It does not create a second mutation
 engine or reinterpret those components' schemas.
