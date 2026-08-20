@@ -318,8 +318,8 @@ unique, bounded IDs for every delivery artifact projected from a cohort before c
 serialization. Adapters do not patch an already serialized report, and the IDs do not enter the
 renderer fingerprint.
 
-PR #499 replaces the draft single-item delivery seam with an explicit batch seam before it leaves
-draft:
+The #465 delivery PR (first drafted as #499, since closed) must replace that draft single-item
+delivery seam with an explicit batch seam:
 
 ```csharp
 public sealed record DeliveryRenderBatchContext(
@@ -473,7 +473,7 @@ an error: verified partial blobs may be named only in the failed diagnostic enve
 returned as nominal delivery artifacts. The protocol bounds batch/artifact/frame counts, unique
 decoded input and aggregate decoded output, JSON depth/collections/strings, every raw frame, and
 stderr; stdout is reserved exclusively for protocol frames. Export error code, phase, fixed `error` severity, pending resources,
-part/anchor/resource, remediation, and safe detail cross this frame unchanged. PR #499 extends its current renderer diagnostic model to
+part/anchor/resource, remediation, and safe detail cross this frame unchanged. The #465 delivery PR extends the #499-draft renderer diagnostic model to
 retain those fields through .NET, CLI, MCP, validation evidence, and failure reports.
 
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
@@ -1079,7 +1079,7 @@ the #501 acceptance boundary; code written against the former numeric entry-size
 | #442 / #506 | font directories/resolver, license policy, resolution evidence, fingerprint integration |
 | #443 / #507 | generated-PDF raster/text/link ratchet and reproducibility documentation |
 | #444 / #508 | shared final/original/markup and hidden/inline/endnotes/margin profiles |
-| #465 / PR #499 | consume #439's exact batch session through the existing delivery seam |
+| #465 / delivery PR (drafted as #499, closed) | consume #439's exact batch session through the delivery seam |
 
 These remain separate PRs, but their acceptance order preserves the contract rather than merely the
 current branch stack. #501 freezes the complete schema-v1 shapes used through #508 (or uses an
@@ -1088,7 +1088,7 @@ gate until #508 has landed and the release candidate reruns every advertised rev
 including `original` and already-applied final/original sources. No published v1 may advertise a
 profile that returns `unsupported_runtime` in its supported release runtime.
 
-#499 is accepted only after it exposes the bundle-level `RenderBatchesAsync` seam above, validates
+The #465 delivery PR is accepted only after it exposes the bundle-level `RenderBatchesAsync` seam above, validates
 both group-context digests, represents an unsafe .NET document version as the closed
 `document_version_unrepresentable` reason, and preserves the structured diagnostic envelope. It may
 not loop the legacy `RenderAsync` API or use cross-call cache state. The #501--#508 stack remains
