@@ -2036,7 +2036,9 @@ public static class DeliveryChangeReceiptVerifier
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
         var pageMapCache = new Dictionary<string, (PageMap? Map, string? Finding)>(
             StringComparer.Ordinal);
-        var projectionCache = new Dictionary<(string ArtifactId, string AnchorId), PageCitation>();
+        var projectionCache = new Dictionary<
+            (string ArtifactId, string AnchorId, long DocumentVersion, string Renderer),
+            PageCitation>();
         foreach (var citation in payload.PageCitations)
         {
             try
@@ -2139,13 +2141,10 @@ public static class DeliveryChangeReceiptVerifier
                     _ = DeliveryReceiptCanonicalJson.CanonicalizeBounded(
                         pageMapBytes, limits, limits.MaxPageMapBytes,
                         "page_map_resource_limit");
-                    var parsedMap = DocxSessionJson.ParsePageMap(
-                        Encoding.UTF8.GetString(pageMapBytes));
-                    var mapValidation = PageMapContract.ValidatePortable(
-                        parsedMap, citation.DocumentVersion, citation.RendererFingerprint);
-                    cachedMap = mapValidation.Success
-                        ? (parsedMap, null)
-                        : (null, "invalid_page_map_artifact");
+                    // Cache only the citation-independent parse; ValidatePortable is
+                    // parameterized per citation and must not share a cached verdict.
+                    cachedMap = (DocxSessionJson.ParsePageMap(
+                        Encoding.UTF8.GetString(pageMapBytes)), null);
                 }
                 catch (DeliveryReceiptValidationException ex)
                 {
@@ -2163,8 +2162,17 @@ public static class DeliveryChangeReceiptVerifier
                 valid = false;
                 continue;
             }
+            if (!PageMapContract.ValidatePortable(
+                    cachedMap.Map, citation.DocumentVersion,
+                    citation.RendererFingerprint).Success)
+            {
+                findings.Add($"invalid_page_map_artifact:{citation.AnchorId}");
+                valid = false;
+                continue;
+            }
 
-            var projectionKey = (citation.PageMapArtifactId, citation.AnchorId);
+            var projectionKey = (citation.PageMapArtifactId, citation.AnchorId,
+                citation.DocumentVersion, citation.RendererFingerprint);
             if (!projectionCache.TryGetValue(projectionKey, out var projected))
             {
                 projected = PageMapContract.ProjectCitation(

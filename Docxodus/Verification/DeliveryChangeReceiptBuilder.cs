@@ -828,7 +828,9 @@ public sealed class DeliveryChangeReceiptBuilder
                 annotation.Id, "annotation id", 2048),
             SourceDigest = DeliveryReceiptCanonicalJson.Digest(canonical.Bytes),
             Author = annotation.Author,
-            Date = annotation.Created?.ToString("O", CultureInfo.InvariantCulture),
+            Date = annotation.Created is { } created
+                ? DocxSessionJson.UtcRoundtrip(created)
+                : null,
             Type = annotation.LabelId,
             AffectedAnchorIds = Array.Empty<string>(),
             Text = TextEvidence(annotation.AnnotatedText ?? string.Empty, "annotation text"),

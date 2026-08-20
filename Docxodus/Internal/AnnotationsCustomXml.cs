@@ -149,7 +149,14 @@ internal static class AnnotationsCustomXml
         };
 
         var createdStr = (string?)element.Attribute("created");
-        if (DateTime.TryParse(createdStr, out var created)) a.Created = created;
+        if (DateTime.TryParse(
+                createdStr, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal
+                | System.Globalization.DateTimeStyles.AssumeUniversal,
+                out var created))
+        {
+            a.Created = created;
+        }
 
         var range = element.Element(Ann + "range");
         if (range is not null) a.BookmarkName = (string?)range.Attribute("bookmarkName");

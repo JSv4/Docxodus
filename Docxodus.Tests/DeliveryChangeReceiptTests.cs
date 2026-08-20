@@ -3,6 +3,7 @@
 
 #nullable enable
 
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -2518,6 +2519,163 @@ public class DeliveryChangeReceiptTests
         var result = DeliveryChangeReceiptVerifier.VerifyJson(
             receipt.ToJson(), RequiredArtifactBytes(edit));
         Assert.True(result.IsValid, string.Join("; ", result.Findings));
+    }
+
+    [Fact]
+    public void DCR045_StaleCitation_DoesNotPoisonPageMapVerdictForLaterCitations()
+    {
+        var edit = SingleEdit("Citation cache isolation.");
+        using var reopened = Open(edit.AfterBytes);
+        var anchors = BodyParagraphs(reopened);
+        Assert.True(anchors.Length >= 2);
+        var identity = DeliveryDocumentIdentity.FromManifest(
+            edit.AfterManifest, edit.Result.ResultVersion);
+        var version = edit.Result.ResultVersion;
+        const string renderer = "renderer-A";
+
+        PageCitation CitationFor(string anchorId, int index) =>
+            Citation(anchorId, version, renderer) with
+            {
+                Fragments = new[]
+                {
+                    new PageMapFragment
+                    {
+                        FragmentId = $"page-1-fragment-{index}",
+                        AnchorId = anchorId,
+                        FragmentIndex = 0,
+                        PageNumber = 1,
+                        Geometry = new PageMapRect(72, 72 + (index * 30), 300, 24),
+                        Story = PageMapStory.Body,
+                    },
+                },
+            };
+        var citations = new[] { CitationFor(anchors[0], 0), CitationFor(anchors[1], 1) };
+        var pageMapBytes = JsonSerializer.SerializeToUtf8Bytes(new PageMap
+        {
+            Mode = PageMapMode.Paginated,
+            Availability = PageMapAvailability.Available,
+            DocumentVersion = version,
+            RendererFingerprint = renderer,
+            Pages = citations[0].Pages,
+            Fragments = citations.SelectMany(citation => citation.Fragments).ToArray(),
+        }, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters =
+            {
+                new System.Text.Json.Serialization.JsonStringEnumConverter(
+                    JsonNamingPolicy.CamelCase, allowIntegerValues: false),
+            },
+        });
+        var pageMapDigest = Digest(pageMapBytes);
+        var pdf = Encoding.ASCII.GetBytes("%PDF-1.7\ncitation-cache\n%%EOF");
+
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        builder.AddArtifact(DeliveryArtifactInput.Available(
+            "pdf", DeliveryArtifactRole.Pdf, "application/pdf", pdf) with
+        {
+            Document = identity,
+            RendererFingerprint = renderer,
+            PageMapDigest = pageMapDigest,
+        });
+        builder.AddArtifact(DeliveryArtifactInput.Available(
+            "page-map", DeliveryArtifactRole.PageMap, "application/json", pageMapBytes) with
+        {
+            Document = identity,
+            RendererFingerprint = renderer,
+        });
+        foreach (var citation in citations)
+        {
+            builder.AddPageCitation(new DeliveryPageCitationInput
+            {
+                Citation = citation,
+                Scope = "body",
+                Document = identity,
+                PageMapDigest = pageMapDigest,
+                PageMapArtifactId = "page-map",
+                RenderArtifactId = "pdf",
+            });
+        }
+        var receipt = builder.Build();
+        var artifactBytes = RequiredArtifactBytes(edit);
+        artifactBytes["pdf"] = pdf;
+        artifactBytes["page-map"] = pageMapBytes;
+        Assert.True(DeliveryChangeReceiptVerifier.Verify(receipt, artifactBytes).IsValid);
+
+        var payload = JsonNode.Parse(receipt.ToJson())!["payload"]!.AsObject();
+        var ordered = payload["pageCitations"]!.AsArray();
+        Assert.Equal(2, ordered.Count);
+        var staleAnchor = ordered[0]!["anchorId"]!.GetValue<string>();
+        var healthyAnchor = ordered[1]!["anchorId"]!.GetValue<string>();
+        ordered[0]!["documentVersion"] = edit.Result.BaseVersion;
+
+        var result = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(payload), artifactBytes);
+
+        Assert.False(result.IsValid);
+        Assert.Contains($"invalid_page_map_artifact:{staleAnchor}", result.Findings);
+        Assert.DoesNotContain(
+            $"invalid_page_map_artifact:{healthyAnchor}", result.Findings);
+        Assert.DoesNotContain(result.Findings,
+            finding => finding.EndsWith($":{healthyAnchor}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DCR046_AnnotationTimestamps_AreUtcNormalizedInTheHashedPayload()
+    {
+        var source = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = Open(source);
+        var anchor = BodyParagraphs(session)[0];
+        var beforeBytes = session.Save();
+        var beforeManifest = Manifest(beforeBytes);
+        var createdUtc = new DateTime(2026, 8, 19, 17, 30, 0, DateTimeKind.Utc);
+        var operation = DeliveryNormalizedOperation.Create("docx_edit", "add_annotation",
+            JsonSerializer.Serialize(new { anchorId = anchor, labelId = "CLAUSE" }));
+        var result = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep("docx_edit", "add_annotation",
+                s => s.AddAnnotation(anchor, null, new DocumentAnnotation
+                {
+                    Id = "ann-1",
+                    LabelId = "CLAUSE",
+                    Label = "Clause",
+                    Color = "#FFEB3B",
+                    Author = "Annotator",
+                    Created = createdUtc.ToLocalTime(),
+                })),
+        });
+        Assert.True(result.Success,
+            result.Failure is null ? "batch failed" : result.Failure.Error.Message);
+        var afterBytes = session.Save();
+        var afterManifest = Manifest(afterBytes);
+        var contribution = DeliveryTransactionContribution.FromMutationBatchResult(
+            result, beforeManifest, afterManifest, new[] { operation });
+
+        var builder = new DeliveryChangeReceiptBuilder(
+            beforeManifest, result.BaseVersion, DeliveryReceiptPrivacyProfile.FullEvidence)
+            .SetDeliveredDocument(afterManifest, result.ResultVersion);
+        AddCleanDocx(builder, afterBytes, afterManifest, result.ResultVersion);
+        builder.AddSemanticChangeSet(DeliverySemanticChangeSetInput.ForSourceToDelivered(
+            SemanticChanges(beforeBytes, afterBytes)));
+        var entryId = builder.AddTransaction(contribution);
+        AddTransactionSemantic(
+            builder, entryId, beforeBytes, afterBytes, "semantic-source-to-delivered");
+        var receipt = builder.Build();
+
+        var change = Assert.Single(
+            Assert.Single(receipt.Payload.Transactions).AuthoredChanges,
+            item => item.EntityKind == DeliveryAuthoredEntityKind.Annotation);
+        Assert.NotNull(change.Date);
+        Assert.EndsWith("Z", change.Date, StringComparison.Ordinal);
+        Assert.Equal(createdUtc, DateTime.Parse(
+            change.Date, CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind).ToUniversalTime());
+        Assert.NotNull(change.FullEvidence);
+        var evidenceCreated = change.FullEvidence.Value
+            .GetProperty("created").GetString();
+        Assert.NotNull(evidenceCreated);
+        Assert.EndsWith("Z", evidenceCreated, StringComparison.Ordinal);
     }
 
     private static DeliveryChangeReceipt BuildWithProfile(
