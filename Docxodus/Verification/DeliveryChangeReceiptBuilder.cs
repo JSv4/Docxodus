@@ -303,6 +303,39 @@ public sealed class DeliveryChangeReceiptBuilder
             throw new DeliveryReceiptValidationException(
                 "duplicate_evidence", "Receipt evidence identities must be unique.");
         }
+        foreach (var artifact in artifacts)
+        {
+            if (artifact.Role != DeliveryArtifactRole.ReviewDocx
+                && artifact.DocumentVersion is { } artifactVersion
+                && artifact.PackageDigest is { } artifactPackageDigest
+                && !DeliveryReceiptLineageValidator.IsArtifactDocumentReachable(
+                    lineageValidation, artifactVersion, artifactPackageDigest, artifacts))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "unreachable_artifact_document",
+                    $"Artifact '{artifact.ArtifactId}' is bound to a document identity that "
+                    + "is neither a lineage state nor an in-receipt review copy.");
+            }
+        }
+        var boundEvidenceArtifacts = semanticChangeSets
+            .Select(binding => binding.ArtifactId)
+            .Concat(evidence.Select(item => item.ArtifactId)
+                .Where(artifactId => artifactId is not null)
+                .Select(artifactId => artifactId!))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var artifact in artifacts)
+        {
+            if (artifact.Role is DeliveryArtifactRole.SemanticDiff
+                    or DeliveryArtifactRole.ValidationReport
+                    or DeliveryArtifactRole.ReversibilityProof
+                && !boundEvidenceArtifacts.Contains(artifact.ArtifactId))
+            {
+                throw new DeliveryReceiptValidationException(
+                    "unbound_evidence_artifact",
+                    $"Artifact '{artifact.ArtifactId}' claims a typed-evidence role but no "
+                    + "semantic binding or evidence reference attests it.");
+            }
+        }
         var citations = _citations
             .Select(citation => BuildPageCitation(citation, lineageValidation))
             .OrderBy(citation => citation.AnchorId, StringComparer.Ordinal)

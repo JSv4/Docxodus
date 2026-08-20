@@ -208,6 +208,21 @@ internal static class DeliveryReceiptLineageValidator
         && DeliveryReceiptValidation.DigestEquals(
             document.RawPackageBytesDigest, packageDigest);
 
+    /// <summary>An artifact document identity is valid when it is a lineage-reachable
+    /// edit state, or when it matches the identity of a ReviewDocx artifact in the same
+    /// receipt (a render of the review copy is attested by the review copy itself).</summary>
+    public static bool IsArtifactDocumentReachable(
+        DeliveryLineageValidationResult validation,
+        long documentVersion,
+        VerificationDigest packageDigest,
+        IReadOnlyCollection<DeliveryArtifact> artifacts) =>
+        IsReachable(validation, documentVersion, packageDigest)
+        || artifacts.Any(artifact =>
+            artifact.Role == DeliveryArtifactRole.ReviewDocx
+            && artifact.DocumentVersion == documentVersion
+            && DeliveryReceiptValidation.DigestEquals(
+                artifact.PackageDigest, packageDigest));
+
     public static bool DocumentEquals(
         DeliveryDocumentIdentity left,
         DeliveryDocumentIdentity right) =>

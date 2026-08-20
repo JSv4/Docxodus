@@ -416,6 +416,23 @@ public static class DeliveryChangeReceiptVerifier
                 findings.Add(finding);
             valid = false;
         }
+        var boundEvidenceArtifacts = payload.SemanticChangeSets
+            .Select(binding => binding.ArtifactId)
+            .Concat(payload.Evidence.Select(item => item.ArtifactId)
+                .Where(artifactId => artifactId is not null)
+                .Select(artifactId => artifactId!))
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var artifact in payload.Artifacts)
+        {
+            if (artifact.Role is DeliveryArtifactRole.SemanticDiff
+                    or DeliveryArtifactRole.ValidationReport
+                    or DeliveryArtifactRole.ReversibilityProof
+                && !boundEvidenceArtifacts.Contains(artifact.ArtifactId))
+            {
+                findings.Add($"unbound_evidence_artifact:{artifact.ArtifactId}");
+                valid = false;
+            }
+        }
         foreach (var change in payload.PackageChanges)
             valid &= ValidatePackageChange(change, payload.PrivacyProfile, findings);
         if (payload.PackageChanges.Select(change => change.ChangeId)
@@ -467,8 +484,8 @@ public static class DeliveryChangeReceiptVerifier
             if (artifact.Role != DeliveryArtifactRole.ReviewDocx
                 && artifact.DocumentVersion is { } documentVersion
                 && artifact.PackageDigest is { } packageDigest
-                && !DeliveryReceiptLineageValidator.IsReachable(
-                    lineageValidation, documentVersion, packageDigest))
+                && !DeliveryReceiptLineageValidator.IsArtifactDocumentReachable(
+                    lineageValidation, documentVersion, packageDigest, payload.Artifacts))
             {
                 findings.Add("unreachable_artifact_document");
                 valid = false;

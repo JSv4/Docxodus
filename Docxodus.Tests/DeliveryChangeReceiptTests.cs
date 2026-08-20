@@ -723,7 +723,9 @@ public class DeliveryChangeReceiptTests
             pdfBytes,
             unreachablePageMap);
 
-        Assert.Equal("unreachable_citation_document",
+        // The page-map/pdf artifacts are bound to the same unreachable identity, so the
+        // artifact-level reachability guard fires first at build time.
+        Assert.Equal("unreachable_artifact_document",
             Assert.Throws<DeliveryReceiptValidationException>(
                 () => unreachableBuilder.Build()).Code);
 
@@ -2676,6 +2678,105 @@ public class DeliveryChangeReceiptTests
             .GetProperty("created").GetString();
         Assert.NotNull(evidenceCreated);
         Assert.EndsWith("Z", evidenceCreated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DCR047_UnboundEvidenceRoleArtifacts_AreRejectedAtBuildAndVerify()
+    {
+        var forgedBytes = Encoding.UTF8.GetBytes(
+            "{\"schema\":\"docxodus.semantic-changes\",\"totally\":\"forged\"}");
+
+        var edit = SingleEdit("Unbound evidence artifact.");
+        var forgedBuilder = Builder(edit);
+        AddTransactionWithSemantic(forgedBuilder, edit);
+        forgedBuilder.AddArtifact(DeliveryArtifactInput.Available(
+            "forged-semantic", DeliveryArtifactRole.SemanticDiff,
+            "application/json", forgedBytes));
+        Assert.Equal("unbound_evidence_artifact",
+            Assert.Throws<DeliveryReceiptValidationException>(
+                () => forgedBuilder.Build()).Code);
+
+        var reportBuilder = Builder(edit);
+        AddTransactionWithSemantic(reportBuilder, edit);
+        reportBuilder.AddArtifact(DeliveryArtifactInput.Available(
+            "orphan-report", DeliveryArtifactRole.ValidationReport,
+            "application/json", forgedBytes));
+        Assert.Equal("unbound_evidence_artifact",
+            Assert.Throws<DeliveryReceiptValidationException>(
+                () => reportBuilder.Build()).Code);
+
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var payload = JsonNode.Parse(receipt.ToJson())!["payload"]!.AsObject();
+        var artifacts = payload["artifacts"]!.AsArray();
+        var template = artifacts.Single(item =>
+            item!["role"]!.GetValue<string>() == "semanticDiff")!;
+        var forged = JsonNode.Parse(template.ToJsonString())!.AsObject();
+        forged["artifactId"] = "zz-forged";
+        forged["byteLength"] = forgedBytes.Length;
+        var forgedDigest = Digest(forgedBytes);
+        forged["digest"] = new JsonObject
+        {
+            ["algorithm"] = forgedDigest.Algorithm,
+            ["value"] = forgedDigest.Value,
+        };
+        artifacts.Add(forged);
+        var artifactBytes = RequiredArtifactBytes(edit);
+        artifactBytes["zz-forged"] = forgedBytes;
+
+        var result = DeliveryChangeReceiptVerifier.VerifyJson(
+            RehashPayloadJson(payload), artifactBytes);
+
+        Assert.False(result.IsValid);
+        Assert.Contains("unbound_evidence_artifact:zz-forged", result.Findings);
+    }
+
+    [Fact]
+    public void DCR048_ReviewBoundRenderArtifacts_VerifyAndFabricatedIdentitiesFailAtBuild()
+    {
+        var edit = SingleEdit("Review render binding.");
+        var redlineBytes = DocxDiff.Compare(
+            new WmlDocument("before.docx", edit.BeforeBytes),
+            new WmlDocument("after.docx", edit.AfterBytes)).DocumentByteArray;
+        var redlineManifest = Manifest(redlineBytes);
+        var redlineIdentity = DeliveryDocumentIdentity.FromManifest(
+            redlineManifest, edit.Result.ResultVersion);
+        var pdf = Encoding.ASCII.GetBytes("%PDF-1.7\nreview render\n%%EOF");
+
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        builder.AddArtifact(DeliveryArtifactInput.Available(
+            "review-docx", DeliveryArtifactRole.ReviewDocx,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            redlineBytes) with
+        {
+            Document = redlineIdentity,
+            RelativePath = "delivery/review.docx",
+        });
+        builder.AddArtifact(DeliveryArtifactInput.Available(
+            "review-pdf", DeliveryArtifactRole.Pdf, "application/pdf", pdf) with
+        {
+            Document = redlineIdentity,
+        });
+        var receipt = builder.Build();
+        var artifactBytes = RequiredArtifactBytes(edit);
+        artifactBytes["review-docx"] = redlineBytes;
+        artifactBytes["review-pdf"] = pdf;
+        var result = DeliveryChangeReceiptVerifier.Verify(receipt, artifactBytes);
+        Assert.True(result.IsValid, string.Join("; ", result.Findings));
+
+        var rogueBuilder = Builder(edit);
+        AddTransactionWithSemantic(rogueBuilder, edit);
+        rogueBuilder.AddArtifact(DeliveryArtifactInput.Available(
+            "rogue-pdf", DeliveryArtifactRole.Pdf, "application/pdf", pdf) with
+        {
+            Document = DeliveryDocumentIdentity.FromManifest(
+                redlineManifest, edit.Result.ResultVersion),
+        });
+        Assert.Equal("unreachable_artifact_document",
+            Assert.Throws<DeliveryReceiptValidationException>(
+                () => rogueBuilder.Build()).Code);
     }
 
     private static DeliveryChangeReceipt BuildWithProfile(
