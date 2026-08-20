@@ -1866,7 +1866,13 @@ internal static class RevisionOps
             if (Detached(u.Element)) continue;
             if (u.Paragraph is not null) touchedParagraphs.Add(u.Paragraph);
             if (ContentSurvives(u.Element.Name, accept))
-                UnwrapWrapper(u.Element, restoreDeleted: u.Element.Name == W.del);
+                // A surviving w:del OR w:moveFrom un-deletes its payload: the comparison
+                // engine serializes move-source text as w:delText (delete-grade), so a
+                // rejected move must restore it exactly like a rejected deletion — the
+                // reject-all transform converts every delText unconditionally, and leaving
+                // it strands the text as orphaned w:delText once the wrapper is gone.
+                UnwrapWrapper(u.Element, restoreDeleted:
+                    u.Element.Name == W.del || u.Element.Name == W.moveFrom);
             else
                 RemoveContentWrapper(u.Element);
         }

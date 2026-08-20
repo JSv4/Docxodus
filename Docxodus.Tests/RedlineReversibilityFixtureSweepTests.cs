@@ -199,6 +199,7 @@ public class RedlineReversibilityFixtureSweepTests
     [Theory]
     [InlineData("CA/CA001-Plain.docx", "CA/CA001-Plain-Mod.docx")]
     [InlineData("WC/WC001-Digits.docx", "WC/WC001-Digits-Mod.docx")]
+    [InlineData("WC/WC004-Large.docx", "WC/WC004-Large-Mod.docx")]
     [InlineData("WC/WC001-Digits.docx", "WC/WC001-Digits-Deleted-Paragraph.docx")]
     [InlineData("WC/WC001-Digits-Deleted-Paragraph.docx", "WC/WC001-Digits.docx")]
     [InlineData("WC/WC002-Unmodified.docx", "WC/WC002-DiffInMiddle.docx")]
@@ -304,14 +305,14 @@ public class RedlineReversibilityFixtureSweepTests
     // pin and the RRS004 exclusion must be updated.
     // ------------------------------------------------------------------
 
-    // WC004-Large: rejecting the engine redline through the proof's *selective* resolver
-    // strips every w:del wrapper but leaves the deleted content behind as orphaned
-    // w:delText nodes, so ~1.3k characters of restored text are lost from the rejected
-    // body. RevisionProcessor's reject-all on the very same redline restores the text (see
-    // DocxDiffOpsRoundTripTests), so the loss is specific to selective resolution. The
-    // accept direction is content-faithful.
+    // WC004-Large regression pin for the selective-reject moveFrom fix: the comparison
+    // engine serializes move-source text as w:delText inside w:moveFrom, and rejecting
+    // those moves used to strand ~1.3k characters as orphaned w:delText once the wrapper
+    // was unwrapped without the delText → t restore. Beyond RRS004's story-text oracle
+    // (which WC004 now passes), assert the specific corruption shape can never return:
+    // the rejected package contains no w:delText outside a delete-grade wrapper.
     [Fact]
-    public void RRS005_KnownGap_LargeDocumentSelectiveRejectStrandsDeletedText()
+    public void RRS005_RejectedMoveRestoresDeletedTextInsteadOfStrandingIt()
     {
         var left = Fixture("WC/WC004-Large.docx");
         var right = Fixture("WC/WC004-Large-Mod.docx");
@@ -319,25 +320,13 @@ public class RedlineReversibilityFixtureSweepTests
 
         var run = RedlineReversibilityVerifier.Prove(left, right, redline);
 
-        Assert.True(run.Proof.AcceptToFinal?.Completed, run.Proof.ToJson());
         Assert.True(run.Proof.RejectToBaseline?.Completed, run.Proof.ToJson());
-        Assert.Equal(StoryTexts(right), StoryTexts(run.AcceptedPackageBytes!));
-
         using var stream = new MemoryStream(run.RejectedPackageBytes!, writable: false);
         using var rejected = WordprocessingDocument.Open(stream, false);
         var body = rejected.MainDocumentPart!.Document.Body!;
+        Assert.Empty(body.Descendants<DeletedText>());
         Assert.Empty(body.Descendants<DeletedRun>());
         Assert.Empty(body.Descendants<InsertedRun>());
-        var strandedDeletedText = string.Concat(
-            body.Descendants<DeletedText>().Select(text => text.Text));
-        Assert.NotEmpty(strandedDeletedText); // the bug: content survives only as w:delText
-        Assert.NotEqual(StoryTexts(left), StoryTexts(run.RejectedPackageBytes!));
-
-        // The proof itself must expose the loss rather than certify the round-trip.
-        Assert.False(run.Proof.Success);
-        Assert.Contains(run.Proof.RejectToBaseline!.Findings, finding =>
-            finding.Code == "modeled_semantic_mismatch"
-            && finding.Severity == VerificationFindingSeverity.Error);
     }
 
     // WC035: when a comparison adds the document's first footnote/endnote, the redline
