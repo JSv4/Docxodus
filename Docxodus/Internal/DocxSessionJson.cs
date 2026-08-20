@@ -2063,8 +2063,17 @@ internal static class DocxSessionJson
                 sb.Append(JsonString(r.ConstituentIds[c]));
             }
             sb.Append(']')
+              .Append(",\"constituentKeys\":[");
+            for (int c = 0; c < r.ConstituentKeys.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                sb.Append(JsonString(r.ConstituentKeys[c]));
+            }
+            sb.Append(']')
               .Append(",\"author\":").Append(JsonString(r.Author));
             if (r.Date is not null) sb.Append(",\"date\":").Append(JsonString(r.Date));
+            if (r.DateUtc is not null)
+                sb.Append(",\"dateUtc\":").Append(JsonString(r.DateUtc));
             sb.Append(",\"text\":").Append(JsonString(r.Text))
               .Append(",\"partUri\":").Append(JsonString(r.PartUri))
               .Append(",\"scope\":").Append(JsonString(r.Scope));

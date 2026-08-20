@@ -228,6 +228,16 @@ public sealed record PackageAnnotationCounts
 /// <summary>High-signal package and renderer facts derived without opening a mutable SDK package.</summary>
 public sealed record PackageManifestFacts
 {
+    /// <summary>
+    /// Exact physical tracked-change carriers found during the bounded manifest XML pass. This is
+    /// intentionally internal: schema-v1's public revision counts describe logical families, while
+    /// proof admission needs a conservative carrier count before constructing a mutable session.
+    /// </summary>
+    internal long NativeRevisionCarrierCount { get; init; }
+
+    /// <summary>Whether any physical tracked-change carrier uses the strict Word namespace.</summary>
+    internal bool HasStrictRevisionMarkup { get; init; }
+
     public string? MainDocumentUri { get; init; }
     public bool IsStrictOoxml { get; init; }
     public bool IsMacroEnabled { get; init; }

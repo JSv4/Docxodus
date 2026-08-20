@@ -35,6 +35,8 @@ public static class PackageManifestGenerator
         "http://purl.oclc.org/ooxml/wordprocessingml/main";
     private const string Word2012Namespace =
         "http://schemas.microsoft.com/office/word/2012/wordml";
+    private const string Word2010Namespace =
+        "http://schemas.microsoft.com/office/word/2010/wordml";
     private static readonly AsciiCaseInsensitiveComparer PartNameComparer =
         AsciiCaseInsensitiveComparer.Instance;
     private static readonly uint[] Crc32Table = CreateCrc32Table();
@@ -908,6 +910,8 @@ public static class PackageManifestGenerator
         var resolvedComments = 0;
         var people = 0;
         var annotations = 0;
+        long nativeRevisionCarrierCount = 0;
+        var hasStrictRevisionMarkup = false;
         var isStrict = relationships.Any(relationship =>
             OpenXmlRelationshipVocabulary.IsStrictOfficeType(relationship.Type));
 
@@ -922,6 +926,13 @@ public static class PackageManifestGenerator
             var storyElements = IsWordprocessingStoryPart(work)
                 ? wordElements
                 : new List<XElement>();
+            var revisionCarriers = isWordPart
+                ? elements.Where(IsNativeRevisionCarrier).ToList()
+                : new List<XElement>();
+            nativeRevisionCarrierCount = checked(
+                nativeRevisionCarrierCount + revisionCarriers.Count);
+            hasStrictRevisionMarkup |= revisionCarriers.Any(element =>
+                element.Name.NamespaceName == StrictWordNamespace);
             isStrict |= isWordPart && wordElements.Any(element =>
                 element.Name.NamespaceName == StrictWordNamespace);
             paragraphCount += storyElements.Count(element => element.Name.LocalName == "p");
@@ -991,6 +1002,8 @@ public static class PackageManifestGenerator
         };
         return new PackageManifestFacts
         {
+            NativeRevisionCarrierCount = nativeRevisionCarrierCount,
+            HasStrictRevisionMarkup = hasStrictRevisionMarkup,
             MainDocumentUri = mainDocumentUri,
             IsStrictOoxml = isStrict,
             IsMacroEnabled = works.Any(work =>
@@ -1869,6 +1882,37 @@ public static class PackageManifestGenerator
         "numberingChange" or "pPrChange" or "rPrChange" or "sectPrChange"
         or "tblGridChange" or "tblPrChange" or "tblPrExChange" or "tcPrChange"
         or "trPrChange";
+
+    private static bool IsNativeRevisionCarrier(XElement element)
+    {
+        if (element.Name.NamespaceName == Word2010Namespace)
+        {
+            return element.Name.LocalName is "conflictIns" or "conflictDel"
+                or "customXmlConflictInsRangeStart" or "customXmlConflictInsRangeEnd"
+                or "customXmlConflictDelRangeStart" or "customXmlConflictDelRangeEnd";
+        }
+
+        if (!IsWordprocessingElement(element))
+            return false;
+
+        var localName = element.Name.LocalName;
+        if (localName is "delText" or "delInstrText")
+        {
+            return !element.Ancestors().Any(ancestor =>
+                IsWordprocessingElement(ancestor)
+                && ancestor.Name.LocalName is "del" or "moveFrom");
+        }
+
+        return localName is "ins" or "del" or "moveFrom" or "moveTo"
+            or "moveFromRangeStart" or "moveFromRangeEnd"
+            or "moveToRangeStart" or "moveToRangeEnd"
+            or "customXmlInsRangeStart" or "customXmlInsRangeEnd"
+            or "customXmlDelRangeStart" or "customXmlDelRangeEnd"
+            or "customXmlMoveFromRangeStart" or "customXmlMoveFromRangeEnd"
+            or "customXmlMoveToRangeStart" or "customXmlMoveToRangeEnd"
+            or "cellIns" or "cellDel" or "cellMerge"
+            || IsPropertyRevisionName(localName);
+    }
 
     private static bool IsCustomXmlRevisionRangeStart(string localName) => localName is
         "customXmlInsRangeStart" or "customXmlDelRangeStart"
