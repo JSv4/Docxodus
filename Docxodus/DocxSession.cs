@@ -12469,7 +12469,7 @@ public sealed partial class DocxSession : IDisposable
     /// topology. Every cached XDocument is then overlaid on its clone counterpart so edits that
     /// have not yet reached a part stream are represented in the checkpoint as well.
     /// </summary>
-    private byte[] SerializePackageCheckpoint() => SerializeCheckpointOf(_doc!);
+    internal byte[] SerializePackageCheckpoint() => SerializeCheckpointOf(_doc!);
 
     /// <summary>
     /// The opening package rendered through the same checkpoint pipeline the current side uses,

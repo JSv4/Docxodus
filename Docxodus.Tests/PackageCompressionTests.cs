@@ -49,6 +49,34 @@ public sealed class PackageCompressionTests
     }
 
     [Fact]
+    public void PKG521_AllPackageOutputs_PinZipEntryTimestampsToTheDosEpoch()
+    {
+        var epoch = new DateTime(1980, 1, 1, 0, 0, 0);
+        var input = LoadFixture(RegressionFixture);
+        using var session = new DocxSession(input);
+        var anchor = session.Project().AnchorIndex.Keys
+            .First(id => id.StartsWith("p:body:", StringComparison.Ordinal));
+        Assert.True(session.ReplaceText(anchor, "Deterministic timestamp probe.").Success);
+
+        using var saved = new ZipArchive(
+            new MemoryStream(session.Save()), ZipArchiveMode.Read);
+        Assert.All(saved.Entries, entry => Assert.Equal(epoch, entry.LastWriteTime.DateTime));
+
+        // The #521 flake lived here: the checkpoint clone used to restamp every entry
+        // with wall-clock time at 2-second DOS granularity, so back-to-back manifests of
+        // an untouched session could disagree on the raw package digest.
+        var checkpoint = session.SerializePackageCheckpoint();
+        using var cloned = new ZipArchive(
+            new MemoryStream(checkpoint), ZipArchiveMode.Read);
+        Assert.All(cloned.Entries, entry => Assert.Equal(epoch, entry.LastWriteTime.DateTime));
+        Assert.Equal(checkpoint, session.SerializePackageCheckpoint());
+
+        var first = session.GetPackageManifest();
+        var second = session.GetPackageManifest();
+        Assert.Equal(first.RawPackageBytesDigest.Value, second.RawPackageBytesDigest.Value);
+    }
+
+    [Fact]
     public void PKG332_Normalization_PreservesEveryEntryPayloadAndOpcStructure()
     {
         var input = LoadFixture(RegressionFixture);
