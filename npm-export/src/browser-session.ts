@@ -21,6 +21,7 @@ import {
   exportError,
   fromBrowserFailure,
 } from "./contracts.js";
+import { errorMessages } from "./diagnostics.js";
 
 const PLAYWRIGHT_VERSION = "1.57.0";
 const EXECUTABLE_BYTES_MAX = 1024 * 1024 * 1024;
@@ -90,6 +91,32 @@ interface HostOwnedBrowserIdentity {
 }
 
 const HOST_OWNED_BROWSERS = new WeakMap<Browser, HostOwnedBrowserIdentity>();
+
+/**
+ * Playwright's substituted banner plus the three markers it keys that substitution on, so the
+ * condition is still recognized when Chromium's own log reaches us unrewritten.
+ */
+const SANDBOX_UNAVAILABLE_MARKERS = Object.freeze([
+  "Chromium sandboxing failed",
+  "No usable sandbox!",
+  "crbug.com/357670",
+  "crbug.com/638180",
+]);
+
+/**
+ * A host that denies Chromium its process sandbox — Ubuntu 23.10 and later restrict unprivileged
+ * user namespaces through AppArmor by default — is a distinct and common launch failure, and one
+ * this runtime deliberately cannot resolve for the operator, since it never drops `chromiumSandbox`.
+ * Recognizing it is what lets the failure name the knob that is actually theirs.
+ *
+ * Exported so the predicate can be tested on a host where the condition cannot be created — CI
+ * permits the namespaces this detects the absence of.
+ */
+export function chromiumSandboxUnavailable(cause: unknown): boolean {
+  return errorMessages(cause).some(
+    (text) => SANDBOX_UNAVAILABLE_MARKERS.some((marker) => text.includes(marker)),
+  );
+}
 
 function timeoutError(phase: "browser_launch" | "wasm_initialization" | "pdf_print", pending: string) {
   return new DocxodusExportError(
@@ -372,13 +399,20 @@ async function launchBrowser(
         report: cause.report,
       });
     }
+    const sandboxUnavailable = chromiumSandboxUnavailable(cause);
     exportError(
       "browser_launch_failure",
       "browser_launch",
-      "Chromium could not be launched for export.",
-      explicit
-        ? "Verify browserExecutablePath and its shared-library dependencies."
-        : "Install @playwright/browser-chromium during deployment or provide browserExecutablePath.",
+      sandboxUnavailable
+        ? "Chromium could not be launched because this host denies its process sandbox."
+        : "Chromium could not be launched for export.",
+      sandboxUnavailable
+        ? "Permit unprivileged user namespaces on the render host, for example "
+          + "kernel.apparmor_restrict_unprivileged_userns=0 on Ubuntu 23.10 and later; "
+          + "the export runtime never launches Chromium without its process sandbox."
+        : explicit
+          ? "Verify browserExecutablePath and its shared-library dependencies."
+          : "Install @playwright/browser-chromium during deployment or provide browserExecutablePath.",
       { cause: cleanupFailure === undefined ? cause : new AggregateError([cause, cleanupFailure]) },
     );
   }

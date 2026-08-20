@@ -15,11 +15,11 @@ import {
   type ReviewProfile,
 } from "./index.js";
 import { canonicalJsonBytes } from "./canonical.js";
+import { humanDiagnostic } from "./diagnostics.js";
 import { writeDiagnosticNoReplace } from "./files.js";
 import { decodeStrictUtf8, strictJsonParse } from "./strict-json.js";
 
 const MAX_CONFIGURATION_BYTES = 1_048_576;
-const MAX_HUMAN_DIAGNOSTIC_CHARACTERS = 16_384;
 
 const HELP = `Usage:
   docxodus convert <input.docx> --to <html|pdf> --output <path>
@@ -120,22 +120,6 @@ async function readJson<T>(path: string | undefined, label: string): Promise<T |
   } finally {
     await handle?.close().catch(() => undefined);
   }
-}
-
-function humanError(error: unknown): string {
-  let message: string;
-  if (error instanceof DocxodusExportError) {
-    message = `${error.code} (${error.phase}): ${error.message}\nRemediation: ${error.remediation}`
-      + (error.detail ? `\nDetail: ${error.detail}` : "")
-      + (error.committedDestinations.length
-        ? `\nAlready committed: ${error.committedDestinations.join(", ")}`
-        : "");
-  } else {
-    message = error instanceof Error ? error.message : String(error);
-  }
-  return message.length <= MAX_HUMAN_DIAGNOSTIC_CHARACTERS
-    ? message
-    : `${message.slice(0, MAX_HUMAN_DIAGNOSTIC_CHARACTERS - 3)}...`;
 }
 
 export async function runCli(argv: readonly string[]): Promise<number> {
@@ -259,10 +243,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       try {
         await writeDiagnosticNoReplace(reportPath, canonicalJsonBytes(error.report));
       } catch (reportError) {
-        process.stderr.write(`Failed to preserve render report: ${humanError(reportError)}\n`);
+        process.stderr.write(`Failed to preserve render report: ${humanDiagnostic(reportError)}\n`);
       }
     }
-    process.stderr.write(`${humanError(error)}\n`);
+    process.stderr.write(`${humanDiagnostic(error)}\n`);
     return signalExitCode ?? (error instanceof DocxodusExportError ? 1 : 2);
   }
 }

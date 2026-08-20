@@ -19,6 +19,8 @@ import {
   convertDocxToPdf,
   DocxodusExportError,
 } from "../dist/index.js";
+import { chromiumSandboxUnavailable } from "../dist/browser-session.js";
+import { humanDiagnostic } from "../dist/diagnostics.js";
 import {
   prepareDestinations,
   publishNoReplace,
@@ -304,5 +306,98 @@ describe("hardening boundaries", { concurrency: false }, () => {
     });
     assert.equal(conflicting.status, 2);
     assert.match(conflicting.stderr.toString(), /conflicts/i);
+  });
+
+  test("human diagnostics render the cause chain, terminal-safe and newline-preserving", () => {
+    const launchLog = [
+      "browserType.launch: Target page, context or browser has been closed",
+      "Browser logs:",
+      "Chromium sandboxing failed!",
+      "================================",
+      "  - (preferred): Configure your environment to support sandboxing",
+      "================================",
+    ].join("\n");
+    const decorated = `\u001b[2m${launchLog}\u001b[22m\r\nCall\tlog:\u0000`;
+    const rendered = humanDiagnostic(new DocxodusExportError(
+      "browser_launch_failure",
+      "browser_launch",
+      "Chromium could not be launched because this host denies its process sandbox.",
+      "Permit unprivileged user namespaces on the render host.",
+      {
+        cause: new AggregateError([
+          new Error(decorated),
+          new Error("the private temporary directory could not be removed"),
+        ]),
+      },
+    ));
+    assert.match(rendered, /^browser_launch_failure \(browser_launch\): /);
+    assert.match(rendered, /^Cause: browserType\.launch: /m);
+    assert.ok(rendered.includes("Chromium sandboxing failed!"));
+    assert.match(rendered, /^Cause: the private temporary directory could not be removed$/m);
+    assert.match(rendered, /^Call log:$/m);
+    assert.equal(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(rendered), false);
+  });
+
+  test("cause rendering is bounded and terminates on cyclic chains", () => {
+    const inner = new Error("inner");
+    const outer = new Error("outer", { cause: inner });
+    inner.cause = outer;
+    const cyclic = humanDiagnostic(outer);
+    assert.equal(cyclic.match(/^Cause: /gm).length, 1);
+    assert.match(cyclic, /^Cause: inner$/m);
+
+    const bounded = humanDiagnostic(new Error("top", {
+      cause: new Error("x".repeat(64 * 1024)),
+    }));
+    assert.ok(bounded.length <= 16_384, `rendered ${bounded.length} characters`);
+    assert.ok(bounded.endsWith("..."));
+
+    const starved = humanDiagnostic(new DocxodusExportError(
+      "conversion_failure",
+      "conversion",
+      "m",
+      "r",
+      { detail: "d".repeat(64 * 1024), cause: new Error("the reason this failed") },
+    ));
+    assert.match(starved, /^Cause: the reason this failed$/m);
+  });
+
+  test("an unavailable Chromium process sandbox is recognized behind its cause chain", () => {
+    assert.equal(chromiumSandboxUnavailable(new Error("Chromium sandboxing failed!\nlogs")), true);
+    assert.equal(
+      chromiumSandboxUnavailable(new Error(
+        "[err] No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro",
+      )),
+      true,
+    );
+    assert.equal(
+      chromiumSandboxUnavailable(new AggregateError([
+        new Error("[err] see https://crbug.com/638180 for more information"),
+        new Error("cleanup failed"),
+      ])),
+      true,
+    );
+    assert.equal(chromiumSandboxUnavailable(new Error("ENOENT: no such file or directory")), false);
+    assert.equal(chromiumSandboxUnavailable(undefined), false);
+  });
+
+  test("CLI stderr carries the reason a Chromium launch failed", async () => {
+    const output = join(scratch, "launch-cause-must-not-exist.pdf");
+    const missing = join(scratch, "chromium-that-does-not-exist");
+    const failed = spawnSync(process.execPath, [
+      cliEntry,
+      "convert",
+      fixture,
+      "--to", "pdf",
+      "--output", output,
+      "--review-profile", "final",
+      "--comments", "hidden",
+      "--browser-executable", missing,
+    ], { cwd: packageRoot });
+    const stderr = failed.stderr.toString();
+    assert.equal(failed.status, 1, stderr);
+    assert.match(stderr, /^browser_launch_failure \(browser_launch\): /m);
+    assert.match(stderr, /^Cause: [\s\S]*ENOENT/m);
+    await assert.rejects(stat(output), { code: "ENOENT" });
   });
 });

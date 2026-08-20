@@ -88,9 +88,15 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
   fonts remain reported honestly; `strictFonts` therefore fails closed.
 - The `original` review profile remains fail-closed until issue #444 completes its projection.
 - Mixed-section and broader fidelity ratchets are extended by issues #440 and #443.
+- Chromium keeps its process sandbox, so the render host has to permit unprivileged user
+  namespaces. Ubuntu 23.10 and later restrict them through AppArmor by default; check with
+  `unshare --user --map-root-user true` and permit them with
+  `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. A launch that fails this way is
+  reported as its own condition rather than as a suspect executable.
 
 Failures are `DocxodusExportError` objects with stable code, phase, remediation, safe detail, and a
-structured failed report when materialization had begun.
+structured failed report when materialization had begun. The CLI additionally writes the underlying
+cause chain to stderr, which is where a Chromium launch diagnostic becomes readable.
 
 ## Framed host
 
