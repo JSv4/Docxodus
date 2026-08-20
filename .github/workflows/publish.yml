@@ -320,7 +320,28 @@ jobs:
           cd npm
           npm run build
 
-      - name: Publish to npm
+      - name: Version Node export companion
+        run: |
+          cd npm-export
+          npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
+          npm pkg set peerDependencies.docxodus=${{ steps.version.outputs.VERSION }}
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Install and test Node export companion
+        run: |
+          cd npm-export
+          npm ci
+          npx playwright-core install-deps chromium
+          npm test
+          npm run test:package-boundary
+
+      - name: Publish browser/WASM package
         run: |
           cd npm
+          npm publish --access public
+
+      - name: Publish Node export companion
+        run: |
+          cd npm-export
+          npm pkg delete devDependencies.docxodus
           npm publish --access public

@@ -541,9 +541,11 @@ directory where the platform provides a durability primitive and removes the pri
 after the target link exists. A filesystem without safe link semantics returns `filesystem_failure`
 instead of falling back to a check-then-rename race. JSON diagnostics go to the report; human
 diagnostics go to stderr; PDF/HTML bytes never go through stdout implicitly. Each destination has
-atomic no-replace visibility, but several destinations can be partially visible after a crash or
-later commit failure; the returned error lists committed destinations and the CLI never claims
-multi-file transactionality.
+atomic no-replace visibility. If a later commit fails, the publisher rolls back every earlier
+destination whose stable identity and content still prove ownership, fsyncs the affected parents,
+and reports any destination it cannot safely remove. A process or machine crash can still expose a
+prefix of links; callers requiring crash-atomic multi-file visibility publish a fresh containing
+directory as `DeliveryBundleService` does.
 
 The no-replace contract prevents accidental overwrite and path aliases; it is not a defense against
 a malicious same-identity process replacing ancestor directories between path operations. Secure

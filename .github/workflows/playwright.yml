@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -12,7 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The full single-worker WASM matrix plus the pinned-Chromium export suite now exceeds the
+    # former 25-minute ceiling on hosted runners. Keep a bounded cushion so assertion failures
+    # still surface instead of the job being canceled before export artifacts are produced.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -37,9 +39,25 @@ jobs:
       - name: Build npm package (WASM + TypeScript)
         run: cd npm && npm run build
 
+      - name: Install Node export companion dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: cd npm-export && npm ci --ignore-scripts
+
       - name: Install Playwright browsers
         run: cd npm && npx playwright install --with-deps chromium firefox
 
+      # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
+      # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
+      # default, which fails every launched-browser export with browser_launch_failure.
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Run Node/CLI PDF export tests
+        run: cd npm-export && npm test
+
+      # Run the long editor matrix after the export evidence exists. The final upload is `always()`,
+      # so an unrelated late regression cannot suppress the HTML/PDF artifacts under review.
       - name: Run Playwright tests
         run: cd npm && npm test
 
@@ -51,4 +69,5 @@ jobs:
           path: |
             npm/playwright-report/
             npm/test-results/
+            npm-export/test-artifacts/
           retention-days: 7
