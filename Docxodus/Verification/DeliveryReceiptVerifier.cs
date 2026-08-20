@@ -195,9 +195,13 @@ public static class DeliveryChangeReceiptVerifier
             payload.DeliveredDocument,
             payload.Transactions,
             payload.Lineage);
+        var artifactDigestMemo = new Dictionary<string, VerificationDigest>(
+            StringComparer.Ordinal);
         bool contractValid = ValidateContract(
-            payload, receiptDigest, artifactBytes, lineageValidation, limits, findings);
-        var artifactResults = VerifyArtifacts(payload.Artifacts, artifactBytes, limits, findings);
+            payload, receiptDigest, artifactBytes, lineageValidation, limits,
+            artifactDigestMemo, findings);
+        var artifactResults = VerifyArtifacts(
+            payload.Artifacts, artifactBytes, limits, artifactDigestMemo, findings);
         bool artifactsValid = artifactResults.All(result => result.Status is
             DeliveryArtifactVerificationStatus.Verified
             or DeliveryArtifactVerificationStatus.Unavailable);
@@ -302,6 +306,7 @@ public static class DeliveryChangeReceiptVerifier
         IReadOnlyDictionary<string, byte[]> artifactBytes,
         DeliveryLineageValidationResult lineageValidation,
         DeliveryReceiptLimits limits,
+        IDictionary<string, VerificationDigest> artifactDigestMemo,
         ICollection<string> findings)
     {
         bool valid = true;
@@ -496,7 +501,8 @@ public static class DeliveryChangeReceiptVerifier
             .GroupBy(artifact => artifact.ArtifactId, StringComparer.Ordinal)
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
-        valid &= ValidateRequiredCleanDocx(payload, artifactBytes, limits, findings);
+        valid &= ValidateRequiredCleanDocx(
+            payload, artifactBytes, limits, artifactDigestMemo, findings);
         valid &= ValidateSemanticBindings(
             payload, artifactsById, artifactBytes, lineageValidation, limits, findings);
         foreach (var evidence in payload.Evidence)
@@ -583,13 +589,8 @@ public static class DeliveryChangeReceiptVerifier
         return valid;
     }
 
-    private static string ExpectedEvidenceSchema(DeliveryEvidenceKind kind) => kind switch
-    {
-        DeliveryEvidenceKind.ValidationResult => DeliverableVerificationResult.SchemaId,
-        DeliveryEvidenceKind.RedlineReversibility => RedlineReversibilityProof.SchemaId,
-        DeliveryEvidenceKind.SemanticChangeSet => string.Empty,
-        _ => string.Empty,
-    };
+    private static string ExpectedEvidenceSchema(DeliveryEvidenceKind kind) =>
+        DeliveryReceiptContract.EvidenceSchemaFor(kind) ?? string.Empty;
 
     private static bool IsExactEvidence(DeliveryEvidenceKind kind, ReadOnlySpan<byte> bytes) =>
         kind switch
@@ -1010,7 +1011,8 @@ public static class DeliveryChangeReceiptVerifier
         foreach (var anchor in anchors.EnumerateArray())
         {
             if (anchor.ValueKind != JsonValueKind.Object
-                || anchor.EnumerateObject().Count() != 4
+                || anchor.EnumerateObject().Count()
+                    != DeliveryReceiptContract.EditResultAnchorPropertyCount
                 || !TryGetRequiredString(anchor, "id", out var id)
                 || !TryGetRequiredString(anchor, "kind", out var kind)
                 || !TryGetRequiredString(anchor, "scope", out var scope)
@@ -1623,40 +1625,17 @@ public static class DeliveryChangeReceiptVerifier
             return true;
         if (privacyProfile == DeliveryReceiptPrivacyProfile.HashOnly)
             return IsDigestToken(value);
-        var prefix = $"{label}; ";
-        const string separator = " characters; ";
-        if (!value.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        int separatorIndex = value.IndexOf(separator, prefix.Length, StringComparison.Ordinal);
-        return separatorIndex > prefix.Length
-            && int.TryParse(
-                value.AsSpan(prefix.Length, separatorIndex - prefix.Length),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture,
-                out var count)
-            && count >= 0
-            && IsDigestToken(value[(separatorIndex + separator.Length)..]);
+        return DeliveryReceiptContract.IsRedactedFreeText(value, label);
     }
 
-    private static bool IsDigestToken(string value)
-    {
-        if (value.Length != 71 || !value.StartsWith("sha256:", StringComparison.Ordinal))
-            return false;
-        foreach (var character in value.AsSpan(7))
-        {
-            if (character is not (>= '0' and <= '9')
-                and not (>= 'a' and <= 'f'))
-            {
-                return false;
-            }
-        }
-        return true;
-    }
+    private static bool IsDigestToken(string value) =>
+        DeliveryReceiptContract.IsSha256DigestToken(value);
 
     private static bool ValidateRequiredCleanDocx(
         DeliveryChangeReceiptPayload payload,
         IReadOnlyDictionary<string, byte[]> artifactBytes,
         DeliveryReceiptLimits limits,
+        IDictionary<string, VerificationDigest> artifactDigestMemo,
         ICollection<string> findings)
     {
         var cleanArtifacts = payload.Artifacts
@@ -1680,9 +1659,7 @@ public static class DeliveryChangeReceiptVerifier
             || !DeliveryReceiptValidation.DigestEquals(
                 clean.PackageDigest, payload.DeliveredDocument.RawPackageBytesDigest)
             || !DeliveryReceiptValidation.DigestEquals(
-                clean.Digest, payload.DeliveredDocument.RawPackageBytesDigest)
-            || !DeliveryReceiptValidation.DigestEquals(
-                clean.Digest, DeliveryReceiptCanonicalJson.Digest(cleanBytes)))
+                clean.Digest, payload.DeliveredDocument.RawPackageBytesDigest))
         {
             findings.Add("clean_docx_delivery_mismatch");
             return false;
@@ -1692,13 +1669,14 @@ public static class DeliveryChangeReceiptVerifier
         {
             var actualManifest = PackageManifestGenerator.Generate(
                 cleanBytes, limits.CleanDocxManifestOptions);
+            var actualIdentity = DeliveryDocumentIdentity.FromManifest(
+                actualManifest, clean.DocumentVersion.Value);
+            artifactDigestMemo[clean.ArtifactId] = actualIdentity.RawPackageBytesDigest;
             if (!actualManifest.IsValid
                 || !string.Equals(actualManifest.PackageKind, "opc", StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(actualManifest.Facts.MainDocumentUri)
                 || !DeliveryReceiptLineageValidator.DocumentEquals(
-                    DeliveryDocumentIdentity.FromManifest(
-                        actualManifest, clean.DocumentVersion.Value),
-                    payload.DeliveredDocument))
+                    actualIdentity, payload.DeliveredDocument))
             {
                 findings.Add("clean_docx_delivery_mismatch");
                 return false;
@@ -1933,6 +1911,7 @@ public static class DeliveryChangeReceiptVerifier
         IReadOnlyList<DeliveryArtifact> artifacts,
         IReadOnlyDictionary<string, byte[]> artifactBytes,
         DeliveryReceiptLimits limits,
+        IReadOnlyDictionary<string, VerificationDigest> artifactDigestMemo,
         ICollection<string> findings)
     {
         var results = new List<DeliveryArtifactVerification>();
@@ -2017,7 +1996,10 @@ public static class DeliveryChangeReceiptVerifier
                 continue;
             }
 
-            var actualDigest = DeliveryReceiptCanonicalJson.Digest(bytes);
+            var actualDigest = artifactDigestMemo.TryGetValue(
+                    artifact.ArtifactId, out var memoized)
+                ? memoized
+                : DeliveryReceiptCanonicalJson.Digest(bytes);
             var status = bytes.LongLength != artifact.ByteLength
                 ? DeliveryArtifactVerificationStatus.LengthMismatch
                 : !DeliveryReceiptValidation.DigestEquals(artifact.Digest, actualDigest)
@@ -2214,27 +2196,19 @@ public static class DeliveryChangeReceiptVerifier
     private static bool CitationCoordinatesEqual(
         DeliveryPageCitation receiptCitation,
         PageCitation projected) =>
-        string.Equals(receiptCitation.AnchorId, projected.AnchorId, StringComparison.Ordinal)
-        && receiptCitation.DocumentVersion == projected.DocumentVersion
-        && string.Equals(receiptCitation.RendererFingerprint,
-            projected.RendererFingerprint, StringComparison.Ordinal)
-        && receiptCitation.Pages.SequenceEqual(projected.Pages)
-        && receiptCitation.Fragments.SequenceEqual(projected.Fragments);
+        DeliveryReceiptContract.CitationCoordinatesEqual(
+            projected,
+            receiptCitation.AnchorId,
+            receiptCitation.DocumentVersion,
+            receiptCitation.RendererFingerprint,
+            receiptCitation.Pages,
+            receiptCitation.Fragments);
 
     private static void ValidateDocument(DeliveryDocumentIdentity document) =>
         DeliveryReceiptValidation.ValidateDocument(document);
 
-    private static string ScopeFromAnchor(string anchorId)
-    {
-        var first = anchorId.IndexOf(':');
-        var second = first < 0 ? -1 : anchorId.IndexOf(':', first + 1);
-        if (first <= 0 || second <= first + 1 || second == anchorId.Length - 1)
-        {
-            throw new DeliveryReceiptValidationException(
-                "invalid_anchor_id", "Citation anchor is not a canonical kind:scope:unid value.");
-        }
-        return anchorId[(first + 1)..second];
-    }
+    private static string ScopeFromAnchor(string anchorId) =>
+        DeliveryReceiptContract.ScopeFromAnchor(anchorId);
 
     private static bool IsMalformedReceiptException(Exception exception) =>
         exception is JsonException

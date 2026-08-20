@@ -232,10 +232,7 @@ public sealed class DeliveryTransactionContribution
 
     internal static void ValidateFingerprint(string fingerprint)
     {
-        if (fingerprint is null || fingerprint.Length != 71
-            || !fingerprint.StartsWith("sha256:", StringComparison.Ordinal)
-            || fingerprint.AsSpan(7).ToString().Any(
-                c => !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))))
+        if (!DeliveryReceiptContract.IsSha256DigestToken(fingerprint))
         {
             throw new DeliveryReceiptValidationException(
                 "invalid_request_fingerprint",

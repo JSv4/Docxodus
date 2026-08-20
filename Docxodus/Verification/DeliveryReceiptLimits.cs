@@ -63,15 +63,8 @@ public sealed record DeliveryReceiptLimits
             throw new ArgumentOutOfRangeException(name);
     }
 
-    private static PackageManifestOptions CloneManifestOptions(PackageManifestOptions value) => new()
-    {
-        MaxEntryCount = value.MaxEntryCount,
-        MaxEntryUncompressedBytes = value.MaxEntryUncompressedBytes,
-        MaxTotalUncompressedBytes = value.MaxTotalUncompressedBytes,
-        MaxXmlPartBytes = value.MaxXmlPartBytes,
-        MaxCompressionRatio = value.MaxCompressionRatio,
-        MaxUriLength = value.MaxUriLength,
-    };
+    private static PackageManifestOptions CloneManifestOptions(PackageManifestOptions value) =>
+        value with { };
 }
 
 /// <summary>Options for portable receipt verification.</summary>

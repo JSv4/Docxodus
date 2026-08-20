@@ -263,6 +263,5 @@ internal static class DeliveryReceiptLineageValidator
     }
 
     private static bool OptionalDigestEquals(VerificationDigest? left, VerificationDigest? right) =>
-        left is null && right is null
-        || DeliveryReceiptValidation.DigestEquals(left, right);
+        DeliveryReceiptValidation.OptionalDigestEquals(left, right);
 }

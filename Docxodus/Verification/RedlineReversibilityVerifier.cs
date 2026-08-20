@@ -1549,9 +1549,7 @@ public static class RedlineReversibilityVerifier
     };
 
     private static bool DigestEquals(VerificationDigest? left, VerificationDigest? right) =>
-        left is not null && right is not null
-        && string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal)
-        && string.Equals(left.Value, right.Value, StringComparison.Ordinal);
+        DeliveryReceiptValidation.DigestEquals(left, right);
 
     private static DocxSession OpenProofSession(
         byte[] bytes,

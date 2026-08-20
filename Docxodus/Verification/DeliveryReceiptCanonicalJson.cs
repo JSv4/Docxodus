@@ -632,6 +632,11 @@ internal static class DeliveryReceiptValidation
         && string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal)
         && string.Equals(left.Value, right.Value, StringComparison.Ordinal);
 
+    /// <summary>Digest equality where mutual absence counts as equal — for optional
+    /// identity components whose absence is itself part of the identity.</summary>
+    public static bool OptionalDigestEquals(VerificationDigest? left, VerificationDigest? right) =>
+        (left is null && right is null) || DigestEquals(left, right);
+
     public static string Invariant(long value) => value.ToString(CultureInfo.InvariantCulture);
 }
 
@@ -726,18 +731,23 @@ public static class DeliveryChangeReceiptSerializer
         DeliveryReceiptLimits limits)
     {
         var canonicalPayload = SerializePayload(payload, limits);
+        var receiptDigest = DeliveryReceiptCanonicalJson.Digest(canonicalPayload);
         var receipt = new DeliveryChangeReceipt
         {
             Payload = payload,
-            ReceiptDigest = DeliveryReceiptCanonicalJson.Digest(canonicalPayload),
+            ReceiptDigest = receiptDigest,
         };
+        // The canonical envelope is exactly {"payload":<canonicalPayload>,
+        // "receiptDigest":{"algorithm":…,"value":…}} with ASCII digest fields, so its
+        // length is arithmetic; re-serializing the whole envelope only to measure it
+        // doubled the largest allocation of a Build.
+        long envelopeLength = "{\"payload\":".Length
+            + canonicalPayload.LongLength
+            + ",\"receiptDigest\":{\"algorithm\":\"\",\"value\":\"\"}}".Length
+            + receiptDigest.Algorithm.Length
+            + receiptDigest.Value.Length;
         DeliveryReceiptResourceBudget.Bytes(
-            DeliveryReceiptCanonicalJson.SerializeCanonicalBounded(
-                receipt,
-                DeliveryReceiptCanonicalJson.JsonContext.DeliveryChangeReceipt,
-                limits,
-                limits.MaxReceiptJsonBytes,
-                "receipt_resource_limit").LongLength,
+            envelopeLength,
             limits.MaxReceiptJsonBytes,
             "receipt_resource_limit",
             "Receipt JSON");

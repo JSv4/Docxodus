@@ -31,6 +31,8 @@ public sealed class DeliveryChangeReceiptBuilder
     private readonly Dictionary<string, DeliveryArtifact> _artifacts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, byte[]> _artifactBytes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PageMap> _validatedPageMaps = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PackageManifest> _cleanDocxManifests =
+        new(StringComparer.Ordinal);
     private readonly Dictionary<(string ArtifactId, string AnchorId), PageCitation>
         _pageMapProjections = new();
     private readonly List<DeliveryPageCitationInput> _citations = new();
@@ -689,6 +691,8 @@ public sealed class DeliveryChangeReceiptBuilder
 
     private static void WriteAnchor(Utf8JsonWriter writer, Anchor anchor)
     {
+        // Exactly DeliveryReceiptContract.EditResultAnchorPropertyCount properties;
+        // the verifier re-reads anchors with that arity.
         writer.WriteStartObject();
         writer.WriteString("id", anchor.Id);
         writer.WriteString("kind", anchor.Kind);
@@ -894,12 +898,14 @@ public sealed class DeliveryChangeReceiptBuilder
                 "artifact_resource_limit", "Receipt artifact count limit exceeded.");
         }
         ValidateArtifactResourceLimits(input);
-        var artifact = BuildArtifact(input);
+        var artifact = BuildArtifact(input, out var cleanDocxManifest);
         if (!_artifacts.TryAdd(artifact.ArtifactId, artifact))
         {
             throw new DeliveryReceiptValidationException(
                 "duplicate_artifact_id", $"Artifact id '{artifact.ArtifactId}' is duplicated.");
         }
+        if (cleanDocxManifest is not null)
+            _cleanDocxManifests[artifact.ArtifactId] = cleanDocxManifest;
         if (input.Bytes is not null)
         {
             _totalArtifactBytes = checked(_totalArtifactBytes + input.Bytes.LongLength);
@@ -944,8 +950,14 @@ public sealed class DeliveryChangeReceiptBuilder
         }
     }
 
-    private DeliveryArtifact BuildArtifact(DeliveryArtifactInput input)
+    private DeliveryArtifact BuildArtifact(DeliveryArtifactInput input) =>
+        BuildArtifact(input, out _);
+
+    private DeliveryArtifact BuildArtifact(
+        DeliveryArtifactInput input,
+        out PackageManifest? cleanDocxManifest)
     {
+        cleanDocxManifest = null;
         if (!Enum.IsDefined(input.Role) || !Enum.IsDefined(input.Availability))
             throw new DeliveryReceiptValidationException("invalid_artifact_enum", "Unknown artifact value.");
         var artifactId = DeliveryReceiptValidation.RequireNonBlank(
@@ -1001,6 +1013,7 @@ public sealed class DeliveryChangeReceiptBuilder
                         "Caller-supplied clean DOCX identity does not match recomputed bytes.");
                 }
                 document = actual;
+                cleanDocxManifest = manifest;
             }
             if (document is not null
                 && input.Role is DeliveryArtifactRole.CleanDocx or DeliveryArtifactRole.ReviewDocx
@@ -1150,8 +1163,10 @@ public sealed class DeliveryChangeReceiptBuilder
                 "clean_docx_delivery_mismatch",
                 "The clean DOCX artifact must be available and exactly match DeliveredDocument.");
         }
-        var actualManifest = PackageManifestGenerator.Generate(
-            cleanBytes, _limits.CleanDocxManifestOptions);
+        var actualManifest = _cleanDocxManifests.TryGetValue(
+                clean.ArtifactId, out var cachedManifest)
+            ? cachedManifest
+            : PackageManifestGenerator.Generate(cleanBytes, _limits.CleanDocxManifestOptions);
         if (!actualManifest.IsValid
             || !string.Equals(actualManifest.PackageKind, "opc", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(actualManifest.Facts.MainDocumentUri)
@@ -1378,17 +1393,14 @@ public sealed class DeliveryChangeReceiptBuilder
         }
     }
 
-    private static string ExpectedEvidenceSchema(DeliveryEvidenceKind kind) => kind switch
-    {
-        DeliveryEvidenceKind.ValidationResult => DeliverableVerificationResult.SchemaId,
-        DeliveryEvidenceKind.RedlineReversibility => RedlineReversibilityProof.SchemaId,
-        DeliveryEvidenceKind.SemanticChangeSet =>
-            throw new DeliveryReceiptValidationException(
+    private static string ExpectedEvidenceSchema(DeliveryEvidenceKind kind) =>
+        DeliveryReceiptContract.EvidenceSchemaFor(kind)
+        ?? throw (kind == DeliveryEvidenceKind.SemanticChangeSet
+            ? new DeliveryReceiptValidationException(
                 "semantic_evidence_requires_typed_factory",
-                "Semantic evidence must use the typed #457 binding."),
-        _ => throw new DeliveryReceiptValidationException(
-            "unknown_evidence_kind", "Unknown evidence kind."),
-    };
+                "Semantic evidence must use the typed #457 binding.")
+            : new DeliveryReceiptValidationException(
+                "unknown_evidence_kind", "Unknown evidence kind."));
 
     private static bool IsExactEvidence(DeliveryEvidenceKind kind, ReadOnlySpan<byte> bytes) =>
         kind switch
@@ -1565,14 +1577,11 @@ public sealed class DeliveryChangeReceiptBuilder
     }
 
     private static bool CitationCoordinatesEqual(PageCitation left, PageCitation right) =>
-        string.Equals(left.AnchorId, right.AnchorId, StringComparison.Ordinal)
+        DeliveryReceiptContract.CitationCoordinatesEqual(
+            right, left.AnchorId, left.DocumentVersion, left.RendererFingerprint,
+            left.Pages, left.Fragments)
         && left.Availability == right.Availability
-        && left.UnavailableReason == right.UnavailableReason
-        && left.DocumentVersion == right.DocumentVersion
-        && string.Equals(left.RendererFingerprint, right.RendererFingerprint,
-            StringComparison.Ordinal)
-        && left.Pages.SequenceEqual(right.Pages)
-        && left.Fragments.SequenceEqual(right.Fragments);
+        && left.UnavailableReason == right.UnavailableReason;
 
     private DeliveryTextEvidence TextEvidence(string value, string structuralSummary)
     {
@@ -1595,7 +1604,7 @@ public sealed class DeliveryChangeReceiptBuilder
         {
             DeliveryReceiptPrivacyProfile.HashOnly => digest,
             DeliveryReceiptPrivacyProfile.HashAndSummary =>
-                $"{label}; {value.Length.ToString(CultureInfo.InvariantCulture)} characters; {digest}",
+                DeliveryReceiptContract.RedactedFreeText(label, value.Length, digest),
             _ => value,
         };
     }
@@ -2030,14 +2039,7 @@ public sealed class DeliveryChangeReceiptBuilder
     private static string ScopeFromAnchor(string anchorId)
     {
         DeliveryReceiptValidation.RequireNonBlank(anchorId, "anchor id", 4096);
-        var first = anchorId.IndexOf(':');
-        var second = first < 0 ? -1 : anchorId.IndexOf(':', first + 1);
-        if (first <= 0 || second <= first + 1 || second == anchorId.Length - 1)
-        {
-            throw new DeliveryReceiptValidationException(
-                "invalid_anchor_id", $"'{anchorId}' is not a canonical kind:scope:unid anchor.");
-        }
-        return anchorId[(first + 1)..second];
+        return DeliveryReceiptContract.ScopeFromAnchor(anchorId);
     }
 
     private static JsonElement ParseCanonical(byte[] canonical)
