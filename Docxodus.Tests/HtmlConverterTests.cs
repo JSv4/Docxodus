@@ -792,8 +792,19 @@ namespace OxPt
                         .First(note => (string)note.Attribute(w + "type") == "continuationSeparator");
                     normal.Add(new XElement(w + "p", new XElement(w + "r",
                         new XElement(w + "t", "NORMAL-SEPARATOR-TOKEN"))));
-                    continuation.Add(new XElement(w + "p", new XElement(w + "r",
-                        new XElement(w + "t", "CONTINUATION-SEPARATOR-TOKEN"))));
+                    // A separator story is cloned onto every note band, so any
+                    // identity or local target it carries would be duplicated
+                    // across pages. Author both kinds here and assert they are
+                    // stripped from the rendered template.
+                    continuation.Add(new XElement(w + "p",
+                        new XElement(w + "bookmarkStart",
+                            new XAttribute(w + "id", "77"),
+                            new XAttribute(w + "name", "SEPARATOR-BOOKMARK")),
+                        new XElement(w + "bookmarkEnd", new XAttribute(w + "id", "77")),
+                        new XElement(w + "hyperlink",
+                            new XAttribute(w + "anchor", "SEPARATOR-BOOKMARK"),
+                            new XElement(w + "r",
+                                new XElement(w + "t", "CONTINUATION-SEPARATOR-TOKEN")))));
                     footnotes.Root.Add(new XElement(w + "footnote",
                         new XAttribute(w + "type", "continuationNotice"),
                         new XAttribute(w + "id", "999"),
@@ -822,7 +833,18 @@ namespace OxPt
                     Assert.DoesNotContain(registry.Elements(), element =>
                         (string)element.Attribute("data-footnote-id") == "999");
                     Assert.DoesNotContain("MUST-NOT-BECOME-A-NOTE", registry.Value);
-                    Assert.Contains("data-footnote-separator=\"continuation\"", html.ToString());
+
+                    // No identity and no local target survives on a repeated story,
+                    // and nothing in it is editable.
+                    var repeated = separators[1].DescendantsAndSelf().ToList();
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName is "id" or "name"
+                            or "data-anchor" or "data-source-anchor-id"));
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName == "href"
+                            && attribute.Value.StartsWith("#", StringComparison.Ordinal)));
+                    Assert.All(repeated, element =>
+                        Assert.Equal("false", (string)element.Attribute("contenteditable")));
                 }
             }
         }

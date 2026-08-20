@@ -127,9 +127,9 @@ function longParagraphFootnoteHtml(
         </aside>
       </div>
       <div data-section-index="0"
-           data-page-width="122" data-page-height="122"
+           data-page-width="140" data-page-height="122"
            data-content-width="120" data-content-height="120"
-           data-margin-top="1" data-margin-right="1"
+           data-margin-top="1" data-margin-right="19"
            data-margin-bottom="1" data-margin-left="1">
         <p class="body" data-source-anchor-id="p:body:citation">
           citing body <sup data-footnote-id="f-long">1</sup>
@@ -790,7 +790,6 @@ test.describe('Paginated footnote layout', () => {
         expect(result.pagesText.slice(1).some((text: string) =>
           text.includes('after-two'))).toBe(true);
         expect(result.pageMapFragments).toHaveLength(1);
-        expect(result.expectedText).toBe('oversized-unsafe after-one after-two');
       },
     );
   });

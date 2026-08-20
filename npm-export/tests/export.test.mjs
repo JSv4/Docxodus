@@ -690,14 +690,16 @@ describe("@docxodus/export", { concurrency: false }, () => {
       paragraphFragments.map((_, index) => index),
     );
 
+    // Match on word boundaries, never substrings: `footnote-1-1-1` occurs inside
+    // `footnote-1-1-10`, so a bare indexOf reports every low-numbered word twice.
     let priorPdfOffset = -1;
     for (const index of [1, 2, 150, 300, 450, 599, 600]) {
       const token = `footnote-1-1-${index}`;
       assert.equal(result.html.match(new RegExp(`\\b${token}\\b`, "g"))?.length, 1);
-      const pdfOffset = inspection.searchableText.indexOf(token);
-      assert.ok(pdfOffset > priorPdfOffset, `${token} missing or out of order in PDF text`);
-      assert.equal(inspection.searchableText.indexOf(token, pdfOffset + token.length), -1);
-      priorPdfOffset = pdfOffset;
+      const pdfMatches = [...inspection.searchableText.matchAll(new RegExp(`\\b${token}\\b`, "g"))];
+      assert.equal(pdfMatches.length, 1, `${token} must appear exactly once in the PDF text`);
+      assert.ok(pdfMatches[0].index > priorPdfOffset, `${token} out of order in PDF text`);
+      priorPdfOffset = pdfMatches[0].index;
     }
 
     await writeFile(join(successArtifacts, "long-footnote.pdf"), result.pdf);

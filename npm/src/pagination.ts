@@ -2609,6 +2609,22 @@ export class PaginationEngine {
   }
 
   /**
+   * Where a note measurement tree is attached.
+   *
+   * A note band is reserved from a measurement and then painted; if the two
+   * happen under different inherited typography the painted notes overflow the
+   * reserve, which is the invisible clipping this engine exists to avoid. The
+   * registry lives in the staging tree but a band paints inside the output
+   * container, so measure there. The host is never a page box, so a page's
+   * `zoom` cannot scale a reserve that is accounted for in unscaled points.
+   */
+  private noteMeasurementHost(): HTMLElement {
+    return this.containerElement.isConnected
+      ? this.containerElement
+      : this.stagingElement;
+  }
+
+  /**
    * Measures the height of footnotes for given IDs (in points).
    * Creates a temporary container to measure the footnotes.
    * @param footnoteIds - IDs of footnotes to measure
@@ -2623,6 +2639,12 @@ export class PaginationEngine {
   ): number {
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length === 0 && !hasContinuation) {
+      return 0;
+    }
+    // Mirror addPageFootnotes: with no registry and nothing carried, no band is
+    // painted, so reserving the separator's height would shrink every page's
+    // body for a document whose note references resolve to nothing.
+    if (this.footnoteRegistry.size === 0 && !hasContinuation) {
       return 0;
     }
 
@@ -2661,7 +2683,7 @@ export class PaginationEngine {
     }
 
     // Append to staging for measurement
-    this.stagingElement.appendChild(measureContainer);
+    this.noteMeasurementHost().appendChild(measureContainer);
     try {
       return pxToPt(measureContainer.getBoundingClientRect().height);
     } finally {
@@ -2700,7 +2722,7 @@ export class PaginationEngine {
       throw new Error("Footnote continuation is missing its content shell");
     }
     measureContainer.appendChild(wrapper);
-    this.stagingElement.appendChild(measureContainer);
+    this.noteMeasurementHost().appendChild(measureContainer);
 
     try {
       for (let index = 0; index < continuation.remainingElements.length; index++) {
@@ -2744,10 +2766,14 @@ export class PaginationEngine {
               head.remove();
             }
           }, {
-            emergencyGraphemeBreaks: true,
+            // Both fallbacks below cut where ordinary line breaking would not,
+            // so they are only ever right for an element that owns the whole
+            // band: if this page already carries earlier content, a paragraph
+            // that will not start here belongs intact in the next note band.
+            emergencyGraphemeBreaks: fitting.length === 0,
             // A continuation page owns the full note band. If even one legal
             // grapheme is taller than it, clip only that unit and keep draining.
-            forceFirstOnNoFit: true,
+            forceFirstOnNoFit: fitting.length === 0,
           });
         }
         if (split?.kind === "split") {
@@ -2808,7 +2834,7 @@ export class PaginationEngine {
     this.appendFootnoteSeparator(layoutContext, false);
     const attachedFootnote = footnoteElement.cloneNode(true) as HTMLElement;
     layoutContext.appendChild(attachedFootnote);
-    this.stagingElement.appendChild(layoutContext);
+    this.noteMeasurementHost().appendChild(layoutContext);
 
     // A second live tree represents the exact already-packed page payload plus
     // an initially empty partial item. Candidates are appended once and layout
@@ -2846,7 +2872,7 @@ export class PaginationEngine {
       throw new Error("Footnote is missing its content shell");
     }
     measureContainer.appendChild(measuredPartial);
-    this.stagingElement.appendChild(measureContainer);
+    this.noteMeasurementHost().appendChild(measureContainer);
 
     // Get child elements (paragraphs) of the footnote content.
     //
@@ -2895,8 +2921,12 @@ export class PaginationEngine {
               head.remove();
             }
           }, {
-            emergencyGraphemeBreaks: true,
-            forceFirstOnNoFit: forceProgress,
+            // Both fallbacks cut where ordinary line breaking would not, so they
+            // are only ever right for an element that owns the whole band: with
+            // earlier siblings already packed here, a paragraph that will not
+            // start belongs intact in the next note band.
+            emergencyGraphemeBreaks: fits.length === 0 && forceProgress,
+            forceFirstOnNoFit: fits.length === 0 && forceProgress,
           })
           : null;
         if (split?.kind === "split") {
@@ -3462,12 +3492,40 @@ export class PaginationEngine {
           pageSectionIndex,
           pageInSection(),
         );
-        if (currentFootnoteHeight > ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO) {
-          // Pack an oversized carried/queued payload before admitting another
-          // body block. finishPage partitions it into visible note-only bands.
-          finishPage(block.sectionIndex);
-          i--;
-          continue;
+        const ownerMaxFootnoteArea = ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+        if (currentFootnoteHeight > ownerMaxFootnoteArea) {
+          // A queue of whole notes larger than the band does not entitle it to
+          // the whole page: the band is capped and the rest of the page still
+          // belongs to body text. Keep the notes that fit here, defer the rest,
+          // and only fall back to a note-owned page when not even one note fits
+          // — that case needs the splitting finishPage performs.
+          const fittingIds: string[] = [];
+          let fittingHeight = 0;
+          if ((currentContinuation?.remainingElements.length ?? 0) === 0
+              && currentPartialFootnotes.length === 0) {
+            for (const footnoteId of currentFootnoteIds) {
+              this.checkpoint();
+              const candidateHeight = this.measureFootnotesHeight(
+                [...fittingIds, footnoteId],
+                ownerDimensions.contentWidth,
+              );
+              if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT > ownerMaxFootnoteArea) break;
+              fittingIds.push(footnoteId);
+              fittingHeight = candidateHeight;
+            }
+          }
+          if (fittingIds.length > 0) {
+            deferredFootnoteIds = [
+              ...currentFootnoteIds.slice(fittingIds.length),
+              ...deferredFootnoteIds,
+            ];
+            currentFootnoteIds = fittingIds;
+            currentFootnoteHeight = fittingHeight;
+          } else {
+            finishPage(block.sectionIndex);
+            i--;
+            continue;
+          }
         }
       }
       const blockDimensions = dimensionsFor(block.sectionIndex);
@@ -3677,6 +3735,14 @@ export class PaginationEngine {
             maxFootnoteArea,
             effectiveContentHeight - bodyContentUsed - blockSpaceWithoutFootnotes
           );
+          // Deferring a note costs a page turn, and it only buys anything if the
+          // next page's band is larger than what this page can already offer.
+          // When this page already offers the maximum band, a note that cannot
+          // start here cannot start there either: keep the established clipped
+          // fallback on the citing page rather than evacuating it.
+          const nextPageMaxFootnoteArea =
+            freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+          const deferralCannotHelp = availableForFootnotes >= nextPageMaxFootnoteArea;
 
           // Try to fit as much of each new footnote as possible in expanded area
           for (let noteIndex = 0; noteIndex < newFootnoteIds.length; noteIndex++) {
@@ -3712,7 +3778,7 @@ export class PaginationEngine {
                   footnote,
                   availableForFootnotes,
                   blockDimensions.contentWidth,
-                  false,
+                  deferralCannotHelp,
                   {
                     footnoteIds: currentFootnoteIds,
                     continuation: currentContinuation,

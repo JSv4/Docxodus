@@ -3702,12 +3702,19 @@ namespace Docxodus
             var markerName = kind == "continuation"
                 ? W.continuationSeparator
                 : W.separator;
+            // Whitespace is not authored content. This runs after the pipeline's
+            // empty-paragraph pass, which annotates a marker-only story's
+            // paragraph and gives it a synthetic ` ` run so the empty line keeps
+            // its height. Counting that run as authored drew a blank line under
+            // the rule on every continued-note page and ate the band height the
+            // paginator had just budgeted.
             var hasAuthoredContent = source.Descendants().Any(e =>
                 !e.AncestorsAndSelf().Any(ancestor =>
                     ancestor.Name == W.pPr || ancestor.Name == W.rPr) &&
                 e.Name != W.p && e.Name != W.r &&
                 e.Name != W.separator && e.Name != W.continuationSeparator &&
-                e.Name != W.footnoteRef && e.Name != W.endnoteRef);
+                e.Name != W.footnoteRef && e.Name != W.endnoteRef &&
+                !(e.Name == W.t && string.IsNullOrWhiteSpace(e.Value)));
 
             var story = new XElement(Xhtml.div,
                 new XAttribute("class", $"footnote-separator-story footnote-separator-{kind}"),
