@@ -185,7 +185,8 @@ internal static class PageMapContract
     };
 
     private static bool ValidRect(PageMapRect rect) =>
-        double.IsFinite(rect.X) && rect.X >= 0
+        rect is not null
+        && double.IsFinite(rect.X) && rect.X >= 0
         && double.IsFinite(rect.Y) && rect.Y >= 0
         && double.IsFinite(rect.Width) && rect.Width > 0
         && double.IsFinite(rect.Height) && rect.Height > 0;

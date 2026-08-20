@@ -233,6 +233,23 @@ public sealed record RedlineReversibilityProof
         this, (indented ? JsonOptions.Indented : JsonOptions.Canonical)
             .RedlineReversibilityProof);
 
+    internal static bool IsExactCanonical(ReadOnlySpan<byte> bytes)
+    {
+        try
+        {
+            var proof = JsonSerializer.Deserialize(
+                bytes, JsonOptions.Canonical.RedlineReversibilityProof);
+            return proof is not null
+                && string.Equals(proof.Schema, SchemaId, StringComparison.Ordinal)
+                && proof.SchemaVersion == 1
+                && bytes.SequenceEqual(proof.ToCanonicalUtf8Bytes());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static class JsonOptions
     {
         internal static readonly RedlineReversibilityProofJsonContext Canonical =
@@ -248,17 +265,17 @@ public sealed record RedlineReversibilityProof
                 WriteIndented = indented,
             };
             options.Converters.Add(new JsonStringEnumConverter<RedlineRevisionDisposition>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RedlineProofDirection>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RedlinePackageDivergenceKind>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RevisionFamily>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<RevisionResolutionStatus>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             options.Converters.Add(new JsonStringEnumConverter<VerificationFindingSeverity>(
-                JsonNamingPolicy.CamelCase));
+                JsonNamingPolicy.CamelCase, allowIntegerValues: false));
             return new RedlineReversibilityProofJsonContext(options);
         }
     }

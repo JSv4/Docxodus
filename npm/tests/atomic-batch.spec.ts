@@ -19,6 +19,36 @@ test.describe('DocxSession atomic batches (#445)', () => {
     await waitForDocxodus(page);
   });
 
+  test('an empty mutation result list is a successful no-op step (core parity)', async ({ page }) => {
+    const result = await page.evaluate((bytes: number[]) => {
+      const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes));
+      try {
+        const projection = session.project();
+        const anchors = (Object.entries(projection.anchorIndex) as [string, any][])
+          .filter(([id, value]) => value.scope === 'body'
+            && ['p', 'h', 'li'].includes(value.kind)
+            && projection.markdown.includes(`{#${id}}`))
+          .map(([id]) => id);
+        const batch = session.executeBatch([
+          { tool: 'docx_edit', action: 'replace_text_range',
+            mutation: () => [] },
+          { tool: 'docx_edit', action: 'replace_text',
+            mutation: () => session.replaceText(anchors[0], 'Committed after the noop step.') },
+        ]);
+        return {
+          success: batch.success,
+          status: batch.status,
+          stepSuccess: batch.steps.map((step: any) => step.success),
+          markdown: session.project().markdown.includes('Committed after the noop step.'),
+        };
+      } finally { session.close(); }
+    }, Array.from(fixture));
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('ok');
+    expect(result.stepSuccess).toEqual([true, true]);
+    expect(result.markdown).toBe(true);
+  });
+
   test('rollback is exact and success is one version/undo unit', async ({ page }) => {
     const result = await page.evaluate((bytes: number[]) => {
       const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes));

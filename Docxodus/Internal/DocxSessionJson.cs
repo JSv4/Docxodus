@@ -1923,6 +1923,16 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>UTC-normalized round-trip timestamp: the wire format never carries a
+    /// machine-local offset, so hash-covered payloads are timezone-independent.
+    /// Unspecified kinds are treated as UTC deterministically.</summary>
+    public static string UtcRoundtrip(System.DateTime value) => (value.Kind switch
+    {
+        System.DateTimeKind.Utc => value,
+        System.DateTimeKind.Local => value.ToUniversalTime(),
+        _ => System.DateTime.SpecifyKind(value, System.DateTimeKind.Utc),
+    }).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+
     public static string EnumToSnake(System.Enum code)
     {
         var s = code.ToString();
@@ -2626,7 +2636,7 @@ internal static class DocxSessionJson
             if (a.Author is not null)
                 sb.Append(",\"author\":").Append(JsonString(a.Author));
             if (a.Created.HasValue)
-                sb.Append(",\"created\":").Append(JsonString(a.Created.Value.ToString("o")));
+                sb.Append(",\"created\":").Append(JsonString(UtcRoundtrip(a.Created.Value)));
             if (a.AnnotatedText is not null)
                 sb.Append(",\"annotatedText\":").Append(JsonString(a.AnnotatedText));
             if (a.Metadata is { Count: > 0 })

@@ -325,10 +325,11 @@ export class DocxSession {
       try {
         const value = step.mutation();
         const results = Array.isArray(value) ? value : [value];
-        if (results.length === 0 || results.some(result =>
+        if (results.some(result =>
           result === null || typeof result !== "object" || typeof result.success !== "boolean")) {
-          return [internalFailure("batch mutation returned no valid edit results")];
+          return [internalFailure("batch mutation returned invalid edit results")];
         }
+        // An empty list is a successful no-op step, matching the core contract.
         return results;
       } catch (error) {
         return [internalFailure(error)];

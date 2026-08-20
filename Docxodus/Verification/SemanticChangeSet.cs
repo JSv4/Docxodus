@@ -256,19 +256,23 @@ public sealed class SemanticChangeSet
     {
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = indented }))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("schema", Schema);
-            writer.WriteNumber("schemaVersion", SchemaVersion);
-            writer.WriteNumber("changeCount", ChangeCount);
-            writer.WriteStartArray("changes");
-            foreach (var change in Changes)
-                WriteChange(writer, change);
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
+            WriteCanonical(writer);
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    internal void WriteCanonical(Utf8JsonWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        writer.WriteStartObject();
+        writer.WriteString("schema", Schema);
+        writer.WriteNumber("schemaVersion", SchemaVersion);
+        writer.WriteNumber("changeCount", ChangeCount);
+        writer.WriteStartArray("changes");
+        foreach (var change in Changes)
+            WriteChange(writer, change);
+        writer.WriteEndArray();
+        writer.WriteEndObject();
     }
 
     private static void WriteChange(Utf8JsonWriter writer, SemanticChange change)

@@ -71,6 +71,14 @@ cites are the final document's.
   validation, cross-part closure, workflow residue, baseline-aware findings, expected deltas, and
   digest-bound renderer artifacts into one canonical pass/failed report. Default report operations
   are also available through WASM/npm, Python, and MCP.
+- **Delivery change receipts.** `DeliveryChangeReceiptBuilder` binds one delivery into a
+  canonical, hash-addressed record — source/delivered package identities, every normalized
+  request and transaction with its undo/redo lineage, requested/derived/unexpected change
+  attribution, typed semantic evidence, page citations pinned to a render fingerprint, and
+  the digest of every artifact — and `DeliveryChangeReceiptVerifier` re-checks all of it
+  from raw bytes, so a recipient can verify what an automated edit did (and that nothing
+  else changed) without trusting the system that produced it. Core .NET today; the
+  cross-surface ripple is tracked in #520.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
 - Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
@@ -267,6 +275,7 @@ reading first:
 | [`semantic_diff.md`](docs/architecture/semantic_diff.md) | Stable semantic-change schema, package coverage, canonicalization, and limits |
 | [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
 | [`native_content_controls.md`](docs/architecture/native_content_controls.md) | Native Word content-control registry, fills, binding/lock safety, and transports |
+| [`delivery_change_receipt.md`](docs/architecture/delivery_change_receipt.md) | Deterministic delivery receipts, LIFO lineage, exact semantic/package artifacts, privacy, citations, and verification |
 | [`markdown_projection.md`](docs/architecture/markdown_projection.md) | The projection spec and anchor format |
 | [`docx_converter.md`](docs/architecture/docx_converter.md) | `WmlToHtmlConverter` internals |
 | [`editor_ui_surface.md`](docs/architecture/editor_ui_surface.md) | The browser editor, control by control |

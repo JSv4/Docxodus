@@ -209,9 +209,9 @@ internal static class PackageDelta
         location.PropertyPath ?? string.Empty,
     });
 
+    // Mutual absence is equality here (an entry legitimately has no XML digest);
+    // comparison is the shared strict ordinal one — internally generated digests are
+    // always lower-case, so the previous case-insensitivity was dead tolerance.
     private static bool DigestEquals(VerificationDigest? left, VerificationDigest? right) =>
-        left is null && right is null
-        || left is not null && right is not null
-        && string.Equals(left.Algorithm, right.Algorithm, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(left.Value, right.Value, StringComparison.OrdinalIgnoreCase);
+        DeliveryReceiptValidation.OptionalDigestEquals(left, right);
 }

@@ -1418,8 +1418,9 @@ public enum MutationBatchMode
 /// <summary>
 /// One core batch step. <see cref="Preflight"/> performs any read-only validation that can be
 /// decided before mutation begins (all steps up front for atomic mode, or immediately before each
-/// step for best-effort mode); <see cref="Mutation"/> returns one or more edit envelopes so
-/// multi-match replacement can remain one step without losing its individual results.
+/// step for best-effort mode); <see cref="Mutation"/> returns zero or more edit envelopes. An
+/// empty collection is a successful no-op, while multiple results let multi-match replacement
+/// remain one step without losing its individual outcomes.
 /// </summary>
 public sealed class MutationBatchStep
 {
@@ -4112,11 +4113,11 @@ public sealed partial class DocxSession : IDisposable
         try
         {
             var results = step.Mutation(this);
-            if (results is not { Count: > 0 } || results.Any(result => result is null))
+            if (results is null || results.Any(result => result is null))
                 return new[]
                 {
                     EditResult.Fail(EditErrorCode.InternalError,
-                        "batch mutation returned no valid edit results"),
+                        "batch mutation returned invalid edit results"),
                 };
             return results;
         }
