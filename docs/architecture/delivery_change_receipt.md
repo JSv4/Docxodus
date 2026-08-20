@@ -352,3 +352,12 @@ decision applies the #463 or #464 semantics to the authenticated owner object. T
 operation in #465 assembles artifacts and invokes the receipt builder; receipt construction itself
 performs no document mutation, rendering, ZIP inspection, or OOXML parsing outside those shared
 components.
+
+## Surface scope
+
+The builder and verifier are deliberately core-.NET-only for now: nothing is exposed on the
+`*Ops` facades, WASM bridge, npm/TypeScript, stdio Python host, or MCP server, matching the rest
+of the verify track until the delivery operation (#465) fixes the shape callers actually need.
+The cross-surface ripple required by the CLAUDE.md checklist is tracked in #520; the JSON
+receipt itself is already portable, so non-.NET consumers can verify receipts once the ripple
+lands without a schema change.

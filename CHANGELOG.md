@@ -412,6 +412,14 @@ All notable changes to this project will be documented in this file.
   recompile.
 
 ### Changed
+- **A batch step whose mutation records no edits is now a successful no-op (#458).**
+  `MutationBatchStep.Mutation` may return an empty edit-result list; previously the
+  step failed with `internal_error` and rolled an atomic batch back. This means an
+  edit that matches nothing (for example a `replace_text_range` whose search text
+  is stale) no longer blocks the rest of the batch — callers that need "this edit
+  must land" semantics should pass `ExpectedMatchCount` (or a preflight) so a
+  zero-match step fails explicitly instead of vacuously succeeding. Delivery
+  receipts record such steps as portable no-op evidence.
 - **A footnote too long for its page now keeps flowing instead of being clipped.**
   Browser pagination reserves at most 60% of the body height for the note band; a
   note whose tail did not fit there used to be handed to the next page whole and
