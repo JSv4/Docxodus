@@ -7,6 +7,7 @@ import hashlib
 from docx_scalpel import (
     PackageContentTypeSource,
     PackageKind,
+    PackageManifestInspectionLimits,
     generate_package_manifest,
     open_session,
 )
@@ -70,3 +71,23 @@ def test_live_session_manifest_overlays_edits_without_touching_history(
             session.get_package_manifest().normalized_semantic_digest
             == after.normalized_semantic_digest
         )
+
+
+def test_stateless_manifest_honours_lowered_inspection_limits(
+    tour_plan_bytes: bytes,
+) -> None:
+    """A caller's lowered ceiling must constrain the inspection itself.
+
+    The engine reports the breach as a structured finding on an otherwise well-formed
+    package rather than raising, so the same call under default ceilings stays valid.
+    """
+    default = generate_package_manifest(tour_plan_bytes)
+    assert default.is_valid
+
+    constrained = generate_package_manifest(
+        tour_plan_bytes,
+        PackageManifestInspectionLimits(opc_entries=1),
+    )
+
+    assert constrained.findings
+    assert constrained != default
