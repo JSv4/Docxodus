@@ -167,8 +167,8 @@ describe("hardening boundaries", { concurrency: false }, () => {
   test("byte APIs reject cancellation and invalid runtime attestations before browser work", async () => {
     const controller = new AbortController();
     controller.abort();
-    assert.throws(
-      () => convertDocxToPdf(Uint8Array.of(1), { ...baseOptions, signal: controller.signal }),
+    await assert.rejects(
+      convertDocxToPdf(Uint8Array.of(1), { ...baseOptions, signal: controller.signal }),
       (error) => error instanceof DocxodusExportError
         && error.code === "operation_cancelled"
         && error.phase === "input_validation",

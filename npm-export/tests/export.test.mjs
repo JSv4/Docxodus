@@ -469,6 +469,9 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.equal(rendered.stderr.byteLength, 0);
     const { control: response, blobs } = parseFrames(rendered.stdout);
     assert.equal(response.schemaVersion, 1);
+    // A failed render answers with a fatal envelope instead of batches. Surface that message
+    // rather than dereferencing undefined, which would hide why the host gave up.
+    assert.ok(response.batches, `host returned no batches: ${JSON.stringify(response.fatal)}`);
     assert.equal(response.batches.length, 2);
     assert.equal(response.batches[0].id, "artifact-1");
     assert.equal(response.batches[1].id, "artifact-2");
