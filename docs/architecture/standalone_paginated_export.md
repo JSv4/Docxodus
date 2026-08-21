@@ -722,6 +722,27 @@ for a family it has never heard of. `strictFonts` rejects any outcome that is no
 digest-identified, license-evidenced face with complete glyph coverage, which is why a
 browser-observed environment can never satisfy it.
 
+### Revision and comment families that are not drawn
+
+`markup` draws insertions, deletions, moves, and run-level format changes. The remaining families
+in a package's revision inventory travel through the projection untouched and are never drawn, so
+each is reported rather than approximated: tracked cell insert/delete/merge and custom XML revision
+ranges raise `revision_family_not_rendered`, and property revisions raise
+`revision_property_change_partially_rendered`, which names precisely which of them is drawn. The
+manifest counts every property revision in one bucket and only `rPrChange` of them renders, so the
+warning reports the combined figure rather than adding a second inventory pass over the package.
+
+`final` and `original` need no such warnings. They apply the projection and then assert the derived
+package retains no revisions at all, so a family that cannot be applied fails the projection instead
+of passing through unseen. This is also what keeps the source package intact: the projection derives
+a new package and the original bytes are never accepted, rejected, or rewritten in place.
+
+Any visible comment profile renders comment bodies, ranges and authors, but not the topology
+recorded in `commentsExtended`: a reply is drawn as an independent comment
+(`comment_thread_flattened`) and a resolved comment is drawn identically to an open one
+(`comment_resolved_state_not_rendered`). Both silently change what a review PDF means, which is why
+they are reported instead of approximated.
+
 ## Error taxonomy and limits
 
 Public failures are `DocxodusExportError` values with one of these codes:

@@ -5,6 +5,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { generateFootnoteDocx } from './docx-footnote-fixture.js';
 import { generateTableCommentDocx } from './docx-page-map-fixture.js';
+import {
+  generateCommentTopologyDocx,
+  generateUnrenderableRevisionDocx,
+} from './docx-review-topology-fixture.js';
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
@@ -804,6 +808,39 @@ test.describe('standalone paginated HTML', () => {
         expect(failure.report.readiness.at(-1).pending.length).toBeGreaterThan(0);
       }
     });
+
+  test('warns for revision families the markup profile cannot draw', async ({ page }) => {
+    const source = generateUnrenderableRevisionDocx();
+    const markup = await convert(page, source, false, { reviewProfile: 'markup' });
+
+    const codes = markup.renderReport.warnings.map((warning) => warning.code);
+    expect(codes).toContain('revision_family_not_rendered');
+    expect(codes).toContain('revision_property_change_partially_rendered');
+    expect(markup.renderReport.warnings.filter(
+      (warning) => warning.code === 'revision_family_not_rendered',
+    ).every((warning) => warning.phase === 'package_preflight')).toBe(true);
+
+    // final applies the projection and then asserts no revision survives it, so an
+    // unrenderable family cannot pass through silently and needs no warning.
+    const final = await convert(page, source, false, { reviewProfile: 'final' });
+    expect(final.renderReport.warnings.map((warning) => warning.code))
+      .not.toContain('revision_family_not_rendered');
+  });
+
+  test('warns that comment threading and resolved state are not drawn', async ({ page }) => {
+    const source = generateCommentTopologyDocx();
+    const visible = await convert(page, source, false, { commentProfile: 'inline' });
+
+    const codes = visible.renderReport.warnings.map((warning) => warning.code);
+    expect(codes).toContain('comment_thread_flattened');
+    expect(codes).toContain('comment_resolved_state_not_rendered');
+
+    // hidden renders no comment bodies at all, so neither limitation applies.
+    const hidden = await convert(page, source, false, { commentProfile: 'hidden' });
+    const hiddenCodes = hidden.renderReport.warnings.map((warning) => warning.code);
+    expect(hiddenCodes).not.toContain('comment_thread_flattened');
+    expect(hiddenCodes).not.toContain('comment_resolved_state_not_rendered');
+  });
 
   test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'HC006-Test-01.docx')));
