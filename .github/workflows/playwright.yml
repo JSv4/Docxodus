@@ -44,6 +44,12 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
         run: cd npm-export && npm ci --ignore-scripts
 
+      # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
+      # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
+      # default, which fails every launched-browser export with browser_launch_failure.
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install Playwright browsers
         run: cd npm && npx playwright install --with-deps chromium firefox
 
