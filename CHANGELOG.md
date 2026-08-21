@@ -17,6 +17,19 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Explicit revision and comment export profiles (#444).** The `final`, `original`, `markup` and
+  `hidden`/`inline`/`endnotes`/`margin` vocabulary now reports what it cannot represent rather than
+  approximating it silently. Under `markup`, tracked cell insert/delete/merge revisions and custom
+  XML revision ranges raise `revision_family_not_rendered`, and property revisions raise
+  `revision_property_change_partially_rendered` naming precisely which of them is drawn — the
+  converter renders run-level format changes and not paragraph, table, section or numbering ones.
+  Under any visible comment profile, comment threading raises `comment_thread_flattened` and
+  resolved state raises `comment_resolved_state_not_rendered`, because the topology recorded in
+  `commentsExtended` is not read: a reply is drawn as an independent comment and a resolved comment
+  is indistinguishable from an open one. `final` and `original` need none of these — they apply the
+  projection and then assert no revision survived it, so an unrenderable family fails the
+  projection instead of passing through unseen.
+
 - **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
   Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
   recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector

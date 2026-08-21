@@ -1594,6 +1594,9 @@ async function preflightManifest(
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
   }
+  warnUnrenderedRevisionFamilies(manifest, state, options);
+  warnUnrenderedCommentTopology(manifest, state, options);
+
   if (manifest.facts.altChunkCount > 0) {
     const warning: RenderWarning = {
       code: "altchunk_not_supported",
@@ -1606,6 +1609,99 @@ async function preflightManifest(
     if (options.unsupportedContent === "strict") {
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
+  }
+}
+
+/**
+ * Warns for tracked-revision families the markup profile cannot show.
+ *
+ * The converter renders insertions, deletions, moves, and run-level format changes as visible
+ * markup. Everything else in a package's revision inventory — cell insert/delete/merge, custom
+ * XML revision ranges, and the paragraph, table, section and numbering property changes — is
+ * carried through the projection untouched but never drawn, so a reader of the PDF has no way
+ * to tell it is there.
+ *
+ * Only `markup` needs these. `final` and `original` apply the projection and then assert the
+ * derived package has no revisions left at all, so an unrenderable family cannot survive them
+ * silently — it fails the projection instead.
+ */
+function warnUnrenderedRevisionFamilies(
+  manifest: PackageManifest,
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  if (options.reviewProfile !== "markup") return;
+  const revisions = manifest.facts.revisions;
+  if (revisions.structuralChanges > 0) {
+    policyWarning(state, options, {
+      code: "revision_family_not_rendered",
+      phase: "package_preflight",
+      message: `${revisions.structuralChanges} table cell insert, delete, or merge `
+        + `${revisions.structuralChanges === 1 ? "revision is" : "revisions are"} present but are `
+        + "not drawn as markup.",
+      remediation: "Use the final or original profile, or accept the cell revisions in Word before export.",
+      detail: "cellIns, cellDel, cellMerge",
+    });
+  }
+  if (revisions.otherChanges > 0) {
+    policyWarning(state, options, {
+      code: "revision_family_not_rendered",
+      phase: "package_preflight",
+      message: `${revisions.otherChanges} custom XML revision `
+        + `${revisions.otherChanges === 1 ? "range is" : "ranges are"} present but are not drawn as markup.`,
+      remediation: "Use the final or original profile, or resolve the custom XML revisions before export.",
+      detail: "customXmlInsRangeStart, customXmlDelRangeStart, customXmlMoveFromRangeStart, customXmlMoveToRangeStart",
+    });
+  }
+  if (revisions.propertyChanges > 0) {
+    // The manifest counts every property revision in one bucket, and only rPrChange of them is
+    // rendered, so the count cannot be split here without a second inventory pass over the
+    // package. Report the combined figure and name precisely which of it is drawn.
+    policyWarning(state, options, {
+      code: "revision_property_change_partially_rendered",
+      phase: "package_preflight",
+      message: `${revisions.propertyChanges} property ${revisions.propertyChanges === 1 ? "revision is" : "revisions are"} `
+        + "present; markup draws run-level format changes and does not draw paragraph, table, "
+        + "section, or numbering property changes.",
+      remediation: "Use the final or original profile when property revisions must be reflected in the output.",
+      detail: "rendered: rPrChange; not rendered: numberingChange, pPrChange, sectPrChange, "
+        + "tblGridChange, tblPrChange, tblPrExChange, tcPrChange, trPrChange",
+    });
+  }
+}
+
+/**
+ * Warns when a visible comment profile cannot represent the source's comment topology.
+ *
+ * Comment bodies, ranges and authors render, but the threading recorded in commentsExtended does
+ * not: a reply is drawn as an independent comment, and a resolved comment is indistinguishable
+ * from an open one. That silently changes what a review PDF means, so it is reported rather than
+ * approximated.
+ */
+function warnUnrenderedCommentTopology(
+  manifest: PackageManifest,
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  if (options.commentProfile === "hidden") return;
+  const annotations = manifest.facts.annotations;
+  if (annotations.commentReplies > 0) {
+    policyWarning(state, options, {
+      code: "comment_thread_flattened",
+      phase: "package_preflight",
+      message: `${annotations.commentReplies} comment ${annotations.commentReplies === 1 ? "reply is" : "replies are"} `
+        + "rendered as independent comments rather than as threaded replies.",
+      remediation: "Read the exported comments in document order, or use commentProfile: hidden when threading matters.",
+    });
+  }
+  if (annotations.resolvedComments > 0) {
+    policyWarning(state, options, {
+      code: "comment_resolved_state_not_rendered",
+      phase: "package_preflight",
+      message: `${annotations.resolvedComments} resolved `
+        + `${annotations.resolvedComments === 1 ? "comment is" : "comments are"} rendered identically to open comments.`,
+      remediation: "Resolve-and-delete the closed comments before export, or use commentProfile: hidden.",
+    });
   }
 }
 
