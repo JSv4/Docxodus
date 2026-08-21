@@ -702,11 +702,25 @@ records include family stack, PostScript face, style, weight, stretch, glyph cov
 identity/version, substitution decision, and license evidence; these normalized records, not local
 paths, enter the report and fingerprint.
 
-Issue #442 adds the versioned browser `FontResolver` contract used by `fontResolver`. It has bounded
-request/result records and an `AbortSignal`; Node constructs the same resolver from
-`fontDirectories`. A configured root's order is policy and is preserved. Duplicate resolved roots
-or ambiguous faces fail. The resolver cannot fetch URLs, and its returned font bytes are
-length/digest/media-type/license checked before injection.
+The versioned browser `FontResolver` contract used by `fontResolver` has bounded request/result
+records and an `AbortSignal`; Node constructs the same resolver from `fontDirectories`. A
+configured root's order is policy and is preserved. Duplicate resolved roots or ambiguous faces
+fail. The resolver cannot fetch URLs, and its returned font bytes are length/digest/media-type/
+license checked before injection.
+
+The Node resolver reaches the isolated page as a Playwright binding rather than as a serialized
+value. That is not an implementation detail: the resolver reads font files from the host
+filesystem, which the page must never be given access to, so the only thing that crosses the
+boundary is one bounded request and one bounded response. The materializer therefore sees the same
+`FontResolver` function shape whether the caller supplied one directly in the browser or the host
+built one from directories. With no resolver configured the inventory falls back to measured
+browser observation, and every resolution is recorded `unverified` from the `browser` source.
+
+Availability in that fallback is measured, never asked of `FontFaceSet.check()`, which reports
+whether pending downloads have settled rather than whether a family exists — Chromium answers true
+for a family it has never heard of. `strictFonts` rejects any outcome that is not an exact,
+digest-identified, license-evidenced face with complete glyph coverage, which is why a
+browser-observed environment can never satisfy it.
 
 ## Error taxonomy and limits
 

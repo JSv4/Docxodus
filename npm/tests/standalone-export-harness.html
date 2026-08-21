@@ -11,7 +11,84 @@
       canonicalJson,
       convertDocxToPaginatedHtml,
       DocxodusExportError,
+      FONT_RESOLVER_CONTRACT_ID,
+      FONT_RESOLVER_SCHEMA_VERSION,
+      FONT_SUBSTITUTION_CONTRACT_MATERIAL,
+      FONT_SUBSTITUTION_CONTRACT_VERSION,
+      inventoryDocumentFontRequests,
+      parseCssFontFamily,
     } from './export-browser.js';
+
+    async function sha256(value) {
+      const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+    }
+
+    // A caller-supplied resolver, scripted per test: exact match, deliberate substitution,
+    // outright miss, and a version that drifts between calls.
+    function configuredResolver(plan) {
+      let calls = 0;
+      return async request => {
+        calls++;
+        const substitutionContractDigest = await sha256(
+          canonicalJson(FONT_SUBSTITUTION_CONTRACT_MATERIAL),
+        );
+        if (plan.mode === 'missing') {
+          return {
+            schemaVersion: FONT_RESOLVER_SCHEMA_VERSION,
+            resolverContract: FONT_RESOLVER_CONTRACT_ID,
+            substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION,
+            substitutionContractDigest,
+            outcomes: request.requests.map(item => ({
+              requestId: item.id,
+              requestedFamily: item.familyStack[0],
+              status: 'missing',
+              glyphCoverage: 'unverified',
+            })),
+            faces: [],
+          };
+        }
+        const faces = request.requests.map(item => ({
+          id: `fixture-${item.id}`,
+          resolvedFamily: plan.mode === 'substituted'
+            ? 'Docxodus Canvas Mono'
+            : item.familyStack[0],
+          postscriptName: `DocxodusFixture-${item.id}`,
+          version: plan.drift && calls > 1 ? 'fixture-v2' : 'fixture-v1',
+          style: item.style,
+          weight: item.weight,
+          stretch: item.stretch,
+          format: plan.format,
+          mediaType: plan.mediaType,
+          byteLength: plan.byteLength,
+          sha256: plan.sha256,
+          bytesBase64: plan.bytesBase64,
+          licenseEvidence: {
+            kind: plan.attested ? 'attested' : 'installable',
+            identity: plan.licenseIdentity,
+            noSubsetting: false,
+          },
+        }));
+        return {
+          schemaVersion: FONT_RESOLVER_SCHEMA_VERSION,
+          resolverContract: FONT_RESOLVER_CONTRACT_ID,
+          substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION,
+          substitutionContractDigest,
+          outcomes: request.requests.map((item, index) => ({
+            requestId: item.id,
+            requestedFamily: item.familyStack[0],
+            resolvedFamily: faces[index].resolvedFamily,
+            status: plan.mode === 'substituted' ? 'substituted' : 'resolved',
+            faceId: faces[index].id,
+            metricCompatible: plan.mode !== 'substituted',
+            faceMatch: 'exact',
+            glyphCoverage: 'complete',
+          })),
+          faces,
+        };
+      };
+    }
 
     window.DocxodusStandalone = {
       canonicalJson,
@@ -27,6 +104,39 @@
         );
         input.fill(0);
         return conversion;
+      },
+      convertWithFontResolver: (bytes, options, plan) => convertDocxToPaginatedHtml(
+        new Uint8Array(bytes),
+        { wasmBasePath: './', ...options, fontResolver: configuredResolver(plan) },
+      ),
+      convertWithFontResolverFailure: async (bytes, options, plan) => {
+        try {
+          await convertDocxToPaginatedHtml(
+            new Uint8Array(bytes),
+            { wasmBasePath: './', ...options, fontResolver: configuredResolver(plan) },
+          );
+          return { unexpectedSuccess: true };
+        } catch (error) {
+          if (!(error instanceof DocxodusExportError)) throw error;
+          return error.toJSON();
+        }
+      },
+      parseFontFamilies: value => parseCssFontFamily(value),
+      inventoryFontFixture: async (html, limits = {}) => {
+        const frame = document.createElement('iframe');
+        frame.sandbox.add('allow-same-origin');
+        const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
+        frame.srcdoc = `<!doctype html><html><body>${html}</body></html>`;
+        document.body.appendChild(frame);
+        await loaded;
+        try {
+          return inventoryDocumentFontRequests(frame.contentDocument, {
+            fontRequests: limits.fontRequests ?? 64,
+            fontSampleCodePoints: limits.fontSampleCodePoints ?? 4096,
+          });
+        } finally {
+          frame.remove();
+        }
       },
       convertFailure: async (bytes, options) => {
         try {
