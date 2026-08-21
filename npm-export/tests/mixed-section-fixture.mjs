@@ -202,3 +202,83 @@ export function generateMixedSectionDocx() {
   }
   return storedZip(entries);
 }
+
+/** One real-converter footnote paragraph long enough to span several PDF pages. */
+export function generateLongFootnoteDocx(wordCount = 600) {
+  const noteText = Array.from(
+    { length: wordCount },
+    (_, index) => `footnote-1-1-${index + 1}`,
+  ).join(" ");
+  return storedZip([
+    {
+      name: "[Content_Types].xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
+</Types>`),
+    },
+    {
+      name: "_rels/.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "word/_rels/document.xml.rels",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="${R_NS}/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="${R_NS}/footnotes" Target="footnotes.xml"/>
+</Relationships>`),
+    },
+    {
+      name: "word/styles.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="${W_NS}">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>
+    <w:sz w:val="24"/><w:szCs w:val="24"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/>
+    <w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+    <w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
+  </w:style>
+  <w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/>
+    <w:rPr><w:vertAlign w:val="superscript"/></w:rPr>
+  </w:style>
+</w:styles>`),
+    },
+    {
+      name: "word/footnotes.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="${W_NS}">
+  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="1"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>
+    <w:r><w:t xml:space="preserve"> ${noteText}</w:t></w:r>
+  </w:p></w:footnote>
+</w:footnotes>`),
+    },
+    {
+      name: "word/document.xml",
+      data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>
+  <w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>
+    <w:r><w:t>Body cites long footnote</w:t></w:r>
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>
+  </w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
+    <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"
+      w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/>
+  </w:sectPr>
+</w:body></w:document>`),
+    },
+  ]);
+}

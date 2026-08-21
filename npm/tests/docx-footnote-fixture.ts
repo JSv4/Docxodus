@@ -29,13 +29,16 @@ function bodyParagraph(index: number, noteId: number | null): string {
     `<w:r><w:t xml:space="preserve">Body line ${index + 1}</w:t></w:r>${citation}</w:p>`;
 }
 
-function footnote(id: number, paragraphCount: number): string {
+function footnote(id: number, paragraphCount: number, wordsPerParagraph: number): string {
   const paragraphs = Array.from({ length: paragraphCount }, (_, index) =>
     `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
       (index === 0
         ? `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>`
         : '') +
-      `<w:r><w:t xml:space="preserve"> Footnote ${id} paragraph ${index + 1} text.</w:t></w:r></w:p>`)
+      `<w:r><w:t xml:space="preserve"> ${wordsPerParagraph > 0
+        ? Array.from({ length: wordsPerParagraph }, (_, wordIndex) =>
+          `footnote-${id}-${index + 1}-${wordIndex + 1}`).join(' ')
+        : `Footnote ${id} paragraph ${index + 1} text.`}</w:t></w:r></w:p>`)
     .join('');
   return `<w:footnote w:id="${id}">${paragraphs}</w:footnote>`;
 }
@@ -44,15 +47,26 @@ function footnote(id: number, paragraphCount: number): string {
  * @param noteCount distinct footnotes, cited from the first `noteCount` body paragraphs.
  * @param bodyLines total body paragraphs — few enough to keep everything on one page, so the
  *   note area's position is determined purely by the page geometry, not by flow pressure.
+ * @param paragraphsPerNote paragraphs emitted inside each note.
+ * @param wordsPerParagraph when positive, emits this many uniquely numbered words in each note
+ *   paragraph so one real converter paragraph can be made taller than a note band.
  */
 export function generateFootnoteDocx(
   noteCount = 1,
   bodyLines = 5,
   paragraphsPerNote = 1,
+  wordsPerParagraph = 0,
+  separatorStories: {
+    normalText?: string;
+    continuationText?: string;
+  } = {},
 ): Uint8Array {
   const noteIds = Array.from({ length: noteCount }, (_, i) => i + 1);
   const body = Array.from({ length: bodyLines }, (_, i) =>
     bodyParagraph(i, i < noteCount ? i + 1 : null)).join('');
+
+  const separatorRun = (marker: 'separator' | 'continuationSeparator', text?: string) =>
+    `<w:p><w:r><w:${marker}/>${text ? `<w:t xml:space="preserve"> ${text}</w:t>` : ''}</w:r></w:p>`;
 
   return storedZip([
     {
@@ -104,9 +118,13 @@ export function generateFootnoteDocx(
       name: 'word/footnotes.xml',
       data: xml(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="${W_NS}">
-  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
-  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
-  ${noteIds.map((id) => footnote(id, paragraphsPerNote)).join('\n  ')}
+  <w:footnote w:type="separator" w:id="-1">${separatorRun(
+    'separator', separatorStories.normalText,
+  )}</w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0">${separatorRun(
+    'continuationSeparator', separatorStories.continuationText,
+  )}</w:footnote>
+  ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordsPerParagraph)).join('\n  ')}
 </w:footnotes>`),
     },
     {

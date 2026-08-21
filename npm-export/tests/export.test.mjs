@@ -23,7 +23,10 @@ import {
   renderDocxFile,
 } from "../dist/index.js";
 import { canonicalJson } from "../dist/canonical.js";
-import { generateMixedSectionDocx } from "./mixed-section-fixture.mjs";
+import {
+  generateLongFootnoteDocx,
+  generateMixedSectionDocx,
+} from "./mixed-section-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(here);
@@ -661,6 +664,48 @@ describe("@docxodus/export", { concurrency: false }, () => {
       columnContainers,
     });
     await writeFile(join(successArtifacts, "mixed-sections-scaled-viewer.png"), screenshot);
+  });
+
+  test("preserves one converter-produced footnote paragraph across HTML and PDF pages", {
+    timeout: 180_000,
+  }, async () => {
+    const source = generateLongFootnoteDocx(600);
+    const result = await renderDocxArtifacts(source, {
+      ...baseOptions,
+      browser,
+      outputs: ["html", "pdf"],
+    });
+    const inspection = await inspectPdf(result.pdf);
+
+    assert.ok(result.pageCount > 2);
+    assert.equal(inspection.pageCount, result.pageCount);
+    assert.deepEqual(result.renderReport.pages, result.pageMap.pages);
+    assertPdfBoxes(inspection, result.pageMap.pages);
+    const paragraphFragments = result.pageMap.fragments.filter((fragment) =>
+      fragment.story === "footnote" && fragment.anchorId.startsWith("p:fn:"));
+    assert.ok(paragraphFragments.length > 2);
+    assert.ok(new Set(paragraphFragments.map((fragment) => fragment.pageNumber)).size > 2);
+    assert.deepEqual(
+      paragraphFragments.map((fragment) => fragment.fragmentIndex),
+      paragraphFragments.map((_, index) => index),
+    );
+
+    // Match on word boundaries, never substrings: `footnote-1-1-1` occurs inside
+    // `footnote-1-1-10`, so a bare indexOf reports every low-numbered word twice.
+    let priorPdfOffset = -1;
+    for (const index of [1, 2, 150, 300, 450, 599, 600]) {
+      const token = `footnote-1-1-${index}`;
+      assert.equal(result.html.match(new RegExp(`\\b${token}\\b`, "g"))?.length, 1);
+      const pdfMatches = [...inspection.searchableText.matchAll(new RegExp(`\\b${token}\\b`, "g"))];
+      assert.equal(pdfMatches.length, 1, `${token} must appear exactly once in the PDF text`);
+      assert.ok(pdfMatches[0].index > priorPdfOffset, `${token} out of order in PDF text`);
+      priorPdfOffset = pdfMatches[0].index;
+    }
+
+    await writeFile(join(successArtifacts, "long-footnote.pdf"), result.pdf);
+    await writeFile(join(successArtifacts, "long-footnote.html"), result.html);
+    await writeJson(join(successArtifacts, "long-footnote-page-map.json"), result.pageMap);
+    await writeJson(join(successArtifacts, "long-footnote-pdf-inspection.json"), inspection);
   });
 
   test("retains a structured report when post-layout PDF verification fails", { timeout: 180_000 }, async () => {

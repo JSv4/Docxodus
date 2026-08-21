@@ -340,9 +340,8 @@ const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
 // Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
 // rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
 const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
-
-// Minimum body content height per page (to avoid pages with only footnotes)
-const MIN_BODY_CONTENT_HEIGHT = 72; // 1 inch minimum body content
+/** Internal provenance retained only while a note element waits between pages. */
+const FOOTNOTE_SOURCE_POSITION_ATTR = "data-pagination-footnote-source-position";
 
 /**
  * Pagination engine that converts HTML with pagination metadata
@@ -375,6 +374,27 @@ interface PartialFootnote {
   fittingElements: HTMLElement[];
 }
 
+/** Existing page payload that a newly split note must fit beside. */
+interface FootnotePackingContext {
+  footnoteIds: readonly string[];
+  continuation?: FootnoteContinuation | null;
+  partialFootnotes?: readonly PartialFootnote[];
+}
+
+type ParagraphSplitAttempt =
+  | { kind: "split"; head: HTMLElement; tail: HTMLElement }
+  | { kind: "no-fit" }
+  | { kind: "indivisible" };
+
+interface ParagraphFragmentEndpoint {
+  node: Node;
+  offset: number;
+  /** UTF-16 offset in the paragraph's flattened text. */
+  textOffset: number;
+  /** Prefer a DOM boundary outside an atomic field over its last text-node boundary. */
+  priority: number;
+}
+
 /**
  * A section's `w:pgNumType`, as stamped on its wrapper by the converter. Both fields are optional
  * because both attributes are: an absent `start` means the section continues the previous section's
@@ -402,6 +422,8 @@ export class PaginationEngine {
   private layoutToken?: { documentVersion: number; rendererFingerprint: string };
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
+  private footnoteSeparator: HTMLElement | null = null;
+  private footnoteContinuationSeparator: HTMLElement | null = null;
   private commentMarginRegistry: Map<string, HTMLElement>;
   private footnoteLayoutLikeWord8 = false;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
@@ -495,6 +517,10 @@ export class PaginationEngine {
 
     // Parse the footnote registry if present
     this.footnoteRegistry = this.parseFootnoteRegistry();
+    ({
+      normal: this.footnoteSeparator,
+      continuation: this.footnoteContinuationSeparator,
+    } = this.parseFootnoteSeparators());
 
     // Parse the margin-comment registry if present. Its entries are cloned into
     // the side substrate of pages that contain the corresponding range marker.
@@ -541,7 +567,17 @@ export class PaginationEngine {
     for (const id of referencedFootnoteIds) {
       this.checkpoint();
       const source = this.footnoteRegistry.get(id);
-      if (source) this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+      if (!source) continue;
+      this.collectExpectedSourceAnchors(source, this.expectedPageMapAnchorIds);
+      // Margin comments are presentation stories selected by markers. Markers
+      // inside a cited footnote are just as visible/addressable as body markers.
+      for (const reference of Array.from(
+        source.querySelectorAll<HTMLElement>("[data-comment-id]"),
+      )) {
+        this.checkpoint();
+        const commentId = reference.dataset.commentId;
+        if (commentId) referencedCommentIds.add(commentId);
+      }
     }
     for (const id of referencedCommentIds) {
       this.checkpoint();
@@ -1732,34 +1768,218 @@ export class PaginationEngine {
   }
 
   /**
-   * A DOM endpoint that can finish a paragraph fragment. Endpoints are chosen
-   * after whitespace or at a run boundary so the paginator never deliberately
-   * cuts through an ordinary word merely to fill a little more of a page.
+   * DOM endpoints that can finish a paragraph fragment. The flattened UTF-16
+   * offsets are checked against the browser's Unicode grapheme segmenter, so a
+   * formatting-run boundary can never bisect a surrogate pair, combining
+   * sequence, or joined emoji. NBSP/word-joiner boundaries remain indivisible.
+   * PAGE/NUMPAGES field results are atomic because splitting their marker would
+   * make later substitution duplicate or replace only half of the field.
    */
-  private paragraphFragmentEndpoints(paragraph: HTMLElement): Array<{ node: Text; offset: number }> {
-    const endpoints: Array<{ node: Text; offset: number }> = [];
+  private paragraphFragmentEndpoints(
+    paragraph: HTMLElement,
+    emergencyGraphemeBreaks = false,
+  ): ParagraphFragmentEndpoint[] {
+    const textNodes: Text[] = [];
+    const textStarts = new Map<Text, number>();
+    const lastTextByField = new Map<HTMLElement, Text>();
     const walker = this.document.createTreeWalker(paragraph, this.view.NodeFilter.SHOW_TEXT);
+    const flattenedChunks: string[] = [];
+    let flattenedLength = 0;
     let textNode: Text | null;
-
     while ((textNode = walker.nextNode() as Text | null)) {
-      const text = textNode.data;
-      if (text.length === 0) continue;
-
-      // A whitespace boundary preserves normal word wrapping. Always retain the
-      // end of a run too: adjacent runs can change formatting without containing
-      // a whitespace character between them.
-      const whitespace = /\s+/g;
-      let match: RegExpExecArray | null;
-      while ((match = whitespace.exec(text)) !== null) {
-        endpoints.push({ node: textNode, offset: match.index + match[0].length });
+      this.checkpoint();
+      textStarts.set(textNode, flattenedLength);
+      textNodes.push(textNode);
+      flattenedChunks.push(textNode.data);
+      flattenedLength += textNode.data.length;
+      let field = textNode.parentElement?.closest<HTMLElement>("[data-field]") ?? null;
+      while (field?.parentElement?.closest<HTMLElement>("[data-field]")) {
+        field = field.parentElement.closest<HTMLElement>("[data-field]");
       }
-      if (endpoints.length === 0 || endpoints[endpoints.length - 1].node !== textNode ||
-          endpoints[endpoints.length - 1].offset !== text.length) {
-        endpoints.push({ node: textNode, offset: text.length });
+      if (field && paragraph.contains(field)) lastTextByField.set(field, textNode);
+    }
+    const flattenedText = flattenedChunks.join("");
+    if (!this.hasVisibleText(flattenedText)) return [];
+
+    const invisible = /[\s\u200B-\u200F\uFEFF]/;
+    let firstVisibleOffset = -1;
+    let lastVisibleOffset = -1;
+    for (let index = 0; index < flattenedText.length; index++) {
+      if (index % 4096 === 0) this.checkpoint();
+      if (invisible.test(flattenedText[index])) continue;
+      if (firstVisibleOffset < 0) firstVisibleOffset = index;
+      lastVisibleOffset = index;
+    }
+
+    const graphemeBoundaries = this.graphemeBoundaryOffsets(flattenedText);
+    const candidates: ParagraphFragmentEndpoint[] = [];
+    const addCandidate = (candidate: ParagraphFragmentEndpoint): void => {
+      const { textOffset } = candidate;
+      if (textOffset <= 0 || textOffset >= flattenedText.length) return;
+      if (textOffset <= firstVisibleOffset || textOffset > lastVisibleOffset) return;
+      if (this.isNonBreakingTextBoundary(flattenedText, textOffset)) return;
+      if (!this.isLegalParagraphLineBoundary(paragraph, flattenedText, textOffset)) return;
+      if (graphemeBoundaries) {
+        if (!graphemeBoundaries.has(textOffset)) return;
+      } else if (!this.isConservativeFallbackTextBoundary(flattenedText, textOffset)) {
+        return;
+      }
+      candidates.push(candidate);
+    };
+
+    for (const node of textNodes) {
+      this.checkpoint();
+      const start = textStarts.get(node)!;
+      // Field results and converter list markers are semantic atoms. A field
+      // receives one boundary outside its wrapper below; a list marker stays
+      // with the first real text fragment and is never emitted by itself.
+      const atomic = node.parentElement?.closest<HTMLElement>(
+        "[data-field], [data-list-marker], a[data-comment-id]",
+      );
+      if (atomic && paragraph.contains(atomic)) continue;
+
+      // Only CSS-collapsible ASCII whitespace is a wrapping opportunity. JS's
+      // broader `\s` class includes NBSP and other explicitly non-breaking text.
+      const whitespace = /[\u0009-\u000D\u0020]+/g;
+      let match: RegExpExecArray | null;
+      let matchesSinceCheckpoint = 0;
+      while ((match = whitespace.exec(node.data)) !== null) {
+        if (++matchesSinceCheckpoint % 256 === 0) this.checkpoint();
+        const offset = match.index + match[0].length;
+        addCandidate({ node, offset, textOffset: start + offset, priority: 0 });
+      }
+      addCandidate({
+        node,
+        offset: node.data.length,
+        textOffset: start + node.data.length,
+        priority: 0,
+      });
+      if (emergencyGraphemeBreaks) {
+        for (let offset = 1; offset < node.data.length; offset++) {
+          if (offset % 256 === 0) this.checkpoint();
+          addCandidate({
+            node,
+            offset,
+            textOffset: start + offset,
+            priority: -1,
+          });
+        }
       }
     }
 
+    // A field is splittable only immediately after its complete outer wrapper.
+    // Starting the tail at the parent's child boundary prevents Range from
+    // cloning an empty `[data-field]` shell that substitution could repopulate.
+    for (const field of Array.from(paragraph.querySelectorAll<HTMLElement>("[data-field]"))) {
+      this.checkpoint();
+      if (field.parentElement?.closest("[data-field]")) continue;
+      const last = lastTextByField.get(field);
+      const parent = field.parentNode;
+      if (!last || !parent) continue;
+      const childIndex = Array.prototype.indexOf.call(parent.childNodes, field);
+      if (childIndex < 0) continue;
+      addCandidate({
+        node: parent,
+        offset: childIndex + 1,
+        textOffset: textStarts.get(last)! + last.data.length,
+        priority: 1,
+      });
+    }
+
+    // Several DOM boundaries can represent the same flattened offset. Prefer
+    // the outer atomic boundary, then keep one stable document-order candidate.
+    candidates.sort((left, right) =>
+      left.textOffset - right.textOffset || right.priority - left.priority);
+    const endpoints: ParagraphFragmentEndpoint[] = [];
+    for (const candidate of candidates) {
+      if (endpoints[endpoints.length - 1]?.textOffset !== candidate.textOffset) {
+        endpoints.push(candidate);
+      }
+    }
     return endpoints;
+  }
+
+  /** Browser-native UAX #29 boundaries; null keeps older runtimes conservative. */
+  private graphemeBoundaryOffsets(text: string): Set<number> | null {
+    type Segment = { segment: string; index: number };
+    type Segmenter = new (
+      locale?: string,
+      options?: { granularity: "grapheme" },
+    ) => { segment(value: string): Iterable<Segment> };
+    const SegmenterConstructor = (this.view.Intl as typeof Intl & {
+      Segmenter?: Segmenter;
+    }).Segmenter;
+    if (!SegmenterConstructor) return null;
+
+    const boundaries = new Set<number>([0, text.length]);
+    let segmentCount = 0;
+    for (const part of new SegmenterConstructor("en", { granularity: "grapheme" }).segment(text)) {
+      if (++segmentCount % 256 === 0) this.checkpoint();
+      boundaries.add(part.index);
+      boundaries.add(part.index + part.segment.length);
+    }
+    return boundaries;
+  }
+
+  /**
+   * Conservative UAX #14/CSS wrapping opportunities used for synthetic page
+   * boundaries. In particular, a formatting-run boundary is not itself a word
+   * boundary, and Japanese opening/closing punctuation stays with its pair.
+   * Arbitrary grapheme breaks are admitted only when the paragraph's CSS asks
+   * the browser to wrap anywhere.
+   */
+  private isLegalParagraphLineBoundary(
+    paragraph: HTMLElement,
+    text: string,
+    offset: number,
+  ): boolean {
+    const lastCodeUnit = text.charCodeAt(offset - 1);
+    const beforeOffset = lastCodeUnit >= 0xDC00 && lastCodeUnit <= 0xDFFF
+      ? Math.max(0, offset - 2)
+      : offset - 1;
+    const beforeCodePoint = text.codePointAt(beforeOffset);
+    const afterCodePoint = text.codePointAt(offset);
+    const before = beforeCodePoint === undefined ? "" : String.fromCodePoint(beforeCodePoint);
+    const after = afterCodePoint === undefined ? "" : String.fromCodePoint(afterCodePoint);
+    if (/^[\u0009-\u000D\u0020]$/.test(before)
+        || /^[\u0009-\u000D\u0020]$/.test(after)) return true;
+    if (/[-\u00AD\u2010]$/u.test(before)) return true;
+
+    const style = this.view.getComputedStyle(paragraph);
+    if (style.wordBreak === "break-all"
+        || style.overflowWrap === "anywhere"
+        || style.overflowWrap === "break-word") return true;
+
+    const eastAsian = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+    if (!eastAsian.test(before) && !eastAsian.test(after)) return false;
+    const opening = "([{<\u2018\u201C\u3008\u300A\u300C\u300E\u3010\u3014\u3016\u3018\u301A\uFF08\uFF3B\uFF5B";
+    const closing = ")]}>\u2019\u201D\u3001\u3002\u3009\u300B\u300D\u300F\u3011\u3015\u3017\u3019\u301B\uFF01\uFF05\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\uFF3D\uFF5D";
+    return !opening.includes(before) && !closing.includes(after);
+  }
+
+  /** Never fragment across characters whose line-break meaning is explicitly non-breaking. */
+  private isNonBreakingTextBoundary(text: string, offset: number): boolean {
+    const codePointBefore = (index: number): number | undefined => {
+      if (index <= 0) return undefined;
+      const last = text.charCodeAt(index - 1);
+      const start = last >= 0xDC00 && last <= 0xDFFF ? index - 2 : index - 1;
+      return text.codePointAt(Math.max(0, start));
+    };
+    const nonBreaking = new Set([
+      0x00A0, 0x200E, 0x200F, 0x2011, 0x202A, 0x202B, 0x202C,
+      0x202D, 0x202E, 0x202F, 0x2060, 0x2066, 0x2067, 0x2068,
+      0x2069, 0xFEFF,
+    ]);
+    return nonBreaking.has(codePointBefore(offset) ?? -1)
+      || nonBreaking.has(text.codePointAt(offset) ?? -1);
+  }
+
+  /**
+   * Without Intl.Segmenter, admit only an all-ASCII boundary. This still
+   * fragments ordinary prose while refusing to guess about Unicode clusters.
+   */
+  private isConservativeFallbackTextBoundary(text: string, offset: number): boolean {
+    return text.charCodeAt(offset - 1) <= 0x7F && text.charCodeAt(offset) <= 0x7F;
   }
 
   /**
@@ -1768,7 +1988,11 @@ export class PaginationEngine {
    * this is enough to reject empty head or tail fragments.
    */
   private hasVisibleFragmentText(fragment: DocumentFragment): boolean {
-    return (fragment.textContent || "")
+    return this.hasVisibleText(fragment.textContent || "");
+  }
+
+  private hasVisibleText(text: string): boolean {
+    return text
       .replace(/[\u200B-\u200F\uFEFF]/g, "")
       .trim()
       .length > 0;
@@ -1781,7 +2005,7 @@ export class PaginationEngine {
    * fallback instead of risking broken content or duplicate anchors.
    */
   private canFragmentParagraph(block: MeasuredBlock): boolean {
-    if (!this.fragmentParagraphs || block.element.tagName !== "P") {
+    if (!this.fragmentParagraphs) {
       return false;
     }
 
@@ -1797,8 +2021,33 @@ export class PaginationEngine {
       return false;
     }
 
-    // The outer paragraph may carry its source identity. Descendant identities
-    // are not safe to duplicate in a continuation fragment, so reject them.
+    return this.canRangeFragmentParagraph(paragraph);
+  }
+
+  /**
+   * Shared structural gate for body and note paragraph fragmentation. Footnote
+   * first paragraphs are inline beside their marker, so that one known layout
+   * context may opt into an inline root while retaining every descendant and
+   * break-safety restriction used for body text.
+   */
+  private canRangeFragmentParagraph(
+    paragraph: HTMLElement,
+    allowInlineRoot: boolean = false,
+  ): boolean {
+    if (
+      paragraph.tagName !== "P" ||
+      paragraph.dataset.keepWithNext === "true" ||
+      paragraph.dataset.keepLines === "true" ||
+      paragraph.dataset.pageBreakBefore === "true" ||
+      paragraph.dataset.widowControl === "true" ||
+      paragraph.hasAttribute("contenteditable")
+    ) {
+      return false;
+    }
+
+    // Non-textual/out-of-flow descendants still need dedicated fragmenters.
+    // Inline ids/editor anchors are reconciled after Range cloning, and list
+    // markers are kept atomically with the leading text fragment.
     const unsupportedDescendants = [
       "br",
       "img",
@@ -1829,9 +2078,6 @@ export class PaginationEngine {
       "fieldset",
       "details",
       "[data-footnote-id]",
-      "[data-list-marker]",
-      "[data-anchor]",
-      "[id]",
       "[contenteditable]",
     ].join(", ");
     if (paragraph.querySelector(unsupportedDescendants)) {
@@ -1839,7 +2085,7 @@ export class PaginationEngine {
     }
 
     const isValidatedEndnote = paragraph.dataset.paginationSafeEndnote === "true";
-    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph);
+    return isValidatedEndnote || this.hasRangeFragmentSafeLayout(paragraph, allowInlineRoot);
   }
 
   /**
@@ -1847,13 +2093,17 @@ export class PaginationEngine {
    * box/layout context is deferred until a future fragmenter can model it accurately. Callers
    * must invoke this while the paragraph is attached to the styled document.
    */
-  private hasRangeFragmentSafeLayout(paragraph: HTMLElement): boolean {
+  private hasRangeFragmentSafeLayout(
+    paragraph: HTMLElement,
+    allowInlineRoot: boolean = false,
+  ): boolean {
     const paragraphStyle = this.view.getComputedStyle(paragraph);
     if (
-      paragraphStyle.display !== "block" ||
+      (paragraphStyle.display !== "block" &&
+        !(allowInlineRoot && paragraphStyle.display === "inline")) ||
       paragraphStyle.position !== "static" ||
       paragraphStyle.float !== "none" ||
-      paragraphStyle.whiteSpace !== "normal" ||
+      (paragraphStyle.whiteSpace !== "normal" && paragraphStyle.whiteSpace !== "pre-wrap") ||
       paragraphStyle.breakBefore !== "auto" ||
       paragraphStyle.breakAfter !== "auto" ||
       paragraphStyle.breakInside === "avoid" ||
@@ -1911,6 +2161,129 @@ export class PaginationEngine {
   }
 
   /**
+   * Range clones repeat an inline ancestor when the split lands inside it. Keep
+   * semantic wrappers (links, comments, formatting) on both sides, but retain a
+   * duplicated HTML/editor identity only on the leading fragment. Targets that
+   * occur wholly after the split are absent from `head` and remain on `tail`.
+   */
+  private reconcileParagraphFragmentIdentities(
+    head: HTMLElement,
+    tail: HTMLElement,
+  ): void {
+    const elements = (root: HTMLElement, selector: string): HTMLElement[] => [
+      ...(root.matches(selector) ? [root] : []),
+      ...Array.from(root.querySelectorAll<HTMLElement>(selector)),
+    ];
+
+    const headIds = new Set(elements(head, "[id]").map((element) => element.id));
+    for (const element of elements(tail, "[id]")) {
+      if (headIds.has(element.id)) element.removeAttribute("id");
+    }
+
+    const headAnchors = new Set(elements(head, "[data-anchor]")
+      .map((element) => element.dataset.anchor)
+      .filter((anchor): anchor is string => Boolean(anchor)));
+    for (const element of elements(tail, "[data-anchor]")) {
+      if (!element.dataset.anchor || !headAnchors.has(element.dataset.anchor)) continue;
+      element.removeAttribute("data-anchor");
+      element.removeAttribute("data-committed-text");
+    }
+  }
+
+  /**
+   * Range-clone the largest safe prefix accepted by `fits`. The measurement
+   * policy stays with the caller, allowing body blocks and note bands to share
+   * one DOM fragmenter while measuring in their respective layout contexts.
+   */
+  private splitParagraphAtLargestFit(
+    paragraph: HTMLElement,
+    fits: (head: HTMLElement) => boolean,
+    options: {
+      emergencyGraphemeBreaks?: boolean;
+      forceFirstOnNoFit?: boolean;
+    } = {},
+  ): ParagraphSplitAttempt {
+    const largestFit = (endpoints: ParagraphFragmentEndpoint[]) => {
+      // Prefix height is usually monotone, but selector-sensitive inline CSS
+      // (`:last-child`, `:only-child`) can make a longer Range clone shorter.
+      // Probe the largest legal endpoint first so the common non-monotone case
+      // cannot be discarded by the binary search below.
+      const lastEndpoint = endpoints[endpoints.length - 1];
+      if (lastEndpoint) {
+        const lastRange = this.document.createRange();
+        lastRange.setStart(paragraph, 0);
+        lastRange.setEnd(lastEndpoint.node, lastEndpoint.offset);
+        const lastContents = lastRange.cloneContents();
+        if (this.hasVisibleFragmentText(lastContents)) {
+          const lastHead = this.createParagraphFragment(paragraph, lastRange, true, false);
+          if (fits(lastHead)) return { endpoint: lastEndpoint, head: lastHead };
+        }
+      }
+
+      let low = 0;
+      let high = endpoints.length - 2;
+      let best: { endpoint: ParagraphFragmentEndpoint; head: HTMLElement } | null = null;
+      while (low <= high) {
+        this.checkpoint();
+        const middle = Math.floor((low + high) / 2);
+        const endpoint = endpoints[middle];
+        const headRange = this.document.createRange();
+        headRange.setStart(paragraph, 0);
+        headRange.setEnd(endpoint.node, endpoint.offset);
+        const headContents = headRange.cloneContents();
+        if (!this.hasVisibleFragmentText(headContents)) {
+          low = middle + 1;
+          continue;
+        }
+
+        const head = this.createParagraphFragment(paragraph, headRange, true, false);
+        if (fits(head)) {
+          best = { endpoint, head };
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      return best;
+    };
+
+    let endpoints = this.paragraphFragmentEndpoints(paragraph);
+    let best = largestFit(endpoints);
+    if (!best && options.emergencyGraphemeBreaks) {
+      endpoints = this.paragraphFragmentEndpoints(paragraph, true);
+      best = largestFit(endpoints);
+    }
+    if (!best && options.forceFirstOnNoFit && endpoints.length > 0) {
+      const endpoint = endpoints[0];
+      const headRange = this.document.createRange();
+      headRange.setStart(paragraph, 0);
+      headRange.setEnd(endpoint.node, endpoint.offset);
+      best = {
+        endpoint,
+        head: this.createParagraphFragment(paragraph, headRange, true, false),
+      };
+    }
+    if (!best) {
+      return endpoints.length > 0 ? { kind: "no-fit" } : { kind: "indivisible" };
+    }
+
+    const tailRange = this.document.createRange();
+    tailRange.setStart(best.endpoint.node, best.endpoint.offset);
+    tailRange.setEnd(paragraph, paragraph.childNodes.length);
+    const tailContents = tailRange.cloneContents();
+    if (!this.hasVisibleFragmentText(tailContents)) return { kind: "indivisible" };
+
+    const tail = this.createParagraphFragment(paragraph, tailRange, false, true);
+    this.reconcileParagraphFragmentIdentities(best.head, tail);
+
+    return {
+      kind: "split",
+      head: best.head,
+      tail,
+    };
+  }
+
+  /**
    * Splits a simple paragraph at the largest DOM Range endpoint that fits the
    * currently available body space. The caller then processes the tail normally,
    * allowing it to fragment again on later pages when necessary.
@@ -1925,63 +2298,19 @@ export class PaginationEngine {
       return null;
     }
 
-    const paragraph = block.element;
-    const endpoints = this.paragraphFragmentEndpoints(paragraph);
-    // The final endpoint is the full paragraph and cannot leave a tail. A
-    // single text run with no earlier whitespace remains an overflow fallback.
-    if (endpoints.length < 2) {
-      return null;
-    }
-
-    let low = 0;
-    let high = endpoints.length - 2;
-    let best: { endpoint: { node: Text; offset: number }; element: HTMLElement; measured: MeasuredBlock } | null = null;
-
-    // Fragment height is monotonic for the deliberately narrow eligible subset,
-    // so binary search avoids measuring every word in long body paragraphs.
-    while (low <= high) {
-      this.checkpoint();
-      const middle = Math.floor((low + high) / 2);
-      const endpoint = endpoints[middle];
-      const headRange = this.document.createRange();
-      headRange.setStart(paragraph, 0);
-      headRange.setEnd(endpoint.node, endpoint.offset);
-      const headContents = headRange.cloneContents();
-
-      if (!this.hasVisibleFragmentText(headContents)) {
-        low = middle + 1;
-        continue;
-      }
-
-      const head = this.createParagraphFragment(paragraph, headRange, true, false);
+    const split = this.splitParagraphAtLargestFit(block.element, (head) => {
       const measured = this.measureElement(head, dims, block.sectionIndex);
-      if (effectiveMarginTopPt + measured.heightPt <= availableHeightPt) {
-        best = { endpoint, element: head, measured };
-        low = middle + 1;
-      } else {
-        high = middle - 1;
-      }
-    }
+      return effectiveMarginTopPt + measured.heightPt <= availableHeightPt;
+    });
+    if (split.kind !== "split") return null;
 
-    if (!best) {
-      return null;
-    }
-
-    const tailRange = this.document.createRange();
-    tailRange.setStart(best.endpoint.node, best.endpoint.offset);
-    tailRange.setEnd(paragraph, paragraph.childNodes.length);
-    const tailContents = tailRange.cloneContents();
-    if (!this.hasVisibleFragmentText(tailContents)) {
-      return null;
-    }
-
-    const tail = this.createParagraphFragment(paragraph, tailRange, false, true);
-    const tailMeasured = this.measureElement(tail, dims, block.sectionIndex);
+    const headMeasured = this.measureElement(split.head, dims, block.sectionIndex);
+    const tailMeasured = this.measureElement(split.tail, dims, block.sectionIndex);
 
     return [
       {
-        ...best.measured,
-        element: best.element,
+        ...headMeasured,
+        element: split.head,
         keepWithNext: false,
         keepLines: false,
         pageBreakBefore: false,
@@ -1989,7 +2318,7 @@ export class PaginationEngine {
       },
       {
         ...tailMeasured,
-        element: tail,
+        element: split.tail,
         keepWithNext: false,
         keepLines: false,
         pageBreakBefore: false,
@@ -2079,7 +2408,12 @@ export class PaginationEngine {
 
     if (!registryEl) return registry;
 
-    const entries = Array.from(registryEl.querySelectorAll<HTMLElement>("[data-footnote-id]"));
+    // Only direct registry entries are definitions. Custom separator stories may
+    // legitimately contain arbitrary converted markup, including stale semantic
+    // attributes that must never be mistaken for another note definition.
+    const entries = Array.from(registryEl.children)
+      .filter((entry): entry is HTMLElement =>
+        entry instanceof this.view.HTMLElement && entry.hasAttribute("data-footnote-id"));
 
     for (const entry of entries) {
       const footnoteId = entry.dataset.footnoteId;
@@ -2090,6 +2424,56 @@ export class PaginationEngine {
     }
 
     return registry;
+  }
+
+  /** Read Word's optional normal and continuation separator stories. */
+  private parseFootnoteSeparators(): {
+    normal: HTMLElement | null;
+    continuation: HTMLElement | null;
+  } {
+    const registry = this.stagingElement.querySelector("#pagination-footnote-registry");
+    const clone = (kind: "normal" | "continuation") => {
+      const source = Array.from(registry?.children ?? []).find((entry) =>
+        entry instanceof this.view.HTMLElement
+        && entry.getAttribute("data-footnote-separator") === kind,
+      );
+      return source?.cloneNode(true) as HTMLElement | undefined;
+    };
+    return {
+      normal: clone("normal") ?? null,
+      continuation: clone("continuation") ?? null,
+    };
+  }
+
+  /** Append the exact separator story selected for this initial/continued note band. */
+  private appendFootnoteSeparator(container: HTMLElement, continuation: boolean): void {
+    const kind = continuation ? "continuation" : "normal";
+    const source = continuation ? this.footnoteContinuationSeparator : this.footnoteSeparator;
+    if (!source) {
+      const fallback = this.document.createElement("hr");
+      fallback.dataset.footnoteSeparator = kind;
+      container.appendChild(fallback);
+      return;
+    }
+
+    const clone = source.cloneNode(true) as HTMLElement;
+    for (const element of [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))]) {
+      element.removeAttribute("id");
+      element.removeAttribute("data-anchor");
+      element.removeAttribute("data-committed-text");
+      element.removeAttribute("data-source-anchor-id");
+      element.removeAttribute("data-page-fragment-id");
+      element.removeAttribute("data-fragment-index");
+      element.removeAttribute("data-footnote-id");
+      element.removeAttribute("data-comment-id");
+      element.removeAttribute("name");
+      if (element instanceof this.view.HTMLAnchorElement
+          && element.getAttribute("href")?.startsWith("#")) {
+        element.removeAttribute("href");
+      }
+      element.setAttribute("contenteditable", "false");
+    }
+    container.appendChild(clone);
   }
 
   /** Parses the hidden source notes used to render paginated margin comments. */
@@ -2124,6 +2508,122 @@ export class PaginationEngine {
     return ids;
   }
 
+  /** Clone a note child for the continuation queue with its original selector position. */
+  private cloneFootnoteElementForContinuation(
+    element: HTMLElement,
+    sourceIndex: number,
+  ): HTMLElement {
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.setAttribute(
+      FOOTNOTE_SOURCE_POSITION_ATTR,
+      sourceIndex === 0 ? "first" : "later",
+    );
+    return clone;
+  }
+
+  /** Remove identities that belong only to the initial registry presentation shell. */
+  private makeContinuationShellInert(element: HTMLElement): void {
+    element.removeAttribute("id");
+    element.removeAttribute("data-anchor");
+    element.removeAttribute("data-committed-text");
+  }
+
+  /**
+   * Build the exact continuation shape shared by measurement and paint.
+   *
+   * Keep the source `.footnote-item > .footnote-content` ancestry: document
+   * CSS, inherited direction/language, and custom classes frequently target
+   * those shells. Only the number and initial HTML/editor identities are
+   * omitted. A hidden sentinel preserves `p:not(:first-of-type)` for a page
+   * whose first carried element was a later source paragraph.
+   */
+  private createFootnoteContinuationWrapper(
+    continuation: FootnoteContinuation,
+    elements: readonly HTMLElement[] = continuation.remainingElements,
+  ): HTMLElement {
+    const source = this.footnoteRegistry.get(continuation.footnoteId);
+    const wrapper = source
+      ? source.cloneNode(false) as HTMLElement
+      : this.document.createElement("div");
+    this.makeContinuationShellInert(wrapper);
+    wrapper.classList.add("footnote-continuation");
+    wrapper.dataset.footnoteId = continuation.footnoteId;
+    if (continuation.sourceAnchorId) {
+      wrapper.dataset.sourceAnchorId = continuation.sourceAnchorId;
+    }
+
+    const sourceContent = source?.querySelector<HTMLElement>(".footnote-content");
+    const content = sourceContent
+      ? sourceContent.cloneNode(false) as HTMLElement
+      : this.document.createElement("span");
+    this.makeContinuationShellInert(content);
+    if (!sourceContent) content.className = "footnote-content";
+
+    const first = elements[0];
+    if (
+      first?.tagName === "P"
+      && first.getAttribute(FOOTNOTE_SOURCE_POSITION_ATTR) === "later"
+    ) {
+      const sentinel = this.document.createElement("p");
+      sentinel.className = "footnote-continuation-position-sentinel";
+      sentinel.setAttribute("aria-hidden", "true");
+      sentinel.style.setProperty("display", "none", "important");
+      content.appendChild(sentinel);
+    }
+    for (let index = 0; index < elements.length; index++) {
+      this.checkpoint();
+      const element = elements[index];
+      const clone = element.cloneNode(true) as HTMLElement;
+      clone.removeAttribute(FOOTNOTE_SOURCE_POSITION_ATTR);
+      if (index === 0 && clone.tagName === "P") {
+        // Without the initial number, a carried paragraph always starts a new
+        // line even when source CSS made the note's first paragraph inline.
+        clone.style.setProperty("display", "block", "important");
+      }
+      content.appendChild(clone);
+    }
+    wrapper.appendChild(content);
+    return wrapper;
+  }
+
+  /** Build the exact partial-note item shape shared by measurement and paint. */
+  private createPartialFootnoteItem(
+    footnote: HTMLElement,
+    fittingElements: readonly HTMLElement[],
+  ): HTMLElement {
+    const item = footnote.cloneNode(false) as HTMLElement;
+    const number = footnote.querySelector(".footnote-number");
+    if (number) item.appendChild(number.cloneNode(true));
+
+    const sourceContent = footnote.querySelector<HTMLElement>(".footnote-content");
+    const content = sourceContent
+      ? sourceContent.cloneNode(false) as HTMLElement
+      : this.document.createElement("span");
+    if (!sourceContent) content.className = "footnote-content";
+    for (const element of fittingElements) {
+      this.checkpoint();
+      content.appendChild(element.cloneNode(true));
+    }
+    item.appendChild(content);
+    return item;
+  }
+
+  /**
+   * Where a note measurement tree is attached.
+   *
+   * A note band is reserved from a measurement and then painted; if the two
+   * happen under different inherited typography the painted notes overflow the
+   * reserve, which is the invisible clipping this engine exists to avoid. The
+   * registry lives in the staging tree but a band paints inside the output
+   * container, so measure there. The host is never a page box, so a page's
+   * `zoom` cannot scale a reserve that is accounted for in unscaled points.
+   */
+  private noteMeasurementHost(): HTMLElement {
+    return this.containerElement.isConnected
+      ? this.containerElement
+      : this.stagingElement;
+  }
+
   /**
    * Measures the height of footnotes for given IDs (in points).
    * Creates a temporary container to measure the footnotes.
@@ -2134,10 +2634,17 @@ export class PaginationEngine {
   private measureFootnotesHeight(
     footnoteIds: string[],
     contentWidth: number,
-    continuation?: FootnoteContinuation | null
+    continuation?: FootnoteContinuation | null,
+    partialFootnotes?: readonly PartialFootnote[],
   ): number {
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
-    if ((footnoteIds.length === 0 && !hasContinuation) || this.footnoteRegistry.size === 0) {
+    if (footnoteIds.length === 0 && !hasContinuation) {
+      return 0;
+    }
+    // Mirror addPageFootnotes: with no registry and nothing carried, no band is
+    // painted, so reserving the separator's height would shrink every page's
+    // body for a document whose note references resolve to nothing.
+    if (this.footnoteRegistry.size === 0 && !hasContinuation) {
       return 0;
     }
 
@@ -2152,85 +2659,43 @@ export class PaginationEngine {
     measureContainer.style.left = "-9999px";
     measureContainer.className = this.cssPrefix + "footnotes";
 
-    // Add separator line (same as will be rendered)
-    const hr = this.document.createElement("hr");
-    measureContainer.appendChild(hr);
+    // Add the same normal/continuation separator story that will be painted.
+    this.appendFootnoteSeparator(measureContainer, Boolean(hasContinuation));
 
     // Add continuation content first (if any)
     if (hasContinuation) {
-      const contWrapper = this.document.createElement("div");
-      contWrapper.className = "footnote-continuation";
-      contWrapper.dataset.footnoteId = continuation!.footnoteId;
-      if (continuation!.sourceAnchorId) {
-        contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
-      }
-      for (const el of continuation!.remainingElements) {
-        contWrapper.appendChild(el.cloneNode(true));
-      }
-      measureContainer.appendChild(contWrapper);
+      measureContainer.appendChild(this.createFootnoteContinuationWrapper(continuation!));
     }
 
     // Add footnotes
+    const partialById = new Map(
+      partialFootnotes?.map((partial) => [partial.footnoteId, partial] as const) ?? [],
+    );
     for (const id of footnoteIds) {
       this.checkpoint();
       const footnote = this.footnoteRegistry.get(id);
       if (footnote) {
-        measureContainer.appendChild(footnote.cloneNode(true));
+        const partial = partialById.get(id);
+        measureContainer.appendChild(partial
+          ? this.createPartialFootnoteItem(footnote, partial.fittingElements)
+          : footnote.cloneNode(true));
       }
     }
 
     // Append to staging for measurement
-    this.stagingElement.appendChild(measureContainer);
-
-    // Measure
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-
-    // Clean up
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
+    this.noteMeasurementHost().appendChild(measureContainer);
+    try {
+      return pxToPt(measureContainer.getBoundingClientRect().height);
+    } finally {
+      measureContainer.remove();
+    }
   }
 
   /**
-   * Measures the height of just the continuation content (in points).
-   */
-  private measureContinuationHeight(
-    continuation: FootnoteContinuation,
-    contentWidth: number
-  ): number {
-    if (!continuation || continuation.remainingElements.length === 0) {
-      return 0;
-    }
-
-    const measureContainer = this.document.createElement("div");
-    measureContainer.style.position = "absolute";
-    measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
-    measureContainer.style.left = "-9999px";
-    measureContainer.className = this.cssPrefix + "footnotes";
-
-    // Add separator line
-    const hr = this.document.createElement("hr");
-    measureContainer.appendChild(hr);
-
-    // Add continuation content
-    for (const el of continuation.remainingElements) {
-      measureContainer.appendChild(el.cloneNode(true));
-    }
-
-    this.stagingElement.appendChild(measureContainer);
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
-  }
-
-  /**
-   * Partition a continuation at complete child boundaries for one page's note band.
-   * Always advances by at least one element so an indivisible oversized paragraph
-   * follows the established clipped fallback without trapping pagination in a loop.
+   * Partition a continuation for one page's note band, preferring complete children
+   * and range-fragmenting an eligible paragraph when necessary. Always advances by
+   * at least one element so an indivisible oversized paragraph follows the established
+   * clipped fallback without trapping pagination in a loop.
    */
   private splitContinuationForPage(
     continuation: FootnoteContinuation,
@@ -2238,22 +2703,100 @@ export class PaginationEngine {
     contentWidth: number,
   ): { current: FootnoteContinuation; overflow: FootnoteContinuation | null } {
     const fitting: HTMLElement[] = [];
-    let fittingHeight = 0;
+    let remaining: HTMLElement[] = [];
 
-    for (const element of continuation.remainingElements) {
-      const candidate: FootnoteContinuation = {
-        footnoteId: continuation.footnoteId,
-        sourceAnchorId: continuation.sourceAnchorId,
-        remainingElements: [...fitting, element],
-      };
-      const candidateHeight = this.measureContinuationHeight(candidate, contentWidth);
-      if (fitting.length > 0 && candidateHeight > availableHeightPt) break;
-      fitting.push(element);
-      fittingHeight = candidateHeight;
-      if (fittingHeight >= availableHeightPt) break;
+    // Keep one live measurement tree and append each candidate exactly once.
+    // Rebuilding `[...fitting, candidate]` for every child cloned 1+2+...+N
+    // descendants before a page/resource cap could run, which is quadratic for
+    // producer-authored notes containing thousands of tiny paragraphs/runs.
+    const measureContainer = this.document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.left = "-9999px";
+    measureContainer.className = this.cssPrefix + "footnotes";
+    this.appendFootnoteSeparator(measureContainer, true);
+    const wrapper = this.createFootnoteContinuationWrapper(continuation, []);
+    const content = wrapper.querySelector<HTMLElement>(":scope > .footnote-content");
+    if (!content) {
+      throw new Error("Footnote continuation is missing its content shell");
+    }
+    measureContainer.appendChild(wrapper);
+    this.noteMeasurementHost().appendChild(measureContainer);
+
+    try {
+      for (let index = 0; index < continuation.remainingElements.length; index++) {
+        this.checkpoint();
+        const element = continuation.remainingElements[index];
+        const sourcePosition = element.getAttribute(FOOTNOTE_SOURCE_POSITION_ATTR);
+        if (
+          fitting.length === 0
+          && element.tagName === "P"
+          && element.getAttribute(FOOTNOTE_SOURCE_POSITION_ATTR) === "later"
+        ) {
+          const sentinel = this.document.createElement("p");
+          sentinel.className = "footnote-continuation-position-sentinel";
+          sentinel.setAttribute("aria-hidden", "true");
+          sentinel.style.setProperty("display", "none", "important");
+          content.appendChild(sentinel);
+        }
+
+        const candidate = element.cloneNode(true) as HTMLElement;
+        candidate.removeAttribute(FOOTNOTE_SOURCE_POSITION_ATTR);
+        if (fitting.length === 0 && candidate.tagName === "P") {
+          candidate.style.setProperty("display", "block", "important");
+        }
+        content.appendChild(candidate);
+        const candidateHeight = pxToPt(measureContainer.getBoundingClientRect().height);
+        if (candidateHeight <= availableHeightPt) {
+          fitting.push(element);
+          continue;
+        }
+
+        const canSplitCandidate = candidate.tagName === "P"
+          && this.canRangeFragmentParagraph(candidate);
+        candidate.remove();
+        let split: ParagraphSplitAttempt | null = null;
+        if (canSplitCandidate) {
+          split = this.splitParagraphAtLargestFit(candidate, (head) => {
+            content.appendChild(head);
+            try {
+              return pxToPt(measureContainer.getBoundingClientRect().height) <= availableHeightPt;
+            } finally {
+              head.remove();
+            }
+          }, {
+            // Both fallbacks below cut where ordinary line breaking would not,
+            // so they are only ever right for an element that owns the whole
+            // band: if this page already carries earlier content, a paragraph
+            // that will not start here belongs intact in the next note band.
+            emergencyGraphemeBreaks: fitting.length === 0,
+            // A continuation page owns the full note band. If even one legal
+            // grapheme is taller than it, clip only that unit and keep draining.
+            forceFirstOnNoFit: fitting.length === 0,
+          });
+        }
+        if (split?.kind === "split") {
+          if (sourcePosition) {
+            split.head.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+            split.tail.setAttribute(FOOTNOTE_SOURCE_POSITION_ATTR, sourcePosition);
+          }
+          fitting.push(split.head);
+          remaining = [split.tail, ...continuation.remainingElements.slice(index + 1)];
+        } else if (fitting.length === 0) {
+          // A genuinely indivisible first element retains the established visible
+          // clipped fallback, but only for itself. Its siblings continue later.
+          fitting.push(element);
+          remaining = continuation.remainingElements.slice(index + 1);
+        } else {
+          remaining = continuation.remainingElements.slice(index);
+        }
+        break;
+      }
+    } finally {
+      measureContainer.remove();
     }
 
-    const remaining = continuation.remainingElements.slice(fitting.length);
     return {
       current: {
         footnoteId: continuation.footnoteId,
@@ -2275,8 +2818,62 @@ export class PaginationEngine {
   private splitFootnoteToFit(
     footnoteElement: HTMLElement,
     availableHeightPt: number,
-    contentWidth: number
+    contentWidth: number,
+    forceProgress = false,
+    existingPayload?: FootnotePackingContext,
   ): { fits: HTMLElement[]; overflow: HTMLElement[] } {
+    // Registry entries are detached clones, so getComputedStyle() cannot validate
+    // their real paragraph layout. Attach an exact clone in the rendered note
+    // context for the duration of the conservative range-fragmentation check.
+    const layoutContext = this.document.createElement("div");
+    layoutContext.style.position = "absolute";
+    layoutContext.style.visibility = "hidden";
+    layoutContext.style.width = `${contentWidth}pt`;
+    layoutContext.style.left = "-9999px";
+    layoutContext.className = this.cssPrefix + "footnotes";
+    this.appendFootnoteSeparator(layoutContext, false);
+    const attachedFootnote = footnoteElement.cloneNode(true) as HTMLElement;
+    layoutContext.appendChild(attachedFootnote);
+    this.noteMeasurementHost().appendChild(layoutContext);
+
+    // A second live tree represents the exact already-packed page payload plus
+    // an initially empty partial item. Candidates are appended once and layout
+    // is read in place, avoiding cumulative prefix re-cloning.
+    const measureContainer = this.document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.left = "-9999px";
+    measureContainer.className = this.cssPrefix + "footnotes";
+    const hasContinuation = Boolean(existingPayload?.continuation?.remainingElements.length);
+    this.appendFootnoteSeparator(measureContainer, hasContinuation);
+    if (hasContinuation) {
+      measureContainer.appendChild(this.createFootnoteContinuationWrapper(
+        existingPayload!.continuation!,
+      ));
+    }
+    const partialById = new Map(
+      existingPayload?.partialFootnotes?.map((partial) =>
+        [partial.footnoteId, partial] as const) ?? [],
+    );
+    for (const id of existingPayload?.footnoteIds ?? []) {
+      this.checkpoint();
+      const source = this.footnoteRegistry.get(id);
+      if (!source) continue;
+      const partial = partialById.get(id);
+      measureContainer.appendChild(partial
+        ? this.createPartialFootnoteItem(source, partial.fittingElements)
+        : source.cloneNode(true));
+    }
+    const measuredPartial = this.createPartialFootnoteItem(attachedFootnote, []);
+    const measuredContent = measuredPartial.querySelector<HTMLElement>(":scope > .footnote-content");
+    if (!measuredContent) {
+      layoutContext.remove();
+      throw new Error("Footnote is missing its content shell");
+    }
+    measureContainer.appendChild(measuredPartial);
+    this.noteMeasurementHost().appendChild(measureContainer);
+
     // Get child elements (paragraphs) of the footnote content.
     //
     // `fits` is spliced into a freshly built `.footnote-item` > `.footnote-content` wrapper by
@@ -2285,99 +2882,86 @@ export class PaginationEngine {
     // inside another item's content span; the inner block-level div then broke the line, so the
     // note's number rendered alone above its text — the same visible symptom as the escaped-CSS
     // bug, from an unrelated cause, on the notes that happened to take a can't-split path.
-    const footnoteContent = footnoteElement.querySelector(".footnote-content");
-    if (!footnoteContent) {
-      // No content structure to split — hand back the element's own children.
-      return {
-        fits: Array.from(footnoteElement.children).map((el) => el.cloneNode(true) as HTMLElement),
-        overflow: [],
-      };
-    }
+    try {
+      const footnoteContent = attachedFootnote.querySelector(".footnote-content");
+      if (!footnoteContent) {
+        // No content structure to split — hand back the element's own children.
+        return {
+          fits: Array.from(attachedFootnote.children).map((el) =>
+            el.cloneNode(true) as HTMLElement),
+          overflow: [],
+        };
+      }
 
-    const children = Array.from(footnoteContent.children) as HTMLElement[];
-    if (children.length <= 1) {
-      // Single paragraph: can't split at paragraph level, but the whole content still fits.
-      return {
-        fits: children.map((el) => el.cloneNode(true) as HTMLElement),
-        overflow: [],
-      };
-    }
+      const children = Array.from(footnoteContent.children) as HTMLElement[];
+      const fits: HTMLElement[] = [];
+      let overflow: HTMLElement[] = [];
 
-    const fits: HTMLElement[] = [];
-    const overflow: HTMLElement[] = [];
-    let currentHeight = 0;
+      for (let i = 0; i < children.length; i++) {
+        this.checkpoint();
+        const child = children[i];
+        const measuredCandidate = child.cloneNode(true) as HTMLElement;
+        measuredContent.appendChild(measuredCandidate);
+        const candidateFits = pxToPt(measureContainer.getBoundingClientRect().height)
+          <= availableHeightPt;
+        if (candidateFits) {
+          fits.push(child.cloneNode(true) as HTMLElement);
+          continue;
+        }
 
-    // Measure separator line height
-    const hrMeasure = this.document.createElement("div");
-    hrMeasure.style.position = "absolute";
-    hrMeasure.style.visibility = "hidden";
-    hrMeasure.style.width = `${contentWidth}pt`;
-    hrMeasure.style.left = "-9999px";
-    hrMeasure.className = this.cssPrefix + "footnotes";
-    const hr = this.document.createElement("hr");
-    hrMeasure.appendChild(hr);
-    this.stagingElement.appendChild(hrMeasure);
-    const hrHeight = pxToPt(hrMeasure.getBoundingClientRect().height);
-    this.stagingElement.removeChild(hrMeasure);
+        measuredCandidate.remove();
 
-    currentHeight = hrHeight;
-
-    // Also account for footnote number
-    const footnoteNumber = footnoteElement.querySelector(".footnote-number");
-
-    for (let i = 0; i < children.length; i++) {
-      this.checkpoint();
-      const child = children[i];
-
-      // Measure this element
-      const measureContainer = this.document.createElement("div");
-      measureContainer.style.position = "absolute";
-      measureContainer.style.visibility = "hidden";
-      measureContainer.style.width = `${contentWidth}pt`;
-      measureContainer.style.left = "-9999px";
-      measureContainer.className = this.cssPrefix + "footnotes";
-      measureContainer.appendChild(child.cloneNode(true));
-      this.stagingElement.appendChild(measureContainer);
-      const childHeight = pxToPt(measureContainer.getBoundingClientRect().height);
-      this.stagingElement.removeChild(measureContainer);
-
-      if (currentHeight + childHeight <= availableHeightPt) {
-        fits.push(child.cloneNode(true) as HTMLElement);
-        currentHeight += childHeight;
-      } else {
-        // This and remaining elements overflow
-        for (let j = i; j < children.length; j++) {
-          this.checkpoint();
-          overflow.push(children[j].cloneNode(true) as HTMLElement);
+        const split = this.canRangeFragmentParagraph(child, true)
+          ? this.splitParagraphAtLargestFit(child, (head) => {
+            measuredContent.appendChild(head);
+            try {
+              return pxToPt(measureContainer.getBoundingClientRect().height)
+                <= availableHeightPt;
+            } finally {
+              head.remove();
+            }
+          }, {
+            // Both fallbacks cut where ordinary line breaking would not, so they
+            // are only ever right for an element that owns the whole band: with
+            // earlier siblings already packed here, a paragraph that will not
+            // start belongs intact in the next note band.
+            emergencyGraphemeBreaks: fits.length === 0 && forceProgress,
+            forceFirstOnNoFit: fits.length === 0 && forceProgress,
+          })
+          : null;
+        if (split?.kind === "split") {
+          fits.push(split.head);
+          split.tail.setAttribute(
+            FOOTNOTE_SOURCE_POSITION_ATTR,
+            i === 0 ? "first" : "later",
+          );
+          overflow = [split.tail, ...children.slice(i + 1).map((element, offset) =>
+            this.cloneFootnoteElementForContinuation(element, i + 1 + offset))];
+        } else if (split?.kind === "no-fit") {
+          // The paragraph is splittable, but this citation page has less than
+          // one line left. Defer it whole so a fresh note band can try again.
+          overflow = children.slice(i).map((element, offset) =>
+            this.cloneFootnoteElementForContinuation(element, i + offset));
+        } else if (fits.length === 0 && forceProgress) {
+          // Preserve the one-element clipping fallback for content that cannot be
+          // range-fragmented only on a dedicated full note band, while allowing
+          // every later sibling to continue. A residual citation-page band must
+          // defer the whole element: it may fit untouched on the next page.
+          fits.push(child.cloneNode(true) as HTMLElement);
+          overflow = children.slice(i + 1).map((element, offset) =>
+            this.cloneFootnoteElementForContinuation(element, i + 1 + offset));
+        } else {
+          overflow = children.slice(i).map((element, offset) =>
+            this.cloneFootnoteElementForContinuation(element, i + offset));
         }
         break;
       }
+
+      return { fits, overflow };
+    } finally {
+      measureContainer.remove();
+      layoutContext.remove();
     }
-
-    return { fits, overflow };
-  }
-
-  /**
-   * Measures a single footnote's height.
-   */
-  private measureSingleFootnoteHeight(footnoteId: string, contentWidth: number): number {
-    const footnote = this.footnoteRegistry.get(footnoteId);
-    if (!footnote) return 0;
-
-    const measureContainer = this.document.createElement("div");
-    measureContainer.style.position = "absolute";
-    measureContainer.style.visibility = "hidden";
-    measureContainer.style.width = `${contentWidth}pt`;
-    measureContainer.style.left = "-9999px";
-    measureContainer.className = this.cssPrefix + "footnotes";
-    measureContainer.appendChild(footnote.cloneNode(true));
-
-    this.stagingElement.appendChild(measureContainer);
-    const rect = measureContainer.getBoundingClientRect();
-    const heightPt = pxToPt(rect.height);
-    this.stagingElement.removeChild(measureContainer);
-
-    return heightPt;
   }
 
   /**
@@ -2400,9 +2984,6 @@ export class PaginationEngine {
       return;
     }
 
-    // Create a set of partial footnote IDs for quick lookup
-    const partialFootnoteIds = new Set(partialFootnotes?.map(p => p.footnoteId) || []);
-
     // Calculate max height for footnotes area (content height minus margin for body content)
     const maxFootnoteHeight = Math.min(
       footnoteHeight,
@@ -2422,21 +3003,11 @@ export class PaginationEngine {
     footnotesDiv.style.maxHeight = `${maxFootnoteHeight}pt`;
     footnotesDiv.style.overflow = "hidden";
 
-    // Add separator line
-    const hr = this.document.createElement("hr");
-    footnotesDiv.appendChild(hr);
+    this.appendFootnoteSeparator(footnotesDiv, Boolean(hasContinuation));
 
     // Add continuation content first (if any)
     if (hasContinuation) {
-      const contWrapper = this.document.createElement("div");
-      contWrapper.className = "footnote-continuation";
-      if (continuation!.sourceAnchorId) {
-        contWrapper.dataset.sourceAnchorId = continuation!.sourceAnchorId;
-      }
-      for (const el of continuation!.remainingElements) {
-        contWrapper.appendChild(el.cloneNode(true));
-      }
-      footnotesDiv.appendChild(contWrapper);
+      footnotesDiv.appendChild(this.createFootnoteContinuationWrapper(continuation!));
     }
 
     // Clone footnotes in order of appearance
@@ -2447,28 +3018,9 @@ export class PaginationEngine {
         // Render partial footnote (only the fitting elements)
         const footnote = this.footnoteRegistry.get(id);
         if (footnote) {
-          const partialDiv = this.document.createElement("div");
-          partialDiv.className = "footnote-item";
-          partialDiv.dataset.footnoteId = id;
-          if (footnote.dataset.sourceAnchorId) {
-            partialDiv.dataset.sourceAnchorId = footnote.dataset.sourceAnchorId;
-          }
-
-          // Add footnote number
-          const numberSpan = footnote.querySelector(".footnote-number");
-          if (numberSpan) {
-            partialDiv.appendChild(numberSpan.cloneNode(true));
-          }
-
-          // Add only the fitting content
-          const contentSpan = this.document.createElement("span");
-          contentSpan.className = "footnote-content";
-          for (const el of partial.fittingElements) {
-            contentSpan.appendChild(el.cloneNode(true));
-          }
-          partialDiv.appendChild(contentSpan);
-
-          footnotesDiv.appendChild(partialDiv);
+          footnotesDiv.appendChild(
+            this.createPartialFootnoteItem(footnote, partial.fittingElements),
+          );
         }
       } else {
         // Render full footnote from registry
@@ -2677,6 +3229,8 @@ export class PaginationEngine {
     let currentContinuation: FootnoteContinuation | null = this.pendingFootnoteContinuation;
     // Track any new continuation that will carry to next page
     let nextPageContinuation: FootnoteContinuation | null = null;
+    let currentContinuationPartitioned = false;
+    let currentPageAdmitted = false;
     /**
      * Whole notes that could not be started on this page and must render on the next one.
      *
@@ -2703,19 +3257,57 @@ export class PaginationEngine {
       remainingHeight = effectiveContentHeight;
     };
 
-    // Account for any continuation from previous section/page
-    if (currentContinuation && currentContinuation.remainingElements.length > 0) {
-      currentFootnoteHeight = this.measureContinuationHeight(currentContinuation, dims.contentWidth);
-    }
+    const admitCurrentPage = () => {
+      if (currentPageAdmitted) return;
+      this.admitPageAllocation();
+      currentPageAdmitted = true;
+    };
 
-    const finishPage = (nextPageSectionIndex = pageSectionIndex) => {
+    const prepareCurrentContinuation = () => {
+      if (currentContinuationPartitioned
+          || (currentContinuation?.remainingElements.length ?? 0) === 0) return;
+      // A continuation guarantees that this physical page will exist. Admit it
+      // before touching the carried DOM, then partition once and retain that
+      // exact head while body placement is decided.
+      admitCurrentPage();
+      const ownedDimensions = dimensionsFor();
+      const pageBands = this.getPageBands(
+        ownedDimensions,
+        pageSectionIndex,
+        pageInSection(),
+      );
+      const partition = this.splitContinuationForPage(
+        currentContinuation!,
+        pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
+        ownedDimensions.contentWidth,
+      );
+      currentContinuation = partition.current;
+      if (partition.overflow) nextPageContinuation = partition.overflow;
+      currentContinuationPartitioned = true;
+      currentFootnoteHeight = this.measureFootnotesHeight(
+        currentFootnoteIds,
+        ownedDimensions.contentWidth,
+        currentContinuation,
+        currentPartialFootnotes,
+      );
+    };
+
+    const finishPage = (
+      nextPageSectionIndex = pageSectionIndex,
+      forceEmptyPage = false,
+    ) => {
       const hasCurrentContinuation =
         (currentContinuation?.remainingElements.length ?? 0) > 0;
-      if (currentContent.length === 0 && currentFootnoteIds.length === 0
+      if (!forceEmptyPage && currentContent.length === 0 && currentFootnoteIds.length === 0
           && !hasCurrentContinuation) {
         adoptEmptyPageOwner(nextPageSectionIndex);
         return;
       }
+
+      prepareCurrentContinuation();
+      // Pages without a carried continuation are charged here. Continuation
+      // pages were charged before their page-owned partition above.
+      admitCurrentPage();
 
       let pageContinuation = currentContinuation;
       const ownedPageInSection = pageInSection();
@@ -2730,25 +3322,20 @@ export class PaginationEngine {
         ownedPageInSection,
       );
       const maxFootnoteHeight = pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
-      if (currentContinuation && currentContinuation.remainingElements.length > 0) {
-        const partition = this.splitContinuationForPage(
-          currentContinuation,
-          maxFootnoteHeight,
-          ownedDimensions.contentWidth,
-        );
-        pageContinuation = partition.current;
-        if (partition.overflow) {
-          // A carried tail occupies the next page before any newly introduced note.
-          // The normal flow never starts another splittable note while an oversized
-          // continuation already consumes the note budget, so this assignment does
-          // not discard an independent continuation.
-          nextPageContinuation = partition.overflow;
-        }
-        currentFootnoteHeight = this.measureContinuationHeight(
-          pageContinuation,
-          ownedDimensions.contentWidth,
-        );
-      }
+      // `prepareCurrentContinuation` has already packed the exact head for this
+      // page. Keeping that partition stable lets body fit decisions share the
+      // remaining band without rescanning the entire tail.
+      pageContinuation = currentContinuation;
+
+      // Recompute the entire painted payload after continuation partitioning.
+      // Measuring only the carried head here discarded the reserve for a newer
+      // whole/partial note and let the clipped note band silently consume it.
+      currentFootnoteHeight = this.measureFootnotesHeight(
+        currentFootnoteIds,
+        ownedDimensions.contentWidth,
+        pageContinuation,
+        currentPartialFootnotes,
+      );
 
       // A final body page can seed the next page with several whole notes. Partition that queue
       // before materializing a note-only page: addPageFootnotes deliberately clips its band, so
@@ -2781,6 +3368,7 @@ export class PaginationEngine {
                 source,
                 maxFootnoteHeight - FOOTNOTE_MEASUREMENT_GUARD_PT,
                 ownedDimensions.contentWidth,
+                true,
               )
               : null;
             fittingIds.push(footnoteId);
@@ -2814,7 +3402,9 @@ export class PaginationEngine {
         currentFootnoteIds,
         currentFootnoteHeight,
         pageContinuation,
-        currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined
+        currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined,
+        false,
+        currentPageAdmitted,
       );
       pages.push(page);
       precedingDisplayedPageNumber = ownedDisplayedPageNumber;
@@ -2823,6 +3413,12 @@ export class PaginationEngine {
       currentContent = [];
 
       pageSectionIndex = nextPageSectionIndex;
+      if (!sectionStartPages.has(pageSectionIndex)) {
+        // A carried note can own pages before the first body block of a new
+        // section lands. Count those physical pages in that section so first /
+        // odd / even stories and restarted displayed numbering advance once.
+        sectionStartPages.set(pageSectionIndex, pageNumber);
+      }
 
       // Get effective content height for new page position
       const newBands = this.getPageBands(
@@ -2841,6 +3437,8 @@ export class PaginationEngine {
       // Carry over continuation to next page
       currentContinuation = nextPageContinuation;
       nextPageContinuation = null;
+      currentContinuationPartitioned = false;
+      currentPageAdmitted = false;
 
       // Notes that never got started land at the top of the new page's note area. They are
       // ordinary footnotes from here on, so the normal fitting path handles them — and because
@@ -2850,21 +3448,18 @@ export class PaginationEngine {
         deferredFootnoteIds = [];
       }
 
-      // Account for continuation height on new page
+      // Whole deferred notes have no carried DOM and can be measured directly.
+      // A continuation is partitioned lazily after the prospective page has
+      // passed its resource admission check, so never clone its entire tail here.
       const nextDimensions = dimensionsFor();
-      if (currentContinuation && currentContinuation.remainingElements.length > 0) {
-        currentFootnoteHeight = this.measureContinuationHeight(
-          currentContinuation,
-          nextDimensions.contentWidth,
-        );
-      } else {
-        currentFootnoteHeight = 0;
-      }
-      if (currentFootnoteIds.length > 0) {
-        currentFootnoteHeight += this.measureFootnotesHeight(
-          currentFootnoteIds, nextDimensions.contentWidth, null);
-      }
+      currentFootnoteHeight = currentContinuation
+        ? 0
+        : this.measureFootnotesHeight(currentFootnoteIds, nextDimensions.contentWidth);
     };
+
+    const pageHasPayload = () => currentContent.length > 0
+      || currentFootnoteIds.length > 0
+      || (currentContinuation?.remainingElements.length ?? 0) > 0;
 
     for (let i = 0; i < blocks.length; i++) {
       this.checkpoint();
@@ -2886,6 +3481,52 @@ export class PaginationEngine {
         && (currentContinuation?.remainingElements.length ?? 0) === 0;
       if (pageIsEmpty && block.sectionIndex !== pageSectionIndex) {
         adoptEmptyPageOwner(block.sectionIndex);
+      }
+
+      prepareCurrentContinuation();
+
+      if (currentFootnoteHeight > 0) {
+        const ownerDimensions = dimensionsFor();
+        const ownerBands = this.getPageBands(
+          ownerDimensions,
+          pageSectionIndex,
+          pageInSection(),
+        );
+        const ownerMaxFootnoteArea = ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+        if (currentFootnoteHeight > ownerMaxFootnoteArea) {
+          // A queue of whole notes larger than the band does not entitle it to
+          // the whole page: the band is capped and the rest of the page still
+          // belongs to body text. Keep the notes that fit here, defer the rest,
+          // and only fall back to a note-owned page when not even one note fits
+          // — that case needs the splitting finishPage performs.
+          const fittingIds: string[] = [];
+          let fittingHeight = 0;
+          if ((currentContinuation?.remainingElements.length ?? 0) === 0
+              && currentPartialFootnotes.length === 0) {
+            for (const footnoteId of currentFootnoteIds) {
+              this.checkpoint();
+              const candidateHeight = this.measureFootnotesHeight(
+                [...fittingIds, footnoteId],
+                ownerDimensions.contentWidth,
+              );
+              if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT > ownerMaxFootnoteArea) break;
+              fittingIds.push(footnoteId);
+              fittingHeight = candidateHeight;
+            }
+          }
+          if (fittingIds.length > 0) {
+            deferredFootnoteIds = [
+              ...currentFootnoteIds.slice(fittingIds.length),
+              ...deferredFootnoteIds,
+            ];
+            currentFootnoteIds = fittingIds;
+            currentFootnoteHeight = fittingHeight;
+          } else {
+            finishPage(block.sectionIndex);
+            i--;
+            continue;
+          }
+        }
       }
       const blockDimensions = dimensionsFor(block.sectionIndex);
       const nextBlockPageInSection = pageInSection(block.sectionIndex, pageNumber + 1);
@@ -2987,17 +3628,22 @@ export class PaginationEngine {
       const newFootnoteIds = this.collectNewFootnoteIds([block], currentFootnoteIds);
 
       // Calculate additional footnote height if this block is added
+      let combinedFootnoteHeight = currentFootnoteHeight;
       let additionalFootnoteHeight = 0;
       if (newFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
         // Measure the combined height of all footnotes that would be on this page
         // (including any continuation)
         const combinedFootnoteIds = [...currentFootnoteIds, ...newFootnoteIds];
-        const totalFootnoteHeight = this.measureFootnotesHeight(
+        combinedFootnoteHeight = this.measureFootnotesHeight(
           combinedFootnoteIds,
           blockDimensions.contentWidth,
-          currentContinuation
+          currentContinuation,
+          currentPartialFootnotes,
         );
-        additionalFootnoteHeight = totalFootnoteHeight - currentFootnoteHeight;
+        additionalFootnoteHeight = Math.max(
+          0,
+          combinedFootnoteHeight - currentFootnoteHeight,
+        );
       }
 
       // Calculate the effective height this block will consume
@@ -3021,7 +3667,6 @@ export class PaginationEngine {
       // Calculate maximum footnote area for this page (can expand into body content space)
       const bodyContentUsed = effectiveContentHeight - remainingHeight;
       const maxFootnoteArea = effectiveContentHeight * MAX_FOOTNOTE_AREA_RATIO;
-      const maxFootnoteExpansion = Math.max(0, maxFootnoteArea - currentFootnoteHeight);
 
       // A paragraph that cannot fit as a whole may still have a simple text-only
       // prefix that fits this page. Fragment before the ordinary next-page or
@@ -3042,7 +3687,11 @@ export class PaginationEngine {
       }
 
       // Check if block fits on current page (including its footnotes)
-      if (blockSpace <= effectiveRemainingHeight) {
+      if (
+        blockSpace <= effectiveRemainingHeight
+        && (combinedFootnoteHeight === 0
+          || combinedFootnoteHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= maxFootnoteArea)
+      ) {
         // Block fits with current footnote allocation
         markSectionPlaced(block.sectionIndex);
         currentContent.push(this.cloneBlockForPage(
@@ -3055,7 +3704,7 @@ export class PaginationEngine {
         // Add new footnotes to current page
         if (newFootnoteIds.length > 0) {
           currentFootnoteIds.push(...newFootnoteIds);
-          currentFootnoteHeight += additionalFootnoteHeight;
+          currentFootnoteHeight = combinedFootnoteHeight;
         }
         currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
       } else if (
@@ -3068,11 +3717,6 @@ export class PaginationEngine {
       ) {
         // Block doesn't fit with current allocation - try expanding footnote area
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt;
-
-        // Check if block fits if we expand footnote area
-        // We can expand footnotes up to maxFootnoteArea, leaving room for body content
-        const minBodySpaceNeeded = bodyContentUsed + blockSpaceWithoutFootnotes + MIN_BODY_CONTENT_HEIGHT;
-        const canExpandFootnotes = minBodySpaceNeeded <= effectiveContentHeight;
 
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
           // Block itself fits, but footnotes don't - expand footnote area
@@ -3091,30 +3735,55 @@ export class PaginationEngine {
             maxFootnoteArea,
             effectiveContentHeight - bodyContentUsed - blockSpaceWithoutFootnotes
           );
+          // Deferring a note costs a page turn, and it only buys anything if the
+          // next page's band is larger than what this page can already offer.
+          // When this page already offers the maximum band, a note that cannot
+          // start here cannot start there either: keep the established clipped
+          // fallback on the citing page rather than evacuating it.
+          const nextPageMaxFootnoteArea =
+            freshBlockPageBodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+          const deferralCannotHelp = availableForFootnotes >= nextPageMaxFootnoteArea;
 
           // Try to fit as much of each new footnote as possible in expanded area
-          for (const footnoteId of newFootnoteIds) {
+          for (let noteIndex = 0; noteIndex < newFootnoteIds.length; noteIndex++) {
             this.checkpoint();
+            const footnoteId = newFootnoteIds[noteIndex];
             const footnote = this.footnoteRegistry.get(footnoteId);
             if (!footnote) continue;
 
-            const footnoteHeight = this.measureSingleFootnoteHeight(
-              footnoteId,
+            // One page can carry only one split tail. Once that slot is used,
+            // keep every later note in source order on the deferral queue.
+            if (nextPageContinuation) {
+              deferredFootnoteIds.push(...newFootnoteIds.slice(noteIndex));
+              break;
+            }
+
+            const candidateIds = [...currentFootnoteIds, footnoteId];
+            const candidateHeight = this.measureFootnotesHeight(
+              candidateIds,
               blockDimensions.contentWidth,
+              currentContinuation,
+              currentPartialFootnotes,
             );
             const spaceLeftForFootnotes = availableForFootnotes - currentFootnoteHeight;
 
-            if (footnoteHeight <= spaceLeftForFootnotes) {
+            if (candidateHeight + FOOTNOTE_MEASUREMENT_GUARD_PT <= availableForFootnotes) {
               // Whole footnote fits in expanded area
               currentFootnoteIds.push(footnoteId);
-              currentFootnoteHeight += footnoteHeight;
+              currentFootnoteHeight = candidateHeight;
             } else {
               // Footnote needs to be split - use all available expanded space
               if (spaceLeftForFootnotes > 20) { // Minimum space to start a footnote
                 const { fits, overflow } = this.splitFootnoteToFit(
                   footnote,
-                  spaceLeftForFootnotes,
-                  blockDimensions.contentWidth
+                  availableForFootnotes,
+                  blockDimensions.contentWidth,
+                  deferralCannotHelp,
+                  {
+                    footnoteIds: currentFootnoteIds,
+                    continuation: currentContinuation,
+                    partialFootnotes: currentPartialFootnotes,
+                  },
                 );
 
                 if (fits.length > 0) {
@@ -3131,106 +3800,37 @@ export class PaginationEngine {
                       remainingElements: overflow
                     };
                   }
-                  currentFootnoteHeight = availableForFootnotes;
+                  currentFootnoteHeight = this.measureFootnotesHeight(
+                    currentFootnoteIds,
+                    blockDimensions.contentWidth,
+                    currentContinuation,
+                    currentPartialFootnotes,
+                  );
+                  if (overflow.length > 0) {
+                    deferredFootnoteIds.push(...newFootnoteIds.slice(noteIndex + 1));
+                    break;
+                  }
                 } else {
                   // Nothing of this note fits: defer the WHOLE note rather than assigning the
                   // single continuation slot, which a later note on this page would overwrite.
-                  deferredFootnoteIds.push(footnoteId);
+                  deferredFootnoteIds.push(...newFootnoteIds.slice(noteIndex));
+                  break;
                 }
               } else {
                 // Not enough space to even start the note — same deferral.
-                deferredFootnoteIds.push(footnoteId);
+                deferredFootnoteIds.push(...newFootnoteIds.slice(noteIndex));
+                break;
               }
             }
           }
           currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
-        } else if (canExpandFootnotes && newFootnoteIds.length > 0) {
-          // Block doesn't fit with current layout, but might fit if we expand footnote area first
-          // This handles the case where we need to give footnotes more space BEFORE adding the block
-
-          // First, try to fit more of current footnotes by expanding the area
-          // Then check if the block fits in reduced body space
-          const expandedFootnoteSpace = Math.min(maxFootnoteArea, additionalFootnoteHeight + currentFootnoteHeight);
-          const bodySpaceAfterExpansion = effectiveContentHeight - expandedFootnoteSpace;
-
-          if (blockSpaceWithoutFootnotes <= bodySpaceAfterExpansion - bodyContentUsed) {
-            // Block fits after expanding footnote area.
-            markSectionPlaced(block.sectionIndex);
-            currentContent.push(this.cloneBlockForPage(
-              block,
-              isFirstOnPage,
-              pageInSection(block.sectionIndex),
-            ));
-            // `remainingHeight` tracks BODY consumption only — every other branch maintains it
-            // that way, and the footnote reserve is applied separately via `effectiveRemainingHeight`
-            // at the top of each iteration. Assigning `bodySpaceAfterExpansion - …` here folded the
-            // reserve in a second time, so a later block would see a body budget short by the whole
-            // footnote area. Consistency fix: no measurable difference on the documents tested, but
-            // the two meanings must not coexist or the next change here inherits a latent bug.
-            remainingHeight = bodySpaceAfterExpansion - bodyContentUsed - blockSpaceWithoutFootnotes;
-            prevMarginBottomPt = block.marginBottomPt;
-            currentFootnoteIds.push(...newFootnoteIds);
-            currentFootnoteHeight = expandedFootnoteSpace;
-            currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
-          } else {
-            // Still doesn't fit - start new page
-            finishPage(block.sectionIndex);
-            const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
-              ? this.measureFootnotesHeight(
-                allBlockFootnoteIds,
-                blockDimensions.contentWidth,
-                currentContinuation,
-              )
-              : (currentContinuation
-                ? this.measureContinuationHeight(currentContinuation, blockDimensions.contentWidth)
-                : 0);
-            const newPageMarginTop = this.effectiveBlockMarginTop(
-              block, 0, true, pageInSection(block.sectionIndex));
-            const newPageSpace = newPageMarginTop + block.heightPt + block.marginBottomPt;
-            markSectionPlaced(block.sectionIndex);
-            currentContent.push(this.cloneBlockForPage(
-              block,
-              true,
-              pageInSection(block.sectionIndex),
-            ));
-            remainingHeight = effectiveContentHeight - newPageSpace;
-            prevMarginBottomPt = block.marginBottomPt;
-            // Merge, never replace: finishPage() may have just seeded this page with notes deferred
-            // from the previous one, and overwriting here dropped them from the document.
-            currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
-            currentFootnoteHeight = newPageFootnoteHeight;
-            currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
-          }
         } else {
-          // Block itself doesn't fit - start new page
-          finishPage(block.sectionIndex);
-          // On new page, recalculate footnote height for just this block's footnotes
-          // (plus any continuation from previous page)
-          const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
-            ? this.measureFootnotesHeight(
-              allBlockFootnoteIds,
-              blockDimensions.contentWidth,
-              currentContinuation,
-            )
-            : (currentContinuation
-              ? this.measureContinuationHeight(currentContinuation, blockDimensions.contentWidth)
-              : 0);
-          const newPageMarginTop = this.effectiveBlockMarginTop(
-            block, 0, true, pageInSection(block.sectionIndex));
-          const newPageSpace = newPageMarginTop + block.heightPt + block.marginBottomPt;
-          markSectionPlaced(block.sectionIndex);
-          currentContent.push(this.cloneBlockForPage(
-            block,
-            true,
-            pageInSection(block.sectionIndex),
-          ));
-          remainingHeight = effectiveContentHeight - newPageSpace;
-          prevMarginBottomPt = block.marginBottomPt;
-          // Merge, never replace: finishPage() may have just seeded this page with notes deferred
-          // from the previous one, and overwriting here dropped them from the document.
-          currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
-          currentFootnoteHeight = newPageFootnoteHeight;
-          currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
+          // Block itself doesn't fit. Retry after the page turn so carried
+          // continuations and deferred notes participate in the normal fit and
+          // split decisions instead of being overwritten by forced placement.
+          finishPage(block.sectionIndex, !pageHasPayload());
+          i--;
+          continue;
         }
       } else {
         // Block is taller than a page. Ordinary tables can be split at complete
@@ -3252,8 +3852,10 @@ export class PaginationEngine {
         // Unsupported oversized blocks are intentionally left intact. Splitting
         // arbitrary HTML, merged tables, or footnote-bearing tables would be less
         // correct than the prior clipped fallback.
-        if (currentContent.length > 0) {
+        if (pageHasPayload()) {
           finishPage(block.sectionIndex);
+          i--;
+          continue;
         }
         markSectionPlaced(block.sectionIndex);
         currentContent.push(this.cloneBlockForPage(
@@ -3261,9 +3863,10 @@ export class PaginationEngine {
           true,
           pageInSection(block.sectionIndex),
         ));
-        // Merge, never replace: finishPage() may have just seeded this page with notes deferred
-        // from the previous one, and overwriting here dropped them from the document.
-        currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
+        // An unsupported body block already occupies/clips its whole body band.
+        // Preserve its notes losslessly on following note-only pages rather
+        // than drawing them underneath that clipped fallback.
+        deferredFootnoteIds.push(...newFootnoteIds);
         currentPageHasFootnoteReference ||= allBlockFootnoteIds.length > 0;
         finishPage(block.sectionIndex);
       }
@@ -3532,6 +4135,13 @@ export class PaginationEngine {
     return reference.start + (reference.size - objectSize) * fraction;
   }
 
+  /** Charge a physical page before any page-owned partitioning or DOM allocation. */
+  private admitPageAllocation(): void {
+    const prospectivePageCount = this.createdPageCount + 1;
+    this.pageCountCheckpoint?.(prospectivePageCount);
+    this.createdPageCount = prospectivePageCount;
+  }
+
   /**
    * Creates a page container element.
    */
@@ -3547,10 +4157,9 @@ export class PaginationEngine {
     continuation?: FootnoteContinuation | null,
     partialFootnotes?: PartialFootnote[],
     isSectionFiller = false,
+    pageAlreadyAdmitted = false,
   ): PageInfo {
-    const prospectivePageCount = this.createdPageCount + 1;
-    this.pageCountCheckpoint?.(prospectivePageCount);
-    this.createdPageCount = prospectivePageCount;
+    if (!pageAlreadyAdmitted) this.admitPageAllocation();
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
     const pageBox = this.document.createElement("div");
@@ -3642,13 +4251,20 @@ export class PaginationEngine {
 
     pageBox.appendChild(contentArea);
 
-    // Materialize margin comments in a page-owned side column. The body only carries range
-    // markers; definition and comment-paragraph identities live on these selected registry
-    // clones, so PageMap geometry describes the actual visible margin presentation.
+    // Add footnotes if any references appear on this page (or continuation from previous)
+    const hasContinuation = continuation && continuation.remainingElements.length > 0;
+    if (!isSectionFiller && (footnoteIds.length > 0 || hasContinuation)) {
+      this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes);
+
+    }
+
+    // Materialize margin comments after footnotes exist so markers inside a
+    // note participate in the same page-owned comment story as body markers.
     const pageCommentIds: string[] = [];
     for (const marker of Array.from(
-      contentArea.querySelectorAll<HTMLElement>("[data-comment-id]"),
+      pageBox.querySelectorAll<HTMLElement>("[data-comment-id]"),
     )) {
+      if (marker.closest(`.${this.cssPrefix}comment-margin`)) continue;
       const id = marker.dataset.commentId;
       if (id && this.commentMarginRegistry.has(id) && !pageCommentIds.includes(id)) {
         pageCommentIds.push(id);
@@ -3673,13 +4289,6 @@ export class PaginationEngine {
         }
       }
       pageBox.appendChild(marginColumn);
-    }
-
-    // Add footnotes if any references appear on this page (or continuation from previous)
-    const hasContinuation = continuation && continuation.remainingElements.length > 0;
-    if (!isSectionFiller && (footnoteIds.length > 0 || hasContinuation)) {
-      this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes);
-
     }
 
     // Add footer if available for this section/page

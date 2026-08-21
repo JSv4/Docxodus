@@ -31,6 +31,7 @@ interface NoteGeometry {
   boxBottom: number;
   notesTop: number;
   notesBottom: number;
+  notesWidth: number;
   separator: { top: number; bottom: number; width: number } | null;
   items: { top: number; bottom: number; number: string; text: string }[];
   backrefs: number;
@@ -43,7 +44,7 @@ const MEASURE = () => {
     const r = box.getBoundingClientRect();
     const notes = box.querySelector('.page-footnotes') as HTMLElement | null;
     if (!notes) {
-      return { boxTop: r.top, boxBottom: r.bottom, notesTop: 0, notesBottom: 0,
+      return { boxTop: r.top, boxBottom: r.bottom, notesTop: 0, notesBottom: 0, notesWidth: 0,
         separator: null, items: [], backrefs: 0, lineHeight: '' };
     }
     const nr = notes.getBoundingClientRect();
@@ -54,6 +55,7 @@ const MEASURE = () => {
       boxBottom: r.bottom,
       notesTop: nr.top,
       notesBottom: nr.bottom,
+      notesWidth: nr.width,
       separator: hrRect
         ? { top: hrRect.top, bottom: hrRect.bottom, width: hrRect.width }
         : null,
@@ -105,12 +107,17 @@ async function paginateGeneratedDocument(page: Page, docx: Uint8Array): Promise<
 test.describe('Paginated footnote geometry', () => {
   let onePage: NoteGeometry;
   let twoNotes: NoteGeometry;
+  let continuedNote: NoteGeometry[];
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
     try {
       [onePage] = await paginateGeneratedDocument(page, generateFootnoteDocx(1));
       [twoNotes] = await paginateGeneratedDocument(page, generateFootnoteDocx(2));
+      continuedNote = await paginateGeneratedDocument(
+        page,
+        generateFootnoteDocx(1, 1, 1, 600),
+      );
     } finally {
       await page.close();
     }
@@ -152,6 +159,16 @@ test.describe('Paginated footnote geometry', () => {
     const gap = onePage.items[0].top - onePage.separator!.bottom;
     expect(gap, 'separator to first note gap').toBeGreaterThanOrEqual(2);
     expect(gap, 'separator to first note gap').toBeLessThanOrEqual(10);
+  });
+
+  test('continuation separator spans the full text column', async () => {
+    expect(continuedNote.length).toBeGreaterThan(2);
+    expect(continuedNote[0].separator!.width).toBeCloseTo(192, 0);
+    for (const page of continuedNote.slice(1)) {
+      expect(page.separator, 'every continuation note band needs a separator').not.toBeNull();
+      expect(page.separator!.width, 'continuation separator width')
+        .toBeCloseTo(page.notesWidth, 0);
+    }
   });
 
   test('notes stack with no renderer-invented spacing between them', async () => {

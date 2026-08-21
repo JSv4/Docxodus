@@ -730,6 +730,19 @@ namespace OxPt
 
                     Assert.NotNull(footnoteRegistry);
 
+                    // Stock marker-only stories contain formatting properties
+                    // under pPr/rPr, but no authored presentation paragraph.
+                    // They must render exactly the rule, without an empty line.
+                    var separatorStories = footnoteRegistry.Elements()
+                        .Where(e => e.Attribute("data-footnote-separator") != null)
+                        .ToList();
+                    Assert.Equal(2, separatorStories.Count);
+                    Assert.All(separatorStories, story =>
+                    {
+                        Assert.Single(story.Elements().Where(e => e.Name.LocalName == "hr"));
+                        Assert.DoesNotContain(story.Elements(), e => e.Name.LocalName == "p");
+                    });
+
                     // Check footnote-content spans for empty children
                     var footnoteContentSpans = footnoteRegistry.Descendants()
                         .Where(e => e.Name.LocalName == "span" &&
@@ -756,6 +769,82 @@ namespace OxPt
                                 $"Found empty span in footnote registry content with class '{(string)span.Attribute("class")}'");
                         }
                     }
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008c2_PaginatedFootnoteSeparators_ArePreservedAndTypedBoilerplateIsExcluded()
+        {
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+                    var footnotes = wDoc.MainDocumentPart.FootnotesPart.GetXDocument();
+                    var normal = footnotes.Root.Elements(w + "footnote")
+                        .First(note => (string)note.Attribute(w + "type") == "separator");
+                    var continuation = footnotes.Root.Elements(w + "footnote")
+                        .First(note => (string)note.Attribute(w + "type") == "continuationSeparator");
+                    normal.Add(new XElement(w + "p", new XElement(w + "r",
+                        new XElement(w + "t", "NORMAL-SEPARATOR-TOKEN"))));
+                    // A separator story is cloned onto every note band, so any
+                    // identity or local target it carries would be duplicated
+                    // across pages. Author both kinds here and assert they are
+                    // stripped from the rendered template.
+                    continuation.Add(new XElement(w + "p",
+                        new XElement(w + "bookmarkStart",
+                            new XAttribute(w + "id", "77"),
+                            new XAttribute(w + "name", "SEPARATOR-BOOKMARK")),
+                        new XElement(w + "bookmarkEnd", new XAttribute(w + "id", "77")),
+                        new XElement(w + "hyperlink",
+                            new XAttribute(w + "anchor", "SEPARATOR-BOOKMARK"),
+                            new XElement(w + "r",
+                                new XElement(w + "t", "CONTINUATION-SEPARATOR-TOKEN")))));
+                    footnotes.Root.Add(new XElement(w + "footnote",
+                        new XAttribute(w + "type", "continuationNotice"),
+                        new XAttribute(w + "id", "999"),
+                        new XElement(w + "p", new XElement(w + "r",
+                            new XElement(w + "t", "MUST-NOT-BECOME-A-NOTE")))));
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc,
+                        new WmlToHtmlConverterSettings
+                        {
+                            PageTitle = "Footnote separator stories",
+                            FabricateCssClasses = true,
+                            RenderFootnotesAndEndnotes = true,
+                            RenderPagination = PaginationMode.Paginated,
+                        });
+                    var registry = html.Descendants()
+                        .First(element => element.Name.LocalName == "div" &&
+                            (string)element.Attribute("id") == "pagination-footnote-registry");
+                    var separators = registry.Elements()
+                        .Where(element => element.Attribute("data-footnote-separator") != null)
+                        .ToList();
+
+                    Assert.Equal(new[] { "normal", "continuation" }, separators
+                        .Select(element => (string)element.Attribute("data-footnote-separator")));
+                    Assert.Contains("NORMAL-SEPARATOR-TOKEN", separators[0].Value);
+                    Assert.Contains("CONTINUATION-SEPARATOR-TOKEN", separators[1].Value);
+                    Assert.DoesNotContain(registry.Elements(), element =>
+                        (string)element.Attribute("data-footnote-id") == "999");
+                    Assert.DoesNotContain("MUST-NOT-BECOME-A-NOTE", registry.Value);
+
+                    // No identity and no local target survives on a repeated story,
+                    // and nothing in it is editable.
+                    var repeated = separators[1].DescendantsAndSelf().ToList();
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName is "id" or "name"
+                            or "data-anchor" or "data-source-anchor-id"));
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName == "href"
+                            && attribute.Value.StartsWith("#", StringComparison.Ordinal)));
+                    Assert.All(repeated, element =>
+                        Assert.Equal("false", (string)element.Attribute("contenteditable")));
                 }
             }
         }
