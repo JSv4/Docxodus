@@ -667,7 +667,7 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
     </style><div id="staging">
       <div id="pagination-footnote-registry"><div class="footnote-item" data-footnote-id="realm-note">
         <span class="footnote-number">1</span><span class="footnote-content"><p>${
-          Array.from({ length: 240 }, (_, index) => `realm-${index}`).join(' ')
+          Array.from({ length: 900 }, (_, index) => `realm-${index}`).join(' ')
         }</p></span></div></div>
       <section data-section-index="0" data-page-width="612"
       data-page-height="792" data-content-width="468" data-content-height="648"
@@ -719,7 +719,10 @@ test('PaginationEngine uses the element realm and applies scale exactly once', a
   expect(Number(result.zoom)).toBeCloseTo(0.8, 5);
   expect(result.transform).toBe('');
   expect(result.secondCall).toContain('one-shot');
+  // The note must outrun one 60%-of-648pt band, or "continues in the foreign
+  // realm" is not what this asserts: 240 words measured ~230pt and fitted a
+  // single band, so the split it claimed to prove never happened.
   expect(result.notePages).toBeGreaterThan(1);
   expect(result.noteText).toContain('realm-0');
-  expect(result.noteText).toContain('realm-239');
+  expect(result.noteText).toContain('realm-899');
 });
