@@ -3984,7 +3984,13 @@ namespace Docxodus
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
                         new XAttribute("data-hf-type", "header-first"),
-                        firstHeaderContent));
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        firstHeaderContent ?? (object)new XText(string.Empty)));
                 }
 
                 // Render even header if the document actually uses even/odd stories
@@ -3998,7 +4004,13 @@ namespace Docxodus
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
                         new XAttribute("data-hf-type", "header-even"),
-                        evenHeaderContent));
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        evenHeaderContent ?? (object)new XText(string.Empty)));
                 }
 
                 // Render default footer
@@ -4020,7 +4032,13 @@ namespace Docxodus
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
                         new XAttribute("data-hf-type", "footer-first"),
-                        firstFooterContent));
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        firstFooterContent ?? (object)new XText(string.Empty)));
                 }
 
                 // Render even footer if the document actually uses even/odd stories
@@ -4032,7 +4050,13 @@ namespace Docxodus
                     registry.Add(new XElement(Xhtml.div,
                         new XAttribute("data-section", sectionIndex),
                         new XAttribute("data-hf-type", "footer-even"),
-                        evenFooterContent));
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        evenFooterContent ?? (object)new XText(string.Empty)));
                 }
             }
 
