@@ -49,6 +49,9 @@ __all__ = [
     "DeliverableVerificationMode",
     "DeliverableVerificationDecision",
     "DeliverableFindingDisposition",
+    "RedlineRevisionDisposition",
+    "RedlineProofDirection",
+    "RedlinePackageDivergenceKind",
     "DeliverableFindingCategory",
     "DeliverableCheckStatus",
     "DeliverablePackageChangeKind",
@@ -77,6 +80,30 @@ class DeliverableVerificationDecision(str, Enum):
     PASSED_WITH_PRE_EXISTING_FINDINGS = "passedWithPreExistingFindings"
     FAILED = "failed"
     NOT_EVALUATED = "notEvaluated"
+
+
+class RedlineRevisionDisposition(str, Enum):
+    """How a revision in a redline relates to the selected baseline."""
+
+    PRE_EXISTING = "preExisting"
+    INTENDED_FINAL_PRE_EXISTING = "intendedFinalPreExisting"
+    GENERATED = "generated"
+    CONFLICTED = "conflicted"
+
+
+class RedlineProofDirection(str, Enum):
+    """Which of the two proof paths a result or finding belongs to."""
+
+    ACCEPT_TO_FINAL = "acceptToFinal"
+    REJECT_TO_BASELINE = "rejectToBaseline"
+
+
+class RedlinePackageDivergenceKind(str, Enum):
+    """How a package entry differs from a path's expected document."""
+
+    ADDED = "added"
+    REMOVED = "removed"
+    MODIFIED = "modified"
 
 
 class DeliverableFindingDisposition(str, Enum):

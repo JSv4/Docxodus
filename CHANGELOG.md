@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Redline reversibility proof on every client surface (#464).** The proof engine landed with
+  #497 but was reachable only from .NET. `VerificationOps.ProveRedlineReversibility` now owns the
+  wire shape, and the canonical `redline-reversibility-proof/v1` document is available from the
+  WASM bridge, the npm package (`proveRedlineReversibility`, plus an off-main-thread worker path
+  because three packages are inspected and two rebuilt), the stdio host
+  (`prove_redline_reversibility`), `docx-scalpel` (`prove_redline_reversibility`, decoded into
+  typed frozen dataclasses), and the MCP server (`docxodus_track_changes` action
+  `prove_reversibility`, which proves the session's clean-save checkpoint against two documents
+  resolved through the document store). The rebuilt packages stay in-process — the proof already
+  carries their digests and the divergences between them and each expected document.
 - **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
   spill pages to the section that supplies their body while preserving predecessor-owned stories
   on the shared page, carries section-specific header/footer distances and logical page numbering,

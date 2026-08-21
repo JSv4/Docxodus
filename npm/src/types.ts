@@ -1168,6 +1168,173 @@ export interface DeliverableVerificationResult {
   companionArtifacts: readonly DeliverableArtifactMetadata[];
 }
 
+/** How a revision in a redline relates to the selected baseline. */
+export type RedlineRevisionDisposition =
+  | "preExisting"
+  | "intendedFinalPreExisting"
+  | "generated"
+  | "conflicted";
+
+/** Which of the two proof paths a result or finding belongs to. */
+export type RedlineProofDirection = "acceptToFinal" | "rejectToBaseline";
+
+/** How a package entry differs from a path's expected document. */
+export type RedlinePackageDivergenceKind = "added" | "removed" | "modified";
+
+/** Fail-closed resolution status of one native revision. */
+export type RedlineRevisionResolutionStatus =
+  | "supported"
+  | "unsupported"
+  | "malformed"
+  | "ambiguous";
+
+/** Coarse family of one native revision. */
+export type RedlineRevisionFamily =
+  | "contentInsert"
+  | "contentDelete"
+  | "move"
+  | "paragraphMark"
+  | "rowInsert"
+  | "rowDelete"
+  | "cellInsert"
+  | "cellDelete"
+  | "cellMerge"
+  | "contentControlInsert"
+  | "contentControlDelete"
+  | "numberingPropertiesInsert"
+  | "numberingChange"
+  | "propertiesChange"
+  | "unsupported";
+
+/** Why a revision could not be resolved. */
+export interface RedlineRevisionDiagnostic {
+  code: string;
+  message: string;
+}
+
+/** Input or output package identity recorded by the proof. */
+export interface RedlineProofPackageIdentity {
+  rawPackageBytesDigest: VerificationDigest;
+  orderedOpcContentDigest: VerificationDigest | null;
+  normalizedWholePackageDigest: VerificationDigest | null;
+}
+
+/** A stable, part-qualified identity for one native Word revision. */
+export interface RedlineRevisionIdentity {
+  id: string;
+  partUri: string;
+  scope: string;
+  type: string;
+  family: RedlineRevisionFamily;
+  constituentIds: readonly string[];
+  constituentKeys: readonly string[];
+  author: string;
+  date: string | null;
+  dateUtc: string | null;
+  text: string;
+  anchorId: string | null;
+  affectedAnchorIds: readonly string[];
+  resolutionStatus: RedlineRevisionResolutionStatus;
+  diagnostic: RedlineRevisionDiagnostic | null;
+}
+
+/** Classification of a baseline/intended-final/redline revision identity triple. */
+export interface RedlineRevisionClassification {
+  disposition: RedlineRevisionDisposition;
+  baseline: RedlineRevisionIdentity | null;
+  intendedFinal: RedlineRevisionIdentity | null;
+  redline: RedlineRevisionIdentity | null;
+  reason: string;
+}
+
+/**
+ * Modeled semantic comparison for one path. `available` and `changeCount` are explicit so an
+ * empty modeled change set is never mistaken for complete package equality.
+ */
+export interface RedlineModeledSemanticComparison {
+  available: boolean;
+  equivalent: boolean | null;
+  schema: string | null;
+  changeCount: number | null;
+  diagnostic: string | null;
+}
+
+/** One added, removed, or modified package entry on a proof path. */
+export interface RedlinePackageDivergence {
+  kind: RedlinePackageDivergenceKind;
+  partUri: string;
+  occurrence: number;
+  anchorId: string | null;
+  applicableRevisionIds: readonly string[];
+  expectedRawDigest: VerificationDigest | null;
+  actualRawDigest: VerificationDigest | null;
+  expectedNormalizedDigest: VerificationDigest | null;
+  actualNormalizedDigest: VerificationDigest | null;
+  /** Whether the semantic change set reports a modeled change for this part. */
+  hasModeledSemanticChange: boolean;
+  /**
+   * Conservatively true when the normalized difference may contain content outside the modeled
+   * semantic projection. A modeled change in one part never proves every change in it was modeled.
+   */
+  unknownOrUnmodeled: boolean;
+}
+
+/** A structured, actionable proof finding. */
+export interface RedlineProofFinding {
+  code: string;
+  severity: VerificationFindingSeverity;
+  message: string;
+  direction: RedlineProofDirection | null;
+  location: ChangeLocation | null;
+  anchorId: string | null;
+  revisionIds: readonly string[];
+  remediation: string | null;
+}
+
+/** Result of accepting or rejecting only the generated revision set. */
+export interface RedlineProofPathResult {
+  direction: RedlineProofDirection;
+  completed: boolean;
+  equivalent: boolean;
+  requestedRevisionIds: readonly string[];
+  resolvedRevisionIds: readonly string[];
+  implicitlyResolvedRevisionIds: readonly string[];
+  survivingPreExistingRevisions: readonly RedlineRevisionIdentity[];
+  preExistingRevisionsPreserved: boolean;
+  modeledSemantic: RedlineModeledSemanticComparison;
+  normalizedWholePackageEquivalent: boolean;
+  orderedOpcContentEquivalent: boolean;
+  exactPackageBytesEquivalent: boolean;
+  /**
+   * Whether the complete bounded package delta was available. A false value never exposes a
+   * potentially misleading prefix of `divergences`.
+   */
+  divergenceAnalysisCompleted: boolean;
+  expectedPackage: RedlineProofPackageIdentity;
+  actualPackage: RedlineProofPackageIdentity | null;
+  firstDivergence: RedlinePackageDivergence | null;
+  divergences: readonly RedlinePackageDivergence[];
+  findings: readonly RedlineProofFinding[];
+}
+
+/**
+ * Canonical schema-v1 proof that a redline's generated changes accept to the intended final and
+ * reject to the baseline without consuming pre-existing review state.
+ */
+export interface RedlineReversibilityProof {
+  schema: "https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1";
+  schemaVersion: 1;
+  success: boolean;
+  requireExactPackageBytes: boolean;
+  baselinePackage: RedlineProofPackageIdentity;
+  intendedFinalPackage: RedlineProofPackageIdentity;
+  redlinePackage: RedlineProofPackageIdentity;
+  revisionClassifications: readonly RedlineRevisionClassification[];
+  acceptToFinal: RedlineProofPathResult | null;
+  rejectToBaseline: RedlineProofPathResult | null;
+  findings: readonly RedlineProofFinding[];
+}
+
 /** Effective #493 inspection limits applied while the manifest is being generated. */
 export interface PackageManifestInspectionLimits {
   opcEntries: number;
@@ -1187,6 +1354,11 @@ export interface DocxodusWasmExports {
     VerifyDeliverableWithBaseline: (
       baselineBytes: Uint8Array,
       bytes: Uint8Array
+    ) => string;
+    ProveRedlineReversibility: (
+      baselineBytes: Uint8Array,
+      intendedFinalBytes: Uint8Array,
+      redlineBytes: Uint8Array
     ) => string;
     GeneratePackageManifestWithOptions: (
       bytes: Uint8Array,
@@ -3860,6 +4032,7 @@ export type WorkerRequestType =
   | "init"
   | "generatePackageManifest"
   | "verifyDeliverable"
+  | "proveRedlineReversibility"
   | "projectReviewProfile"
   | "convertDocxToHtml"
   | "compareDocuments"
@@ -3938,6 +4111,17 @@ export interface WorkerVerifyDeliverableRequest extends WorkerRequestBase {
   type: "verifyDeliverable";
   documentBytes: Uint8Array;
   baselineBytes?: Uint8Array;
+}
+
+/**
+ * Prove redline accept/reject reversibility off the main thread. Three packages are inspected and
+ * two are rebuilt, so this is the heaviest verification request the worker serves.
+ */
+export interface WorkerProveRedlineReversibilityRequest extends WorkerRequestBase {
+  type: "proveRedlineReversibility";
+  baselineBytes: Uint8Array;
+  intendedFinalBytes: Uint8Array;
+  redlineBytes: Uint8Array;
 }
 
 /**
@@ -4097,6 +4281,7 @@ export type WorkerRequest =
   | WorkerInitRequest
   | WorkerGeneratePackageManifestRequest
   | WorkerVerifyDeliverableRequest
+  | WorkerProveRedlineReversibilityRequest
   | WorkerProjectReviewProfileRequest
   | WorkerConvertRequest
   | WorkerCompareRequest
@@ -4167,6 +4352,11 @@ export interface WorkerProjectReviewProfileResponse extends WorkerResponseBase {
 export interface WorkerVerifyDeliverableResponse extends WorkerResponseBase {
   type: "verifyDeliverable";
   verification?: DeliverableVerificationResult;
+}
+
+export interface WorkerProveRedlineReversibilityResponse extends WorkerResponseBase {
+  type: "proveRedlineReversibility";
+  proof?: RedlineReversibilityProof;
 }
 
 /**
@@ -4281,6 +4471,7 @@ export type WorkerResponse =
   | WorkerInitResponse
   | WorkerGeneratePackageManifestResponse
   | WorkerVerifyDeliverableResponse
+  | WorkerProveRedlineReversibilityResponse
   | WorkerProjectReviewProfileResponse
   | WorkerConvertResponse
   | WorkerCompareResponse

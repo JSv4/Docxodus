@@ -25,6 +25,7 @@ import type {
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
   WorkerVerifyDeliverableResponse,
+  WorkerProveRedlineReversibilityResponse,
   WorkerProjectReviewProfileResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
@@ -53,6 +54,7 @@ import type {
   EditResult,
   PackageManifest,
   DeliverableVerificationResult,
+  RedlineReversibilityProof,
   SemanticChangeSet,
   PackageManifestInspectionLimits,
   WorkerErrorCode,
@@ -220,6 +222,17 @@ export interface WorkerDocxodus {
     document: File | Uint8Array,
     baseline?: File | Uint8Array
   ): Promise<DeliverableVerificationResult>;
+
+  /**
+   * Prove that a redline's generated revisions accept to the intended final and reject to the
+   * baseline. Three packages are inspected and two rebuilt, so this always runs off the main
+   * thread; the returned proof carries digests and divergences rather than the rebuilt bytes.
+   */
+  proveRedlineReversibility(
+    baseline: File | Uint8Array,
+    intendedFinal: File | Uint8Array,
+    redline: File | Uint8Array
+  ): Promise<RedlineReversibilityProof>;
 
   /** Compare two DOCX packages into the stable, versioned semantic-change schema. */
   getSemanticChanges(
@@ -525,6 +538,30 @@ export async function createWorkerDocxodus(
         throw new Error(response.error ?? "verifyDeliverable failed");
       }
       return response.verification;
+    },
+
+    async proveRedlineReversibility(
+      baseline: File | Uint8Array,
+      intendedFinal: File | Uint8Array,
+      redline: File | Uint8Array
+    ): Promise<RedlineReversibilityProof> {
+      const baselineBytes = await toBytes(baseline);
+      const intendedFinalBytes = await toBytes(intendedFinal);
+      const redlineBytes = await toBytes(redline);
+      const response = await sendRequest<WorkerProveRedlineReversibilityResponse>(
+        {
+          id: generateId(),
+          type: "proveRedlineReversibility",
+          baselineBytes,
+          intendedFinalBytes,
+          redlineBytes,
+        },
+        [baselineBytes.buffer, intendedFinalBytes.buffer, redlineBytes.buffer]
+      );
+      if (!response.success || !response.proof) {
+        throw new Error(response.error ?? "proveRedlineReversibility failed");
+      }
+      return response.proof;
     },
 
     async getSemanticChanges(
