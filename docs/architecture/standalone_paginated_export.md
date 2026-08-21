@@ -638,6 +638,30 @@ signature; only then does it measure a fresh PageMap, serialize, and perform the
 check. Otherwise it fails `pagination_failure`. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
+The readiness log in the render report records both sides of the barrier. The browser materializer
+records the phases it runs itself, from `input_validation` through `output_verification`; the Node
+host prepends the phases it owns and the materializer cannot observe from inside the page —
+`browser_launch`, the materializer bootstrap under `wasm_initialization`, the closed-runtime-graph
+audit under `output_verification`, and `cleanup` — so the log reads in the order the work happened.
+`output_write` and `filesystem_commit` are deliberately absent from it: a report cannot record the
+outcome of writing its own bytes, and their digests are already fixed by then. They remain phases
+for error and timeout reporting only. A failed report carries exactly one non-complete entry, so a
+teardown failure behind an already-failed render is reported through the render's failure rather
+than as a second one.
+
+Font readiness proves availability, not identity. `FontFaceSet.check()` reports whether pending
+downloads have settled rather than whether a family exists — Chromium answers true for a family it
+has never heard of — so each requested family's first entry is measured through advance widths
+against every generic fallback. A family that matches all of them is being silently substituted for
+and is recorded `missing` with an aggregate `font_family_unavailable` warning; one that resolves
+stays `unverified`, since rendering it proves neither which file supplied it nor its version.
+Because an unresolvable family is a font-policy matter governed by `strictFonts` rather than
+unsupported content, it always warns and never fails the render on its own. Image and inline-SVG
+findings do route through `unsupportedContent`: they warn with an omitted resource record by
+default and fail closed at their own phase under `strict`. The offline reopen check applies neither
+policy — a resource that materialized and then failed from the serialized HTML is a defect in the
+output, not in the source, and fails `output_verification`.
+
 The production path performs synchronous WASM conversion inside the existing dedicated worker and
 owns the render page/context. Its total deadline can therefore terminate the worker or close the
 owned context. A Promise race on the browser main thread is not considered cancellation. The same

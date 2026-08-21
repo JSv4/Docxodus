@@ -2188,6 +2188,51 @@ async function awaitFonts(document: Document): Promise<void> {
   if (document.fonts) await document.fonts.ready;
 }
 
+// Availability probing needs glyphs whose advance widths differ between typefaces;
+// digits and mixed-case letters separate metric-compatible families far better than
+// a single repeated character does.
+const FONT_AVAILABILITY_SAMPLE = "MWmwilAaGg0189";
+const FONT_AVAILABILITY_FALLBACKS = ["monospace", "serif", "sans-serif"] as const;
+
+// getComputedStyle returns the whole declared stack. Only the first entry is the
+// family the document actually asked for; everything after it is already a
+// substitution the author accepted, and the generic at the end always resolves.
+function primaryFamily(stack: string): string | undefined {
+  for (const entry of stack.split(",")) {
+    const family = entry.trim().replace(/^["']|["']$/g, "").trim();
+    if (family) return family;
+  }
+  return undefined;
+}
+
+function cssFamilyToken(family: string): string {
+  return /^[A-Za-z][A-Za-z0-9-]*$/.test(family)
+    ? family
+    : `"${family.replace(/["\\]/g, "\\$&")}"`;
+}
+
+// document.fonts.check() reports whether pending downloads are settled, not whether
+// a family exists — Chromium answers true for a family it has never heard of. Measure
+// instead: a family that changes the advance width away from every generic fallback is
+// present, and one that matches all three is being silently substituted for.
+function familyAvailable(view: Window & typeof globalThis, family: string): boolean {
+  const generic = family.toLowerCase();
+  if (FONT_AVAILABILITY_FALLBACKS.includes(generic as typeof FONT_AVAILABILITY_FALLBACKS[number])
+    || generic === "cursive" || generic === "fantasy" || generic === "system-ui") {
+    return true;
+  }
+  const context = view.document.createElement("canvas").getContext("2d");
+  if (!context) return true;
+  const token = cssFamilyToken(family);
+  for (const fallback of FONT_AVAILABILITY_FALLBACKS) {
+    context.font = `72px ${fallback}`;
+    const baseline = context.measureText(FONT_AVAILABILITY_SAMPLE).width;
+    context.font = `72px ${token}, ${fallback}`;
+    if (context.measureText(FONT_AVAILABILITY_SAMPLE).width !== baseline) return true;
+  }
+  return false;
+}
+
 function inventoryBrowserObservedFonts(document: Document, state: ExecutionState): void {
   const view = document.defaultView;
   if (!view) throw new Error("render document has no defaultView");
@@ -2202,11 +2247,41 @@ function inventoryBrowserObservedFonts(document: Document, state: ExecutionState
     const family = view.getComputedStyle(element).fontFamily.trim();
     if (family) families.add(family);
   }
+  const unavailable: string[] = [];
   for (const requestedFamily of Array.from(families).sort(compareCodeUnits)) {
+    const primary = primaryFamily(requestedFamily);
+    // An available family is still only "unverified": the barrier proves the browser
+    // can render it, not which file it came from. Attesting the file is issue #442.
+    if (primary === undefined || familyAvailable(view, primary)) {
+      addFont(state, {
+        requestedFamily,
+        status: "unverified",
+        source: "browser",
+      });
+      continue;
+    }
     addFont(state, {
       requestedFamily,
-      status: "unverified",
+      status: "missing",
       source: "browser",
+    });
+    unavailable.push(primary);
+  }
+  if (unavailable.length > 0) {
+    // Always a warning, never a failure. An unresolvable family is a font-policy matter
+    // governed by strictFonts — which issue #442 owns — and not unsupported content, so
+    // this deliberately does not route through policyWarning.
+    //
+    // One aggregate warning, not one per family: the per-family record already lives in
+    // fonts[], and a wide document would otherwise spend its whole diagnostic budget here.
+    addWarning(state, {
+      code: "font_family_unavailable",
+      severity: "warning",
+      phase: "font_loading",
+      message: `The render environment substituted ${unavailable.length} requested font `
+        + `${unavailable.length === 1 ? "family" : "families"} that it could not resolve.`,
+      remediation: "Install the missing families in the render environment, or supply them through fontDirectories.",
+      detail: boundedFamilyList(unavailable),
     });
   }
   if (families.size > 0) {
@@ -2220,25 +2295,90 @@ function inventoryBrowserObservedFonts(document: Document, state: ExecutionState
   }
 }
 
-async function decodeImages(document: Document): Promise<void> {
+function boundedFamilyList(families: string[]): string {
+  const unique = Array.from(new Set(families)).sort(compareCodeUnits);
+  const listed = unique.slice(0, 8);
+  return unique.length > listed.length
+    ? `${listed.join(", ")}, and ${unique.length - listed.length} more`
+    : listed.join(", ");
+}
+
+// A src can be a multi-megabyte data URL, so it is never the label. Anchors and alt text
+// are bounded, stable across renders, and enough to find the element in the source.
+function visualResourceLabel(element: Element, kind: string, index: number): string {
+  const anchor = element.closest("[data-source-anchor-id]")?.getAttribute("data-source-anchor-id");
+  if (anchor) return `${kind}:${boundedText(anchor)}`;
+  const alt = element instanceof HTMLImageElement ? element.alt.trim() : "";
+  return alt ? `${kind}:${boundedText(alt)}` : `${kind}-${index + 1}`;
+}
+
+function boundedText(value: string, maximum = 80): string {
+  // Control characters would travel into the report and out to a terminal.
+  const clean = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return clean.length > maximum ? `${clean.slice(0, maximum - 1)}…` : clean;
+}
+
+interface VisualResourceFailure {
+  resource: string;
+  anchorId?: string;
+}
+
+function visualResourceFailure(element: Element, kind: string, index: number): VisualResourceFailure {
+  const anchorId = element.closest("[data-source-anchor-id]")
+    ?.getAttribute("data-source-anchor-id") ?? undefined;
+  return { resource: visualResourceLabel(element, kind, index), ...(anchorId ? { anchorId } : {}) };
+}
+
+// Probes report; they do not decide. Materialization routes their findings through the
+// unsupportedContent policy, while the offline reopen check treats any finding as a
+// defect in the serialized output — the same resource decoded moments earlier.
+async function decodeImages(document: Document): Promise<VisualResourceFailure[]> {
   const images = Array.from(document.images);
+  // decode() rejects for a broken image; settle every one before judging any, so a
+  // single failure cannot hide the others from the report.
   await Promise.all(images.map((image) =>
-    typeof image.decode === "function" ? image.decode() : Promise.resolve()));
-  for (const image of images) {
-    if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
-      throw new Error(`Image failed to decode${image.alt ? `: ${image.alt}` : ""}`);
-    }
+    typeof image.decode === "function"
+      ? image.decode().catch(() => undefined)
+      : Promise.resolve()));
+  return images.flatMap((image, index) =>
+    image.complete && image.naturalWidth > 0 && image.naturalHeight > 0
+      ? []
+      : [visualResourceFailure(image, "image", index)]);
+}
+
+function validateInlineSvg(document: Document): VisualResourceFailure[] {
+  // Without a viewBox or intrinsic size the element has no resolvable geometry, so
+  // pagination would measure it at zero and the printed page would silently lose it.
+  return Array.from(document.querySelectorAll<SVGSVGElement>("svg")).flatMap((svg, index) =>
+    svg.hasAttribute("viewBox")
+      || (Number.parseFloat(svg.getAttribute("width") ?? "") > 0
+        && Number.parseFloat(svg.getAttribute("height") ?? "") > 0)
+      ? []
+      : [visualResourceFailure(svg, "svg", index)]);
+}
+
+function admitVisualResourceFailures(
+  state: ExecutionState,
+  options: NormalizedOptions,
+  failures: VisualResourceFailure[],
+  kind: "image" | "svg",
+  warning: { code: string; phase: ExportPhase; message: string; remediation: string },
+): void {
+  for (const failure of failures) {
+    addResource(state, { kind, status: "omitted", resource: failure.resource });
+    policyWarning(state, options, { ...warning, ...failure });
   }
 }
 
-function validateInlineSvg(document: Document): void {
-  for (const svg of Array.from(document.querySelectorAll<SVGSVGElement>("svg"))) {
-    if (!svg.hasAttribute("viewBox")
-      && !(Number.parseFloat(svg.getAttribute("width") ?? "") > 0
-        && Number.parseFloat(svg.getAttribute("height") ?? "") > 0)) {
-      throw new Error("Inline SVG has neither a viewBox nor explicit dimensions");
-    }
-  }
+function assertVisualResourcesIntact(
+  failures: VisualResourceFailure[],
+  what: string,
+): void {
+  if (failures.length === 0) return;
+  throw new Error(
+    `${failures.length} ${what} that materialized successfully did not survive serialization: `
+    + `${failures.slice(0, 8).map((failure) => failure.resource).join(", ")}`,
+  );
 }
 
 function normalizeFragmentTargets(
@@ -2802,8 +2942,8 @@ async function verifyOfflineReopen(
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
     await awaitFonts(reopened);
-    await decodeImages(reopened);
-    validateInlineSvg(reopened);
+    assertVisualResourcesIntact(await decodeImages(reopened), "embedded images");
+    assertVisualResourcesIntact(validateInlineSvg(reopened), "inline SVG elements");
     await awaitStableTree(reopened, pages);
     countDomNodes(reopened, state.limits.domNodes, "output_verification");
     const resources = automaticResourceCount(reopened);
@@ -3219,10 +3359,24 @@ export async function convertDocxToPaginatedHtml(
           await awaitFonts(renderDocument);
           inventoryBrowserObservedFonts(renderDocument, state);
         });
-        await runPhase(state, "image_decoding", ["embedded images"], () =>
-          decodeImages(renderDocument));
-        await runPhase(state, "chart_svg_materialization", ["inline SVG"], () =>
-          validateInlineSvg(renderDocument));
+        await runPhase(state, "image_decoding", ["embedded images"], async () => {
+          admitVisualResourceFailures(
+            state, options, await decodeImages(renderDocument), "image", {
+              code: "image_decode_failed",
+              phase: "image_decoding",
+              message: "An embedded image did not decode and will print as empty space.",
+              remediation: "Re-encode the image in a browser-supported format, or use unsupportedContent: strict to reject the document.",
+            });
+        });
+        await runPhase(state, "chart_svg_materialization", ["inline SVG"], () => {
+          admitVisualResourceFailures(
+            state, options, validateInlineSvg(renderDocument), "svg", {
+              code: "chart_svg_unmeasurable",
+              phase: "chart_svg_materialization",
+              message: "An inline SVG has neither a viewBox nor explicit dimensions and cannot be laid out.",
+              remediation: "Give the SVG a viewBox or explicit width and height, or use unsupportedContent: strict to reject the document.",
+            });
+        });
 
         const staging = renderDocument.getElementById("pagination-staging") as HTMLElement | null;
         const container = renderDocument.getElementById("pagination-container") as HTMLElement | null;
