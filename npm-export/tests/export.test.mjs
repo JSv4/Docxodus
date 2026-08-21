@@ -15,6 +15,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { PDFDocument } from "pdf-lib";
 import {
   convertDocxToPdf,
   DocxodusExportError,
@@ -22,6 +23,7 @@ import {
   renderDocxFile,
 } from "../dist/index.js";
 import { canonicalJson } from "../dist/canonical.js";
+import { generateMixedSectionDocx } from "./mixed-section-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(here);
@@ -56,6 +58,12 @@ async function currentRuntimeDirectories() {
 }
 
 async function inspectPdf(bytes) {
+  const geometryDocument = await PDFDocument.load(new Uint8Array(bytes), {
+    ignoreEncryption: false,
+    updateMetadata: false,
+    throwOnInvalidObject: true,
+  });
+  const geometryPages = geometryDocument.getPages();
   const loading = getDocument({
     data: new Uint8Array(bytes),
     isEvalSupported: false,
@@ -80,6 +88,16 @@ async function inspectPdf(bytes) {
     pages.push({
       pageNumber,
       text: pageText,
+      textRuns: content.items
+        .filter((item) => "str" in item && item.str.trim().length > 0)
+        .map((item) => ({
+          text: item.str,
+          transform: [...item.transform],
+          width: item.width,
+          height: item.height,
+        })),
+      mediaBox: geometryPages[pageNumber - 1].getMediaBox(),
+      cropBox: geometryPages[pageNumber - 1].getCropBox(),
       links: pageLinks.map(({ url, unsafeUrl, dest }) => ({ url, unsafeUrl, dest })),
       constructPathOperations: pagePaths,
     });
@@ -96,10 +114,80 @@ async function inspectPdf(bytes) {
   };
 }
 
+function assertPdfBoxes(inspection, expectedPages, tolerance = 0.5) {
+  assert.equal(inspection.pageCount, expectedPages.length);
+  for (let index = 0; index < expectedPages.length; index++) {
+    const expected = expectedPages[index];
+    const actual = inspection.pages[index];
+    for (const [name, box] of [["MediaBox", actual.mediaBox], ["CropBox", actual.cropBox]]) {
+      assert.ok(Math.abs(box.x) <= tolerance, `page ${index + 1} ${name} x=${box.x}`);
+      assert.ok(Math.abs(box.y) <= tolerance, `page ${index + 1} ${name} y=${box.y}`);
+      assert.ok(
+        Math.abs(box.width - expected.width) <= tolerance,
+        `page ${index + 1} ${name} width ${box.width} != ${expected.width}`,
+      );
+      assert.ok(
+        Math.abs(box.height - expected.height) <= tolerance,
+        `page ${index + 1} ${name} height ${box.height} != ${expected.height}`,
+      );
+    }
+  }
+}
+
+function assertEquivalentPdfBoxes(actual, expected, tolerance = 0.5) {
+  assert.equal(actual.pageCount, expected.pageCount);
+  for (let index = 0; index < actual.pages.length; index++) {
+    for (const boxName of ["mediaBox", "cropBox"]) {
+      for (const coordinate of ["x", "y", "width", "height"]) {
+        const actualValue = actual.pages[index][boxName][coordinate];
+        const expectedValue = expected.pages[index][boxName][coordinate];
+        assert.ok(
+          Math.abs(actualValue - expectedValue) <= tolerance,
+          `page ${index + 1} ${boxName}.${coordinate} ${actualValue} != ${expectedValue}`,
+        );
+      }
+    }
+  }
+}
+
+function assertEquivalentPdfTextGeometry(actual, expected, tolerance = 0.25) {
+  assert.equal(actual.pageCount, expected.pageCount);
+  for (let pageIndex = 0; pageIndex < actual.pages.length; pageIndex++) {
+    const actualRuns = actual.pages[pageIndex].textRuns;
+    const expectedRuns = expected.pages[pageIndex].textRuns;
+    assert.equal(
+      actualRuns.length,
+      expectedRuns.length,
+      `page ${pageIndex + 1} text-run count changed`,
+    );
+    for (let runIndex = 0; runIndex < actualRuns.length; runIndex++) {
+      const actualRun = actualRuns[runIndex];
+      const expectedRun = expectedRuns[runIndex];
+      assert.equal(
+        actualRun.text,
+        expectedRun.text,
+        `page ${pageIndex + 1} text run ${runIndex + 1} changed`,
+      );
+      for (let component = 0; component < actualRun.transform.length; component++) {
+        assert.ok(
+          Math.abs(actualRun.transform[component] - expectedRun.transform[component]) <= tolerance,
+          `page ${pageIndex + 1} text run ${runIndex + 1} transform[${component}] changed`,
+        );
+      }
+      for (const dimension of ["width", "height"]) {
+        assert.ok(
+          Math.abs(actualRun[dimension] - expectedRun[dimension]) <= tolerance,
+          `page ${pageIndex + 1} text run ${runIndex + 1} ${dimension} changed`,
+        );
+      }
+    }
+  }
+}
+
 async function writeViewer() {
-  const viewer = `<!doctype html><meta charset="utf-8"><title>Docxodus #439 test artifacts</title>
+  const viewer = `<!doctype html><meta charset="utf-8"><title>Docxodus #439/#440 test artifacts</title>
 <style>body{font:15px system-ui;margin:2rem;max-width:70rem}li{margin:.55rem 0}iframe,object,img{width:100%;min-height:48rem;border:1px solid #bbb}</style>
-<h1>Docxodus #439 Node/PDF export evidence</h1>
+<h1>Docxodus #439/#440 Node/PDF export evidence</h1>
 <p>Generated by the end-to-end Node, CLI, Chromium, and PDF-parser test suite.</p>
 <ul>
 <li><a href="success/generated.pdf">Generated searchable PDF</a></li>
@@ -112,9 +200,18 @@ async function writeViewer() {
 <li><a href="success/hyperlinks.pdf">Hyperlink preservation PDF</a></li>
 <li><a href="success/chart-vector.pdf">Vector-chart preservation PDF</a></li>
 <li><a href="success/cli.pdf">CLI PDF</a></li>
+<li><a href="success/mixed-sections.docx">Mixed-section source DOCX</a></li>
+<li><a href="success/mixed-sections.html">Mixed-section standalone HTML</a></li>
+<li><a href="success/mixed-sections.pdf">Mixed-section PDF</a></li>
+<li><a href="success/mixed-sections-scaled-viewer.pdf">PDF reprinted from an 80% screen view</a></li>
+<li><a href="success/mixed-sections-page-map.json">Mixed-section PageMap</a></li>
+<li><a href="success/mixed-sections-render-report.json">Mixed-section render report</a></li>
+<li><a href="success/mixed-sections-inspection.json">Mixed-section PDF geometry/text inspection</a></li>
+<li><a href="success/mixed-sections-scaled-viewer.png">80% viewer screenshot</a></li>
 <li><a href="failure/pdf-limit-render-report.json">Structured PDF-limit failure report</a></li>
 </ul>
 <h2>PDF preview</h2><object data="success/generated.pdf" type="application/pdf"></object>
+<h2>Mixed-section PDF preview</h2><object data="success/mixed-sections.pdf" type="application/pdf"></object>
 <h2>Offline HTML preview</h2><iframe sandbox src="success/standalone.html"></iframe>`;
   await writeFile(join(artifacts, "view-artifacts.html"), viewer);
 }
@@ -344,6 +441,226 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeJson(join(successArtifacts, "hyperlink-inspection.json"), linkInspection);
     await writeFile(join(successArtifacts, "chart-vector.pdf"), chartResult.pdf);
     await writeJson(join(successArtifacts, "chart-vector-inspection.json"), chartInspection);
+  });
+
+  test("preserves mixed section geometry, stories, notes, numbering, and print scale", { timeout: 180_000 }, async () => {
+    const source = generateMixedSectionDocx();
+    const result = await renderDocxArtifacts(source, {
+      ...baseOptions,
+      browser,
+      outputs: ["html", "pdf"],
+    });
+    const expectedPages = [
+      { pageNumber: 1, pageInSection: 1, width: 612, height: 792, sectionIndex: 0 },
+      { pageNumber: 2, pageInSection: 2, width: 612, height: 792, sectionIndex: 0 },
+      { pageNumber: 3, pageInSection: 1, width: 792, height: 612, sectionIndex: 1 },
+      { pageNumber: 4, pageInSection: 1, width: 595.3, height: 841.9, sectionIndex: 2 },
+      { pageNumber: 5, pageInSection: 2, width: 595.3, height: 841.9, sectionIndex: 3 },
+      { pageNumber: 6, pageInSection: 1, width: 612, height: 792, sectionIndex: 4 },
+    ];
+    assert.equal(result.pageCount, expectedPages.length);
+    assert.deepEqual(
+      result.pageMap.pages.map(({ pageNumber, pageInSection, width, height, sectionIndex }) => ({
+        pageNumber,
+        pageInSection,
+        width,
+        height,
+        sectionIndex,
+      })),
+      expectedPages,
+    );
+    // The report inventory is the complete PageMap page contract, including pageInSection and
+    // pageName; comparing projections here previously made this success test fail by construction.
+    assert.deepEqual(result.renderReport.pages, result.pageMap.pages);
+    assert.match(result.html, /column-count:\s*2/i);
+
+    const normalInspection = await inspectPdf(result.pdf);
+    assertPdfBoxes(normalInspection, expectedPages);
+    const pageText = normalInspection.pages.map((page) => page.text.replace(/\s+/g, " ").trim());
+    const expectedText = [
+      ["HEADER-S0", "BODY-S0-P1 LETTER PORTRAIT", "FOOTER-S0 PAGE 1"],
+      ["HEADER-S0", "BODY-S0-P2 EXPLICIT PAGE BREAK", "FOOTER-S0 PAGE 2"],
+      ["HEADER-S1", "BODY-S1 LANDSCAPE", "LANDSCAPE FOOTNOTE TOKEN", "FOOTER-S1 PAGE 10"],
+      ["HEADER-S2", "BODY-S2 A4 PORTRAIT BEFORE CONTINUOUS", "BODY-S3 TWO COLUMN SHARED PAGE", "FOOTER-S2 PAGE 11"],
+      ["HEADER-S3", "BODY-S3 TWO COLUMN SPILL PAGE", "FOOTER-S3 PAGE 12"],
+      ["HEADER-S4", "BODY-S4 LETTER PORTRAIT FINAL", "FOOTER-S4 PAGE 13"],
+    ];
+    const expectedTokenPages = new Map();
+    expectedText.forEach((tokens, pageIndex) => {
+      tokens.forEach((token) => {
+        const owners = expectedTokenPages.get(token) ?? new Set();
+        owners.add(pageIndex);
+        expectedTokenPages.set(token, owners);
+      });
+    });
+    expectedText.forEach((tokens, index) => {
+      let precedingTokenIndex = -1;
+      tokens.forEach((token) => {
+        const tokenIndex = pageText[index].indexOf(token);
+        assert.ok(
+          tokenIndex > precedingTokenIndex,
+          `page ${index + 1} token ${JSON.stringify(token)} is missing or out of order: ${pageText[index]}`,
+        );
+        assert.equal(
+          pageText[index].indexOf(token, tokenIndex + token.length),
+          -1,
+          `page ${index + 1} repeats ${JSON.stringify(token)}: ${pageText[index]}`,
+        );
+        pageText.forEach((otherPageText, otherPageIndex) => {
+          if (!expectedTokenPages.get(token).has(otherPageIndex)) {
+            assert.equal(
+              otherPageText.includes(token),
+              false,
+              `${JSON.stringify(token)} leaked from page ${index + 1} to page ${otherPageIndex + 1}`,
+            );
+          }
+        });
+        precedingTokenIndex = tokenIndex;
+      });
+    });
+    assert.equal(pageText[3].includes("HEADER-S3"), false);
+    assert.equal(pageText[3].includes("FOOTER-S3"), false);
+
+    const scaledContext = await browser.newContext({ serviceWorkers: "block" });
+    const scaledPage = await scaledContext.newPage();
+    const requests = [];
+    scaledPage.on("request", (request) => requests.push(request.url()));
+    await scaledPage.setContent(result.html, { waitUntil: "load" });
+    await scaledPage.evaluate(async () => { await document.fonts.ready; });
+    const screenScales = await scaledPage.locator(".page-box").evaluateAll((nodes) =>
+      nodes.map((node, index) => {
+        // Alternate the two real viewer paths so every sheet remains at an effective 80% scale:
+        // Chromium's inline zoom and the transform fallback with compensating margins. Print CSS
+        // must neutralize both paths.
+        if (index % 2 === 0) {
+          node.style.zoom = "0.8";
+        } else {
+          node.style.transform = "scale(0.8)";
+          node.style.transformOrigin = "top left";
+          node.style.marginRight = "-100px";
+          node.style.marginBottom = "-100px";
+        }
+        const style = getComputedStyle(node);
+        return {
+          zoom: style.zoom,
+          transform: style.transform,
+          transformOrigin: style.transformOrigin,
+          marginRight: style.marginRight,
+          marginBottom: style.marginBottom,
+        };
+      }));
+    for (const [index, scale] of screenScales.entries()) {
+      if (index % 2 === 0) {
+        assert.equal(scale.zoom, "0.8");
+        assert.equal(scale.transform, "none");
+        assert.equal(scale.marginRight, "0px");
+        assert.equal(scale.marginBottom, "0px");
+      } else {
+        assert.equal(scale.zoom, "1");
+        assert.match(scale.transform, /^matrix\(0\.8, 0, 0, 0\.8, 0, 0\)$/);
+        assert.equal(scale.transformOrigin, "0px 0px");
+        assert.equal(scale.marginRight, "-100px");
+        assert.equal(scale.marginBottom, "-100px");
+      }
+    }
+    const columnContainers = await scaledPage.locator(".page-content > div").evaluateAll((nodes) =>
+      nodes.filter((node) => getComputedStyle(node).columnCount === "2").length);
+    assert.ok(columnContainers >= 2);
+    const screenshot = await scaledPage.screenshot({ fullPage: true });
+    await scaledPage.emulateMedia({ media: "print" });
+    const printAudit = await scaledPage.evaluate((pageMap) => {
+      const pages = Array.from(document.querySelectorAll(".page-box"));
+      return {
+        pages: pages.map((page) => {
+          const style = getComputedStyle(page);
+          const rect = page.getBoundingClientRect();
+          return {
+            zoom: style.zoom,
+            transform: style.transform,
+            marginTop: style.marginTop,
+            marginRight: style.marginRight,
+            marginBottom: style.marginBottom,
+            marginLeft: style.marginLeft,
+            widthPt: rect.width * 72 / 96,
+            heightPt: rect.height * 72 / 96,
+          };
+        }),
+        fragments: pageMap.fragments.map((expected) => {
+          const element = document.querySelector(
+            `[data-page-fragment-id="${CSS.escape(expected.fragmentId)}"]`,
+          );
+          const page = element?.closest(".page-box");
+          if (!element || !page) return { fragmentId: expected.fragmentId, missing: true };
+          const pageRect = page.getBoundingClientRect();
+          const rect = element.getBoundingClientRect();
+          const pageContract = pageMap.pages[expected.pageNumber - 1];
+          const xRatio = pageContract.width / pageRect.width;
+          const yRatio = pageContract.height / pageRect.height;
+          return {
+            fragmentId: expected.fragmentId,
+            missing: false,
+            geometry: {
+              x: (rect.left - pageRect.left) * xRatio,
+              y: (rect.top - pageRect.top) * yRatio,
+              width: rect.width * xRatio,
+              height: rect.height * yRatio,
+            },
+          };
+        }),
+      };
+    }, result.pageMap);
+    printAudit.pages.forEach((page, index) => {
+      assert.equal(page.zoom, "1", `page ${index + 1} retained viewer zoom in print`);
+      assert.equal(page.transform, "none", `page ${index + 1} retained viewer transform in print`);
+      for (const margin of ["marginTop", "marginRight", "marginBottom", "marginLeft"]) {
+        assert.equal(page[margin], "0px", `page ${index + 1} retained ${margin} in print`);
+      }
+      assert.ok(Math.abs(page.widthPt - expectedPages[index].width) <= 0.1);
+      assert.ok(Math.abs(page.heightPt - expectedPages[index].height) <= 0.1);
+    });
+    printAudit.fragments.forEach((actual, index) => {
+      const expected = result.pageMap.fragments[index];
+      assert.equal(actual.missing, false, `print tree lost ${expected.fragmentId}`);
+      for (const coordinate of ["x", "y", "width", "height"]) {
+        assert.ok(
+          Math.abs(actual.geometry[coordinate] - expected.geometry[coordinate]) <= 0.1,
+          `${expected.fragmentId} print ${coordinate} changed`,
+        );
+      }
+    });
+    const scaledPdf = await scaledPage.pdf({
+      printBackground: true,
+      preferCSSPageSize: true,
+      tagged: true,
+      outline: false,
+      displayHeaderFooter: false,
+      scale: 1,
+      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+    });
+    await scaledContext.close();
+    assert.deepEqual(requests, []);
+
+    const scaledInspection = await inspectPdf(scaledPdf);
+    assertPdfBoxes(scaledInspection, expectedPages);
+    assertEquivalentPdfBoxes(scaledInspection, normalInspection);
+    assertEquivalentPdfTextGeometry(scaledInspection, normalInspection);
+
+    await writeFile(join(successArtifacts, "mixed-sections.docx"), source);
+    await writeFile(join(successArtifacts, "mixed-sections.html"), result.html);
+    await writeFile(join(successArtifacts, "mixed-sections.pdf"), result.pdf);
+    await writeFile(join(successArtifacts, "mixed-sections-scaled-viewer.pdf"), scaledPdf);
+    await writeJson(join(successArtifacts, "mixed-sections-page-map.json"), result.pageMap);
+    await writeJson(join(successArtifacts, "mixed-sections-render-report.json"), result.renderReport);
+    await writeJson(join(successArtifacts, "mixed-sections-inspection.json"), {
+      expectedPages,
+      normal: normalInspection,
+      scaled: scaledInspection,
+      screenScales,
+      printAudit,
+      offlineRequests: requests,
+      columnContainers,
+    });
+    await writeFile(join(successArtifacts, "mixed-sections-scaled-viewer.png"), screenshot);
   });
 
   test("retains a structured report when post-layout PDF verification fails", { timeout: 180_000 }, async () => {

@@ -33,7 +33,13 @@ public class PaginatedHeaderFooterGatingTests
 {
     /// <summary>A one-section document with default + even + first header/footer stories, where the
     /// gating flags are set only as the arguments ask.</summary>
-    private static byte[] BuildDoc(bool titlePg, bool evenAndOddHeaders)
+    private static byte[] BuildDoc(
+        bool titlePg,
+        bool evenAndOddHeaders,
+        bool? footnoteLayoutLikeWord8 = null,
+        bool includeGatedReferences = true,
+        bool emitDisabledTitlePage = false,
+        bool emitDisabledEvenAndOddHeaders = false)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -44,7 +50,11 @@ public class PaginatedHeaderFooterGatingTests
             main.Document.Body = body;
 
             var settings = new Settings();
-            if (evenAndOddHeaders) settings.Append(new EvenAndOddHeaders());
+            if (evenAndOddHeaders || emitDisabledEvenAndOddHeaders)
+                settings.Append(new EvenAndOddHeaders { Val = evenAndOddHeaders });
+            if (footnoteLayoutLikeWord8.HasValue)
+                settings.Append(new Compatibility(new FootnoteLayoutLikeWord8
+                    { Val = footnoteLayoutLikeWord8.Value }));
             main.AddNewPart<DocumentSettingsPart>().Settings = settings;
 
             body.Append(new Paragraph(new Run(new Text("Body paragraph."))));
@@ -64,6 +74,8 @@ public class PaginatedHeaderFooterGatingTests
                          (HeaderFooterValues.First, "FIRST-STORY"),
                      })
             {
+                if (!includeGatedReferences && kind != HeaderFooterValues.Default)
+                    continue;
                 var hp = main.AddNewPart<HeaderPart>();
                 hp.Header = new Header(new Paragraph(new Run(new Text(text))));
                 var fp = main.AddNewPart<FooterPart>();
@@ -72,7 +84,8 @@ public class PaginatedHeaderFooterGatingTests
                 sectPr.PrependChild(new HeaderReference { Type = kind, Id = main.GetIdOfPart(hp) });
             }
 
-            if (titlePg) sectPr.Append(new TitlePage());
+            if (titlePg || emitDisabledTitlePage)
+                sectPr.Append(new TitlePage { Val = titlePg });
             body.Append(sectPr);
             main.Document.Save();
         }
@@ -230,5 +243,76 @@ public class PaginatedHeaderFooterGatingTests
         Assert.True(second.HasFooter);
         Assert.True(second.HasFirstPageFooter);
         Assert.True(second.HasEvenPageFooter);
+    }
+
+    [Fact]
+    public void PHF005_Word8FootnoteCompatibilityReachesThePaginator()
+    {
+        var without = PaginatedHtml(BuildDoc(
+            titlePg: false,
+            evenAndOddHeaders: false));
+        var with = PaginatedHtml(BuildDoc(
+            titlePg: false,
+            evenAndOddHeaders: false,
+            footnoteLayoutLikeWord8: true));
+        var explicitlyDisabled = PaginatedHtml(BuildDoc(
+            titlePg: false,
+            evenAndOddHeaders: false,
+            footnoteLayoutLikeWord8: false));
+
+        Assert.DoesNotContain("data-footnote-layout-like-word8", without);
+        Assert.DoesNotContain("data-footnote-layout-like-word8", explicitlyDisabled);
+        Assert.Contains("data-footnote-layout-like-word8=\"true\"", with);
+    }
+
+    [Fact]
+    public void PHF006_EnabledButMissingFirstAndEvenStoriesStayBlank()
+    {
+        var root = XElement.Parse(PaginatedHtml(BuildDoc(
+            titlePg: true,
+            evenAndOddHeaders: true,
+            includeGatedReferences: false)));
+        var sectionStories = root.Descendants()
+            .Where(e => e.Name.LocalName == "div" &&
+                        (string?)e.Attribute("data-section") == "0")
+            .ToDictionary(e => (string)e.Attribute("data-hf-type")!);
+
+        Assert.Equal("DEFAULT-STORY", sectionStories["header-default"].Value);
+        Assert.Equal("DEFAULT-STORY", sectionStories["footer-default"].Value);
+        foreach (var type in new[]
+                 {
+                     "header-first", "header-even", "footer-first", "footer-even",
+                 })
+        {
+            Assert.True(sectionStories.ContainsKey(type));
+            Assert.Equal(string.Empty, sectionStories[type].Value);
+        }
+    }
+
+    [Fact]
+    public void PHF007_ExplicitFalseGateValuesDoNotEnableFirstOrEvenStories()
+    {
+        var bytes = BuildDoc(
+            titlePg: false,
+            evenAndOddHeaders: false,
+            emitDisabledTitlePage: true,
+            emitDisabledEvenAndOddHeaders: true);
+        var html = PaginatedHtml(bytes);
+
+        Assert.Contains("DEFAULT-STORY", html);
+        Assert.DoesNotContain("header-first", html);
+        Assert.DoesNotContain("footer-first", html);
+        Assert.DoesNotContain("header-even", html);
+        Assert.DoesNotContain("footer-even", html);
+        Assert.DoesNotContain("FIRST-STORY", html);
+        Assert.DoesNotContain("EVEN-STORY", html);
+
+        using var ms = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(ms, false);
+        var section = Assert.Single(WmlToHtmlConverter.GetDocumentMetadata(document).Sections);
+        Assert.False(section.HasFirstPageHeader);
+        Assert.False(section.HasFirstPageFooter);
+        Assert.False(section.HasEvenPageHeader);
+        Assert.False(section.HasEvenPageFooter);
     }
 }

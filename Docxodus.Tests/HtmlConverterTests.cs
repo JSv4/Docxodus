@@ -802,6 +802,63 @@ namespace OxPt
         }
 
         [Fact]
+        public void HC008f_BlankRunningStory_PaginatedMode_NotSelfClosing()
+        {
+            // A section with w:titlePg but no first-page headerReference deliberately gets an
+            // EMPTY header-first registry entry, so page one cannot fall through to the Default
+            // story. Empty is the whole point -- and an empty XElement serializes as a
+            // self-closing <div .../>, which a browser's HTML parser treats as an UNCLOSED div.
+            // Every following sibling, #pagination-container included, then nests inside the
+            // display:none staging; the standalone exporter removes staging during finalization
+            // and takes the entire page tree with it, so PageMap measurement sees 0x0 pages.
+            // Same hazard as the page-break marker in HC008d, reached through a blank story.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+                    var body = wDoc.MainDocumentPart.GetXDocument().Root.Element(w + "body");
+                    var sectPr = body.Element(w + "sectPr");
+                    if (sectPr.Element(w + "titlePg") == null)
+                        sectPr.Add(new XElement(w + "titlePg"));
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc,
+                        new WmlToHtmlConverterSettings
+                        {
+                            PageTitle = "Blank running story",
+                            FabricateCssClasses = true,
+                            RenderPagination = PaginationMode.Paginated,
+                            RenderHeadersAndFooters = true,
+                        });
+                    // Serialize exactly as the production WASM path does (HtmlConversionOps).
+                    string htmlString = html.ToString(SaveOptions.DisableFormatting);
+
+                    // Sanity: titlePg really did select a blank First story.
+                    Assert.Contains("data-hf-type=\"header-first\"", htmlString);
+
+                    // No running-story entry may be self-closing, blank or not.
+                    Assert.DoesNotContain("data-hf-type=\"header-first\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"header-even\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"footer-first\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"footer-even\" />", htmlString);
+
+                    // Staging and container must remain siblings once a browser parses this:
+                    // an unclosed registry div would swallow the container that follows it.
+                    int staging = htmlString.IndexOf("id=\"pagination-staging\"", StringComparison.Ordinal);
+                    int container = htmlString.IndexOf("id=\"pagination-container\"", StringComparison.Ordinal);
+                    Assert.True(staging >= 0 && container > staging);
+                    string between = htmlString.Substring(staging, container - staging);
+                    Assert.DoesNotContain("data-hf-type", between.Substring(between.LastIndexOf("</div>", StringComparison.Ordinal)));
+                }
+            }
+        }
+
+        [Fact]
         public void HC008e_PaginationPrintCss_IsGeneratedOnlyForPaginatedOutput()
         {
             // Screen pagination is deliberately a scaled flex-column viewer. Its print
