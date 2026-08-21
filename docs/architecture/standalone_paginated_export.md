@@ -660,7 +660,9 @@ unsupported content, it always warns and never fails the render on its own. Imag
 findings do route through `unsupportedContent`: they warn with an omitted resource record by
 default and fail closed at their own phase under `strict`. The offline reopen check applies neither
 policy — a resource that materialized and then failed from the serialized HTML is a defect in the
-output, not in the source, and fails `output_verification`.
+output, not in the source, and fails `output_verification`. A resource the policy already omitted
+is excluded from that check: it was reported once against the source document, and the reopened
+tree necessarily reproduces the same failure.
 
 The production path performs synchronous WASM conversion inside the existing dedicated worker and
 owns the render page/context. Its total deadline can therefore terminate the worker or close the

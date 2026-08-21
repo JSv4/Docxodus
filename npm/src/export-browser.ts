@@ -2370,15 +2370,32 @@ function admitVisualResourceFailures(
   }
 }
 
+/**
+ * Fails the offline reopen check for a resource that worked during materialization and
+ * then did not survive serialization.
+ *
+ * Resources that already failed under the unsupportedContent policy are excluded: they
+ * were reported once against the source document and warned through, and the reopened
+ * tree naturally reproduces the same failure. Re-raising it here would turn every warned
+ * export into a hard output_verification_failure.
+ */
 function assertVisualResourcesIntact(
   failures: VisualResourceFailure[],
+  alreadyOmitted: ReadonlySet<string>,
   what: string,
 ): void {
-  if (failures.length === 0) return;
+  const regressions = failures.filter((failure) => !alreadyOmitted.has(failure.resource));
+  if (regressions.length === 0) return;
   throw new Error(
-    `${failures.length} ${what} that materialized successfully did not survive serialization: `
-    + `${failures.slice(0, 8).map((failure) => failure.resource).join(", ")}`,
+    `${regressions.length} ${what} that materialized successfully did not survive serialization: `
+    + `${regressions.slice(0, 8).map((failure) => failure.resource).join(", ")}`,
   );
+}
+
+function omittedVisualResources(state: ExecutionState, kind: "image" | "svg"): ReadonlySet<string> {
+  return new Set(state.resources
+    .filter((resource) => resource.kind === kind && resource.status === "omitted" && resource.resource)
+    .map((resource) => resource.resource!));
 }
 
 function normalizeFragmentTargets(
@@ -2942,8 +2959,10 @@ async function verifyOfflineReopen(
     const reopened = frame.contentDocument!;
     const pages = Array.from(reopened.querySelectorAll<HTMLElement>(".page-box"));
     await awaitFonts(reopened);
-    assertVisualResourcesIntact(await decodeImages(reopened), "embedded images");
-    assertVisualResourcesIntact(validateInlineSvg(reopened), "inline SVG elements");
+    assertVisualResourcesIntact(
+      await decodeImages(reopened), omittedVisualResources(state, "image"), "embedded images");
+    assertVisualResourcesIntact(
+      validateInlineSvg(reopened), omittedVisualResources(state, "svg"), "inline SVG elements");
     await awaitStableTree(reopened, pages);
     countDomNodes(reopened, state.limits.domNodes, "output_verification");
     const resources = automaticResourceCount(reopened);
