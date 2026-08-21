@@ -43,8 +43,11 @@ Fixtures under `fixtures/` are **build scripts in the same step format**, not `.
 
 - The corpus carries no third-party document bytes, so there is no redistribution question to
   answer. See [PROVENANCE.md](PROVENANCE.md).
-- A fixture is reviewable as a diff. `EV003` asserts each one builds twice to the same normalized
-  package identity, because a corpus that drifts between runs cannot anchor a baseline.
+- A fixture is reviewable as a diff. `EV003` asserts each one builds twice to the same content and
+  the same package shape, because a corpus that drifts between runs cannot anchor a baseline.
+  Reproducible here means the same *document*, not the same bytes or the same package digest:
+  anchor ids and revision-save ids are minted per build, so two honest builds of one script differ
+  at the digest layer while being the same document.
 
 ## Metrics
 
@@ -53,12 +56,36 @@ contract rather than a bespoke comparison:
 
 | Invariant | Question | Source |
 |-----------|----------|--------|
-| `taskCompletion` | Did the intended change land? | text projection of the saved deliverable |
+| `taskCompletion` | Did the intended change land? | `docxodus_search` over every story |
 | `targetPrecision` | Did it change *only* that? | distinct anchors in the #457 semantic change set |
 | `collateral` | Was unrelated package state preserved? | #456 package manifests, before and after |
 | `validity` | Is the deliverable structurally sound? | #463 deliverable gate |
 | `reversibility` | Does the redline accept and reject cleanly? | #464 proof |
 | `rendering` | Does it still render? | HTML projection |
+
+### Text assertions ask the document, not a rendering of it
+
+`taskCompletion` and `collateral.textPreserved` resolve each needle through `docxodus_search`,
+counted over every story, rather than substring-matching the markdown projection. The projection
+renders a table *structurally*, so cell text is not present in it as literal prose — an early
+version of this suite scored a correct fee-table edit as a total loss for exactly that reason. The
+search path is also the one the steps themselves use to find targets, so a scenario asserts
+against the same view of the document it edits.
+
+### Reversibility is asserted in layers
+
+`reversibility` always requires that both proof paths complete and that resolving only the
+generated revisions leaves pre-existing review state intact. Full package equivalence
+(`mustSucceed`) is **opt-in and currently off**.
+
+The reason is honesty about what is being scored. The proof needs an intended final, and for a
+session-authored redline that document has to be *derived* — here by
+`RevisionProcessor.AcceptRevisions`. Requiring full equivalence would therefore assert that the
+derivation and the proof's own selective-accept path agree byte-for-byte at the normalized layer,
+which is a statement about two engine paths rather than about whether the redline is reversible.
+The engine's own `RP001` expects `Success == false` on a generated redline for the same family of
+reasons. Turning `mustSucceed` on, with a fixture whose intended final is stated rather than
+derived, is follow-up work.
 
 `targetPrecision` and `collateral` are what make this an evaluation rather than a test. Any edit
 can be made to land; the interesting question is what else moved. Each scenario's

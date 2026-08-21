@@ -23,6 +23,14 @@ internal sealed record EvalOutcome
     required public int PartsAdded { get; init; }
     required public int PartsRemoved { get; init; }
     required public string ValidityDecision { get; init; }
+    /// <summary>
+    /// How many blocks contain each needle the scenario's invariants name, answered by
+    /// docxodus_search over every story. Text assertions ask the <em>document</em> this way
+    /// rather than substring-matching a markdown projection: the projection renders tables
+    /// structurally, so cell text is not present in it as literal prose.
+    /// </summary>
+    required public IReadOnlyDictionary<string, int> TextMatchCounts { get; init; }
+    /// <summary>The markdown-derived text projection. Retained for failure artifacts only.</summary>
     required public string Text { get; init; }
     required public string Html { get; init; }
     required public string SemanticChangesJson { get; init; }
@@ -69,6 +77,14 @@ internal static class EvalHarness
         return workspace.Save(sessionId);
     }
 
+    /// <summary>The text projection of a standalone package, for fixture-reproducibility checks.</summary>
+    public static string TextProjection(byte[] packageBytes)
+    {
+        using var workspace = new EvalWorkspace();
+        var sessionId = workspace.Open(packageBytes, trackedChanges: "accept");
+        return ReadStringProperty(workspace.Content(sessionId, "text"), "text");
+    }
+
     /// <summary>Execute one scenario and collect every metric its invariants can assert over.</summary>
     public static EvalOutcome Run(JsonElement scenario)
     {
@@ -87,6 +103,7 @@ internal static class EvalHarness
         var (added, removed) = ComparePartInventories(openingBytes, deliverable);
 
         using var verification = JsonDocument.Parse(workspace.Content(sessionId, "verification"));
+        var matchCounts = CountAssertedText(workspace, sessionId, scenario.GetProperty("invariants"));
         var outcome = new EvalOutcome
         {
             Id = id,
@@ -98,6 +115,7 @@ internal static class EvalHarness
             PartsRemoved = removed,
             ValidityDecision =
                 verification.RootElement.GetProperty("decision").GetString() ?? "notEvaluated",
+            TextMatchCounts = matchCounts,
             Text = ReadStringProperty(workspace.Content(sessionId, "text"), "text"),
             Html = ReadStringProperty(workspace.Content(sessionId, "html"), "html"),
             SemanticChangesJson = semanticChangesJson,
@@ -108,7 +126,12 @@ internal static class EvalHarness
 
         // The intended final is derived, not asserted: accept every revision in the deliverable
         // and prove the deliverable reproduces that on accept and the opening package on reject.
-        var intendedFinal = AcceptAllRevisions(deliverable);
+        // RevisionProcessor rather than a second session: a session would stamp its own settings
+        // and anchor bookkeeping onto the derived package, and the proof would then report that
+        // bookkeeping as a divergence belonging to the redline.
+        var intendedFinal = RevisionProcessor
+            .AcceptRevisions(new WmlDocument("redline.docx", deliverable))
+            .DocumentByteArray;
         var proof = RedlineReversibilityVerifier
             .Prove(openingBytes, intendedFinal, deliverable).Proof;
         return outcome with
@@ -126,16 +149,48 @@ internal static class EvalHarness
             ? mode.GetString() ?? "none"
             : "none";
 
-    private static byte[] AcceptAllRevisions(byte[] redline)
+    /// <summary>
+    /// Resolve every needle the invariants name to a match count, over every story, while the
+    /// session is still open. Counting up front keeps the assertions pure and puts the numbers
+    /// into the failure artifact.
+    /// </summary>
+    private static IReadOnlyDictionary<string, int> CountAssertedText(
+        EvalWorkspace workspace, string sessionId, JsonElement invariants)
     {
-        using var workspace = new EvalWorkspace();
-        var sessionId = workspace.Open(redline, trackedChanges: "accept");
-        workspace.Call("docxodus_track_changes", new JsonObject
+        var needles = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (group, property) in new[]
+                 {
+                     ("taskCompletion", "textPresent"),
+                     ("taskCompletion", "textAbsent"),
+                     ("collateral", "textPreserved"),
+                 })
         {
-            ["sessionId"] = sessionId,
-            ["action"] = "accept_all",
-        });
-        return workspace.Save(sessionId);
+            if (invariants.TryGetProperty(group, out var section)
+                && section.TryGetProperty(property, out var array))
+            {
+                foreach (var value in array.EnumerateArray())
+                {
+                    if (value.GetString() is { Length: > 0 } needle)
+                        needles.Add(needle);
+                }
+            }
+        }
+
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var needle in needles)
+        {
+            using var response = JsonDocument.Parse(workspace.Call("docxodus_search", new JsonObject
+            {
+                ["sessionId"] = sessionId,
+                ["mode"] = "text",
+                ["query"] = needle,
+                ["caseSensitive"] = true,
+                ["scope"] = "all",
+            }));
+            counts[needle] = response.RootElement.GetProperty("matches").GetArrayLength();
+        }
+
+        return counts;
     }
 
     private static void RunSteps(EvalWorkspace workspace, string sessionId, JsonElement steps)

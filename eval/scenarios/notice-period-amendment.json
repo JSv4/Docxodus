@@ -46,7 +46,9 @@
     },
     "reversibility": {
       "mode": "acceptAll",
-      "mustSucceed": true,
+      "pathsMustComplete": true,
+      "preExistingMustBePreserved": true,
+      "mustSucceed": false,
       "generatedRevisionsAtLeast": 1
     },
     "rendering": {

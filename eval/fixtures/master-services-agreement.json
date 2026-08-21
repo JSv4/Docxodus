@@ -149,7 +149,7 @@
       "args": {
         "action": "insert_paragraph",
         "position": "after",
-        "markdown": "ACME HOLDINGS LLC \u2014 By: . . . . . . . . . . . . . . .  Name: Dana Reyes  Title: General Counsel"
+        "markdown": "ACME HOLDINGS LLC \u2014 By: . . . . . . . . . . . . . . . Name: Dana Reyes Title: General Counsel"
       }
     },
     {
@@ -161,7 +161,7 @@
       "args": {
         "action": "insert_paragraph",
         "position": "after",
-        "markdown": "NORTHWIND CONSULTING GROUP \u2014 By: . . . . . . . . . . . . . . .  Name: Sam Okafor  Title: Managing Partner"
+        "markdown": "NORTHWIND CONSULTING GROUP \u2014 By: . . . . . . . . . . . . . . . Name: Sam Okafor Title: Managing Partner"
       }
     },
     {
