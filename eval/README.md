@@ -1,0 +1,93 @@
+# Workflow evaluation suite
+
+Measures whether an automated document workflow completes the task it was given, leaves
+everything else alone, and produces a valid reviewable artifact. Issue
+[#466](https://github.com/JSv4/Docxodus/issues/466).
+
+This directory is the **corpus and the contract**. The runner lives in
+`Docxodus.Tests/Eval/` and runs as part of the ordinary .NET suite.
+
+## What a scenario is
+
+A scenario is one JSON file under `scenarios/`, validated by
+[`scenario.schema.json`](scenario.schema.json):
+
+| Part | Answers |
+|------|---------|
+| `fixture` | What document did we start from? |
+| `intent` | What would a human have asked for? |
+| `steps` | What tool calls perform the task? |
+| `invariants` | What makes this run a pass — and what makes it a *precise* pass? |
+
+`intent` is deliberately unused by the scripted caller. It is the prompt an agent run would be
+given; the caller executes `steps` verbatim instead. **That split is the point of the suite:** a
+failure under the scripted caller is the engine's, and can never be blamed on model planning.
+Agent-scored runs reuse the same fixtures and invariants and are scored against this baseline.
+
+## Why the steps are MCP tool calls
+
+`steps` name MCP tools (`docxodus_edit`, `docxodus_create`, …), not the .NET API. The engine
+baseline has to be measured where an agent actually meets it, so a gap that only exists in the
+tool surface — a missing argument, a wrong precondition, an action that silently no-ops — shows
+up here rather than being papered over by a typed call no agent can make.
+
+Steps address blocks by *content*, through `target`, rather than by threading the previous step's
+response. A step is therefore independent of the shape of what came before, and a fixture that
+drifts fails loudly: if a target matches fewer blocks than the requested `index`, the run errors
+out instead of quietly editing a different block and then reporting good precision.
+
+## Fixtures
+
+Fixtures under `fixtures/` are **build scripts in the same step format**, not `.docx` files.
+`EvalHarness.BuildFixture` replays one over a blank document. Two consequences:
+
+- The corpus carries no third-party document bytes, so there is no redistribution question to
+  answer. See [PROVENANCE.md](PROVENANCE.md).
+- A fixture is reviewable as a diff. `EV003` asserts each one builds twice to the same normalized
+  package identity, because a corpus that drifts between runs cannot anchor a baseline.
+
+## Metrics
+
+Every scenario is scored on the metrics #466 asks for, each sourced from an existing engine
+contract rather than a bespoke comparison:
+
+| Invariant | Question | Source |
+|-----------|----------|--------|
+| `taskCompletion` | Did the intended change land? | text projection of the saved deliverable |
+| `targetPrecision` | Did it change *only* that? | distinct anchors in the #457 semantic change set |
+| `collateral` | Was unrelated package state preserved? | #456 package manifests, before and after |
+| `validity` | Is the deliverable structurally sound? | #463 deliverable gate |
+| `reversibility` | Does the redline accept and reject cleanly? | #464 proof |
+| `rendering` | Does it still render? | HTML projection |
+
+`targetPrecision` and `collateral` are what make this an evaluation rather than a test. Any edit
+can be made to land; the interesting question is what else moved. Each scenario's
+`collateral.textPreserved` lists the near-miss content a careless edit would also have caught —
+for `term-replacement`, the two *other* occurrences of the defined term.
+
+## Failure artifacts
+
+A failing scenario writes `opening.docx`, `delivered.docx`, `delivered.html`, `delivered.txt`,
+`semantic-changes.json`, and `reversibility-proof.json` (when one was produced) so a failure is
+diagnosable without re-running it. Set `DOCXODUS_EVAL_ARTIFACTS` to choose the directory;
+otherwise they land under the system temp directory.
+
+## Adding a scenario
+
+1. Write the scenario JSON. Reuse a fixture, or add a build script under `fixtures/`.
+2. Declare its invariants. `EV002` requires `taskCompletion`, `targetPrecision`, and a non-empty
+   `collateral.textPreserved`: a scenario with nothing scoreable is one that cannot fail, and
+   "it looked right" is not an acceptance criterion.
+3. Run `dotnet test --filter "FullyQualifiedName~WorkflowEvalTests"`.
+
+## Scope
+
+This is the deterministic fast subset: no PDF, no browser, no network, so it runs on every push.
+Deliberately **not** here, and tracked separately:
+
+- Generated-PDF and visual-regression scoring — that is #443's ratchet, and depending on it before
+  it exists would bake unstable numbers into this suite's baselines.
+- Agent-scored runs and model planning quality, which need this scripted baseline to exist first.
+- The larger opt-in corpus, and the remaining #466 scenarios: clause insertion with numbering,
+  comment/footnote/cross-reference authoring, content-control templates, N-way consolidation, and
+  documents carrying pre-existing revisions.

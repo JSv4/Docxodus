@@ -1,0 +1,59 @@
+{
+  "id": "table-economics",
+  "title": "Modify economics in a fee table without disturbing neighbouring rows",
+  "intent": "Increase the Year 2 annual fee to $138,600.",
+  "fixture": "master-services-agreement",
+  "trackedChanges": "accept",
+  "steps": [
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "$132,000"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "$132,000",
+        "replace": "$138,600",
+        "caseSensitive": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "$138,600"
+      ],
+      "textAbsent": [
+        "$132,000"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 1,
+      "changedAnchorsAtMost": 2,
+      "changedPartsAtMost": 1
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "$120,000",
+        "$145,200",
+        "Annual Fee",
+        "Year 2"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "$138,600",
+        "$145,200"
+      ]
+    }
+  }
+}

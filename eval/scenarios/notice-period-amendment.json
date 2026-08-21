@@ -1,0 +1,58 @@
+{
+  "id": "notice-period-amendment",
+  "title": "Amend the notice period with native tracked changes",
+  "intent": "Change the termination notice period in clause 2 from thirty days to sixty days, as a tracked change so counsel can review it.",
+  "fixture": "master-services-agreement",
+  "trackedChanges": "render_inline",
+  "steps": [
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "terminate this Agreement for convenience"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "thirty (30) days",
+        "replace": "sixty (60) days",
+        "caseSensitive": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "sixty (60) days"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 1,
+      "changedAnchorsAtMost": 2
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "written notice to the other party",
+        "(the \"Service Provider\")",
+        "$132,000"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "reversibility": {
+      "mode": "acceptAll",
+      "mustSucceed": true,
+      "generatedRevisionsAtLeast": 1
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "sixty (60) days"
+      ]
+    }
+  }
+}

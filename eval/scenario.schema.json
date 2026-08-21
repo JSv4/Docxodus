@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/eval/workflow-scenario/v1",
+  "title": "Docxodus workflow evaluation scenario v1",
+  "description": "One deterministic document-workflow task: a fixture, a machine-readable instruction expressed as agent-surface tool calls, and the invariants that decide whether the run passed. Adding a scenario means writing invariants — a scenario with no invariant assertions is rejected by the runner rather than silently passing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "fixture", "steps", "invariants"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Stable identifier. Also the artifact directory name on failure."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "intent": {
+      "type": "string",
+      "description": "What a human asked for, in one sentence. This is the prompt an agent run would be given; the scripted caller ignores it and executes steps directly, which is what separates engine correctness from model planning quality."
+    },
+    "fixture": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Name of a build script under eval/fixtures. Fixtures are constructed programmatically through the same step format, so the corpus carries no third-party document bytes."
+    },
+    "trackedChanges": {
+      "enum": ["accept", "render_inline", "strip_deletions"],
+      "default": "accept",
+      "description": "How the session records the scripted caller's own edits — docxodus_open's trackedChanges."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    },
+    "invariants": { "$ref": "#/$defs/invariants" }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "args"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "pattern": "^docxodus_[a-z_]+$",
+          "description": "An MCP tool name. The scripted caller drives the agent surface, not the .NET API, so the engine baseline is measured where an agent would meet it."
+        },
+        "target": {
+          "$ref": "#/$defs/target",
+          "description": "Resolved to an anchor id by docxodus_search before the call, then injected into args. Targeting by content rather than by a chained response keeps a step independent of the previous step's result shape."
+        },
+        "args": {
+          "type": "object",
+          "description": "The tool's own arguments, minus sessionId (supplied by the runner) and minus the argument that `target` fills in."
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "query"],
+      "properties": {
+        "mode": { "enum": ["text", "regex", "kind", "bookmark"] },
+        "query": { "type": "string", "minLength": 1 },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Which match to use, in document order. The runner fails the scenario when the match count is smaller than index+1, so a fixture drift surfaces as a scenario error rather than as a silently different target."
+        },
+        "caseSensitive": { "type": "boolean", "default": true },
+        "scope": { "enum": ["body", "headers", "footers", "header_footer", "all"], "default": "body" },
+        "as": {
+          "type": "string",
+          "default": "anchorId",
+          "description": "Which argument receives the resolved anchor, e.g. cellAnchorId for table tools."
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "taskCompletion": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Did the intended change land? Asserted over the saved deliverable, not over tool return values.",
+          "properties": {
+            "textPresent": { "type": "array", "items": { "type": "string" } },
+            "textAbsent": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "targetPrecision": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Did it change only what it was asked to? Counted as distinct anchors in the #457 semantic change set from the opening package to the saved state.",
+          "properties": {
+            "changedAnchorsAtLeast": { "type": "integer", "minimum": 0 },
+            "changedAnchorsAtMost": { "type": "integer", "minimum": 0 },
+            "changedPartsAtMost": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "collateral": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Was unrelated package state preserved? Counted from #456 package manifests of the opening and saved packages.",
+          "properties": {
+            "partsAdded": { "type": "integer", "minimum": 0 },
+            "partsRemoved": { "type": "integer", "minimum": 0 },
+            "textPreserved": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Content that must survive untouched — the near-miss occurrences a careless edit would also catch."
+            }
+          }
+        },
+        "validity": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Is the deliverable structurally valid? The #463 deliverable gate, run with the opening bytes as baseline.",
+          "properties": {
+            "decisionIn": {
+              "type": "array",
+              "items": { "enum": ["passed", "passedWithPreExistingFindings", "failed", "notEvaluated"] }
+            }
+          }
+        },
+        "reversibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "For tracked-change scenarios: does the redline accept to the intended final and reject to the baseline? The #464 proof, with the intended final derived by accepting every revision.",
+          "properties": {
+            "mode": {
+              "enum": ["none", "acceptAll"],
+              "description": "acceptAll derives the intended final by accepting every revision in the deliverable, then proves the deliverable against it and the opening package."
+            },
+            "mustSucceed": { "type": "boolean", "default": true },
+            "generatedRevisionsAtLeast": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "rendering": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Rendering regression, HTML-only in this scaffold. Generated-PDF fidelity is #443's ratchet and is deliberately not a dependency here.",
+          "properties": {
+            "htmlMustContain": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "id": "master-services-agreement",
+  "title": "Master Services Agreement",
+  "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, and a running header and footer. Built programmatically so the corpus carries no third-party bytes.",
+  "steps": [
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "kind",
+        "query": "p",
+        "index": 0
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "MASTER SERVICES AGREEMENT",
+        "level": 1
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "MASTER SERVICES AGREEMENT"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "This Master Services Agreement (this \"Agreement\") is entered into by Acme Holdings LLC (the \"Client\") and Northwind Consulting Group (the \"Service Provider\")."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Northwind Consulting Group"
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "1. Services",
+        "level": 2
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "1. Services"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "The Service Provider shall perform the services described in each Statement of Work executed under this Agreement."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "each Statement of Work"
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "2. Term and Termination",
+        "level": 2
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "2. Term and Termination"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Either party may terminate this Agreement for convenience upon thirty (30) days written notice to the other party."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "for convenience upon"
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "3. Fees",
+        "level": 2
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "3. Fees"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "The Client shall pay the Service Provider the annual fees set out below, invoiced quarterly in advance."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "invoiced quarterly in advance"
+      },
+      "args": {
+        "action": "insert_table",
+        "position": "after",
+        "rows": 4,
+        "columns": 2,
+        "cellContents": [
+          "Period",
+          "Annual Fee",
+          "Year 1",
+          "$120,000",
+          "Year 2",
+          "$132,000",
+          "Year 3",
+          "$145,200"
+        ]
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "$145,200"
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "4. Signatures",
+        "level": 2
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "4. Signatures"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "ACME HOLDINGS LLC \u2014 By: . . . . . . . . . . . . . . .  Name: Dana Reyes  Title: General Counsel"
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Title: General Counsel"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "NORTHWIND CONSULTING GROUP \u2014 By: . . . . . . . . . . . . . . .  Name: Sam Okafor  Title: Managing Partner"
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "MASTER SERVICES AGREEMENT",
+        "as": "bodyAnchorId"
+      },
+      "args": {
+        "action": "set_header_text",
+        "markdown": "Acme Holdings LLC \u2014 Master Services Agreement",
+        "kind": "default"
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "MASTER SERVICES AGREEMENT",
+        "as": "bodyAnchorId"
+      },
+      "args": {
+        "action": "set_footer_text",
+        "markdown": "Confidential",
+        "kind": "default"
+      }
+    }
+  ]
+}
