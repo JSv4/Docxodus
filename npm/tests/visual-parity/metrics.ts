@@ -23,6 +23,10 @@ export interface PageMetrics {
   perceptualDiffPixelRatio: number;
   meanDeltaE76: number;
   ssim: number;
+  /** Fraction of Docxodus ink lying within the tolerance radius of reference ink. */
+  tolerantInkPrecision: number;
+  /** Fraction of reference ink lying within the tolerance radius of Docxodus ink. */
+  tolerantInkRecall: number;
   tolerantInkF1: number;
   severity: VisualSeverity;
 }
@@ -224,14 +228,20 @@ function dilate(mask: Uint8Array, width: number, height: number, radius: number)
   return out;
 }
 
-function inkF1(
+interface InkMetrics {
+  precision: number;
+  recall: number;
+  f1: number;
+}
+
+function inkMetrics(
   a: RgbaImage,
   b: RgbaImage,
   bgA: readonly number[],
   bgB: readonly number[],
   dx: number,
   dy: number,
-): number {
+): InkMetrics {
   const width = Math.max(a.width, b.width);
   const height = Math.max(a.height, b.height);
   const maskA = new Uint8Array(width * height);
@@ -255,7 +265,11 @@ function inkF1(
   }
   const precision = activeA ? matchedA / activeA : activeB ? 0 : 1;
   const recall = activeB ? matchedB / activeB : activeA ? 0 : 1;
-  return precision + recall ? 2 * precision * recall / (precision + recall) : 0;
+  return {
+    precision,
+    recall,
+    f1: precision + recall ? 2 * precision * recall / (precision + recall) : 0,
+  };
 }
 
 function severity(metrics: Omit<PageMetrics, 'severity'>): VisualSeverity {
@@ -310,6 +324,7 @@ export function compareImages(a: RgbaImage, b: RgbaImage): { metrics: PageMetric
   }
 
   const pixels = width * height;
+  const ink = inkMetrics(a, b, bgA, bgB, alignment.dx, alignment.dy);
   const withoutSeverity: Omit<PageMetrics, 'severity'> = {
     docxodus: { width: a.width, height: a.height, background: bgA },
     libreoffice: { width: b.width, height: b.height, background: bgB },
@@ -320,7 +335,9 @@ export function compareImages(a: RgbaImage, b: RgbaImage): { metrics: PageMetric
     perceptualDiffPixelRatio: pixels ? perceptuallyDifferent / pixels : 0,
     meanDeltaE76: pixels ? deltaTotal / pixels : 0,
     ssim: ssim(a, b, bgA, bgB, alignment.dx, alignment.dy),
-    tolerantInkF1: inkF1(a, b, bgA, bgB, alignment.dx, alignment.dy),
+    tolerantInkPrecision: ink.precision,
+    tolerantInkRecall: ink.recall,
+    tolerantInkF1: ink.f1,
   };
   return {
     metrics: { ...withoutSeverity, severity: severity(withoutSeverity) },

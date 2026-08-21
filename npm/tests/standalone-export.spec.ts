@@ -823,6 +823,62 @@ test.describe('standalone paginated HTML', () => {
       contentType: 'application/json',
     });
   });
+
+  test('publishes complete PageMaps when long footnote paragraphs continue', async ({
+    page,
+  }, testInfo) => {
+    const cases = [
+      {
+        id: 'single-oversized-paragraph',
+        // Issue #489 case C: one paragraph is taller than the maximum note band and must
+        // continue across pages without clipping.
+        source: generateFootnoteDocx(1, 2, 1, [700]),
+      },
+      {
+        id: 'oversized-leading-paragraph-with-tail',
+        // Issue #489 case C2: the long leader and its tail must all survive continuation.
+        source: generateFootnoteDocx(1, 2, 3, [700, 8, 8]),
+      },
+    ];
+    const evidence: Array<{
+      id: string;
+      sourceSha256: string;
+      pageMap: BrowserExportResult['pageMap'];
+      renderReport: BrowserExportResult['renderReport'];
+    }> = [];
+
+    for (const entry of cases) {
+      const result = await convert(page, entry.source, false, { commentProfile: 'hidden' });
+      const footnotePages = new Set(result.pageMap.fragments
+        .filter((fragment: any) => fragment.story === 'footnote')
+        .map((fragment: any) => fragment.pageNumber));
+
+      expect(result.pageCount, entry.id).toBeGreaterThan(2);
+      expect(footnotePages.size, `${entry.id} must continue its note across pages`)
+        .toBeGreaterThan(1);
+      expect(result.renderReport.status, entry.id).toBe('complete');
+      expect(result.renderReport.source.rawPackageBytesDigest, entry.id).toBe(digest(entry.source));
+      expect(result.renderReport.readiness, entry.id).toContainEqual(expect.objectContaining({
+        phase: 'running_story_placement',
+        status: 'complete',
+        pending: [],
+      }));
+      expect(result.renderReport.bindings.htmlDigest, entry.id).toBe(digest(result.html));
+      expect(result.renderReport.bindings.pageMapDigest, entry.id)
+        .toBe(digest(canonical(result.pageMap)));
+      evidence.push({
+        id: entry.id,
+        sourceSha256: digest(entry.source),
+        pageMap: result.pageMap,
+        renderReport: result.renderReport,
+      });
+    }
+
+    await testInfo.attach('long-footnote-continuation-exports.json', {
+      body: Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`),
+      contentType: 'application/json',
+    });
+  });
 });
 
 test('PaginationEngine uses the element realm and applies scale exactly once', async ({ page }) => {
