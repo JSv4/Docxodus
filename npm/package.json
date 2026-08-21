@@ -28,7 +28,7 @@
       "import": "./dist/export-browser.bundle.js"
     },
     "./export-assets.json": "./dist/export-assets.json",
-    "./render-report.schema.json": "./dist/render-report-v1.schema.json"
+    "./render-report.schema.json": "./dist/render-report-v2.schema.json"
   },
   "typesVersions": {
     "*": {

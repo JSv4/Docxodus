@@ -67,9 +67,26 @@ globalThis.__docxodusExportBridge = {
     try {
       const response = await fetch(inputUrl, { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error(\`Input snapshot could not be loaded (\${response.status}).\`);
+      // The host exposes its font resolver as a Playwright binding when font directories
+      // are configured. Wrapping it here keeps the resolver contract identical on both
+      // sides: the materializer only ever sees a FontResolver function.
+      const binding = globalThis.__docxodusResolveFonts;
+      const fontResolver = typeof binding === "function"
+        ? async (request) => {
+          const response = await binding(request);
+          if (!response || response.ok !== true) {
+            throw new Error(response?.error?.message ?? "The configured font resolver failed.");
+          }
+          return response.result;
+        }
+        : undefined;
       const result = await convertDocxToPaginatedHtml(
         new Uint8Array(await response.arrayBuffer()),
-        { ...options, wasmBasePath: "/wasm/" },
+        {
+          ...options,
+          wasmBasePath: "/wasm/",
+          ...(fontResolver ? { fontResolver } : {}),
+        },
       );
       return {
         ok: true,

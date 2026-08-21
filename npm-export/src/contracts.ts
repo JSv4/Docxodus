@@ -7,6 +7,9 @@ import type {
   ExportPhase,
   ExportResourceLimits,
   FailedRenderReport,
+  FontResolver,
+  FontResolverRequest,
+  FontResolverResponse,
   PaginatedHtmlOptions,
   PaginatedHtmlResult,
   PaginatedRenderMetadata,
@@ -24,6 +27,9 @@ export type {
   ExportPhase,
   ExportResourceLimits,
   FailedRenderReport,
+  FontResolver,
+  FontResolverRequest,
+  FontResolverResponse,
   PaginatedHtmlOptions,
   PaginatedHtmlResult,
   PaginatedRenderMetadata,
@@ -68,10 +74,12 @@ export interface NodeExportRuntime {
   browser?: Browser;
   /** Explicit Chromium executable used when `browser` is omitted. */
   browserExecutablePath?: string;
-  /** Reserved for the verified font runtime delivered by issue #442. */
+  /** Ordered font directories searched for configured faces; order is policy. */
   fontDirectories?: readonly string[];
   fontLicenseAttestations?: readonly FontLicenseAttestation[];
   environmentAttestation?: RenderEnvironmentAttestation;
+  /** Built by the host from `fontDirectories`; exposed to the page as a binding. */
+  fontResolver?: FontResolver;
 }
 
 export type NodeExportOptions = Omit<PaginatedHtmlOptions, "wasmBasePath" | "fontResolver">
