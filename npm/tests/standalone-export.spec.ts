@@ -665,6 +665,8 @@ test.describe('standalone paginated HTML', () => {
     // five output_verification checks — so the contract is the order they occur in, not
     // the count. A repeated page-tree attempt truncates its own entries, which is why a
     // rebuilt layout does not show up here as a second pass through the render phases.
+    // browser_launch lands after conversion because it is the isolated render realm, not
+    // the process: the materializer only creates that frame once it has HTML to lay out.
     const order = result.renderReport.readiness
       .map((entry) => entry.phase)
       .filter((phase, index, phases) => phase !== phases[index - 1]);
@@ -673,6 +675,7 @@ test.describe('standalone paginated HTML', () => {
       'wasm_initialization',
       'package_preflight',
       'docx_conversion',
+      'browser_launch',
       'font_loading',
       'image_decoding',
       'chart_svg_materialization',

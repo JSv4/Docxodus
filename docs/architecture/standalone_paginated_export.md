@@ -638,6 +638,12 @@ signature; only then does it measure a fresh PageMap, serialize, and perform the
 check. Otherwise it fails `pagination_failure`. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
+`browser_launch` appears twice in a Node export, and in different places. On the host it is
+Chromium and its isolated context, before anything is converted. In the browser materializer it is
+the isolated render realm — a script-free same-origin frame — which is created only once there is
+converted HTML to lay out, so it records *after* `docx_conversion` and before `font_loading`. The
+offline reopen check creates a second such realm and records it under `output_verification`.
+
 The readiness log in the render report records both sides of the barrier. The browser materializer
 records the phases it runs itself, from `input_validation` through `output_verification`; the Node
 host prepends the phases it owns and the materializer cannot observe from inside the page —
