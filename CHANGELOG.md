@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Deterministic print-readiness barrier (#441).** The export barrier now proves what it used
+  to assume. Requested font families are probed for actual availability instead of being taken
+  on trust once `document.fonts.ready` resolves — `FontFaceSet.check()` answers true for families
+  Chromium has never heard of, so resolution is measured through advance widths against every
+  generic fallback. A family the environment silently substituted for is recorded as `missing`
+  rather than `unverified` and raises one aggregate `font_family_unavailable` warning; an
+  available family stays `unverified`, because the barrier proves the browser can render it and
+  not which file it came from. Undecodable images and unmeasurable inline SVG now route through
+  the `unsupportedContent` policy as `image_decode_failed` / `chart_svg_unmeasurable` warnings
+  with an omitted resource record, instead of collapsing into an untyped `conversion_failure`;
+  under `strict` they fail closed at their own phase. The offline reopen check keeps assertion
+  semantics, so a resource that materialized and then did not survive serialization is still an
+  `output_verification_failure`. On the Node side the render report's readiness log now covers
+  the host-owned phases the browser materializer cannot see from inside the page —
+  `browser_launch`, `wasm_initialization`, `output_verification` and `cleanup` — prepended in
+  the order the work actually happened, so a timeout in any of them names its phase and pending
+  resources instead of surfacing a bare error code.
 - **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
   spill pages to the section that supplies their body while preserving predecessor-owned stories
   on the shared page, carries section-specific header/footer distances and logical page numbering,
