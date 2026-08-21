@@ -16,6 +16,7 @@ import {
   RATCHET_RECORD_FILE,
   RATCHET_SCHEMA_VERSION,
   RATCHET_TOLERANCE,
+  assertRecordUpdateProvenance,
   buildRecord,
   chromiumFingerprint,
   compareToRecord,
@@ -299,6 +300,19 @@ test.describe('visual parity ratchet', () => {
     // Sorted by id so corpus reordering cannot churn the committed diff.
     expect(BASELINE_RECORD.cases.map(entry => entry.id)).toEqual(['multi-section', 'shape']);
   });
+
+  test('record refresh requires an exact clean source commit', () => {
+    const clean = {
+      ...BASELINE_SUMMARY,
+      gitCommit: 'a'.repeat(40),
+      workingTreeDirty: false,
+    };
+    expect(() => assertRecordUpdateProvenance(clean)).not.toThrow();
+    expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
+      .toThrow(/dirty or unverified worktree/);
+    expect(() => assertRecordUpdateProvenance({ ...clean, gitCommit: 'deadbeef' }))
+      .toThrow(/40-character source commit/);
+  });
 });
 
 /**
@@ -350,6 +364,18 @@ test.describe('LibreOffice reference-version contract', () => {
   test('the declared build belongs to the declared minor', () => {
     expect(LIBREOFFICE_CONTRACT.build.startsWith(`${LIBREOFFICE_CONTRACT.version}.`)).toBe(true);
     expect(LIBREOFFICE_CONTRACT.archiveUrl).toContain(LIBREOFFICE_CONTRACT.build);
+    expect(LIBREOFFICE_CONTRACT.archiveSignatureUrl).toBe(`${LIBREOFFICE_CONTRACT.archiveUrl}.asc`);
+    expect(LIBREOFFICE_CONTRACT.signingKeyFingerprint).toMatch(/^[0-9A-F]{40}$/);
+  });
+
+  test('CI verifies the detached signature and exact signing-key fingerprint before extraction', () => {
+    const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
+    expect(workflow).toContain(LIBREOFFICE_CONTRACT.archiveSignatureUrl);
+    expect(workflow).toContain(LIBREOFFICE_CONTRACT.signingKeyFingerprint);
+    expect(workflow).toContain('--verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz');
+    expect(workflow.indexOf('--verify /tmp/libreoffice.tar.gz.asc'))
+      .toBeLessThan(workflow.indexOf('tar -xzf /tmp/libreoffice.tar.gz'));
+    expect(workflow).toContain('cancel-in-progress: true');
   });
 });
 

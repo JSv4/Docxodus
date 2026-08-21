@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: these numbers were recorded on the retired #505-#508 stack, whose readiness barrier and font runtime differ from the ones that landed. They are carried over as a starting point, not as a validated baseline for this lineage. The environment fingerprint below will not match a run on this lineage, so the first complete run reports `environment-changed` rather than a renderer regression; re-record it with DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 and commit the result. The unconditional gates (conversion, page count, physical geometry, semantic and chart-vector contracts) do not depend on these numbers and are live immediately.",
+  "recordedAt": "2026-08-16",
+  "sourceCommit": "de64978a8dd71776a59384aec209888e18c44512",
+  "environment": {
+    "libreoffice": "25.8",
+    "chromium": "143",
+    "poppler": "24.02",
+    "fontContractSha256": "65e32c507ebaa14eef364f04036f26c6853ab900779889d29b2f3d427c9937db"
+  },
+  "tolerance": {
+    "ssim": 0.0005,
+    "inkF1": 0.001
+  },
+  "cases": [
+    {
+      "id": "pdf-chart",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "minor",
+      "ssim": 0.97896,
+      "worstInkF1": 1
+    },
+    {
+      "id": "pdf-endnote-table",
+      "disposition": "unattributed",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.83263,
+      "worstInkF1": 0.92516
+    },
+    {
+      "id": "pdf-external-hyperlink",
+      "disposition": "unattributed",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "close",
+      "ssim": 0.99875,
+      "worstInkF1": 1
+    },
+    {
+      "id": "pdf-final-revisions",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "major",
+      "ssim": 0.94936,
+      "worstInkF1": 0.83804
+    },
+    {
+      "id": "pdf-footnote",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "close",
+      "ssim": 0.99563,
+      "worstInkF1": 0.99031
+    },
+    {
+      "id": "pdf-hidden-comments",
+      "disposition": "unattributed",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "minor",
+      "ssim": 0.97934,
+      "worstInkF1": 1
+    },
+    {
+      "id": "pdf-legal-contract",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 3,
+        "libreoffice": 3
+      },
+      "severity": "severe",
+      "ssim": 0.72192,
+      "worstInkF1": 0.64058
+    },
+    {
+      "id": "pdf-mixed-orientation-running-stories",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 6,
+        "libreoffice": 6
+      },
+      "severity": "close",
+      "ssim": 0.99986,
+      "worstInkF1": 1
+    },
+    {
+      "id": "pdf-raster-image",
+      "disposition": "environment",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "major",
+      "ssim": 0.93775,
+      "worstInkF1": 0.8797
+    },
+    {
+      "id": "pdf-two-column-section",
+      "disposition": "renderer-bug",
+      "pages": {
+        "docxodus": 1,
+        "libreoffice": 1
+      },
+      "severity": "severe",
+      "ssim": 0.71808,
+      "worstInkF1": 0.46279
+    }
+  ]
+}

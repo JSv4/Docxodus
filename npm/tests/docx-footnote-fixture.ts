@@ -29,16 +29,31 @@ function bodyParagraph(index: number, noteId: number | null): string {
     `<w:r><w:t xml:space="preserve">Body line ${index + 1}</w:t></w:r>${citation}</w:p>`;
 }
 
-function footnote(id: number, paragraphCount: number, wordsPerParagraph: number): string {
-  const paragraphs = Array.from({ length: paragraphCount }, (_, index) =>
-    `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
+function footnote(
+  id: number,
+  paragraphCount: number,
+  wordCounts: number | readonly number[],
+): string {
+  const paragraphWordCounts = Array.isArray(wordCounts) ? wordCounts : undefined;
+  const wordsPerParagraph = typeof wordCounts === 'number' ? wordCounts : 0;
+  const effectiveParagraphCount = paragraphWordCounts?.length ?? paragraphCount;
+  const paragraphs = Array.from({ length: effectiveParagraphCount }, (_, index) => {
+    const requestedWords = paragraphWordCounts?.[index];
+    const text = requestedWords === undefined
+      ? wordsPerParagraph > 0
+        ? Array.from({ length: wordsPerParagraph }, (_, wordIndex) =>
+          `footnote-${id}-${index + 1}-${wordIndex + 1}`).join(' ')
+        : `Footnote ${id} paragraph ${index + 1} text.`
+      : `Footnote ${id} paragraph ${index + 1} text.${
+        ' continuation'.repeat(Math.max(0, requestedWords - 5))}`;
+    return (
+      `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
       (index === 0
         ? `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>`
         : '') +
-      `<w:r><w:t xml:space="preserve"> ${wordsPerParagraph > 0
-        ? Array.from({ length: wordsPerParagraph }, (_, wordIndex) =>
-          `footnote-${id}-${index + 1}-${wordIndex + 1}`).join(' ')
-        : `Footnote ${id} paragraph ${index + 1} text.`}</w:t></w:r></w:p>`)
+      `<w:r><w:t xml:space="preserve"> ${text}</w:t></w:r></w:p>`
+    );
+  })
     .join('');
   return `<w:footnote w:id="${id}">${paragraphs}</w:footnote>`;
 }
@@ -48,14 +63,14 @@ function footnote(id: number, paragraphCount: number, wordsPerParagraph: number)
  * @param bodyLines total body paragraphs — few enough to keep everything on one page, so the
  *   note area's position is determined purely by the page geometry, not by flow pressure.
  * @param paragraphsPerNote paragraphs emitted inside each note.
- * @param wordsPerParagraph when positive, emits this many uniquely numbered words in each note
- *   paragraph so one real converter paragraph can be made taller than a note band.
+ * @param wordCounts either a shared exact word count for every note paragraph, or per-paragraph
+ *   word counts for constructing notes with uneven continuation pressure.
  */
 export function generateFootnoteDocx(
   noteCount = 1,
   bodyLines = 5,
   paragraphsPerNote = 1,
-  wordsPerParagraph = 0,
+  wordCounts: number | readonly number[] = 0,
   separatorStories: {
     normalText?: string;
     continuationText?: string;
@@ -124,7 +139,7 @@ export function generateFootnoteDocx(
   <w:footnote w:type="continuationSeparator" w:id="0">${separatorRun(
     'continuationSeparator', separatorStories.continuationText,
   )}</w:footnote>
-  ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordsPerParagraph)).join('\n  ')}
+  ${noteIds.map((id) => footnote(id, paragraphsPerNote, wordCounts)).join('\n  ')}
 </w:footnotes>`),
     },
     {
