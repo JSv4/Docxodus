@@ -482,14 +482,14 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_track_changes",
-            "List, selectively accept/reject (by revisionId), or atomically bulk-resolve live tracked changes including structural cell, content-control, and numbering families — or switch how the session records its OWN subsequent edits (set_mode).",
+            "List, selectively accept/reject (by revisionId), or atomically bulk-resolve live tracked changes including structural cell, content-control, and numbering families — switch how the session records its OWN subsequent edits (set_mode) — or prove this redline accepts to an intended final and rejects to a baseline (prove_reversibility).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
-                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and REFUSES the whole document (revision_unsupported/revision_malformed/revision_ambiguous, nothing mutated) on the first entry it cannot resolve safely — a missing or non-numeric w:id, one w:id shared by two live revisions in a part, customXml move ranges, revisions under m:ctrlPr, w:del on a run's w:rPr or a paragraph's w:numPr, a w:sdt envelope whose range topology is not Word's two-pair shape, an unattached w:numberingChange, or a malformed cell marker. There is no force mode; run 'list' and read each entry's diagnostic to see what blocks it." },
+                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode", "prove_reversibility"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and REFUSES the whole document (revision_unsupported/revision_malformed/revision_ambiguous, nothing mutated) on the first entry it cannot resolve safely — a missing or non-numeric w:id, one w:id shared by two live revisions in a part, customXml move ranges, revisions under m:ctrlPr, w:del on a run's w:rPr or a paragraph's w:numPr, a w:sdt envelope whose range topology is not Word's two-pair shape, an unattached w:numberingChange, or a malformed cell marker. There is no force mode; run 'list' and read each entry's diagnostic to see what blocks it." },
                 "revisionId": { "type": "string", "description": "accept/reject: the opaque stable id from 'list' (e.g. 'rev2-a1b2c3d4e5f60718293a'). Legacy revNNN ids remain accepted only when uniquely resolvable. Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
                 "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format", "structure"], "description": "list: only return revisions of this coarse type." },
@@ -497,7 +497,9 @@ internal static class ToolCatalog
                 "resolutionStatus": { "type": "string", "enum": ["supported", "unsupported", "malformed", "ambiguous"], "description": "list: fail-closed resolution status filter." },
                 "partUri": { "type": "string", "description": "list: exact owning package-part URI." },
                 "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept/accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
-                "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." }
+                "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." },
+                "baselinePath": { "type": "string", "description": "prove_reversibility: the document this session's redline was generated against, resolved inside the server's document scope like docxodus_open's path. Rejecting only the generated revisions must reproduce it." },
+                "intendedFinalPath": { "type": "string", "description": "prove_reversibility: the document accepting only the generated revisions must reproduce, resolved the same way. Together with baselinePath this is what makes the result a proof rather than a diff." }
               },
               "required": ["sessionId", "action"]
             }

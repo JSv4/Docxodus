@@ -7,6 +7,7 @@ import type {
   CompareResult,
   PackageManifest,
   DeliverableVerificationResult,
+  RedlineReversibilityProof,
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
@@ -170,6 +171,20 @@ export type {
   VerificationFinding,
   VerificationFindingSeverity,
   ChangeLocation,
+  RedlineReversibilityProof,
+  RedlineProofPathResult,
+  RedlineProofPackageIdentity,
+  RedlineProofFinding,
+  RedlineProofDirection,
+  RedlineRevisionClassification,
+  RedlineRevisionDisposition,
+  RedlineRevisionIdentity,
+  RedlineRevisionFamily,
+  RedlineRevisionResolutionStatus,
+  RedlineRevisionDiagnostic,
+  RedlineModeledSemanticComparison,
+  RedlinePackageDivergence,
+  RedlinePackageDivergenceKind,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";
 export { PlaceholderKinds, ContextBoundary } from "./types.js";
@@ -660,6 +675,38 @@ export async function verifyDeliverable(
           bytes,
         ),
   ) as DeliverableVerificationResult;
+}
+
+/**
+ * Prove that a redline's generated revisions accept to the intended final and reject to the
+ * selected baseline without consuming pre-existing review state.
+ *
+ * Three packages are inspected and two rebuilt, so on a UI thread prefer the worker proxy's
+ * `proveRedlineReversibility`. Malformed, encrypted, and safety-limited packages are reported as
+ * structured proof findings rather than thrown errors. The rebuilt packages are not returned:
+ * the proof carries their digests and the divergences between them and each expected document.
+ *
+ * @param baseline - The document the redline was generated against
+ * @param intendedFinal - The document accepting the generated revisions must reproduce
+ * @param redline - The generated redline under proof
+ */
+export async function proveRedlineReversibility(
+  baseline: File | Uint8Array,
+  intendedFinal: File | Uint8Array,
+  redline: File | Uint8Array,
+): Promise<RedlineReversibilityProof> {
+  const exports = ensureInitialized();
+  const baselineBytes = await toBytes(baseline);
+  const intendedFinalBytes = await toBytes(intendedFinal);
+  const redlineBytes = await toBytes(redline);
+  await yieldToMain();
+  return JSON.parse(
+    exports.DocumentConverter.ProveRedlineReversibility(
+      baselineBytes,
+      intendedFinalBytes,
+      redlineBytes,
+    ),
+  ) as RedlineReversibilityProof;
 }
 
 /**

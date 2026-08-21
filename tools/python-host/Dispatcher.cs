@@ -52,6 +52,7 @@ internal static class Dispatcher
         "generate_package_manifest" => GeneratePackageManifest(args),
         "get_package_manifest" => VerificationOps.GetPackageManifest(Handle(args)),
         "verify_deliverable" => VerifyDeliverable(args),
+        "prove_redline_reversibility" => ProveRedlineReversibility(args),
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
@@ -341,6 +342,32 @@ internal static class Dispatcher
 
         _ => throw new UnknownOpException(op),
     };
+
+    /// <summary>
+    /// Prove that a redline's generated revisions accept to the intended final and reject to the
+    /// baseline. All three packages are required: unlike verify_deliverable there is no
+    /// session-scoped form, because the proof compares three distinct packages rather than a
+    /// live document against its own opening bytes.
+    /// </summary>
+    private static string ProveRedlineReversibility(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object)
+            throw new FormatException("prove_redline_reversibility args must be an object");
+
+        return VerificationOps.ProveRedlineReversibility(
+            RequiredPackage(args, "baselineB64"),
+            RequiredPackage(args, "intendedFinalB64"),
+            RequiredPackage(args, "redlineB64"));
+    }
+
+    private static byte[] RequiredPackage(JsonElement args, string property)
+    {
+        if (!args.TryGetProperty(property, out var encoded)
+            || encoded.ValueKind != JsonValueKind.String)
+            throw new FormatException($"args property \"{property}\" must be a string");
+
+        return Convert.FromBase64String(Str(args, property));
+    }
 
     private static string VerifyDeliverable(JsonElement args)
     {

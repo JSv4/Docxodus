@@ -67,6 +67,7 @@ from .types import (
     DocxDiffSettings,
     DocxSessionSettings,
     DeliverableVerificationResult,
+    RedlineReversibilityProof,
     EditError,
     EditResult,
     EditSummary,
@@ -117,6 +118,7 @@ __all__ = [
     "convert_docx_to_html",
     "generate_package_manifest",
     "verify_deliverable",
+    "prove_redline_reversibility",
     "docx_diff_compare",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
@@ -212,6 +214,33 @@ def verify_deliverable(
     if not isinstance(result, Mapping):
         raise TypeError(f"verify_deliverable: expected object, got {result!r}")
     return DeliverableVerificationResult._from_wire(result)
+
+
+def prove_redline_reversibility(
+    baseline: bytes,
+    intended_final: bytes,
+    redline: bytes,
+) -> RedlineReversibilityProof:
+    """Prove a generated redline accepts to the intended final and rejects to the baseline.
+
+    All three packages are required, and none of them is opened as an editable
+    session: malformed, encrypted, and safety-limited inputs come back as typed proof
+    findings. The two rebuilt packages stay in the host process — the proof carries
+    their digests plus the divergences between them and each expected document.
+    """
+    result = _call(
+        "prove_redline_reversibility",
+        {
+            "baselineB64": base64.b64encode(baseline).decode("ascii"),
+            "intendedFinalB64": base64.b64encode(intended_final).decode("ascii"),
+            "redlineB64": base64.b64encode(redline).decode("ascii"),
+        },
+    )
+    if not isinstance(result, Mapping):
+        raise TypeError(
+            f"prove_redline_reversibility: expected object, got {result!r}"
+        )
+    return RedlineReversibilityProof._from_wire(result)
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,9 @@ from .enums import (
     PlaceholderKind,
     PlaceholderKinds,
     ProjectionScopes,
+    RedlinePackageDivergenceKind,
+    RedlineProofDirection,
+    RedlineRevisionDisposition,
     TableAnchorEntityKind,
     TableRenderMode,
     TableRowHeightRule,
@@ -127,6 +130,14 @@ __all__ = [
     "DeliverableSemanticDelta",
     "DeliverableArtifactMetadata",
     "DeliverableVerificationResult",
+    "RedlineReversibilityProof",
+    "RedlineProofPathResult",
+    "RedlineProofPackageIdentity",
+    "RedlineProofFinding",
+    "RedlineRevisionClassification",
+    "RedlineRevisionIdentity",
+    "RedlineModeledSemanticComparison",
+    "RedlinePackageDivergence",
     "WmlToMarkdownConverterSettings",
     "DocumentAnnotation",
     "AnnotationUpdate",
@@ -811,6 +822,369 @@ class DeliverableVerificationResult:
             ),
         )
 
+
+# ---------------------------------------------------------------------------
+# Redline reversibility proof
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineProofPackageIdentity:
+    """Input or output package identity recorded by the proof."""
+
+    raw_package_bytes_digest: VerificationDigest
+    ordered_opc_content_digest: VerificationDigest | None = None
+    normalized_whole_package_digest: VerificationDigest | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineProofPackageIdentity":
+        ordered = d.get("orderedOpcContentDigest")
+        normalized = d.get("normalizedWholePackageDigest")
+        return cls(
+            raw_package_bytes_digest=VerificationDigest._from_wire(
+                d["rawPackageBytesDigest"]
+            ),
+            ordered_opc_content_digest=(
+                VerificationDigest._from_wire(ordered)
+                if isinstance(ordered, Mapping)
+                else None
+            ),
+            normalized_whole_package_digest=(
+                VerificationDigest._from_wire(normalized)
+                if isinstance(normalized, Mapping)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineRevisionIdentity:
+    """A stable, part-qualified identity for one native Word revision.
+
+    ``family`` and ``resolution_status`` stay plain strings, matching
+    ``RevisionListEntry`` — the same vocabulary read off the same live markup.
+    """
+
+    id: str
+    part_uri: str = ""
+    scope: str = ""
+    type: str = ""
+    family: str = "unsupported"
+    constituent_ids: tuple[str, ...] = ()
+    constituent_keys: tuple[str, ...] = ()
+    author: str = "unknown"
+    date: str | None = None
+    date_utc: str | None = None
+    text: str = ""
+    anchor_id: str | None = None
+    affected_anchor_ids: tuple[str, ...] = ()
+    resolution_status: str = "unsupported"
+    diagnostic: RevisionDiagnostic | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineRevisionIdentity":
+        diagnostic = d.get("diagnostic")
+        return cls(
+            id=str(d["id"]),
+            part_uri=d.get("partUri", ""),
+            scope=d.get("scope", ""),
+            type=d.get("type", ""),
+            family=d.get("family", "unsupported"),
+            constituent_ids=tuple(d.get("constituentIds", ())),
+            constituent_keys=tuple(d.get("constituentKeys", ())),
+            author=d.get("author", "unknown"),
+            date=d.get("date"),
+            date_utc=d.get("dateUtc"),
+            text=d.get("text", ""),
+            anchor_id=d.get("anchorId"),
+            affected_anchor_ids=tuple(d.get("affectedAnchorIds", ())),
+            resolution_status=d.get("resolutionStatus", "unsupported"),
+            diagnostic=(
+                RevisionDiagnostic._from_wire(diagnostic)
+                if isinstance(diagnostic, Mapping)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineRevisionClassification:
+    """Classification of a baseline / intended-final / redline revision identity triple."""
+
+    disposition: RedlineRevisionDisposition
+    reason: str
+    baseline: RedlineRevisionIdentity | None = None
+    intended_final: RedlineRevisionIdentity | None = None
+    redline: RedlineRevisionIdentity | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineRevisionClassification":
+        def identity(key: str) -> RedlineRevisionIdentity | None:
+            value = d.get(key)
+            return (
+                RedlineRevisionIdentity._from_wire(value)
+                if isinstance(value, Mapping)
+                else None
+            )
+
+        return cls(
+            disposition=RedlineRevisionDisposition(str(d["disposition"])),
+            reason=d.get("reason", ""),
+            baseline=identity("baseline"),
+            intended_final=identity("intendedFinal"),
+            redline=identity("redline"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineModeledSemanticComparison:
+    """Modeled semantic comparison for one proof path.
+
+    ``available`` and ``change_count`` are explicit so an empty modeled change set is
+    never mistaken for complete package equality.
+    """
+
+    available: bool
+    equivalent: bool | None = None
+    schema: str | None = None
+    change_count: int | None = None
+    diagnostic: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineModeledSemanticComparison":
+        equivalent = d.get("equivalent")
+        change_count = d.get("changeCount")
+        return cls(
+            available=bool(d["available"]),
+            equivalent=None if equivalent is None else bool(equivalent),
+            schema=d.get("schema"),
+            change_count=None if change_count is None else int(change_count),
+            diagnostic=d.get("diagnostic"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlinePackageDivergence:
+    """One added, removed, or modified package entry on a proof path."""
+
+    kind: RedlinePackageDivergenceKind
+    part_uri: str
+    occurrence: int = 0
+    anchor_id: str | None = None
+    applicable_revision_ids: tuple[str, ...] = ()
+    expected_raw_digest: VerificationDigest | None = None
+    actual_raw_digest: VerificationDigest | None = None
+    expected_normalized_digest: VerificationDigest | None = None
+    actual_normalized_digest: VerificationDigest | None = None
+    has_modeled_semantic_change: bool = False
+    unknown_or_unmodeled: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlinePackageDivergence":
+        def digest(key: str) -> VerificationDigest | None:
+            value = d.get(key)
+            return (
+                VerificationDigest._from_wire(value)
+                if isinstance(value, Mapping)
+                else None
+            )
+
+        return cls(
+            kind=RedlinePackageDivergenceKind(str(d["kind"])),
+            part_uri=str(d["partUri"]),
+            occurrence=int(d.get("occurrence", 0)),
+            anchor_id=d.get("anchorId"),
+            applicable_revision_ids=tuple(d.get("applicableRevisionIds", ())),
+            expected_raw_digest=digest("expectedRawDigest"),
+            actual_raw_digest=digest("actualRawDigest"),
+            expected_normalized_digest=digest("expectedNormalizedDigest"),
+            actual_normalized_digest=digest("actualNormalizedDigest"),
+            has_modeled_semantic_change=bool(d.get("hasModeledSemanticChange", False)),
+            unknown_or_unmodeled=bool(d.get("unknownOrUnmodeled", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineProofFinding:
+    """A structured, actionable proof finding."""
+
+    code: str
+    severity: VerificationFindingSeverity
+    message: str
+    direction: RedlineProofDirection | None = None
+    location: ChangeLocation | None = None
+    anchor_id: str | None = None
+    revision_ids: tuple[str, ...] = ()
+    remediation: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineProofFinding":
+        direction = d.get("direction")
+        location = d.get("location")
+        return cls(
+            code=str(d["code"]),
+            severity=VerificationFindingSeverity(str(d["severity"])),
+            message=str(d["message"]),
+            direction=(
+                RedlineProofDirection(str(direction)) if direction is not None else None
+            ),
+            location=(
+                ChangeLocation._from_wire(location)
+                if isinstance(location, Mapping)
+                else None
+            ),
+            anchor_id=d.get("anchorId"),
+            revision_ids=tuple(d.get("revisionIds", ())),
+            remediation=d.get("remediation"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineProofPathResult:
+    """Result of accepting or rejecting only the generated revision set."""
+
+    direction: RedlineProofDirection
+    completed: bool
+    equivalent: bool
+    expected_package: RedlineProofPackageIdentity
+    modeled_semantic: RedlineModeledSemanticComparison
+    requested_revision_ids: tuple[str, ...] = ()
+    resolved_revision_ids: tuple[str, ...] = ()
+    implicitly_resolved_revision_ids: tuple[str, ...] = ()
+    surviving_pre_existing_revisions: tuple[RedlineRevisionIdentity, ...] = ()
+    pre_existing_revisions_preserved: bool = False
+    normalized_whole_package_equivalent: bool = False
+    ordered_opc_content_equivalent: bool = False
+    exact_package_bytes_equivalent: bool = False
+    divergence_analysis_completed: bool = False
+    actual_package: RedlineProofPackageIdentity | None = None
+    first_divergence: RedlinePackageDivergence | None = None
+    divergences: tuple[RedlinePackageDivergence, ...] = ()
+    findings: tuple[RedlineProofFinding, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineProofPathResult":
+        actual = d.get("actualPackage")
+        first = d.get("firstDivergence")
+        return cls(
+            direction=RedlineProofDirection(str(d["direction"])),
+            completed=bool(d["completed"]),
+            equivalent=bool(d["equivalent"]),
+            expected_package=RedlineProofPackageIdentity._from_wire(
+                d["expectedPackage"]
+            ),
+            modeled_semantic=RedlineModeledSemanticComparison._from_wire(
+                d["modeledSemantic"]
+            ),
+            requested_revision_ids=tuple(d.get("requestedRevisionIds", ())),
+            resolved_revision_ids=tuple(d.get("resolvedRevisionIds", ())),
+            implicitly_resolved_revision_ids=tuple(
+                d.get("implicitlyResolvedRevisionIds", ())
+            ),
+            surviving_pre_existing_revisions=tuple(
+                RedlineRevisionIdentity._from_wire(item)
+                for item in d.get("survivingPreExistingRevisions", ())
+            ),
+            pre_existing_revisions_preserved=bool(
+                d.get("preExistingRevisionsPreserved", False)
+            ),
+            normalized_whole_package_equivalent=bool(
+                d.get("normalizedWholePackageEquivalent", False)
+            ),
+            ordered_opc_content_equivalent=bool(
+                d.get("orderedOpcContentEquivalent", False)
+            ),
+            exact_package_bytes_equivalent=bool(
+                d.get("exactPackageBytesEquivalent", False)
+            ),
+            divergence_analysis_completed=bool(
+                d.get("divergenceAnalysisCompleted", False)
+            ),
+            actual_package=(
+                RedlineProofPackageIdentity._from_wire(actual)
+                if isinstance(actual, Mapping)
+                else None
+            ),
+            first_divergence=(
+                RedlinePackageDivergence._from_wire(first)
+                if isinstance(first, Mapping)
+                else None
+            ),
+            divergences=tuple(
+                RedlinePackageDivergence._from_wire(item)
+                for item in d.get("divergences", ())
+            ),
+            findings=tuple(
+                RedlineProofFinding._from_wire(item)
+                for item in d.get("findings", ())
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RedlineReversibilityProof:
+    """Canonical schema-v1 proof returned by ``prove_redline_reversibility``.
+
+    ``success`` is true only when both paths completed, reached their expected
+    document, and left every pre-existing revision intact.
+    """
+
+    schema: str
+    schema_version: int
+    success: bool
+    require_exact_package_bytes: bool
+    baseline_package: RedlineProofPackageIdentity
+    intended_final_package: RedlineProofPackageIdentity
+    redline_package: RedlineProofPackageIdentity
+    revision_classifications: tuple[RedlineRevisionClassification, ...] = ()
+    accept_to_final: RedlineProofPathResult | None = None
+    reject_to_baseline: RedlineProofPathResult | None = None
+    findings: tuple[RedlineProofFinding, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RedlineReversibilityProof":
+        schema = str(d.get("schema", ""))
+        schema_version = int(d.get("schemaVersion", 0))
+        expected = (
+            "https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1"
+        )
+        if schema != expected or schema_version != 1:
+            raise ValueError(
+                f"unsupported redline-reversibility-proof schema {schema!r} "
+                f"version {schema_version}"
+            )
+
+        def path(key: str) -> RedlineProofPathResult | None:
+            value = d.get(key)
+            return (
+                RedlineProofPathResult._from_wire(value)
+                if isinstance(value, Mapping)
+                else None
+            )
+
+        return cls(
+            schema=schema,
+            schema_version=schema_version,
+            success=bool(d["success"]),
+            require_exact_package_bytes=bool(d["requireExactPackageBytes"]),
+            baseline_package=RedlineProofPackageIdentity._from_wire(
+                d["baselinePackage"]
+            ),
+            intended_final_package=RedlineProofPackageIdentity._from_wire(
+                d["intendedFinalPackage"]
+            ),
+            redline_package=RedlineProofPackageIdentity._from_wire(d["redlinePackage"]),
+            revision_classifications=tuple(
+                RedlineRevisionClassification._from_wire(item)
+                for item in d.get("revisionClassifications", ())
+            ),
+            accept_to_final=path("acceptToFinal"),
+            reject_to_baseline=path("rejectToBaseline"),
+            findings=tuple(
+                RedlineProofFinding._from_wire(item)
+                for item in d.get("findings", ())
+            ),
+        )
 
 # ---------------------------------------------------------------------------
 # Anchors

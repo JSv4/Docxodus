@@ -137,6 +137,33 @@ it does not reinterpret or flatten proof fields.
 The checked-in schema is
 [`docs/schemas/redline-reversibility-proof-v1.schema.json`](../schemas/redline-reversibility-proof-v1.schema.json).
 
+## Transports
+
+`Docxodus.Internal.VerificationOps.ProveRedlineReversibility` is the single owner of the wire
+shape. Every non-.NET caller routes through it, so the proof JSON is identical on all of them:
+
+| Surface | Entry point |
+|---------|-------------|
+| .NET (in-process) | `RedlineReversibilityVerifier.Prove` |
+| Shared facade | `VerificationOps.ProveRedlineReversibility` |
+| WASM | `DocumentConverter.ProveRedlineReversibility` |
+| npm (direct) | `proveRedlineReversibility(baseline, intendedFinal, redline)` |
+| npm (worker) | `worker.proveRedlineReversibility(...)` |
+| stdio host | op `prove_redline_reversibility` (`baselineB64`, `intendedFinalB64`, `redlineB64`) |
+| Python | `docx_scalpel.prove_redline_reversibility` → `RedlineReversibilityProof` |
+| MCP | `docxodus_track_changes` action `prove_reversibility` |
+
+Only the canonical proof JSON crosses the facade. `RedlineReversibilityProofRun`'s two rebuilt
+packages stay in-process: every transport above is a JSON wire, and base64 of two further
+packages would multiply the payload for evidence the proof already carries as digests and
+structured divergences. A caller that genuinely needs those bytes uses the verifier directly.
+
+Three packages are inspected and two rebuilt, which makes this the heaviest verification
+operation in the library — hence the worker path on the browser surface. The MCP action proves
+the session's clean-save checkpoint, matching what `docxodus_get_content(format: "verification")`
+already gates, and reads its two comparison packages through the document store so neither can
+name a location outside the server's scope.
+
 ## Dependency boundary
 
 The implementation consumes the package manifest and shared inspection limits from
