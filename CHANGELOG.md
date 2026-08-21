@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
+  document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
+  A scenario declares a fixture, the tool calls that perform the task, and the invariants that
+  decide the run — scored on task completion, target precision (distinct anchors in the #457
+  change set), collateral package change (#456 manifests), deliverable validity (#463), redline
+  reversibility (#464), and HTML rendering. The caller drives the MCP tool surface rather than
+  the .NET API, so the engine baseline is measured where an agent meets it and a failure can
+  never be attributed to model planning. Fixtures are build scripts replayed over a blank
+  document, so the corpus carries no third-party bytes. Ships the term-replacement,
+  notice-period-amendment, and table-economics scenarios as the deterministic fast subset; PDF
+  and visual-regression scoring stay with #443's ratchet.
 - **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
   spill pages to the section that supplies their body while preserving predecessor-owned stories
   on the shared page, carries section-specific header/footer distances and logical page numbering,
