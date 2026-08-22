@@ -327,8 +327,12 @@ describe("@docxodus/export", { concurrency: false }, () => {
           basis: "test-only attestation",
         }],
       }),
+      // Before #442 this rejected `unsupported_runtime` because font directories were
+      // refused outright. The runtime now attempts discovery, so a well-formed attestation
+      // gets as far as resolving the root — and fails closed there, because
+      // /deployment/fonts does not exist.
       (error) => error instanceof DocxodusExportError
-        && error.code === "unsupported_runtime"
+        && error.code === "resource_policy_failure"
         && error.phase === "font_loading",
     );
 

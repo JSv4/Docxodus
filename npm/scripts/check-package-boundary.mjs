@@ -49,7 +49,7 @@ try {
     'dist/export-browser.bundle.js',
     'dist/export-browser.d.ts',
     'dist/export-assets.json',
-    'dist/render-report-v1.schema.json',
+    'dist/render-report-v2.schema.json',
   ]) {
     assert.ok(paths.includes(required), `npm package is missing required runtime file: ${required}`);
   }

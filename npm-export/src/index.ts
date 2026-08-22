@@ -15,6 +15,7 @@ import {
   type BrowserRenderOutcome,
   type BrowserRuntimeIdentity,
 } from "./browser-session.js";
+import { createNodeFontRuntime } from "./fonts/index.js";
 import type {
   NodeExportOptions,
   NodeExportRuntime,
@@ -239,6 +240,31 @@ function validateEnvironmentAttestation(
   });
 }
 
+/**
+ * Attaches a font resolver when the caller configured font directories.
+ *
+ * Discovery needs the resolved limits and the requested outputs — a license record is
+ * scoped to the outputs it permits — so it cannot be built during runtime validation,
+ * which sees neither. Without directories the runtime stays resolver-free and the
+ * materializer falls back to measured browser observation.
+ */
+function withFontResolver(
+  runtime: NodeExportRuntime,
+  options: NodeExportOptions,
+  outputs: readonly RenderOutput[],
+): NodeExportRuntime {
+  if (!runtime.fontDirectories?.length) return runtime;
+  return {
+    ...runtime,
+    fontResolver: createNodeFontRuntime(
+      runtime.fontDirectories,
+      runtime.fontLicenseAttestations ?? [],
+      { ...DEFAULT_EXPORT_RESOURCE_LIMITS, ...options.limits },
+      outputs,
+    ).resolver,
+  };
+}
+
 function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
   if (runtime.browser && runtime.browserExecutablePath) {
     exportError(
@@ -361,27 +387,19 @@ function validateRuntime(runtime: NodeExportRuntime): NodeExportRuntime {
       nonEmptyString(record.attester, `fontLicenseAttestations[${index}].attester`);
     }
   }
-  if (fontDirectories.length > 0) {
-    exportError(
-      "unsupported_runtime",
-      "font_loading",
-      "Explicit font-directory injection is not available in this renderer version.",
-      "Use the browser-observed font mode until issue #442 lands the verified font runtime.",
-    );
-  }
   if (attestations.length > 0 && fontDirectories.length === 0) {
     exportError(
       "invalid_argument",
       "input_validation",
       "Font-license attestations require at least one font directory.",
-      "Remove the unattached attestations or provide the matching directory after #442.",
+      "Remove the unattached attestations or provide the directory whose faces they cover.",
     );
   }
   return {
     browser: runtime.browser,
     browserExecutablePath: runtime.browserExecutablePath,
-    fontDirectories: [],
-    fontLicenseAttestations: [],
+    fontDirectories: [...fontDirectories],
+    fontLicenseAttestations: [...attestations],
     environmentAttestation: validateEnvironmentAttestation(runtime.environmentAttestation),
   };
 }
@@ -742,8 +760,11 @@ function runtimeEnvironment(
       ? "contextRestricted"
       : "ownedProcessRestricted",
   };
+  // "embedded" left the vocabulary with the v2 font contract: OOXML embedded fonts are not
+  // exported until de-obfuscation and embedding-license policy exist. A node-verified font
+  // environment is one the host itself configured, or one the caller attested to.
   const nodeFontsVerified = report.fonts.every((font) =>
-    font.status === "resolved" && (font.source === "embedded" || font.source === "configured"));
+    font.status === "resolved" && (font.source === "configured" || font.source === "attested"));
   const baselineVerification = runtime.launchMode !== "injected" && nodeFontsVerified
     ? "nodeVerified"
     : "browserObserved";
@@ -884,7 +905,7 @@ async function renderOwned(
   const requested = validateOutputs(outputs);
   nodeOptionsPreflight(options, allowOutputs);
   sourcePreflight(sourceBytes, options);
-  const runtime = validateRuntime(options);
+  const runtime = withFontResolver(validateRuntime(options), options, requested);
   const timeoutMs = normalizedTimeout(options);
   const deadline = Date.now() + timeoutMs;
   const pdfLimit = options.limits?.pdfOutputBytes

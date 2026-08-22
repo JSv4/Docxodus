@@ -61,7 +61,21 @@ interface BrowserExportResult {
     environment: { rendererFingerprint: string; verification: string };
     pages: BrowserExportResult['pageMap']['pages'];
     bindings: { pageMapDigest: string; htmlDigest: string };
-    fonts: Array<{ requestedFamily: string; status: string; source: string }>;
+    fonts: Array<{
+      requestId: string;
+      requestedFamily: string;
+      requestedFamilies: string[];
+      sampleDigest: string;
+      status: string;
+      source: string;
+      fileSha256?: string;
+    }>;
+    fontIdentity?: {
+      resolverContract: string;
+      substitutionContractVersion: number;
+      substitutionContractDigest: string;
+      resolutionDigest: string;
+    };
     warnings: Array<{ code: string; severity: string; phase: string }>;
     resources: Array<{ kind: string; status: string; resource?: string }>;
     readiness: Array<{ phase: string; status: string; elapsedMs: number; pending: string[] }>;
@@ -83,9 +97,9 @@ function digest(value: Uint8Array | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-test('freezes the closed render-report v1 schema and exact resource-limit vocabulary', () => {
+test('freezes the closed render-report v2 schema and exact resource-limit vocabulary', () => {
   const schema = JSON.parse(readFileSync(
-    join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
+    join(here, '..', '..', 'docs', 'schemas', 'render-report-v2.schema.json'),
     'utf8',
   ));
   const limits = JSON.parse(readFileSync(join(here, '..', 'src', 'export-resource-limits-v1.json'), 'utf8'));
@@ -114,6 +128,26 @@ test('freezes the closed render-report v1 schema and exact resource-limit vocabu
     'invalid_argument', 'source_digest_mismatch', 'document_version_unrepresentable',
     'operation_cancelled', 'resource_limit',
   ]));
+  // v2's reason for existing: a font record now carries resolver-backed identity, and a
+  // resolution may come from an attested source. Neither fits v1's closed font entry.
+  expect(schema.$id).toBe('https://docxodus.dev/schemas/render/render-report/v2');
+  expect(definitions.baseProperties.schemaVersion).toEqual({ const: 2 });
+  const fontEntry = definitions.baseProperties.fonts.items;
+  expect(fontEntry.additionalProperties).toBe(false);
+  expect(fontEntry.required).toEqual(expect.arrayContaining([
+    'requestId', 'requestedFamily', 'requestedFamilies', 'sampleDigest', 'status', 'source',
+  ]));
+  expect(fontEntry.properties.status.enum).toEqual([
+    'resolved', 'substituted', 'missing', 'load_failed', 'unverified',
+  ]);
+  expect(fontEntry.properties.source.enum).toEqual(['browser', 'configured', 'attested']);
+  expect(fontEntry.properties.licenseEvidence.required).toEqual(
+    ['kind', 'identity', 'noSubsetting'],
+  );
+  expect(definitions.fontIdentity.required).toEqual([
+    'resolverContract', 'substitutionContractVersion',
+    'substitutionContractDigest', 'resolutionDigest',
+  ]);
 });
 
 function generateTrackedRevisionDocx(): Uint8Array {
@@ -289,14 +323,22 @@ test.describe('standalone paginated HTML', () => {
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
     expect(result.renderReport.fonts.length).toBeGreaterThan(0);
-    // A browser-observed font is 'unverified' when the environment can render it and
-    // 'missing' when it silently substituted for it. Which one a given runner produces
-    // depends on the fonts it has installed, so the contract here is that it is one of
-    // those two and never a claim of verified identity.
+    // With no resolver configured the inventory is browser-observed: 'unverified' when the
+    // environment can render the family and 'missing' when it silently substituted for it.
+    // Which one a given runner produces depends on the fonts it has installed, so the
+    // contract is that it is one of those two, sourced from the browser, and never a claim
+    // of verified file identity.
     expect(result.renderReport.fonts.every((font) =>
       font.requestedFamily.length > 0
+      && font.requestId.length > 0
+      && /^[0-9a-f]{64}$/.test(font.sampleDigest)
       && (font.status === 'unverified' || font.status === 'missing')
-      && font.source === 'browser')).toBe(true);
+      && font.source === 'browser'
+      && font.fileSha256 === undefined)).toBe(true);
+    expect(result.renderReport.fontIdentity).toMatchObject({
+      resolverContract: 'https://docxodus.dev/contracts/font-resolver/v1',
+      substitutionContractVersion: 1,
+    });
     expect(result.renderReport.warnings).toContainEqual(expect.objectContaining({
       code: 'font_environment_unverified',
       severity: 'warning',

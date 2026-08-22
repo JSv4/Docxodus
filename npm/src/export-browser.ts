@@ -7,6 +7,7 @@
  */
 
 import limitsContractJson from "./export-resource-limits-v1.json";
+import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -20,6 +21,48 @@ import {
   type PackageManifestInspectionLimits,
   type VersionInfo,
 } from "./types.js";
+import {
+  BrowserFontError,
+  createBrowserFontTask,
+  type BrowserFontResult,
+} from "./font-runtime.js";
+import type {
+  FontConfigurationIdentity,
+  FontResolution,
+  FontResolver,
+} from "./font-contract.js";
+
+export {
+  fontFamilyKey,
+  FONT_RESOLVER_CONTRACT_ID,
+  FONT_RESOLVER_SCHEMA_VERSION,
+  FONT_SUBSTITUTION_CONTRACT,
+  FONT_SUBSTITUTION_CONTRACT_MATERIAL,
+  FONT_SUBSTITUTION_CONTRACT_VERSION,
+  normalizeFontFamilyName,
+} from "./font-contract.js";
+export { inventoryDocumentFontRequests, parseCssFontFamily } from "./font-runtime.js";
+export type {
+  FontConfigurationIdentity,
+  FontEmbeddingKind,
+  FontFamilyKind,
+  FontFaceMatch,
+  FontFaceStyle,
+  FontFileFormat,
+  FontGlyphCoverage,
+  FontLicenseEvidence,
+  FontMediaType,
+  FontRequest,
+  FontResolution,
+  FontResolutionSource,
+  FontResolutionStatus,
+  FontResolver,
+  FontResolverFace,
+  FontResolverOutcome,
+  FontResolverRequest,
+  FontResolverResponse,
+  FontSubstitutionEntry,
+} from "./font-contract.js";
 
 export type ReviewProfile = "final" | "original" | "markup";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
@@ -113,8 +156,8 @@ export interface PaginatedHtmlOptions {
   timeoutMs?: number;
   limits?: Partial<ExportResourceLimits>;
   signal?: AbortSignal;
-  /** Reserved browser-only resolver boundary implemented by issue #442. */
-  fontResolver?: unknown;
+  /** Ephemeral browser-side resolver; never serialized into standalone output. */
+  fontResolver?: FontResolver;
   /** Trusted runtime assets only; never a document-resource base URL. */
   wasmBasePath?: string;
 }
@@ -138,20 +181,6 @@ export interface ReadinessOutcome {
   pending: string[];
 }
 
-export interface FontResolution {
-  requestedFamily: string;
-  requestedFamilyStack?: string[];
-  resolvedFamily?: string;
-  status: "resolved" | "substituted" | "missing" | "unverified";
-  source: "browser" | "embedded" | "configured";
-}
-
-export interface FontConfigurationIdentity {
-  schemaVersion: 1;
-  digest: string;
-  verification: "browserObserved" | "configured";
-}
-
 export interface ResourceOutcome {
   kind: "image" | "svg" | "chart" | "external_link";
   status: "embedded" | "inline" | "allowed_user_link" | "omitted";
@@ -168,8 +197,8 @@ export interface UnsupportedContentOutcome {
 }
 
 export interface RenderReportBase {
-  schema: "https://docxodus.dev/schemas/render/render-report/v1";
-  schemaVersion: 1;
+  schema: "https://docxodus.dev/schemas/render/render-report/v2";
+  schemaVersion: 2;
   source: {
     rawPackageBytesDigest: string;
     byteLength: number;
@@ -375,6 +404,75 @@ export class DocxodusExportError extends Error {
   }
 }
 
+const RECONSTRUCTIBLE_ERROR_CODES = new Set<DocxodusExportErrorCode>([
+  "invalid_argument",
+  "invalid_document",
+  "source_digest_mismatch",
+  "document_version_unrepresentable",
+  "conversion_failure",
+  "browser_launch_failure",
+  "resource_policy_failure",
+  "readiness_timeout",
+  "operation_cancelled",
+  "pagination_failure",
+  "pdf_write_failure",
+  "output_write_failure",
+  "output_verification_failure",
+  "resource_limit",
+  "unsupported_runtime",
+  "filesystem_failure",
+]);
+
+const RECONSTRUCTIBLE_PHASES = new Set<ExportPhase>([
+  "input_validation",
+  "package_preflight",
+  "browser_launch",
+  "wasm_initialization",
+  "docx_conversion",
+  "font_loading",
+  "image_decoding",
+  "chart_svg_materialization",
+  "pagination",
+  "running_story_placement",
+  "page_tree_stability",
+  "pdf_print",
+  "output_verification",
+  "output_write",
+  "filesystem_commit",
+  "cleanup",
+]);
+
+/**
+ * Rebuilds a `DocxodusExportError` from a `DocxodusExportError.toJSON()`-shaped object that
+ * crossed a serialization boundary (a Node-backed `FontResolver` reaching the page as a
+ * Playwright binding, for instance), so the original code/phase/remediation survive instead
+ * of collapsing into a generic message string. Returns `undefined` for anything that isn't
+ * recognizably a serialized `DocxodusExportError`.
+ */
+export function reconstructDocxodusExportError(value: unknown): DocxodusExportError | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.code !== "string" || !RECONSTRUCTIBLE_ERROR_CODES.has(record.code as DocxodusExportErrorCode)) {
+    return undefined;
+  }
+  if (typeof record.phase !== "string" || !RECONSTRUCTIBLE_PHASES.has(record.phase as ExportPhase)) {
+    return undefined;
+  }
+  if (typeof record.message !== "string" || typeof record.remediation !== "string") return undefined;
+  return new DocxodusExportError(
+    record.code as DocxodusExportErrorCode,
+    record.phase as ExportPhase,
+    record.message,
+    record.remediation,
+    {
+      detail: typeof record.detail === "string" ? record.detail : undefined,
+      partUri: typeof record.partUri === "string" ? record.partUri : undefined,
+      anchorId: typeof record.anchorId === "string" ? record.anchorId : undefined,
+      resource: typeof record.resource === "string" ? record.resource : undefined,
+    },
+  );
+}
+
 interface NormalizedOptions {
   documentVersion: number;
   expectedSourceDigest?: string;
@@ -384,6 +482,8 @@ interface NormalizedOptions {
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
   strictFonts: boolean;
+  /** Ephemeral: held only for the duration of the render, never serialized or digested. */
+  fontResolver?: FontResolver;
   timeoutMs: number;
   limits: ExportResourceLimits;
   wasmBasePath: string;
@@ -397,6 +497,7 @@ interface ExecutionState {
   readiness: ReadinessOutcome[];
   warnings: RenderWarning[];
   fonts: FontResolution[];
+  fontIdentity?: FontConfigurationIdentity;
   resources: ResourceOutcome[];
   unsupportedContent: UnsupportedContentOutcome[];
   limits: ExportResourceLimits;
@@ -433,7 +534,7 @@ class PageTreeInstabilityError extends Error {
   }
 }
 
-const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v1" as const;
+const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v2" as const;
 const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
@@ -540,10 +641,9 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation", "strictFonts must be boolean.",
       "Pass true or false.");
   }
-  if (options.fontResolver !== undefined) {
-    fail("unsupported_runtime", "font_loading",
-      "The browser fontResolver contract is reserved but not implemented on this branch.",
-      "Omit fontResolver until issue #442 supplies the versioned resolver.");
+  if (options.fontResolver !== undefined && typeof options.fontResolver !== "function") {
+    fail("invalid_argument", "input_validation", "fontResolver must be a function.",
+      "Pass a FontResolver conforming to the versioned resolver contract, or omit it.");
   }
   if (options.signal !== undefined
     && (typeof options.signal !== "object"
@@ -608,6 +708,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     title,
     unsupportedContent,
     strictFonts: options.strictFonts ?? false,
+    ...(options.fontResolver ? { fontResolver: options.fontResolver } : {}),
     timeoutMs,
     limits: Object.freeze(limits),
     wasmBasePath,
@@ -1031,52 +1132,7 @@ async function loadRuntimeAssetIdentity(
   };
 }
 
-function canonicalValue(value: unknown): unknown {
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    assertWellFormedUnicode(value);
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("Canonical JSON does not support non-finite numbers");
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (Array.isArray(value)) return value.map(canonicalValue);
-  if (typeof value === "object") {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError("Canonical JSON supports only plain objects");
-    }
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      assertWellFormedUnicode(key);
-      const member = (value as Record<string, unknown>)[key];
-      if (member !== undefined) result[key] = canonicalValue(member);
-    }
-    return result;
-  }
-  throw new TypeError(`Canonical JSON does not support ${typeof value}`);
-}
-
-function assertWellFormedUnicode(value: string): void {
-  for (let index = 0; index < value.length; index++) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
-      }
-      index++;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
-    }
-  }
-}
-
-/** Serialize report/schema values with recursively sorted object keys and no insignificant space. */
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalValue(value));
-}
+export { canonicalJson };
 
 async function canonicalMaterialDigest(domain: string, value: unknown): Promise<string> {
   if (!/^[\x20-\x7e]+$/.test(domain)) {
@@ -1392,12 +1448,6 @@ function addResource(state: ExecutionState, resource: ResourceOutcome): void {
 function addUnsupportedContent(state: ExecutionState, outcome: UnsupportedContentOutcome): void {
   enforceDiagnosticAdmission(state, 1);
   state.unsupportedContent.push(outcome);
-}
-
-function addFont(state: ExecutionState, font: FontResolution): void {
-  enforceLimit(state.fonts.length + 1, state.limits.fontRequests, "fontRequests", "font_loading");
-  enforceDiagnosticAdmission(state, 1);
-  state.fonts.push(font);
 }
 
 function enforceDiagnosticAdmission(state: ExecutionState, additional: number): void {
@@ -2188,119 +2238,192 @@ async function awaitFonts(document: Document): Promise<void> {
   if (document.fonts) await document.fonts.ready;
 }
 
-// Availability probing needs glyphs whose advance widths differ between typefaces;
-// digits and mixed-case letters separate metric-compatible families far better than
-// a single repeated character does.
-const FONT_AVAILABILITY_SAMPLE = "MWmwilAaGg0189";
-const FONT_AVAILABILITY_FALLBACKS = ["monospace", "serif", "sans-serif"] as const;
-
-// getComputedStyle returns the whole declared stack. Only the first entry is the
-// family the document actually asked for; everything after it is already a
-// substitution the author accepted, and the generic at the end always resolves.
-function primaryFamily(stack: string): string | undefined {
-  for (const entry of stack.split(",")) {
-    const family = entry.trim().replace(/^["']|["']$/g, "").trim();
-    if (family) return family;
-  }
-  return undefined;
-}
-
-function cssFamilyToken(family: string): string {
-  return /^[A-Za-z][A-Za-z0-9-]*$/.test(family)
-    ? family
-    : `"${family.replace(/["\\]/g, "\\$&")}"`;
-}
-
-// document.fonts.check() reports whether pending downloads are settled, not whether
-// a family exists — Chromium answers true for a family it has never heard of. Measure
-// instead: a family that changes the advance width away from every generic fallback is
-// present, and one that matches all three is being silently substituted for.
-function familyAvailable(view: Window & typeof globalThis, family: string): boolean {
-  const generic = family.toLowerCase();
-  if (FONT_AVAILABILITY_FALLBACKS.includes(generic as typeof FONT_AVAILABILITY_FALLBACKS[number])
-    || generic === "cursive" || generic === "fantasy" || generic === "system-ui") {
-    return true;
-  }
-  const context = view.document.createElement("canvas").getContext("2d");
-  if (!context) return true;
-  const token = cssFamilyToken(family);
-  for (const fallback of FONT_AVAILABILITY_FALLBACKS) {
-    context.font = `72px ${fallback}`;
-    const baseline = context.measureText(FONT_AVAILABILITY_SAMPLE).width;
-    context.font = `72px ${token}, ${fallback}`;
-    if (context.measureText(FONT_AVAILABILITY_SAMPLE).width !== baseline) return true;
-  }
-  return false;
-}
-
-function inventoryBrowserObservedFonts(document: Document, state: ExecutionState): void {
-  const view = document.defaultView;
-  if (!view) throw new Error("render document has no defaultView");
-
-  const candidates = new Set<Element>([
-    document.body,
-    ...Array.from(document.querySelectorAll<HTMLElement>("[data-source-anchor-id]")),
-  ]);
-  const families = new Set<string>();
-  for (const element of candidates) {
-    if (!element.textContent?.trim()) continue;
-    const family = view.getComputedStyle(element).fontFamily.trim();
-    if (family) families.add(family);
-  }
-  const unavailable: string[] = [];
-  for (const requestedFamily of Array.from(families).sort(compareCodeUnits)) {
-    const primary = primaryFamily(requestedFamily);
-    // An available family is still only "unverified": the barrier proves the browser
-    // can render it, not which file it came from. Attesting the file is issue #442.
-    if (primary === undefined || familyAvailable(view, primary)) {
-      addFont(state, {
-        requestedFamily,
-        status: "unverified",
-        source: "browser",
-      });
-      continue;
+/**
+ * Lifts the converter's measurement staging area out of `visibility: hidden` for the font
+ * phase, and returns the undo.
+ *
+ * `font_loading` has to settle before pagination, because line breaking depends on which
+ * faces actually resolved — and until pagination runs, every piece of document content is
+ * still inside `#pagination-staging`, which the converter hides so its measurements never
+ * paint. Left alone, the font inventory would see a document with no rendered text and
+ * report no font dependencies at all.
+ *
+ * Only the staging root's own `visibility` is overridden, never a descendant's: content the
+ * document itself hid keeps its own declaration and stays out of the inventory. Visibility
+ * does not affect layout, so nothing the engine measures moves.
+ */
+function revealMeasurementStaging(document: Document): () => void {
+  const roots = Array.from(
+    document.querySelectorAll<HTMLElement>("#pagination-staging, .page-staging"),
+  );
+  const saved = roots.map((root) => ({
+    root,
+    value: root.style.getPropertyValue("visibility"),
+    priority: root.style.getPropertyPriority("visibility"),
+  }));
+  for (const root of roots) root.style.setProperty("visibility", "visible", "important");
+  return () => {
+    for (const { root, value, priority } of saved) {
+      if (value) root.style.setProperty("visibility", value, priority);
+      else root.style.removeProperty("visibility");
     }
-    addFont(state, {
-      requestedFamily,
-      status: "missing",
-      source: "browser",
-    });
-    unavailable.push(primary);
+  };
+}
+
+/**
+ * Admits one resolver-backed font inventory into the report.
+ *
+ * The inventory is canonical: `createBrowserFontTask` samples every rendered face,
+ * resolves it through the configured resolver when there is one and through measured
+ * browser availability when there is not, and returns both the resolutions and the
+ * configuration identity the renderer fingerprint binds.
+ */
+function recordFontResolution(
+  result: BrowserFontResult,
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  enforceLimit(result.resolutions.length, state.limits.fontRequests, "fontRequests", "font_loading");
+  enforceDiagnosticAdmission(state, result.resolutions.length);
+  state.fontIdentity = { ...result.identity };
+  state.fonts.push(...result.resolutions.map((resolution) => ({
+    ...resolution,
+    requestedFamilies: [...resolution.requestedFamilies],
+    requestedFamilyKinds: [...resolution.requestedFamilyKinds],
+    ...(resolution.licenseEvidence
+      ? { licenseEvidence: { ...resolution.licenseEvidence } }
+      : {}),
+  })));
+  if (result.renderedTextNodeCount > 0 && result.resolutions.length === 0) {
+    fail("resource_policy_failure", "font_loading",
+      "Rendered text was present, but the canonical font inventory was unexpectedly empty.",
+      "Report this font inventory invariant failure before relying on the output.");
   }
-  if (unavailable.length > 0) {
-    // Always a warning, never a failure. An unresolvable family is a font-policy matter
-    // governed by strictFonts — which issue #442 owns — and not unsupported content, so
-    // this deliberately does not route through policyWarning.
-    //
-    // One aggregate warning, not one per family: the per-family record already lives in
-    // fonts[], and a wide document would otherwise spend its whole diagnostic budget here.
-    addWarning(state, {
-      code: "font_family_unavailable",
-      severity: "warning",
-      phase: "font_loading",
-      message: `The render environment substituted ${unavailable.length} requested font `
-        + `${unavailable.length === 1 ? "family" : "families"} that it could not resolve.`,
-      remediation: "Install the missing families in the render environment, or supply them through fontDirectories.",
-      detail: boundedFamilyList(unavailable),
-    });
+  for (const resolution of result.resolutions) {
+    // Every one of these is a warning and never a failure on its own. An unresolvable or
+    // substituted family is a font-policy matter governed by strictFonts below, not
+    // unsupported content, so none of them route through policyWarning.
+    const severity = "warning" as const;
+    if (resolution.status === "missing") {
+      addWarning(state, {
+        code: "font_unavailable",
+        severity,
+        phase: "font_loading",
+        message: `No configured face resolved the required font family: ${resolution.requestedFamily}.`,
+        remediation: "Install or explicitly supply the required font before export.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.status === "load_failed") {
+      addWarning(state, {
+        code: "font_load_failed",
+        severity,
+        phase: "font_loading",
+        message: `The configured font face for ${resolution.requestedFamily} could not be decoded or loaded.`,
+        remediation: "Replace the configured font with a valid browser-supported face.",
+        resource: resolution.requestedFamily,
+        ...(resolution.loadFailureDetail ? { detail: resolution.loadFailureDetail } : {}),
+      });
+    }
+    if (resolution.status === "substituted") {
+      addWarning(state, {
+        code: "font_substituted",
+        severity,
+        phase: "font_loading",
+        message: `${resolution.requestedFamily} was resolved to ${resolution.resolvedFamily ?? "a configured substitute"}.`,
+        remediation: "Supply an exact configured family when substitution is not acceptable.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.faceMatch === "synthesized") {
+      addWarning(state, {
+        code: "font_face_synthesized",
+        severity,
+        phase: "font_loading",
+        message: `The requested style, weight, or stretch for ${resolution.requestedFamily} requires synthesis.`,
+        remediation: "Supply an exact configured face for this style, weight, and stretch.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.metricCompatible === false) {
+      addWarning(state, {
+        code: "font_metric_mismatch",
+        severity,
+        phase: "font_loading",
+        message: `The substitute selected for ${resolution.requestedFamily} is not metrically compatible.`,
+        remediation: "Supply the exact family or review PageMap and line wrapping before publication.",
+        resource: resolution.requestedFamily,
+      });
+    }
+    if (resolution.glyphCoverage === "partial") {
+      addWarning(state, {
+        code: "font_glyph_coverage_partial",
+        severity,
+        phase: "font_loading",
+        message: `The configured face for ${resolution.requestedFamily} covers only part of the rendered text.`,
+        remediation: "Supply a face with complete glyph coverage for the reported sample.",
+        resource: resolution.requestedFamily,
+      });
+    }
   }
-  if (families.size > 0) {
+  // Without a configured resolver every resolution is source: "browser" by construction, so
+  // that alone signals an unattested environment. With one configured, a family a resolver
+  // authoritatively reports missing is also source: "browser" (there is no face to attribute
+  // it to) but already carries its own accurate font_unavailable warning above — it must not
+  // also claim the whole environment is unattested, or misdirect the caller to "use a
+  // resolver" when they already have.
+  if (result.resolutions.some((resolution) =>
+    resolution.status === "unverified" || (!result.resolverConfigured && resolution.source === "browser"))) {
     addWarning(state, {
       code: "font_environment_unverified",
       severity: "warning",
       phase: "font_loading",
       message: "The browser loaded the requested CSS font families, but their exact files and substitutions are not attestable.",
-      remediation: "Use the verified font resolver from issue #442 when exact font identity is required.",
+      remediation: "Use an explicit verified font resolver when exact font identity is required.",
     });
+  }
+  // strictFonts is the gate #441 deliberately left to this issue. It demands an exact,
+  // digest-identified, license-evidenced face with complete coverage — anything less is
+  // a font environment the caller asked not to publish from. `verified` is computed once,
+  // where every raw signal is in scope, by the resolution's producer (font-runtime.ts).
+  const strictFailures = result.resolutions.filter((resolution) => !resolution.verified);
+  if (options.strictFonts && strictFailures.length > 0) {
+    fail("resource_policy_failure", "font_loading",
+      "Strict font policy rejected a non-exact, unverified, or incompletely covered font outcome.",
+      "Supply exact verified faces with complete glyph coverage or disable strictFonts.", {
+        detail: strictFailures.map(({ requestId, status }) => `${requestId}:${status}`).join(", "),
+      });
   }
 }
 
-function boundedFamilyList(families: string[]): string {
-  const unique = Array.from(new Set(families)).sort(compareCodeUnits);
-  const listed = unique.slice(0, 8);
-  return unique.length > listed.length
-    ? `${listed.join(", ")}, and ${unique.length - listed.length} more`
-    : listed.join(", ");
+function rethrowBrowserFontError(error: unknown): never {
+  if (error instanceof BrowserFontError) {
+    // A Node-backed resolver's own failure (a symlink in a configured directory, a resource
+    // limit discovery hit) crosses with its real code/phase/remediation intact — see
+    // reconstructDocxodusExportError, called by the resolver wrapper before it throws. Prefer
+    // that over the generic "malformed resolver response" framing below, which is only
+    // accurate for a resolver that replied but violated the wire contract.
+    if (error.cause instanceof DocxodusExportError) {
+      const original = error.cause;
+      fail(original.code, original.phase, original.message, original.remediation, {
+        detail: original.detail,
+        partUri: original.partUri,
+        anchorId: original.anchorId,
+        resource: original.resource,
+        cause: error,
+      });
+    }
+    fail(
+      error.kind === "resource_limit" ? "resource_limit" : "resource_policy_failure",
+      "font_loading",
+      error.message,
+      error.kind === "resource_limit"
+        ? "Lower the number or size of configured fonts or raise the versioned font limit."
+        : "Return one canonical, digest-verified resolver outcome for every font request.",
+      { detail: error.detail, cause: error },
+    );
+  }
+  throw error;
 }
 
 // A src can be a multi-megabyte data URL, so it is never the label. Anchors and alt text
@@ -2810,6 +2933,7 @@ async function rendererIdentity(
   runtimeAssets: RuntimeAssetIdentity,
   runtimeVersion: VersionInfo,
   fonts: FontResolution[],
+  fontIdentity: FontConfigurationIdentity,
 ): Promise<{
   rendererFingerprint: string;
   observed: ExportRuntimeObservedFacts;
@@ -2822,15 +2946,10 @@ async function rendererIdentity(
   }
   const fontRecords = fonts.map((font) => ({ ...font }))
     .sort((left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)));
-  const fontDigest = await canonicalMaterialDigest(
-    "docxodus:font-configuration:v1",
-    { verification: "browserObserved", fonts: fontRecords },
-  );
-  const fontIdentity: FontConfigurationIdentity = {
-    schemaVersion: 1,
-    digest: fontDigest,
-    verification: "browserObserved",
-  };
+  // The font runtime already produced the canonical configuration identity, binding the
+  // substitution contract and every resolution. Re-deriving one here would let the
+  // fingerprint disagree with the report about the same font environment.
+  const fontDigest = fontIdentity.resolutionDigest;
   const observed = observedRuntimeFacts(document);
   const fingerprint = {
     contract: "docxodus-standalone-browser-v1",
@@ -2839,7 +2958,7 @@ async function rendererIdentity(
     runtimeVersion,
     paginatorContractVersion: 1,
     pageMapSchemaVersion: 1,
-    renderReportSchemaVersion: 1,
+    renderReportSchemaVersion: 2,
     layoutDigest,
     runtimePolicyDigest,
     fontConfigurationDigest: fontDigest,
@@ -3067,7 +3186,7 @@ function reportBase(
 ): RenderReportBase {
   return {
     schema: REPORT_SCHEMA,
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: {
       rawPackageBytesDigest: manifest.rawPackageBytesDigest.value.toLowerCase(),
       byteLength: sourceBytes.byteLength,
@@ -3266,11 +3385,6 @@ export async function convertDocxToPaginatedHtml(
       fail("invalid_document", "input_validation", "The DOCX input is empty.",
         "Pass a non-empty OPC package.");
     }
-    if (options.strictFonts) {
-      fail("unsupported_runtime", "font_loading",
-        "Strict font verification is not yet available in the browser materializer.",
-        "Use the browser-observed font mode until issue #442 lands.");
-    }
     layoutDigest = await layoutDigestForOptions(options);
 
     runtimeAssets = await runPhase(state, "wasm_initialization", ["runtime asset graph"], () =>
@@ -3367,6 +3481,7 @@ export async function convertDocxToPaginatedHtml(
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
     let firstAttemptSignature: string | undefined;
+    let firstAttemptFontIdentity: string | undefined;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         frame = await createIsolatedFrame(globalThis.document, state, bootstrapHtml(options.title));
@@ -3374,10 +3489,41 @@ export async function convertDocxToPaginatedHtml(
         sanitizeConvertedDocument(renderDocument, convertedHtml, state, options);
         inventoryConvertedContent(renderDocument, state, options);
 
-        await runPhase(state, "font_loading", ["document.fonts.ready"], async () => {
-          await awaitFonts(renderDocument);
-          inventoryBrowserObservedFonts(renderDocument, state);
-        });
+        // The task samples every rendered face before the phase begins, so its pending
+        // list names the outstanding font requests rather than a generic wait.
+        const restoreStaging = revealMeasurementStaging(renderDocument);
+        try {
+          const fontTask = createBrowserFontTask(renderDocument, options.fontResolver, state.limits);
+          await runPhase(state, "font_loading", fontTask.pending(), async () => {
+            await awaitFonts(renderDocument);
+            const resolved = await fontTask.wait(ownedOperationAbort.signal)
+              .catch(rethrowBrowserFontError);
+            recordFontResolution(resolved, state, options);
+            // Both attempts put the identical question to the resolver. One that answers
+            // differently the second time makes the page tree unreproducible and would bind
+            // the fingerprint to a configuration the output was never laid out with, so it
+            // is rejected here rather than surfacing later as page-tree instability.
+            //
+            // Compared on resolverDigest, not the broader resolutionDigest: the latter also
+            // reflects browser-observed load outcomes (did this face happen to decode this
+            // attempt), which is not a claim about the resolver's determinism and would
+            // misattribute a flaky decode as "the resolver returned a different configuration."
+            // resolverDigest is undefined with no resolver configured, in which case there is
+            // no resolver-drift question to ask.
+            if (resolved.identity.resolverDigest !== undefined) {
+              if (attempt === 1) {
+                firstAttemptFontIdentity = resolved.identity.resolverDigest;
+              } else if (firstAttemptFontIdentity !== undefined
+                && firstAttemptFontIdentity !== resolved.identity.resolverDigest) {
+                fail("resource_policy_failure", "font_loading",
+                  "The font resolver returned a different configuration for the second pristine attempt.",
+                  "Return one deterministic resolution for an identical set of font requests.");
+              }
+            }
+          });
+        } finally {
+          restoreStaging();
+        }
         await runPhase(state, "image_decoding", ["embedded images"], async () => {
           admitVisualResourceFailures(
             state, options, await decodeImages(renderDocument), "image", {
@@ -3505,6 +3651,7 @@ export async function convertDocxToPaginatedHtml(
         runtimeAssets!,
         runtimeVersion!,
         state.fonts,
+        state.fontIdentity!,
       ));
     rendererFingerprint = renderer.rendererFingerprint;
     observed = renderer.observed;

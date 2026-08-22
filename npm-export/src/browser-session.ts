@@ -13,6 +13,8 @@ import type {
   BrowserMaterializationFailure,
   BrowserMaterializationSuccess,
   ExportPhase,
+  FontResolverRequest,
+  FontResolverResponse,
   NodeExportRuntime,
   ReadinessOutcome,
 } from "./contracts.js";
@@ -68,6 +70,10 @@ export interface BrowserRenderOutcome {
   runtime: BrowserRuntimeIdentity;
   requestLog: RequestLogEntry[];
 }
+
+type FontBindingResponse =
+  | { ok: true; result: FontResolverResponse }
+  | { ok: false; error: ReturnType<DocxodusExportError["toJSON"]> };
 
 interface BridgeResponse {
   ok: boolean;
@@ -960,6 +966,36 @@ export async function renderInBrowser(
       void download.cancel();
     });
     page.setDefaultTimeout(remaining(deadline, "wasm_initialization"));
+    const fontResolver = runtime.fontResolver;
+    if (fontResolver) {
+      // A Playwright binding, not a serialized value: the resolver reads font files from
+      // the host filesystem, which the isolated page can never be given access to.
+      await withReadiness(
+        recordReadiness,
+        "wasm_initialization",
+        ["font resolver binding"],
+        () => bounded(context!, deadline, "wasm_initialization", "font resolver binding", signal,
+          () => page.exposeBinding("__docxodusResolveFonts", async (
+            _source,
+            request: FontResolverRequest,
+          ): Promise<FontBindingResponse> => {
+            try {
+              return { ok: true, result: await fontResolver(request, signal ?? new AbortController().signal) };
+            } catch (error) {
+              const normalized = error instanceof DocxodusExportError
+                ? error
+                : new DocxodusExportError(
+                  "resource_policy_failure",
+                  "font_loading",
+                  "The configured font resolver failed.",
+                  "Inspect the configured font directories and license attestations.",
+                  { cause: error },
+                );
+              return { ok: false, error: normalized.toJSON() };
+            }
+          })),
+      );
+    }
     await withReadiness(
       recordReadiness,
       "wasm_initialization",

@@ -60,6 +60,7 @@ const BOOTSTRAP_HTML = `<!doctype html>
 const BOOTSTRAP_JS = `import {
   convertDocxToPaginatedHtml,
   DocxodusExportError,
+  reconstructDocxodusExportError,
 } from "/export-browser.bundle.js";
 
 globalThis.__docxodusExportBridge = {
@@ -67,9 +68,39 @@ globalThis.__docxodusExportBridge = {
     try {
       const response = await fetch(inputUrl, { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error(\`Input snapshot could not be loaded (\${response.status}).\`);
+      // The host exposes its font resolver as a Playwright binding when font directories
+      // are configured. Wrapping it here keeps the resolver contract identical on both
+      // sides: the materializer only ever sees a FontResolver function.
+      const binding = globalThis.__docxodusResolveFonts;
+      const fontResolver = typeof binding === "function"
+        ? async (request, signal) => {
+          // Playwright bindings cross as a plain async call with no signal support; racing the
+          // call locally still lets an already-aborted render stop waiting on the host promptly.
+          const response = await (signal
+            ? Promise.race([
+              binding(request),
+              new Promise((_resolve, reject) => {
+                if (signal.aborted) reject(signal.reason ?? new Error("aborted"));
+                else signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+              }),
+            ])
+            : binding(request));
+          if (!response || response.ok !== true) {
+            // The host's DocxodusExportError crosses as its own toJSON() shape; reconstruct it
+            // so the real code/phase/remediation survive instead of collapsing to one string.
+            throw reconstructDocxodusExportError(response?.error)
+              ?? new Error(response?.error?.message ?? "The configured font resolver failed.");
+          }
+          return response.result;
+        }
+        : undefined;
       const result = await convertDocxToPaginatedHtml(
         new Uint8Array(await response.arrayBuffer()),
-        { ...options, wasmBasePath: "/wasm/" },
+        {
+          ...options,
+          wasmBasePath: "/wasm/",
+          ...(fontResolver ? { fontResolver } : {}),
+        },
       );
       return {
         ok: true,
