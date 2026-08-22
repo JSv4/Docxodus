@@ -1996,22 +1996,29 @@ public class HtmlConversionOpsTests
     // font's native single-line height. Treating an auto value such as 259 as 107.9% of font-size
     // makes repeated blank lines materially too short. The generated HTML keeps `normal` as that
     // native base and applies the OOXML multiplier to the synthesized inline placeholder.
-    [Fact]
-    public void HCO085_EmptyParagraphAutoLineSpacing_MultipliesNativeLineHeight()
+    // Word spells a visually empty paragraph two ways: a structurally empty w:p, and an explicit
+    // run holding an empty w:t (the spacer rows in VP004's signature table, for instance). Both
+    // must reach the browser as exactly ONE placeholder span — asserting uniqueness before
+    // filtering by value is what keeps a second, emptied span from slipping through beside it.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HCO085_EmptyParagraphAutoLineSpacing_MultipliesNativeLineHeight(bool explicitEmptyRun)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms,
                    DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
-            // Word commonly serializes a visually empty paragraph as an explicit run with an
-            // empty w:t (for example, the spacer rows in VP004's signature table). It still
-            // needs the same paragraph-mark line box as a structurally empty w:p.
-            main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph(
-                new Wp.Run(new Wp.Text(string.Empty)
-                {
-                    Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve,
-                }))));
+            var paragraphContent = explicitEmptyRun
+                ? new Wp.Paragraph(new Wp.Run(
+                    new Wp.RunProperties(new Wp.FontSize { Val = "22" }),
+                    new Wp.Text(string.Empty)
+                    {
+                        Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve,
+                    }))
+                : new Wp.Paragraph();
+            main.Document = new Wp.Document(new Wp.Body(paragraphContent));
             main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
                 new Wp.DocDefaults(
                     new Wp.RunPropertiesDefault(
@@ -2031,14 +2038,17 @@ public class HtmlConversionOpsTests
             new HtmlConversionOptions { FabricateCssClasses = false });
         var root = System.Xml.Linq.XElement.Parse(html);
         var paragraph = root.Descendants().Single(e => e.Name.LocalName == "p");
-        var placeholder = paragraph.Elements().Single(e =>
-            e.Name.LocalName == "span" && e.Value == "\u00A0");
+        // Uniqueness FIRST: filtering to NBSP-valued spans before Single() would hide an emptied
+        // sibling span, which is exactly the shape the empty-w:t spelling used to leave behind.
+        var placeholder = paragraph.Elements().Single(e => e.Name.LocalName == "span");
 
         Assert.Contains("--docx-auto-line-spacing: 1.079", (string?)paragraph.Attribute("style"));
         Assert.Contains("line-height: normal", (string?)paragraph.Attribute("style"));
         Assert.Contains("line-height: calc(1lh * var(--docx-auto-line-spacing))",
             (string?)placeholder.Attribute("style"));
         Assert.Equal("\u00A0", placeholder.Value);
+        Assert.Empty(paragraph.Descendants().Where(e =>
+            e.Name.LocalName == "span" && !e.HasElements && e.Value.Length == 0));
     }
 
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the

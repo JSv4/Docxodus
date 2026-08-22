@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -39,15 +39,32 @@ test.describe('generated-PDF benchmark path confinement', () => {
       .toThrow(/non-symlink|inside the repository/);
   });
 
-  test('separates retries and rejects symlink bootstrap artifacts', () => {
+  test('separates retries into their own roots', () => {
     const root = join(outside, 'artifacts');
     const first = prepareExternalOutputRoot(repository, root, 0, new Set());
     expect(first).toBe(root);
     expect(prepareExternalOutputRoot(repository, root, 1, new Set())).toBe(join(root, 'retry-1'));
+  });
+
+  test('rejects a symlinked bootstrap artifact', () => {
     if (process.platform === 'win32') return;
-    const bootstrap = join(root, 'ci-context.json');
-    symlinkSync(join(repository, 'missing'), bootstrap);
+    // A FRESH root: reusing the retry test's root leaves a retry-1 directory that trips the
+    // stale-artifact check first, so the symlink itself would never be examined and the
+    // symlink clause could be deleted with the test still green. CI supplies ci-context.json,
+    // which makes it the one attacker-influenced path this check guards.
+    const root = join(outside, 'bootstrap-artifacts');
+    prepareExternalOutputRoot(repository, root, 0, new Set(['ci-context.json']));
+    expect(readdirSync(root)).toEqual([]);
+    symlinkSync(join(repository, 'missing'), join(root, 'ci-context.json'));
     expect(() => prepareExternalOutputRoot(repository, root, 0, new Set(['ci-context.json'])))
-      .toThrow(/unsafe/);
+      .toThrow(/stale or unsafe artifacts/);
+
+    // A REGULAR bootstrap file of the same name is accepted, so the rejection above is about
+    // the symlink and not merely about the file's presence.
+    const regular = join(outside, 'regular-artifacts');
+    prepareExternalOutputRoot(repository, regular, 0, new Set(['ci-context.json']));
+    writeFileSync(join(regular, 'ci-context.json'), '{}');
+    expect(prepareExternalOutputRoot(repository, regular, 0, new Set(['ci-context.json'])))
+      .toBe(regular);
   });
 });

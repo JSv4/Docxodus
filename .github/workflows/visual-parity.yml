@@ -34,7 +34,11 @@ permissions:
 
 concurrency:
   group: visual-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # NEVER cancel in progress. The workflow has no pull_request trigger, so this group collapses to
+  # github.ref and the Monday cron shares it with every manual dispatch on the same ref. Cancelling
+  # would let a dispatch silently kill the scheduled traversal — the one run that most needs the
+  # gate, because nobody is watching it — and lose the week's ratchet comparison. Runs queue instead.
+  cancel-in-progress: false
 
 jobs:
   visual-parity:
@@ -42,7 +46,13 @@ jobs:
     # The browser-page benchmark and the generated-PDF benchmark each traverse the full corpus.
     # Keep one bounded job so they share the exact reference environment, with enough time for
     # the second benchmark to finish and publish its own failure evidence.
-    timeout-minutes: 90
+    #
+    # The budget must cover playwright.config.ts's `retries: process.env.CI ? 2 : 0`: three
+    # attempts at ~20 min plus three at ~30 min. A tighter cap does not merely truncate the run —
+    # a job timeout is a cancellation, so `if: ${{ !cancelled() }}` skips the generated-PDF step
+    # and its artifact ships carrying only the bootstrap "CI failed during setup" page, which is
+    # precisely the misleading outcome that bootstrap step exists to prevent.
+    timeout-minutes: 150
 
     steps:
       - name: Checkout
@@ -162,9 +172,10 @@ jobs:
         run: cd npm && npx playwright install --with-deps chromium
 
       # The regression ratchet (issue #395) compares this run against the committed record and
-      # fails when any case got worse. Pull-request and scheduled runs have no `inputs`, so the
-      # expression falls through to '1'. Refresh the record deliberately in the PR that changes
-      # rendering; conversion, page-count, geometry, and semantic contracts remain unconditional.
+      # fails when any case got worse. A scheduled run has no `inputs`, so the expression falls
+      # through to '1' — the weekly run is the one that most needs the gate, because nobody is
+      # watching it. Refresh the record deliberately in the PR that changes rendering; conversion,
+      # page-count, geometry, and candidate-side semantic contracts remain unconditional.
       - name: Compare stratified corpus with LibreOffice
         env:
           DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity

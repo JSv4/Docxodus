@@ -129,12 +129,22 @@ export interface RatchetSummary {
 
 export type RatchetStatus = 'ok' | 'regressed' | 'environment-changed' | 'record-mismatch';
 
+/**
+ * The environment variable that refreshes the record being compared. This module is shared by two
+ * benchmarks with two different records and two different switches, so a hardcoded name sends an
+ * operator to a variable that does nothing here — and that DOES overwrite the OTHER benchmark's
+ * record when they apply it to the other command.
+ */
+export const DEFAULT_RATCHET_UPDATE_ENV = 'DOCXODUS_VISUAL_PARITY_UPDATE_RECORD';
+
 export interface RatchetOptions {
   /**
    * Whether the run covered the whole corpus. A `DOCXODUS_VISUAL_PARITY_FILTER` run legitimately
    * measures a subset, so its absent cases are not findings; an unfiltered run's are.
    */
   expectComplete: boolean;
+  /** Name of the refresh switch quoted in this comparison's remediation messages. */
+  updateRecordEnv?: string;
 }
 
 export interface RatchetFinding {
@@ -288,6 +298,7 @@ export function compareToRecord(
   summary: RatchetSummary,
   options: RatchetOptions = { expectComplete: true },
 ): RatchetComparison {
+  const updateRecordEnv = options.updateRecordEnv ?? DEFAULT_RATCHET_UPDATE_ENV;
   if (record.schemaVersion !== RATCHET_SCHEMA_VERSION) {
     return {
       status: 'record-mismatch',
@@ -295,7 +306,7 @@ export function compareToRecord(
       improvements: [],
       environmentDrift: [],
       message: `Ratchet record schema ${record.schemaVersion} is not the expected ` +
-        `${RATCHET_SCHEMA_VERSION}; regenerate it with DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1.`,
+        `${RATCHET_SCHEMA_VERSION}; regenerate it with ${updateRecordEnv}=1.`,
     };
   }
 
@@ -312,8 +323,7 @@ export function compareToRecord(
         drift.join('\n  ') +
         '\nThe recorded numbers were measured under a different reference environment, so ' +
         'comparing against them would attribute that change to Docxodus. Rerun the benchmark ' +
-        'in the new environment with DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 and commit the ' +
-        'refreshed record.',
+        `in the new environment with ${updateRecordEnv}=1 and commit the refreshed record.`,
     };
   }
 
@@ -345,7 +355,7 @@ export function compareToRecord(
       recorded: '(absent)',
       measured: measured.severity,
       detail: `${measured.id} was measured but is not in the record; add it with ` +
-        'DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1',
+        `${updateRecordEnv}=1`,
     });
   }
 

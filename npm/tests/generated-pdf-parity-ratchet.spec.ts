@@ -6,6 +6,7 @@ import { PDF_PARITY_CORPUS } from './visual-parity/pdf-corpus.js';
 import {
   RATCHET_SCHEMA_VERSION,
   RATCHET_TOLERANCE,
+  buildRecord,
   compareToRecord,
   readRecord,
   type RatchetRecord,
@@ -19,6 +20,33 @@ import {
  */
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const recordFile = resolve(__dirname, 'visual-parity/generated-pdf-ratchet.json');
+
+/**
+ * A synthetic already-severe baseline. Deriving this from the committed record instead would make
+ * the two tests below crash the moment a refresh clears the last severe case — which is the
+ * project's declared direction (#444) — and they are the ONLY coverage of the physicalGeometry and
+ * semantics branches in compareCase, so the crash would land exactly where coverage is unique.
+ */
+const SEVERE_BASELINE: RatchetSummary = {
+  gitCommit: 'c'.repeat(40),
+  workingTreeDirty: false,
+  environment: {
+    chromium: '143.0.7499.4',
+    libreoffice: 'LibreOffice 25.8.7.3 580(Build:3)',
+    pdftoppm: 'pdftoppm version 24.02.0',
+    fontContract: { sha256: 'abc123' },
+  },
+  cases: [{
+    id: 'pdf-synthetic-severe',
+    disposition: { kind: 'renderer-bug' },
+    docxodusPages: 1,
+    libreofficePages: 1,
+    severity: 'severe',
+    pages: [{ ssim: 0.5, tolerantInkF1: 0.5 }],
+    physicalGeometryPassed: true,
+    semanticChecksPassed: true,
+  }],
+};
 
 function measuredSummary(record: RatchetRecord): RatchetSummary {
   return {
@@ -100,31 +128,60 @@ test.describe('the committed generated-PDF parity ratchet', () => {
     }
   });
 
+  test('an unchanged already-severe baseline holds', () => {
+    const record = buildRecord(SEVERE_BASELINE, '2026-08-16');
+    expect(compareToRecord(record, SEVERE_BASELINE).status).toBe('ok');
+  });
+
   test('rejects physical-geometry failure even for an already-severe raster baseline', () => {
-    const record = readRecord(recordFile)!;
-    const summary = measuredSummary(record);
-    const severe = summary.cases.find((entry) => entry.severity === 'severe')!;
-    severe.physicalGeometryPassed = false;
+    const record = buildRecord(SEVERE_BASELINE, '2026-08-16');
+    const summary = structuredClone(SEVERE_BASELINE);
+    summary.cases[0].physicalGeometryPassed = false;
 
     const comparison = compareToRecord(record, summary);
     expect(comparison.status).toBe('regressed');
     expect(comparison.findings).toContainEqual(expect.objectContaining({
-      caseId: severe.id,
+      caseId: 'pdf-synthetic-severe',
       signal: 'physicalGeometry',
     }));
   });
 
   test('rejects semantic failure even for an already-severe raster baseline', () => {
-    const record = readRecord(recordFile)!;
-    const summary = measuredSummary(record);
-    const severe = summary.cases.find((entry) => entry.severity === 'severe')!;
-    severe.semanticChecksPassed = false;
+    const record = buildRecord(SEVERE_BASELINE, '2026-08-16');
+    const summary = structuredClone(SEVERE_BASELINE);
+    summary.cases[0].semanticChecksPassed = false;
 
     const comparison = compareToRecord(record, summary);
     expect(comparison.status).toBe('regressed');
     expect(comparison.findings).toContainEqual(expect.objectContaining({
-      caseId: severe.id,
+      caseId: 'pdf-synthetic-severe',
       signal: 'semantics',
     }));
+  });
+
+  test('remediation messages name THIS benchmark\'s refresh switch, not the other one', () => {
+    const record = buildRecord(SEVERE_BASELINE, '2026-08-16');
+    const drifted = structuredClone(SEVERE_BASELINE);
+    drifted.environment.libreoffice = 'LibreOffice 26.2.0.1 100(Build:1)';
+    const comparison = compareToRecord(record, drifted, {
+      expectComplete: true,
+      updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD',
+    });
+
+    expect(comparison.status).toBe('environment-changed');
+    expect(comparison.message).toContain('DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1');
+    // Applying the browser-page switch to this command refreshes nothing here and DOES
+    // overwrite the other benchmark's record, so it must not appear in this guidance.
+    expect(comparison.message).not.toContain('DOCXODUS_VISUAL_PARITY_UPDATE_RECORD');
+  });
+
+  test('the generated-PDF benchmark passes that switch name to the comparator', () => {
+    const spec = readFileSync(resolve(__dirname, 'generated-pdf-parity.spec.ts'), 'utf8');
+    expect(spec).toContain("updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD'");
+  });
+
+  test('the committed record still round-trips through the comparator unchanged', () => {
+    const record = readRecord(recordFile)!;
+    expect(compareToRecord(record, measuredSummary(record)).status).toBe('ok');
   });
 });

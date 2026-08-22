@@ -4879,7 +4879,15 @@ namespace Docxodus
             // The paragraph conversion might have created empty spans.
             // These can and should be removed because empty spans are
             // invalid in HTML5.
-            paragraph.Elements(Xhtml.span).Where(e => e.IsEmpty).Remove();
+            //
+            // `XElement.IsEmpty` is a SERIALIZATION property: it is true only for an element with
+            // no child nodes at all, so a span the converter built around an empty `w:t` carries an
+            // empty XText child, serializes as `<span></span>`, and slips through. Test for absent
+            // content instead. Child elements are what keeps a span that holds only `<br/>` or an
+            // image — content with no text — from being deleted along with the genuinely empty ones.
+            paragraph.Elements(Xhtml.span)
+                .Where(e => !e.HasElements && e.Value.Length == 0)
+                .Remove();
 
             foreach (var span in paragraph.Elements(Xhtml.span).ToList())
             {
@@ -7945,12 +7953,15 @@ namespace Docxodus
             }
         }
 
-        // Non-breaking spaces are not required if we use appropriate CSS, i.e., "white-space: pre-wrap;".
-        // We only need to make sure that empty w:p elements are translated into non-empty h:p elements,
-        // because empty h:p elements would be ignored by browsers.
-        // Further, in addition to not being required, non-breaking spaces would change the layout behavior
-        // of spans having consecutive spaces. Therefore, avoiding non-breaking spaces has the additional
-        // benefit of leading to a more faithful representation of the Word document in HTML.
+        // We only need to make sure that visually empty w:p elements are translated into non-empty
+        // h:p elements, because an h:p with no rendered inline content produces no line box.
+        //
+        // Ordinary run whitespace is NOT substituted here: consumers emit "span { white-space:
+        // pre-wrap; }" (see HtmlConversionOps), under which a real space keeps its own width, and
+        // substituting NBSP would change the layout behavior of consecutive spaces. The synthesized
+        // placeholder below is the single exception, and even there the literal is cosmetic —
+        // ConvertTextWithNbsp already maps a lone boundary space to U+00A0 downstream, so writing
+        // the placeholder as NBSP states the intent rather than changing the emitted bytes.
         private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
         {
             XElement element = node as XElement;
@@ -7977,14 +7988,16 @@ namespace Docxodus
                 // W.yearShort
                 if (element.Name == W.p)
                 {
-                    // Translate empty paragraphs to paragraphs having one run with a
-                    // non-breaking space. A normal space is eligible for the converter's
-                    // leading/trailing-whitespace suppression and can arrive in the browser as
-                    // an empty span. That removes the paragraph-mark line box entirely, leaves
-                    // a canonical paragraph anchor with zero geometry, and makes the strict
-                    // PageMap fail otherwise-valid documents (notably signature-table spacers).
-                    // NBSP is confined to this synthesized empty-paragraph placeholder; ordinary
-                    // run whitespace still uses pre-wrap without layout-changing substitution.
+                    // Translate visually empty paragraphs into paragraphs carrying one placeholder
+                    // run, so the paragraph mark keeps a line box.
+                    //
+                    // A `w:t` with no characters is not content. Word commonly serializes a blank
+                    // paragraph that way (signature-table spacer rows, for instance), and counting
+                    // it left the paragraph with nothing but a span the converter had already
+                    // emptied — no line box, a canonical paragraph anchor with zero geometry, and a
+                    // strict PageMap rejecting an otherwise-valid document. The emptied span itself
+                    // is removed in ProcessParagraph, so both spellings of "blank paragraph" reach
+                    // the browser as exactly one placeholder span.
                     bool hasContent = element
                         .Elements()
                         .Where(e => e.Name != W.pPr)

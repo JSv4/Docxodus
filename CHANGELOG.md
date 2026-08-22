@@ -20,9 +20,12 @@ All notable changes to this project will be documented in this file.
 - **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
   Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
   recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector
-  contracts are unconditional gates that no raster severity or disposition can waive; SSIM and ink
+  contracts are unconditional gates that no raster severity or disposition can waive (the chart
+  contract requires a chart case to emit vector path operations at all); SSIM and ink
   metrics ratchet separately against a numbers-only record, and text and link extraction are gated
-  independently so a text regression cannot hide behind an acceptable raster score. An environment
+  independently so a text regression cannot hide behind an acceptable raster score. Extraction from
+  the *reference* PDF is reported rather than gated, so a LibreOffice or Poppler change cannot fail
+  a contract that names Docxodus. An environment
   fingerprint covering LibreOffice, Chromium, Poppler and the font contract means a changed
   environment reports `environment-changed` rather than being misattributed to the renderer. The
   benchmark stays `workflow_dispatch`-only until #444 lands, per the release-gate ordering in the
@@ -613,15 +616,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
-- **Empty paragraphs lost their line box in paginated export (#443).** The converter synthesized
-  the placeholder run for a visually empty paragraph with a normal space, which is eligible for
-  its own leading/trailing-whitespace suppression and could reach the browser as an empty span.
-  That removed the paragraph-mark line box, left a canonical paragraph anchor with zero geometry,
-  and made the strict PageMap reject otherwise-valid documents — signature-table spacer rows most
-  visibly. The placeholder now uses a non-breaking space, confined to that synthesized run;
-  ordinary run whitespace still relies on `pre-wrap` with no layout-changing substitution. A
-  paragraph Word serialized as an explicit run with an empty `w:t` is treated the same as a
-  structurally empty `w:p`.
+- **Empty paragraphs lost their line box in paginated export (#443).** A paragraph Word serialized
+  as an explicit run holding an empty `w:t` — how it commonly writes a blank line, including
+  signature-table spacer rows — counted as having content, so it received no placeholder run and
+  reached the browser as nothing but a span the converter had already emptied. That left no
+  paragraph-mark line box, a canonical paragraph anchor with zero geometry, and a strict PageMap
+  rejecting otherwise-valid documents. An empty `w:t` is no longer treated as content, and the
+  cleanup that deletes empty spans now recognizes them: it tested `XElement.IsEmpty`, which is a
+  serialization property true only of an element with no child nodes at all, so a span built around
+  an empty `w:t` carried an empty text node and survived. Both spellings of a blank paragraph now
+  produce exactly one placeholder span.
 - **Chromium launch failures say why, and an unavailable sandbox is named as a host policy**
   (issue #525). The Node export runtime already attached the real reason a launch failed to
   `DocxodusExportError.cause`, but the CLI rendered only code, phase, message, remediation, and

@@ -144,7 +144,15 @@ interface SemanticEvidence {
     pdfjs: TextExtractorEvidence;
     pdftotext: TextExtractorEvidence;
   };
+  /** Candidate-side verdict. This, and only this, gates the run. */
   passed: boolean;
+  /**
+   * Whether the REFERENCE PDF also yielded the expected text. A failure here is a property of
+   * LibreOffice, Poppler, or the font contract — not of Docxodus — so it is reported rather than
+   * gated, exactly as a raster environment change is. Folding it into `passed` would fail an
+   * "unconditional" contract that names Docxodus for someone else's release.
+   */
+  referenceExtractionHealthy: boolean;
 }
 
 interface PdfParityPageResult extends PageMetrics {
@@ -206,8 +214,16 @@ function writeJsonAtomic(path: string, value: unknown): void {
 
 function writeTextAtomic(path: string, value: string): void {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, value, { flag: 'wx', mode: 0o600 });
-  renameSync(temporary, path);
+  try {
+    writeFileSync(temporary, value, { flag: 'wx', mode: 0o600 });
+    renameSync(temporary, path);
+  } catch (error) {
+    // The record path stages inside the repository, so a surviving .tmp would make the NEXT
+    // run's `git status --porcelain` dirty and refuse the refresh, blaming the implementation
+    // for this benchmark's own leftover file.
+    rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 function escapeHtml(value: unknown): string {
@@ -305,6 +321,23 @@ function assertPinnedSource(entry: PdfParityCorpusEntry, gitExecutable: string):
     throw new Error(`${entry.id} manifest does not bind the fixture at HEAD (${headBlob} != ${entry.source.gitBlob}).`);
   }
   return bytes;
+}
+
+/**
+ * Poppler resolves fonts through fontconfig for any face the PDF does not embed, so it has to run
+ * under the SAME contract both renderers used. The runner process does not inherit it — the
+ * Playwright config injects FONTCONFIG_FILE into `launchOptions.env` (the browser), not here — so
+ * omitting this leaves pdftoppm/pdftotext on host fonts while `summary.json` reports the pinned
+ * contract as though it applied, and a distro font update then reads as a renderer regression.
+ */
+function popplerEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TZ: 'UTC',
+    FONTCONFIG_FILE: FONT_CONTRACT_FILE,
+  };
 }
 
 function libreofficeEnv(work: string): NodeJS.ProcessEnv {
@@ -410,7 +443,7 @@ function textEvidence(text: string, entry: PdfParityCorpusEntry): TextExtractorE
 function popplerText(pdftotextExecutable: string, path: string): string {
   return execFileSync(pdftotextExecutable, ['-enc', 'UTF-8', '-nopgbrk', path, '-'], {
     encoding: 'utf8',
-    env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TZ: 'UTC' },
+    env: popplerEnv(),
     timeout: 120_000,
     maxBuffer: 6 * 1024 * 1024,
   });
@@ -439,11 +472,8 @@ function semanticEvidence(
       pdfjs: referencePdfjs,
       pdftotext: referencePoppler,
     },
-    passed: candidatePdfjs.passed
-      && candidatePoppler.passed
-      && candidateLinks.passed
-      && referencePdfjs.passed
-      && referencePoppler.passed,
+    passed: candidatePdfjs.passed && candidatePoppler.passed && candidateLinks.passed,
+    referenceExtractionHealthy: referencePdfjs.passed && referencePoppler.passed,
   };
 }
 
@@ -507,6 +537,9 @@ function summarizeCases(cases: PdfParityCaseResult[]) {
     pageCountMismatches: cases.filter((entry) => entry.pageCountDelta !== 0).length,
     physicalGeometryFailures: cases.filter((entry) => !entry.physicalGeometryPassed).length,
     semanticFailures: cases.filter((entry) => !entry.semanticChecksPassed).length,
+    // Reported, never gated: see SemanticEvidence.referenceExtractionHealthy.
+    referenceExtractionFailures: cases.filter((entry) =>
+      entry.semantic !== undefined && !entry.semantic.referenceExtractionHealthy).length,
     vectorFailures: cases.filter((entry) => !entry.vectorContentPassed).length,
     errors: cases.filter((entry) => entry.error !== undefined).length,
     severityCounts: Object.fromEntries(severityOrder.map((level) => [
@@ -767,9 +800,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
 
         const candidateRaster = rasterizePdf(candidatePdfPath, join(caseOutput, 'docxodus'), {
           executablePath: tools.pdftoppm.path,
+          env: popplerEnv(),
         });
         const referenceRaster = rasterizePdf(referencePdfPath, join(caseOutput, 'libreoffice'), {
           executablePath: tools.pdftoppm.path,
+          env: popplerEnv(),
         });
         if (candidateRaster.contractSha256 !== referenceRaster.contractSha256
           || candidateRaster.contractSha256 !== PDF_RASTER_CONTRACT_SHA256) {
@@ -863,7 +898,10 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         console.log(`[${caseIndex + 1}/${corpus.length}] ${entry.id}: `
           + `${result.docxodusPages}/${result.libreofficePages} pages, ${result.severity} `
           + `(${result.disposition.kind}), semantics ${semantic.passed ? 'pass' : 'FAIL'}, `
-          + `geometry ${physicalGeometryPassed ? 'pass' : 'FAIL'}`);
+          + `geometry ${physicalGeometryPassed ? 'pass' : 'FAIL'}`
+          + (semantic.referenceExtractionHealthy
+            ? ''
+            : ' [reference extraction degraded — environment, not gated]'));
       } catch (error) {
         const failedReport = error && typeof error === 'object'
           && 'report' in error ? (error as { report?: unknown }).report : undefined;
@@ -930,7 +968,10 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       throw new Error('Generated-PDF ratchet record is missing. Run a complete benchmark with '
         + 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 and commit the numbers-only record.');
     }
-    const comparison = compareToRecord(existingRecord, summary, { expectComplete: complete });
+    const comparison = compareToRecord(existingRecord, summary, {
+      expectComplete: complete,
+      updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD',
+    });
     writeJsonAtomic(join(outputRoot, 'ratchet-comparison.json'), comparison);
     console.log(`Generated-PDF ratchet [${comparison.status}]: ${comparison.message}`);
     if (!updateRecord && process.env.DOCXODUS_VISUAL_PARITY_RATCHET !== '0') {

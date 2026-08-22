@@ -37,7 +37,10 @@ function validResult(): Record<string, any> {
       source: { rawPackageBytesDigest: 'b'.repeat(64) },
       options: { reviewProfile: 'final', commentProfile: 'hidden' },
       environment: { rendererFingerprint: fingerprint, verification: 'nodeVerified', fidelityTier: 'releaseBaselined' },
-      pages: pageMap.pages,
+      // Deliberately a separate array: sharing the reference with pageMap.pages makes every
+      // mutation below change both sides at once, so the report-vs-PageMap divergence check
+      // could be deleted with both tests still green.
+      pages: structuredClone(pageMap.pages),
       warnings: [],
       bindings: { pdfDigest: sha256(pdf), pageMapDigest: sha256(canonicalJson(pageMap)) },
     },
@@ -67,6 +70,9 @@ test.describe('supported generated-PDF result verification', () => {
       (value: Record<string, any>) => { value.renderReport.environment.verification = 'browserObserved'; },
       (value: Record<string, any>) => { value.renderReport.bindings.pdfDigest = 'd'.repeat(64); },
       (value: Record<string, any>) => { value.warnings.push({ code: 'unexpected' }); },
+      // Only the report's inventory moves — the clause that exists to catch exactly this.
+      (value: Record<string, any>) => { value.renderReport.pages[0].width = 611; },
+      (value: Record<string, any>) => { value.renderReport.pages.push(value.renderReport.pages[0]); },
     ];
     for (const mutate of mutations) {
       const value = validResult();
