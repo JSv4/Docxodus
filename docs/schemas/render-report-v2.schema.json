@@ -268,6 +268,10 @@
         "resolutionDigest": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "resolverDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -744,7 +748,8 @@
             "sampleCodePointCount",
             "sampleDigest",
             "status",
-            "source"
+            "source",
+            "verified"
           ],
           "properties": {
             "requestId": {
@@ -883,6 +888,13 @@
                   "type": "boolean"
                 }
               }
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "loadFailureDetail": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }

@@ -109,7 +109,8 @@ describe("verified Node font runtime", () => {
     );
     assert.equal(catalog.faces.length, 1);
     assert.equal(catalog.faces[0].sha256, fileSha256);
-    assert.equal(catalog.faces[0].licenseEvidence.kind, "attested");
+    assert.equal(catalog.faces[0].license.ok, true);
+    assert.equal(catalog.faces[0].license.evidence.kind, "attested");
 
     // Mutating the path after discovery cannot alter the already parsed/injected snapshot.
     await writeFile(target, Buffer.alloc(original.byteLength, 0));
@@ -249,8 +250,8 @@ describe("verified Node font runtime", () => {
       (error) => error.code === "resource_policy_failure" && /forbids subsetting/.test(error.message),
     );
     assert.notEqual(
-      htmlCatalog.faces[0].licenseEvidence.identity,
-      noSubsetCatalog.faces[0].licenseEvidence.identity,
+      htmlCatalog.faces[0].license.evidence.identity,
+      noSubsetCatalog.faces[0].license.evidence.identity,
     );
   });
 
@@ -479,6 +480,41 @@ describe("verified Node font runtime", () => {
         requests: [request().requests[0], { ...request().requests[0], id: "face-2" }],
       }, new AbortController().signal),
       (error) => error.code === "resource_limit" && error.phase === "font_loading",
+    );
+  });
+
+  test("rejects each malformed field of a font request from the page, not just the family name", async () => {
+    const { directory } = await fontDirectory();
+    const bytes = await readFile(fixture);
+    await writeFile(join(directory, "face.woff2"), bytes);
+    const resolver = createNodeFontResolver(
+      [directory],
+      [attestation(digest(bytes))],
+      DEFAULT_EXPORT_RESOURCE_LIMITS,
+    );
+    const signal = new AbortController().signal;
+    const rejectsPolicy = (overrides) => assert.rejects(
+      resolver({ schemaVersion: 1, requests: [{ ...request().requests[0], ...overrides }] }, signal),
+      (error) => error.code === "resource_policy_failure" && error.phase === "font_loading",
+      `expected rejection for ${JSON.stringify(overrides)}`,
+    );
+    await rejectsPolicy({ extraneousField: true });
+    await rejectsPolicy({ id: "" });
+    await rejectsPolicy({ id: "has a space" });
+    await rejectsPolicy({ familyKinds: ["named"] }); // shorter than the two-entry familyStack
+    await rejectsPolicy({ style: "bogus" });
+    await rejectsPolicy({ weight: 0 });
+    await rejectsPolicy({ weight: 1001 });
+    await rejectsPolicy({ stretch: 49 });
+    await rejectsPolicy({ stretch: 201 });
+    await rejectsPolicy({ sampleCodePoints: [90, 32] }); // descending, not sorted
+    await rejectsPolicy({ sampleCodePoints: [32, 32] }); // duplicate, not strictly increasing
+    await assert.rejects(
+      resolver({
+        schemaVersion: 1,
+        requests: [request().requests[0], { ...request().requests[0] }],
+      }, signal),
+      (error) => error.code === "resource_policy_failure" && /duplicate ids/.test(error.message),
     );
   });
 });

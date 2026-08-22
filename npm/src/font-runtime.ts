@@ -1,3 +1,4 @@
+import { canonicalJson, isWellFormedUnicode } from "./canonical.js";
 import {
   FONT_RESOLVER_CONTRACT_ID,
   FONT_RESOLVER_SCHEMA_VERSION,
@@ -29,6 +30,10 @@ export interface BrowserFontResult {
   identity: FontConfigurationIdentity;
   resolutions: FontResolution[];
   renderedTextNodeCount: number;
+  /** False only for the no-resolver fallback (observedFonts): every resolution is then
+   * `source: "browser"` by construction, which callers must not confuse with a configured
+   * resolver's own `missing` outcome (also `source: "browser"`, but authoritative). */
+  resolverConfigured: boolean;
 }
 
 export interface BrowserFontTask {
@@ -39,16 +44,19 @@ export interface BrowserFontTask {
 export class BrowserFontError extends Error {
   readonly kind: "invalid_response" | "resource_limit";
   readonly detail?: string;
+  readonly cause?: unknown;
 
   constructor(
     kind: BrowserFontError["kind"],
     message: string,
     detail?: string,
+    cause?: unknown,
   ) {
     super(message);
     this.name = "BrowserFontError";
     this.kind = kind;
     this.detail = detail;
+    this.cause = cause;
   }
 }
 
@@ -121,47 +129,6 @@ const FORMAT_HINT = new Map<FontFileFormat, string>([
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function isWellFormedUnicode(value: string): boolean {
-  for (let index = 0; index < value.length; index++) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(++index);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function canonicalValue(value: unknown): unknown {
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    if (!isWellFormedUnicode(value)) {
-      throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
-    }
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("Canonical JSON does not support non-finite numbers");
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (Array.isArray(value)) return value.map(canonicalValue);
-  if (typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort(compareText)) {
-      const member = (value as Record<string, unknown>)[key];
-      if (member !== undefined) result[key] = canonicalValue(member);
-    }
-    return result;
-  }
-  throw new TypeError(`Canonical JSON does not support ${typeof value}`);
-}
-
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalValue(value));
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -473,6 +440,8 @@ function requireObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+// Same shape as npm-export/src/fonts/resolver.ts's exactKeys, duplicated rather than shared
+// across the package boundary; each closes over its own error type.
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const unknown = Object.keys(record).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
@@ -540,6 +509,8 @@ function canonicalBase64(value: unknown, expectedBytes: number, label: string): 
   return bytes;
 }
 
+// Duplicated (not shared) with npm-export/src/fonts/discovery.ts's readU32 — that package
+// can't reach this realm's internals, and the two throw genuinely different error types.
 function readU32(bytes: Uint8Array, offset: number): number {
   if (bytes.byteLength < offset + 4) {
     throw new BrowserFontError("invalid_response", "A configured webfont has a truncated format header.");
@@ -572,6 +543,9 @@ function expandedFontByteLength(
   return expanded;
 }
 
+// The signature bytes asserted here are also decoded independently by npm-export's
+// discovery.ts (decodedFormat), which detects a discovered file's own format from the same
+// bytes. A new font format needs both updated, or discovery will accept what this rejects.
 function fontSignatureMatches(bytes: Uint8Array, format: FontFileFormat): boolean {
   if (bytes.length < 4) return false;
   const signature = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
@@ -1070,6 +1044,7 @@ async function observedFonts(
       status: probes.get(request.id) === false ? "missing" : "unverified",
       source: "browser",
       glyphCoverage: "unverified",
+      verified: false,
     });
   }
   const resolutionDigest = await digestJson({ contractDigest, requests: inventory.requests, resolutions });
@@ -1082,6 +1057,7 @@ async function observedFonts(
     },
     resolutions,
     renderedTextNodeCount: inventory.renderedTextNodeCount,
+    resolverConfigured: false,
   };
 }
 
@@ -1113,9 +1089,16 @@ async function configuredFonts(
     responseValue = await abortable(resolver(resolverRequest, signal), signal);
   } catch (cause) {
     if (signal.aborted) throw cause;
+    // The resolver is a trusted caller policy authority, not necessarily this validated
+    // wire contract — a Node-backed resolver's own filesystem/policy failure crosses here
+    // with its original code/phase/remediation intact (see reconstructDocxodusExportError
+    // in export-browser.ts); preserve it as `cause` so rethrowBrowserFontError can report
+    // the real failure instead of a generic "fix your resolver" message.
     throw new BrowserFontError(
       "invalid_response",
       `The configured font resolver failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      undefined,
+      cause,
     );
   } finally {
     pending.delete("resolver");
@@ -1125,12 +1108,16 @@ async function configuredFonts(
     requests: inventory.requests,
     response: responseIdentityMaterial(validated.response),
   });
+  // A missing document realm is an engine invariant break, not a per-face decode failure —
+  // check it once, outside the per-face catch below, so it fails loud instead of being
+  // silently reclassified as "this one font is corrupt" for every face in flight.
+  const view = document.defaultView;
+  if (!view) throw new BrowserFontError("invalid_response", "The render document has no font realm.");
   const successfulFaces = new Set<string>();
+  const faceLoadFailures = new Map<string, string>();
   for (const id of validated.faces.keys()) pending.add(`face:${id}`);
   await forEachBounded(Array.from(validated.faces), async ([id, face]) => {
     try {
-      const view = document.defaultView;
-      if (!view) throw new Error("The render document has no font realm.");
       const candidate = new view.FontFace("__DocxodusValidation", new Uint8Array(face.bytes).buffer, {
         style: face.record.style,
         weight: String(face.record.weight),
@@ -1140,6 +1127,12 @@ async function configuredFonts(
       successfulFaces.add(id);
     } catch (error) {
       if (signal.aborted) throw error;
+      // The Font Loading API's own reason (SyntaxError for undecodable bytes, NetworkError,
+      // ...) is the one piece of information that tells a caller *why* a face failed — it
+      // never otherwise reaches the render report.
+      faceLoadFailures.set(id, error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error));
     } finally {
       pending.delete(`face:${id}`);
     }
@@ -1199,6 +1192,7 @@ async function configuredFonts(
   }
 
   const fallbackAvailable = new Map<string, boolean>();
+  const requestLoadFailures = new Map<string, string>();
   if (document.fonts) {
     await forEachBounded(inventory.requests, async (request) => {
       const synthetic = syntheticByRequest.get(request.id);
@@ -1210,6 +1204,7 @@ async function configuredFonts(
             sample,
           ), signal);
           if (loaded.length === 0) {
+            requestLoadFailures.set(request.id, "The face decoded, but the browser did not apply it to the requested style.");
             successfulRequests.delete(request.id);
             syntheticByRequest.delete(request.id);
             for (const use of usesByRequest.get(request.id) ?? []) restoreUse(use);
@@ -1217,11 +1212,18 @@ async function configuredFonts(
         } else {
           const specification = fontSpecification(request, request.familyStack, request.familyKinds);
           const sample = String.fromCodePoint(...request.sampleCodePoints.slice(0, 4096)) || " ";
+          // document.fonts.check() cannot answer this — see familyAvailable() above for why.
+          // Measure the same way observedFonts() does instead of asking check().
           await abortable(document.fonts.load(specification, sample), signal);
-          fallbackAvailable.set(request.id, document.fonts.check(specification, sample));
+          fallbackAvailable.set(request.id, requestedFamilyAvailable(document, request));
         }
       } catch (error) {
         if (signal.aborted) throw error;
+        // Same rationale as faceLoadFailures above: capture what the Font Loading API says,
+        // not just that it rejected.
+        requestLoadFailures.set(request.id, error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error));
         fallbackAvailable.set(request.id, false);
         successfulRequests.delete(request.id);
         syntheticByRequest.delete(request.id);
@@ -1243,10 +1245,23 @@ async function configuredFonts(
     const outcome = outcomeById.get(request.id)!;
     const selected = outcome.faceId ? validated.faces.get(outcome.faceId)?.record : undefined;
     const loadFailed = selected !== undefined && !successfulRequests.has(request.id);
+    // The face's own decode failure (a corrupt byte stream) is the more fundamental reason
+    // when both are present; the request-level detail only ever fires once a face already
+    // decoded successfully but the browser then declined to apply it.
+    const loadFailureDetail = loadFailed
+      ? (outcome.faceId && faceLoadFailures.get(outcome.faceId)) || requestLoadFailures.get(request.id)
+      : undefined;
     const browserFallbackAvailable = !selected && outcome.status === "missing"
       ? fallbackAvailable.get(request.id) === true
       : undefined;
     const glyphCoverage = selected ? outcome.glyphCoverage : "unverified";
+    // strictFonts' whole question, computed once here where every raw signal is in scope: an
+    // exact, digest-identified, license-evidenced face with complete coverage that actually
+    // loaded. `selected` truthy already implies `source` is configured/attested and
+    // `fileSha256`/`licenseEvidence` are set below (both are always present on a validated
+    // face record), so only faceMatch and glyphCoverage are independent conditions here.
+    const verified = !loadFailed && outcome.status === "resolved" && selected !== undefined
+      && outcome.faceMatch === "exact" && glyphCoverage === "complete";
     resolutions.push({
       ...baseResolution(request),
       sampleDigest: await digestJson(request.sampleCodePoints),
@@ -1269,6 +1284,8 @@ async function configuredFonts(
       ...(glyphCoverage ? { glyphCoverage } : {}),
       ...(outcome.missingCodePoints ? { missingCodePointCount: outcome.missingCodePoints.length } : {}),
       ...(browserFallbackAvailable === undefined ? {} : { browserFallbackAvailable }),
+      ...(loadFailureDetail ? { loadFailureDetail } : {}),
+      verified,
     });
   }
   const resolutionDigest = await digestJson({ resolverDigest, resolutions });
@@ -1278,9 +1295,11 @@ async function configuredFonts(
       substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION,
       substitutionContractDigest: contractDigest,
       resolutionDigest,
+      resolverDigest,
     },
     resolutions,
     renderedTextNodeCount: inventory.renderedTextNodeCount,
+    resolverConfigured: true,
   };
 }
 

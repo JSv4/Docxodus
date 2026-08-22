@@ -20,20 +20,24 @@ All notable changes to this project will be documented in this file.
 - **Verified font runtime (#442).** `fontDirectories` is live: the Node adapter
   deterministically discovers TTF/OTF/WOFF/WOFF2 files across the ordered directories,
   rejects symlinks and escaping or changing paths, reads family and face metadata, hashes
-  every file, and gates injection on OS/2 `fsType` — restricted-license faces are never
-  embedded, and WOFF/WOFF2 files whose embedding rights cannot be derived require an
-  explicit caller attestation rather than being assumed permitted. The resolver reaches the
-  isolated page as a Playwright binding, never as serialized bytes, so the materializer only
-  ever sees the versioned `FontResolver` contract and the page never gains filesystem access.
-  Resolution records now carry the request identity, family stack and kinds, style, weight,
-  stretch, sample digest, resolved face, file digest and version, face match, metric
-  compatibility, glyph coverage and license evidence, and the renderer fingerprint binds the
-  resulting configuration identity. `strictFonts` finally enforces: it rejects any outcome
-  that is not an exact, digest-identified, license-evidenced face with complete coverage,
-  replacing the `unsupported_runtime` stub that previously rejected every configured font
-  environment outright. The visual-parity font contract now derives from the production
-  substitution contract instead of duplicating it, keeping only deployment-specific package
-  hints on the test side.
+  every file, and gates injection on OS/2 `fsType` — a restricted-license face fails the
+  export closed rather than being silently dropped or substituted, and every WOFF/WOFF2 file
+  requires an explicit caller attestation regardless of what its OS/2 bits would otherwise
+  permit, since embedding rights cannot be derived from the compressed format alone. The
+  resolver reaches the isolated page as a Playwright binding, never as serialized bytes, so
+  the materializer only ever sees the versioned `FontResolver` contract and the page never
+  gains filesystem access; a Node-backed resolver's own failure (a rejected symlink, a
+  resource limit) crosses back with its original code and remediation intact rather than
+  collapsing into a generic message. Resolution records now carry the request identity,
+  family stack and kinds, style, weight, stretch, sample digest, resolved face, file digest
+  and version, face match, metric compatibility, glyph coverage, license evidence, and a
+  single `verified` flag standing in for the whole strictFonts question, and the renderer
+  fingerprint binds the resulting configuration identity. `strictFonts` finally enforces: it
+  rejects any outcome that is not an exact, digest-identified, license-evidenced face with
+  complete coverage, replacing the `unsupported_runtime` stub that previously rejected every
+  configured font environment outright. The visual-parity font contract now derives from the
+  production substitution contract instead of duplicating it, keeping only deployment-specific
+  package hints on the test side.
 
 - **Deterministic print-readiness barrier (#441).** The export barrier now proves what it used
   to assume. Requested font families are probed for actual availability instead of being taken

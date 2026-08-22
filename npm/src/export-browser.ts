@@ -7,6 +7,7 @@
  */
 
 import limitsContractJson from "./export-resource-limits-v1.json";
+import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -23,8 +24,6 @@ import {
 import {
   BrowserFontError,
   createBrowserFontTask,
-  inventoryDocumentFontRequests,
-  parseCssFontFamily,
   type BrowserFontResult,
 } from "./font-runtime.js";
 import type {
@@ -403,6 +402,75 @@ export class DocxodusExportError extends Error {
       ...(this.report === undefined ? {} : { report: this.report }),
     };
   }
+}
+
+const RECONSTRUCTIBLE_ERROR_CODES = new Set<DocxodusExportErrorCode>([
+  "invalid_argument",
+  "invalid_document",
+  "source_digest_mismatch",
+  "document_version_unrepresentable",
+  "conversion_failure",
+  "browser_launch_failure",
+  "resource_policy_failure",
+  "readiness_timeout",
+  "operation_cancelled",
+  "pagination_failure",
+  "pdf_write_failure",
+  "output_write_failure",
+  "output_verification_failure",
+  "resource_limit",
+  "unsupported_runtime",
+  "filesystem_failure",
+]);
+
+const RECONSTRUCTIBLE_PHASES = new Set<ExportPhase>([
+  "input_validation",
+  "package_preflight",
+  "browser_launch",
+  "wasm_initialization",
+  "docx_conversion",
+  "font_loading",
+  "image_decoding",
+  "chart_svg_materialization",
+  "pagination",
+  "running_story_placement",
+  "page_tree_stability",
+  "pdf_print",
+  "output_verification",
+  "output_write",
+  "filesystem_commit",
+  "cleanup",
+]);
+
+/**
+ * Rebuilds a `DocxodusExportError` from a `DocxodusExportError.toJSON()`-shaped object that
+ * crossed a serialization boundary (a Node-backed `FontResolver` reaching the page as a
+ * Playwright binding, for instance), so the original code/phase/remediation survive instead
+ * of collapsing into a generic message string. Returns `undefined` for anything that isn't
+ * recognizably a serialized `DocxodusExportError`.
+ */
+export function reconstructDocxodusExportError(value: unknown): DocxodusExportError | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.code !== "string" || !RECONSTRUCTIBLE_ERROR_CODES.has(record.code as DocxodusExportErrorCode)) {
+    return undefined;
+  }
+  if (typeof record.phase !== "string" || !RECONSTRUCTIBLE_PHASES.has(record.phase as ExportPhase)) {
+    return undefined;
+  }
+  if (typeof record.message !== "string" || typeof record.remediation !== "string") return undefined;
+  return new DocxodusExportError(
+    record.code as DocxodusExportErrorCode,
+    record.phase as ExportPhase,
+    record.message,
+    record.remediation,
+    {
+      detail: typeof record.detail === "string" ? record.detail : undefined,
+      partUri: typeof record.partUri === "string" ? record.partUri : undefined,
+      anchorId: typeof record.anchorId === "string" ? record.anchorId : undefined,
+      resource: typeof record.resource === "string" ? record.resource : undefined,
+    },
+  );
 }
 
 interface NormalizedOptions {
@@ -1064,52 +1132,7 @@ async function loadRuntimeAssetIdentity(
   };
 }
 
-function canonicalValue(value: unknown): unknown {
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    assertWellFormedUnicode(value);
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("Canonical JSON does not support non-finite numbers");
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (Array.isArray(value)) return value.map(canonicalValue);
-  if (typeof value === "object") {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError("Canonical JSON supports only plain objects");
-    }
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      assertWellFormedUnicode(key);
-      const member = (value as Record<string, unknown>)[key];
-      if (member !== undefined) result[key] = canonicalValue(member);
-    }
-    return result;
-  }
-  throw new TypeError(`Canonical JSON does not support ${typeof value}`);
-}
-
-function assertWellFormedUnicode(value: string): void {
-  for (let index = 0; index < value.length; index++) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
-      }
-      index++;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      throw new TypeError("Canonical JSON does not support unpaired UTF-16 surrogates");
-    }
-  }
-}
-
-/** Serialize report/schema values with recursively sorted object keys and no insignificant space. */
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalValue(value));
-}
+export { canonicalJson };
 
 async function canonicalMaterialDigest(domain: string, value: unknown): Promise<string> {
   if (!/^[\x20-\x7e]+$/.test(domain)) {
@@ -1425,12 +1448,6 @@ function addResource(state: ExecutionState, resource: ResourceOutcome): void {
 function addUnsupportedContent(state: ExecutionState, outcome: UnsupportedContentOutcome): void {
   enforceDiagnosticAdmission(state, 1);
   state.unsupportedContent.push(outcome);
-}
-
-function addFont(state: ExecutionState, font: FontResolution): void {
-  enforceLimit(state.fonts.length + 1, state.limits.fontRequests, "fontRequests", "font_loading");
-  enforceDiagnosticAdmission(state, 1);
-  state.fonts.push(font);
 }
 
 function enforceDiagnosticAdmission(state: ExecutionState, additional: number): void {
@@ -2305,6 +2322,7 @@ function recordFontResolution(
         message: `The configured font face for ${resolution.requestedFamily} could not be decoded or loaded.`,
         remediation: "Replace the configured font with a valid browser-supported face.",
         resource: resolution.requestedFamily,
+        ...(resolution.loadFailureDetail ? { detail: resolution.loadFailureDetail } : {}),
       });
     }
     if (resolution.status === "substituted") {
@@ -2348,8 +2366,14 @@ function recordFontResolution(
       });
     }
   }
+  // Without a configured resolver every resolution is source: "browser" by construction, so
+  // that alone signals an unattested environment. With one configured, a family a resolver
+  // authoritatively reports missing is also source: "browser" (there is no face to attribute
+  // it to) but already carries its own accurate font_unavailable warning above — it must not
+  // also claim the whole environment is unattested, or misdirect the caller to "use a
+  // resolver" when they already have.
   if (result.resolutions.some((resolution) =>
-    resolution.status === "unverified" || resolution.source === "browser")) {
+    resolution.status === "unverified" || (!result.resolverConfigured && resolution.source === "browser"))) {
     addWarning(state, {
       code: "font_environment_unverified",
       severity: "warning",
@@ -2360,14 +2384,9 @@ function recordFontResolution(
   }
   // strictFonts is the gate #441 deliberately left to this issue. It demands an exact,
   // digest-identified, license-evidenced face with complete coverage — anything less is
-  // a font environment the caller asked not to publish from.
-  const strictFailures = result.resolutions.filter((resolution) =>
-    resolution.status !== "resolved"
-    || (resolution.source !== "configured" && resolution.source !== "attested")
-    || resolution.faceMatch !== "exact"
-    || resolution.glyphCoverage !== "complete"
-    || !resolution.fileSha256
-    || !resolution.licenseEvidence);
+  // a font environment the caller asked not to publish from. `verified` is computed once,
+  // where every raw signal is in scope, by the resolution's producer (font-runtime.ts).
+  const strictFailures = result.resolutions.filter((resolution) => !resolution.verified);
   if (options.strictFonts && strictFailures.length > 0) {
     fail("resource_policy_failure", "font_loading",
       "Strict font policy rejected a non-exact, unverified, or incompletely covered font outcome.",
@@ -2379,6 +2398,21 @@ function recordFontResolution(
 
 function rethrowBrowserFontError(error: unknown): never {
   if (error instanceof BrowserFontError) {
+    // A Node-backed resolver's own failure (a symlink in a configured directory, a resource
+    // limit discovery hit) crosses with its real code/phase/remediation intact — see
+    // reconstructDocxodusExportError, called by the resolver wrapper before it throws. Prefer
+    // that over the generic "malformed resolver response" framing below, which is only
+    // accurate for a resolver that replied but violated the wire contract.
+    if (error.cause instanceof DocxodusExportError) {
+      const original = error.cause;
+      fail(original.code, original.phase, original.message, original.remediation, {
+        detail: original.detail,
+        partUri: original.partUri,
+        anchorId: original.anchorId,
+        resource: original.resource,
+        cause: error,
+      });
+    }
     fail(
       error.kind === "resource_limit" ? "resource_limit" : "resource_policy_failure",
       "font_loading",
@@ -3469,13 +3503,22 @@ export async function convertDocxToPaginatedHtml(
             // differently the second time makes the page tree unreproducible and would bind
             // the fingerprint to a configuration the output was never laid out with, so it
             // is rejected here rather than surfacing later as page-tree instability.
-            if (attempt === 1) {
-              firstAttemptFontIdentity = resolved.identity.resolutionDigest;
-            } else if (firstAttemptFontIdentity !== undefined
-              && firstAttemptFontIdentity !== resolved.identity.resolutionDigest) {
-              fail("resource_policy_failure", "font_loading",
-                "The font resolver returned a different configuration for the second pristine attempt.",
-                "Return one deterministic resolution for an identical set of font requests.");
+            //
+            // Compared on resolverDigest, not the broader resolutionDigest: the latter also
+            // reflects browser-observed load outcomes (did this face happen to decode this
+            // attempt), which is not a claim about the resolver's determinism and would
+            // misattribute a flaky decode as "the resolver returned a different configuration."
+            // resolverDigest is undefined with no resolver configured, in which case there is
+            // no resolver-drift question to ask.
+            if (resolved.identity.resolverDigest !== undefined) {
+              if (attempt === 1) {
+                firstAttemptFontIdentity = resolved.identity.resolverDigest;
+              } else if (firstAttemptFontIdentity !== undefined
+                && firstAttemptFontIdentity !== resolved.identity.resolverDigest) {
+                fail("resource_policy_failure", "font_loading",
+                  "The font resolver returned a different configuration for the second pristine attempt.",
+                  "Return one deterministic resolution for an identical set of font requests.");
+              }
             }
           });
         } finally {

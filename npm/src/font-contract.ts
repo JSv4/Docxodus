@@ -188,6 +188,16 @@ export interface FontResolution {
   /** Whether Chromium can paint some fallback despite an authoritative resolver miss. */
   browserFallbackAvailable?: boolean;
   licenseEvidence?: FontLicenseEvidence;
+  /** The Font Loading API's own reason, present only when `status` is `load_failed`. */
+  loadFailureDetail?: string;
+  /**
+   * An exact, digest-identified, license-evidenced face with complete glyph coverage that
+   * actually loaded — the single question `strictFonts` gates on. Computed once at the source
+   * that has every raw signal in scope, so a direct reader of the render report never has to
+   * separately remember that `fileSha256`/`faceMatch`/`glyphCoverage` describe the *selected*
+   * face and say nothing on their own about whether it loaded (see `status`).
+   */
+  verified: boolean;
 }
 
 export interface FontConfigurationIdentity {
@@ -195,4 +205,11 @@ export interface FontConfigurationIdentity {
   substitutionContractVersion: typeof FONT_SUBSTITUTION_CONTRACT_VERSION;
   substitutionContractDigest: string;
   resolutionDigest: string;
+  /**
+   * Present only when a resolver was configured: a digest of the resolver's own response,
+   * excluding browser-observed load outcomes. Lets the cross-attempt drift check compare what
+   * the resolver actually answered, rather than `resolutionDigest`, which also reflects
+   * whether each face happened to decode in the browser this particular attempt.
+   */
+  resolverDigest?: string;
 }

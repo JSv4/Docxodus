@@ -71,11 +71,9 @@ export interface BrowserRenderOutcome {
   requestLog: RequestLogEntry[];
 }
 
-interface FontBindingResponse {
-  ok: boolean;
-  result?: FontResolverResponse;
-  error?: ReturnType<DocxodusExportError["toJSON"]>;
-}
+type FontBindingResponse =
+  | { ok: true; result: FontResolverResponse }
+  | { ok: false; error: ReturnType<DocxodusExportError["toJSON"]> };
 
 interface BridgeResponse {
   ok: boolean;

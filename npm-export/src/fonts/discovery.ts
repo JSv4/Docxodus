@@ -39,8 +39,7 @@ export interface ConfiguredFontFace {
   bytes: Uint8Array;
   codePoints: readonly number[];
   permittedOutputs: readonly RenderOutput[];
-  licenseEvidence?: FontLicenseEvidence;
-  licenseFailure?: string;
+  license: { ok: true; evidence: FontLicenseEvidence } | { ok: false; failure: string };
 }
 
 export interface FontCatalog {
@@ -81,9 +80,10 @@ function underRoot(root: string, candidate: string): boolean {
     && !isAbsolute(fromRoot));
 }
 
-function fontError(message: string, remediation: string, detail?: string): never {
+function fontError(message: string, remediation: string, detail?: string, cause?: unknown): never {
   exportError("resource_policy_failure", "font_loading", message, remediation, {
     ...(detail ? { detail } : {}),
+    ...(cause === undefined ? {} : { cause }),
   });
 }
 
@@ -131,6 +131,9 @@ function safeMetadata(value: unknown, label: string, required = true): string | 
   return normalized;
 }
 
+// Duplicated (not shared) with npm/src/font-runtime.ts's readU32: this realm has no access to
+// that package's internals, and the logic is identical enough that inlining beats a public
+// cross-package export just to save these four lines.
 function readU32(bytes: Uint8Array, offset: number): number {
   if (bytes.byteLength < offset + 4) {
     fontError("A configured font has a truncated format header.", "Replace the malformed font file.");
@@ -138,6 +141,9 @@ function readU32(bytes: Uint8Array, offset: number): number {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false);
 }
 
+// The signature bytes here (wOFF/wOF2/OTTO/0x00010000/"true") are also asserted independently
+// by npm/src/font-runtime.ts's fontSignatureMatches, which verifies a resolver's declared
+// format against the bytes it actually sent. A new font format needs both updated.
 function decodedFormat(bytes: Uint8Array, extension: string): DecodedFormat {
   if (bytes.byteLength < 4) {
     fontError("A configured font is too short to contain a valid header.", "Replace the malformed font file.");
@@ -315,7 +321,8 @@ async function readStableFontFile(
     if (cause instanceof DocxodusExportError) throw cause;
     if (signal?.aborted) throw signal.reason;
     return fontError(`Configured ${label} could not be read safely.`,
-      "Verify font-directory permissions and remove path aliases.");
+      "Verify font-directory permissions and remove path aliases.",
+      cause instanceof Error ? cause.message : undefined, cause);
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -352,7 +359,8 @@ async function directoryEntries(
   } catch (cause) {
     if (cause instanceof DocxodusExportError) throw cause;
     fontError("A configured font directory could not be enumerated safely.",
-      "Verify directory permissions and remove unstable entries.");
+      "Verify directory permissions and remove unstable entries.",
+      cause instanceof Error ? cause.message : undefined, cause);
   } finally {
     await directory?.close().catch(() => undefined);
   }
@@ -395,7 +403,8 @@ export async function discoverFontCatalog(
     } catch (cause) {
       if (cause instanceof DocxodusExportError) throw cause;
       fontError(`fontDirectory[${index}] could not be resolved safely.`,
-        "Verify the directory exists and is readable.");
+        "Verify the directory exists and is readable.",
+        cause instanceof Error ? cause.message : undefined, cause);
     }
   }
 
@@ -422,17 +431,30 @@ export async function discoverFontCatalog(
         entryCount,
         limitSnapshot.fontDirectoryEntries,
       );
+      const batchStart = entryCount;
       entryCount += entries.length;
       const childDirectories: DirectorySnapshot[] = [];
-      for (const entry of entries) {
+      for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+        const entry = entries[entryIndex];
         if (signal?.aborted) throw signal.reason;
         const candidate = join(current.path, entry.name);
         let info: BigIntStats;
         try {
           info = await lstat(candidate, { bigint: true });
-        } catch {
-          fontError(`fontDirectory[${directoryIndex}] entry ${entryCount} changed during traversal.`,
-            "Retry after the font deployment is stable.");
+        } catch (cause) {
+          // A stat failure here isn't uniformly "the deployment changed underneath us" — a
+          // permission problem needs different advice than a genuine ENOENT race, and either
+          // way the real errno is the one thing that tells an operator what to actually fix.
+          const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : undefined;
+          const permission = code === "EACCES" || code === "EPERM";
+          fontError(
+            `fontDirectory[${directoryIndex}] entry ${batchStart + entryIndex} ` +
+            (permission ? "could not be read." : "changed during traversal."),
+            permission
+              ? "Grant the render host read access to the configured font directory."
+              : "Retry after the font deployment is stable.",
+            code, cause,
+          );
         }
         if (info.isSymbolicLink()) {
           fontError(`fontDirectory[${directoryIndex}] contains a symlink.`,
@@ -498,9 +520,9 @@ export async function discoverFontCatalog(
             snapshot.bytes.byteOffset,
             snapshot.bytes.byteLength,
           ));
-        } catch {
+        } catch (cause) {
           fontError(`fontDirectory[${directoryIndex}] contains a malformed font.`,
-            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256);
+            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
         }
         let face: ConfiguredFontFace;
         try {
@@ -527,6 +549,14 @@ export async function discoverFontCatalog(
             : requiresAttestation && !attested
               ? "A WOFF/WOFF2 font requires an exact embedding-rights attestation."
               : !licenseEvidence ? os2License.failure : undefined;
+          // licenseEvidence/licenseFailure above are always exactly one-or-the-other, never
+          // both and never neither — every branch of os2LicenseEvidence() and the two
+          // requiresAttestation checks maintain that. Express it once here rather than
+          // leaving every consumer to re-derive "did licensing succeed" from two independently
+          // optional fields.
+          const license = licenseEvidence
+            ? { ok: true as const, evidence: Object.freeze({ ...licenseEvidence }) }
+            : { ok: false as const, failure: licenseFailure! };
           const codePoints: number[] = [];
           let priorCodePoint = -1;
           for (const codePoint of parsed.characterSet) {
@@ -575,13 +605,12 @@ export async function discoverFontCatalog(
               ...(attestation?.permittedOutputs.includes("pdf") ? ["pdf" as const] : []),
               ...(!attestation && licenseEvidence ? ["html" as const, "pdf" as const] : []),
             ]),
-            ...(licenseEvidence ? { licenseEvidence: Object.freeze({ ...licenseEvidence }) } : {}),
-            ...(licenseFailure ? { licenseFailure } : {}),
+            license,
           });
         } catch (cause) {
           if (cause instanceof DocxodusExportError) throw cause;
           fontError(`fontDirectory[${directoryIndex}] contains unreadable font metadata.`,
-            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256);
+            "Replace the font with a valid, bounded OpenType or webfont file.", fileSha256, cause);
         }
         const key = faceKey(face);
         const conflict = directoryFaces.get(key);

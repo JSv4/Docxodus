@@ -49,6 +49,50 @@
             faces: [],
           };
         }
+        if (plan.mode === 'partial-missing') {
+          // A configured resolver that resolves every family it knows about and reports the
+          // rest missing — not the same as no resolver at all, which is what mode: 'missing'
+          // (every request unresolved) and mode: 'exact' (every request resolved) each are.
+          const face = {
+            id: 'fixture-resolved',
+            resolvedFamily: request.requests[0].familyStack[0],
+            postscriptName: 'DocxodusFixture-resolved',
+            version: 'fixture-v1',
+            style: request.requests[0].style,
+            weight: request.requests[0].weight,
+            stretch: request.requests[0].stretch,
+            format: plan.format,
+            mediaType: plan.mediaType,
+            byteLength: plan.byteLength,
+            sha256: plan.sha256,
+            bytesBase64: plan.bytesBase64,
+            licenseEvidence: { kind: 'attested', identity: plan.licenseIdentity, noSubsetting: false },
+          };
+          return {
+            schemaVersion: FONT_RESOLVER_SCHEMA_VERSION,
+            resolverContract: FONT_RESOLVER_CONTRACT_ID,
+            substitutionContractVersion: FONT_SUBSTITUTION_CONTRACT_VERSION,
+            substitutionContractDigest,
+            outcomes: request.requests.map((item, index) => index === 0
+              ? {
+                requestId: item.id,
+                requestedFamily: item.familyStack[0],
+                resolvedFamily: face.resolvedFamily,
+                status: 'resolved',
+                faceId: face.id,
+                metricCompatible: true,
+                faceMatch: 'exact',
+                glyphCoverage: 'complete',
+              }
+              : {
+                requestId: item.id,
+                requestedFamily: item.familyStack[0],
+                status: 'missing',
+                glyphCoverage: 'unverified',
+              }),
+            faces: [face],
+          };
+        }
         const faces = request.requests.map(item => ({
           id: `fixture-${item.id}`,
           resolvedFamily: plan.mode === 'substituted'
@@ -82,8 +126,9 @@
             status: plan.mode === 'substituted' ? 'substituted' : 'resolved',
             faceId: faces[index].id,
             metricCompatible: plan.mode !== 'substituted',
-            faceMatch: 'exact',
-            glyphCoverage: 'complete',
+            faceMatch: plan.mode === 'synthesized' ? 'synthesized' : 'exact',
+            glyphCoverage: plan.mode === 'partial-coverage' ? 'partial' : 'complete',
+            ...(plan.mode === 'partial-coverage' ? { missingCodePoints: [item.sampleCodePoints[0]] } : {}),
           })),
           faces,
         };

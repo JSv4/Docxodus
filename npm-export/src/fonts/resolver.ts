@@ -39,6 +39,8 @@ function limitError(name: keyof ExportResourceLimits, actual: number, maximum: n
   );
 }
 
+// Same shape as npm/src/font-runtime.ts's exactKeys, duplicated rather than shared across the
+// package boundary; each closes over its own error type.
 function exactKeys(value: object, allowed: readonly string[], label: string): void {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
@@ -265,7 +267,7 @@ function selectFace(catalog: FontCatalog, request: FontRequest): Selection | und
 }
 
 function resolverFace(face: ConfiguredFontFace): FontResolverFace {
-  if (!face.licenseEvidence) {
+  if (!face.license.ok) {
     policyError("A selected configured font has no legal embedding evidence.",
       "Remove the font or provide an exact WOFF/WOFF2 embedding-rights attestation.",
       face.sha256);
@@ -288,7 +290,7 @@ function resolverFace(face: ConfiguredFontFace): FontResolverFace {
     byteLength: face.byteLength,
     sha256: face.sha256,
     bytesBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64"),
-    licenseEvidence: Object.freeze({ ...face.licenseEvidence }),
+    licenseEvidence: Object.freeze({ ...face.license.evidence }),
   });
 }
 
@@ -320,11 +322,10 @@ export function resolveCatalogRequests(
         status: "missing" as const,
       });
     }
-    if (selection.face.licenseFailure || !selection.face.licenseEvidence) {
-      policyError(selection.face.licenseFailure
-        ?? "A selected configured font has no legal embedding evidence.",
-      "Remove the font or provide an exact WOFF/WOFF2 embedding-rights attestation.",
-      selection.face.sha256);
+    if (!selection.face.license.ok) {
+      policyError(selection.face.license.failure,
+        "Remove the font or provide an exact WOFF/WOFF2 embedding-rights attestation.",
+        selection.face.sha256);
     }
     const forbiddenOutputs = outputs.filter((output) =>
       !selection.face.permittedOutputs.includes(output));
@@ -335,7 +336,7 @@ export function resolveCatalogRequests(
         `${selection.face.sha256}:${forbiddenOutputs.join(",")}`,
       );
     }
-    if (outputs.includes("pdf") && selection.face.licenseEvidence.noSubsetting) {
+    if (outputs.includes("pdf") && selection.face.license.evidence.noSubsetting) {
       policyError(
         "A selected configured font forbids subsetting and cannot be verified in Chromium PDF output.",
         "Use HTML-only output or supply a font whose license permits PDF subsetting.",
@@ -477,8 +478,8 @@ export function pathFreeCatalogManifest(catalog: FontCatalog): Record<string, un
       sha256: face.sha256,
       glyphCount: face.codePoints.length,
       permittedOutputs: face.permittedOutputs,
-      licenseEvidence: face.licenseEvidence,
-      licenseFailure: face.licenseFailure,
+      licenseEvidence: face.license.ok ? face.license.evidence : undefined,
+      licenseFailure: face.license.ok ? undefined : face.license.failure,
     })),
   };
 }

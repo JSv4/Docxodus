@@ -418,24 +418,78 @@ test.describe('browser configured font runtime', () => {
     ]));
   });
 
-  test('keeps an explicit resolver miss authoritative while recording browser fallback', async ({ page }) => {
+  test('warns when a resolved face required style synthesis', async ({ page }) => {
+    const result = await convertWithResolver(page, fontPlan(validFont, { mode: 'synthesized' }));
+    expect(result.renderReport.fonts.length).toBeGreaterThan(0);
+    expect(result.renderReport.fonts.every((font: any) =>
+      font.status === 'resolved' && font.faceMatch === 'synthesized' && font.verified === false)).toBe(true);
+    expect(result.renderReport.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'font_face_synthesized', phase: 'font_loading' }),
+    ]));
+  });
+
+  test('warns when a resolved face covers only part of the requested text', async ({ page }) => {
+    const result = await convertWithResolver(page, fontPlan(validFont, { mode: 'partial-coverage' }));
+    expect(result.renderReport.fonts.length).toBeGreaterThan(0);
+    expect(result.renderReport.fonts.every((font: any) =>
+      font.status === 'resolved' && font.glyphCoverage === 'partial'
+      && font.missingCodePointCount === 1 && font.verified === false)).toBe(true);
+    expect(result.renderReport.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'font_glyph_coverage_partial', phase: 'font_loading' }),
+    ]));
+  });
+
+  test('keeps an explicit resolver miss authoritative while measuring browser fallback', async ({ page }) => {
     const result = await convertWithResolver(page, fontPlan(validFont, { mode: 'missing' }));
     expect(result.renderReport.fonts.length).toBeGreaterThan(0);
+    // The document requests fictional families ("Docxodus Requested A"/"B") that Chromium has
+    // never heard of and that carry no substitution rule, so a genuine advance-width measurement
+    // reports no browser fallback — document.fonts.check() would wrongly report true here for
+    // every family regardless of availability, which is exactly the bug this measures against.
     expect(result.renderReport.fonts.every((font: any) =>
       font.status === 'missing'
       && font.source === 'browser'
       && font.glyphCoverage === 'unverified'
-      && font.browserFallbackAvailable === true)).toBe(true);
+      && font.browserFallbackAvailable === false)).toBe(true);
     expect(result.renderReport.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'font_unavailable', phase: 'font_loading' }),
+    ]));
+  });
+
+  test('does not claim the whole environment is unattested when a configured resolver reports one family missing', async ({ page }) => {
+    const result = await convertWithResolver(page, fontPlan(validFont, { mode: 'partial-missing' }));
+    expect(result.renderReport.fonts.length).toBe(2);
+    const [resolved, missing] = result.renderReport.fonts;
+    expect(resolved.status).toBe('resolved');
+    expect(resolved.source).toBe('attested');
+    expect(missing.status).toBe('missing');
+    expect(missing.source).toBe('browser');
+    // font_unavailable is the accurate, family-scoped warning for the missing font. It must
+    // not also trigger font_environment_unverified — that would misreport a fully configured,
+    // attested resolver as an unattested browser-observed environment, and misdirect the
+    // caller ("use an explicit verified font resolver") when they already have one.
+    expect(result.renderReport.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'font_unavailable', phase: 'font_loading' }),
+    ]));
+    expect(result.renderReport.warnings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'font_environment_unverified' }),
     ]));
   });
 
   test('reports corrupt selected faces as load_failed by default and rejects them in strict mode', async ({ page }) => {
     const permissive = await convertWithResolver(page, fontPlan(corruptFont));
     expect(permissive.renderReport.fonts.every((font: any) => font.status === 'load_failed')).toBe(true);
+    // The Font Loading API's own rejection reason must reach the report, not just the fact
+    // that loading failed — otherwise a corrupt font and an internal engine break both read
+    // as the same opaque "could not be decoded or loaded" with nothing to tell them apart.
+    expect(permissive.renderReport.fonts.every((font: any) =>
+      typeof font.loadFailureDetail === 'string' && font.loadFailureDetail.length > 0)).toBe(true);
     expect(permissive.renderReport.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'font_load_failed', severity: 'warning' }),
+      expect.objectContaining({
+        code: 'font_load_failed',
+        severity: 'warning',
+        detail: expect.any(String),
+      }),
     ]));
     expect(permissive.html).not.toContain('id="docxodus-configured-fonts"');
 
