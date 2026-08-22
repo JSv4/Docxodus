@@ -12,6 +12,11 @@ duplicated description is one that will go stale.
 
 - **Never credit yourself in commits.** Do not add "Generated with Claude Code" or
   "Co-Authored-By: Claude" to commit messages.
+- **Write PR descriptions for a human reviewer, not for the next agent.** Explain, in plain
+  language, why the change exists, how it works at a mechanism level, and how it was
+  validated. Don't invent terminology, lean on internal issue-number shorthand, or use
+  jargon a reader outside the change wouldn't recognize — a reviewer who hasn't read the
+  code should be able to follow the description on its own.
 
 ## Coding Standards
 
