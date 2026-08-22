@@ -356,6 +356,17 @@ function requestKey(request: Omit<MutableRequest, "sampleCodePoints">): string {
   });
 }
 
+/**
+ * Whether the element is *being rendered* in the HTML sense: it generates a painted box and
+ * therefore resolves a font. Content the author hid contributes no glyphs to the output and
+ * is deliberately left out of the inventory.
+ *
+ * The converter's measurement staging area is itself `visibility: hidden`, and at
+ * `font_loading` every piece of document content still lives inside it. The export pipeline
+ * lifts that one container's own visibility for the duration of the phase (see
+ * `revealMeasurementStaging` in export-browser.ts) so this predicate keeps its meaning:
+ * a descendant that the document itself hid still computes to hidden and stays out.
+ */
 function participatesInRendering(element: HTMLElement, view: Window): boolean {
   const leaf = view.getComputedStyle(element);
   if (leaf.visibility === "hidden" || leaf.visibility === "collapse") return false;

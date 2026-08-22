@@ -2222,6 +2222,38 @@ async function awaitFonts(document: Document): Promise<void> {
 }
 
 /**
+ * Lifts the converter's measurement staging area out of `visibility: hidden` for the font
+ * phase, and returns the undo.
+ *
+ * `font_loading` has to settle before pagination, because line breaking depends on which
+ * faces actually resolved — and until pagination runs, every piece of document content is
+ * still inside `#pagination-staging`, which the converter hides so its measurements never
+ * paint. Left alone, the font inventory would see a document with no rendered text and
+ * report no font dependencies at all.
+ *
+ * Only the staging root's own `visibility` is overridden, never a descendant's: content the
+ * document itself hid keeps its own declaration and stays out of the inventory. Visibility
+ * does not affect layout, so nothing the engine measures moves.
+ */
+function revealMeasurementStaging(document: Document): () => void {
+  const roots = Array.from(
+    document.querySelectorAll<HTMLElement>("#pagination-staging, .page-staging"),
+  );
+  const saved = roots.map((root) => ({
+    root,
+    value: root.style.getPropertyValue("visibility"),
+    priority: root.style.getPropertyPriority("visibility"),
+  }));
+  for (const root of roots) root.style.setProperty("visibility", "visible", "important");
+  return () => {
+    for (const { root, value, priority } of saved) {
+      if (value) root.style.setProperty("visibility", value, priority);
+      else root.style.removeProperty("visibility");
+    }
+  };
+}
+
+/**
  * Admits one resolver-backed font inventory into the report.
  *
  * The inventory is canonical: `createBrowserFontTask` samples every rendered face,
@@ -3319,11 +3351,6 @@ export async function convertDocxToPaginatedHtml(
       fail("invalid_document", "input_validation", "The DOCX input is empty.",
         "Pass a non-empty OPC package.");
     }
-    if (options.strictFonts) {
-      fail("unsupported_runtime", "font_loading",
-        "Strict font verification is not yet available in the browser materializer.",
-        "Use the browser-observed font mode until issue #442 lands.");
-    }
     layoutDigest = await layoutDigestForOptions(options);
 
     runtimeAssets = await runPhase(state, "wasm_initialization", ["runtime asset graph"], () =>
@@ -3420,6 +3447,7 @@ export async function convertDocxToPaginatedHtml(
     const attemptCheckpoint = checkpointAttemptState(state);
     let finalized: FinalizedTree | undefined;
     let firstAttemptSignature: string | undefined;
+    let firstAttemptFontIdentity: string | undefined;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         frame = await createIsolatedFrame(globalThis.document, state, bootstrapHtml(options.title));
@@ -3429,13 +3457,30 @@ export async function convertDocxToPaginatedHtml(
 
         // The task samples every rendered face before the phase begins, so its pending
         // list names the outstanding font requests rather than a generic wait.
-        const fontTask = createBrowserFontTask(renderDocument, options.fontResolver, state.limits);
-        await runPhase(state, "font_loading", fontTask.pending(), async () => {
-          await awaitFonts(renderDocument);
-          const resolved = await fontTask.wait(ownedOperationAbort.signal)
-            .catch(rethrowBrowserFontError);
-          recordFontResolution(resolved, state, options);
-        });
+        const restoreStaging = revealMeasurementStaging(renderDocument);
+        try {
+          const fontTask = createBrowserFontTask(renderDocument, options.fontResolver, state.limits);
+          await runPhase(state, "font_loading", fontTask.pending(), async () => {
+            await awaitFonts(renderDocument);
+            const resolved = await fontTask.wait(ownedOperationAbort.signal)
+              .catch(rethrowBrowserFontError);
+            recordFontResolution(resolved, state, options);
+            // Both attempts put the identical question to the resolver. One that answers
+            // differently the second time makes the page tree unreproducible and would bind
+            // the fingerprint to a configuration the output was never laid out with, so it
+            // is rejected here rather than surfacing later as page-tree instability.
+            if (attempt === 1) {
+              firstAttemptFontIdentity = resolved.identity.resolutionDigest;
+            } else if (firstAttemptFontIdentity !== undefined
+              && firstAttemptFontIdentity !== resolved.identity.resolutionDigest) {
+              fail("resource_policy_failure", "font_loading",
+                "The font resolver returned a different configuration for the second pristine attempt.",
+                "Return one deterministic resolution for an identical set of font requests.");
+            }
+          });
+        } finally {
+          restoreStaging();
+        }
         await runPhase(state, "image_decoding", ["embedded images"], async () => {
           admitVisualResourceFailures(
             state, options, await decodeImages(renderDocument), "image", {
