@@ -191,6 +191,8 @@ interface PdfParityCaseResult {
   artifacts: Record<string, string>;
   artifactSha256: Record<string, string>;
   semantic?: SemanticEvidence;
+  /** Reported, never gated: a host font shortfall is not a renderer defect. */
+  fontEnvironment?: { healthy: boolean; faces: number; degraded: unknown[] };
   pages: PdfParityPageResult[];
   error?: string;
 }
@@ -554,6 +556,10 @@ function summarizeCases(cases: PdfParityCaseResult[]) {
     // Reported, never gated: see SemanticEvidence.referenceExtractionHealthy.
     referenceExtractionFailures: cases.filter((entry) =>
       entry.semantic !== undefined && !entry.semantic.referenceExtractionHealthy).length,
+    // Also reported, never gated. A degraded face means these numbers were measured through a
+    // font environment that could not satisfy the document, which is worth seeing beside them.
+    degradedFontEnvironments: cases.filter((entry) =>
+      entry.fontEnvironment !== undefined && !entry.fontEnvironment.healthy).map((entry) => entry.id),
     vectorFailures: cases.filter((entry) => !entry.vectorContentPassed).length,
     errors: cases.filter((entry) => entry.error !== undefined).length,
     severityCounts: Object.fromEntries(severityOrder.map((level) => [
@@ -917,6 +923,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
             reference: referenceInspection.vectorPathOperations,
           },
           severity,
+          fontEnvironment: verifiedCandidate.fontEnvironment,
           rendererFingerprint: candidate.rendererFingerprint,
           environmentFingerprint,
           artifacts,
@@ -937,7 +944,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
           + `geometry ${physicalGeometryPassed ? 'pass' : 'FAIL'}`
           + (semantic.referenceExtractionHealthy
             ? ''
-            : ' [reference extraction degraded — environment, not gated]'));
+            : ' [reference extraction degraded — environment, not gated]')
+          + (verifiedCandidate.fontEnvironment.healthy
+            ? ''
+            : ` [font environment degraded: ${verifiedCandidate.fontEnvironment.degraded
+              .map((face) => `${face.requested}->${face.resolved}`).join(', ')}]`));
       } catch (error) {
         const failedReport = error && typeof error === 'object'
           && 'report' in error ? (error as { report?: unknown }).report : undefined;

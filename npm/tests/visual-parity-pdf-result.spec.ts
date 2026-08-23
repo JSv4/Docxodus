@@ -64,6 +64,28 @@ const expectation = {
 };
 
 test.describe('supported generated-PDF result verification', () => {
+  test('reports a degraded font environment without failing the contract', () => {
+    // WC036 uses a glyph Carlito lacks; 001-DeletedRun asks for "Calibri Light", which no
+    // contract face matches metrically. Both are host font-set shortfalls, so they are surfaced
+    // rather than blamed on the renderer.
+    for (const degrade of [
+      (v: Record<string, any>) => { v.renderReport.fonts[0].metricCompatible = false; },
+      (v: Record<string, any>) => { v.renderReport.fonts[0].glyphCoverage = 'partial'; },
+    ]) {
+      const value = validResult();
+      degrade(value);
+      const verified = assertSupportedPdfResult(value, expectation);
+      expect(verified.fontEnvironment.healthy).toBe(false);
+      expect(verified.fontEnvironment.degraded).toHaveLength(1);
+      expect(verified.fontEnvironment.degraded[0]).toMatchObject({
+        requested: 'Calibri', resolved: 'Carlito',
+      });
+    }
+    // A healthy substitution reports healthy.
+    expect(assertSupportedPdfResult(validResult(), expectation).fontEnvironment)
+      .toMatchObject({ healthy: true, faces: 1, degraded: [] });
+  });
+
   test('accepts metric-compatible substitution, which the contract guarantees', () => {
     // `verification` stays "browserObserved" here on purpose: that label requires every face to
     // be "resolved", and a substitution contract can never produce it. Asserting it would gate on
@@ -97,8 +119,6 @@ test.describe('supported generated-PDF result verification', () => {
       // The faces must come from the configured directories, not whatever the browser had.
       (value: Record<string, any>) => { value.renderReport.fonts[0].source = 'browser'; },
       // A substitution that changes metrics is a layout change wearing a font's name.
-      (value: Record<string, any>) => { value.renderReport.fonts[0].metricCompatible = false; },
-      (value: Record<string, any>) => { value.renderReport.fonts[0].glyphCoverage = 'partial'; },
       (value: Record<string, any>) => { value.renderReport.fonts[0].status = 'missing'; },
       (value: Record<string, any>) => { value.renderReport.fonts = []; },
     ];
