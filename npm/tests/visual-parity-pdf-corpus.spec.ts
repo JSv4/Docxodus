@@ -89,14 +89,32 @@ function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const XML_ENTITIES: Readonly<Record<string, string>> = Object.freeze({
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+});
+
+function decodeEntity(match: string, decimal?: string, hex?: string, name?: string): string {
+  const code = decimal !== undefined ? Number(decimal)
+    : hex !== undefined ? Number.parseInt(hex, 16)
+      : undefined;
+  if (code !== undefined) {
+    // Leave anything unrepresentable as written rather than throwing inside a corpus assertion.
+    return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+      ? String.fromCodePoint(code)
+      : match;
+  }
+  return (name !== undefined && XML_ENTITIES[name]) || match;
+}
+
 function decodedText(xmlFragment: string): string {
   return xmlFragment
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+    // Tolerate '>' inside quoted attribute values; `<[^>]+>` ends the tag at the first one and
+    // leaves the remainder of the attribute in the "text".
+    .replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, "")
+    // ONE pass over the entities. Replacing &amp; first and &lt; second turns "&amp;lt;" into
+    // "<" — markup the document never contained — and the corpus assertions that read this text
+    // would then be checking something Word did not write.
+    .replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));/g, decodeEntity)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -120,6 +138,26 @@ function packageText(parts: Map<string, Buffer>): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+test.describe("XML text decoding", () => {
+  test("decodes entities in one pass, so an escaped entity stays escaped", () => {
+    // The ordered-replace version turned this into "<w:t>" — markup the document never had.
+    expect(decodedText("&amp;lt;w:t&amp;gt;")).toBe("&lt;w:t&gt;");
+    expect(decodedText("&amp;amp;")).toBe("&amp;");
+    expect(decodedText("a &lt;b&gt; c &quot;d&quot; &apos;e&apos; &amp; f"))
+      .toBe('a <b> c "d" \'e\' & f');
+    expect(decodedText("&#65;&#x42;&#x1F600;")).toBe("AB\u{1F600}");
+    // Unknown or unrepresentable references survive verbatim rather than throwing.
+    expect(decodedText("&nosuch; &#x110000;")).toBe("&nosuch; &#x110000;");
+  });
+
+  test("strips elements whose attributes contain the tag delimiter", () => {
+    // `<[^>]+>` stopped at the '>' inside the attribute and left `2" />kept` behind.
+    expect(decodedText('<w:t w:val="a > 2" />kept')).toBe("kept");
+    expect(decodedText("<w:t w:val='x > y'>text</w:t>")).toBe("text");
+    expect(decodedText("<w:p><w:r><w:t>plain</w:t></w:r></w:p>")).toBe("plain");
+  });
+});
 
 test.describe("versioned generated-PDF corpus", () => {
   test("is complete, compact, explicitly profiled, and semantically inspectable", () => {
