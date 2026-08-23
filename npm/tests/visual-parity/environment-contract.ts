@@ -34,6 +34,15 @@ export const LIBREOFFICE_CONTRACT = {
   archiveUrl:
     'https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/' +
     'LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz',
+  /** Detached signature published beside the archived binary. */
+  archiveSignatureUrl:
+    'https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/' +
+    'LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc',
+  /** Issuer fingerprint embedded in that signature; the workflow rejects every other key. */
+  signingKeyFingerprint: 'C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3',
+  signingKeyUrl:
+    'https://keyserver.ubuntu.com/pks/lookup?op=get&search=' +
+    '0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3',
 } as const;
 
 /**
@@ -93,6 +102,8 @@ export function checkLibreOfficeContract(versionOutput: string): LibreOfficeCont
       `LibreOffice ${LIBREOFFICE_CONTRACT.version}; known cross-version differences:\n${differences}\n` +
       `Install LibreOffice ${LIBREOFFICE_CONTRACT.build}, e.g. the TDF build:\n` +
       `  ${LIBREOFFICE_CONTRACT.archiveUrl}\n` +
+      `Verify ${LIBREOFFICE_CONTRACT.archiveSignatureUrl} with signing key ` +
+      `${LIBREOFFICE_CONTRACT.signingKeyFingerprint} before installation.\n` +
       `After a TDF install, REMOVE its bundled Carlito/Caladea/Liberation fonts ` +
       `(share/fonts/truetype/) — they silently override the font-substitution contract inside ` +
       `LibreOffice only (see README).\n` +
@@ -103,8 +114,8 @@ export function checkLibreOfficeContract(versionOutput: string): LibreOfficeCont
 }
 
 /** `libreoffice --version` from the host, empty string when the binary is missing entirely. */
-export function libreofficeVersionOutput(): string {
-  return versionBanner('libreoffice', ['--version']);
+export function libreofficeVersionOutput(executable = 'libreoffice'): string {
+  return versionBanner(executable, ['--version']);
 }
 
 /**
@@ -112,8 +123,8 @@ export function libreofficeVersionOutput(): string {
  * host's LibreOffice is out of contract, returns the full version string for the report when in
  * contract (or when drift is deliberately allowed).
  */
-export function assertLibreOfficeContract(): string {
-  const check = checkLibreOfficeContract(libreofficeVersionOutput());
+export function assertLibreOfficeContract(versionOutput = libreofficeVersionOutput()): string {
+  const check = checkLibreOfficeContract(versionOutput);
   if (check.ok) return check.version;
   if (process.env[LIBREOFFICE_DRIFT_ENV] === '1') {
     console.warn(`[visual-parity] ${LIBREOFFICE_DRIFT_ENV}=1: measuring OUT-OF-CONTRACT ` +
@@ -127,9 +138,9 @@ export function assertLibreOfficeContract(): string {
 /** Poppler is fingerprinted (not install-asserted): pdftoppm's rasterizer is part of what the
  * recorded numbers were measured through, so a distro bump must surface as environment drift
  * rather than as a silent shift attributed to the renderer. */
-export function popplerVersionOutput(): string {
+export function popplerVersionOutput(executable = 'pdftoppm'): string {
   // pdftoppm prints its version banner on stderr with exit code 0.
-  return versionBanner('pdftoppm', ['-v']).split('\n')[0].trim();
+  return versionBanner(executable, ['-v']).split('\n')[0].trim();
 }
 
 export { popplerFingerprint };

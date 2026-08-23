@@ -1,0 +1,150 @@
+import { createHash } from 'node:crypto';
+import { canonicalJson } from './canonical-json.js';
+import { PDF_PARITY_LIMITS } from './pdf.js';
+
+const DIGEST = /^[0-9a-f]{64}$/;
+const MAXIMUM_FRAGMENTS = 100_000;
+const MAXIMUM_FRAGMENT_STRING_CHARACTERS = 8_192;
+const MAXIMUM_TOTAL_FRAGMENT_STRING_CHARACTERS = 16 * 1024 * 1024;
+const PAGE_TOLERANCE = 0.1;
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function sha256(value: Uint8Array | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+export interface SupportedPdfResultExpectation {
+  sourceSha256: string;
+  reviewProfile: string;
+  commentProfile: string;
+  documentVersion?: number;
+}
+
+export interface VerifiedPdfResult {
+  pageCount: number;
+  rendererFingerprint: string;
+  pages: Array<{ pageNumber: number; width: number; height: number }>;
+}
+
+/** Independently validate the supported API envelope before any PDF parser overwrites its claims. */
+export function assertSupportedPdfResult(
+  candidate: unknown,
+  expected: SupportedPdfResultExpectation,
+): VerifiedPdfResult {
+  const result = record(candidate);
+  if (!result || !(result.pdf instanceof Uint8Array)
+    || result.pdf.byteLength < 16 || result.pdf.byteLength > PDF_PARITY_LIMITS.maximumPdfBytes
+    || !Number.isSafeInteger(result.pageCount) || (result.pageCount as number) < 1
+    || (result.pageCount as number) > PDF_PARITY_LIMITS.maximumPages
+    || typeof result.rendererFingerprint !== 'string' || !DIGEST.test(result.rendererFingerprint)
+    || !Array.isArray(result.warnings)) {
+    throw new Error('Supported PDF result has an invalid top-level envelope.');
+  }
+
+  const map = record(result.pageMap);
+  if (!map || !exactKeys(map, [
+    'schemaVersion', 'mode', 'availability', 'documentVersion', 'rendererFingerprint',
+    'pages', 'fragments',
+  ]) || map.schemaVersion !== 1 || map.mode !== 'paginated' || map.availability !== 'available'
+    || map.documentVersion !== (expected.documentVersion ?? 0)
+    || map.rendererFingerprint !== result.rendererFingerprint
+    || !Array.isArray(map.pages) || map.pages.length !== result.pageCount
+    || !Array.isArray(map.fragments) || map.fragments.length > MAXIMUM_FRAGMENTS) {
+    throw new Error('Supported PDF result has an invalid or inconsistent PageMap envelope.');
+  }
+
+  const pages: Array<{ pageNumber: number; width: number; height: number }> = [];
+  const pageSizes = new Map<number, { width: number; height: number }>();
+  for (let index = 0; index < map.pages.length; index++) {
+    const page = record(map.pages[index]);
+    if (!page || !exactKeys(page, [
+      'pageNumber', 'pageInSection', 'width', 'height', 'sectionIndex', 'pageName',
+    ]) || page.pageNumber !== index + 1
+      || !Number.isSafeInteger(page.pageInSection) || (page.pageInSection as number) < 1
+      || typeof page.width !== 'number' || !Number.isFinite(page.width) || page.width <= 0
+      || page.width > PDF_PARITY_LIMITS.maximumPhysicalPagePoints
+      || typeof page.height !== 'number' || !Number.isFinite(page.height) || page.height <= 0
+      || page.height > PDF_PARITY_LIMITS.maximumPhysicalPagePoints
+      || (page.sectionIndex !== undefined
+        && (!Number.isSafeInteger(page.sectionIndex) || (page.sectionIndex as number) < 0))
+      || typeof page.pageName !== 'string' || page.pageName.length < 1 || page.pageName.length > 512) {
+      throw new Error(`Supported PDF result has an invalid PageMap page at index ${index}.`);
+    }
+    const verified = {
+      pageNumber: page.pageNumber as number,
+      width: page.width,
+      height: page.height,
+    };
+    pages.push(verified);
+    pageSizes.set(verified.pageNumber, verified);
+  }
+
+  const fragmentIds = new Set<string>();
+  const nextFragmentIndex = new Map<string, number>();
+  let fragmentStringCharacters = 0;
+  for (const candidateFragment of map.fragments) {
+    const fragment = record(candidateFragment);
+    const geometry = fragment ? record(fragment.geometry) : undefined;
+    const page = fragment && Number.isSafeInteger(fragment.pageNumber)
+      ? pageSizes.get(fragment.pageNumber as number)
+      : undefined;
+    fragmentStringCharacters += typeof fragment?.fragmentId === 'string' ? fragment.fragmentId.length : 0;
+    fragmentStringCharacters += typeof fragment?.anchorId === 'string' ? fragment.anchorId.length : 0;
+    if (!fragment || !exactKeys(fragment, [
+      'fragmentId', 'anchorId', 'fragmentIndex', 'pageNumber', 'geometry', 'story', 'inTableCell',
+    ]) || typeof fragment.fragmentId !== 'string' || fragment.fragmentId.length < 1
+      || fragment.fragmentId.length > MAXIMUM_FRAGMENT_STRING_CHARACTERS
+      || fragmentIds.has(fragment.fragmentId)
+      || typeof fragment.anchorId !== 'string' || fragment.anchorId.length < 1
+      || fragment.anchorId.length > MAXIMUM_FRAGMENT_STRING_CHARACTERS
+      || fragmentStringCharacters > MAXIMUM_TOTAL_FRAGMENT_STRING_CHARACTERS
+      || !Number.isSafeInteger(fragment.fragmentIndex) || (fragment.fragmentIndex as number) < 0
+      || !page
+      || fragment.fragmentId !== `p${fragment.pageNumber}-f${fragment.fragmentIndex}-${fragment.anchorId}`
+      || !geometry || !exactKeys(geometry, ['x', 'y', 'width', 'height'])
+      || ![geometry.x, geometry.y, geometry.width, geometry.height].every((value) =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0)
+      || (geometry.x as number) + (geometry.width as number) > page.width + PAGE_TOLERANCE
+      || (geometry.y as number) + (geometry.height as number) > page.height + PAGE_TOLERANCE
+      || !['body', 'header', 'footer', 'footnote', 'endnote', 'comment']
+        .includes(String(fragment.story))
+      || typeof fragment.inTableCell !== 'boolean') {
+      throw new Error('Supported PDF result has an invalid PageMap fragment.');
+    }
+    const expectedIndex = nextFragmentIndex.get(fragment.anchorId) ?? 0;
+    if (fragment.fragmentIndex !== expectedIndex) {
+      throw new Error('Supported PDF result has a discontinuous PageMap fragment sequence.');
+    }
+    nextFragmentIndex.set(fragment.anchorId, expectedIndex + 1);
+    fragmentIds.add(fragment.fragmentId);
+  }
+
+  const report = record(result.renderReport);
+  const reportEnvironment = report ? record(report.environment) : undefined;
+  const reportBindings = report ? record(report.bindings) : undefined;
+  const reportSource = report ? record(report.source) : undefined;
+  const reportOptions = report ? record(report.options) : undefined;
+  if (!report || report.status !== 'complete'
+    || !reportEnvironment || reportEnvironment.rendererFingerprint !== result.rendererFingerprint
+    || reportEnvironment.verification !== 'nodeVerified'
+    || reportEnvironment.fidelityTier !== 'releaseBaselined'
+    || !reportBindings || reportBindings.pdfDigest !== sha256(result.pdf)
+    || reportBindings.pageMapDigest !== sha256(canonicalJson(map))
+    || !reportSource || reportSource.rawPackageBytesDigest !== expected.sourceSha256
+    || !reportOptions || reportOptions.reviewProfile !== expected.reviewProfile
+    || reportOptions.commentProfile !== expected.commentProfile
+    || canonicalJson(report.pages) !== canonicalJson(map.pages)
+    || canonicalJson(report.warnings) !== canonicalJson(result.warnings)) {
+    throw new Error('Supported PDF result is not bound to its report, PageMap, source, and profiles.');
+  }
+  return { pageCount: result.pageCount as number, rendererFingerprint: result.rendererFingerprint, pages };
+}

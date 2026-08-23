@@ -17,6 +17,17 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
+  Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
+  recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector
+  contracts are unconditional gates that no raster severity or disposition can waive; SSIM and ink
+  metrics ratchet separately against a numbers-only record, and text and link extraction are gated
+  independently so a text regression cannot hide behind an acceptable raster score. An environment
+  fingerprint covering LibreOffice, Chromium, Poppler and the font contract means a changed
+  environment reports `environment-changed` rather than being misattributed to the renderer. The
+  benchmark stays `workflow_dispatch`-only until #444 lands, per the release-gate ordering in the
+  design doc.
+
 - **Verified font runtime (#442).** `fontDirectories` is live: the Node adapter
   deterministically discovers TTF/OTF/WOFF/WOFF2 files across the ordered directories,
   rejects symlinks and escaping or changing paths, reads family and face metadata, hashes
@@ -602,6 +613,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Empty paragraphs lost their line box in paginated export (#443).** The converter synthesized
+  the placeholder run for a visually empty paragraph with a normal space, which is eligible for
+  its own leading/trailing-whitespace suppression and could reach the browser as an empty span.
+  That removed the paragraph-mark line box, left a canonical paragraph anchor with zero geometry,
+  and made the strict PageMap reject otherwise-valid documents — signature-table spacer rows most
+  visibly. The placeholder now uses a non-breaking space, confined to that synthesized run;
+  ordinary run whitespace still relies on `pre-wrap` with no layout-changing substitution. A
+  paragraph Word serialized as an explicit run with an empty `w:t` is treated the same as a
+  structurally empty `w:p`.
 - **Chromium launch failures say why, and an unavailable sandbox is named as a host policy**
   (issue #525). The Node export runtime already attached the real reason a launch failed to
   `DocxodusExportError.cause`, but the CLI rendered only code, phase, message, remediation, and

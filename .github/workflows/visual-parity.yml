@@ -1,10 +1,19 @@
 name: LibreOffice visual parity
 
+# Deliberately manual for now. Per docs/architecture/standalone_paginated_export.md this
+# benchmark becomes the release gate only once issue #444 has landed its pixel-moving
+# changes and the comment-bearing fixtures have had their reviewed ratchet refresh. Until
+# then a 90-minute LibreOffice + Poppler traversal on every pull request buys signal the
+# ratchet cannot yet act on. Flipping this to `pull_request:` is #444's final step.
 on:
   workflow_dispatch:
     inputs:
       filter:
-        description: Optional comma-separated corpus case IDs
+        description: Optional comma-separated browser-page corpus case IDs
+        required: false
+        type: string
+      pdf_filter:
+        description: Optional comma-separated generated-PDF corpus case IDs
         required: false
         type: string
       strict:
@@ -23,14 +32,61 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: visual-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   visual-parity:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The browser-page benchmark and the generated-PDF benchmark each traverse the full corpus.
+    # Keep one bounded job so they share the exact reference environment, with enough time for
+    # the second benchmark to finish and publish its own failure evidence.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Create a portable, viewable artifact before any tool install or build can fail. The
+      # generated-PDF runner replaces the pending page and adds its reports as it progresses;
+      # if setup fails first, reviewers still receive the commit/run context instead of an empty
+      # artifact upload.
+      - name: Initialize generated-PDF parity artifacts
+        env:
+          DOCXODUS_GENERATED_PDF_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-generated-pdf-parity
+          DOCXODUS_CI_COMMIT: ${{ github.sha }}
+          DOCXODUS_CI_EVENT: ${{ github.event_name }}
+          DOCXODUS_CI_REF: ${{ github.ref }}
+          DOCXODUS_CI_REPOSITORY: ${{ github.repository }}
+          DOCXODUS_CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DOCXODUS_CI_RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p "$DOCXODUS_GENERATED_PDF_PARITY_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+
+          const output = process.env.DOCXODUS_GENERATED_PDF_PARITY_OUTPUT;
+          const context = {
+            schemaVersion: 1,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+            repository: process.env.DOCXODUS_CI_REPOSITORY,
+            commit: process.env.DOCXODUS_CI_COMMIT,
+            ref: process.env.DOCXODUS_CI_REF,
+            event: process.env.DOCXODUS_CI_EVENT,
+            runId: process.env.DOCXODUS_CI_RUN_ID,
+            runAttempt: process.env.DOCXODUS_CI_RUN_ATTEMPT,
+            runner: { os: process.platform, architecture: process.arch },
+          };
+          writeFileSync(join(output, 'ci-context.json'), `${JSON.stringify(context, null, 2)}\n`);
+          writeFileSync(join(output, 'index.html'), `<!doctype html>
+          <meta charset="utf-8"><title>Docxodus generated-PDF parity</title>
+          <h1>Generated-PDF parity evidence</h1>
+          <p>The test has not completed. If no other files are present, CI failed during setup or build.</p>
+          <p><a href="ci-context.json">CI run context</a></p>\n`);
+          NODE
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -60,8 +116,25 @@ jobs:
       # fails at start, with this same guidance, when they drift.
       - name: Install pinned LibreOffice 25.8.7.3 (reference-version contract)
         run: |
-          curl -sSL -o /tmp/libreoffice.tar.gz \
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 300000000 \
+            -o /tmp/libreoffice.tar.gz \
             "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+            -o /tmp/libreoffice.tar.gz.asc \
+            "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc"
+          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+            -o /tmp/libreoffice-signing-key.asc \
+            "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
+          libreoffice_gnupg_home="$(mktemp -d)"
+          chmod 700 "$libreoffice_gnupg_home"
+          gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --import /tmp/libreoffice-signing-key.asc
+          libreoffice_key_fingerprint="$(gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 \
+            | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$libreoffice_key_fingerprint" = "C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
+          gpg --batch --homedir "$libreoffice_gnupg_home" \
+            --verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz
           tar -xzf /tmp/libreoffice.tar.gz -C /tmp
           sudo dpkg -i /tmp/LibreOffice_*_Linux_x86-64_deb/DEBS/*.deb
           sudo rm -f /opt/libreoffice25.8/share/fonts/truetype/Carlito*.ttf \
@@ -77,13 +150,21 @@ jobs:
       - name: Build npm package
         run: cd npm && npm run build
 
+      # Build the supported Node/PDF surface the generated-PDF benchmark invokes. A normal
+      # install retains @playwright/browser-chromium's exact package-owned browser revision.
+      - name: Install Node export companion dependencies
+        run: cd npm-export && npm ci
+
+      - name: Build Node export companion
+        run: cd npm-export && npm run build
+
       - name: Install Chromium
         run: cd npm && npx playwright install --with-deps chromium
 
       # The regression ratchet (issue #395) compares this run against the committed record and
-      # fails when any case got worse. A scheduled run has no `inputs`, so the expression falls
-      # through to '1' — the weekly run is the one that most needs the gate, because nobody is
-      # watching it. Refresh the record deliberately in the PR that changes rendering.
+      # fails when any case got worse. Pull-request and scheduled runs have no `inputs`, so the
+      # expression falls through to '1'. Refresh the record deliberately in the PR that changes
+      # rendering; conversion, page-count, geometry, and semantic contracts remain unconditional.
       - name: Compare stratified corpus with LibreOffice
         env:
           DOCXODUS_VISUAL_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-visual-parity
@@ -92,6 +173,17 @@ jobs:
           DOCXODUS_VISUAL_PARITY_RATCHET: ${{ github.event_name == 'workflow_dispatch' && !inputs.ratchet && '0' || '1' }}
         run: cd npm && npm run test:visual-parity
 
+      # Run even when the older browser-page benchmark found a regression: the delivered-PDF
+      # evidence is independently useful, and the job still retains the earlier failing status.
+      - name: Compare generated PDFs with LibreOffice PDFs
+        if: ${{ !cancelled() }}
+        env:
+          DOCXODUS_GENERATED_PDF_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-generated-pdf-parity
+          DOCXODUS_GENERATED_PDF_PARITY_FILTER: ${{ inputs.pdf_filter }}
+          DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
+          DOCXODUS_VISUAL_PARITY_RATCHET: ${{ github.event_name == 'workflow_dispatch' && !inputs.ratchet && '0' || '1' }}
+        run: cd npm && npm run test:generated-pdf-parity
+
       - name: Upload visual comparison report
         uses: actions/upload-artifact@v7
         if: always()
@@ -99,4 +191,15 @@ jobs:
           name: libreoffice-visual-parity
           path: ${{ runner.temp }}/docxodus-visual-parity/
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload generated-PDF comparison report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: generated-pdf-visual-parity
+          path: ${{ runner.temp }}/docxodus-generated-pdf-parity/
+          # The initialization step guarantees an index and context file. Treat their absence as
+          # an infrastructure defect instead of quietly publishing an empty artifact.
+          if-no-files-found: error
           retention-days: 14
