@@ -42,6 +42,7 @@ import {
 import { decodePng, encodePng } from './visual-parity/png.js';
 import {
   FONT_CONTRACT_FILE,
+  contractFontDirectories,
   fontContractReport,
 } from './visual-parity/font-contract.js';
 import {
@@ -641,6 +642,14 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       pdftotext: pinExecutable('pdftotext', ['-v']),
     };
     const fontContract = fontContractReport(repoRoot, tools.fcMatch.path);
+    // The Node export path resolves its own faces. Without these it reports
+    // `verification: "browserObserved"` — it took whatever the browser had — while LibreOffice and
+    // Poppler are pinned through FONTCONFIG_FILE. Handing it the same directories is what puts the
+    // third renderer under the one contract, and what `assertSupportedPdfResult` demands.
+    const fontDirectories = contractFontDirectories(tools.fcMatch.path);
+    if (fontDirectories.length === 0) {
+      throw new Error('The font contract resolved no directories to configure for Node export.');
+    }
     const libreofficeVersion = assertLibreOfficeContract(tools.libreoffice.evidence.version);
     const poppler = tools.pdftoppm.evidence.version.split('\n')[0].trim();
     const pdftotext = tools.pdftotext.evidence.version;
@@ -692,6 +701,11 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         pdftotext: tools.pdftotext.evidence,
       },
       fontContract,
+      // COUNT only. The directories are absolute host paths, and `environment` is hashed into
+      // environmentFingerprint, so recording them would make two hosts that satisfy the identical
+      // contract fingerprint differently. Face identity is already carried by
+      // fontContract.families[].fileSha256.
+      fontDirectoryCount: fontDirectories.length,
       locale: 'C.UTF-8',
       timezone: 'UTC',
       rasterContractSha256: PDF_RASTER_CONTRACT_SHA256,
@@ -722,6 +736,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
 
         const candidate = await exporter.convertDocxToPdf(source, {
           ...entry.profiles.candidate,
+          fontDirectories,
           expectedSourceDigest: sourceSha256,
           unsupportedContent: 'warn',
           timeoutMs: 120_000,
