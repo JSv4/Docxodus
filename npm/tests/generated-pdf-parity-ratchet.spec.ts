@@ -219,19 +219,30 @@ test.describe('the committed generated-PDF parity ratchet', () => {
   });
 
   test('a provisional record refuses numeric comparison instead of blaming the renderer', () => {
-    const record = readRecord(recordFile)!;
-    // The committed record was measured off this lineage. Feeding the comparator numbers that
-    // match it EXACTLY must still refuse: the environment fingerprint covers LibreOffice,
-    // Chromium, Poppler and fonts, so a source-lineage difference shows no drift and would
-    // otherwise be compared numerically and attributed to Docxodus.
-    expect(record!.provisional).toBe(true);
-    const comparison = compareToRecord(record, measuredSummary(record), {
+    // Mechanism, not the committed file's current state. The environment fingerprint covers
+    // LibreOffice, Chromium, Poppler and fonts — not source lineage — so numbers measured
+    // off-lineage under the same toolchain show no drift and would otherwise be compared and
+    // attributed to Docxodus.
+    const record = { ...buildRecord(SEVERE_BASELINE, '2026-08-16'), provisional: true };
+    const comparison = compareToRecord(record, SEVERE_BASELINE, {
       expectComplete: true,
       updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD',
     });
     expect(comparison.status).toBe('record-mismatch');
     expect(comparison.message).toContain('provisional');
     expect(comparison.message).toContain('DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1');
+  });
+
+  test('the committed record has been measured on this lineage', () => {
+    const record = readRecord(recordFile)!;
+    // It shipped provisional because its numbers came from a retired stack. A completed refresh
+    // clears the flag, and the flag must not come back — a record that silently re-marks itself
+    // provisional would disable the numeric ratchet without anyone choosing to.
+    expect(record.provisional).toBeUndefined();
+    expect(compareToRecord(record, measuredSummary(record), {
+      expectComplete: true,
+      updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD',
+    }).status).toBe('ok');
   });
 
   test('clearing the flag restores ordinary numeric comparison', () => {

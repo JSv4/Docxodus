@@ -1,9 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: these numbers were recorded on the retired #505-#508 stack, whose readiness barrier and font runtime differ from the ones that landed, so `provisional` is set and the comparator refuses to compare against them rather than blaming the renderer for the difference. The unconditional gates (conversion, page count, physical geometry, semantic and chart-vector contracts) do not depend on these numbers and are live immediately. Re-record with DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1 on a clean tree to clear the flag.",
-  "provisional": true,
-  "recordedAt": "2026-08-16",
-  "sourceCommit": "de64978a8dd71776a59384aec209888e18c44512",
+  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.",
+  "recordedAt": "2026-08-23",
+  "sourceCommit": "38262345278abf6d905330c40e29012d2e6ff468",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -55,9 +54,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "major",
-      "ssim": 0.94936,
-      "worstInkF1": 0.83804
+      "severity": "minor",
+      "ssim": 0.97089,
+      "worstInkF1": 0.99563
     },
     {
       "id": "pdf-footnote",
@@ -100,8 +99,8 @@
         "libreoffice": 6
       },
       "severity": "close",
-      "ssim": 0.99986,
-      "worstInkF1": 1
+      "ssim": 0.99951,
+      "worstInkF1": 0.95004
     },
     {
       "id": "pdf-raster-image",
