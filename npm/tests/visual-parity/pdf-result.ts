@@ -133,6 +133,12 @@ export function assertSupportedPdfResult(
   const reportBindings = report ? record(report.bindings) : undefined;
   const reportSource = report ? record(report.source) : undefined;
   const reportOptions = report ? record(report.options) : undefined;
+  const reportFonts: Array<Record<string, unknown>> = Array.isArray(report?.fonts)
+    ? (report.fonts as unknown[]).flatMap((font) => {
+      const entry = record(font);
+      return entry === undefined ? [] : [entry];
+    })
+    : [];
   // Named, individually reported checks. A single boolean chain collapsed eleven distinct
   // failures into one sentence, so a benchmark that rejected every case said only that something
   // was unbound — with no way to tell a renderer-fingerprint mismatch from a profile mismatch
@@ -143,8 +149,20 @@ export function assertSupportedPdfResult(
     ['renderReport.environment is an object', () => reportEnvironment !== undefined],
     ['environment.rendererFingerprint matches the result',
       () => reportEnvironment?.rendererFingerprint === result.rendererFingerprint],
-    ['environment.verification === "nodeVerified"',
-      () => reportEnvironment?.verification === 'nodeVerified'],
+    // NOT `verification === "nodeVerified"`. That label requires every face to be `resolved`,
+    // and this benchmark's whole premise is metric-compatible SUBSTITUTION — fonts.conf maps
+    // Calibri to Carlito — so any document asking for Calibri reports `substituted` and the label
+    // is unreachable by construction. Gate on the properties that actually carry the guarantee:
+    // the faces came from the configured directories rather than whatever the browser had, and
+    // substitution did not degrade layout. An injected browser is still rejected, by the
+    // fidelityTier check above, which `releaseBaselined` grants only to a `pinned` launch.
+    ['every face came from the configured font directories',
+      () => reportFonts.length > 0 && reportFonts.every((font) => font.source === 'configured')],
+    ['every face resolved or substituted, none missing',
+      () => reportFonts.every((font) => font.status === 'resolved' || font.status === 'substituted')],
+    ['every substituted face is metric-compatible with complete glyph coverage',
+      () => reportFonts.every((font) => font.status !== 'substituted'
+        || (font.metricCompatible === true && font.glyphCoverage === 'complete'))],
     ['environment.fidelityTier === "releaseBaselined"',
       () => reportEnvironment?.fidelityTier === 'releaseBaselined'],
     ['renderReport.bindings is an object', () => reportBindings !== undefined],
@@ -169,6 +187,14 @@ export function assertSupportedPdfResult(
   if (unmet.length > 0) {
     const observed = {
       verification: reportEnvironment?.verification,
+      fonts: reportFonts.map((font) => ({
+        requested: font.requestedFamily,
+        resolved: font.resolvedFamily,
+        status: font.status,
+        source: font.source,
+        metricCompatible: font.metricCompatible,
+        glyphCoverage: font.glyphCoverage,
+      })),
       fidelityTier: reportEnvironment?.fidelityTier,
       reviewProfile: reportOptions?.reviewProfile,
       commentProfile: reportOptions?.commentProfile,
