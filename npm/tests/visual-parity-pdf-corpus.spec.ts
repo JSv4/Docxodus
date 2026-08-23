@@ -106,11 +106,36 @@ function decodeEntity(match: string, decimal?: string, hex?: string, name?: stri
   return (name !== undefined && XML_ENTITIES[name]) || match;
 }
 
+/**
+ * Remove elements in a single left-to-right pass.
+ *
+ * A regex replace cannot do this completely: removing matches can splice the surrounding text
+ * into a NEW tag ("<<w:t>w:t>"), so one pass leaves residue and a loop is needed to reach a
+ * fixpoint. Consuming the input once sidesteps that entirely — nothing already emitted is ever
+ * re-examined — and it is also where quoted attribute values are handled, since a '>' inside one
+ * does not end the tag.
+ */
+function stripElements(xmlFragment: string): string {
+  let text = "";
+  let insideTag = false;
+  let quote: string | undefined;
+  for (const character of xmlFragment) {
+    if (!insideTag) {
+      if (character === "<") insideTag = true;
+      else text += character;
+    } else if (quote !== undefined) {
+      if (character === quote) quote = undefined;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      insideTag = false;
+    }
+  }
+  return text;
+}
+
 function decodedText(xmlFragment: string): string {
-  return xmlFragment
-    // Tolerate '>' inside quoted attribute values; `<[^>]+>` ends the tag at the first one and
-    // leaves the remainder of the attribute in the "text".
-    .replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, "")
+  return stripElements(xmlFragment)
     // ONE pass over the entities. Replacing &amp; first and &lt; second turns "&amp;lt;" into
     // "<" — markup the document never contained — and the corpus assertions that read this text
     // would then be checking something Word did not write.
@@ -152,6 +177,9 @@ test.describe("XML text decoding", () => {
   });
 
   test("strips elements whose attributes contain the tag delimiter", () => {
+    // A regex replace can splice its surroundings into a new tag; a single pass cannot.
+    expect(decodedText("<<w:t>w:t>")).toBe("w:t>");
+    expect(decodedText("<a><b>x</b></a>")).toBe("x");
     // `<[^>]+>` stopped at the '>' inside the attribute and left `2" />kept` behind.
     expect(decodedText('<w:t w:val="a > 2" />kept')).toBe("kept");
     expect(decodedText("<w:t w:val='x > y'>text</w:t>")).toBe("text");
