@@ -618,6 +618,8 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       gitCommit: sourceCommit,
       gitTree: sourceTree,
       workingTreeDirty: sourceWorkingTreeDirty,
+      // Bounded: enough to identify the offender, not enough to bloat the record diff.
+      workingTreeStatus: sourceWorkingTreeStatus.split('\n').filter(Boolean).slice(0, 40),
       rasterContract: {
         ...PDF_RASTER_CONTRACT,
         sha256: PDF_RASTER_CONTRACT_SHA256,

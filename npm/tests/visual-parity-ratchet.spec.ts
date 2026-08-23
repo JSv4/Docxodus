@@ -310,6 +310,14 @@ test.describe('visual parity ratchet', () => {
     expect(() => assertRecordUpdateProvenance(clean)).not.toThrow();
     expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
       .toThrow(/dirty or unverified worktree/);
+    // The refusal must name what it objected to: on a hosted runner nobody can go and look.
+    expect(() => assertRecordUpdateProvenance({
+      ...clean,
+      workingTreeDirty: true,
+      workingTreeStatus: [' M npm/package-lock.json', '?? npm/stray.txt'],
+    })).toThrow(/npm\/package-lock\.json[\s\S]*npm\/stray\.txt/);
+    expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
+      .toThrow(/No status detail was recorded/);
     expect(() => assertRecordUpdateProvenance({ ...clean, gitCommit: 'deadbeef' }))
       .toThrow(/40-character source commit/);
   });

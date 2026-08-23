@@ -127,6 +127,8 @@ export interface RatchetSummaryCase {
 export interface RatchetSummary {
   gitCommit?: string;
   workingTreeDirty?: boolean;
+  /** Bounded `git status --porcelain` excerpt, so a refusal can name what it objected to. */
+  workingTreeStatus?: readonly string[];
   environment: {
     chromium?: string;
     libreoffice?: string;
@@ -264,8 +266,14 @@ export function buildRecord(summary: RatchetSummary, recordedAt: string): Ratche
  */
 export function assertRecordUpdateProvenance(summary: RatchetSummary): void {
   if (summary.workingTreeDirty !== false) {
+    // Name the entries. "Dirty" with no list sends the reader hunting through build steps for a
+    // path the runner already knew — and on a hosted runner they cannot look for themselves.
+    const entries = summary.workingTreeStatus ?? [];
+    const listed = entries.length > 0
+      ? ` Working tree reports:\n  ${entries.join('\n  ')}`
+      : ' No status detail was recorded.';
     throw new Error('Refusing to refresh a parity ratchet from a dirty or unverified worktree; '
-      + 'commit the implementation and rerun the complete benchmark.');
+      + `commit the implementation and rerun the complete benchmark.${listed}`);
   }
   if (!/^[0-9a-f]{40}$/.test(summary.gitCommit ?? '')) {
     throw new Error('Refusing to refresh a parity ratchet without the exact 40-character source commit.');
