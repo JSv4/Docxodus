@@ -35,6 +35,11 @@ test.describe('generated-PDF build provenance', () => {
   test('rejects an active direct Playwright invocation that skipped the owned builds', () => {
     expect(() => assertBuildOwningLifecycle(false, undefined)).not.toThrow();
     expect(() => assertBuildOwningLifecycle(true, 'test:generated-pdf-parity')).not.toThrow();
+    // CI builds both packages as its own steps and then runs the prebuilt runner, so this name
+    // must be accepted or the workflow pays for a second trimmed WASM publish.
+    expect(() => assertBuildOwningLifecycle(true, 'test:generated-pdf-parity:prebuilt'))
+      .not.toThrow();
     expect(() => assertBuildOwningLifecycle(true, undefined)).toThrow(/direct Playwright/);
+    expect(() => assertBuildOwningLifecycle(true, 'test')).toThrow(/direct Playwright/);
   });
 });

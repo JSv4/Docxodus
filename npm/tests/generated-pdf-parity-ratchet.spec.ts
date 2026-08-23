@@ -107,16 +107,22 @@ test.describe('the committed generated-PDF parity ratchet', () => {
       scripts: Record<string, string>;
     };
     const command = packageJson.scripts['test:generated-pdf-parity'];
+    const prebuilt = packageJson.scripts['test:generated-pdf-parity:prebuilt'];
     expect(command).toContain('npm run build');
     expect(command).toContain('npm --prefix ../npm-export run build');
-    expect(command).toContain('npm run pretest');
-    expect(command).toContain('playwright test generated-pdf-parity.spec.ts');
     expect(command.indexOf('npm run build')).toBeLessThan(
       command.indexOf('npm --prefix ../npm-export run build'),
     );
+    // Both builds must precede the delegation, or the runner measures stale artifacts.
     expect(command.indexOf('npm --prefix ../npm-export run build')).toBeLessThan(
-      command.indexOf('playwright test generated-pdf-parity.spec.ts'),
+      command.indexOf('npm run test:generated-pdf-parity:prebuilt'),
     );
+    expect(prebuilt).toContain('npm run pretest');
+    expect(prebuilt).toContain('playwright test generated-pdf-parity.spec.ts');
+    expect(prebuilt.indexOf('npm run pretest'))
+      .toBeLessThan(prebuilt.indexOf('playwright test generated-pdf-parity.spec.ts'));
+    // The prebuilt runner must NOT build: that is the whole point, and CI calls it directly.
+    expect(prebuilt).not.toContain('npm run build');
   });
 
   test('agrees with the corpus about every reviewable disposition', () => {

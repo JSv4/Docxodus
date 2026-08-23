@@ -32,8 +32,17 @@ function exporterCanonicalJson(): (value: unknown) => string {
     .replace(/ as Record<string, unknown>/g, '')
     .replace(/const result: Record<string, unknown> =/, 'const result =')
     .replace(/export function/g, 'function');
-  // eslint-disable-next-line no-new-func
-  return new Function(`${body}\nreturn canonicalJson;`)() as (value: unknown) => string;
+  try {
+    // eslint-disable-next-line no-new-func
+    return new Function(`${body}\nreturn canonicalJson;`)() as (value: unknown) => string;
+  } catch (error) {
+    throw new Error(
+      `${EXPORTER_SOURCE} could not be evaluated after stripping its type annotations, so this `
+      + 'mirror check could not run. That is a signal, not a flake: either the exporter grew an '
+      + 'annotation form this strip does not handle, or its canonicalizer changed shape. Extend '
+      + `the strip above, or replace it with a shared module. Cause: ${error}`,
+    );
+  }
 }
 
 test.describe('canonical JSON mirrors the exporter', () => {

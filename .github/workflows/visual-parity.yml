@@ -193,7 +193,9 @@ jobs:
           DOCXODUS_GENERATED_PDF_PARITY_FILTER: ${{ inputs.pdf_filter }}
           DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
           DOCXODUS_VISUAL_PARITY_RATCHET: ${{ github.event_name == 'workflow_dispatch' && !inputs.ratchet && '0' || '1' }}
-        run: cd npm && npm run test:generated-pdf-parity
+        # `:prebuilt` deliberately: the two build steps above already produced npm/dist and
+        # npm-export/dist, and the full script would repeat a trimmed WASM publish for nothing.
+        run: cd npm && npm run test:generated-pdf-parity:prebuilt
 
       - name: Upload visual comparison report
         uses: actions/upload-artifact@v7

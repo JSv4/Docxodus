@@ -38,9 +38,23 @@ export interface GeneratedPdfBuildEvidence {
   exporterLock: FileDigestEvidence;
 }
 
+/**
+ * Scripts permitted to launch the benchmark.
+ *
+ * `test:generated-pdf-parity` builds both packages and then delegates to the `:prebuilt` runner,
+ * so the runner's name is what the Playwright process actually sees either way. CI can therefore
+ * call `:prebuilt` directly after its own build steps instead of repeating a trimmed WASM publish
+ * inside the run. Both are npm scripts, so a bare `npx playwright test` is still refused.
+ */
+export const BUILD_OWNING_LIFECYCLE_EVENTS: readonly string[] = [
+  'test:generated-pdf-parity',
+  'test:generated-pdf-parity:prebuilt',
+];
+
 export function assertBuildOwningLifecycle(active: boolean, lifecycleEvent: string | undefined): void {
-  if (active && lifecycleEvent !== 'test:generated-pdf-parity') {
-    throw new Error('Run generated-PDF parity through `npm run test:generated-pdf-parity`; '
+  if (active && !BUILD_OWNING_LIFECYCLE_EVENTS.includes(lifecycleEvent ?? '')) {
+    throw new Error('Run generated-PDF parity through `npm run test:generated-pdf-parity`, or '
+      + '`npm run test:generated-pdf-parity:prebuilt` when both packages are already built; '
       + 'direct Playwright invocation does not own the required npm and exporter builds.');
   }
 }

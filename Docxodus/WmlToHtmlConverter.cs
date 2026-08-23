@@ -4697,6 +4697,32 @@ namespace Docxodus
             return note;
         }
 
+        /// <summary>
+        /// Whether a span carries nothing at all, and so is safe to drop as invalid HTML5.
+        ///
+        /// `XElement.IsEmpty` is a SERIALIZATION property — true only for an element with no child
+        /// nodes whatever — so a span the converter built around an empty `w:t` carries an empty
+        /// XText child, serializes as `&lt;span&gt;&lt;/span&gt;`, and used to slip through.
+        ///
+        /// Absence of text is NOT sufficient on its own, though: the converter deliberately
+        /// synthesizes text-empty spans that ARE the layout. A tab advance is an inline-block of a
+        /// computed width (see <see cref="ProcessTab"/>), whose empty text node is there on
+        /// purpose; deleting it collapses every tab stop on the line. So keep any span that a
+        /// style annotation has given a box, and any span carrying a `data-` marker for a later
+        /// pass or for the browser.
+        /// </summary>
+        private static bool IsDiscardableEmptySpan(XElement span)
+        {
+            if (span.HasElements || span.Value.Length != 0) return false;
+            if (span.Attributes().Any(a =>
+                a.Name.LocalName.StartsWith("data-", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+            var style = span.Annotation<Dictionary<string, string>>();
+            return style == null || (!style.ContainsKey("width") && !style.ContainsKey("display"));
+        }
+
         private static object ProcessTab(XElement element)
         {
             var tabWidthAtt = element.Attribute(PtOpenXml.TabWidth);
@@ -4879,15 +4905,7 @@ namespace Docxodus
             // The paragraph conversion might have created empty spans.
             // These can and should be removed because empty spans are
             // invalid in HTML5.
-            //
-            // `XElement.IsEmpty` is a SERIALIZATION property: it is true only for an element with
-            // no child nodes at all, so a span the converter built around an empty `w:t` carries an
-            // empty XText child, serializes as `<span></span>`, and slips through. Test for absent
-            // content instead. Child elements are what keeps a span that holds only `<br/>` or an
-            // image — content with no text — from being deleted along with the genuinely empty ones.
-            paragraph.Elements(Xhtml.span)
-                .Where(e => !e.HasElements && e.Value.Length == 0)
-                .Remove();
+            paragraph.Elements(Xhtml.span).Where(IsDiscardableEmptySpan).Remove();
 
             foreach (var span in paragraph.Elements(Xhtml.span).ToList())
             {
