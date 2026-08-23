@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md.",
-  "recordedAt": "2026-08-13",
-  "sourceCommit": "a3d71c2ddcf6ff3775be752908654a24823caf8c",
+  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` names an integration commit that is not an ancestor of this branch, so these numbers could not be taken on trust. They were re-measured in CI on the pinned reference environment (run 32612575750) and reproduce exactly: fields-and-tabs ssim 0.95942, running-content severity severe / ssim 0.99868 / worstInkF1 0.10495. running-content is a reference deviation, not a renderer defect: DB005 section 2 sets titlePg and omits its first-page header and footer references, so WordprocessingML inherits section 1\u2019s first-page stories; Docxodus follows that rule and LibreOffice does not, and the ink F1 collapse is that near-blank page disagreeing on which running story it carries.",
+  "recordedAt": "2026-08-16",
+  "sourceCommit": "de64978a8dd71776a59384aec209888e18c44512",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -77,8 +77,8 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.96026,
-      "worstInkF1": 0.99775
+      "ssim": 0.95942,
+      "worstInkF1": 0.99868
     },
     {
       "id": "footnote",
@@ -170,14 +170,14 @@
     },
     {
       "id": "running-content",
-      "disposition": "environment",
+      "disposition": "reference-deviation",
       "pages": {
         "docxodus": 5,
         "libreoffice": 5
       },
-      "severity": "close",
-      "ssim": 0.99927,
-      "worstInkF1": 0.96486
+      "severity": "severe",
+      "ssim": 0.99868,
+      "worstInkF1": 0.10495
     },
     {
       "id": "shape",

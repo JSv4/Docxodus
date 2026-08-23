@@ -4697,6 +4697,32 @@ namespace Docxodus
             return note;
         }
 
+        /// <summary>
+        /// Whether a span carries nothing at all, and so is safe to drop as invalid HTML5.
+        ///
+        /// `XElement.IsEmpty` is a SERIALIZATION property — true only for an element with no child
+        /// nodes whatever — so a span the converter built around an empty `w:t` carries an empty
+        /// XText child, serializes as `&lt;span&gt;&lt;/span&gt;`, and used to slip through.
+        ///
+        /// Absence of text is NOT sufficient on its own, though: the converter deliberately
+        /// synthesizes text-empty spans that ARE the layout. A tab advance is an inline-block of a
+        /// computed width (see <see cref="ProcessTab"/>), whose empty text node is there on
+        /// purpose; deleting it collapses every tab stop on the line. So keep any span that a
+        /// style annotation has given a box, and any span carrying a `data-` marker for a later
+        /// pass or for the browser.
+        /// </summary>
+        private static bool IsDiscardableEmptySpan(XElement span)
+        {
+            if (span.HasElements || span.Value.Length != 0) return false;
+            if (span.Attributes().Any(a =>
+                a.Name.LocalName.StartsWith("data-", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+            var style = span.Annotation<Dictionary<string, string>>();
+            return style == null || (!style.ContainsKey("width") && !style.ContainsKey("display"));
+        }
+
         private static object ProcessTab(XElement element)
         {
             var tabWidthAtt = element.Attribute(PtOpenXml.TabWidth);
@@ -4879,7 +4905,7 @@ namespace Docxodus
             // The paragraph conversion might have created empty spans.
             // These can and should be removed because empty spans are
             // invalid in HTML5.
-            paragraph.Elements(Xhtml.span).Where(e => e.IsEmpty).Remove();
+            paragraph.Elements(Xhtml.span).Where(IsDiscardableEmptySpan).Remove();
 
             foreach (var span in paragraph.Elements(Xhtml.span).ToList())
             {
@@ -7945,12 +7971,15 @@ namespace Docxodus
             }
         }
 
-        // Non-breaking spaces are not required if we use appropriate CSS, i.e., "white-space: pre-wrap;".
-        // We only need to make sure that empty w:p elements are translated into non-empty h:p elements,
-        // because empty h:p elements would be ignored by browsers.
-        // Further, in addition to not being required, non-breaking spaces would change the layout behavior
-        // of spans having consecutive spaces. Therefore, avoiding non-breaking spaces has the additional
-        // benefit of leading to a more faithful representation of the Word document in HTML.
+        // We only need to make sure that visually empty w:p elements are translated into non-empty
+        // h:p elements, because an h:p with no rendered inline content produces no line box.
+        //
+        // Ordinary run whitespace is NOT substituted here: consumers emit "span { white-space:
+        // pre-wrap; }" (see HtmlConversionOps), under which a real space keeps its own width, and
+        // substituting NBSP would change the layout behavior of consecutive spaces. The synthesized
+        // placeholder below is the single exception, and even there the literal is cosmetic —
+        // ConvertTextWithNbsp already maps a lone boundary space to U+00A0 downstream, so writing
+        // the placeholder as NBSP states the intent rather than changing the emitted bytes.
         private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
         {
             XElement element = node as XElement;
@@ -7977,9 +8006,16 @@ namespace Docxodus
                 // W.yearShort
                 if (element.Name == W.p)
                 {
-                    // Translate empty paragraphs to paragraphs having one run with
-                    // a normal space. A non-breaking space, i.e., \x00A0, is not
-                    // required if we use appropriate CSS.
+                    // Translate visually empty paragraphs into paragraphs carrying one placeholder
+                    // run, so the paragraph mark keeps a line box.
+                    //
+                    // A `w:t` with no characters is not content. Word commonly serializes a blank
+                    // paragraph that way (signature-table spacer rows, for instance), and counting
+                    // it left the paragraph with nothing but a span the converter had already
+                    // emptied — no line box, a canonical paragraph anchor with zero geometry, and a
+                    // strict PageMap rejecting an otherwise-valid document. The emptied span itself
+                    // is removed in ProcessParagraph, so both spellings of "blank paragraph" reach
+                    // the browser as exactly one placeholder span.
                     bool hasContent = element
                         .Elements()
                         .Where(e => e.Name != W.pPr)
@@ -7997,7 +8033,7 @@ namespace Docxodus
                             e.Name == W.separator ||
                             e.Name == W.softHyphen ||
                             e.Name == W.sym ||
-                            e.Name == W.t ||
+                            (e.Name == W.t && e.Value.Length != 0) ||
                             e.Name == W.tab ||
                             e.Name == W.yearLong ||
                             e.Name == W.yearShort
@@ -8009,7 +8045,7 @@ namespace Docxodus
                             element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)),
                             new XElement(W.r,
                                 element.Elements(W.pPr).Elements(W.rPr),
-                                new XElement(W.t, " ")));
+                                new XElement(W.t, "\u00A0")));
                 }
 
                 return new XElement(element.Name,

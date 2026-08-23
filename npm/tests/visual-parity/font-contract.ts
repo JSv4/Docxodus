@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FONT_SUBSTITUTION_CONTRACT,
@@ -42,24 +42,36 @@ export interface ResolvedFont {
   substitute: string;
   resolvedFamily: string;
   file: string;
+  /** Absolute resolved path. Host-specific, so it is NOT part of the recorded report. */
+  filePath: string;
+  fileSha256: string;
   fontVersion: string;
   metricCompatible: boolean;
 }
 
 /** What each declared family resolves to under the contract, per fc-match. */
-export function resolveContractFonts(): ResolvedFont[] {
+export function resolveContractFonts(fcMatchExecutable = 'fc-match'): ResolvedFont[] {
   return FONT_CONTRACT.map(entry => {
-    const out = execFileSync('fc-match', ['-f', '%{family}\t%{file}\t%{fontversion}', entry.family], {
+    const out = execFileSync(fcMatchExecutable, ['-f', '%{family}\t%{file}\t%{fontversion}', entry.family], {
       encoding: 'utf8',
       env: { ...process.env, FONTCONFIG_FILE: FONT_CONTRACT_FILE },
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
     });
     const [resolvedFamily = '', file = '', fontVersion = ''] = out.split('\t');
+    const resolvedFile = realpathSync(file);
+    const metadata = lstatSync(resolvedFile);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`fc-match returned a non-regular font file for ${entry.family}`);
+    }
     return {
       family: entry.family,
       substitute: entry.substitute,
       // fc-match may report a family list; the substitute must be one of its names.
       resolvedFamily,
-      file,
+      file: basename(resolvedFile),
+      filePath: resolvedFile,
+      fileSha256: createHash('sha256').update(readFileSync(resolvedFile)).digest('hex'),
       fontVersion,
       metricCompatible: entry.metricCompatible,
     };
@@ -67,13 +79,27 @@ export function resolveContractFonts(): ResolvedFont[] {
 }
 
 /**
+ * Directories holding the contract's resolved faces.
+ *
+ * The benchmark already pins fonts for LibreOffice and Poppler through FONTCONFIG_FILE, but the
+ * Node export path resolves its own: `@docxodus/export` reports `verification: "nodeVerified"`
+ * only when every face resolved from a `configured` or `attested` source, and falls back to
+ * `browserObserved` when it had to take whatever the browser had. Handing it these directories as
+ * `fontDirectories` is how the third renderer joins the same contract as the other two.
+ */
+export function contractFontDirectories(fcMatchExecutable = 'fc-match'): string[] {
+  const directories = resolveContractFonts(fcMatchExecutable).map(font => dirname(font.filePath));
+  return [...new Set(directories)].sort();
+}
+
+/**
  * Fails clearly when the host cannot satisfy the contract, naming the packages to install.
  * Returns the resolutions for the report on success.
  */
-export function assertFontContract(): ResolvedFont[] {
+export function assertFontContract(fcMatchExecutable = 'fc-match'): ResolvedFont[] {
   let resolved: ResolvedFont[];
   try {
-    resolved = resolveContractFonts();
+    resolved = resolveContractFonts(fcMatchExecutable);
   } catch (error) {
     throw new Error(`fc-match is unavailable; the font contract cannot be verified: ${error}`);
   }
@@ -90,11 +116,14 @@ export function assertFontContract(): ResolvedFont[] {
 }
 
 /** The report block `summary.json` records for the environment. */
-export function fontContractReport(repoRoot: string) {
+export function fontContractReport(repoRoot: string, fcMatchExecutable = 'fc-match') {
   return {
     file: relative(repoRoot, FONT_CONTRACT_FILE),
     sha256: createHash('sha256').update(readFileSync(FONT_CONTRACT_FILE)).digest('hex'),
-    families: assertFontContract(),
+    // `filePath` is deliberately dropped: it is absolute, so recording it would make the
+    // environment fingerprint differ between two hosts that satisfy the identical contract.
+    families: assertFontContract(fcMatchExecutable)
+      .map(({ filePath: _filePath, ...font }) => font),
   };
 }
 

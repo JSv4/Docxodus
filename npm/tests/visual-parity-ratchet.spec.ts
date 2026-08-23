@@ -16,6 +16,7 @@ import {
   RATCHET_RECORD_FILE,
   RATCHET_SCHEMA_VERSION,
   RATCHET_TOLERANCE,
+  assertRecordUpdateProvenance,
   buildRecord,
   chromiumFingerprint,
   compareToRecord,
@@ -299,6 +300,27 @@ test.describe('visual parity ratchet', () => {
     // Sorted by id so corpus reordering cannot churn the committed diff.
     expect(BASELINE_RECORD.cases.map(entry => entry.id)).toEqual(['multi-section', 'shape']);
   });
+
+  test('record refresh requires an exact clean source commit', () => {
+    const clean = {
+      ...BASELINE_SUMMARY,
+      gitCommit: 'a'.repeat(40),
+      workingTreeDirty: false,
+    };
+    expect(() => assertRecordUpdateProvenance(clean)).not.toThrow();
+    expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
+      .toThrow(/dirty or unverified worktree/);
+    // The refusal must name what it objected to: on a hosted runner nobody can go and look.
+    expect(() => assertRecordUpdateProvenance({
+      ...clean,
+      workingTreeDirty: true,
+      workingTreeStatus: [' M npm/package-lock.json', '?? npm/stray.txt'],
+    })).toThrow(/npm\/package-lock\.json[\s\S]*npm\/stray\.txt/);
+    expect(() => assertRecordUpdateProvenance({ ...clean, workingTreeDirty: true }))
+      .toThrow(/No status detail was recorded/);
+    expect(() => assertRecordUpdateProvenance({ ...clean, gitCommit: 'deadbeef' }))
+      .toThrow(/40-character source commit/);
+  });
 });
 
 /**
@@ -350,6 +372,30 @@ test.describe('LibreOffice reference-version contract', () => {
   test('the declared build belongs to the declared minor', () => {
     expect(LIBREOFFICE_CONTRACT.build.startsWith(`${LIBREOFFICE_CONTRACT.version}.`)).toBe(true);
     expect(LIBREOFFICE_CONTRACT.archiveUrl).toContain(LIBREOFFICE_CONTRACT.build);
+    expect(LIBREOFFICE_CONTRACT.archiveSignatureUrl).toBe(`${LIBREOFFICE_CONTRACT.archiveUrl}.asc`);
+    expect(LIBREOFFICE_CONTRACT.signingKeyFingerprint).toMatch(/^[0-9A-F]{40}$/);
+  });
+
+  test('CI verifies the detached signature and exact signing-key fingerprint before extraction', () => {
+    const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
+    expect(workflow).toContain(LIBREOFFICE_CONTRACT.archiveSignatureUrl);
+    expect(workflow).toContain(LIBREOFFICE_CONTRACT.signingKeyFingerprint);
+    expect(workflow).toContain('--verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz');
+    expect(workflow.indexOf('--verify /tmp/libreoffice.tar.gz.asc'))
+      .toBeLessThan(workflow.indexOf('tar -xzf /tmp/libreoffice.tar.gz'));
+  });
+
+  test('CI never cancels an in-flight benchmark, and budgets for configured retries', () => {
+    const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
+    // The group collapses to github.ref, so cancelling would let a manual dispatch kill the
+    // scheduled traversal that the ratchet depends on.
+    expect(workflow).toContain('cancel-in-progress: false');
+    const budget = Number(workflow.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+    const config = readFileSync(resolve(__dirname, '../playwright.config.ts'), 'utf8');
+    const retries = Number(config.match(/retries:\s*process\.env\.CI\s*\?\s*(\d+)/)?.[1]);
+    // A job timeout is a cancellation, so an under-budgeted job SKIPS the generated-PDF step
+    // and uploads only its bootstrap page.
+    expect(budget).toBeGreaterThanOrEqual((retries + 1) * 50);
   });
 });
 

@@ -17,6 +17,27 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Long footnote paragraphs keep a complete PageMap when they continue (#489).** A note paragraph
+  taller than the maximum note band, and a long leader followed by short tails, are now covered by
+  `standalone-export.spec.ts`: both must continue across pages with `running_story_placement`
+  complete, no pending work, and PageMap fragments on every page the note reaches. The footnote
+  fixture generator accepts per-paragraph word counts so uneven continuation pressure can be
+  constructed directly.
+
+- **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
+  Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
+  recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector
+  contracts are unconditional gates that no raster severity or disposition can waive (the chart
+  contract requires a chart case to emit vector path operations at all); SSIM and ink
+  metrics ratchet separately against a numbers-only record, and text and link extraction are gated
+  independently so a text regression cannot hide behind an acceptable raster score. Extraction from
+  the *reference* PDF is reported rather than gated, so a LibreOffice or Poppler change cannot fail
+  a contract that names Docxodus. An environment
+  fingerprint covering LibreOffice, Chromium, Poppler and the font contract means a changed
+  environment reports `environment-changed` rather than being misattributed to the renderer. The
+  benchmark stays `workflow_dispatch`-only until #444 lands, per the release-gate ordering in the
+  design doc.
+
 - **Verified font runtime (#442).** `fontDirectories` is live: the Node adapter
   deterministically discovers TTF/OTF/WOFF/WOFF2 files across the ordered directories,
   rejects symlinks and escaping or changing paths, reads family and face metadata, hashes
@@ -602,6 +623,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Empty paragraphs lost their line box in paginated export (#443).** A paragraph Word serialized
+  as an explicit run holding an empty `w:t` — how it commonly writes a blank line, including
+  signature-table spacer rows — counted as having content, so it received no placeholder run and
+  reached the browser as nothing but a span the converter had already emptied. That left no
+  paragraph-mark line box, a canonical paragraph anchor with zero geometry, and a strict PageMap
+  rejecting otherwise-valid documents. An empty `w:t` is no longer treated as content, and the
+  cleanup that deletes empty spans now recognizes them: it tested `XElement.IsEmpty`, which is a
+  serialization property true only of an element with no child nodes at all, so a span built around
+  an empty `w:t` carried an empty text node and survived. Both spellings of a blank paragraph now
+  produce exactly one placeholder span.
 - **Chromium launch failures say why, and an unavailable sandbox is named as a host policy**
   (issue #525). The Node export runtime already attached the real reason a launch failed to
   `DocxodusExportError.cause`, but the CLI rendered only code, phase, message, remediation, and
