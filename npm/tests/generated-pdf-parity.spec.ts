@@ -726,12 +726,10 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
           unsupportedContent: 'warn',
           timeoutMs: 120_000,
         });
-        const verifiedCandidate = assertSupportedPdfResult(candidate, {
-          sourceSha256,
-          reviewProfile: entry.profiles.candidate.reviewProfile,
-          commentProfile: entry.profiles.candidate.commentProfile,
-        });
-        docxodusPages = verifiedCandidate.pageCount;
+        // Persist BEFORE validating. The envelope assertion is the strictest check in the
+        // harness, so it is the one most likely to reject every case at once — and running it
+        // first meant a rejected run shipped an artifact containing no PDF, no report and no
+        // PageMap, leaving nothing to diagnose but the exception text.
         const candidatePdfPath = join(caseOutput, 'docxodus.pdf');
         writeFileSync(candidatePdfPath, candidate.pdf);
         writeJsonAtomic(join(caseOutput, 'render-report.json'), candidate.renderReport);
@@ -739,6 +737,13 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         artifacts.candidatePdf = `${entry.id}/docxodus.pdf`;
         artifacts.renderReport = `${entry.id}/render-report.json`;
         artifacts.pageMap = `${entry.id}/page-map.json`;
+
+        const verifiedCandidate = assertSupportedPdfResult(candidate, {
+          sourceSha256,
+          reviewProfile: entry.profiles.candidate.reviewProfile,
+          commentProfile: entry.profiles.candidate.commentProfile,
+        });
+        docxodusPages = verifiedCandidate.pageCount;
 
         if (candidate.renderReport.source.rawPackageBytesDigest !== sourceSha256) {
           throw new Error(`${entry.id}: render report source digest does not bind the pinned source.`);

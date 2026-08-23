@@ -133,18 +133,49 @@ export function assertSupportedPdfResult(
   const reportBindings = report ? record(report.bindings) : undefined;
   const reportSource = report ? record(report.source) : undefined;
   const reportOptions = report ? record(report.options) : undefined;
-  if (!report || report.status !== 'complete'
-    || !reportEnvironment || reportEnvironment.rendererFingerprint !== result.rendererFingerprint
-    || reportEnvironment.verification !== 'nodeVerified'
-    || reportEnvironment.fidelityTier !== 'releaseBaselined'
-    || !reportBindings || reportBindings.pdfDigest !== sha256(result.pdf)
-    || reportBindings.pageMapDigest !== sha256(canonicalJson(map))
-    || !reportSource || reportSource.rawPackageBytesDigest !== expected.sourceSha256
-    || !reportOptions || reportOptions.reviewProfile !== expected.reviewProfile
-    || reportOptions.commentProfile !== expected.commentProfile
-    || canonicalJson(report.pages) !== canonicalJson(map.pages)
-    || canonicalJson(report.warnings) !== canonicalJson(result.warnings)) {
-    throw new Error('Supported PDF result is not bound to its report, PageMap, source, and profiles.');
+  // Named, individually reported checks. A single boolean chain collapsed eleven distinct
+  // failures into one sentence, so a benchmark that rejected every case said only that something
+  // was unbound — with no way to tell a renderer-fingerprint mismatch from a profile mismatch
+  // without re-running against a patched harness.
+  const bindingChecks: ReadonlyArray<readonly [string, () => boolean]> = [
+    ['renderReport is an object', () => report !== undefined],
+    ['renderReport.status === "complete"', () => report?.status === 'complete'],
+    ['renderReport.environment is an object', () => reportEnvironment !== undefined],
+    ['environment.rendererFingerprint matches the result',
+      () => reportEnvironment?.rendererFingerprint === result.rendererFingerprint],
+    ['environment.verification === "nodeVerified"',
+      () => reportEnvironment?.verification === 'nodeVerified'],
+    ['environment.fidelityTier === "releaseBaselined"',
+      () => reportEnvironment?.fidelityTier === 'releaseBaselined'],
+    ['renderReport.bindings is an object', () => reportBindings !== undefined],
+    ['bindings.pdfDigest binds the returned PDF',
+      () => reportBindings?.pdfDigest === sha256(result.pdf as Uint8Array)],
+    ['bindings.pageMapDigest binds the returned PageMap',
+      () => reportBindings?.pageMapDigest === sha256(canonicalJson(map))],
+    ['renderReport.source is an object', () => reportSource !== undefined],
+    ['source.rawPackageBytesDigest binds the pinned fixture',
+      () => reportSource?.rawPackageBytesDigest === expected.sourceSha256],
+    ['renderReport.options is an object', () => reportOptions !== undefined],
+    ['options.reviewProfile matches the corpus contract',
+      () => reportOptions?.reviewProfile === expected.reviewProfile],
+    ['options.commentProfile matches the corpus contract',
+      () => reportOptions?.commentProfile === expected.commentProfile],
+    ['renderReport.pages agrees with pageMap.pages',
+      () => canonicalJson(report?.pages) === canonicalJson(map.pages)],
+    ['renderReport.warnings agrees with result.warnings',
+      () => canonicalJson(report?.warnings) === canonicalJson(result.warnings)],
+  ];
+  const unmet = bindingChecks.filter(([, holds]) => !holds()).map(([label]) => label);
+  if (unmet.length > 0) {
+    const observed = {
+      verification: reportEnvironment?.verification,
+      fidelityTier: reportEnvironment?.fidelityTier,
+      reviewProfile: reportOptions?.reviewProfile,
+      commentProfile: reportOptions?.commentProfile,
+      status: report?.status,
+    };
+    throw new Error('Supported PDF result is not bound to its report, PageMap, source, and '
+      + `profiles. Unmet: ${unmet.join('; ')}. Observed: ${JSON.stringify(observed)}`);
   }
   return { pageCount: result.pageCount as number, rendererFingerprint: result.rendererFingerprint, pages };
 }
