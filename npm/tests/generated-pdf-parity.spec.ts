@@ -590,7 +590,17 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
   const git = pinExecutable('git', ['--version']);
   const sourceCommit = commandVersion(git.path, ['rev-parse', 'HEAD']);
   const sourceTree = commandVersion(git.path, ['rev-parse', 'HEAD^{tree}']);
-  const sourceWorkingTreeStatus = commandVersion(git.path, ['status', '--porcelain']);
+  // "Dirty" has to mean the CONTENT differs from HEAD, not that a line-ending attribute is
+  // misconfigured. `Docxodus.Tests/Docxodus.Tests.csproj` is stored with CRLF and `text` unset
+  // while every sibling csproj is `text eol=crlf`, so a fresh CI checkout reports it modified
+  // while it is byte-identical in content — enough to refuse every record refresh forever for a
+  // reason that has nothing to do with the record. Untracked files, deleted tracked files and
+  // real content edits all still count.
+  const workingTreeStatus = (): string => [
+    commandVersion(git.path, ['ls-files', '--others', '--exclude-standard']),
+    commandVersion(git.path, ['diff', '--name-only', '--ignore-cr-at-eol', 'HEAD']),
+  ].filter((value) => value.length > 0).join('\n');
+  const sourceWorkingTreeStatus = workingTreeStatus();
   const sourceWorkingTreeDirty = sourceWorkingTreeStatus.length > 0;
   const cases: PdfParityCaseResult[] = [];
   let phase = 'artifact-initialization';
@@ -1040,7 +1050,7 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
     phase = 'evidence-stability';
     const finalSourceCommit = commandVersion(git.path, ['rev-parse', 'HEAD']);
     const finalSourceTree = commandVersion(git.path, ['rev-parse', 'HEAD^{tree}']);
-    const finalWorkingTreeStatus = commandVersion(git.path, ['status', '--porcelain']);
+    const finalWorkingTreeStatus = workingTreeStatus();
     if (finalSourceCommit !== sourceCommit || finalSourceTree !== sourceTree
       || finalWorkingTreeStatus !== sourceWorkingTreeStatus) {
       throw new Error('Source commit, tree, or working-tree state changed during the benchmark.');
