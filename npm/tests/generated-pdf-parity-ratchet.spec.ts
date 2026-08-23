@@ -180,8 +180,29 @@ test.describe('the committed generated-PDF parity ratchet', () => {
     expect(spec).toContain("updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD'");
   });
 
-  test('the committed record still round-trips through the comparator unchanged', () => {
+  test('a provisional record refuses numeric comparison instead of blaming the renderer', () => {
     const record = readRecord(recordFile)!;
-    expect(compareToRecord(record, measuredSummary(record)).status).toBe('ok');
+    // The committed record was measured off this lineage. Feeding the comparator numbers that
+    // match it EXACTLY must still refuse: the environment fingerprint covers LibreOffice,
+    // Chromium, Poppler and fonts, so a source-lineage difference shows no drift and would
+    // otherwise be compared numerically and attributed to Docxodus.
+    expect(record!.provisional).toBe(true);
+    const comparison = compareToRecord(record, measuredSummary(record), {
+      expectComplete: true,
+      updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD',
+    });
+    expect(comparison.status).toBe('record-mismatch');
+    expect(comparison.message).toContain('provisional');
+    expect(comparison.message).toContain('DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD=1');
+  });
+
+  test('clearing the flag restores ordinary numeric comparison', () => {
+    const record = readRecord(recordFile)!;
+    const promoted = { ...record, provisional: undefined };
+    expect(compareToRecord(promoted, measuredSummary(record)).status).toBe('ok');
+  });
+
+  test('a refresh never re-emits the provisional flag', () => {
+    expect(buildRecord(SEVERE_BASELINE, '2026-08-16')).not.toHaveProperty('provisional');
   });
 });

@@ -39,13 +39,19 @@ function footnote(
   const effectiveParagraphCount = paragraphWordCounts?.length ?? paragraphCount;
   const paragraphs = Array.from({ length: effectiveParagraphCount }, (_, index) => {
     const requestedWords = paragraphWordCounts?.[index];
+    if (requestedWords !== undefined && (!Number.isInteger(requestedWords) || requestedWords < 1)) {
+      throw new Error(`Footnote paragraph ${index + 1} needs a positive integer word count.`);
+    }
+    // Emit EXACTLY the requested number of words. Padding a five-word stem with `repeat(n - 5)`
+    // clamped every count below five to the same text, so a case asking for uneven continuation
+    // pressure silently got none and the test it fed proved nothing about the uneven path.
     const text = requestedWords === undefined
       ? wordsPerParagraph > 0
         ? Array.from({ length: wordsPerParagraph }, (_, wordIndex) =>
           `footnote-${id}-${index + 1}-${wordIndex + 1}`).join(' ')
         : `Footnote ${id} paragraph ${index + 1} text.`
-      : `Footnote ${id} paragraph ${index + 1} text.${
-        ' continuation'.repeat(Math.max(0, requestedWords - 5))}`;
+      : Array.from({ length: requestedWords }, (_, wordIndex) =>
+        `note${id}p${index + 1}w${wordIndex + 1}`).join(' ');
     return (
       `<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>` +
       (index === 0

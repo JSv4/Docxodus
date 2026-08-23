@@ -117,10 +117,12 @@ interface GeometryDelta {
 
 interface PageGeometryComparison {
   page: number;
-  candidate: { mediaBox: PdfBox; cropBox: PdfBox };
-  reference: { mediaBox: PdfBox; cropBox: PdfBox };
+  candidate: { mediaBox: PdfBox; cropBox: PdfBox; rotation: number };
+  reference: { mediaBox: PdfBox; cropBox: PdfBox; rotation: number };
   mediaBoxDelta: GeometryDelta;
   cropBoxDelta: GeometryDelta;
+  /** `scaledOrientedPdfBox` already swaps the extents, so equal boxes hide a /Rotate difference. */
+  rotationMatches: boolean;
   passed: boolean;
 }
 
@@ -500,13 +502,24 @@ function compareGeometry(
     const referencePage = reference.pages[index];
     const mediaBoxDelta = boxDelta(candidatePage.mediaBox, referencePage.mediaBox);
     const cropBoxDelta = boxDelta(candidatePage.cropBox, referencePage.cropBox);
+    const rotationMatches = candidatePage.rotation === referencePage.rotation;
     return {
       page: index + 1,
-      candidate: { mediaBox: candidatePage.mediaBox, cropBox: candidatePage.cropBox },
-      reference: { mediaBox: referencePage.mediaBox, cropBox: referencePage.cropBox },
+      candidate: {
+        mediaBox: candidatePage.mediaBox,
+        cropBox: candidatePage.cropBox,
+        rotation: candidatePage.rotation,
+      },
+      reference: {
+        mediaBox: referencePage.mediaBox,
+        cropBox: referencePage.cropBox,
+        rotation: referencePage.rotation,
+      },
       mediaBoxDelta,
       cropBoxDelta,
-      passed: mediaBoxDelta.maximumAbsoluteDelta <= PHYSICAL_GEOMETRY_TOLERANCE_POINTS
+      rotationMatches,
+      passed: rotationMatches
+        && mediaBoxDelta.maximumAbsoluteDelta <= PHYSICAL_GEOMETRY_TOLERANCE_POINTS
         && cropBoxDelta.maximumAbsoluteDelta <= PHYSICAL_GEOMETRY_TOLERANCE_POINTS,
     };
   });
@@ -777,10 +790,13 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
         );
         writeJsonAtomic(join(caseOutput, 'semantic.json'), semantic);
         artifacts.semantic = `${entry.id}/semantic.json`;
-        const vectorContentPassed = !(entry.categories as readonly string[]).includes('charts')
-          || candidateInspection.vectorPathOperations > 0;
+        const chartsRequired = (entry.categories as readonly string[]).includes('charts');
+        const vectorContentPassed = !chartsRequired
+          || candidateInspection.vectorPathOperations
+            >= PDF_PARITY_LIMITS.minimumChartVectorPathOperations;
         writeJsonAtomic(join(caseOutput, 'vector-content.json'), {
-          required: (entry.categories as readonly string[]).includes('charts'),
+          required: chartsRequired,
+          minimumConstructPathOperations: PDF_PARITY_LIMITS.minimumChartVectorPathOperations,
           passed: vectorContentPassed,
           candidateConstructPathOperations: candidateInspection.vectorPathOperations,
           referenceConstructPathOperations: referenceInspection.vectorPathOperations,

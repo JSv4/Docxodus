@@ -17,6 +17,13 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Long footnote paragraphs keep a complete PageMap when they continue (#489).** A note paragraph
+  taller than the maximum note band, and a long leader followed by short tails, are now covered by
+  `standalone-export.spec.ts`: both must continue across pages with `running_story_placement`
+  complete, no pending work, and PageMap fragments on every page the note reaches. The footnote
+  fixture generator accepts per-paragraph word counts so uneven continuation pressure can be
+  constructed directly.
+
 - **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
   Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
   recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector

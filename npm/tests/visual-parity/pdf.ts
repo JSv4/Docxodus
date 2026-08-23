@@ -5,12 +5,17 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
-  statSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
 import type { PDFObject, PDFPage } from 'pdf-lib';
 import { getDocument, OPS, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { MAXIMUM_PNG_PIXELS } from './png.js';
+
+/** Directory pdfjs reads its standard-14 font data from; resolved against the installed package. */
+const PDFJS_STANDARD_FONTS = fileURLToPath(
+  new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url));
 
 /**
  * Resource ceilings for the fixed release corpus. These are deliberately far above its current
@@ -22,12 +27,23 @@ export const PDF_PARITY_LIMITS = Object.freeze({
   maximumPages: 32,
   maximumRasterBytesPerPage: 16 * 1024 * 1024,
   maximumTotalRasterBytes: 128 * 1024 * 1024,
-  maximumRasterPixelsPerPage: 4_000_000,
+  // Single owner: the PNG decoder enforces the same ceiling, and two literals drift.
+  maximumRasterPixelsPerPage: MAXIMUM_PNG_PIXELS,
   maximumTextCharacters: 5_000_000,
   maximumAnnotationsPerPage: 4_096,
   maximumOperatorEntriesPerPage: 1_000_000,
   maximumPhysicalPagePoints: 14_400,
   maximumHyperlinkTargetCharacters: 8_192,
+  /**
+   * Floor a chart case's vector path operations must clear.
+   *
+   * `> 0` was not a contract: measured on this corpus, an ordinary text page (HC023) already
+   * emits 4 construct-path operations from text decoration alone, so a chart that failed to
+   * render entirely would still have passed. The supported clustered chart (HC043) emits 27.
+   * Twelve sits well above the incidental baseline and well below a rendered chart, so a chart
+   * collapsing to a blank frame or a raster fallback fails instead of passing.
+   */
+  minimumChartVectorPathOperations: 12,
 });
 
 /**
@@ -145,17 +161,18 @@ export function rasterizePdf(
   }
   const resolvedPdf = resolve(pdfPath);
   const resolvedPrefix = resolve(outputPrefix);
-  if (!existsSync(resolvedPdf) || !lstatSync(resolvedPdf).isFile()
-    || lstatSync(resolvedPdf).isSymbolicLink()) {
+  const pdfMetadata = existsSync(resolvedPdf) ? lstatSync(resolvedPdf) : undefined;
+  if (!pdfMetadata?.isFile() || pdfMetadata.isSymbolicLink()) {
     throw new Error(`PDF raster input is not a regular file: ${resolvedPdf}`);
   }
-  const pdfBytes = statSync(resolvedPdf).size;
+  const pdfBytes = pdfMetadata.size;
   if (pdfBytes > PDF_RASTER_CONTRACT.maximumPdfBytes) {
     throw new Error(`PDF raster input exceeds ${PDF_RASTER_CONTRACT.maximumPdfBytes} bytes: ${pdfBytes}`);
   }
-  if (!existsSync(dirname(resolvedPrefix)) || !lstatSync(dirname(resolvedPrefix)).isDirectory()
-    || lstatSync(dirname(resolvedPrefix)).isSymbolicLink()) {
-    throw new Error(`PDF raster output directory does not exist: ${dirname(resolvedPrefix)}`);
+  const outputDirectory = dirname(resolvedPrefix);
+  const outputMetadata = existsSync(outputDirectory) ? lstatSync(outputDirectory) : undefined;
+  if (!outputMetadata?.isDirectory() || outputMetadata.isSymbolicLink()) {
+    throw new Error(`PDF raster output directory does not exist: ${outputDirectory}`);
   }
   if (numberedPngs(resolvedPrefix).length > 0) {
     throw new Error(`Refusing to mix stale raster pages for prefix: ${resolvedPrefix}`);
@@ -177,20 +194,22 @@ export function rasterizePdf(
   if (pages.length > PDF_RASTER_CONTRACT.maximumPages) {
     throw new Error(`pdftoppm produced more than ${PDF_RASTER_CONTRACT.maximumPages} pages.`);
   }
+  // One read per page: the size check, the dimension header, and the digest all come from the
+  // same bytes, so re-stat-ing and re-reading every raster three times bought nothing.
   let totalRasterBytes = 0;
-  pages.forEach((page, index) => {
+  const artifacts = pages.map((page, index): RasterArtifact => {
     if (page.pageNumber !== index + 1) {
       throw new Error(`pdftoppm produced a non-contiguous page sequence at ${page.path}`);
     }
-    const size = statSync(page.path).size;
-    if (size > PDF_RASTER_CONTRACT.maximumRasterBytesPerPage) {
+    const bytes = readFileSync(page.path);
+    if (bytes.byteLength > PDF_RASTER_CONTRACT.maximumRasterBytesPerPage) {
       throw new Error(`Raster page exceeds ${PDF_RASTER_CONTRACT.maximumRasterBytesPerPage} bytes: ${page.path}`);
     }
-    totalRasterBytes += size;
+    totalRasterBytes += bytes.byteLength;
     if (totalRasterBytes > PDF_RASTER_CONTRACT.maximumTotalRasterBytes) {
       throw new Error(`Raster output exceeds ${PDF_RASTER_CONTRACT.maximumTotalRasterBytes} total bytes.`);
     }
-    const header = readFileSync(page.path).subarray(0, 24);
+    const header = bytes.subarray(0, 24);
     const isPng = header.length === 24
       && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     const width = isPng ? header.readUInt32BE(16) : 0;
@@ -198,16 +217,13 @@ export function rasterizePdf(
     if (!width || !height || width * height > PDF_RASTER_CONTRACT.maximumRasterPixelsPerPage) {
       throw new Error(`Raster page has invalid or excessive dimensions at ${page.path}: ${width}x${height}`);
     }
+    return { ...page, bytes: bytes.byteLength, sha256: sha256(bytes) };
   });
   return {
     pdfPath: resolvedPdf,
     pdfSha256: sha256(readFileSync(resolvedPdf)),
     contractSha256: PDF_RASTER_CONTRACT_SHA256,
-    pages: pages.map((page) => ({
-      ...page,
-      bytes: statSync(page.path).size,
-      sha256: sha256(readFileSync(page.path)),
-    })),
+    pages: artifacts,
   };
 }
 
@@ -496,6 +512,10 @@ export async function inspectPdf(
     data: new Uint8Array(owned),
     useSystemFonts: false,
     disableFontFace: true,
+    // Without this, pdfjs warns and degrades on any PDF that leaves a base-14 face unembedded —
+    // silently weakening the text extraction this contract gates on. The data ships in the same
+    // pdfjs-dist the Node export tests use, so it stays version-locked with the parser.
+    standardFontDataUrl: PDFJS_STANDARD_FONTS,
     stopAtErrors: true,
     maxImageSize: PDF_PARITY_LIMITS.maximumRasterPixelsPerPage,
     canvasMaxAreaInBytes: PDF_PARITY_LIMITS.maximumRasterBytesPerPage,
@@ -524,7 +544,7 @@ export async function inspectPdf(
         throw new Error(`PDF page ${pageNumber} exceeds the annotation limit.`);
       }
       const linkAnnotations = annotations
-        .filter((annotation) => annotation.subtype === 'Link')
+        .filter((annotation) => annotation.subtype === 'Link');
       const hyperlinks = await Promise.all(linkAnnotations
         .map(async (annotation): Promise<PdfHyperlinkAnnotation> => {
           const rectangle = annotationRectangle(annotation.rect);

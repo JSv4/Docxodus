@@ -24,7 +24,15 @@ export interface GeneratedPdfBuildEvidence {
   schemaVersion: 1;
   exporterJavaScript: JavaScriptGraphEvidence;
   exporterEntry: FileDigestEvidence;
+  /** tsc output. Recorded because a stale one means a partial build, but NOT what runs. */
   docxodusRuntimeEntry: FileDigestEvidence;
+  /**
+   * The esbuild bundle the page actually loads — `assets.ts` serves
+   * `./export-browser.bundle.js`, not the tsc output beside it. Fingerprinting only the latter
+   * let a rebuild that changed the bundle pass as unchanged, which is the exact partial-build
+   * class this evidence exists to catch.
+   */
+  docxodusBrowserBundle: FileDigestEvidence;
   exportAssetManifest: FileDigestEvidence;
   npmLock: FileDigestEvidence;
   exporterLock: FileDigestEvidence;
@@ -103,6 +111,8 @@ export function captureGeneratedPdfBuildEvidence(repositoryRoot: string): Genera
     exporterJavaScript: javascriptGraphEvidence(exporterDist),
     exporterEntry: regularFileEvidence(join(exporterDist, 'index.js')),
     docxodusRuntimeEntry: regularFileEvidence(resolve(repositoryRoot, 'npm/dist/export-browser.js')),
+    docxodusBrowserBundle: regularFileEvidence(
+      resolve(repositoryRoot, 'npm/dist/export-browser.bundle.js')),
     exportAssetManifest: regularFileEvidence(resolve(repositoryRoot, 'npm/dist/export-assets.json')),
     npmLock: regularFileEvidence(resolve(repositoryRoot, 'npm/package-lock.json')),
     exporterLock: regularFileEvidence(resolve(repositoryRoot, 'npm-export/package-lock.json')),

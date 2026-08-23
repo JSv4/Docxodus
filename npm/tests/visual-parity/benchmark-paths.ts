@@ -69,7 +69,10 @@ export function prepareExternalOutputRoot(
       || !metadata.isFile() || metadata.isSymbolicLink()) unexpected.push(name);
   }
   if (unexpected.length > 0) {
-    throw new Error(`Generated-PDF parity output contains stale or unsafe artifacts: ${unexpected.join(', ')}`);
+    throw new Error('Generated-PDF parity output contains stale or unsafe artifacts: '
+      + `${unexpected.join(', ')}\nEvidence from a previous run cannot be mixed with this one. `
+      + `Remove ${canonicalOutput}, or point DOCXODUS_GENERATED_PDF_PARITY_OUTPUT at a new `
+      + 'directory outside the repository.');
   }
   return canonicalOutput;
 }

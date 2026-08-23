@@ -94,6 +94,15 @@ export interface RatchetCase {
 export interface RatchetRecord {
   schemaVersion: number;
   description: string;
+  /**
+   * Set when the numbers were NOT measured on this lineage — carried over from a retired branch,
+   * say. The environment fingerprint cannot catch that: it pins LibreOffice, Chromium, Poppler and
+   * the font contract, so a record measured on different SOURCE under the SAME toolchain shows no
+   * drift and gets compared numerically, attributing the difference to the renderer. A provisional
+   * record therefore refuses numeric comparison outright until it is re-recorded. `buildRecord`
+   * never emits the flag, so a real refresh clears it.
+   */
+  provisional?: boolean;
   recordedAt: string;
   sourceCommit: string;
   environment: RatchetEnvironment;
@@ -299,6 +308,18 @@ export function compareToRecord(
   options: RatchetOptions = { expectComplete: true },
 ): RatchetComparison {
   const updateRecordEnv = options.updateRecordEnv ?? DEFAULT_RATCHET_UPDATE_ENV;
+  if (record.provisional === true) {
+    return {
+      status: 'record-mismatch',
+      findings: [],
+      improvements: [],
+      environmentDrift: [],
+      message: 'The committed record is marked provisional: its numbers were not measured on this '
+        + 'lineage, so comparing against them would attribute the difference to the renderer. The '
+        + 'unconditional contracts still gate this run. Re-record with '
+        + `${updateRecordEnv}=1 on a clean tree and commit the result to clear the flag.`,
+    };
+  }
   if (record.schemaVersion !== RATCHET_SCHEMA_VERSION) {
     return {
       status: 'record-mismatch',

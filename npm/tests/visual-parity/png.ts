@@ -8,7 +8,8 @@ export interface RgbaImage {
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const MAXIMUM_PNG_INPUT_BYTES = 64 * 1024 * 1024;
-const MAXIMUM_PNG_PIXELS = 4_000_000;
+/** Shared with the PDF raster contract, which enforces the same ceiling on pdftoppm output. */
+export const MAXIMUM_PNG_PIXELS = 4_000_000;
 
 function paeth(a: number, b: number, c: number): number {
   const p = a + b - c;

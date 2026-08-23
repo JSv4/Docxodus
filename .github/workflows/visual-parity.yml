@@ -126,13 +126,13 @@ jobs:
       # fails at start, with this same guidance, when they drift.
       - name: Install pinned LibreOffice 25.8.7.3 (reference-version contract)
         run: |
-          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 300000000 \
+          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 300000000 \
             -o /tmp/libreoffice.tar.gz \
             "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
-          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
             -o /tmp/libreoffice.tar.gz.asc \
             "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc"
-          curl -fsS --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
+          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
             -o /tmp/libreoffice-signing-key.asc \
             "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
           libreoffice_gnupg_home="$(mktemp -d)"

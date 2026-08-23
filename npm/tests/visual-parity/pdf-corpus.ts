@@ -70,7 +70,16 @@ export interface InternalPdfLinkExpectation {
   sourceText: string;
   anchor: string;
   destinationText: string;
-  /** Chromium emits one logical internal link as this exact consecutive annotation group. */
+  /**
+   * Exact consecutive annotation count Chromium emits for this one logical link.
+   *
+   * MEASURED, not assumed: exporting VP004 through `convertDocxToPdf` and grouping Link
+   * annotations by consecutive target yields 11 logical links of exactly 5 annotations each
+   * (55 total across 3 pages) - Chromium emits one rectangle per line box the anchor covers, and
+   * every TOC entry here wraps the same way. HC023's single external link measures 1.
+   * Re-measure when the pinned Chromium revision changes; the count is pinned precisely so that
+   * a change in multiplicity surfaces instead of passing silently.
+   */
   expectedPdfAnnotations: number;
 }
 

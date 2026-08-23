@@ -87,6 +87,12 @@ Concretely, a new session op touches: `DocxSession.cs` → `DocxSessionOps.cs` �
 `npm/src/index.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
 → `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
 
+**The generated-PDF benchmark is a ripple site for PageMap shape.**
+`npm/tests/visual-parity/pdf-result.ts` validates the supported `convertDocxToPdf` envelope with
+*exact* key matching on `pageMap`, each page, and each fragment, so adding an optional field to any
+of them fails the benchmark from a test file none of the tables above name. Update it in the same
+change.
+
 **Defaults are declared once.** Read them from the settings object rather than repeating
 literals per surface — `DocxSessionJson.ParseSettings` and the MCP dispatcher had each
 hardcoded their own copy of `undoDepth`, and it drifted.
