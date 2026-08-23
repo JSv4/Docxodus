@@ -186,6 +186,20 @@ test.describe('the committed generated-PDF parity ratchet', () => {
     expect(spec).toContain("updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD'");
   });
 
+  test('CI can perform the refresh its own failure message demands', () => {
+    const workflow = readFileSync(
+      resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
+    // Telling an operator to re-record while offering no way to do it is worse than no message:
+    // the pinned reference environment lives in CI, not on their machine.
+    expect(workflow).toContain('update_record:');
+    expect(workflow).toContain('DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD:');
+    // `contents: read` plus no commit step means the refreshed record has to leave via the
+    // artifact or not at all.
+    expect(workflow).toContain('contents: read');
+    const spec = readFileSync(resolve(__dirname, 'generated-pdf-parity.spec.ts'), 'utf8');
+    expect(spec).toContain("writeTextAtomic(join(outputRoot, 'generated-pdf-ratchet.json')");
+  });
+
   test('a provisional record refuses numeric comparison instead of blaming the renderer', () => {
     const record = readRecord(recordFile)!;
     // The committed record was measured off this lineage. Feeding the comparator numbers that

@@ -26,6 +26,13 @@ on:
         required: false
         default: true
         type: boolean
+      update_record:
+        description: >-
+          Re-record the generated-PDF ratchet on this environment and publish it in the artifact.
+          Required to clear a provisional record; the run cannot commit it for you.
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '41 8 * * 1'
 
@@ -191,6 +198,9 @@ jobs:
         env:
           DOCXODUS_GENERATED_PDF_PARITY_OUTPUT: ${{ runner.temp }}/docxodus-generated-pdf-parity
           DOCXODUS_GENERATED_PDF_PARITY_FILTER: ${{ inputs.pdf_filter }}
+          # A refresh must measure the WHOLE corpus, so this is deliberately incompatible with a
+          # filter; the runner refuses the combination rather than writing a partial record.
+          DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD: ${{ inputs.update_record && '1' || '0' }}
           DOCXODUS_VISUAL_PARITY_STRICT: ${{ inputs.strict && '1' || '0' }}
           DOCXODUS_VISUAL_PARITY_RATCHET: ${{ github.event_name == 'workflow_dispatch' && !inputs.ratchet && '0' || '1' }}
         # `:prebuilt` deliberately: the two build steps above already produced npm/dist and

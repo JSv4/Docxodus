@@ -1039,8 +1039,15 @@ test('supported generated PDFs match reference PDFs through the fidelity ratchet
       record.description = 'Generated-PDF visual-fidelity regression ratchet (issue #443). '
         + 'Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and '
         + 'fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.';
-      writeTextAtomic(GENERATED_PDF_RATCHET_RECORD_FILE, serializeRecord(record));
+      const serialized = serializeRecord(record);
+      writeTextAtomic(GENERATED_PDF_RATCHET_RECORD_FILE, serialized);
+      // Also publish it as evidence. CI holds `contents: read` and has no commit step, so a
+      // refresh performed on the pinned reference environment would otherwise be discarded with
+      // the runner, and the operator would be told to reproduce that environment by hand.
+      writeTextAtomic(join(outputRoot, 'generated-pdf-ratchet.json'), serialized);
       console.log(`Generated-PDF ratchet record refreshed: ${GENERATED_PDF_RATCHET_RECORD_FILE}`);
+      console.log('A copy is in the uploaded artifact as generated-pdf-ratchet.json; review the '
+        + 'diff and commit it to clear the provisional flag.');
     }
 
     phase = 'complete';
