@@ -178,6 +178,17 @@ jobs:
       - name: Install Chromium
         run: cd npm && npx playwright install --with-deps chromium
 
+      # The same step `playwright.yml` already runs before its export suite, and for the same
+      # reason. The supported export path launches Chromium with `chromiumSandbox: true` and never
+      # drops it — `assertSupportedPdfResult` rejects the degraded `injected` fidelity tier so a
+      # sandbox-less run cannot be mistaken for a release-baselined one. Ubuntu 23.10+ runners ship
+      # `kernel.apparmor_restrict_unprivileged_userns=1`, which denies that sandbox, and the export
+      # runtime's own remediation text names this exact sysctl. Without it every case fails with
+      # "Chromium could not be launched because this host denies its process sandbox" and the
+      # unconditional gate reports ten errors that say nothing about rendering.
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       # The regression ratchet (issue #395) compares this run against the committed record and
       # fails when any case got worse. A scheduled run has no `inputs`, so the expression falls
       # through to '1' — the weekly run is the one that most needs the gate, because nobody is

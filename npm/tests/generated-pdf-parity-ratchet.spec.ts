@@ -186,6 +186,24 @@ test.describe('the committed generated-PDF parity ratchet', () => {
     expect(spec).toContain("updateRecordEnv: 'DOCXODUS_GENERATED_PDF_PARITY_UPDATE_RECORD'");
   });
 
+  test('the benchmark permits the sandbox its own runtime refuses to drop', () => {
+    const benchmark = readFileSync(
+      resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
+    const playwright = readFileSync(
+      resolve(__dirname, '../../.github/workflows/playwright.yml'), 'utf8');
+    const sysctl = 'sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
+    // playwright.yml established this; visual-parity.yml omitted it, so every generated-PDF case
+    // died with "this host denies its process sandbox" before rendering anything. The export
+    // runtime launches with chromiumSandbox: true and never drops it -- assertSupportedPdfResult
+    // rejects the degraded `injected` tier -- so the runner must permit the sandbox, and the two
+    // workflows must not drift apart on it again.
+    expect(playwright).toContain(sysctl);
+    expect(benchmark).toContain(sysctl);
+    // It has to happen before the benchmark runs, not merely somewhere in the file.
+    expect(benchmark.indexOf(sysctl))
+      .toBeLessThan(benchmark.indexOf('npm run test:visual-parity'));
+  });
+
   test('CI can perform the refresh its own failure message demands', () => {
     const workflow = readFileSync(
       resolve(__dirname, '../../.github/workflows/visual-parity.yml'), 'utf8');
