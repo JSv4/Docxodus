@@ -1407,8 +1407,8 @@ function validatePackageManifestJson(source: string): PackageManifest {
     "mediaPartCount", "customXmlPartCount", "drawingCount", "altChunkCount", "fieldCount",
   ]) integerAt(facts[name], `$.facts.${name}`);
   const revisions = recordAt(facts.revisions, "$.facts.revisions", [
-    "insertions", "deletions", "moveFrom", "moveTo", "propertyChanges", "structuralChanges",
-    "otherChanges", "total",
+    "insertions", "deletions", "moveFrom", "moveTo", "propertyChanges", "runPropertyChanges",
+    "structuralChanges", "otherChanges", "total",
   ]);
   for (const name of Object.keys(revisions)) integerAt(revisions[name], `$.facts.revisions.${name}`);
   const annotations = recordAt(facts.annotations, "$.facts.annotations", [
@@ -1482,7 +1482,7 @@ async function preflightManifest(
   bytes: Uint8Array,
   options: NormalizedOptions,
   state: ExecutionState,
-  compareExpectedDigest: boolean,
+  isSourcePackage: boolean,
 ): Promise<void> {
   const sourceDigest = manifest.rawPackageBytesDigest.value;
   const recomputedDigest = await sha256(bytes);
@@ -1493,7 +1493,7 @@ async function preflightManifest(
         detail: `manifest=${sourceDigest}; recomputed=${recomputedDigest}`,
       });
   }
-  if (compareExpectedDigest && options.expectedSourceDigest
+  if (isSourcePackage && options.expectedSourceDigest
     && !constantTimeDigestEqual(options.expectedSourceDigest, sourceDigest)) {
     fail("source_digest_mismatch", "package_preflight", "The source digest does not match expectedSourceDigest.",
       "Render the exact verified source bytes or update the expected digest.", {
@@ -1623,6 +1623,102 @@ async function preflightManifest(
     if (options.unsupportedContent === "strict") {
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
+  }
+  if (isSourcePackage) {
+    warnUnrenderedRevisionFamilies(manifest, state, options);
+    warnUnrenderedCommentTopology(manifest, state, options);
+  }
+}
+
+/**
+ * Warns for tracked-revision families the markup profile cannot draw.
+ *
+ * The converter draws insertions, deletions, moves, run-level format changes, and tracked cell
+ * insert/delete/merge (as tinted, struck-through or dashed cells). What it never draws is a custom
+ * XML revision range, and the block-level property revisions — paragraph, table, section and
+ * numbering — which travel through the projection untouched but leave no mark a reader can see.
+ *
+ * Only `markup` needs these. `final` and `original` apply the projection and then assert the
+ * derived package has no revisions left at all, so an unrenderable family cannot survive them
+ * silently — it fails the projection instead.
+ */
+function warnUnrenderedRevisionFamilies(
+  manifest: PackageManifest,
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  if (options.reviewProfile !== "markup") return;
+  const revisions = manifest.facts.revisions;
+  const customXmlRanges = revisions.otherChanges;
+  if (customXmlRanges > 0) {
+    policyWarning(state, options, {
+      code: "revision_family_not_rendered",
+      phase: "package_preflight",
+      message: customXmlRanges === 1
+        ? "1 custom XML revision range is present but is not drawn as markup."
+        : `${customXmlRanges} custom XML revision ranges are present but are not drawn as markup.`,
+      remediation: "Use the final or original profile, or resolve the custom XML revisions before export.",
+      detail: "customXmlInsRangeStart, customXmlDelRangeStart, customXmlMoveFromRangeStart, customXmlMoveToRangeStart",
+    });
+  }
+  // rPrChange is the one property revision the converter draws (as a marked format change), so
+  // only the remainder is unrepresented. The manifest counts that subset for exactly this reason;
+  // reporting the combined figure would fail a strict export whose content is fully drawn.
+  const blockPropertyChanges = revisions.propertyChanges - revisions.runPropertyChanges;
+  if (blockPropertyChanges > 0) {
+    policyWarning(state, options, {
+      code: "revision_property_change_not_rendered",
+      phase: "package_preflight",
+      message: blockPropertyChanges === 1
+        ? "1 paragraph, table, section, or numbering property revision is present but is not drawn as markup."
+        : `${blockPropertyChanges} paragraph, table, section, and numbering property revisions are `
+          + "present but are not drawn as markup.",
+      remediation: "Use the final or original profile when block-level property revisions must be reflected in the output.",
+      detail: "numberingChange, pPrChange, sectPrChange, tblGridChange, tblPrChange, "
+        + "tblPrExChange, tcPrChange, trPrChange",
+    });
+  }
+}
+
+/**
+ * Warns when a visible comment profile cannot represent the source's comment topology.
+ *
+ * Comment bodies, ranges and authors render, but the threading recorded in commentsExtended does
+ * not: a reply is drawn as an independent comment, and a resolved comment is indistinguishable
+ * from an open one. That silently changes what a review PDF means, so it is reported rather than
+ * approximated.
+ *
+ * Comments survive the `final`/`original` projection unchanged, so this must run against the
+ * source package only — the derived preflight would otherwise report every one of them twice.
+ */
+function warnUnrenderedCommentTopology(
+  manifest: PackageManifest,
+  state: ExecutionState,
+  options: NormalizedOptions,
+): void {
+  if (options.commentProfile === "hidden") return;
+  const annotations = manifest.facts.annotations;
+  if (annotations.commentReplies > 0) {
+    policyWarning(state, options, {
+      code: "comment_thread_flattened",
+      phase: "package_preflight",
+      message: annotations.commentReplies === 1
+        ? "1 comment reply is drawn as an independent comment rather than as a threaded reply."
+        : `${annotations.commentReplies} comment replies are drawn as independent comments rather `
+          + "than as threaded replies.",
+      remediation: "Read the exported comments in document order, which preserves reply sequence, "
+        + "or flatten the threads in Word before export.",
+    });
+  }
+  if (annotations.resolvedComments > 0) {
+    policyWarning(state, options, {
+      code: "comment_resolved_state_not_rendered",
+      phase: "package_preflight",
+      message: annotations.resolvedComments === 1
+        ? "1 resolved comment is drawn identically to an open comment."
+        : `${annotations.resolvedComments} resolved comments are drawn identically to open comments.`,
+      remediation: "Delete the resolved comments before export so the output carries only open ones.",
+    });
   }
 }
 

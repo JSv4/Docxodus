@@ -5,6 +5,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { generateFootnoteDocx } from './docx-footnote-fixture.js';
 import { generateTableCommentDocx } from './docx-page-map-fixture.js';
+import {
+  generateCellRevisionDocx,
+  generateCommentTopologyDocx,
+  generateRenderedRevisionOnlyDocx,
+  generateUnrenderableRevisionDocx,
+} from './docx-review-topology-fixture.js';
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
@@ -76,7 +82,10 @@ interface BrowserExportResult {
       substitutionContractDigest: string;
       resolutionDigest: string;
     };
-    warnings: Array<{ code: string; severity: string; phase: string }>;
+    warnings: Array<{
+      code: string; severity: string; phase: string;
+      message: string; remediation: string; detail?: string;
+    }>;
     resources: Array<{ kind: string; status: string; resource?: string }>;
     readiness: Array<{ phase: string; status: string; elapsedMs: number; pending: string[] }>;
   };
@@ -803,6 +812,141 @@ test.describe('standalone paginated HTML', () => {
         });
         expect(failure.report.readiness.at(-1).pending.length).toBeGreaterThan(0);
       }
+    });
+
+  test('warns only for the revision families the markup profile cannot draw', async ({ page }) => {
+    const source = generateUnrenderableRevisionDocx();
+    const markup = await convert(page, source, false, { reviewProfile: 'markup' });
+    const warnings = markup.renderReport.warnings;
+
+    // One custom XML range, and two of the three property revisions: the rPrChange beside them
+    // is drawn as a marked format change, so the count must exclude it.
+    expect(warnings).toContainEqual(expect.objectContaining({
+      code: 'revision_family_not_rendered',
+      severity: 'warning',
+      phase: 'package_preflight',
+      message: '1 custom XML revision range is present but is not drawn as markup.',
+      detail: 'customXmlInsRangeStart, customXmlDelRangeStart, customXmlMoveFromRangeStart, '
+        + 'customXmlMoveToRangeStart',
+    }));
+    expect(warnings).toContainEqual(expect.objectContaining({
+      code: 'revision_property_change_not_rendered',
+      severity: 'warning',
+      phase: 'package_preflight',
+      message: '2 paragraph, table, section, and numbering property revisions are present but are '
+        + 'not drawn as markup.',
+    }));
+    // No remediation may point at a profile that shows less than the one being warned about.
+    for (const warning of warnings) expect(warning.remediation).not.toContain('commentProfile: hidden');
+
+    // final applies the projection and then asserts no revision survives it, so no family can
+    // pass through silently and neither warning applies.
+    const final = await convert(page, source, false, { reviewProfile: 'final' });
+    const finalCodes = final.renderReport.warnings.map((warning) => warning.code);
+    expect(finalCodes).not.toContain('revision_family_not_rendered');
+    expect(finalCodes).not.toContain('revision_property_change_not_rendered');
+  });
+
+  test('does not warn for revisions the markup profile does draw', async ({ page }) => {
+    // A run-level format change and an insertion are both drawn, so nothing is unrepresented —
+    // reporting the whole propertyChanges bucket would fail this export closed under strict.
+    const source = generateRenderedRevisionOnlyDocx();
+    const markup = await convert(page, source, false, { reviewProfile: 'markup' });
+    const codes = markup.renderReport.warnings.map((warning) => warning.code);
+    expect(codes).not.toContain('revision_family_not_rendered');
+    expect(codes).not.toContain('revision_property_change_not_rendered');
+
+    const strict = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      unsupportedContent: 'strict',
+    });
+    expect(strict.pageCount).toBeGreaterThan(0);
+  });
+
+  test('draws tracked cell revisions rather than warning about them', async ({ page }) => {
+    // The premise of every warning here is "the converter does not draw this". For cell
+    // insert/delete it does, so this test asserts the drawing and the silence together — the
+    // warning cannot come back without the render evidence going with it.
+    const source = generateCellRevisionDocx();
+    const markup = await convert(page, source, false, { reviewProfile: 'markup' });
+
+    const drawn = await page.evaluate((html: string) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const styles = Array.from(parsed.querySelectorAll('style'), (node) => node.textContent).join('');
+      return {
+        insCells: parsed.querySelectorAll('td.rev-cell-ins').length,
+        delCells: parsed.querySelectorAll('td.rev-cell-del').length,
+        styledIns: styles.includes('td.rev-cell-ins'),
+        styledDel: styles.includes('td.rev-cell-del'),
+      };
+    }, markup.html);
+    expect(drawn).toEqual({ insCells: 1, delCells: 1, styledIns: true, styledDel: true });
+
+    expect(markup.renderReport.warnings.map((warning) => warning.code))
+      .not.toContain('revision_family_not_rendered');
+
+    const strict = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      unsupportedContent: 'strict',
+    });
+    expect(strict.pageCount).toBeGreaterThan(0);
+  });
+
+  test('fails closed under strict for a revision family it cannot draw', async ({ page }) => {
+    const source = generateUnrenderableRevisionDocx();
+    const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
+      .convertFailure(bytes, {
+        reviewProfile: 'markup',
+        commentProfile: 'hidden',
+        unsupportedContent: 'strict',
+      }), Array.from(source));
+
+    expect(failure.unexpectedSuccess).toBeUndefined();
+    expect(failure.code).toBe('resource_policy_failure');
+    expect(failure.phase).toBe('package_preflight');
+    expect(failure.report.status).toBe('failed');
+  });
+
+  test('warns exactly once that comment threading and resolved state are not drawn',
+    async ({ page }) => {
+      const source = generateCommentTopologyDocx();
+      // The default review profile is final, which preflights the source and the derived package;
+      // comments survive that projection, so a warning per package would report each one twice.
+      const visible = await convert(page, source, false, { commentProfile: 'inline' });
+      const warnings = visible.renderReport.warnings;
+
+      expect(warnings.filter((warning) => warning.code === 'comment_thread_flattened')).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          phase: 'package_preflight',
+          message: '1 comment reply is drawn as an independent comment rather than as a threaded reply.',
+        }),
+      ]);
+      expect(warnings.filter(
+        (warning) => warning.code === 'comment_resolved_state_not_rendered',
+      )).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          phase: 'package_preflight',
+          message: '1 resolved comment is drawn identically to an open comment.',
+        }),
+      ]);
+
+      // hidden renders no comment bodies at all, so neither limitation applies.
+      const hidden = await convert(page, source, false, { commentProfile: 'hidden' });
+      const hiddenCodes = hidden.renderReport.warnings.map((warning) => warning.code);
+      expect(hiddenCodes).not.toContain('comment_thread_flattened');
+      expect(hiddenCodes).not.toContain('comment_resolved_state_not_rendered');
+
+      const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
+        .convertFailure(bytes, {
+          reviewProfile: 'final',
+          commentProfile: 'inline',
+          unsupportedContent: 'strict',
+        }), Array.from(source));
+      expect(failure.unexpectedSuccess).toBeUndefined();
+      expect(failure.code).toBe('resource_policy_failure');
+      expect(failure.phase).toBe('package_preflight');
     });
 
   test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {

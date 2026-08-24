@@ -327,6 +327,7 @@ class PackageRevisionCounts:
     move_from: int = 0
     move_to: int = 0
     property_changes: int = 0
+    run_property_changes: int = 0
     structural_changes: int = 0
     other_changes: int = 0
     total: int = 0
@@ -339,6 +340,7 @@ class PackageRevisionCounts:
             move_from=int(d.get("moveFrom", 0)),
             move_to=int(d.get("moveTo", 0)),
             property_changes=int(d.get("propertyChanges", 0)),
+            run_property_changes=int(d.get("runPropertyChanges", 0)),
             structural_changes=int(d.get("structuralChanges", 0)),
             other_changes=int(d.get("otherChanges", 0)),
             total=int(d.get("total", 0)),
