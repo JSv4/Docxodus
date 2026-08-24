@@ -722,6 +722,42 @@ for a family it has never heard of. `strictFonts` rejects any outcome that is no
 digest-identified, license-evidenced face with complete glyph coverage, which is why a
 browser-observed environment can never satisfy it.
 
+### Revision and comment families that are not drawn
+
+`markup` draws insertions, deletions, moves, run-level format changes, and tracked cell
+insert/delete/merge — the last as tinted, struck-through or dashed cells. Two families it does not
+draw travel through the projection untouched and leave no mark a reader can see, so each is
+reported rather than approximated: a custom XML revision range raises
+`revision_family_not_rendered`, and the block-level property revisions — paragraph, table, section
+and numbering — raise `revision_property_change_not_rendered`.
+
+That second warning counts only what is missing. `rPrChange` is a property revision the converter
+does draw, so the manifest counts it separately as `runPropertyChanges` and the warning reports
+`propertyChanges - runPropertyChanges`. Splitting the count in the inventory rather than
+approximating it in the export is what keeps `unsupportedContent: "strict"` honest: a document
+whose only property revisions are run-level format changes is drawn in full and must not fail
+closed. The split costs no extra work — it is one more counter in the pass the manifest already
+makes, not a second inventory pass over the package.
+
+`final` and `original` need no such warnings. They apply the projection and then assert the derived
+package retains no revisions at all, so a family that cannot be applied fails the projection instead
+of passing through unseen. This is also what keeps the source package intact: the projection derives
+a new package and the original bytes are never accepted, rejected, or rewritten in place.
+
+Any visible comment profile renders comment bodies, ranges and authors, but not the topology
+recorded in `commentsExtended`: a reply is drawn as an independent comment
+(`comment_thread_flattened`) and a resolved comment is drawn identically to an open one
+(`comment_resolved_state_not_rendered`). Both silently change what a review PDF means, which is why
+they are reported instead of approximated. Comments survive the `final`/`original` projection
+unchanged, so these two are raised against the source package only; the derived preflight would
+otherwise report each of them twice.
+
+All four warnings route through the `unsupportedContent` policy, so `strict` turns the first one
+raised into a closed `resource_policy_failure` in `package_preflight` rather than a warning a
+caller has to notice. As everywhere else in preflight, a strict export reports the first policy
+breach and stops; `warn` is what enumerates every one of them in a single pass.
+
+
 ## Error taxonomy and limits
 
 Public failures are `DocxodusExportError` values with one of these codes:
