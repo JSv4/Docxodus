@@ -1594,6 +1594,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_compare",
             "docxodus_content_controls",
             "docxodus_create",
+            "docxodus_deliver",
             "docxodus_edit",
             "docxodus_format",
             "docxodus_get_content",

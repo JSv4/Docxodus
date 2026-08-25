@@ -78,7 +78,7 @@ path stay as they are.
 
 ## Tool surface
 
-Three lifecycle tools plus seventeen grouped-intent tools, each addressed by the anchor ids the
+Three lifecycle tools plus eighteen grouped-intent tools, each addressed by the anchor ids the
 markdown projection and search tools return:
 
 | Tool | Purpose |
@@ -96,7 +96,18 @@ markdown projection and search tools return:
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
 | `docxodus_compare` | Sessionless: diff or N-way consolidate stored document versions into one author-attributed native redline written back into the document scope |
 | `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
+| `docxodus_deliver` | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
+
+`docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
+`docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
+as base64, with a 64 MiB pre-base64 byte limit. Production HTML/PDF/PageMap/report rendering uses
+the process-owned epic #434 host when `DOCXODUS_NODE_PATH` and `DOCXODUS_EXPORT_HOST_PATH` are set;
+`DOCXODUS_CHROMIUM_PATH` is optional. The server never searches PATH or accepts executable paths
+from tool arguments. Authoritative change receipts remain unavailable here because issuance
+requires exact transaction snapshots/contributions rather than the MCP retry journal's response
+cache. Mark an unavailable artifact optional to retain a complete bundle, or use
+`returnIncompleteBundle` for diagnostic required outputs.
 
 Applying `docxodus_mutations` batches can include a caller-chosen, non-blank root `transactionId` of
 at most 256 Unicode scalar values. During the open session, retrying the same canonical request

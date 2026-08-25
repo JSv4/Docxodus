@@ -40,6 +40,29 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Verified delivery bundles (#465).** `DeliveryBundleService.BuildAsync` derives a requested
+  set of document, render, and evidence artifacts from exact baseline and working snapshots
+  under an explicit two-part revision policy (`preserve`/`accept`/`reject` for pre-existing
+  versus generated revisions), proves the review document's accept-to-final and
+  reject-to-baseline directions, and returns immutable bytes plus a canonical
+  `delivery-bundle-manifest/v1` — or publishes the same result as a fresh, atomically committed
+  directory via `DeliveryBundleDirectoryPublisher`. The schema-v1 artifact vocabulary covers
+  baseline/policy-baseline/working/review/final DOCX, standalone HTML, final and review PDF,
+  PageMap, render report, package manifests, semantic and package deltas, comprehensive
+  deliverable validation, the reversibility proof, and the deterministic change receipt
+  (receipt issuance requires authoritative transaction evidence and stages the final
+  deliverable's canonical verification result as the receipt's validation evidence).
+  `DeliveryBundleVerifier.VerifyJson` re-verifies a manifest against independently supplied
+  artifact bytes. Production HTML/PDF rendering crosses one injected
+  `IDeliveryArtifactRenderer` boundary — a pure per-profile-pair `DescribeBatch` whose
+  layout-options and runtime-policy digests enter the group key, and one `RenderBatchesAsync`
+  call per build carrying every group in stable order; `DocxodusExportHostRenderer` sends that
+  call as a single `docxodus-export-host` framed request with digest-deduplicated sources,
+  process-owned executable authority, and no PATH discovery, and represents a document version
+  outside JavaScript's safe range as the closed `document_version_unrepresentable`
+  unavailability before any frame is built. Ships as the `docxodus-deliver` CLI
+  (`tools/delivery`) and the MCP `docxodus_deliver` tool over the same service. See
+  `docs/architecture/delivery_bundle.md`.
 - **`docxodus_compare` MCP tool (#466).** A sessionless agent-server tool that turns stored
   document versions into one native tracked-changes redline: `baselinePath` plus `revisedPath`
   (two-way `DocxDiff` compare) or `revisedPaths` with per-reviewer `authors` (N-way

@@ -14,7 +14,8 @@ jobs:
     # The full single-worker WASM matrix plus the pinned-Chromium export suite now exceeds the
     # former 25-minute ceiling on hosted runners. Keep a bounded cushion so assertion failures
     # still surface instead of the job being canceled before export artifacts are produced.
-    timeout-minutes: 45
+    # The delivery export-host integration test adds one .NET test build on top.
+    timeout-minutes: 55
 
     steps:
       - name: Checkout
@@ -62,6 +63,19 @@ jobs:
       - name: Run Node/CLI PDF export tests
         run: cd npm-export && npm test
 
+      # The delivery bundle's production renderer spawns the framed export host, so this is the
+      # one job holding every prerequisite: the built host, permitted user namespaces, and a real
+      # Chromium. The gate keeps the test inert everywhere else.
+      - name: Run delivery export-host integration test
+        env:
+          DOCXODUS_RUN_DELIVERY_EXPORT_HOST: 1
+          DOCXODUS_EXPORT_HOST_PATH: ${{ github.workspace }}/npm-export/dist/host.js
+          DOCXODUS_DELIVERY_REAL_ARTIFACT_DIR: ${{ github.workspace }}/delivery-artifacts
+        run: |
+          export DOCXODUS_NODE_PATH="$(command -v node)"
+          dotnet test Docxodus.Tests/Docxodus.Tests.csproj \
+            --filter "FullyQualifiedName~DeliveryExportHostIntegrationTests"
+
       # Run the long editor matrix after the export evidence exists. The final upload is `always()`,
       # so an unrelated late regression cannot suppress the HTML/PDF artifacts under review.
       - name: Run Playwright tests
@@ -76,5 +90,6 @@ jobs:
             npm/playwright-report/
             npm/test-results/
             npm-export/test-artifacts/
+            delivery-artifacts/
           if-no-files-found: ignore
           retention-days: 7

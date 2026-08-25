@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <AssemblyName>docxodus-deliver</AssemblyName>
+    <RootNamespace>Docxodus.DeliveryCli</RootNamespace>
+    <NoWarn>$(NoWarn);SA1633;SA1636</NoWarn>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>docxodus-deliver</ToolCommandName>
+    <PackageId>Docxodus.DeliveryCli</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>JSv4</Authors>
+    <Description>Build verified, atomic Docxodus document delivery bundles.</Description>
+    <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>openxml;docx;word;delivery;verification;cli</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Docxodus.Tests" />
+  </ItemGroup>
+</Project>

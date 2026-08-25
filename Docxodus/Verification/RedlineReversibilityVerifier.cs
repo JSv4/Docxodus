@@ -790,7 +790,7 @@ public static class RedlineReversibilityVerifier
             outputBytes);
     }
 
-    private static IReadOnlyList<RedlineRevisionClassification> Classify(
+    internal static IReadOnlyList<RedlineRevisionClassification> Classify(
         IReadOnlyList<RevisionListEntry> baselineEntries,
         IReadOnlyList<RevisionListEntry> finalEntries,
         IReadOnlyList<RevisionListEntry> redlineEntries,
@@ -1154,7 +1154,7 @@ public static class RedlineReversibilityVerifier
         }
     }
 
-    private static RedlineRevisionIdentity ToIdentity(RevisionListEntry entry) => new()
+    internal static RedlineRevisionIdentity ToIdentity(RevisionListEntry entry) => new()
     {
         Id = entry.Id,
         PartUri = entry.PartUri,
@@ -1259,14 +1259,14 @@ public static class RedlineReversibilityVerifier
         }
     }
 
-    private static bool RevisionOverlaps(
+    internal static bool RevisionOverlaps(
         RedlineRevisionIdentity baseline,
         RedlineRevisionIdentity redline) =>
         string.Equals(baseline.PartUri, redline.PartUri, StringComparison.Ordinal)
         && baseline.ConstituentKeys.Intersect(
             redline.ConstituentKeys, StringComparer.Ordinal).Any();
 
-    private static string RevisionSortKey(RedlineRevisionIdentity item) =>
+    internal static string RevisionSortKey(RedlineRevisionIdentity item) =>
         item.PartUri + "\n" + item.Family + "\n" + item.Id;
 
     private static RedlineProofFinding RevisionConflictFinding(
@@ -1702,7 +1702,7 @@ public static class RedlineReversibilityVerifier
         bool Completed,
         IReadOnlyList<RedlinePackageDivergence> Divergences);
 
-    private sealed class ProofFindingBudget
+    internal sealed class ProofFindingBudget
     {
         private readonly int _maximum;
         private int _retained;

@@ -68,6 +68,7 @@ internal static class Dispatcher
             "docxodus_annotate" => Annotate(store, args),
             "docxodus_track_changes" => TrackChanges(store, args),
             "docxodus_mutations" => Mutations(store, args),
+            "docxodus_deliver" => DeliveryTool.Execute(store, Session(store, args), args),
             "docxodus_table" => Table(store, args),
             _ => throw new McpToolException($"unknown tool: {tool}"),
         });

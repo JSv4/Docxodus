@@ -282,8 +282,13 @@ public sealed record DeliverableRenderDiagnostic
     required public DeliverableRenderDiagnosticKind Kind { get; init; }
     required public string Message { get; init; }
     public VerificationFindingSeverity Severity { get; init; } = VerificationFindingSeverity.Warning;
+    /// <summary>The renderer's stable diagnostic code, when its protocol supplies one.</summary>
+    public string? Code { get; init; }
+    /// <summary>The renderer phase that observed the diagnostic.</summary>
+    public string? Phase { get; init; }
     public string? OwningPartUri { get; init; }
     public string? AnchorId { get; init; }
+    public string? Resource { get; init; }
     public string? FontName { get; init; }
     public string? SubstitutedFontName { get; init; }
     public string? Remediation { get; init; }
