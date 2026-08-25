@@ -10,9 +10,11 @@ This directory is the **corpus and the contract**. The runner lives in
 ## What a scenario is
 
 A scenario is one JSON file under `scenarios/`. [`scenario.schema.json`](scenario.schema.json)
-documents the contract; the suite's `EV002` test enforces its substance directly — a non-empty
-completion and preservation list, at least one precision bound, and no invariant key outside the
-vocabulary the checkers actually read, so a typo cannot silently switch a check off:
+is the contract, and it is enforced, not decorative: `EV004` validates every scenario file
+against it, `EV005` pins its invariant vocabulary to the checkers' vocabulary in both
+directions, and `EV002` enforces its substance directly — a non-empty completion and
+preservation list, at least one precision bound, no empty invariant group, and no invariant key
+outside the vocabulary the checkers actually read, so a typo cannot silently switch a check off:
 
 | Part | Answers |
 |------|---------|
@@ -38,6 +40,11 @@ response. A step is therefore independent of the shape of what came before, and 
 drifts fails loudly: if a target matches fewer blocks than the requested `index`, the run errors
 out instead of quietly editing a different block and then reporting good precision.
 
+A tool that takes several anchors — a range format, a move, a bookmark span — declares `targets`
+instead: a map whose keys name the arguments and whose values are resolved exactly like `target`.
+The key names the argument, so a `targets` entry that also declares `as` fails the scenario as
+contradictory.
+
 ## Fixtures
 
 Fixtures under `fixtures/` are **build scripts in the same step format**, not `.docx` files.
@@ -60,10 +67,18 @@ contract rather than a bespoke comparison:
 |-----------|----------|--------|
 | `taskCompletion` | Did the intended change land? | `docxodus_search` over every story |
 | `targetPrecision` | Did it change *only* that? | distinct anchors in the #457 semantic change set |
-| `collateral` | Was unrelated package state preserved? | #456 package manifests, before and after |
+| `collateral` | Was unrelated package state preserved? | #456 package manifests, before and after; `changedPartsMustBeWithin` additionally pins *which* parts the change set may touch |
 | `validity` | Is the deliverable structurally sound? | #463 deliverable gate |
+| `trackedRevisions` | Is the expected live markup present — including another reviewer's? | `docxodus_track_changes list` on the delivered session |
+| `comments` | Are the expected comments, replies, and resolved flags present? | `docxodus_comment list` on the delivered session |
 | `reversibility` | Does the redline accept and reject cleanly? | #464 proof |
 | `rendering` | Does it still render? | HTML projection |
+
+`trackedRevisions` and `comments` are read through the same MCP dispatcher the steps drive, so
+they assert the agent-surface view of the document, and only what those tools actually report —
+replies are entries carrying `parentAnchorId`, resolved state is the tool's own `resolved` flag.
+`changedPartsMustBeWithin` names part URIs exactly as the change set reports them
+(`/word/document.xml`); an entry outside the list fails loudly, so a misspelled URI cannot pass.
 
 ### Text assertions ask the document, not a rendering of it
 
@@ -99,12 +114,30 @@ can be made to land; the interesting question is what else moved. Each scenario'
 `collateral.textPreserved` lists the near-miss content a careless edit would also have caught —
 for `term-replacement`, the two *other* occurrences of the defined term.
 
-## Failure artifacts
+## Scorecards and failure artifacts
 
-A failing scenario writes `opening.docx`, `delivered.docx`, `delivered.html`, `delivered.txt`,
-`semantic-changes.json`, `verification.json`, and `reversibility-proof.json` (when one was
-produced) so a failure is diagnosable without re-running it. Set `DOCXODUS_EVAL_ARTIFACTS` to choose the directory;
-otherwise they land under the system temp directory.
+Every run — pass or fail — writes a per-scenario `scorecard.json`: the metrics that were
+actually measured (changed anchors and parts, part-inventory deltas, validity decision, text
+match counts, reversibility outcomes). The scorecard is the machine-readable **engine
+baseline**: a later agent-scored run of the same scenario — same fixture, same invariants,
+planned by a model instead of scripted — is compared against it. Scripted first, agent second,
+in that order, is what criterion-level "separate engine correctness from planning quality"
+means operationally.
+
+A failing scenario additionally writes `opening.docx`, `delivered.docx`, `delivered.html`,
+`delivered.txt`, `semantic-changes.json`, `verification.json`, `revisions.json`,
+`comments.json`, and `reversibility-proof.json` (when one was produced) so a failure is
+diagnosable without re-running it. Set `DOCXODUS_EVAL_ARTIFACTS` to choose the directory;
+otherwise they land under the system temp directory. CI sets it and uploads the directory as a
+build artifact when the suite fails; the weekly corpus workflow uploads it always, scorecards
+included.
+
+A delivery change receipt is deliberately **not** among the artifacts. A receipt's transaction
+lineage must come from authoritative mutation evidence captured at execution time
+(`DeliveryTransactionContribution.FromMutationBatchResult` over a recorded batch); the harness
+executes steps as independent tool calls and holds only before/after snapshots, and the receipt
+contract explicitly forbids reconstructing history from a before/after comparison. Receipt
+production belongs to the #465 delivery operation, which owns that evidence.
 
 ## Adding a scenario
 
@@ -114,14 +147,26 @@ otherwise they land under the system temp directory.
    "it looked right" is not an acceptance criterion.
 3. Run `dotnet test --filter "FullyQualifiedName~WorkflowEvalTests"`.
 
+## The two tiers
+
+Scenarios directly under `scenarios/` are the **fast deterministic subset**: no PDF, no browser,
+no network, executed unfiltered on every push. Scenarios under `scenarios/corpus/` are the
+**opt-in corpus tier**: executed only when `DOCXODUS_RUN_EVAL_CORPUS=1`, which the weekly
+`eval-corpus` workflow (also runnable on demand via `workflow_dispatch`) sets. Declaration
+checks — vacuity, schema conformance — run for both tiers on every push, so a corpus scenario
+cannot sit malformed until Monday.
+
 ## Scope
 
-This is the deterministic fast subset: no PDF, no browser, no network, so it runs on every push.
 Deliberately **not** here, and tracked separately:
 
 - Generated-PDF and visual-regression scoring — that is #443's ratchet, and depending on it before
   it exists would bake unstable numbers into this suite's baselines.
-- Agent-scored runs and model planning quality, which need this scripted baseline to exist first.
-- The larger opt-in corpus, and the remaining #466 scenarios: clause insertion with numbering,
-  comment/footnote/cross-reference authoring, content-control templates, N-way consolidation, and
-  documents carrying pre-existing revisions.
+- Agent-scored runs and model planning quality, which consume the scorecard baseline above.
+- Delivery change receipts, which belong to the #465 delivery operation (see "Scorecards and
+  failure artifacts").
+
+The remaining #466 scenario families — clause insertion with numbering, comment/footnote/
+cross-reference authoring, content-control templates, N-way consolidation, and documents
+carrying pre-existing revisions — are corpus work in progress; the runner capabilities they
+need (multi-anchor targets, part allowlists, markup and comment invariants) are in place.

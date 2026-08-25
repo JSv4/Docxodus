@@ -69,9 +69,17 @@
           "$ref": "#/$defs/target",
           "description": "Resolved to an anchor id by docxodus_search before the call, then injected into args. Targeting by content rather than by a chained response keeps a step independent of the previous step's result shape."
         },
+        "targets": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/target"
+          },
+          "description": "For tools taking several anchors (ranges, moves, bookmarks): each key names the argument that receives its resolved anchor id, each value is a target resolved exactly like `target`. The key already names the argument, so `as` is rejected inside these targets. May be combined with `target` when the argument names do not collide."
+        },
         "args": {
           "type": "object",
-          "description": "The tool's own arguments, minus sessionId (supplied by the runner) and minus the argument that `target` fills in."
+          "description": "The tool's own arguments, minus sessionId (supplied by the runner) and minus the argument(s) that `target`/`targets` fill in."
         }
       }
     },
@@ -185,6 +193,68 @@
                 "type": "string"
               },
               "description": "Content that must survive untouched \u2014 the near-miss occurrences a careless edit would also catch."
+            },
+            "changedPartsMustBeWithin": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "Part URIs the #457 change set may touch, exactly as the change set reports them (leading slash: \"/word/document.xml\"). Any changed part outside this allowlist fails the scenario \u2014 the identity assertion that turns 'how many parts changed' into 'the right parts changed'. A misspelled entry fails loudly rather than passing, because the real changed part is then outside the list."
+            }
+          }
+        },
+        "trackedRevisions": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "Live tracked-change markup in the delivered session, read through docxodus_track_changes list. This is how a scenario asserts a pre-existing reviewer's revision is still live outside the reversibility path.",
+          "properties": {
+            "countAtLeast": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "countAtMost": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "authorsMustInclude": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "comments": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "Comments in the delivered session, read through docxodus_comment list. Replies are entries carrying parentAnchorId; resolved state is the tool's own resolved flag \u2014 only what the tool reports is assertable.",
+          "properties": {
+            "countAtLeast": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "countAtMost": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "authorsMustInclude": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "repliesAtLeast": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "resolvedAtLeast": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         },

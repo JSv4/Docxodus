@@ -36,6 +36,10 @@ internal sealed record EvalOutcome
     required public string Text { get; init; }
     required public string Html { get; init; }
     required public string SemanticChangesJson { get; init; }
+    /// <summary>docxodus_track_changes list on the delivered session — live markup, agent-surface view.</summary>
+    required public string RevisionsJson { get; init; }
+    /// <summary>docxodus_comment list on the delivered session.</summary>
+    required public string CommentsJson { get; init; }
     public RedlineReversibilityProof? Reversibility { get; init; }
     public int GeneratedRevisionCount { get; init; }
 }
@@ -56,9 +60,26 @@ internal static class EvalHarness
     /// <summary>The <c>eval/</c> corpus directory, located by walking up from the test binary.</summary>
     public static string CorpusRoot { get; } = LocateCorpusRoot();
 
+    /// <summary>The fast deterministic subset: runs unfiltered on every push.</summary>
     public static IEnumerable<string> ScenarioFiles() =>
         Directory.EnumerateFiles(Path.Combine(CorpusRoot, "scenarios"), "*.json")
             .OrderBy(path => path, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The opt-in corpus tier under <c>scenarios/corpus/</c>. Executed only when
+    /// <c>DOCXODUS_RUN_EVAL_CORPUS=1</c> (the scheduled eval-corpus workflow sets it);
+    /// its scenarios' declarations are validated on every push regardless.
+    /// </summary>
+    public static IEnumerable<string> CorpusScenarioFiles()
+    {
+        var directory = Path.Combine(CorpusRoot, "scenarios", "corpus");
+        return Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path, StringComparer.Ordinal)
+            : Enumerable.Empty<string>();
+    }
+
+    public static bool RunCorpusTier { get; } = string.Equals(
+        Environment.GetEnvironmentVariable("DOCXODUS_RUN_EVAL_CORPUS"), "1", StringComparison.Ordinal);
 
     public static JsonElement LoadJson(string path)
     {
@@ -66,8 +87,13 @@ internal static class EvalHarness
         return document.RootElement.Clone();
     }
 
-    public static JsonElement LoadScenario(string id) =>
-        LoadJson(Path.Combine(CorpusRoot, "scenarios", $"{id}.json"));
+    public static JsonElement LoadScenario(string id)
+    {
+        var fast = Path.Combine(CorpusRoot, "scenarios", $"{id}.json");
+        return LoadJson(File.Exists(fast)
+            ? fast
+            : Path.Combine(CorpusRoot, "scenarios", "corpus", $"{id}.json"));
+    }
 
     /// <summary>Build a fixture's bytes by running its step script over a blank document.</summary>
     public static byte[] BuildFixture(string name)
@@ -123,6 +149,16 @@ internal static class EvalHarness
             Text = ReadStringProperty(workspace.Content(sessionId, "text"), "text"),
             Html = ReadStringProperty(workspace.Content(sessionId, "html"), "html"),
             SemanticChangesJson = semanticChangesJson,
+            RevisionsJson = workspace.Call("docxodus_track_changes", new JsonObject
+            {
+                ["sessionId"] = sessionId,
+                ["action"] = "list",
+            }),
+            CommentsJson = workspace.Call("docxodus_comment", new JsonObject
+            {
+                ["sessionId"] = sessionId,
+                ["action"] = "list",
+            }),
         };
 
         if (ReversibilityMode(scenario) != "acceptAll")
@@ -206,6 +242,20 @@ internal static class EvalHarness
             args["sessionId"] = sessionId;
             if (step.TryGetProperty("target", out var target))
                 args[TargetArgumentName(target)] = ResolveAnchor(workspace, sessionId, target);
+            if (step.TryGetProperty("targets", out var targets))
+            {
+                // The key names the argument, so a target that also says `as` is contradictory
+                // and must fail the scenario rather than silently prefer one of the two names.
+                foreach (var entry in targets.EnumerateObject())
+                {
+                    if (entry.Value.TryGetProperty("as", out _))
+                        throw new InvalidOperationException(
+                            $"step '{tool}': targets['{entry.Name}'] must not declare 'as' — "
+                            + "the key already names the argument.");
+                    args[entry.Name] = ResolveAnchor(workspace, sessionId, entry.Value);
+                }
+            }
+
             ThrowOnFailedStep(tool, workspace.Call(tool, args));
         }
     }

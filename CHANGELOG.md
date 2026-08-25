@@ -17,6 +17,22 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Workflow evaluation runner completed (#466).** The eval runner now supports multi-anchor
+  steps (`targets` maps an argument name to a content-resolved target, unlocking range formats,
+  moves, and bookmark spans), a `changedPartsMustBeWithin` part-URI allowlist that turns "how
+  many parts changed" into "the right parts changed", and `trackedRevisions`/`comments`
+  invariant groups read through the same MCP dispatcher the steps drive — so a scenario can
+  assert a pre-existing reviewer's markup is still live outside the reversibility path. The
+  scenario schema is now enforced rather than decorative: every scenario file is validated
+  against it, its invariant vocabulary is pinned to the checkers' vocabulary in both
+  directions, and each new checker ships a negative control proving it fails when violated.
+  Every run writes a per-scenario `scorecard.json` — the machine-readable engine baseline
+  later agent-scored runs are compared against — CI uploads eval artifacts on failure, and a
+  weekly `eval-corpus` workflow executes the opt-in tier under `eval/scenarios/corpus/`
+  (`DOCXODUS_RUN_EVAL_CORPUS=1`). Fixtures declare their own `expectedContent` anchor, so the
+  corpus is no longer limited to a single fixture. Delivery change receipts stay deliberately
+  out of the eval artifacts: their lineage must come from mutation evidence captured at
+  execution time, which belongs to the #465 delivery operation.
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
   A scenario declares a fixture, the tool calls that perform the task, and the invariants that

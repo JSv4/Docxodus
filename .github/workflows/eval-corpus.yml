@@ -1,0 +1,41 @@
+name: Eval corpus
+
+# The full workflow-evaluation corpus (issue #466): the fast deterministic subset runs
+# unfiltered in ci.yml on every push; this gate additionally executes every scenario under
+# eval/scenarios/corpus/ and always uploads the per-scenario scorecards, which are the engine
+# baseline agent-scored runs are compared against.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run evaluation suite with the corpus tier
+        env:
+          DOCXODUS_RUN_EVAL_CORPUS: '1'
+          DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --filter "FullyQualifiedName~Docxodus.Tests.Eval" --verbosity normal
+
+      - name: Upload scorecards and failure artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: eval-corpus-artifacts
+          path: eval-artifacts/
+          if-no-files-found: ignore

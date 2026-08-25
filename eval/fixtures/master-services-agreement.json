@@ -2,6 +2,9 @@
   "id": "master-services-agreement",
   "title": "Master Services Agreement",
   "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, a running header and footer, and one pre-existing tracked change by another reviewer that every later operation must leave live. Built programmatically so the corpus carries no third-party bytes.",
+  "expectedContent": [
+    "MASTER SERVICES AGREEMENT"
+  ],
   "steps": [
     {
       "tool": "docxodus_create",
