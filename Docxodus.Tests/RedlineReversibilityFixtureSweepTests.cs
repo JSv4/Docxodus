@@ -15,7 +15,7 @@ namespace Docxodus.Tests;
 /// Fixture-scale evidence for the redline reversibility proof (#464), complementing the
 /// scenario-focused cases in <see cref="RedlineReversibilityProofTests"/>.
 ///
-/// Two corpora, two claims:
+/// Three redline sources, three claims:
 ///
 /// 1. Word-authored redlines — every complete triple in <c>TestFiles/RP</c>
 ///    (<c>{stem}.docx</c> + <c>{stem}-Accepted.docx</c> + <c>{stem}-Rejected.docx</c>, the
@@ -33,6 +33,12 @@ namespace Docxodus.Tests;
 ///    reject at the story-text level. Pairs where that does not currently hold are pinned as
 ///    explicit known gaps with their exact failure signature, so the gap is visible here and
 ///    this file must be updated when it is fixed.
+///
+/// 3. Consolidated multi-author redlines — <c>DocxDiff.Consolidate</c> over two reviewers with
+///    DISTINCT author names (RRS008/RRS009). Ownership classification compares revision
+///    authors, so a redline carrying two reviewer identities exercises a path the
+///    single-author corpora above never reach. The proven contract is Consolidate's own:
+///    reject recovers the shared base, accept recovers the policy-resolved composite.
 ///
 /// "Story text" means the concatenated <c>w:t</c> runs of the body plus every header,
 /// footer, footnotes and endnotes part — presence of a story part counts, so an output that
@@ -393,6 +399,116 @@ public class RedlineReversibilityFixtureSweepTests
     }
 
     // ------------------------------------------------------------------
+    // 3. Consolidated multi-author redlines: DocxDiff.Consolidate.
+    // ------------------------------------------------------------------
+
+    // Two reviewers with disjoint edits of the same base, each stamped with a distinct
+    // author name. The proof classifies every revision from BOTH reviewers as generated —
+    // multi-author attribution must never read as conflicted ownership — and both paths
+    // complete: accept recovers the composite (the accept-all of the consolidated redline,
+    // Consolidate's own round-trip contract) and reject recovers the shared base, at the
+    // story-text level AND at the modeled-semantic level. As with every engine-generated
+    // redline (RRS004), Consolidate rebuilds the output package, so the strict
+    // whole-package proof does not hold today and the proof must say so with evidence.
+    [Fact]
+    public void RRS008_ConsolidatedTwoReviewerRedline_RoundTripsWithPerAuthorClassification()
+    {
+        var baseBytes = Fixture("WC/WC002-Unmodified.docx");
+        var consolidated = ConsolidatedRedline(
+            baseBytes,
+            Fixture("WC/WC002-DiffInMiddle.docx"),
+            Fixture("WC/WC002-InsertAtEnd.docx"));
+        var intendedComposite = RevisionProcessor.AcceptRevisions(consolidated).DocumentByteArray;
+
+        var run = RedlineReversibilityVerifier.Prove(
+            baseBytes, intendedComposite, consolidated.DocumentByteArray);
+        var proof = run.Proof;
+
+        // Both reviewer identities are present, and every revision classifies as generated.
+        Assert.NotEmpty(proof.RevisionClassifications);
+        Assert.All(proof.RevisionClassifications, classification =>
+            Assert.Equal(RedlineRevisionDisposition.Generated, classification.Disposition));
+        Assert.Contains(proof.RevisionClassifications, classification =>
+            classification.Redline?.Author == "Reviewer A");
+        Assert.Contains(proof.RevisionClassifications, classification =>
+            classification.Redline?.Author == "Reviewer B");
+
+        Assert.NotNull(proof.AcceptToFinal);
+        Assert.NotNull(proof.RejectToBaseline);
+        Assert.True(proof.AcceptToFinal!.Completed, proof.ToJson());
+        Assert.True(proof.RejectToBaseline!.Completed, proof.ToJson());
+        AssertResolutionClosure(proof.AcceptToFinal);
+        AssertResolutionClosure(proof.RejectToBaseline);
+
+        // Accept recovers the composite, reject recovers the shared base.
+        Assert.Equal(StoryTexts(intendedComposite), StoryTexts(run.AcceptedPackageBytes!));
+        Assert.Equal(StoryTexts(baseBytes), StoryTexts(run.RejectedPackageBytes!));
+        Assert.True(proof.AcceptToFinal.ModeledSemantic.Equivalent, proof.ToJson());
+        Assert.True(proof.RejectToBaseline.ModeledSemantic.Equivalent, proof.ToJson());
+
+        // The rebuilt package prevents the strict whole-package claim — evidenced, never silent.
+        Assert.False(proof.Success, proof.ToJson());
+        AssertNonEquivalenceIsEvidenced(proof.AcceptToFinal);
+        AssertNonEquivalenceIsEvidenced(proof.RejectToBaseline);
+    }
+
+    // Two reviewers editing the SAME span differently — a genuine merge conflict, resolved
+    // by the default BaseWins policy. The policy decides what markup survives into the
+    // consolidated document (observed: the conflicted span resolves to base, so a
+    // reviewer's competing edit may not appear at all); whatever survives must still
+    // classify as generated for its own reviewer — a policy-resolved merge conflict is not
+    // an ownership conflict — and the proof round-trips against the policy-resolved
+    // composite exactly as in RRS008.
+    [Fact]
+    public void RRS009_ConsolidatedConflictingReviewers_ProveAgainstThePolicyResolvedComposite()
+    {
+        var baseBytes = Fixture("WC/WC002-Unmodified.docx");
+        var reviewerA = Fixture("WC/WC002-DiffInMiddle.docx");
+        var reviewerB = Fixture("WC/WC002-DeleteInMiddle.docx");
+
+        // The pair genuinely conflicts: both reviewers appear as competitors on a base span.
+        var conflicts = DocxDiff.GetConflicts(
+            new WmlDocument("base.docx", baseBytes),
+            Reviewers(reviewerA, reviewerB));
+        Assert.NotEmpty(conflicts);
+        Assert.Contains(conflicts.SelectMany(conflict => conflict.Competitors),
+            competitor => competitor.Author == "Reviewer A");
+        Assert.Contains(conflicts.SelectMany(conflict => conflict.Competitors),
+            competitor => competitor.Author == "Reviewer B");
+
+        var consolidated = ConsolidatedRedline(baseBytes, reviewerA, reviewerB);
+        var intendedComposite = RevisionProcessor.AcceptRevisions(consolidated).DocumentByteArray;
+
+        var run = RedlineReversibilityVerifier.Prove(
+            baseBytes, intendedComposite, consolidated.DocumentByteArray);
+        var proof = run.Proof;
+
+        Assert.NotEmpty(proof.RevisionClassifications);
+        Assert.All(proof.RevisionClassifications, classification =>
+        {
+            Assert.Equal(RedlineRevisionDisposition.Generated, classification.Disposition);
+            Assert.Contains(classification.Redline?.Author,
+                new[] { "Reviewer A", "Reviewer B" });
+        });
+
+        Assert.NotNull(proof.AcceptToFinal);
+        Assert.NotNull(proof.RejectToBaseline);
+        Assert.True(proof.AcceptToFinal!.Completed, proof.ToJson());
+        Assert.True(proof.RejectToBaseline!.Completed, proof.ToJson());
+        AssertResolutionClosure(proof.AcceptToFinal);
+        AssertResolutionClosure(proof.RejectToBaseline);
+
+        Assert.Equal(StoryTexts(intendedComposite), StoryTexts(run.AcceptedPackageBytes!));
+        Assert.Equal(StoryTexts(baseBytes), StoryTexts(run.RejectedPackageBytes!));
+        Assert.True(proof.AcceptToFinal.ModeledSemantic.Equivalent, proof.ToJson());
+        Assert.True(proof.RejectToBaseline.ModeledSemantic.Equivalent, proof.ToJson());
+
+        Assert.False(proof.Success, proof.ToJson());
+        AssertNonEquivalenceIsEvidenced(proof.AcceptToFinal);
+        AssertNonEquivalenceIsEvidenced(proof.RejectToBaseline);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers.
     // ------------------------------------------------------------------
 
@@ -413,6 +529,25 @@ public class RedlineReversibilityFixtureSweepTests
         new WmlDocument("left.docx", left),
         new WmlDocument("right.docx", right),
         new DocxDiffSettings { AuthorForRevisions = "Docxodus Engine" }).DocumentByteArray;
+
+    private static WmlDocument ConsolidatedRedline(
+        byte[] baseBytes, byte[] reviewerA, byte[] reviewerB) => DocxDiff.Consolidate(
+        new WmlDocument("base.docx", baseBytes),
+        Reviewers(reviewerA, reviewerB));
+
+    private static DocxDiffReviewer[] Reviewers(byte[] reviewerA, byte[] reviewerB) => new[]
+    {
+        new DocxDiffReviewer
+        {
+            Document = new WmlDocument("reviewer-a.docx", reviewerA),
+            Author = "Reviewer A",
+        },
+        new DocxDiffReviewer
+        {
+            Document = new WmlDocument("reviewer-b.docx", reviewerB),
+            Author = "Reviewer B",
+        },
+    };
 
     private static IEnumerable<string> PinnedStems(string theoryMethodName) =>
         typeof(RedlineReversibilityFixtureSweepTests)
