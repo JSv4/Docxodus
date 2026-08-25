@@ -638,6 +638,38 @@ signature; only then does it measure a fresh PageMap, serialize, and perform the
 check. Otherwise it fails `pagination_failure`. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
+`browser_launch` appears twice in a Node export, and in different places. On the host it is
+Chromium and its isolated context, before anything is converted. In the browser materializer it is
+the isolated render realm — a script-free same-origin frame — which is created only once there is
+converted HTML to lay out, so it records *after* `docx_conversion` and before `font_loading`. The
+offline reopen check creates a second such realm and records it under `output_verification`.
+
+The readiness log in the render report records both sides of the barrier. The browser materializer
+records the phases it runs itself, from `input_validation` through `output_verification`; the Node
+host prepends the phases it owns and the materializer cannot observe from inside the page —
+`browser_launch`, the materializer bootstrap under `wasm_initialization`, the closed-runtime-graph
+audit under `output_verification`, and `cleanup` — so the log reads in the order the work happened.
+`output_write` and `filesystem_commit` are deliberately absent from it: a report cannot record the
+outcome of writing its own bytes, and their digests are already fixed by then. They remain phases
+for error and timeout reporting only. A failed report carries exactly one non-complete entry, so a
+teardown failure behind an already-failed render is reported through the render's failure rather
+than as a second one.
+
+Font readiness proves availability, not identity. `FontFaceSet.check()` reports whether pending
+downloads have settled rather than whether a family exists — Chromium answers true for a family it
+has never heard of — so each requested family's first entry is measured through advance widths
+against every generic fallback. A family that matches all of them is being silently substituted for
+and is recorded `missing` with an aggregate `font_family_unavailable` warning; one that resolves
+stays `unverified`, since rendering it proves neither which file supplied it nor its version.
+Because an unresolvable family is a font-policy matter governed by `strictFonts` rather than
+unsupported content, it always warns and never fails the render on its own. Image and inline-SVG
+findings do route through `unsupportedContent`: they warn with an omitted resource record by
+default and fail closed at their own phase under `strict`. The offline reopen check applies neither
+policy — a resource that materialized and then failed from the serialized HTML is a defect in the
+output, not in the source, and fails `output_verification`. A resource the policy already omitted
+is excluded from that check: it was reported once against the source document, and the reopened
+tree necessarily reproduces the same failure.
+
 The production path performs synchronous WASM conversion inside the existing dedicated worker and
 owns the render page/context. Its total deadline can therefore terminate the worker or close the
 owned context. A Promise race on the browser main thread is not considered cancellation. The same
@@ -670,11 +702,25 @@ records include family stack, PostScript face, style, weight, stretch, glyph cov
 identity/version, substitution decision, and license evidence; these normalized records, not local
 paths, enter the report and fingerprint.
 
-Issue #442 adds the versioned browser `FontResolver` contract used by `fontResolver`. It has bounded
-request/result records and an `AbortSignal`; Node constructs the same resolver from
-`fontDirectories`. A configured root's order is policy and is preserved. Duplicate resolved roots
-or ambiguous faces fail. The resolver cannot fetch URLs, and its returned font bytes are
-length/digest/media-type/license checked before injection.
+The versioned browser `FontResolver` contract used by `fontResolver` has bounded request/result
+records and an `AbortSignal`; Node constructs the same resolver from `fontDirectories`. A
+configured root's order is policy and is preserved. Duplicate resolved roots or ambiguous faces
+fail. The resolver cannot fetch URLs, and its returned font bytes are length/digest/media-type/
+license checked before injection.
+
+The Node resolver reaches the isolated page as a Playwright binding rather than as a serialized
+value. That is not an implementation detail: the resolver reads font files from the host
+filesystem, which the page must never be given access to, so the only thing that crosses the
+boundary is one bounded request and one bounded response. The materializer therefore sees the same
+`FontResolver` function shape whether the caller supplied one directly in the browser or the host
+built one from directories. With no resolver configured the inventory falls back to measured
+browser observation, and every resolution is recorded `unverified` from the `browser` source.
+
+Availability in that fallback is measured, never asked of `FontFaceSet.check()`, which reports
+whether pending downloads have settled rather than whether a family exists — Chromium answers true
+for a family it has never heard of. `strictFonts` rejects any outcome that is not an exact,
+digest-identified, license-evidenced face with complete glyph coverage, which is why a
+browser-observed environment can never satisfy it.
 
 ## Error taxonomy and limits
 

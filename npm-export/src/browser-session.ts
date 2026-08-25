@@ -13,7 +13,10 @@ import type {
   BrowserMaterializationFailure,
   BrowserMaterializationSuccess,
   ExportPhase,
+  FontResolverRequest,
+  FontResolverResponse,
   NodeExportRuntime,
+  ReadinessOutcome,
 } from "./contracts.js";
 import {
   attachFailedReport,
@@ -67,6 +70,10 @@ export interface BrowserRenderOutcome {
   runtime: BrowserRuntimeIdentity;
   requestLog: RequestLogEntry[];
 }
+
+type FontBindingResponse =
+  | { ok: true; result: FontResolverResponse }
+  | { ok: false; error: ReturnType<DocxodusExportError["toJSON"]> };
 
 interface BridgeResponse {
   ok: boolean;
@@ -145,6 +152,62 @@ function remaining(deadline: number, phase: "browser_launch" | "wasm_initializat
   const value = deadline - Date.now();
   if (value <= 0) throw timeoutError(phase, phase);
   return value;
+}
+
+function completedPhase(phase: ExportPhase, started: number): ReadinessOutcome {
+  return {
+    phase,
+    status: "complete",
+    elapsedMs: Math.max(0, performance.now() - started),
+    pending: [],
+  };
+}
+
+function failedPhase(
+  phase: ExportPhase,
+  started: number,
+  error: unknown,
+  pending: string[],
+): ReadinessOutcome {
+  return {
+    phase,
+    status: error instanceof DocxodusExportError && error.code === "operation_cancelled"
+      ? "cancelled"
+      : "failed",
+    elapsedMs: Math.max(0, performance.now() - started),
+    // A typed failure already names the resource it was waiting on; the caller's list
+    // is the fallback for anything that failed without one.
+    pending: error instanceof DocxodusExportError && error.detail
+      ? [error.detail]
+      : [...pending],
+  };
+}
+
+/**
+ * Times one host-owned phase into the render report's readiness log.
+ *
+ * The browser materializer records its own phases from inside the page, but everything
+ * the host owns — launching Chromium, bootstrapping the materializer, printing,
+ * verifying the request log, tearing the context down — is invisible from in there. A
+ * timeout in any of those used to surface only as a bare error code; recording them
+ * here is what lets a caller see which phase was still outstanding and what it was
+ * waiting on.
+ */
+async function withReadiness<T>(
+  record: (entry: ReadinessOutcome) => void,
+  phase: ExportPhase,
+  pending: string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  try {
+    const result = await operation();
+    record(completedPhase(phase, started));
+    return result;
+  } catch (error) {
+    record(failedPhase(phase, started, error, pending));
+    throw error;
+  }
 }
 
 async function bounded<T>(
@@ -772,9 +835,21 @@ export async function renderInBrowser(
   let primaryError: unknown;
   let cleanupError: unknown;
   let currentPhase: ExportPhase = "browser_launch";
+  // Host phases that run before the browser produces its report have nowhere to record
+  // yet, so they buffer here and are prepended once the report exists. After that point
+  // the report's own array is the sink, which keeps every entry in chronological order.
+  const hostReadiness: ReadinessOutcome[] = [];
+  const recordReadiness = (entry: ReadinessOutcome): void => {
+    (materialization?.renderReport.readiness ?? hostReadiness).push(entry);
+  };
 
   try {
-    launch = await launchBrowser(runtime, deadline, signal);
+    launch = await withReadiness(
+      recordReadiness,
+      "browser_launch",
+      ["Chromium launch"],
+      () => launchBrowser(runtime, deadline, signal),
+    );
     try {
       const contextPromise = launch.browser.newContext({
         viewport: { width: 1280, height: 960 },
@@ -787,17 +862,22 @@ export async function renderInBrowser(
         acceptDownloads: false,
         javaScriptEnabled: true,
       });
-      context = await bounded(
-        undefined,
-        deadline,
+      context = await withReadiness(
+        recordReadiness,
         "browser_launch",
-        "isolated browser context creation",
-        signal,
-        () => contextPromise,
-      ).catch((error) => {
-        void contextPromise.then((lateContext) => lateContext.close()).catch(() => undefined);
-        throw error;
-      });
+        ["isolated browser context creation"],
+        () => bounded(
+          undefined,
+          deadline,
+          "browser_launch",
+          "isolated browser context creation",
+          signal,
+          () => contextPromise,
+        ).catch((error) => {
+          void contextPromise.then((lateContext) => lateContext.close()).catch(() => undefined);
+          throw error;
+        }),
+      );
     } catch (cause) {
       if (cause instanceof DocxodusExportError) throw cause;
       exportError(
@@ -886,11 +966,46 @@ export async function renderInBrowser(
       void download.cancel();
     });
     page.setDefaultTimeout(remaining(deadline, "wasm_initialization"));
-    await bounded(context, deadline, "wasm_initialization", "browser materializer bootstrap", signal, async () => {
-      await page.goto(`${origin}/index.html`, { waitUntil: "load" });
-      await page.waitForFunction(() =>
-        (globalThis as unknown as { __docxodusExportReady?: boolean }).__docxodusExportReady === true);
-    });
+    const fontResolver = runtime.fontResolver;
+    if (fontResolver) {
+      // A Playwright binding, not a serialized value: the resolver reads font files from
+      // the host filesystem, which the isolated page can never be given access to.
+      await withReadiness(
+        recordReadiness,
+        "wasm_initialization",
+        ["font resolver binding"],
+        () => bounded(context!, deadline, "wasm_initialization", "font resolver binding", signal,
+          () => page.exposeBinding("__docxodusResolveFonts", async (
+            _source,
+            request: FontResolverRequest,
+          ): Promise<FontBindingResponse> => {
+            try {
+              return { ok: true, result: await fontResolver(request, signal ?? new AbortController().signal) };
+            } catch (error) {
+              const normalized = error instanceof DocxodusExportError
+                ? error
+                : new DocxodusExportError(
+                  "resource_policy_failure",
+                  "font_loading",
+                  "The configured font resolver failed.",
+                  "Inspect the configured font directories and license attestations.",
+                  { cause: error },
+                );
+              return { ok: false, error: normalized.toJSON() };
+            }
+          })),
+      );
+    }
+    await withReadiness(
+      recordReadiness,
+      "wasm_initialization",
+      ["browser materializer bootstrap"],
+      () => bounded(context!, deadline, "wasm_initialization", "browser materializer bootstrap", signal, async () => {
+        await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+        await page.waitForFunction(() =>
+          (globalThis as unknown as { __docxodusExportReady?: boolean }).__docxodusExportReady === true);
+      }),
+    );
 
     const bridgeResponse = await bounded(
       context,
@@ -939,6 +1054,12 @@ export async function renderInBrowser(
       );
     }
     materialization = bridgeResponse.result;
+    // Chromium launch and materializer bootstrap happened before this report existed.
+    materialization.renderReport.readiness = [
+      ...hostReadiness,
+      ...materialization.renderReport.readiness,
+    ];
+    hostReadiness.length = 0;
     materialization.renderReport.options.outputs = [
       ...(includeHtml ? ["html" as const] : []),
       ...(includePdf ? ["pdf" as const] : []),
@@ -1075,47 +1196,41 @@ export async function renderInBrowser(
             }
           },
         );
-        materialization.renderReport.readiness.push({
-          phase: "pdf_print",
-          status: "complete",
-          elapsedMs: Math.max(0, performance.now() - printStarted),
-          pending: [],
-        });
+        recordReadiness(completedPhase("pdf_print", printStarted));
       } catch (error) {
-        materialization.renderReport.readiness.push({
-          phase: "pdf_print",
-          status: error instanceof DocxodusExportError && error.code === "operation_cancelled"
-            ? "cancelled"
-            : "failed",
-          elapsedMs: Math.max(0, performance.now() - printStarted),
-          pending: [error instanceof DocxodusExportError && error.detail
-            ? error.detail
-            : "offline finalized HTML and Chromium PDF printing"],
-        });
+        recordReadiness(failedPhase("pdf_print", printStarted, error,
+          ["offline finalized HTML and Chromium PDF printing"]));
         throw error;
       }
     }
     currentPhase = "output_verification";
-    if (requestLogOverflow) {
-      exportError(
-        "resource_limit",
-        "output_verification",
-        `renderDiagnostics limit exceeded by browser request evidence (${maximumDiagnostics}).`,
-        "Use the closed runtime graph without repeated request attempts.",
-      );
-    }
-    if (deniedCount > 0) {
-      exportError(
-        "resource_policy_failure",
-        "output_verification",
-        "The export attempted a request outside the closed runtime asset graph.",
-        "Embed automatic resources and remove active or external content.",
-        {
-          detail: `denied=${deniedCount}\n${denied.join("\n")}`,
-          resource: denied[0],
-        },
-      );
-    }
+    await withReadiness(
+      recordReadiness,
+      "output_verification",
+      ["closed runtime graph audit"],
+      async () => {
+        if (requestLogOverflow) {
+          exportError(
+            "resource_limit",
+            "output_verification",
+            `renderDiagnostics limit exceeded by browser request evidence (${maximumDiagnostics}).`,
+            "Use the closed runtime graph without repeated request attempts.",
+          );
+        }
+        if (deniedCount > 0) {
+          exportError(
+            "resource_policy_failure",
+            "output_verification",
+            "The export attempted a request outside the closed runtime asset graph.",
+            "Embed automatic resources and remove active or external content.",
+            {
+              detail: `denied=${deniedCount}\n${denied.join("\n")}`,
+              resource: denied[0],
+            },
+          );
+        }
+      },
+    );
     outcome = {
       materialization: bridgeResponse.result,
       pdf,
@@ -1151,6 +1266,7 @@ export async function renderInBrowser(
       );
     primaryError = attachFailedReport(normalized, materialization?.renderReport);
   } finally {
+    const cleanupStarted = performance.now();
     const cleanupFailures: unknown[] = [];
     if (printContext) {
       const failure = await cleanupStep("PDF browser context shutdown", () => printContext!.close());
@@ -1170,6 +1286,14 @@ export async function renderInBrowser(
       if (failure !== undefined) cleanupFailures.push(failure);
     }
     if (cleanupFailures.length > 0) cleanupError = new AggregateError(cleanupFailures);
+    // A failed report may carry exactly one non-complete entry, and when the render
+    // already failed that entry belongs to the render, not to teardown behind it.
+    if (cleanupFailures.length === 0) {
+      recordReadiness(completedPhase("cleanup", cleanupStarted));
+    } else if (primaryError === undefined) {
+      recordReadiness(failedPhase("cleanup", cleanupStarted, cleanupError,
+        ["owned browser context and temporary runtime directory removal"]));
+    }
   }
 
   if (primaryError !== undefined) {

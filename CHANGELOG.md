@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Render report schema v1 → v2 (#442).** `fonts[]` entries were a closed five-field record
+  with a `browser | embedded | configured` source; they now carry the full resolver-backed
+  resolution shape, `status` gains `load_failed`, and `source` becomes
+  `browser | configured | attested`. `embedded` is gone: OOXML embedded fonts are not
+  exported until de-obfuscation and embedding-license policy exist. `fontIdentity` changes
+  from `{schemaVersion, digest, verification}` to the resolver and substitution contract
+  identities it now binds. A consumer pinned to
+  `docxodus/render-report.schema.json` receives the v2 document; the v1 schema stays in
+  `docs/schemas/` for reading archived reports. Because the report is bound into the renderer
+  fingerprint, fingerprints from before this change do not compare equal to ones after it.
+
 ### Added
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
@@ -16,6 +28,67 @@ All notable changes to this project will be documented in this file.
   document, so the corpus carries no third-party bytes. Ships the term-replacement,
   notice-period-amendment, and table-economics scenarios as the deterministic fast subset; PDF
   and visual-regression scoring stay with #443's ratchet.
+
+- **Long footnote paragraphs keep a complete PageMap when they continue (#489).** A note paragraph
+  taller than the maximum note band, and a long leader followed by short tails, are now covered by
+  `standalone-export.spec.ts`: both must continue across pages with `running_story_placement`
+  complete, no pending work, and PageMap fragments on every page the note reaches. The footnote
+  fixture generator accepts per-paragraph word counts so uneven continuation pressure can be
+  constructed directly.
+
+- **Generated-PDF fidelity ratchet (#443).** `@docxodus/export` PDFs now run through the same
+  Poppler raster contract the browser-page benchmark uses, over a ten-document pinned corpus with
+  recorded provenance. Conversion, page count, physical geometry, semantic content and chart-vector
+  contracts are unconditional gates that no raster severity or disposition can waive (the chart
+  contract requires a chart case to emit vector path operations at all); SSIM and ink
+  metrics ratchet separately against a numbers-only record, and text and link extraction are gated
+  independently so a text regression cannot hide behind an acceptable raster score. Extraction from
+  the *reference* PDF is reported rather than gated, so a LibreOffice or Poppler change cannot fail
+  a contract that names Docxodus. An environment
+  fingerprint covering LibreOffice, Chromium, Poppler and the font contract means a changed
+  environment reports `environment-changed` rather than being misattributed to the renderer. The
+  benchmark stays `workflow_dispatch`-only until #444 lands, per the release-gate ordering in the
+  design doc.
+
+- **Verified font runtime (#442).** `fontDirectories` is live: the Node adapter
+  deterministically discovers TTF/OTF/WOFF/WOFF2 files across the ordered directories,
+  rejects symlinks and escaping or changing paths, reads family and face metadata, hashes
+  every file, and gates injection on OS/2 `fsType` — a restricted-license face fails the
+  export closed rather than being silently dropped or substituted, and every WOFF/WOFF2 file
+  requires an explicit caller attestation regardless of what its OS/2 bits would otherwise
+  permit, since embedding rights cannot be derived from the compressed format alone. The
+  resolver reaches the isolated page as a Playwright binding, never as serialized bytes, so
+  the materializer only ever sees the versioned `FontResolver` contract and the page never
+  gains filesystem access; a Node-backed resolver's own failure (a rejected symlink, a
+  resource limit) crosses back with its original code and remediation intact rather than
+  collapsing into a generic message. Resolution records now carry the request identity,
+  family stack and kinds, style, weight, stretch, sample digest, resolved face, file digest
+  and version, face match, metric compatibility, glyph coverage, license evidence, and a
+  single `verified` flag standing in for the whole strictFonts question, and the renderer
+  fingerprint binds the resulting configuration identity. `strictFonts` finally enforces: it
+  rejects any outcome that is not an exact, digest-identified, license-evidenced face with
+  complete coverage, replacing the `unsupported_runtime` stub that previously rejected every
+  configured font environment outright. The visual-parity font contract now derives from the
+  production substitution contract instead of duplicating it, keeping only deployment-specific
+  package hints on the test side.
+
+- **Deterministic print-readiness barrier (#441).** The export barrier now proves what it used
+  to assume. Requested font families are probed for actual availability instead of being taken
+  on trust once `document.fonts.ready` resolves — `FontFaceSet.check()` answers true for families
+  Chromium has never heard of, so resolution is measured through advance widths against every
+  generic fallback. A family the environment silently substituted for is recorded as `missing`
+  rather than `unverified` and raises one aggregate `font_family_unavailable` warning; an
+  available family stays `unverified`, because the barrier proves the browser can render it and
+  not which file it came from. Undecodable images and unmeasurable inline SVG now route through
+  the `unsupportedContent` policy as `image_decode_failed` / `chart_svg_unmeasurable` warnings
+  with an omitted resource record, instead of collapsing into an untyped `conversion_failure`;
+  under `strict` they fail closed at their own phase. The offline reopen check keeps assertion
+  semantics, so a resource that materialized and then did not survive serialization is still an
+  `output_verification_failure`. On the Node side the render report's readiness log now covers
+  the host-owned phases the browser materializer cannot see from inside the page —
+  `browser_launch`, `wasm_initialization`, `output_verification` and `cleanup` — prepended in
+  the order the work actually happened, so a timeout in any of them names its phase and pending
+  resources instead of surfacing a bare error code.
 - **Mixed-section physical PDF geometry (#440).** The shared paginator now transfers continuous
   spill pages to the section that supplies their body while preserving predecessor-owned stories
   on the shared page, carries section-specific header/footer distances and logical page numbering,
@@ -562,6 +635,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Empty paragraphs lost their line box in paginated export (#443).** A paragraph Word serialized
+  as an explicit run holding an empty `w:t` — how it commonly writes a blank line, including
+  signature-table spacer rows — counted as having content, so it received no placeholder run and
+  reached the browser as nothing but a span the converter had already emptied. That left no
+  paragraph-mark line box, a canonical paragraph anchor with zero geometry, and a strict PageMap
+  rejecting otherwise-valid documents. An empty `w:t` is no longer treated as content, and the
+  cleanup that deletes empty spans now recognizes them: it tested `XElement.IsEmpty`, which is a
+  serialization property true only of an element with no child nodes at all, so a span built around
+  an empty `w:t` carried an empty text node and survived. Both spellings of a blank paragraph now
+  produce exactly one placeholder span.
 - **Chromium launch failures say why, and an unavailable sandbox is named as a host policy**
   (issue #525). The Node export runtime already attached the real reason a launch failed to
   `DocxodusExportError.cause`, but the CLI rendered only code, phase, message, remediation, and

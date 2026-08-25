@@ -7,6 +7,9 @@ export interface RgbaImage {
 }
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const MAXIMUM_PNG_INPUT_BYTES = 64 * 1024 * 1024;
+/** Shared with the PDF raster contract, which enforces the same ceiling on pdftoppm output. */
+export const MAXIMUM_PNG_PIXELS = 4_000_000;
 
 function paeth(a: number, b: number, c: number): number {
   const p = a + b - c;
@@ -19,9 +22,9 @@ function paeth(a: number, b: number, c: number): number {
 /** Decode the non-interlaced, 8-bit PNG formats emitted by Chromium and pdftoppm. */
 export function decodePng(input: Uint8Array): RgbaImage {
   const bytes = Buffer.from(input);
-  if (bytes.length < PNG_SIGNATURE.length ||
+  if (bytes.length < PNG_SIGNATURE.length || bytes.length > MAXIMUM_PNG_INPUT_BYTES ||
       !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-    throw new Error('Not a PNG file');
+    throw new Error(`PNG input must be a valid file no larger than ${MAXIMUM_PNG_INPUT_BYTES} bytes`);
   }
 
   let width = 0;
@@ -32,31 +35,69 @@ export function decodePng(input: Uint8Array): RgbaImage {
   let palette: Buffer | undefined;
   let transparency: Buffer | undefined;
   const idat: Buffer[] = [];
+  let sawHeader = false;
+  let sawEnd = false;
+  let sawImageData = false;
+  let endedImageData = false;
+  let chunkCount = 0;
 
   for (let offset = PNG_SIGNATURE.length; offset + 12 <= bytes.length;) {
+    chunkCount++;
+    if (chunkCount > 100_000) throw new Error('PNG contains too many chunks');
     const length = bytes.readUInt32BE(offset);
     const type = bytes.toString('ascii', offset + 4, offset + 8);
+    const end = offset + 12 + length;
+    if (!Number.isSafeInteger(end) || end > bytes.length) {
+      throw new Error(`Truncated PNG ${type} chunk`);
+    }
     const data = bytes.subarray(offset + 8, offset + 8 + length);
-    if (offset + 12 + length > bytes.length) throw new Error(`Truncated PNG ${type} chunk`);
+    const expectedCrc = bytes.readUInt32BE(offset + 8 + length);
+    const actualCrc = crc32(bytes.subarray(offset + 4, offset + 8 + length));
+    if (actualCrc !== expectedCrc) throw new Error(`PNG ${type} chunk failed its CRC check`);
     if (type === 'IHDR') {
+      if (sawHeader || offset !== PNG_SIGNATURE.length || data.length !== 13) {
+        throw new Error('PNG must contain exactly one leading 13-byte IHDR chunk');
+      }
+      sawHeader = true;
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
       bitDepth = data[8];
       colorType = data[9];
+      if (data[10] !== 0 || data[11] !== 0) {
+        throw new Error('PNG uses an unsupported compression or filter method');
+      }
       interlace = data[12];
     } else if (type === 'PLTE') {
+      if (palette || sawImageData) throw new Error('PNG PLTE chunk is duplicate or out of order');
       palette = data;
     } else if (type === 'tRNS') {
+      if (transparency || sawImageData) throw new Error('PNG tRNS chunk is duplicate or out of order');
       transparency = data;
     } else if (type === 'IDAT') {
+      if (!sawHeader || sawEnd || endedImageData) throw new Error('PNG IDAT chunk is out of order');
+      sawImageData = true;
       idat.push(data);
     } else if (type === 'IEND') {
+      if (data.length !== 0) throw new Error('PNG IEND chunk must be empty');
+      sawEnd = true;
+      if (end !== bytes.length) throw new Error('PNG has trailing bytes after IEND');
       break;
+    } else {
+      if (sawImageData) endedImageData = true;
+      if (type[0] === type[0]?.toUpperCase()) {
+        throw new Error(`PNG contains unsupported critical chunk ${type}`);
+      }
     }
-    offset += length + 12;
+    offset = end;
   }
 
-  if (!width || !height || !idat.length) throw new Error('PNG is missing IHDR or IDAT data');
+  if (!sawHeader || !sawEnd || !width || !height || !idat.length) {
+    throw new Error('PNG is missing IHDR, IDAT, or IEND data');
+  }
+  const pixels = width * height;
+  if (!Number.isSafeInteger(pixels) || pixels > MAXIMUM_PNG_PIXELS) {
+    throw new Error(`PNG dimensions exceed the ${MAXIMUM_PNG_PIXELS}-pixel limit`);
+  }
   if (bitDepth !== 8 || interlace !== 0) {
     throw new Error(`Unsupported PNG format: bitDepth=${bitDepth}, interlace=${interlace}`);
   }
@@ -65,10 +106,18 @@ export function decodePng(input: Uint8Array): RgbaImage {
   const channels = channelsByType[colorType];
   if (!channels) throw new Error(`Unsupported PNG color type ${colorType}`);
   if (colorType === 3 && !palette) throw new Error('Indexed PNG is missing its palette');
+  if (palette && (palette.length === 0 || palette.length > 768 || palette.length % 3 !== 0)) {
+    throw new Error('PNG palette has an invalid length');
+  }
+  if (transparency && colorType === 3 && transparency.length > (palette?.length ?? 0) / 3) {
+    throw new Error('PNG transparency table exceeds its palette');
+  }
 
   const stride = width * channels;
-  const filtered = inflateSync(Buffer.concat(idat));
-  if (filtered.length !== (stride + 1) * height) {
+  const expectedFilteredBytes = (stride + 1) * height;
+  if (!Number.isSafeInteger(expectedFilteredBytes)) throw new Error('PNG payload size is unsafe');
+  const filtered = inflateSync(Buffer.concat(idat), { maxOutputLength: expectedFilteredBytes });
+  if (filtered.length !== expectedFilteredBytes) {
     throw new Error(`Unexpected PNG payload length ${filtered.length}`);
   }
 
@@ -157,7 +206,11 @@ function pngChunk(type: string, data: Uint8Array): Buffer {
 
 /** Encode an RGBA image as a deterministic, non-interlaced PNG. */
 export function encodePng(image: RgbaImage): Buffer {
-  if (image.data.length !== image.width * image.height * 4) {
+  const pixels = image.width * image.height;
+  if (!Number.isSafeInteger(pixels) || pixels < 1 || pixels > MAXIMUM_PNG_PIXELS) {
+    throw new Error(`RGBA dimensions exceed the ${MAXIMUM_PNG_PIXELS}-pixel limit`);
+  }
+  if (image.data.length !== pixels * 4) {
     throw new Error('RGBA buffer length does not match its dimensions');
   }
   const header = Buffer.alloc(13);

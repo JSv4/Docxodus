@@ -94,6 +94,15 @@ export interface RatchetCase {
 export interface RatchetRecord {
   schemaVersion: number;
   description: string;
+  /**
+   * Set when the numbers were NOT measured on this lineage — carried over from a retired branch,
+   * say. The environment fingerprint cannot catch that: it pins LibreOffice, Chromium, Poppler and
+   * the font contract, so a record measured on different SOURCE under the SAME toolchain shows no
+   * drift and gets compared numerically, attributing the difference to the renderer. A provisional
+   * record therefore refuses numeric comparison outright until it is re-recorded. `buildRecord`
+   * never emits the flag, so a real refresh clears it.
+   */
+  provisional?: boolean;
   recordedAt: string;
   sourceCommit: string;
   environment: RatchetEnvironment;
@@ -110,10 +119,16 @@ export interface RatchetSummaryCase {
   severity: VisualSeverity;
   pages: { ssim: number; tolerantInkF1: number }[];
   error?: string;
+  /** Generated-PDF hard signals. Browser-page summaries omit these fields. */
+  physicalGeometryPassed?: boolean;
+  semanticChecksPassed?: boolean;
 }
 
 export interface RatchetSummary {
   gitCommit?: string;
+  workingTreeDirty?: boolean;
+  /** Bounded `git status --porcelain` excerpt, so a refusal can name what it objected to. */
+  workingTreeStatus?: readonly string[];
   environment: {
     chromium?: string;
     libreoffice?: string;
@@ -125,18 +140,29 @@ export interface RatchetSummary {
 
 export type RatchetStatus = 'ok' | 'regressed' | 'environment-changed' | 'record-mismatch';
 
+/**
+ * The environment variable that refreshes the record being compared. This module is shared by two
+ * benchmarks with two different records and two different switches, so a hardcoded name sends an
+ * operator to a variable that does nothing here — and that DOES overwrite the OTHER benchmark's
+ * record when they apply it to the other command.
+ */
+export const DEFAULT_RATCHET_UPDATE_ENV = 'DOCXODUS_VISUAL_PARITY_UPDATE_RECORD';
+
 export interface RatchetOptions {
   /**
    * Whether the run covered the whole corpus. A `DOCXODUS_VISUAL_PARITY_FILTER` run legitimately
    * measures a subset, so its absent cases are not findings; an unfiltered run's are.
    */
   expectComplete: boolean;
+  /** Name of the refresh switch quoted in this comparison's remediation messages. */
+  updateRecordEnv?: string;
 }
 
 export interface RatchetFinding {
   caseId: string;
   /** The signal that moved, so the failure names both the case and what got worse. */
-  signal: 'severity' | 'ssim' | 'inkF1' | 'pages' | 'error' | 'missing' | 'unrecorded';
+  signal: 'severity' | 'ssim' | 'inkF1' | 'pages' | 'error' | 'physicalGeometry'
+    | 'semantics' | 'missing' | 'unrecorded';
   recorded: string;
   measured: string;
   detail: string;
@@ -233,6 +259,27 @@ export function buildRecord(summary: RatchetSummary, recordedAt: string): Ratche
   };
 }
 
+/**
+ * A committed record must identify the exact clean tree that produced it. Keeping this check
+ * outside `buildRecord` preserves that function as a pure formatter for synthetic unit tests,
+ * while both benchmark update paths call it before writing repository state.
+ */
+export function assertRecordUpdateProvenance(summary: RatchetSummary): void {
+  if (summary.workingTreeDirty !== false) {
+    // Name the entries. "Dirty" with no list sends the reader hunting through build steps for a
+    // path the runner already knew — and on a hosted runner they cannot look for themselves.
+    const entries = summary.workingTreeStatus ?? [];
+    const listed = entries.length > 0
+      ? ` Working tree reports:\n  ${entries.join('\n  ')}`
+      : ' No status detail was recorded.';
+    throw new Error('Refusing to refresh a parity ratchet from a dirty or unverified worktree; '
+      + `commit the implementation and rerun the complete benchmark.${listed}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(summary.gitCommit ?? '')) {
+    throw new Error('Refusing to refresh a parity ratchet without the exact 40-character source commit.');
+  }
+}
+
 /** Stable, human-readable serialization; the record is reviewed as a diff. */
 export function serializeRecord(record: RatchetRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
@@ -268,6 +315,19 @@ export function compareToRecord(
   summary: RatchetSummary,
   options: RatchetOptions = { expectComplete: true },
 ): RatchetComparison {
+  const updateRecordEnv = options.updateRecordEnv ?? DEFAULT_RATCHET_UPDATE_ENV;
+  if (record.provisional === true) {
+    return {
+      status: 'record-mismatch',
+      findings: [],
+      improvements: [],
+      environmentDrift: [],
+      message: 'The committed record is marked provisional: its numbers were not measured on this '
+        + 'lineage, so comparing against them would attribute the difference to the renderer. The '
+        + 'unconditional contracts still gate this run. Re-record with '
+        + `${updateRecordEnv}=1 on a clean tree and commit the result to clear the flag.`,
+    };
+  }
   if (record.schemaVersion !== RATCHET_SCHEMA_VERSION) {
     return {
       status: 'record-mismatch',
@@ -275,7 +335,7 @@ export function compareToRecord(
       improvements: [],
       environmentDrift: [],
       message: `Ratchet record schema ${record.schemaVersion} is not the expected ` +
-        `${RATCHET_SCHEMA_VERSION}; regenerate it with DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1.`,
+        `${RATCHET_SCHEMA_VERSION}; regenerate it with ${updateRecordEnv}=1.`,
     };
   }
 
@@ -292,8 +352,7 @@ export function compareToRecord(
         drift.join('\n  ') +
         '\nThe recorded numbers were measured under a different reference environment, so ' +
         'comparing against them would attribute that change to Docxodus. Rerun the benchmark ' +
-        'in the new environment with DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1 and commit the ' +
-        'refreshed record.',
+        `in the new environment with ${updateRecordEnv}=1 and commit the refreshed record.`,
     };
   }
 
@@ -325,7 +384,7 @@ export function compareToRecord(
       recorded: '(absent)',
       measured: measured.severity,
       detail: `${measured.id} was measured but is not in the record; add it with ` +
-        'DOCXODUS_VISUAL_PARITY_UPDATE_RECORD=1',
+        `${updateRecordEnv}=1`,
     });
   }
 
@@ -384,6 +443,26 @@ function compareCase(
       detail: `${recorded.id}: page count changed from ` +
         `${recorded.pages.docxodus}/${recorded.pages.libreoffice} (Docxodus/LibreOffice) to ` +
         `${measured.docxodusPages}/${measured.libreofficePages}`,
+    });
+  }
+
+  if (measured.physicalGeometryPassed === false) {
+    findings.push({
+      caseId: recorded.id,
+      signal: 'physicalGeometry',
+      recorded: 'passed',
+      measured: 'failed',
+      detail: `${recorded.id}: physical PDF geometry failed its absolute contract`,
+    });
+  }
+
+  if (measured.semanticChecksPassed === false) {
+    findings.push({
+      caseId: recorded.id,
+      signal: 'semantics',
+      recorded: 'passed',
+      measured: 'failed',
+      detail: `${recorded.id}: selectable-text or hyperlink semantics failed`,
     });
   }
 

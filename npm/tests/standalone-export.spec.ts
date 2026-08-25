@@ -5,10 +5,31 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { generateFootnoteDocx } from './docx-footnote-fixture.js';
 import { generateTableCommentDocx } from './docx-page-map-fixture.js';
+import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const testFiles = join(here, '..', '..', 'TestFiles');
+
+/** The public lifecycle phase vocabulary, frozen by docs/architecture/standalone_paginated_export.md. */
+const EXPORT_PHASES = [
+  'input_validation',
+  'package_preflight',
+  'browser_launch',
+  'wasm_initialization',
+  'docx_conversion',
+  'font_loading',
+  'image_decoding',
+  'chart_svg_materialization',
+  'pagination',
+  'running_story_placement',
+  'page_tree_stability',
+  'pdf_print',
+  'output_verification',
+  'output_write',
+  'filesystem_commit',
+  'cleanup',
+];
 
 interface BrowserExportResult {
   html: string;
@@ -40,8 +61,24 @@ interface BrowserExportResult {
     environment: { rendererFingerprint: string; verification: string };
     pages: BrowserExportResult['pageMap']['pages'];
     bindings: { pageMapDigest: string; htmlDigest: string };
-    fonts: Array<{ requestedFamily: string; status: string; source: string }>;
+    fonts: Array<{
+      requestId: string;
+      requestedFamily: string;
+      requestedFamilies: string[];
+      sampleDigest: string;
+      status: string;
+      source: string;
+      fileSha256?: string;
+    }>;
+    fontIdentity?: {
+      resolverContract: string;
+      substitutionContractVersion: number;
+      substitutionContractDigest: string;
+      resolutionDigest: string;
+    };
     warnings: Array<{ code: string; severity: string; phase: string }>;
+    resources: Array<{ kind: string; status: string; resource?: string }>;
+    readiness: Array<{ phase: string; status: string; elapsedMs: number; pending: string[] }>;
   };
   warnings: unknown[];
   rendererFingerprint: string;
@@ -60,9 +97,9 @@ function digest(value: Uint8Array | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-test('freezes the closed render-report v1 schema and exact resource-limit vocabulary', () => {
+test('freezes the closed render-report v2 schema and exact resource-limit vocabulary', () => {
   const schema = JSON.parse(readFileSync(
-    join(here, '..', '..', 'docs', 'schemas', 'render-report-v1.schema.json'),
+    join(here, '..', '..', 'docs', 'schemas', 'render-report-v2.schema.json'),
     'utf8',
   ));
   const limits = JSON.parse(readFileSync(join(here, '..', 'src', 'export-resource-limits-v1.json'), 'utf8'));
@@ -91,6 +128,26 @@ test('freezes the closed render-report v1 schema and exact resource-limit vocabu
     'invalid_argument', 'source_digest_mismatch', 'document_version_unrepresentable',
     'operation_cancelled', 'resource_limit',
   ]));
+  // v2's reason for existing: a font record now carries resolver-backed identity, and a
+  // resolution may come from an attested source. Neither fits v1's closed font entry.
+  expect(schema.$id).toBe('https://docxodus.dev/schemas/render/render-report/v2');
+  expect(definitions.baseProperties.schemaVersion).toEqual({ const: 2 });
+  const fontEntry = definitions.baseProperties.fonts.items;
+  expect(fontEntry.additionalProperties).toBe(false);
+  expect(fontEntry.required).toEqual(expect.arrayContaining([
+    'requestId', 'requestedFamily', 'requestedFamilies', 'sampleDigest', 'status', 'source',
+  ]));
+  expect(fontEntry.properties.status.enum).toEqual([
+    'resolved', 'substituted', 'missing', 'load_failed', 'unverified',
+  ]);
+  expect(fontEntry.properties.source.enum).toEqual(['browser', 'configured', 'attested']);
+  expect(fontEntry.properties.licenseEvidence.required).toEqual(
+    ['kind', 'identity', 'noSubsetting'],
+  );
+  expect(definitions.fontIdentity.required).toEqual([
+    'resolverContract', 'substitutionContractVersion',
+    'substitutionContractDigest', 'resolutionDigest',
+  ]);
 });
 
 function generateTrackedRevisionDocx(): Uint8Array {
@@ -266,10 +323,22 @@ test.describe('standalone paginated HTML', () => {
     expect(result.rendererFingerprint).toBe(result.renderReport.environment.rendererFingerprint);
     expect(result.renderReport.environment.verification).toBe('browserObserved');
     expect(result.renderReport.fonts.length).toBeGreaterThan(0);
+    // With no resolver configured the inventory is browser-observed: 'unverified' when the
+    // environment can render the family and 'missing' when it silently substituted for it.
+    // Which one a given runner produces depends on the fonts it has installed, so the
+    // contract is that it is one of those two, sourced from the browser, and never a claim
+    // of verified file identity.
     expect(result.renderReport.fonts.every((font) =>
       font.requestedFamily.length > 0
-      && font.status === 'unverified'
-      && font.source === 'browser')).toBe(true);
+      && font.requestId.length > 0
+      && /^[0-9a-f]{64}$/.test(font.sampleDigest)
+      && (font.status === 'unverified' || font.status === 'missing')
+      && font.source === 'browser'
+      && font.fileSha256 === undefined)).toBe(true);
+    expect(result.renderReport.fontIdentity).toMatchObject({
+      resolverContract: 'https://docxodus.dev/contracts/font-resolver/v1',
+      substitutionContractVersion: 1,
+    });
     expect(result.renderReport.warnings).toContainEqual(expect.objectContaining({
       code: 'font_environment_unverified',
       severity: 'warning',
@@ -628,6 +697,114 @@ test.describe('standalone paginated HTML', () => {
     });
   });
 
+  test('records every readiness phase, in order, for a successful render', async ({ page }) => {
+    const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const result = await convert(page, source);
+
+    expect(result.renderReport.readiness.every((entry) =>
+      entry.status === 'complete' && entry.pending.length === 0 && entry.elapsedMs >= 0)).toBe(true);
+    // Several phases legitimately record more than once — three wasm_initialization steps,
+    // five output_verification checks — so the contract is the order they occur in, not
+    // the count. A repeated page-tree attempt truncates its own entries, which is why a
+    // rebuilt layout does not show up here as a second pass through the render phases.
+    // browser_launch lands after conversion because it is the isolated render realm, not
+    // the process: the materializer only creates that frame once it has HTML to lay out.
+    const order = result.renderReport.readiness
+      .map((entry) => entry.phase)
+      .filter((phase, index, phases) => phase !== phases[index - 1]);
+    expect(order).toEqual([
+      'input_validation',
+      'wasm_initialization',
+      'package_preflight',
+      'docx_conversion',
+      'browser_launch',
+      'font_loading',
+      'image_decoding',
+      'chart_svg_materialization',
+      'pagination',
+      'running_story_placement',
+      'page_tree_stability',
+      'output_verification',
+    ]);
+  });
+
+  test('produces the same page count and geometry when the same input is rendered twice',
+    async ({ page }) => {
+      const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+      const first = await convert(page, source);
+      const second = await convert(page, source);
+
+      // The barrier's whole purpose: a render that waited for a stable page tree cannot
+      // depend on how the previous one happened to be scheduled.
+      expect(second.pageCount).toBe(first.pageCount);
+      expect(canonical(second.pageMap)).toBe(canonical(first.pageMap));
+      expect(second.rendererFingerprint).toBe(first.rendererFingerprint);
+      expect(digest(second.html)).toBe(digest(first.html));
+      expect(second.renderReport.bindings.pageMapDigest)
+        .toBe(first.renderReport.bindings.pageMapDigest);
+    });
+
+  test('routes an undecodable image through the unsupported-content policy', async ({ page }) => {
+    const source = generateUndecodableImageDocx();
+    const warned = await convert(page, source);
+
+    expect(warned.renderReport.warnings).toContainEqual(expect.objectContaining({
+      code: 'image_decode_failed',
+      severity: 'warning',
+      phase: 'image_decoding',
+    }));
+    expect(warned.renderReport.resources).toContainEqual(expect.objectContaining({
+      kind: 'image',
+      status: 'omitted',
+    }));
+    // Warning, not failing, still has to produce a document.
+    expect(warned.pageCount).toBeGreaterThan(0);
+
+    const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
+      .convertFailure(bytes, {
+        reviewProfile: 'final',
+        commentProfile: 'hidden',
+        unsupportedContent: 'strict',
+      }), Array.from(source));
+
+    expect(failure.unexpectedSuccess).toBeUndefined();
+    expect(failure.code).toBe('resource_policy_failure');
+    expect(failure.phase).toBe('image_decoding');
+    expect(failure.report.status).toBe('failed');
+    expect(failure.report.readiness.at(-1)).toMatchObject({
+      phase: 'image_decoding',
+      status: 'failed',
+    });
+  });
+
+  test('names the incomplete phase and its pending resources when the deadline expires',
+    async ({ page }) => {
+      const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+      const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
+        .convertFailure(bytes, {
+          reviewProfile: 'final',
+          commentProfile: 'hidden',
+          timeoutMs: 1,
+        }), Array.from(source));
+
+      expect(failure.unexpectedSuccess).toBeUndefined();
+      expect(failure.code).toBe('readiness_timeout');
+      // Which phase wins the race depends on the machine; that it is a named phase
+      // carrying what it was still waiting on is the contract.
+      expect(EXPORT_PHASES).toContain(failure.phase);
+      expect(failure.pending.length).toBeGreaterThan(0);
+      // A deadline this short can expire before the report exists — the export has not yet
+      // read enough of the package to describe it. When one was produced, its last entry
+      // must still name the phase that ran out of time.
+      if (failure.report) {
+        expect(failure.report.readiness.at(-1)).toMatchObject({
+          phase: failure.phase,
+          status: 'failed',
+        });
+        expect(failure.report.readiness.at(-1).pending.length).toBeGreaterThan(0);
+      }
+    });
+
   test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'HC006-Test-01.docx')));
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
@@ -643,6 +820,62 @@ test.describe('standalone paginated HTML', () => {
     expect(failure.report.readiness.at(-1).status).toBe('failed');
     await testInfo.attach('clipped-content-render-report.json', {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
+      contentType: 'application/json',
+    });
+  });
+
+  test('publishes complete PageMaps when long footnote paragraphs continue', async ({
+    page,
+  }, testInfo) => {
+    const cases = [
+      {
+        id: 'single-oversized-paragraph',
+        // Issue #489 case C: one paragraph is taller than the maximum note band and must
+        // continue across pages without clipping.
+        source: generateFootnoteDocx(1, 2, 1, [700]),
+      },
+      {
+        id: 'oversized-leading-paragraph-with-tail',
+        // Issue #489 case C2: the long leader and its tail must all survive continuation.
+        source: generateFootnoteDocx(1, 2, 3, [700, 8, 8]),
+      },
+    ];
+    const evidence: Array<{
+      id: string;
+      sourceSha256: string;
+      pageMap: BrowserExportResult['pageMap'];
+      renderReport: BrowserExportResult['renderReport'];
+    }> = [];
+
+    for (const entry of cases) {
+      const result = await convert(page, entry.source, false, { commentProfile: 'hidden' });
+      const footnotePages = new Set(result.pageMap.fragments
+        .filter((fragment: any) => fragment.story === 'footnote')
+        .map((fragment: any) => fragment.pageNumber));
+
+      expect(result.pageCount, entry.id).toBeGreaterThan(2);
+      expect(footnotePages.size, `${entry.id} must continue its note across pages`)
+        .toBeGreaterThan(1);
+      expect(result.renderReport.status, entry.id).toBe('complete');
+      expect(result.renderReport.source.rawPackageBytesDigest, entry.id).toBe(digest(entry.source));
+      expect(result.renderReport.readiness, entry.id).toContainEqual(expect.objectContaining({
+        phase: 'running_story_placement',
+        status: 'complete',
+        pending: [],
+      }));
+      expect(result.renderReport.bindings.htmlDigest, entry.id).toBe(digest(result.html));
+      expect(result.renderReport.bindings.pageMapDigest, entry.id)
+        .toBe(digest(canonical(result.pageMap)));
+      evidence.push({
+        id: entry.id,
+        sourceSha256: digest(entry.source),
+        pageMap: result.pageMap,
+        renderReport: result.renderReport,
+      });
+    }
+
+    await testInfo.attach('long-footnote-continuation-exports.json', {
+      body: Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`),
       contentType: 'application/json',
     });
   });
