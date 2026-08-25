@@ -338,6 +338,7 @@ class EditErrorCode(str, Enum):
     ANCHOR_TOKEN_IN_PAYLOAD = "anchor_token_in_payload"
     OFFSET_OUT_OF_RANGE = "offset_out_of_range"
     INVALID_POSITION = "invalid_position"
+    TEXT_NOT_FOUND = "text_not_found"
     UNKNOWN_STYLE = "unknown_style"
     INVALID_LIST_LEVEL = "invalid_list_level"
     INVALID_LIST_START_VALUE = "invalid_list_start_value"

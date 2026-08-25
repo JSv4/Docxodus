@@ -1613,6 +1613,13 @@ public enum EditErrorCode
     OffsetOutOfRange,
     InvalidPosition,
 
+    /// <summary>A text needle that matches nothing in the target anchor's visible text.
+    /// <see cref="DocxSession.ReplaceTextRange"/> reports it instead of a silent
+    /// zero-replacement so a caller can distinguish "replaced nothing" from "replaced
+    /// something" — re-inspect the anchor and retarget. Pass
+    /// <see cref="ReplaceOptions.ExpectedMatchCount"/> = 0 to assert absence instead.</summary>
+    TextNotFound,
+
     UnknownStyle,
     InvalidListLevel,
 
@@ -4874,6 +4881,14 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
+    /// A <paramref name="find"/> that matches nothing fails with a single
+    /// <see cref="EditErrorCode.TextNotFound"/> result naming the anchor and the needle —
+    /// never an empty list a caller could mistake for success. The exceptions are the two
+    /// explicit no-op spellings: <see cref="ReplaceOptions.ExpectedMatchCount"/> = 0
+    /// (assert absence) and <see cref="ReplaceOptions.MaxReplacements"/> = 0 (found but
+    /// deliberately unconsumed), which return an empty list.
+    /// </para>
+    /// <para>
     /// The replacement text is plain-text and inherits the formatting of the FIRST run the
     /// match spanned — middle/trailing runs keep their <c>w:rPr</c> but lose the slice of
     /// text the match consumed (so a bold run that contributed three chars to the match now
@@ -4942,6 +4957,16 @@ public sealed partial class DocxSession : IDisposable
             .ToList();
         if (EvaluatePreconditions(guards, matches.Count) is { } countPreconditionError)
             return new[] { new EditResult { Success = false, Error = countPreconditionError } };
+        if (matches.Count == 0)
+        {
+            // ExpectedMatchCount = 0 already asserted absence above, so an empty result is
+            // the caller's asserted outcome; any other zero-match call is a targeting
+            // failure the caller must be able to distinguish from success (issue #490).
+            if (guards?.ExpectedMatchCount == 0) return Array.Empty<EditResult>();
+            return new[] { EditResult.Fail(EditErrorCode.TextNotFound,
+                $"text not found in anchor's visible text: \"{find}\"", anchorId) };
+        }
+
         if (opts.MaxReplacements is int cap) matches = matches.Take(cap).ToList();
         if (matches.Count == 0) return Array.Empty<EditResult>();
 

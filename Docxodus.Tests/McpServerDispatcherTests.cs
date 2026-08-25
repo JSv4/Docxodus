@@ -2758,4 +2758,42 @@ public class McpServerDispatcherTests : IDisposable
 
         Assert.Contains("CaptureInitialProjection", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void MCP153_ReplaceTextRange_NoMatch_ReportsTextNotFoundOnBothPaths()
+    {
+        // Issue #490: the direct call used to answer a zero-match replace with a bare [],
+        // and the same op inside a batch used to fail as internal_error. Both paths must
+        // report the same structured text_not_found, naming the anchor and the needle.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var direct = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text_range","anchorId":"{{anchor}}","find":"ZZZ-not-present-ZZZ","replace":"x"}""")));
+        Assert.Equal(JsonValueKind.Array, direct.ValueKind);
+        Assert.Equal(1, direct.GetArrayLength());
+        var directResult = direct[0];
+        Assert.False(directResult.GetProperty("success").GetBoolean());
+        var directError = directResult.GetProperty("error");
+        Assert.Equal("text_not_found", directError.GetProperty("code").GetString());
+        Assert.Equal(anchor, directError.GetProperty("anchorId").GetString());
+        Assert.Contains("ZZZ-not-present-ZZZ", directError.GetProperty("message").GetString());
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "atomic",
+              "steps": [
+                { "tool": "docxodus_edit", "args": { "action": "replace_text_range", "anchorId": "{{anchor}}", "find": "ZZZ-not-present-ZZZ", "replace": "x" } }
+              ]
+            }
+            """)));
+        Assert.Equal("failed", batch.GetProperty("status").GetString());
+        Assert.True(batch.GetProperty("rolledBack").GetBoolean());
+        var failure = batch.GetProperty("failure");
+        Assert.Equal("replace_text_range", failure.GetProperty("action").GetString());
+        Assert.Equal("text_not_found", failure.GetProperty("error").GetProperty("code").GetString());
+    }
 }

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`ReplaceTextRange` with a needle that matches nothing now fails with the new
+  `TextNotFound` error code (#490)** — `text_not_found` on the wire — carrying the anchor id
+  and the needle, instead of returning an empty list a caller could not distinguish from a
+  successful replacement. The same structured failure surfaces identically when the op runs
+  as a mutation batch step: the step fails (rolling back an atomic batch) with
+  `text_not_found` rather than the former `internal_error` or, post-#497, a silent no-op.
+  **A caller that relied on the empty-list no-op** should pass `ExpectedMatchCount = 0`
+  (`expectedMatchCount` on the wire) to assert absence as a successful no-op;
+  `MaxReplacements = 0` likewise remains a successful found-but-unconsumed no-op.
 - **Revision and comment export profiles report what they cannot draw (#444).** Under `markup`,
   a custom XML revision range now raises `revision_family_not_rendered` and a block-level property
   revision — paragraph, table, section or numbering — raises
