@@ -65,6 +65,7 @@ public sealed class WorkflowEvalTests
         CheckValidity(invariants, outcome, failures);
         CheckTrackedRevisions(invariants, outcome, failures);
         CheckComments(invariants, outcome, failures);
+        CheckRedline(invariants, outcome, failures);
         CheckReversibility(invariants, outcome, failures);
         CheckRendering(invariants, outcome, failures);
 
@@ -98,6 +99,7 @@ public sealed class WorkflowEvalTests
             ["trackedRevisions"] = ["countAtLeast", "countAtMost", "authorsMustInclude"],
             ["comments"] =
                 ["countAtLeast", "countAtMost", "authorsMustInclude", "repliesAtLeast", "resolvedAtLeast"],
+            ["redline"] = ["fromPath", "countAtLeast", "countAtMost", "authorsMustInclude"],
             ["reversibility"] =
             [
                 "mode", "mustSucceed", "generatedRevisionsAtLeast", "pathsMustComplete",
@@ -308,6 +310,25 @@ public sealed class WorkflowEvalTests
             CheckComments,
             expectFailure: false,
             "the comment thread matches every bound");
+
+        AssertCheck(
+            outcome,
+            """{ "redline": { "fromPath": "out.docx", "countAtLeast": 3, "authorsMustInclude": ["Reviewer B"] } }""",
+            CheckRedline,
+            expectFailure: true,
+            "the captured redline has two revisions and no Reviewer B");
+        AssertCheck(
+            outcome,
+            """{ "redline": { "fromPath": "out.docx", "countAtLeast": 2, "countAtMost": 2, "authorsMustInclude": ["Reviewer A"] } }""",
+            CheckRedline,
+            expectFailure: false,
+            "the captured redline matches every bound");
+        AssertCheck(
+            outcome with { RedlineRevisionsJson = null },
+            """{ "redline": { "fromPath": "out.docx", "countAtLeast": 1 } }""",
+            CheckRedline,
+            expectFailure: true,
+            "declared redline invariants with no captured redline must fail, not skip");
     }
 
     private static void AssertCheck(
@@ -352,6 +373,11 @@ public sealed class WorkflowEvalTests
             {"comments":[
             {"anchorId":"cmt:cmt:1","author":"First Reviewer","text":"Q?","resolved":true},
             {"anchorId":"cmt:cmt:2","author":"Second Reviewer","text":"A.","parentAnchorId":"cmt:cmt:1"}]}
+            """,
+        RedlineRevisionsJson = """
+            {"revisions":[
+            {"id":"r1","type":"insert","author":"Reviewer A","text":"x"},
+            {"id":"r2","type":"delete","author":"Reviewer A","text":"y"}]}
             """,
     };
 
@@ -490,6 +516,33 @@ public sealed class WorkflowEvalTests
             failures.Add(
                 $"comments: {resolved} resolved comment(s), expected at least "
                 + $"{resolvedAtLeast.GetInt32()}");
+    }
+
+    /// <summary>
+    /// Assertions over the document a compare step wrote (<c>redline.fromPath</c>): the harness
+    /// opened it in a fresh session and read docxodus_track_changes list, so these bounds
+    /// describe the produced file itself, independent of the compare tool's own response.
+    /// </summary>
+    private static void CheckRedline(
+        JsonElement invariants, EvalOutcome outcome, List<string> failures)
+    {
+        if (!invariants.TryGetProperty("redline", out var expected))
+            return;
+
+        if (outcome.RedlineRevisionsJson is not { } revisionsJson)
+        {
+            failures.Add("redline: invariants declared but no redline document was captured");
+            return;
+        }
+
+        using var document = JsonDocument.Parse(revisionsJson);
+        var revisions = document.RootElement.GetProperty("revisions").EnumerateArray().ToList();
+        CheckCountBounds(expected, revisions.Count, "redline", "revision", failures);
+        CheckAuthors(
+            expected,
+            revisions.Select(item => item.GetProperty("author").GetString() ?? string.Empty),
+            "redline",
+            failures);
     }
 
     private static void CheckCountBounds(
@@ -654,6 +707,12 @@ public sealed class WorkflowEvalTests
             Path.Combine(directory, "revisions.json"), outcome.RevisionsJson, Encoding.UTF8);
         File.WriteAllText(
             Path.Combine(directory, "comments.json"), outcome.CommentsJson, Encoding.UTF8);
+        if (outcome.RedlineRevisionsJson is { } redlineRevisions)
+        {
+            File.WriteAllText(
+                Path.Combine(directory, "redline-revisions.json"), redlineRevisions, Encoding.UTF8);
+        }
+
         if (outcome.Reversibility is { } proof)
         {
             File.WriteAllText(
@@ -682,6 +741,13 @@ public sealed class WorkflowEvalTests
     /// </summary>
     private static void WriteScorecard(EvalOutcome outcome, IReadOnlyList<string> failures)
     {
+        int? redlineRevisionCount = null;
+        if (outcome.RedlineRevisionsJson is { } redlineJson)
+        {
+            using var redline = JsonDocument.Parse(redlineJson);
+            redlineRevisionCount = redline.RootElement.GetProperty("revisions").GetArrayLength();
+        }
+
         var scorecard = new
         {
             scenario = outcome.Id,
@@ -696,6 +762,7 @@ public sealed class WorkflowEvalTests
                 validityDecision = outcome.ValidityDecision,
                 textMatchCounts = outcome.TextMatchCounts,
                 generatedRevisionCount = outcome.GeneratedRevisionCount,
+                redlineRevisionCount,
                 reversibility = outcome.Reversibility is { } proof
                     ? new
                     {

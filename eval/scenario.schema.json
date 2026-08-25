@@ -258,6 +258,36 @@
             }
           }
         },
+        "redline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fromPath"
+          ],
+          "description": "Assertions over a redline document a docxodus_compare step wrote. The runner opens fromPath in a fresh session and reads docxodus_track_changes list — the same agent-surface view trackedRevisions uses for the delivered session — so the bounds describe the produced file itself, not the compare tool's own summary.",
+          "properties": {
+            "fromPath": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The workspace path a step wrote the redline to — the same path vocabulary steps use for docxodus_save and docxodus_compare."
+            },
+            "countAtLeast": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "countAtMost": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "authorsMustInclude": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "validity": {
           "type": "object",
           "additionalProperties": false,

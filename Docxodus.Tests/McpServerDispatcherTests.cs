@@ -1591,6 +1591,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_annotate",
             "docxodus_close",
             "docxodus_comment",
+            "docxodus_compare",
             "docxodus_content_controls",
             "docxodus_create",
             "docxodus_edit",

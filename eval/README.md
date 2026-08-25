@@ -48,7 +48,10 @@ contradictory.
 ## Fixtures
 
 Fixtures under `fixtures/` are **build scripts in the same step format**, not `.docx` files.
-`EvalHarness.BuildFixture` replays one over a blank document. Two consequences:
+`EvalHarness.BuildFixture` replays one over a blank document. A fixture may instead declare a
+named programmatic `builder` (C# in `Docxodus.Tests/Eval/EvalFixtureBuilders.cs`) for the one
+thing the step format cannot express — the tool surface fills content controls but cannot create
+one — under the same determinism gate and still without committing bytes. Two consequences:
 
 - The corpus carries no third-party document bytes, so there is no redistribution question to
   answer. See [PROVENANCE.md](PROVENANCE.md).
@@ -71,6 +74,7 @@ contract rather than a bespoke comparison:
 | `validity` | Is the deliverable structurally sound? | #463 deliverable gate |
 | `trackedRevisions` | Is the expected live markup present — including another reviewer's? | `docxodus_track_changes list` on the delivered session |
 | `comments` | Are the expected comments, replies, and resolved flags present? | `docxodus_comment list` on the delivered session |
+| `redline` | Does the redline a `docxodus_compare` step wrote carry the expected attributed revisions? | `docxodus_track_changes list` over a fresh session opened on `fromPath` |
 | `reversibility` | Does the redline accept and reject cleanly? | #464 proof |
 | `rendering` | Does it still render? | HTML projection |
 
@@ -166,7 +170,19 @@ Deliberately **not** here, and tracked separately:
 - Delivery change receipts, which belong to the #465 delivery operation (see "Scorecards and
   failure artifacts").
 
-The remaining #466 scenario families — clause insertion with numbering, comment/footnote/
-cross-reference authoring, content-control templates, N-way consolidation, and documents
-carrying pre-existing revisions — are corpus work in progress; the runner capabilities they
-need (multi-anchor targets, part allowlists, markup and comment invariants) are in place.
+All nine #466 scenario families now run in the fast tier (the whole suite executes in seconds,
+so nothing yet warrants the corpus tier, which stands ready for heavier fixtures). Two
+deliberate descopes are recorded where they bind:
+
+- `review-annotations` covers comment, threaded reply, footnote, bookmark, and a
+  bookmark-anchored internal hyperlink. A field-based `REF` cross-reference is not authorable on
+  the tool surface — issue #545 tracks the op; the scenario notes the substitution.
+- `layout-preservation` is single-section: no section-break authoring op exists on the tool
+  surface, so a multi-section fixture cannot be built through steps. Part identity does the
+  layout work — any touch of a header or footer part fails `changedPartsMustBeWithin`.
+
+One engine observation from building the corpus, worth knowing when authoring fixtures: a
+comment whose range covers a paragraph carrying live tracked-change markup reports a spurious
+`comment` modification in the #457 change set on every open→save cycle (the target paragraph's
+content-derived anchor id is not stable across the save normalization). The fixture therefore
+anchors its pre-existing comment on a revision-free paragraph.

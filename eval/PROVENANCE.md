@@ -12,6 +12,14 @@ nothing in this corpus originates outside the repository.
 | Fixture | Origin | Rights |
 |---------|--------|--------|
 | `master-services-agreement` | Written for this repository | Same MIT license as the rest of the repository |
+| `clause-library` | Written for this repository | Same MIT license as the rest of the repository |
+| `content-control-template` | Written for this repository (programmatic builder) | Same MIT license as the rest of the repository |
+
+One fixture kind exists beyond step scripts: `content-control-template` declares a named
+programmatic **builder** (`Docxodus.Tests/Eval/EvalFixtureBuilders.cs`) instead of steps, because
+the tool surface can fill content controls but has no action that creates one. The builder is C#
+in this repository, deterministic under the same EV003 gate, and commits no document bytes — the
+no-third-party-content property is unchanged.
 
 ## The content is fictional
 

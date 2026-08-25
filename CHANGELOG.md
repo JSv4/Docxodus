@@ -17,6 +17,26 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **`docxodus_compare` MCP tool (#466).** A sessionless agent-server tool that turns stored
+  document versions into one native tracked-changes redline: `baselinePath` plus `revisedPath`
+  (two-way `DocxDiff` compare) or `revisedPaths` with per-reviewer `authors` (N-way
+  consolidate), written to `outputPath`. Every path resolves through the document store's
+  containment check like `docxodus_open`'s, the response summarizes generated revisions by
+  author, and the tool is refused as a `docxodus_mutations` step — it mutates no session.
+  Backed entirely by the existing `DocxDiffOps` facade; no new engine surface.
+
+- **All nine #466 scenario families ship in the eval corpus.** Clause insertion into a real
+  auto-numbered list (renumbering proven through rendered labels), comment + threaded reply +
+  footnote + bookmark-anchored internal link (a field-based `REF` cross-reference is not yet
+  authorable — #545 tracks the op), body edit under part-identity protection of the signature
+  block, header, and page-number-field footer, content-control template fill (via the corpus's
+  first programmatic fixture builder, since the tool surface fills but cannot create controls),
+  two-reviewer compare-and-consolidate through `docxodus_compare` with a `redline` invariant
+  group asserting the written redline's attributed revisions through a fresh session, and an
+  edit over pre-existing revisions and comments that must both survive. The
+  master-services-agreement fixture now carries a footer page-number field and a pre-existing
+  comment; every scenario runs in the fast deterministic tier.
+
 - **Workflow evaluation runner completed (#466).** The eval runner now supports multi-anchor
   steps (`targets` maps an argument name to a content-resolved target, unlocking range formats,
   moves, and bookmark spans), a `changedPartsMustBeWithin` part-URI allowlist that turns "how

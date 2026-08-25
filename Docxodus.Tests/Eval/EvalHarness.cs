@@ -40,6 +40,12 @@ internal sealed record EvalOutcome
     required public string RevisionsJson { get; init; }
     /// <summary>docxodus_comment list on the delivered session.</summary>
     required public string CommentsJson { get; init; }
+    /// <summary>
+    /// docxodus_track_changes list over the document a compare step wrote (the scenario's
+    /// <c>redline.fromPath</c>), read through a fresh session — the harness's own view of the
+    /// produced redline, independent of whatever the compare tool's response claimed.
+    /// </summary>
+    public string? RedlineRevisionsJson { get; init; }
     public RedlineReversibilityProof? Reversibility { get; init; }
     public int GeneratedRevisionCount { get; init; }
 }
@@ -95,10 +101,19 @@ internal static class EvalHarness
             : Path.Combine(CorpusRoot, "scenarios", "corpus", $"{id}.json"));
     }
 
-    /// <summary>Build a fixture's bytes by running its step script over a blank document.</summary>
+    /// <summary>
+    /// Build a fixture's bytes: replay its step script over a blank document, or — when the
+    /// fixture declares <c>builder</c> instead of steps — call the named programmatic builder.
+    /// Builders exist for the one thing the step format cannot author (the tool surface fills
+    /// content controls but cannot create them); they are C# in this assembly, so the corpus
+    /// still carries no committed document bytes.
+    /// </summary>
     public static byte[] BuildFixture(string name)
     {
         var script = LoadJson(Path.Combine(CorpusRoot, "fixtures", $"{name}.json"));
+        if (script.TryGetProperty("builder", out var builder))
+            return EvalFixtureBuilders.Build(builder.GetString()!);
+
         using var workspace = new EvalWorkspace();
         var sessionId = workspace.Open(DocxSessionOps.CreateBlankDocx(), trackedChanges: "accept");
         RunSteps(workspace, sessionId, script.GetProperty("steps"));
@@ -159,6 +174,8 @@ internal static class EvalHarness
                 ["sessionId"] = sessionId,
                 ["action"] = "list",
             }),
+            RedlineRevisionsJson = ReadRedlineRevisions(
+                workspace, scenario.GetProperty("invariants")),
         };
 
         if (ReversibilityMode(scenario) != "acceptAll")
@@ -180,6 +197,28 @@ internal static class EvalHarness
             GeneratedRevisionCount = proof.RevisionClassifications
                 .Count(item => item.Disposition == RedlineRevisionDisposition.Generated),
         };
+    }
+
+    /// <summary>
+    /// When the scenario declares <c>redline</c> invariants, open the document a compare step
+    /// wrote (named by <c>fromPath</c>, resolved inside the workspace like every step path) in a
+    /// fresh session and read its live markup through docxodus_track_changes — the same
+    /// agent-surface view <c>trackedRevisions</c> uses for the delivered session, and
+    /// independent of the compare tool's own response.
+    /// </summary>
+    private static string? ReadRedlineRevisions(EvalWorkspace workspace, JsonElement invariants)
+    {
+        if (!invariants.TryGetProperty("redline", out var redline))
+            return null;
+        if (!redline.TryGetProperty("fromPath", out var fromPath))
+            throw new InvalidOperationException("redline invariants require fromPath");
+
+        var sessionId = workspace.OpenPath(fromPath.GetString()!);
+        return workspace.Call("docxodus_track_changes", new JsonObject
+        {
+            ["sessionId"] = sessionId,
+            ["action"] = "list",
+        });
     }
 
     public static string ReversibilityMode(JsonElement scenario) =>
@@ -408,6 +447,17 @@ internal sealed class EvalWorkspace : IDisposable
         using var opened = JsonDocument.Parse(Call("docxodus_open", new JsonObject
         {
             ["path"] = path,
+            ["trackedChanges"] = trackedChanges,
+        }));
+        return opened.RootElement.GetProperty("sessionId").GetString()!;
+    }
+
+    /// <summary>Open a document a step wrote into the workspace, by its step-visible path.</summary>
+    public string OpenPath(string relativePath, string trackedChanges = "accept")
+    {
+        using var opened = JsonDocument.Parse(Call("docxodus_open", new JsonObject
+        {
+            ["path"] = relativePath,
             ["trackedChanges"] = trackedChanges,
         }));
         return opened.RootElement.GetProperty("sessionId").GetString()!;
