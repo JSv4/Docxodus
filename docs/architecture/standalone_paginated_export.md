@@ -659,7 +659,7 @@ Font readiness proves availability, not identity. `FontFaceSet.check()` reports 
 downloads have settled rather than whether a family exists — Chromium answers true for a family it
 has never heard of — so each requested family's first entry is measured through advance widths
 against every generic fallback. A family that matches all of them is being silently substituted for
-and is recorded `missing` with an aggregate `font_family_unavailable` warning; one that resolves
+and is recorded `missing` with an aggregate `font_unavailable` warning; one that resolves
 stays `unverified`, since rendering it proves neither which file supplied it nor its version.
 Because an unresolvable family is a font-policy matter governed by `strictFonts` rather than
 unsupported content, it always warns and never fails the render on its own. Image and inline-SVG

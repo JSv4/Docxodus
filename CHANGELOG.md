@@ -40,6 +40,16 @@ All notable changes to this project will be documented in this file.
   unavailability before any frame is built. Ships as the `docxodus-deliver` CLI
   (`tools/delivery`) and the MCP `docxodus_deliver` tool over the same service. See
   `docs/architecture/delivery_bundle.md`.
+- **Multi-author Consolidate coverage and schema conformance for the reversibility proof (#464).**
+  The proof suite now exercises `DocxDiff.Consolidate` output: a redline carrying two distinct
+  reviewer authors — disjoint edits and a policy-resolved merge conflict — proves reject ≡ shared
+  base and accept ≡ policy-resolved composite at the story-text and modeled-semantic levels, with
+  every revision classified as generated for its own reviewer (multi-author attribution is not an
+  ownership conflict). A new contract test validates the emitted canonical proof JSON — from the
+  verifier and from the shared `VerificationOps` facade, in both completed and fail-closed shapes —
+  against the checked-in `redline-reversibility-proof-v1` schema, with negative controls proving
+  the validation rejects each constraint kind the schema relies on.
+
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
   A scenario declares a fixture, the tool calls that perform the task, and the invariants that
@@ -669,6 +679,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **`@docxodus/export` docs asserted the font runtime was still unimplemented (#442).** The
+  README's "Runtime boundaries" section claimed `--font-directory` fails with
+  `unsupported_runtime`, the `original` review profile is fail-closed, and the generated-PDF
+  fidelity ratchet is future work — all three shipped. The stale claims are replaced with the
+  delivered contracts, a "Reproducible font configuration" section documents the license-safe
+  metric-substitute set (Carlito / Caladea / Liberation) with packages and directories for a
+  reproducible CLI render, the CLI help no longer marks `--font-directory` as pending, the
+  export design doc names the shipped `font_unavailable` warning code instead of
+  `font_family_unavailable`, and the `docxodus` README's export-browser section no longer
+  claims `original` and `strictFonts` are pending or that the render report is schema v1.
 - **Empty paragraphs lost their line box in paginated export (#443).** A paragraph Word serialized
   as an explicit run holding an empty `w:t` — how it commonly writes a blank line, including
   signature-table spacer rows — counted as having content, so it received no placeholder run and
