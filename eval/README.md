@@ -9,8 +9,10 @@ This directory is the **corpus and the contract**. The runner lives in
 
 ## What a scenario is
 
-A scenario is one JSON file under `scenarios/`, validated by
-[`scenario.schema.json`](scenario.schema.json):
+A scenario is one JSON file under `scenarios/`. [`scenario.schema.json`](scenario.schema.json)
+documents the contract; the suite's `EV002` test enforces its substance directly — a non-empty
+completion and preservation list, at least one precision bound, and no invariant key outside the
+vocabulary the checkers actually read, so a typo cannot silently switch a check off:
 
 | Part | Answers |
 |------|---------|
@@ -74,9 +76,12 @@ against the same view of the document it edits.
 
 ### Reversibility is asserted in layers
 
-`reversibility` always requires that both proof paths complete and that resolving only the
-generated revisions leaves pre-existing review state intact. Full package equivalence
-(`mustSucceed`) is **opt-in and currently off**.
+`reversibility` always requires that both proof paths complete, that resolving only the
+generated revisions leaves pre-existing review state intact (the fixture carries one live
+tracked change by another reviewer precisely so this assertion has something to lose), and that
+rejecting only the generated revisions is *semantically equivalent to the opening package*
+(`rejectMustRestoreBaseline`). Full package equivalence (`mustSucceed`) is **opt-in and
+currently off**.
 
 The reason is honesty about what is being scored. The proof needs an intended final, and for a
 session-authored redline that document has to be *derived* — here by
@@ -84,8 +89,10 @@ session-authored redline that document has to be *derived* — here by
 derivation and the proof's own selective-accept path agree byte-for-byte at the normalized layer,
 which is a statement about two engine paths rather than about whether the redline is reversible.
 The engine's own `RP001` expects `Success == false` on a generated redline for the same family of
-reasons. Turning `mustSucceed` on, with a fixture whose intended final is stated rather than
-derived, is follow-up work.
+reasons. The reject path has no such excuse — its expected document is the opening package
+itself, stated up front — which is why its semantic restoration is asserted by default rather
+than being part of the opt-in. Turning `mustSucceed` on, with a fixture whose intended final is
+stated rather than derived, is follow-up work.
 
 `targetPrecision` and `collateral` are what make this an evaluation rather than a test. Any edit
 can be made to land; the interesting question is what else moved. Each scenario's
@@ -95,8 +102,8 @@ for `term-replacement`, the two *other* occurrences of the defined term.
 ## Failure artifacts
 
 A failing scenario writes `opening.docx`, `delivered.docx`, `delivered.html`, `delivered.txt`,
-`semantic-changes.json`, and `reversibility-proof.json` (when one was produced) so a failure is
-diagnosable without re-running it. Set `DOCXODUS_EVAL_ARTIFACTS` to choose the directory;
+`semantic-changes.json`, `verification.json`, and `reversibility-proof.json` (when one was
+produced) so a failure is diagnosable without re-running it. Set `DOCXODUS_EVAL_ARTIFACTS` to choose the directory;
 otherwise they land under the system temp directory.
 
 ## Adding a scenario

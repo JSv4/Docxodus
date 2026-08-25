@@ -48,6 +48,7 @@
       "mode": "acceptAll",
       "pathsMustComplete": true,
       "preExistingMustBePreserved": true,
+      "rejectMustRestoreBaseline": true,
       "mustSucceed": false,
       "generatedRevisionsAtLeast": 1
     },

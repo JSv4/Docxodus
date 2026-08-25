@@ -149,7 +149,7 @@
         "targetPrecision": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Did it change only what it was asked to? Counted as distinct anchors in the #457 semantic change set from the opening package to the saved state.",
+          "description": "Did it change only what it was asked to? Counted as distinct anchors in the #457 semantic change set from the opening package to the saved state. Must declare at least one bound: an empty targetPrecision bounds nothing.",
           "properties": {
             "changedAnchorsAtLeast": {
               "type": "integer",
@@ -163,7 +163,8 @@
               "type": "integer",
               "minimum": 0
             }
-          }
+          },
+          "minProperties": 1
         },
         "collateral": {
           "type": "object",
@@ -235,8 +236,16 @@
               "type": "boolean",
               "default": true,
               "description": "Resolving only the generated revisions must leave pre-existing review state intact on both paths. Defaults on."
+            },
+            "rejectMustRestoreBaseline": {
+              "type": "boolean",
+              "default": true,
+              "description": "Rejecting only the generated revisions must be semantically equivalent to the opening package. Unlike the accept path, the baseline is stated up front rather than derived, so this asserts restoration itself. Defaults on."
             }
-          }
+          },
+          "required": [
+            "mode"
+          ]
         },
         "rendering": {
           "type": "object",

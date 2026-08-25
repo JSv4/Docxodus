@@ -1,7 +1,7 @@
 {
   "id": "master-services-agreement",
   "title": "Master Services Agreement",
-  "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, and a running header and footer. Built programmatically so the corpus carries no third-party bytes.",
+  "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, a running header and footer, and one pre-existing tracked change by another reviewer that every later operation must leave live. Built programmatically so the corpus carries no third-party bytes.",
   "steps": [
     {
       "tool": "docxodus_create",
@@ -188,6 +188,35 @@
         "action": "set_footer_text",
         "markdown": "Confidential",
         "kind": "default"
+      }
+    },
+    {
+      "tool": "docxodus_track_changes",
+      "args": {
+        "action": "set_mode",
+        "mode": "render_inline",
+        "revisionAuthor": "Prior Reviewer"
+      }
+    },
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "invoiced quarterly in advance"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "invoiced quarterly in advance.",
+        "replace": "invoiced quarterly in advance, net forty-five (45) days.",
+        "caseSensitive": true
+      }
+    },
+    {
+      "tool": "docxodus_track_changes",
+      "args": {
+        "action": "set_mode",
+        "mode": "accept",
+        "revisionAuthor": ""
       }
     }
   ]

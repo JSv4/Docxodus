@@ -55,6 +55,27 @@ public sealed class WorkflowEvalTests
     }
 
     /// <summary>
+    /// The invariant keys each group may use. This is the checkers' vocabulary: a key outside it
+    /// is silently ignored by every checker, so EV002 rejects it rather than letting a typo turn
+    /// an invariant off.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string[]> InvariantVocabulary =
+        new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["taskCompletion"] = ["textPresent", "textAbsent"],
+            ["targetPrecision"] =
+                ["changedAnchorsAtLeast", "changedAnchorsAtMost", "changedPartsAtMost"],
+            ["collateral"] = ["partsAdded", "partsRemoved", "textPreserved"],
+            ["validity"] = ["decisionIn"],
+            ["reversibility"] =
+            [
+                "mode", "mustSucceed", "generatedRevisionsAtLeast", "pathsMustComplete",
+                "preExistingMustBePreserved", "rejectMustRestoreBaseline",
+            ],
+            ["rendering"] = ["htmlMustContain"],
+        };
+
+    /// <summary>
     /// A scenario with no scoreable expectation is a scenario that cannot fail. Adding one has to
     /// mean writing down what "done" and "only that" look like, not eyeballing the output.
     /// </summary>
@@ -74,12 +95,29 @@ public sealed class WorkflowEvalTests
             $"scenario '{id}' must declare taskCompletion: what change had to land.");
         Assert.NotEmpty(completion.GetProperty("textPresent").EnumerateArray());
         Assert.True(
-            invariants.TryGetProperty("targetPrecision", out _),
+            invariants.TryGetProperty("targetPrecision", out var precision),
             $"scenario '{id}' must declare targetPrecision: how much it was allowed to touch.");
+        Assert.True(
+            precision.EnumerateObject().Any(),
+            $"scenario '{id}' declares an empty targetPrecision: it bounds nothing.");
         Assert.True(
             invariants.TryGetProperty("collateral", out var collateral),
             $"scenario '{id}' must declare collateral: what had to survive untouched.");
         Assert.NotEmpty(collateral.GetProperty("textPreserved").EnumerateArray());
+
+        // Every declared invariant must be one the checkers actually read. The schema says
+        // additionalProperties: false; this enforces it where the tests run.
+        foreach (var group in invariants.EnumerateObject())
+        {
+            Assert.True(
+                InvariantVocabulary.TryGetValue(group.Name, out var known),
+                $"scenario '{id}' declares unknown invariant group '{group.Name}'.");
+            foreach (var property in group.Value.EnumerateObject())
+                Assert.True(
+                    known!.Contains(property.Name, StringComparer.Ordinal),
+                    $"scenario '{id}': '{group.Name}.{property.Name}' is not an invariant any "
+                    + "checker reads — a typo here would silently switch the check off.");
+        }
     }
 
     /// <summary>
@@ -106,19 +144,12 @@ public sealed class WorkflowEvalTests
             var first = EvalHarness.BuildFixture(name);
             var second = EvalHarness.BuildFixture(name);
             Assert.True(first.Length > 1_000, $"fixture '{name}' did not build a real package");
-            Assert.Equal(PartUris(first), PartUris(second));
-            Assert.Equal(EvalHarness.TextProjection(first), EvalHarness.TextProjection(second));
+            Assert.Equal(EvalHarness.PartUris(first), EvalHarness.PartUris(second));
+            var projection = EvalHarness.TextProjection(first);
+            // A non-empty anchor: identical-but-empty projections must not count as reproducible.
+            Assert.Contains("MASTER SERVICES AGREEMENT", projection, StringComparison.Ordinal);
+            Assert.Equal(projection, EvalHarness.TextProjection(second));
         }
-    }
-
-    private static IReadOnlyList<string> PartUris(byte[] packageBytes)
-    {
-        using var manifest = JsonDocument.Parse(
-            VerificationOps.GeneratePackageManifest(packageBytes));
-        return manifest.RootElement.GetProperty("entries").EnumerateArray()
-            .Select(entry => entry.GetProperty("uri").GetString() ?? string.Empty)
-            .OrderBy(uri => uri, StringComparer.Ordinal)
-            .ToList();
     }
 
     private static void CheckTaskCompletion(
@@ -240,6 +271,16 @@ public sealed class WorkflowEvalTests
                 "reversibility: resolving the generated revisions consumed pre-existing "
                 + "review state");
 
+        // Restoration, not just completion: rejecting only the generated revisions must be
+        // semantically the opening package. This is the half of reversibility the derived
+        // intended final cannot blur — the baseline is stated up front, never derived.
+        if (Flag(reversibility, "rejectMustRestoreBaseline")
+            && proof.RejectToBaseline?.ModeledSemantic.Equivalent != true)
+            failures.Add(
+                "reversibility: rejecting the generated revisions does not restore the baseline "
+                + $"[{Describe(proof.RejectToBaseline)}, semanticChanges="
+                + $"{proof.RejectToBaseline?.ModeledSemantic.ChangeCount}]");
+
         // Full package equivalence is opt-in. See eval/README.md: a session-authored redline is
         // not yet expected to reach it, and asserting it here would be asserting the derivation
         // of the intended final rather than the engine's reversibility.
@@ -311,6 +352,10 @@ public sealed class WorkflowEvalTests
         File.WriteAllText(
             Path.Combine(directory, "semantic-changes.json"),
             outcome.SemanticChangesJson,
+            Encoding.UTF8);
+        File.WriteAllText(
+            Path.Combine(directory, "verification.json"),
+            outcome.VerificationJson,
             Encoding.UTF8);
         if (outcome.Reversibility is { } proof)
         {

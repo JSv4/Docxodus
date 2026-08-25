@@ -23,6 +23,8 @@ internal sealed record EvalOutcome
     required public int PartsAdded { get; init; }
     required public int PartsRemoved { get; init; }
     required public string ValidityDecision { get; init; }
+    /// <summary>The full #463 verification report, retained for failure artifacts.</summary>
+    required public string VerificationJson { get; init; }
     /// <summary>
     /// How many blocks contain each needle the scenario's invariants name, answered by
     /// docxodus_search over every story. Text assertions ask the <em>document</em> this way
@@ -102,7 +104,8 @@ internal static class EvalHarness
         var (changedAnchors, changedParts) = ReadChangedTargets(semanticChangesJson);
         var (added, removed) = ComparePartInventories(openingBytes, deliverable);
 
-        using var verification = JsonDocument.Parse(workspace.Content(sessionId, "verification"));
+        var verificationJson = workspace.Content(sessionId, "verification");
+        using var verification = JsonDocument.Parse(verificationJson);
         var matchCounts = CountAssertedText(workspace, sessionId, scenario.GetProperty("invariants"));
         var outcome = new EvalOutcome
         {
@@ -115,6 +118,7 @@ internal static class EvalHarness
             PartsRemoved = removed,
             ValidityDecision =
                 verification.RootElement.GetProperty("decision").GetString() ?? "notEvaluated",
+            VerificationJson = verificationJson,
             TextMatchCounts = matchCounts,
             Text = ReadStringProperty(workspace.Content(sessionId, "text"), "text"),
             Html = ReadStringProperty(workspace.Content(sessionId, "html"), "html"),
@@ -202,8 +206,23 @@ internal static class EvalHarness
             args["sessionId"] = sessionId;
             if (step.TryGetProperty("target", out var target))
                 args[TargetArgumentName(target)] = ResolveAnchor(workspace, sessionId, target);
-            workspace.Call(tool, args);
+            ThrowOnFailedStep(tool, workspace.Call(tool, args));
         }
+    }
+
+    /// <summary>
+    /// Edit tools report failure as a result with <c>success: false</c> rather than by throwing.
+    /// A failed step must stop the run right here: letting it continue would surface as an
+    /// invariant failure misattributed to the engine — or, for a needle that already exists in
+    /// the fixture, not surface at all.
+    /// </summary>
+    private static void ThrowOnFailedStep(string tool, string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        if (document.RootElement.ValueKind == JsonValueKind.Object
+            && document.RootElement.TryGetProperty("success", out var success)
+            && success.ValueKind == JsonValueKind.False)
+            throw new InvalidOperationException($"step '{tool}' failed: {response}");
     }
 
     private static string TargetArgumentName(JsonElement target) =>
@@ -248,9 +267,7 @@ internal static class EvalHarness
     {
         using var document = JsonDocument.Parse(semanticChangesJson);
         var root = document.RootElement;
-        if (!root.TryGetProperty("changes", out var changes)
-            && !(root.TryGetProperty("semanticChanges", out var nested)
-                 && nested.TryGetProperty("changes", out changes)))
+        if (!root.TryGetProperty("changes", out var changes))
             return (Array.Empty<string>(), Array.Empty<string>());
 
         var anchors = new SortedSet<string>(StringComparer.Ordinal);
@@ -285,17 +302,15 @@ internal static class EvalHarness
         return (after.Except(before).Count(), before.Except(after).Count());
     }
 
-    private static HashSet<string> PartUris(byte[] packageBytes)
+    /// <summary>The #456 manifest's part-uri inventory, ordered for direct equality checks.</summary>
+    public static IReadOnlyList<string> PartUris(byte[] packageBytes)
     {
         using var manifest = JsonDocument.Parse(
             VerificationOps.GeneratePackageManifest(packageBytes));
-        var uris = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var entry in manifest.RootElement.GetProperty("entries").EnumerateArray())
-        {
-            if (entry.TryGetProperty("uri", out var uri) && uri.GetString() is { } value)
-                uris.Add(value);
-        }
-        return uris;
+        return manifest.RootElement.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("uri").GetString() ?? string.Empty)
+            .OrderBy(uri => uri, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static string ReadStringProperty(string json, string property)
