@@ -17,6 +17,18 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
+  document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
+  A scenario declares a fixture, the tool calls that perform the task, and the invariants that
+  decide the run — scored on task completion, target precision (distinct anchors in the #457
+  change set), collateral package change (#456 manifests), deliverable validity (#463), redline
+  reversibility (#464), and HTML rendering. The caller drives the MCP tool surface rather than
+  the .NET API, so the engine baseline is measured where an agent meets it and a failure can
+  never be attributed to model planning. Fixtures are build scripts replayed over a blank
+  document, so the corpus carries no third-party bytes. Ships the term-replacement,
+  notice-period-amendment, and table-economics scenarios as the deterministic fast subset; PDF
+  and visual-regression scoring stay with #443's ratchet.
+
 - **Redline reversibility proof on every client surface (#464).** The proof engine landed with
   #497 but was reachable only from .NET. `VerificationOps.ProveRedlineReversibility` now owns the
   wire shape, and the canonical `redline-reversibility-proof/v1` document is available from the
