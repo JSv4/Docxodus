@@ -1,0 +1,55 @@
+{
+  "id": "layout-preservation",
+  "title": "Edit the body while preserving signature blocks, header, footer field, and section layout",
+  "intent": "Broaden the services clause slightly; the signature block, running header, the footer with its page-number field, and the section layout must come through untouched. (The fixture is single-section: a section-break authoring op does not exist on the tool surface, so part-identity is the layout assertion — any touch of a header or footer part fails the allowlist.)",
+  "fixture": "master-services-agreement",
+  "steps": [
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "each Statement of Work"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "executed under this Agreement.",
+        "replace": "executed under this Agreement from time to time.",
+        "caseSensitive": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "from time to time"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtMost": 1
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "Acme Holdings LLC — Master Services Agreement",
+        "Confidential",
+        "Name: Dana Reyes Title: General Counsel",
+        "Name: Sam Okafor Title: Managing Partner"
+      ],
+      "changedPartsMustBeWithin": [
+        "/word/document.xml"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "from time to time"
+      ]
+    }
+  }
+}

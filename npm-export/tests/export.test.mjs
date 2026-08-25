@@ -26,6 +26,7 @@ import { canonicalJson } from "../dist/canonical.js";
 import {
   generateLongFootnoteDocx,
   generateMixedSectionDocx,
+  generateTrackedRevisionDocx,
 } from "./mixed-section-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -728,6 +729,39 @@ describe("@docxodus/export", { concurrency: false }, () => {
     await writeFile(join(successArtifacts, "long-footnote.html"), result.html);
     await writeJson(join(successArtifacts, "long-footnote-page-map.json"), result.pageMap);
     await writeJson(join(successArtifacts, "long-footnote-pdf-inspection.json"), inspection);
+  });
+
+  test("PDF text extraction is predictable for each review profile", { timeout: 180_000 }, async () => {
+    // The markup profile is the only one that draws inserted and deleted content
+    // side by side, so extraction order is part of its contract: tokens come out
+    // in document order, deleted content included. The derived profiles must
+    // instead prove the losing side of each revision never reaches the PDF text.
+    const source = generateTrackedRevisionDocx();
+    const expectations = [
+      { reviewProfile: "markup", present: ["Before", "removed", "added", "after."], absent: [] },
+      { reviewProfile: "final", present: ["Before", "added", "after."], absent: ["removed"] },
+      { reviewProfile: "original", present: ["Before", "removed", "after."], absent: ["added"] },
+    ];
+    for (const { reviewProfile, present, absent } of expectations) {
+      const result = await convertDocxToPdf(source, {
+        reviewProfile,
+        commentProfile: "hidden",
+        timeoutMs: 120_000,
+        browser,
+      });
+      const text = (await inspectPdf(result.pdf)).searchableText;
+      let priorOffset = -1;
+      for (const token of present) {
+        const pattern = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
+        const matches = [...text.matchAll(pattern)];
+        assert.equal(matches.length, 1, `${token} must appear exactly once under ${reviewProfile}`);
+        assert.ok(matches[0].index > priorOffset, `${token} out of order under ${reviewProfile}`);
+        priorOffset = matches[0].index;
+      }
+      for (const token of absent) {
+        assert.doesNotMatch(text, new RegExp(`\\b${token}\\b`), `${token} must not extract under ${reviewProfile}`);
+      }
+    }
   });
 
   test("retains a structured report when post-layout PDF verification fails", { timeout: 180_000 }, async () => {

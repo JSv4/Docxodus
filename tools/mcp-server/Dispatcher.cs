@@ -39,6 +39,9 @@ internal static class Dispatcher
 
         if (tool == "docxodus_open") return Open(store, args);
         if (tool == "docxodus_close") return Close(store, args);
+        // Sessionless: compare reads and writes stored documents only, so it neither needs nor
+        // serializes against an open session — the output is opened like any other file.
+        if (tool == "docxodus_compare") return Compare(store, args);
         // Static capability discovery has no document state to serialize against.
         if (tool == "docxodus_images" && OptStr(args, "action") == "capabilities")
             return Images(store, args);
@@ -813,6 +816,95 @@ internal static class Dispatcher
             store.Documents.Resolve(Str(args, "intendedFinalPath")));
         return VerificationOps.ProveRedlineReversibility(
             baseline, intendedFinal, DocxSessionOps.Save(session.Handle));
+    }
+
+    /// <summary>
+    /// Sessionless comparison: read the named versions through the document store, produce one
+    /// native tracked-changes redline — a two-way diff or an N-way consolidate — write it to
+    /// outputPath, and summarize the generated revisions by author. The summary comes from the
+    /// same engine family that produced the redline (GetRevisionsJson /
+    /// GetConsolidatedRevisionsJson), so its counts describe the produced markup, not a guess.
+    /// </summary>
+    private static string Compare(SessionStore store, JsonElement args)
+    {
+        var baseline = store.Documents.Read(store.Documents.Resolve(Str(args, "baselinePath")));
+        var revisedPath = OptStr(args, "revisedPath");
+        var hasMany = args.TryGetProperty("revisedPaths", out var revisedPaths)
+            && revisedPaths.ValueKind == JsonValueKind.Array;
+        if ((revisedPath is not null) == hasMany)
+            throw new McpToolException(
+                "pass exactly one of revisedPath (two-way compare) or revisedPaths (consolidate)");
+
+        byte[] redline;
+        string revisionsJson;
+        if (revisedPath is not null)
+        {
+            var revised = store.Documents.Read(store.Documents.Resolve(revisedPath));
+            var settingsJson = OptStr(args, "author") is { } author
+                ? JsonSerializer.Serialize(new { authorForRevisions = author })
+                : null;
+            redline = DocxDiffOps.Compare(baseline, revised, settingsJson);
+            revisionsJson = DocxDiffOps.GetRevisionsJson(baseline, revised, settingsJson);
+        }
+        else
+        {
+            var paths = revisedPaths.EnumerateArray()
+                .Select(value => value.GetString())
+                .ToList();
+            if (paths.Count < 2 || paths.Any(string.IsNullOrWhiteSpace))
+                throw new McpToolException(
+                    "revisedPaths needs at least two non-empty entries; "
+                    + "use revisedPath for a two-way compare");
+            string[]? authors = null;
+            if (args.TryGetProperty("authors", out var declared)
+                && declared.ValueKind == JsonValueKind.Array)
+            {
+                authors = declared.EnumerateArray()
+                    .Select(value => value.GetString() ?? string.Empty)
+                    .ToArray();
+                if (authors.Length != paths.Count)
+                    throw new McpToolException("authors must match revisedPaths in length and order");
+            }
+
+            var reviewersJson = JsonSerializer.Serialize(paths.Select((path, index) => new
+            {
+                author = authors is not null
+                    ? authors[index]
+                    : Path.GetFileNameWithoutExtension(path!),
+                docB64 = Convert.ToBase64String(
+                    store.Documents.Read(store.Documents.Resolve(path!))),
+            }));
+            redline = DocxDiffOps.Consolidate(baseline, reviewersJson, null);
+            revisionsJson = DocxDiffOps.GetConsolidatedRevisionsJson(baseline, reviewersJson, null);
+        }
+
+        var destination = store.Documents.Resolve(Str(args, "outputPath"));
+        store.Documents.Write(destination, redline);
+
+        using var revisions = JsonDocument.Parse(revisionsJson);
+        var byAuthor = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var total = 0;
+        foreach (var revision in revisions.RootElement.GetProperty("revisions").EnumerateArray())
+        {
+            total++;
+            var name = revision.GetProperty("author").GetString() ?? string.Empty;
+            byAuthor[name] = byAuthor.TryGetValue(name, out var count) ? count + 1 : 1;
+        }
+
+        var summary = new StringBuilder(128);
+        summary.Append("{\"path\":").Append(JsonRpcIo.JsonString(destination));
+        summary.Append(",\"bytesWritten\":").Append(redline.Length);
+        summary.Append(",\"revisions\":{\"total\":").Append(total).Append(",\"byAuthor\":{");
+        var first = true;
+        foreach (var (name, count) in byAuthor)
+        {
+            if (!first) summary.Append(',');
+            first = false;
+            summary.Append(JsonRpcIo.JsonString(name)).Append(':').Append(count);
+        }
+
+        summary.Append("}}}");
+        return summary.ToString();
     }
 
     private static string RunTrackChangesAction(DocSession session, string action, JsonElement args)

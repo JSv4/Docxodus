@@ -932,6 +932,8 @@ export interface PackageRevisionCounts {
   moveFrom: number;
   moveTo: number;
   propertyChanges: number;
+  /** The `rPrChange` subset of `propertyChanges`; not added into `total`. */
+  runPropertyChanges: number;
   structuralChanges: number;
   otherChanges: number;
   total: number;

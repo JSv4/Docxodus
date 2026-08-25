@@ -443,6 +443,33 @@ public class PackageManifestTests
     }
 
     [Fact]
+    public void PM019a_RunPropertyChanges_CountTheRenderableSubsetOfPropertyChanges()
+    {
+        var package = BuildRichPackage(documentText: """
+            <w:rPrChange/><w:rPrChange/>
+            <w:pPrChange/><w:sectPrChange/><w:numberingChange/>
+            <w:tblGridChange/><w:tblPrChange/><w:tblPrExChange/>
+            <w:tcPrChange/><w:trPrChange/>
+            """);
+
+        var manifest = PackageManifestGenerator.Generate(package);
+        var revisions = manifest.Facts.Revisions;
+
+        // rPrChange is the one property revision a renderer can draw inline, so it is counted
+        // apart from the rest; the subset never leaves the parent bucket or enters the total.
+        // The rich package contributes one pPrChange of its own, hence eleven.
+        Assert.Equal(11, revisions.PropertyChanges);
+        Assert.Equal(2, revisions.RunPropertyChanges);
+        Assert.Equal(revisions.Insertions + revisions.Deletions + revisions.MoveFrom
+            + revisions.MoveTo + revisions.PropertyChanges + revisions.StructuralChanges
+            + revisions.OtherChanges, revisions.Total);
+        using var json = JsonDocument.Parse(manifest.ToJson());
+        var revisionJson = json.RootElement.GetProperty("facts").GetProperty("revisions");
+        Assert.Equal(11, revisionJson.GetProperty("propertyChanges").GetInt32());
+        Assert.Equal(2, revisionJson.GetProperty("runPropertyChanges").GetInt32());
+    }
+
+    [Fact]
     public void PM020_DanglingReferencesAndFacts_RequireExactNamespacesAndPartTypes()
     {
         var baseline = PackageManifestGenerator.Generate(BuildRichPackage());

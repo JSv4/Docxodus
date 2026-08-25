@@ -40,6 +40,8 @@ jobs:
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
       - name: Run tests
+        env:
+          DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
@@ -48,6 +50,16 @@ jobs:
         with:
           name: test-results
           path: Docxodus.Tests/TestResults/*.trx
+
+      # A failed eval scenario is diagnosed from its preserved artifacts (both DOCX packages,
+      # rendered HTML, semantic diff, verification report, reversibility proof), not by re-running.
+      - name: Upload eval artifacts
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: eval-artifacts
+          path: eval-artifacts/
+          if-no-files-found: ignore
 
   build-npm:
     runs-on: ubuntu-latest

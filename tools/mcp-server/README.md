@@ -78,7 +78,7 @@ path stay as they are.
 
 ## Tool surface
 
-Three lifecycle tools plus fourteen grouped-intent tools, each addressed by the anchor ids the
+Three lifecycle tools plus eighteen grouped-intent tools, each addressed by the anchor ids the
 markdown projection and search tools return:
 
 | Tool | Purpose |
@@ -94,6 +94,7 @@ markdown projection and search tools return:
 | `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
+| `docxodus_compare` | Sessionless: diff or N-way consolidate stored document versions into one author-attributed native redline written back into the document scope |
 | `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
 | `docxodus_deliver` | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes |
 | `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |

@@ -902,6 +902,7 @@ public static class PackageManifestGenerator
         var moveFrom = 0;
         var moveTo = 0;
         var propertyChanges = 0;
+        var runPropertyChanges = 0;
         var structuralChanges = 0;
         var otherChanges = 0;
         var comments = 0;
@@ -950,6 +951,8 @@ public static class PackageManifestGenerator
             moveTo += storyElements.Count(element => element.Name.LocalName == "moveTo");
             propertyChanges += storyElements.Count(element =>
                 IsPropertyRevisionName(element.Name.LocalName));
+            runPropertyChanges += storyElements.Count(element =>
+                element.Name.LocalName == "rPrChange");
             structuralChanges += storyElements.Count(element =>
                 element.Name.LocalName is "cellIns" or "cellDel" or "cellMerge");
             otherChanges += storyElements.Count(element =>
@@ -995,6 +998,7 @@ public static class PackageManifestGenerator
             MoveFrom = moveFrom,
             MoveTo = moveTo,
             PropertyChanges = propertyChanges,
+            RunPropertyChanges = runPropertyChanges,
             StructuralChanges = structuralChanges,
             OtherChanges = otherChanges,
             Total = insertions + deletions + moveFrom + moveTo + propertyChanges

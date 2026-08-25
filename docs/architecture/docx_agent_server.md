@@ -81,7 +81,7 @@ session registry assumes single-threaded access.
   — the requested `protocolVersion` is echoed when present (every implemented method is
   shape-stable across published revisions; the UI extension negotiates via `capabilities.extensions`)
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 19 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema, _meta? }, ... ] }` — the 20 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
   (plus `structuredContent`/`_meta` on the two preview-related tools — see "Inline preview" below)
 - `resources/list` / `resources/read` / `resources/templates/list` — serve the `ui://` viewer
@@ -214,7 +214,8 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, four read/preview tools, and twelve grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, four read/preview tools, twelve grouped-intent tools, and two sessionless
+operations (`docxodus_compare`, `docxodus_deliver`). Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -517,6 +518,20 @@ is deliberately **not** a `docxodus_mutations` step, because a batch is a sequen
 Malformed, encrypted, and safety-limited inputs come back as typed proof findings rather than
 errors, and fail closed: when a package cannot be admitted, neither path is attempted at all, so
 a partial result can never be misread as evidence.
+
+### `docxodus_compare` — versions into one attributed redline (issue #466)
+
+Sessionless: `baselinePath` plus either `revisedPath` (two-way `DocxDiff` compare) or
+`revisedPaths` (N-way consolidate, each reviewer's changes attributed to the matching `authors`
+entry) produce a native tracked-changes redline written to `outputPath`. Every path — inputs and
+output — resolves through the document store's containment check exactly like `docxodus_open`'s,
+so the tool can neither read nor write outside the server's scope. The response summarizes the
+generated revisions by author; the written file is a plain DOCX an agent then opens with
+`docxodus_open` to inspect, comment on, resolve, or prove with `prove_reversibility`.
+
+It is sessionless because it operates on stored documents, not the open session's state, and it
+is not a `docxodus_mutations` step for the same reason a proof is not: a batch is a sequence of
+session mutations, and this mutates no session.
 
 ### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
