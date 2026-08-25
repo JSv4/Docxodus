@@ -31,10 +31,14 @@ All notable changes to this project will be documented in this file.
   deliverable's canonical verification result as the receipt's validation evidence).
   `DeliveryBundleVerifier.VerifyJson` re-verifies a manifest against independently supplied
   artifact bytes. Production HTML/PDF rendering crosses one injected
-  `IDeliveryArtifactRenderer` boundary; `DocxodusExportHostRenderer` drives the epic #434
-  `docxodus-export-host` framed protocol with process-owned executable authority and no PATH
-  discovery. Ships as the `docxodus-deliver` CLI (`tools/delivery`) and the MCP
-  `docxodus_deliver` tool over the same service. See
+  `IDeliveryArtifactRenderer` boundary — a pure per-profile-pair `DescribeBatch` whose
+  layout-options and runtime-policy digests enter the group key, and one `RenderBatchesAsync`
+  call per build carrying every group in stable order; `DocxodusExportHostRenderer` sends that
+  call as a single `docxodus-export-host` framed request with digest-deduplicated sources,
+  process-owned executable authority, and no PATH discovery, and represents a document version
+  outside JavaScript's safe range as the closed `document_version_unrepresentable`
+  unavailability before any frame is built. Ships as the `docxodus-deliver` CLI
+  (`tools/delivery`) and the MCP `docxodus_deliver` tool over the same service. See
   `docs/architecture/delivery_bundle.md`.
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.

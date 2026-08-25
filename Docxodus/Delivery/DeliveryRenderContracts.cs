@@ -213,24 +213,43 @@ public sealed class DeliveryRenderResult
     internal byte[]? CopyRenderReportBytes() => _renderReportBytes?.ToArray();
 }
 
-/// <summary>Transport-neutral renderer adapter consumed by the delivery orchestrator.</summary>
+/// <summary>
+/// The renderer-declared identity of one review/comment render group. The layout-options digest
+/// covers the group's profile pair plus every materialization option the renderer will apply; the
+/// runtime-policy digest covers the renderer's fixed browser/resource/font policy. Both are
+/// algorithm-labelled SHA-256 values over versioned canonical materials, so grouping can never
+/// depend on hidden mutable adapter state.
+/// </summary>
+public sealed record DeliveryRenderBatchContext(
+    DeliveryReviewProfile ReviewProfile,
+    DeliveryCommentProfile CommentProfile,
+    VerificationDigest LayoutOptionsDigest,
+    VerificationDigest RuntimePolicyDigest);
+
+/// <summary>One render group: requests sharing an exact source, version, and batch context.</summary>
+public sealed record DeliveryRenderBatch(
+    string BatchId,
+    DeliveryRenderBatchContext Context,
+    IReadOnlyList<DeliveryRenderRequest> Requests);
+
+/// <summary>
+/// Transport-neutral renderer adapter consumed by the delivery orchestrator. The service calls
+/// the pure <see cref="DescribeBatch"/> once per requested review/comment pair, groups requests
+/// by exact source digest, document version, and the returned context, and then invokes
+/// <see cref="RenderBatchesAsync"/> exactly once per build with every group in stable order.
+/// The result dictionary is keyed by the caller-owned artifact ID and must contain exactly one
+/// result for every requested artifact ID and no extras. There is no single-item render API:
+/// a genuine one-artifact build is a one-item batch.
+/// </summary>
 public interface IDeliveryArtifactRenderer
 {
     DeliveryRendererCapabilities Capabilities { get; }
 
-    ValueTask<DeliveryRenderResult> RenderAsync(
-        DeliveryRenderRequest request,
-        CancellationToken cancellationToken = default);
-}
+    DeliveryRenderBatchContext DescribeBatch(
+        DeliveryReviewProfile reviewProfile,
+        DeliveryCommentProfile commentProfile);
 
-/// <summary>
-/// Bundle-level renderer boundary for adapters that materialize several coherent artifacts from
-/// one exact source/profile render. Results are keyed by the caller-owned artifact ID. The
-/// returned key set must match the request key set exactly.
-/// </summary>
-public interface IDeliveryArtifactBatchRenderer : IDeliveryArtifactRenderer
-{
-    ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
-        IReadOnlyList<DeliveryRenderRequest> requests,
+    ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchesAsync(
+        IReadOnlyList<DeliveryRenderBatch> batches,
         CancellationToken cancellationToken = default);
 }

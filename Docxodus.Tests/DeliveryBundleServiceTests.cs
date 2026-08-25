@@ -414,6 +414,83 @@ public sealed class DeliveryBundleServiceTests
     }
 
     [Fact]
+    public async Task BuildAsync_GroupsRenderJobsAndInvokesTheBatchSeamExactlyOnce()
+    {
+        var edit = SingleEdit("Batch grouping edit.");
+        var renderer = new CapturingRenderer();
+        var request = Request(edit, new[]
+        {
+            RenderArtifact(
+                "final-html",
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+            RenderArtifact(
+                "final-page-map",
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+            RenderArtifact(
+                "final-html-margin",
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final,
+                DeliveryCommentProfile.Margin),
+        });
+
+        var bundle = await new DeliveryBundleService(renderer).BuildAsync(request);
+
+        Assert.Equal(DeliveryBundleStatus.Complete, bundle.Manifest.Payload.Status);
+        // Exactly one RenderBatchesAsync call carries every group; the two artifacts sharing
+        // source, version, and profiles ride one batch while the differing comment profile
+        // splits into its own — with the context this renderer itself described.
+        var call = Assert.Single(renderer.Calls);
+        Assert.Equal(2, call.Count);
+        var shared = Assert.Single(call, batch =>
+            batch.Context.CommentProfile == DeliveryCommentProfile.Endnotes);
+        var sharedIds = shared.Requests.Select(r => r.ArtifactId).ToArray();
+        Assert.Contains("final-html", sharedIds);
+        Assert.Contains("final-page-map", sharedIds);
+        var split = Assert.Single(call, batch =>
+            batch.Context.CommentProfile == DeliveryCommentProfile.Margin);
+        Assert.Contains("final-html-margin", split.Requests.Select(r => r.ArtifactId));
+        Assert.DoesNotContain("final-html", split.Requests.Select(r => r.ArtifactId));
+        foreach (var batch in call)
+            Assert.Equal(
+                renderer.DescribeBatch(batch.Context.ReviewProfile, batch.Context.CommentProfile),
+                batch.Context);
+        Assert.Equal(
+            call.Select(batch => batch.BatchId).Distinct(StringComparer.Ordinal).Count(),
+            call.Count);
+    }
+
+    [Fact]
+    public async Task BuildAsync_FailsClosedWhenDescribeBatchIsImpureOrForeign()
+    {
+        var edit = SingleEdit("Impure describe edit.");
+        var required = Request(edit, new[]
+        {
+            RenderArtifact(
+                "required-html",
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+        });
+
+        var impure = new ImpureDescribeRenderer();
+        var impureError = await Assert.ThrowsAsync<DeliveryBundleException>(async () =>
+            await new DeliveryBundleService(impure).BuildAsync(required));
+        Assert.Equal("required_artifact_unavailable", impureError.Code);
+        Assert.Equal(0, impure.BatchCount);
+
+        var foreign = new ForeignProfileDescribeRenderer();
+        var foreignError = await Assert.ThrowsAsync<DeliveryBundleException>(async () =>
+            await new DeliveryBundleService(foreign).BuildAsync(required));
+        Assert.Equal("required_artifact_unavailable", foreignError.Code);
+        Assert.Equal(0, foreign.BatchCount);
+    }
+
+    [Fact]
     public async Task BuildAsync_RejectsInvalidPdfProfileBeforeInvokingRenderer()
     {
         var edit = SingleEdit("Invalid profile edit.");
@@ -523,13 +600,14 @@ public sealed class DeliveryBundleServiceTests
         string id,
         DeliveryArtifactKind kind,
         DeliveryArtifactRequiredness requiredness,
-        DeliveryReviewProfile reviewProfile) => new()
+        DeliveryReviewProfile reviewProfile,
+        DeliveryCommentProfile commentProfile = DeliveryCommentProfile.Endnotes) => new()
         {
             ArtifactId = id,
             Kind = kind,
             Requiredness = requiredness,
             ReviewProfile = reviewProfile,
-            CommentProfile = DeliveryCommentProfile.Endnotes,
+            CommentProfile = commentProfile,
         };
 
     private static EditFixture SingleEdit(string replacement, bool tracked = false)
@@ -728,11 +806,64 @@ public sealed class DeliveryBundleServiceTests
         return builder.ToString();
     }
 
-    private sealed class CapturingRenderer : IDeliveryArtifactBatchRenderer
+    /// <summary>
+    /// Shared batch-seam scaffold for the fake renderers: a pure per-pair DescribeBatch whose
+    /// digests derive only from the renderer id and the pair, and a RenderBatchesAsync that
+    /// counts invocations, records the batches, and flattens each batch to one deterministic
+    /// per-request result.
+    /// </summary>
+    private abstract class BatchRendererTestBase : IDeliveryArtifactRenderer
     {
         private readonly List<DeliveryRenderRequest> _requests = new();
+        private readonly List<IReadOnlyList<DeliveryRenderBatch>> _calls = new();
 
-        public DeliveryRendererCapabilities Capabilities { get; } = new(
+        public abstract DeliveryRendererCapabilities Capabilities { get; }
+
+        public IReadOnlyList<DeliveryRenderRequest> Requests => _requests.ToArray();
+
+        public IReadOnlyList<IReadOnlyList<DeliveryRenderBatch>> Calls => _calls.ToArray();
+
+        public int BatchCount => _calls.Count;
+
+        public virtual DeliveryRenderBatchContext DescribeBatch(
+            DeliveryReviewProfile reviewProfile,
+            DeliveryCommentProfile commentProfile) => new(
+            reviewProfile,
+            commentProfile,
+            TestDigest($"{Capabilities.RendererId}|layout|{reviewProfile}|{commentProfile}"),
+            TestDigest($"{Capabilities.RendererId}|runtime"));
+
+        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchesAsync(
+            IReadOnlyList<DeliveryRenderBatch> batches,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _calls.Add(batches.ToArray());
+            var results = new Dictionary<string, DeliveryRenderResult>(StringComparer.Ordinal);
+            foreach (var batch in batches)
+            {
+                foreach (var request in batch.Requests)
+                {
+                    _requests.Add(request);
+                    results.Add(request.ArtifactId, Result(request));
+                }
+            }
+            return ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(results);
+        }
+
+        protected abstract DeliveryRenderResult Result(DeliveryRenderRequest request);
+
+        protected static VerificationDigest TestDigest(string material) => new()
+        {
+            Algorithm = "SHA-256",
+            Value = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant(),
+        };
+    }
+
+    private sealed class CapturingRenderer : BatchRendererTestBase
+    {
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
             "test-renderer",
             new[]
             {
@@ -745,33 +876,8 @@ public sealed class DeliveryBundleServiceTests
             Enum.GetValues<DeliveryReviewProfile>(),
             Enum.GetValues<DeliveryCommentProfile>());
 
-        public IReadOnlyList<DeliveryRenderRequest> Requests => _requests.ToArray();
-        public int BatchCount { get; private set; }
-
-        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
-            IReadOnlyList<DeliveryRenderRequest> requests,
-            CancellationToken cancellationToken = default)
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            BatchCount++;
-            var results = requests.ToDictionary(
-                request => request.ArtifactId,
-                Render,
-                StringComparer.Ordinal);
-            return ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(results);
-        }
-
-        public ValueTask<DeliveryRenderResult> RenderAsync(
-            DeliveryRenderRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(Render(request));
-        }
-
-        private DeliveryRenderResult Render(DeliveryRenderRequest request)
-        {
-            _requests.Add(request);
             var pageMap = PageMapBytes(request.SourceDocumentVersion);
             var bytes = request.Kind switch
             {
@@ -857,7 +963,52 @@ public sealed class DeliveryBundleServiceTests
             + "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
     }
 
-    private sealed class FailedEvidenceRenderer : IDeliveryArtifactBatchRenderer
+    /// <summary>DescribeBatch that returns a different layout digest on every call: the service's
+    /// purity probe must fail the render closed without ever invoking the batch seam.</summary>
+    private sealed class ImpureDescribeRenderer : BatchRendererTestBase
+    {
+        private int _describeCalls;
+
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
+            "impure-describe-renderer",
+            new[] { DeliveryArtifactKind.StandaloneHtml },
+            Enum.GetValues<DeliveryReviewProfile>(),
+            Enum.GetValues<DeliveryCommentProfile>());
+
+        public override DeliveryRenderBatchContext DescribeBatch(
+            DeliveryReviewProfile reviewProfile,
+            DeliveryCommentProfile commentProfile) => new(
+            reviewProfile,
+            commentProfile,
+            TestDigest($"impure|{_describeCalls++}"),
+            TestDigest("impure|runtime"));
+
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request) =>
+            throw new InvalidOperationException("The batch seam must not be reached.");
+    }
+
+    /// <summary>DescribeBatch that answers for a different profile pair than it was asked.</summary>
+    private sealed class ForeignProfileDescribeRenderer : BatchRendererTestBase
+    {
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
+            "foreign-profile-renderer",
+            new[] { DeliveryArtifactKind.StandaloneHtml },
+            Enum.GetValues<DeliveryReviewProfile>(),
+            Enum.GetValues<DeliveryCommentProfile>());
+
+        public override DeliveryRenderBatchContext DescribeBatch(
+            DeliveryReviewProfile reviewProfile,
+            DeliveryCommentProfile commentProfile) => new(
+            DeliveryReviewProfile.Markup,
+            DeliveryCommentProfile.Hidden,
+            TestDigest("foreign|layout"),
+            TestDigest("foreign|runtime"));
+
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request) =>
+            throw new InvalidOperationException("The batch seam must not be reached.");
+    }
+
+    private sealed class FailedEvidenceRenderer : BatchRendererTestBase
     {
         private readonly byte[] _reportBytes;
         private readonly DeliverableRenderDiagnostic _warning;
@@ -870,7 +1021,7 @@ public sealed class DeliveryBundleServiceTests
             _warning = warning;
         }
 
-        public DeliveryRendererCapabilities Capabilities { get; } = new(
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
             "failed-evidence-renderer",
             new[]
             {
@@ -881,21 +1032,7 @@ public sealed class DeliveryBundleServiceTests
             Enum.GetValues<DeliveryReviewProfile>(),
             Enum.GetValues<DeliveryCommentProfile>());
 
-        public ValueTask<DeliveryRenderResult> RenderAsync(
-            DeliveryRenderRequest request,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(Result(request));
-
-        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
-            IReadOnlyList<DeliveryRenderRequest> requests,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
-                requests.ToDictionary(
-                    request => request.ArtifactId,
-                    Result,
-                    StringComparer.Ordinal));
-
-        private DeliveryRenderResult Result(DeliveryRenderRequest request) =>
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request) =>
             request.Kind == DeliveryArtifactKind.RenderReport
                 ? DeliveryRenderResult.FailedReport(_reportBytes, diagnostics: new[] { _warning })
                 : DeliveryRenderResult.Unavailable(
@@ -907,9 +1044,9 @@ public sealed class DeliveryBundleServiceTests
                     diagnostics: new[] { _warning });
     }
 
-    private sealed class SidecarFailureRenderer : IDeliveryArtifactBatchRenderer
+    private sealed class SidecarFailureRenderer : BatchRendererTestBase
     {
-        public DeliveryRendererCapabilities Capabilities { get; } = new(
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
             "sidecar-failure-renderer",
             new[]
             {
@@ -920,21 +1057,7 @@ public sealed class DeliveryBundleServiceTests
             Enum.GetValues<DeliveryReviewProfile>(),
             Enum.GetValues<DeliveryCommentProfile>());
 
-        public ValueTask<DeliveryRenderResult> RenderAsync(
-            DeliveryRenderRequest request,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(Result(request));
-
-        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
-            IReadOnlyList<DeliveryRenderRequest> requests,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
-                requests.ToDictionary(
-                    request => request.ArtifactId,
-                    Result,
-                    StringComparer.Ordinal));
-
-        private static DeliveryRenderResult Result(DeliveryRenderRequest request)
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request)
         {
             if (request.Kind != DeliveryArtifactKind.ReviewPdf)
                 return DeliveryRenderResult.Unavailable(
@@ -972,11 +1095,11 @@ public sealed class DeliveryBundleServiceTests
         }
     }
 
-    private sealed class MalformedMarkupRenderer : IDeliveryArtifactBatchRenderer
+    private sealed class MalformedMarkupRenderer : BatchRendererTestBase
     {
         private static readonly byte[] MalformedPageMap = Encoding.UTF8.GetBytes("{");
 
-        public DeliveryRendererCapabilities Capabilities { get; } = new(
+        public override DeliveryRendererCapabilities Capabilities { get; } = new(
             "malformed-markup-renderer",
             new[]
             {
@@ -987,21 +1110,7 @@ public sealed class DeliveryBundleServiceTests
             new[] { DeliveryReviewProfile.Markup },
             Enum.GetValues<DeliveryCommentProfile>());
 
-        public ValueTask<DeliveryRenderResult> RenderAsync(
-            DeliveryRenderRequest request,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(Result(request));
-
-        public ValueTask<IReadOnlyDictionary<string, DeliveryRenderResult>> RenderBatchAsync(
-            IReadOnlyList<DeliveryRenderRequest> requests,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<IReadOnlyDictionary<string, DeliveryRenderResult>>(
-                requests.ToDictionary(
-                    request => request.ArtifactId,
-                    Result,
-                    StringComparer.Ordinal));
-
-        private static DeliveryRenderResult Result(DeliveryRenderRequest request)
+        protected override DeliveryRenderResult Result(DeliveryRenderRequest request)
         {
             var bytes = request.Kind switch
             {

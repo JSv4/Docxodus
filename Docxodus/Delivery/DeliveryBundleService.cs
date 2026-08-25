@@ -331,12 +331,16 @@ public sealed class DeliveryBundleService
             jobs.Add(job);
         }
 
-        if (jobs.Count != 0 && _renderer is IDeliveryArtifactBatchRenderer batchRenderer)
+        // Empty builds do not invoke the renderer; everything else goes through exactly one
+        // RenderBatchesAsync call carrying every group in stable order. A renderer contract
+        // violation (an impure or mismatched DescribeBatch, a result-key mismatch) is a closed
+        // structured failure for every render job rather than a warning.
+        if (jobs.Count != 0)
         {
             try
             {
-                var results = await batchRenderer.RenderBatchAsync(
-                    jobs.Select(job => job.Request).ToArray(), cancellationToken)
+                var batches = GroupIntoBatches(jobs);
+                var results = await _renderer!.RenderBatchesAsync(batches, cancellationToken)
                     .ConfigureAwait(false);
                 ArgumentNullException.ThrowIfNull(results);
                 var expectedIds = jobs.Select(job => job.Request.ArtifactId)
@@ -359,30 +363,75 @@ public sealed class DeliveryBundleService
                     states.Add(job.Request.ArtifactId, RendererFailure(job, ex));
             }
         }
-        else
-        {
-            foreach (var job in jobs)
-            {
-                try
-                {
-                    var result = await _renderer!.RenderAsync(job.Request, cancellationToken)
-                        .ConfigureAwait(false);
-                    states.Add(job.Request.ArtifactId,
-                        RenderStateFromResult(job, result
-                            ?? throw new InvalidDataException("Renderer returned a null result.")));
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    states.Add(job.Request.ArtifactId, RendererFailure(job, ex));
-                }
-            }
-        }
 
         return plans.Select(plan => states[plan.Request.ArtifactId]).ToArray();
+    }
+
+    /// <summary>
+    /// Groups render jobs by exact source digest, document version, and the renderer-declared
+    /// batch context for their review/comment pair. <c>DescribeBatch</c> is queried once per
+    /// pair — plus one repeat probe, because the contract requires repeating it to be identical:
+    /// grouping must not depend on hidden mutable adapter state.
+    /// </summary>
+    private IReadOnlyList<DeliveryRenderBatch> GroupIntoBatches(IReadOnlyList<RenderJob> jobs)
+    {
+        var contexts = new Dictionary<(DeliveryReviewProfile Review, DeliveryCommentProfile Comment),
+            DeliveryRenderBatchContext>();
+        foreach (var pair in jobs
+                     .Select(job => (Review: job.Request.ReviewProfile,
+                         Comment: job.Request.CommentProfile))
+                     .Distinct()
+                     .OrderBy(pair => pair.Review)
+                     .ThenBy(pair => pair.Comment))
+        {
+            var context = _renderer!.DescribeBatch(pair.Review, pair.Comment)
+                ?? throw new InvalidDataException("The renderer described a null batch context.");
+            ValidateBatchContext(context, pair.Review, pair.Comment);
+            var repeat = _renderer.DescribeBatch(pair.Review, pair.Comment);
+            if (!context.Equals(repeat))
+                throw new InvalidDataException(
+                    $"The renderer's DescribeBatch is not pure for {pair.Review}/{pair.Comment}.");
+            contexts.Add(pair, context);
+        }
+
+        return jobs
+            .GroupBy(job => (Digest: job.Request.SourcePackageDigest.Value,
+                Version: job.Request.SourceDocumentVersion,
+                Review: job.Request.ReviewProfile,
+                Comment: job.Request.CommentProfile))
+            .OrderBy(group => group.Key.Digest, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.Version)
+            .ThenBy(group => group.Key.Review)
+            .ThenBy(group => group.Key.Comment)
+            .Select((group, index) => new DeliveryRenderBatch(
+                $"render-{index + 1:D4}",
+                contexts[(group.Key.Review, group.Key.Comment)],
+                group.Select(job => job.Request)
+                    .OrderBy(request => request.ArtifactId, StringComparer.Ordinal)
+                    .ToArray()))
+            .ToArray();
+    }
+
+    private static void ValidateBatchContext(
+        DeliveryRenderBatchContext context,
+        DeliveryReviewProfile reviewProfile,
+        DeliveryCommentProfile commentProfile)
+    {
+        if (context.ReviewProfile != reviewProfile || context.CommentProfile != commentProfile)
+            throw new InvalidDataException(
+                "The renderer described a batch context for different profiles.");
+        ValidateContextDigest(context.LayoutOptionsDigest, "layout-options");
+        ValidateContextDigest(context.RuntimePolicyDigest, "runtime-policy");
+    }
+
+    private static void ValidateContextDigest(VerificationDigest? digest, string label)
+    {
+        if (digest is null
+            || !string.Equals(digest.Algorithm, "SHA-256", StringComparison.Ordinal)
+            || digest.Value is not { Length: 64 }
+            || digest.Value.Any(character => character is not ((>= '0' and <= '9') or (>= 'a' and <= 'f'))))
+            throw new InvalidDataException(
+                $"The renderer's {label} digest is not an algorithm-labelled lower-case SHA-256 value.");
     }
 
     private static RenderState RenderStateFromResult(RenderJob job, DeliveryRenderResult result)

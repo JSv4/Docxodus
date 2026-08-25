@@ -52,15 +52,28 @@ declared as an implicit required artifact.
 The delivery core owns artifact intent, source selection, metadata validation, relationships,
 failure policy, and verification. It does not discover a renderer. An
 `IDeliveryArtifactRenderer` declares its supported artifact kinds, review profiles, and comment
-profiles and returns bytes with its fingerprint, page count, PageMap, report, and diagnostics.
-Renderer diagnostics remain structured end to end: the canonical manifest retains their stable
-code, severity, phase, message, remediation, owning part, anchor, and resource identity rather than
-flattening them into display strings.
+profiles; its pure `DescribeBatch` returns the per-pair `DeliveryRenderBatchContext` whose
+algorithm-labelled layout-options and runtime-policy digests bind every batch to declared,
+versioned canonical materials. The service queries `DescribeBatch` once per requested pair (plus
+one repeat probe, because repeating it must be identical), groups render jobs by exact source
+digest, document version, and that context, and calls `RenderBatchesAsync` exactly once per
+build with every group in stable order — there is no single-item render API and no compatibility
+loop; an empty build never invokes the renderer. Results come back keyed by artifact ID with
+bytes, fingerprint, page count, PageMap, report, and diagnostics. Renderer diagnostics remain
+structured end to end: the canonical manifest retains their stable code, severity, phase,
+message, remediation, owning part, anchor, and resource identity rather than flattening them
+into display strings.
 
 `DocxodusExportHostRenderer` is the production boundary to epic #434. It requires absolute Node
-and built-host paths owned by the process, launches without a shell or PATH guessing, uses one
-length-framed request/response envelope, and renders each exact source/review/comment cohort only
-once. Final and original cohorts declare their policy-derived source as already profile-resolved;
+and built-host paths owned by the process, launches without a shell or PATH guessing, and sends
+each `RenderBatchesAsync` call as one length-framed request: a control frame declaring
+digest-deduplicated sources and every batch with its code-unit-sorted artifact request IDs,
+followed by one raw DOCX frame per unique source — a source shared by several batches crosses
+the pipe once. It rejects a batch whose context it did not itself describe, and represents a
+.NET document version outside JavaScript's safe-integer range as the closed
+`document_version_unrepresentable` unavailability before any frame is built. Each response
+artifact frame is verified against its declared length and SHA-256, and the render report must
+carry exactly its batch's artifact request IDs. Final and original cohorts declare their policy-derived source as already profile-resolved;
 the host verifies that no tracked revision remains and preserves the exact package bytes rather
 than projecting them a second time. Markup cohorts omit that declaration. The adapter requires the
 same binding in successful and failed reports and rejects any derived-source claim for an exact
