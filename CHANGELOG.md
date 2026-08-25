@@ -29,6 +29,17 @@ All notable changes to this project will be documented in this file.
   notice-period-amendment, and table-economics scenarios as the deterministic fast subset; PDF
   and visual-regression scoring stay with #443's ratchet.
 
+- **Redline reversibility proof on every client surface (#464).** The proof engine landed with
+  #497 but was reachable only from .NET. `VerificationOps.ProveRedlineReversibility` now owns the
+  wire shape, and the canonical `redline-reversibility-proof/v1` document is available from the
+  WASM bridge, the npm package (`proveRedlineReversibility`, plus an off-main-thread worker path
+  because three packages are inspected and two rebuilt), the stdio host
+  (`prove_redline_reversibility`), `docx-scalpel` (`prove_redline_reversibility`, decoded into
+  typed frozen dataclasses), and the MCP server (`docxodus_track_changes` action
+  `prove_reversibility`, which proves the session's clean-save checkpoint against two documents
+  resolved through the document store). The rebuilt packages stay in-process — the proof already
+  carries their digests and the divergences between them and each expected document.
+
 - **Long footnote paragraphs keep a complete PageMap when they continue (#489).** A note paragraph
   taller than the maximum note band, and a long leader followed by short tails, are now covered by
   `standalone-export.spec.ts`: both must continue across pages with `running_story_placement`

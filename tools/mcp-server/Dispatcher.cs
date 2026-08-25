@@ -790,7 +790,28 @@ internal static class Dispatcher
     {
         var session = Session(store, args);
         var action = Str(args, "action");
-        return RunTrackChangesAction(session, action, args);
+        // prove_reversibility is resolved here rather than in RunTrackChangesAction because it
+        // needs the document store to read its two comparison packages — and because it is
+        // read-only evidence, not a mutation, so it must stay out of the batchable action set
+        // that docxodus_mutations drives through RunTrackChangesAction.
+        return action == "prove_reversibility"
+            ? ProveReversibility(store, session, args)
+            : RunTrackChangesAction(session, action, args);
+    }
+
+    /// <summary>
+    /// Prove that the open session's generated revisions accept to the intended final and reject
+    /// to the baseline. The session under proof is its clean-save checkpoint — the same bytes
+    /// docxodus_get_content format "verification" gates — so an agent proves what it would ship,
+    /// not an anchor-annotated working copy.
+    /// </summary>
+    private static string ProveReversibility(SessionStore store, DocSession session, JsonElement args)
+    {
+        var baseline = store.Documents.Read(store.Documents.Resolve(Str(args, "baselinePath")));
+        var intendedFinal = store.Documents.Read(
+            store.Documents.Resolve(Str(args, "intendedFinalPath")));
+        return VerificationOps.ProveRedlineReversibility(
+            baseline, intendedFinal, DocxSessionOps.Save(session.Handle));
     }
 
     private static string RunTrackChangesAction(DocSession session, string action, JsonElement args)

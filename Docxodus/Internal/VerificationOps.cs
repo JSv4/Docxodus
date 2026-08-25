@@ -41,4 +41,36 @@ internal static class VerificationOps
     /// </summary>
     public static string VerifyDeliverable(byte[] baselineBytes, byte[] packageBytes) =>
         DeliverableVerifier.VerifyDeliverable(baselineBytes, packageBytes).ToCanonicalJson();
+
+    /// <summary>
+    /// Prove that a redline's generated revisions accept to the intended final and reject to the
+    /// baseline without consuming pre-existing review state.
+    /// </summary>
+    /// <remarks>
+    /// Only the canonical proof JSON crosses this boundary. The two rebuilt packages stay inside
+    /// the process: every transport routing through this facade is a JSON wire, and base64 of two
+    /// further packages would multiply the payload for evidence the proof already carries as
+    /// digests and structured divergences. A caller that needs those bytes uses
+    /// <see cref="RedlineReversibilityVerifier.Prove"/> directly in-process.
+    /// </remarks>
+    public static string ProveRedlineReversibility(
+        byte[] baselineBytes,
+        byte[] intendedFinalBytes,
+        byte[] redlineBytes) =>
+        RedlineReversibilityVerifier
+            .Prove(baselineBytes, intendedFinalBytes, redlineBytes)
+            .Proof.ToCanonicalJson();
+
+    /// <summary>
+    /// Prove redline reversibility while applying the caller's effective proof limits, so a
+    /// lowered ceiling constrains the proof itself rather than rejecting it after the work is done.
+    /// </summary>
+    public static string ProveRedlineReversibility(
+        byte[] baselineBytes,
+        byte[] intendedFinalBytes,
+        byte[] redlineBytes,
+        RedlineReversibilityProofOptions options) =>
+        RedlineReversibilityVerifier
+            .Prove(baselineBytes, intendedFinalBytes, redlineBytes, options)
+            .Proof.ToCanonicalJson();
 }

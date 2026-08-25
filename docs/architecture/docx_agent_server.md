@@ -457,7 +457,7 @@ rather than duplicated.
 custom-XML part itself is never touched. The full core and cross-language contract is in
 `docs/architecture/native_content_controls.md`.
 
-### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode
+### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode, prove reversibility
 
 `set_mode` (issue #304) switches how the session records its *own subsequent* edits —
 `mode: "accept" | "render_inline" | "strip_deletions"` (the same values `docxodus_open`'s
@@ -497,6 +497,26 @@ EditResult envelope with the affected blocks in `modified`/`removed`. An unknown
 already-resolved id fails with `revision_not_found`. Unsafe registry entries fail with a typed
 unsupported/malformed/ambiguous error. `accept_all`/`reject_all` use that same resolver,
 rebuilding the live registry after each entry; the complete operation is atomic and undoable.
+
+`prove_reversibility` (issue #464) answers a different question from the rest of this tool: not
+*what* is in the redline, but whether the redline is honest. Given `baselinePath` and
+`intendedFinalPath` — both resolved through the document store like any other location, so
+neither can escape the server's scope — it accepts only the session's *generated* revisions and
+checks that the result reproduces the intended final, rejects only those same revisions and
+checks that the result reproduces the baseline, and reports whether any pre-existing review state
+was consumed on either path. The response is the canonical
+`redline-reversibility-proof/v1` document described in
+`docs/architecture/redline_reversibility_proof.md`.
+
+The package under proof is the session's **clean-save checkpoint** — the same bytes
+`docxodus_get_content(format: "verification")` gates — so an agent proves what it would ship
+rather than an anchor-annotated working copy. Two consequences follow from this being evidence
+rather than a mutation: it is read-only and never appears in the session's undo history, and it
+is deliberately **not** a `docxodus_mutations` step, because a batch is a sequence of mutations.
+
+Malformed, encrypted, and safety-limited inputs come back as typed proof findings rather than
+errors, and fail closed: when a package cannot be admitted, neither path is attempted at all, so
+a partial result can never be misread as evidence.
 
 ### `docxodus_mutations` — atomic batches, explicit partial apply, or isolated preview
 
