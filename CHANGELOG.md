@@ -646,6 +646,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **`@docxodus/export` docs asserted the font runtime was still unimplemented (#442).** The
+  README's "Runtime boundaries" section claimed `--font-directory` fails with
+  `unsupported_runtime`, the `original` review profile is fail-closed, and the generated-PDF
+  fidelity ratchet is future work — all three shipped. The stale claims are replaced with the
+  delivered contracts, a "Reproducible font configuration" section documents the license-safe
+  metric-substitute set (Carlito / Caladea / Liberation) with packages and directories for a
+  reproducible CLI render, the CLI help no longer marks `--font-directory` as pending, the
+  export design doc names the shipped `font_unavailable` warning code instead of
+  `font_family_unavailable`, and the `docxodus` README's export-browser section no longer
+  claims `original` and `strictFonts` are pending or that the render report is schema v1.
 - **Empty paragraphs lost their line box in paginated export (#443).** A paragraph Word serialized
   as an explicit run holding an empty `w:t` — how it commonly writes a blank line, including
   signature-table spacer rows — counted as having content, so it received no placeholder run and

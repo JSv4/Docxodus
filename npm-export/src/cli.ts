@@ -32,7 +32,7 @@ Options:
   --strict-fonts
   --timeout <milliseconds>
   --browser-executable <path>        Or DOCXODUS_CHROMIUM_PATH
-  --font-directory <path>            Repeatable; implemented by issue #442
+  --font-directory <path>            Repeatable; verified font sources
   --font-license-attestations <path>
   --environment-attestation <path>
   --limit <name=integer>              Repeatable; values may only lower defaults
