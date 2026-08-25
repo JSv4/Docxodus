@@ -861,8 +861,11 @@ class RedlineProofPackageIdentity:
 class RedlineRevisionIdentity:
     """A stable, part-qualified identity for one native Word revision.
 
-    ``family`` and ``resolution_status`` stay plain strings, matching
-    ``RevisionListEntry`` — the same vocabulary read off the same live markup.
+    ``family`` and ``resolution_status`` stay plain strings. The vocabulary is the
+    same one ``RevisionListEntry`` reads off the live markup, but the proof wire is
+    camelCase (``contentInsert``) where the session listing is snake_case
+    (``content_insert``), so multi-word values from the two surfaces do not compare
+    equal as strings.
     """
 
     id: str

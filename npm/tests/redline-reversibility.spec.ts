@@ -119,3 +119,74 @@ test.describe("redline reversibility proof transports", () => {
     expect(proof.rejectToBaseline).toBeNull();
   });
 });
+
+test.describe("redline reversibility proof over the worker", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/worker-test-harness.html");
+    await page.waitForFunction(
+      () => (window as any).DocxodusWorkerTests !== undefined,
+      { timeout: 10_000 }
+    );
+  });
+
+  test("the worker path hands back the same proof document as the direct export", async ({
+    page,
+  }) => {
+    const baseline = readTestFile("WC/WC001-Digits.docx");
+    const intendedFinal = readTestFile("WC/WC001-Digits-Mod.docx");
+
+    const result = await page.evaluate(
+      async ([b, f]) => {
+        await (window as any).createDocxodusWorker();
+        const worker = (window as any).DocxodusWorker;
+        const baselineBytes = new Uint8Array(b);
+        const finalBytes = new Uint8Array(f);
+        const redline = (await worker.compareDocuments(
+          baselineBytes,
+          finalBytes
+        )) as Uint8Array;
+
+        // The proxy clones before transfer, so the same arrays are reusable.
+        const proof = await worker.proveRedlineReversibility(
+          baselineBytes,
+          finalBytes,
+          redline
+        );
+        const again = await worker.proveRedlineReversibility(
+          baselineBytes,
+          finalBytes,
+          redline
+        );
+
+        return {
+          proof,
+          deterministic: JSON.stringify(proof) === JSON.stringify(again),
+          redline: Array.from(redline),
+        };
+      },
+      [Array.from(baseline), Array.from(intendedFinal)]
+    );
+
+    expect(result.deterministic).toBe(true);
+
+    const proof = result.proof as RedlineReversibilityProof;
+    expect(proof.schema).toBe(SCHEMA);
+    expect(proof.schemaVersion).toBe(1);
+    expect(proof.baselinePackage.rawPackageBytesDigest.value).toBe(sha256(baseline));
+    expect(proof.intendedFinalPackage.rawPackageBytesDigest.value).toBe(
+      sha256(intendedFinal)
+    );
+    expect(proof.redlinePackage.rawPackageBytesDigest.value).toBe(
+      sha256(new Uint8Array(result.redline))
+    );
+    expect(proof.revisionClassifications.length).toBeGreaterThan(0);
+    expect(proof.acceptToFinal).not.toBeNull();
+    expect(proof.rejectToBaseline).not.toBeNull();
+    expect(proof.acceptToFinal!.expectedPackage.rawPackageBytesDigest.value).toBe(
+      sha256(intendedFinal)
+    );
+    expect(proof.rejectToBaseline!.expectedPackage.rawPackageBytesDigest.value).toBe(
+      sha256(baseline)
+    );
+  });
+});

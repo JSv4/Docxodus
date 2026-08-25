@@ -1181,12 +1181,8 @@ export type RedlineProofDirection = "acceptToFinal" | "rejectToBaseline";
 /** How a package entry differs from a path's expected document. */
 export type RedlinePackageDivergenceKind = "added" | "removed" | "modified";
 
-/** Fail-closed resolution status of one native revision. */
-export type RedlineRevisionResolutionStatus =
-  | "supported"
-  | "unsupported"
-  | "malformed"
-  | "ambiguous";
+/** Fail-closed resolution status of one native revision — the session registry's vocabulary. */
+export type RedlineRevisionResolutionStatus = RevisionResolutionStatus;
 
 /** Coarse family of one native revision. */
 export type RedlineRevisionFamily =
@@ -1206,11 +1202,8 @@ export type RedlineRevisionFamily =
   | "propertiesChange"
   | "unsupported";
 
-/** Why a revision could not be resolved. */
-export interface RedlineRevisionDiagnostic {
-  code: string;
-  message: string;
-}
+/** Why a revision could not be resolved — the session registry's shape. */
+export type RedlineRevisionDiagnostic = RevisionDiagnostic;
 
 /** Input or output package identity recorded by the proof. */
 export interface RedlineProofPackageIdentity {

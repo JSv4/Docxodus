@@ -119,13 +119,26 @@ public sealed class RedlineReversibilityTransportTests
                  "intendedFinalPath":{{Quote(finalPath)}}}
                 """)));
 
-            // A location outside the store's scope is refused by the store, not by this action.
-            Assert.Throws<McpToolException>(() => Dispatcher.Call(
-                store, "docxodus_track_changes", Json($$"""
-                    {"sessionId":{{sessionId}},"action":"prove_reversibility",
-                     "baselinePath":{{Quote(Path.Combine(Path.GetTempPath(), "outside.docx"))}},
-                     "intendedFinalPath":{{Quote(finalPath)}}}
-                    """)));
+            // A location outside the store's scope is refused by the store's containment check,
+            // not by a failed read: the file exists and holds a valid package, so only the
+            // resolver can be the thing that rejects it.
+            var outsidePath = Path.Combine(Path.GetTempPath(),
+                $"reversibility-outside-{Guid.NewGuid():N}.docx");
+            File.WriteAllBytes(outsidePath, baseline);
+            try
+            {
+                var escape = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+                    store, "docxodus_track_changes", Json($$"""
+                        {"sessionId":{{sessionId}},"action":"prove_reversibility",
+                         "baselinePath":{{Quote(outsidePath)}},
+                         "intendedFinalPath":{{Quote(finalPath)}}}
+                        """)));
+                Assert.Contains("outside this server's document scope", escape.Message);
+            }
+            finally
+            {
+                File.Delete(outsidePath);
+            }
         }
         finally
         {
@@ -153,6 +166,39 @@ public sealed class RedlineReversibilityTransportTests
             ToolCatalog.Tools.Where(tool => tool.Name == "docxodus_mutations"));
         using var batchSchema = JsonDocument.Parse(mutations.InputSchemaJson);
         Assert.DoesNotContain("prove_reversibility", batchSchema.RootElement.ToString());
+    }
+
+    [Fact]
+    public void RT005_BatchStepRefusalIsBehavioralNotJustSchemaText()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"reversibility-batch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var store = new SessionStore(new LocalFileDocumentStore(root));
+        try
+        {
+            var path = Path.Combine(root, "document.docx");
+            File.WriteAllBytes(path, DocxSession.CreateBlankDocxBytes());
+            using var opened = JsonDocument.Parse(Dispatcher.Call(
+                store, "docxodus_open", Json($$"""{"path":{{Quote(path)}}}""")));
+            var sessionId = Quote(opened.RootElement.GetProperty("sessionId").GetString()!);
+
+            // The whitelist in ValidateMutationBatchAction, not just the tool schema, must
+            // refuse the action — nothing mutated, the batch reports the step as invalid.
+            var response = Dispatcher.Call(store, "docxodus_mutations", Json($$"""
+                {"sessionId":{{sessionId}},"steps":[
+                    {"tool":"docxodus_track_changes","args":{"action":"prove_reversibility"} }]}
+                """));
+            using var batch = JsonDocument.Parse(response);
+            Assert.False(batch.RootElement.GetProperty("success").GetBoolean());
+            Assert.Contains(
+                "unsupported or read-only batch action: docxodus_track_changes/prove_reversibility",
+                response);
+        }
+        finally
+        {
+            store.CloseAll();
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static (byte[] Baseline, byte[] IntendedFinal, byte[] Redline) Triple()
