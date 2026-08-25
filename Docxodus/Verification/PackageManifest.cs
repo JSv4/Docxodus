@@ -204,7 +204,19 @@ public sealed record PackageRevisionCounts
     public int Deletions { get; init; }
     public int MoveFrom { get; init; }
     public int MoveTo { get; init; }
+    /// <summary>
+    /// Every property revision: <c>numberingChange</c>, <c>pPrChange</c>, <c>rPrChange</c>,
+    /// <c>sectPrChange</c>, <c>tblGridChange</c>, <c>tblPrChange</c>, <c>tblPrExChange</c>,
+    /// <c>tcPrChange</c> and <c>trPrChange</c>.
+    /// </summary>
     public int PropertyChanges { get; init; }
+
+    /// <summary>
+    /// The <c>rPrChange</c> subset of <see cref="PropertyChanges"/>, counted separately because
+    /// run-level format changes are the only property revision a renderer can draw inline.
+    /// Never exceeds <see cref="PropertyChanges"/> and is not added into <see cref="Total"/>.
+    /// </summary>
+    public int RunPropertyChanges { get; init; }
 
     /// <summary>Cell insert/delete/merge revision markers.</summary>
     public int StructuralChanges { get; init; }
@@ -457,6 +469,7 @@ public sealed record PackageManifest
         writer.WriteNumber("moveFrom", facts.Revisions.MoveFrom);
         writer.WriteNumber("moveTo", facts.Revisions.MoveTo);
         writer.WriteNumber("propertyChanges", facts.Revisions.PropertyChanges);
+        writer.WriteNumber("runPropertyChanges", facts.Revisions.RunPropertyChanges);
         writer.WriteNumber("structuralChanges", facts.Revisions.StructuralChanges);
         writer.WriteNumber("otherChanges", facts.Revisions.OtherChanges);
         writer.WriteNumber("total", facts.Revisions.Total);
