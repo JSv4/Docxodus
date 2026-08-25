@@ -465,6 +465,52 @@ public sealed class DeliveryBundleServiceTests
     }
 
     [Fact]
+    public async Task BuildAsync_CohortVerificationAcceptsTheHostCanonicalPageMapSpelling()
+    {
+        // Regression for CI run 32862950493: every cohort failed page_map_digest_mismatch plus
+        // page_map_missing because artifact metadata recorded the raw-bytes digest of the host's
+        // canonical JSON spelling, while deliverable verification identifies a PageMap by the
+        // digest of its canonical .NET serialization. The doubles hid it by returning .NET-
+        // canonical bytes; they now return the host spelling, so this path is the one CI runs.
+        var edit = SingleEdit("Host-spelled PageMap edit.");
+        var renderer = new CapturingRenderer();
+        var request = Request(edit, new[]
+        {
+            RenderArtifact(
+                "final-html",
+                DeliveryArtifactKind.StandaloneHtml,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+            RenderArtifact(
+                "final-page-map",
+                DeliveryArtifactKind.PageMap,
+                DeliveryArtifactRequiredness.Required,
+                DeliveryReviewProfile.Final),
+            new DeliveryArtifactRequest
+            {
+                ArtifactId = "validation",
+                Kind = DeliveryArtifactKind.ValidationReport,
+                Requiredness = DeliveryArtifactRequiredness.Required,
+            },
+        });
+
+        // Default options: deliverable-validation failure fails the build, as it did in CI.
+        var bundle = await new DeliveryBundleService(renderer).BuildAsync(request);
+
+        Assert.Equal(DeliveryBundleStatus.Complete, bundle.Manifest.Payload.Status);
+        var validationJson = Encoding.UTF8.GetString(bundle.GetArtifactBytes("validation"));
+        Assert.DoesNotContain("page_map_digest_mismatch", validationJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("page_map_missing", validationJson, StringComparison.Ordinal);
+
+        // The fixture is load-bearing only while the two spellings genuinely differ.
+        var sidecar = bundle.GetArtifactBytes("final-page-map");
+        using var parsed = JsonDocument.Parse(sidecar);
+        var dotnetSpelling = Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(
+            DocxSessionJson.ParsePageMap(parsed.RootElement)));
+        Assert.NotEqual(dotnetSpelling, sidecar);
+    }
+
+    [Fact]
     public async Task BuildAsync_FailsClosedWhenDescribeBatchIsImpureOrForeign()
     {
         var edit = SingleEdit("Impure describe edit.");
@@ -859,6 +905,47 @@ public sealed class DeliveryBundleServiceTests
             Value = Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant(),
         };
+
+        /// <summary>
+        /// Re-spells JSON the way the framed export host frames its sidecars: minified with
+        /// code-unit-sorted object keys. The doubles must return PageMap sidecars in this shape,
+        /// not the .NET serializer's spelling — returning the latter is exactly the drift that
+        /// let a canonical-vs-raw digest disassociation reach CI unseen.
+        /// </summary>
+        protected static byte[] HostCanonicalJson(byte[] json)
+        {
+            using var document = JsonDocument.Parse(json);
+            var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer))
+                WriteSorted(writer, document.RootElement);
+            return buffer.WrittenSpan.ToArray();
+        }
+
+        private static void WriteSorted(Utf8JsonWriter writer, JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    writer.WriteStartObject();
+                    foreach (var property in element.EnumerateObject()
+                                 .OrderBy(property => property.Name, StringComparer.Ordinal))
+                    {
+                        writer.WritePropertyName(property.Name);
+                        WriteSorted(writer, property.Value);
+                    }
+                    writer.WriteEndObject();
+                    break;
+                case JsonValueKind.Array:
+                    writer.WriteStartArray();
+                    foreach (var item in element.EnumerateArray())
+                        WriteSorted(writer, item);
+                    writer.WriteEndArray();
+                    break;
+                default:
+                    element.WriteTo(writer);
+                    break;
+            }
+        }
     }
 
     private sealed class CapturingRenderer : BatchRendererTestBase
@@ -951,7 +1038,9 @@ public sealed class DeliveryBundleServiceTests
                     },
                 },
             };
-            return Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map));
+            // The real adapter hands the delivery layer the host's canonical spelling of the
+            // sidecar, so the double must too.
+            return HostCanonicalJson(Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map)));
         }
 
         internal static byte[] MinimalPdfBytes() => Encoding.ASCII.GetBytes(
@@ -1084,7 +1173,8 @@ public sealed class DeliveryBundleServiceTests
                     },
                 },
             };
-            var pageMapBytes = Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(pageMap));
+            var pageMapBytes = HostCanonicalJson(
+                Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(pageMap)));
             return DeliveryRenderResult.Available(
                 CapturingRenderer.MinimalPdfBytes(),
                 "application/pdf",

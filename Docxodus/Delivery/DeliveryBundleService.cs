@@ -5,6 +5,8 @@
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using Docxodus.Internal;
 using Docxodus.Verification;
 using DeliverableAvailability = Docxodus.Verification.DeliverableArtifactAvailability;
 using ReceiptArtifactAvailability = Docxodus.Verification.DeliveryArtifactAvailability;
@@ -520,10 +522,36 @@ public sealed class DeliveryBundleService
             RendererFingerprint = result?.RendererFingerprint,
             SourcePackageDigest = state.SourceDigest,
             PageMapDigest = result?.CopyPageMapBytes() is { } pageMap
-                ? DeliveryBundleCanonicalJson.Digest(pageMap)
+                ? CanonicalPageMapDigest(pageMap)
                 : null,
             RenderDiagnostics = result?.Diagnostics ?? Array.Empty<DeliverableRenderDiagnostic>(),
         };
+    }
+
+    /// <summary>
+    /// The deliverable-verification contract identifies a PageMap by the SHA-256 of its
+    /// canonical .NET serialization, not of the exact sidecar bytes: the framed host emits its
+    /// own canonical JSON spelling, and two spellings of one portable map must verify as the
+    /// same map. The published PageMap artifact keeps the renderer's exact bytes — the render
+    /// report's pageMapDigest binds those — while this metadata digest is the canonical
+    /// identity the verifier independently recomputes. A sidecar that does not parse records no
+    /// digest: verification is the enforcer, and it reports the malformed map and the unbound
+    /// layout artifacts as its own closed findings rather than this metadata pass throwing.
+    /// </summary>
+    private static VerificationDigest? CanonicalPageMapDigest(byte[] pageMapBytes)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(pageMapBytes);
+            var map = DocxSessionJson.ParsePageMap(document.RootElement);
+            return DeliveryBundleCanonicalJson.Digest(
+                Encoding.UTF8.GetBytes(DocxSessionJson.SerializePageMap(map)));
+        }
+        catch (Exception exception) when (exception
+            is JsonException or FormatException or ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static void BuildReceipt(
