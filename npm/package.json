@@ -1,7 +1,7 @@
 {
   "name": "docxodus",
   "version": "0.0.0",
-  "description": "Render, edit, diff and project Word .docx files in the browser — DOCX to HTML, a block editor, Word-grade redlines with tracked changes, and anchor-addressed markdown for LLM agents. WebAssembly, no server.",
+  "description": "Render, edit, diff and project Word .docx files in the browser \u2014 DOCX to HTML, a block editor, Word-grade redlines with tracked changes, and anchor-addressed markdown for LLM agents. WebAssembly, no server.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -28,14 +28,22 @@
       "import": "./dist/export-browser.bundle.js"
     },
     "./export-assets.json": "./dist/export-assets.json",
-    "./render-report.schema.json": "./dist/render-report-v1.schema.json"
+    "./render-report.schema.json": "./dist/render-report-v2.schema.json"
   },
   "typesVersions": {
     "*": {
-      "react": ["./dist/react.d.ts"],
-      "embed": ["./dist/embed.d.ts"],
-      "worker": ["./dist/worker-proxy.d.ts"],
-      "export-browser": ["./dist/export-browser.d.ts"]
+      "react": [
+        "./dist/react.d.ts"
+      ],
+      "embed": [
+        "./dist/embed.d.ts"
+      ],
+      "worker": [
+        "./dist/worker-proxy.d.ts"
+      ],
+      "export-browser": [
+        "./dist/export-browser.d.ts"
+      ]
     }
   },
   "files": [
@@ -64,6 +72,8 @@
     "test": "playwright test",
     "test:arcade:libreoffice": "npm run pretest && DOCXODUS_LO_PARITY=1 playwright test demo-arcade-libreoffice.spec.ts --project=chromium",
     "test:visual-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 playwright test visual-parity.spec.ts visual-parity-reductions.spec.ts --project=chromium --reporter=line",
+    "test:generated-pdf-parity": "npm run build && npm --prefix ../npm-export run build && npm run test:generated-pdf-parity:prebuilt",
+    "test:generated-pdf-parity:prebuilt": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 DOCXODUS_GENERATED_PDF_PARITY=1 playwright test generated-pdf-parity.spec.ts --project=chromium --reporter=line",
     "capture:word-reference": "mkdir -p dist/wasm && playwright test word-reference-capture.spec.ts --project=chromium --reporter=line",
     "test:ui": "playwright test --ui",
     "demo": "npm run build && npm run demo:serve",
@@ -117,6 +127,8 @@
     "@types/node": "^20.10.0",
     "@types/react": "^19.2.7",
     "esbuild": "^0.28.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.2.108",
     "typescript": "^5.3.0"
   },
   "dependencies": {

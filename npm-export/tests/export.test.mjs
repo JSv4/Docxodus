@@ -327,8 +327,12 @@ describe("@docxodus/export", { concurrency: false }, () => {
           basis: "test-only attestation",
         }],
       }),
+      // Before #442 this rejected `unsupported_runtime` because font directories were
+      // refused outright. The runtime now attempts discovery, so a well-formed attestation
+      // gets as far as resolving the root — and fails closed there, because
+      // /deployment/fonts does not exist.
       (error) => error instanceof DocxodusExportError
-        && error.code === "unsupported_runtime"
+        && error.code === "resource_policy_failure"
         && error.phase === "font_loading",
     );
 
@@ -397,6 +401,24 @@ describe("@docxodus/export", { concurrency: false }, () => {
     assert.deepEqual(result.renderReport.bindings.artifactRequestIds, []);
     assert.ok(result.renderReport.readiness.some((entry) =>
       entry.phase === "pdf_print" && entry.status === "complete"));
+    // The host owns phases the browser materializer cannot see from inside the page.
+    // Without these, a timeout in any of them reports a bare code and no pending work.
+    for (const phase of ["browser_launch", "wasm_initialization", "output_verification", "cleanup"]) {
+      assert.ok(
+        result.renderReport.readiness.some((entry) =>
+          entry.phase === phase && entry.status === "complete"),
+        `readiness is missing a completed host-owned ${phase} phase`,
+      );
+    }
+    // Host phases that ran before the report existed are prepended, not appended, so the
+    // log stays in the order the work actually happened in.
+    const readinessOrder = result.renderReport.readiness.map((entry) => entry.phase);
+    assert.equal(readinessOrder[0], "browser_launch");
+    assert.equal(readinessOrder.at(-1), "cleanup");
+    assert.ok(
+      readinessOrder.indexOf("docx_conversion") > readinessOrder.indexOf("browser_launch"),
+      "browser-reported phases must follow the host launch that produced them",
+    );
 
     const inspection = await inspectPdf(result.pdf);
     assert.equal(inspection.pageCount, result.pageCount);

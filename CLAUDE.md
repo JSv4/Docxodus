@@ -12,6 +12,11 @@ duplicated description is one that will go stale.
 
 - **Never credit yourself in commits.** Do not add "Generated with Claude Code" or
   "Co-Authored-By: Claude" to commit messages.
+- **Write PR descriptions for a human reviewer, not for the next agent.** Explain, in plain
+  language, why the change exists, how it works at a mechanism level, and how it was
+  validated. Don't invent terminology, lean on internal issue-number shorthand, or use
+  jargon a reader outside the change wouldn't recognize — a reviewer who hasn't read the
+  code should be able to follow the description on its own.
 
 ## Coding Standards
 
@@ -81,6 +86,12 @@ Concretely, a new session op touches: `DocxSession.cs` → `DocxSessionOps.cs` �
 `DocxSessionJson.cs` → `wasm/DocxodusWasm/DocxSessionBridge.cs` → `npm/src/types.ts` +
 `npm/src/index.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
 → `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
+
+**The generated-PDF benchmark is a ripple site for PageMap shape.**
+`npm/tests/visual-parity/pdf-result.ts` validates the supported `convertDocxToPdf` envelope with
+*exact* key matching on `pageMap`, each page, and each fragment, so adding an optional field to any
+of them fails the benchmark from a test file none of the tables above name. Update it in the same
+change.
 
 **Defaults are declared once.** Read them from the settings object rather than repeating
 literals per surface — `DocxSessionJson.ParseSettings` and the MCP dispatcher had each

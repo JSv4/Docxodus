@@ -1,8 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  FONT_SUBSTITUTION_CONTRACT,
+  type FontSubstitutionEntry,
+} from '../../src/font-contract.js';
 import { storedZip, xml, R_NS, W_NS } from '../docx-zip.js';
 
 /**
@@ -17,51 +21,57 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Absolute path both renderers must receive as FONTCONFIG_FILE. */
 export const FONT_CONTRACT_FILE = resolve(__dirname, 'fonts.conf');
 
-export interface FontContractEntry {
-  /** The family documents declare. */
-  family: string;
-  /** The substitute the contract assigns. */
-  substitute: string;
-  /** Debian package providing the substitute, for the failure message. */
-  package: string;
-  /** True when the substitute is metric-compatible with the declared family by design. */
-  metricCompatible: boolean;
-}
+export type FontContractEntry = FontSubstitutionEntry;
+export const FONT_CONTRACT = FONT_SUBSTITUTION_CONTRACT;
 
-export const FONT_CONTRACT: FontContractEntry[] = [
-  { family: 'Calibri', substitute: 'Carlito', package: 'fonts-crosextra-carlito', metricCompatible: true },
-  // No open metric clone of the Light cut exists; the contract's job is that BOTH engines make
-  // the same approximation, not that the approximation is metrically exact.
-  { family: 'Calibri Light', substitute: 'Carlito', package: 'fonts-crosextra-carlito', metricCompatible: false },
-  { family: 'Cambria', substitute: 'Caladea', package: 'fonts-crosextra-caladea', metricCompatible: true },
-  { family: 'Times New Roman', substitute: 'Liberation Serif', package: 'fonts-liberation2', metricCompatible: true },
-  { family: 'Arial', substitute: 'Liberation Sans', package: 'fonts-liberation2', metricCompatible: true },
-  { family: 'Courier New', substitute: 'Liberation Mono', package: 'fonts-liberation2', metricCompatible: true },
-];
+/**
+ * Test-environment install hints. These intentionally stay out of the browser-portable
+ * production substitution contract because package names are deployment-specific.
+ */
+export const FONT_CONTRACT_PACKAGES: Readonly<Record<string, string>> = Object.freeze({
+  Calibri: 'fonts-crosextra-carlito',
+  'Calibri Light': 'fonts-crosextra-carlito',
+  Cambria: 'fonts-crosextra-caladea',
+  'Times New Roman': 'fonts-liberation2',
+  Arial: 'fonts-liberation2',
+  'Courier New': 'fonts-liberation2',
+});
 
 export interface ResolvedFont {
   family: string;
   substitute: string;
   resolvedFamily: string;
   file: string;
+  /** Absolute resolved path. Host-specific, so it is NOT part of the recorded report. */
+  filePath: string;
+  fileSha256: string;
   fontVersion: string;
   metricCompatible: boolean;
 }
 
 /** What each declared family resolves to under the contract, per fc-match. */
-export function resolveContractFonts(): ResolvedFont[] {
+export function resolveContractFonts(fcMatchExecutable = 'fc-match'): ResolvedFont[] {
   return FONT_CONTRACT.map(entry => {
-    const out = execFileSync('fc-match', ['-f', '%{family}\t%{file}\t%{fontversion}', entry.family], {
+    const out = execFileSync(fcMatchExecutable, ['-f', '%{family}\t%{file}\t%{fontversion}', entry.family], {
       encoding: 'utf8',
       env: { ...process.env, FONTCONFIG_FILE: FONT_CONTRACT_FILE },
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
     });
     const [resolvedFamily = '', file = '', fontVersion = ''] = out.split('\t');
+    const resolvedFile = realpathSync(file);
+    const metadata = lstatSync(resolvedFile);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`fc-match returned a non-regular font file for ${entry.family}`);
+    }
     return {
       family: entry.family,
       substitute: entry.substitute,
       // fc-match may report a family list; the substitute must be one of its names.
       resolvedFamily,
-      file,
+      file: basename(resolvedFile),
+      filePath: resolvedFile,
+      fileSha256: createHash('sha256').update(readFileSync(resolvedFile)).digest('hex'),
       fontVersion,
       metricCompatible: entry.metricCompatible,
     };
@@ -69,13 +79,27 @@ export function resolveContractFonts(): ResolvedFont[] {
 }
 
 /**
+ * Directories holding the contract's resolved faces.
+ *
+ * The benchmark already pins fonts for LibreOffice and Poppler through FONTCONFIG_FILE, but the
+ * Node export path resolves its own: `@docxodus/export` reports `verification: "nodeVerified"`
+ * only when every face resolved from a `configured` or `attested` source, and falls back to
+ * `browserObserved` when it had to take whatever the browser had. Handing it these directories as
+ * `fontDirectories` is how the third renderer joins the same contract as the other two.
+ */
+export function contractFontDirectories(fcMatchExecutable = 'fc-match'): string[] {
+  const directories = resolveContractFonts(fcMatchExecutable).map(font => dirname(font.filePath));
+  return [...new Set(directories)].sort();
+}
+
+/**
  * Fails clearly when the host cannot satisfy the contract, naming the packages to install.
  * Returns the resolutions for the report on success.
  */
-export function assertFontContract(): ResolvedFont[] {
+export function assertFontContract(fcMatchExecutable = 'fc-match'): ResolvedFont[] {
   let resolved: ResolvedFont[];
   try {
-    resolved = resolveContractFonts();
+    resolved = resolveContractFonts(fcMatchExecutable);
   } catch (error) {
     throw new Error(`fc-match is unavailable; the font contract cannot be verified: ${error}`);
   }
@@ -83,7 +107,7 @@ export function assertFontContract(): ResolvedFont[] {
     !r.resolvedFamily.split(',').some(name => name.trim() === r.substitute));
   if (broken.length) {
     const detail = broken.map(r => {
-      const pkg = FONT_CONTRACT.find(e => e.family === r.family)!.package;
+      const pkg = FONT_CONTRACT_PACKAGES[r.family] ?? '(no test package hint configured)';
       return `  ${r.family} -> ${r.resolvedFamily || '(nothing)'} (contract: ${r.substitute}; install ${pkg})`;
     }).join('\n');
     throw new Error(`Font-substitution contract not satisfied:\n${detail}`);
@@ -92,11 +116,14 @@ export function assertFontContract(): ResolvedFont[] {
 }
 
 /** The report block `summary.json` records for the environment. */
-export function fontContractReport(repoRoot: string) {
+export function fontContractReport(repoRoot: string, fcMatchExecutable = 'fc-match') {
   return {
     file: relative(repoRoot, FONT_CONTRACT_FILE),
     sha256: createHash('sha256').update(readFileSync(FONT_CONTRACT_FILE)).digest('hex'),
-    families: assertFontContract(),
+    // `filePath` is deliberately dropped: it is absolute, so recording it would make the
+    // environment fingerprint differ between two hosts that satisfy the identical contract.
+    families: assertFontContract(fcMatchExecutable)
+      .map(({ filePath: _filePath, ...font }) => font),
   };
 }
 

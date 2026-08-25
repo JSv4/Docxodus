@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@playwright/browser-chromium": "1.57.0",
+    "fontkit": "2.0.4",
     "pdf-lib": "1.17.1",
     "playwright-core": "1.57.0"
   },
@@ -39,6 +40,7 @@
     "docxodus": "0.0.0"
   },
   "devDependencies": {
+    "@types/fontkit": "2.0.9",
     "@types/node": "22.18.0",
     "docxodus": "file:../npm",
     "pdfjs-dist": "6.2.108",

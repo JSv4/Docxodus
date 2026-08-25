@@ -160,8 +160,12 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     categories: ['headers-footers', 'images', 'multi-section'],
     rationale: 'Default/first/even running stories, embedded images, and section inheritance.',
     disposition: {
-      kind: 'environment',
-      rationale: 'Close since PR #372 and issue #377; the residual is substituted-font line metrics.',
+      kind: 'reference-deviation',
+      rationale: 'Section 2 sets titlePg but omits first-page header and footer references. ' +
+        'WordprocessingML therefore inherits the previous section\'s first-page stories. ' +
+        'Docxodus follows that rule; LibreOffice instead renders the odd-page stories on page 4.',
+      reference: 'https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/' +
+        'bce5f993-d683-4aa7-825e-bce25c64e8b8',
     },
   },
   {
