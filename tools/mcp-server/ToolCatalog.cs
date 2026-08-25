@@ -220,7 +220,7 @@ internal static class ToolCatalog
                 "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
                 "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
-                "find": { "type": "string", "description": "replace_text_range: literal text to find within the block." },
+                "find": { "type": "string", "description": "replace_text_range: literal text to find within the block. A find that matches nothing fails with text_not_found (both directly and as a batch step); pass preconditions.expectedMatchCount 0 to assert absence as a successful no-op instead." },
                 "replace": { "type": "string", "description": "replace_text_range: replacement text." },
                 "caseSensitive": { "type": "boolean", "description": "replace_text_range only. Default false." },
                 "toAnchorIdExclusive": { "type": "string", "description": "delete_range: end boundary, exclusive." },

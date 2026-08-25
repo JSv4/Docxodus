@@ -620,6 +620,33 @@ public class DocxSessionAtomicBatchTests
     }
 
     [Fact]
+    public void DS479_AtomicBatch_NoMatchReplaceFailsAsTextNotFound()
+    {
+        // Issue #490: this used to surface as internal_error ("batch mutation returned
+        // no valid edit results") and, after #497, as a silent successful no-op. A
+        // zero-match replace is an ordinary, actionable targeting failure: the step
+        // fails with TextNotFound and an atomic batch rolls back around it.
+        using var session = Open();
+        var anchor = BodyParagraphs(session)[0];
+        var before = session.Save(persistAnchorIds: false);
+
+        var result = session.ExecuteBatch(new[]
+        {
+            new MutationBatchStep("docxodus_edit", "replace_text_range",
+                s => s.ReplaceTextRange(anchor, "ZZZ-not-present-ZZZ", "x")),
+        });
+
+        Assert.False(result.Success);
+        Assert.True(result.RolledBack);
+        Assert.NotNull(result.Failure);
+        Assert.Equal(EditErrorCode.TextNotFound, result.Failure!.Error.Code);
+        Assert.Equal("replace_text_range", result.Failure.Action);
+        Assert.Equal(0, session.Version);
+        Assert.Equal(0, session.UndoCount);
+        AssertSamePackage(before, session.Save(persistAnchorIds: false));
+    }
+
+    [Fact]
     public void DS462_EditResultWireShape_RoundTripsTheTableAnchorMapping()
     {
         // Batch adapters re-serialize every step through Serialize(EditResult) and read it back

@@ -1321,6 +1321,10 @@ export class DocxSession {
    * replaces it with `replace`, preserving the surrounding run formatting that
    * the match didn't touch. Returns one `EditResult` per attempted match.
    *
+   * A `find` that matches nothing fails with a single `text_not_found` result
+   * naming the anchor and the needle — never an empty array. Pass
+   * `expectedMatchCount: 0` to assert absence as a successful no-op instead.
+   *
    * Run-formatting contract: the replacement text inherits the formatting of
    * the FIRST run the match spanned. Middle/trailing runs keep their `w:rPr`
    * but lose the slice of text the match consumed.

@@ -1575,6 +1575,18 @@ session.ReplaceTextAtSpan(anchor, spanStart, spanLength, repl) // exact-span var
 how many to apply), `ExpectedMatchCount` (require the exact live count before the
 cap), and `Preconditions` (the common optimistic guard object).
 
+### No-match contract
+
+A `find` that matches nothing in the anchor's visible text fails with a single
+`TextNotFound` (`text_not_found` on the wire) result carrying the anchor id and the
+needle — never an empty list, which a caller could not distinguish from a successful
+replacement. The same failure surfaces identically when the op runs as a mutation
+batch step, where it fails the step (and rolls back an atomic batch) instead of the
+pre-#490 `internal_error`. Two explicit spellings remain successful empty-list
+no-ops: `ExpectedMatchCount = 0` (the caller asserts absence — zero matches is the
+asserted outcome) and `MaxReplacements = 0` (the needle was found but deliberately
+left unconsumed).
+
 ### Formatting-preservation contract
 
 The replacement text inherits the formatting of the FIRST run the match spanned. Middle and trailing runs keep their `w:rPr` but lose the slice of text the match consumed — so a bold phrase that got partially overwritten still has bold formatting for any surviving text. This is the practical sweet spot: it solves the template-fill case where you want `[___]` → `Bluth Co.` to take on the surrounding text's formatting, and it's predictable for cross-formatting matches.

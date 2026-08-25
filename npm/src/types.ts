@@ -1910,6 +1910,7 @@ export type EditErrorCode =
   | "anchor_token_in_payload"
   | "offset_out_of_range"
   | "invalid_position"
+  | "text_not_found"
   | "unknown_style"
   | "invalid_list_level"
   | "invalid_list_start_value"

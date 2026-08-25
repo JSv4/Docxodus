@@ -2704,13 +2704,60 @@ public class DocxSessionTests
     }
 
     [Fact]
-    public void DS113_ReplaceTextRange_FindNotFound_ReturnsEmpty()
+    public void DS113_ReplaceTextRange_FindNotFound_FailsWithTextNotFound()
     {
+        // Issue #490: a needle that matches nothing used to return an empty list — a
+        // silent no-op indistinguishable from success. It must fail with a dedicated
+        // code carrying the anchor and the needle, so both the direct call and a batch
+        // step report the condition identically.
+        using var s = new DocxSession(BuildDS100_GrepFixture());
+        var anchor = s.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "p").Anchor.Id;
+        var before = FlatBodyText(s);
+        var versionBefore = s.Version;
+
+        var results = s.ReplaceTextRange(anchor, "nope-this-is-not-in-the-doc", "irrelevant");
+
+        var result = Assert.Single(results);
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.TextNotFound, result.Error!.Code);
+        Assert.Equal(anchor, result.Error.AnchorId);
+        Assert.Contains("nope-this-is-not-in-the-doc", result.Error.Message);
+        Assert.Equal(before, FlatBodyText(s));
+        Assert.Equal(versionBefore, s.Version);
+        Assert.Equal(0, s.UndoCount);
+    }
+
+    [Fact]
+    public void DS113B_ReplaceTextRange_ExpectedMatchCountZero_AssertsAbsenceAsSuccess()
+    {
+        // ExpectedMatchCount = 0 is the explicit assert-absence spelling: the caller's
+        // model of the document already includes the needle being gone, so zero matches
+        // is the asserted outcome, not a targeting failure.
         using var s = new DocxSession(BuildDS100_GrepFixture());
         var anchor = s.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "p").Anchor.Id;
         var before = FlatBodyText(s);
 
-        var results = s.ReplaceTextRange(anchor, "nope-this-is-not-in-the-doc", "irrelevant");
+        var viaOptions = s.ReplaceTextRange(anchor, "nope-this-is-not-in-the-doc", "x",
+            new ReplaceOptions { ExpectedMatchCount = 0 });
+        var viaGuards = s.ReplaceTextRange(anchor, "nope-this-is-not-in-the-doc", "x",
+            new ReplaceOptions { Preconditions = new MutationPreconditions { ExpectedMatchCount = 0 } });
+
+        Assert.Empty(viaOptions);
+        Assert.Empty(viaGuards);
+        Assert.Equal(before, FlatBodyText(s));
+    }
+
+    [Fact]
+    public void DS113C_ReplaceTextRange_MaxReplacementsZero_IsCappedNotNotFound()
+    {
+        // A present needle capped to zero replacements is a deliberate no-op, not a
+        // TextNotFound: the needle WAS found; the caller chose not to consume it.
+        using var s = new DocxSession(BuildDS100_GrepFixture());
+        var anchor = s.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "p").Anchor.Id;
+        var before = FlatBodyText(s);
+
+        var results = s.ReplaceTextRange(anchor, "faraway", "distant",
+            new ReplaceOptions { MaxReplacements = 0 });
 
         Assert.Empty(results);
         Assert.Equal(before, FlatBodyText(s));
