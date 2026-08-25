@@ -193,8 +193,8 @@ public sealed class DeliveryBundleServiceTests
     {
         var edit = SingleEdit("Failed render evidence edit.");
         var reportBytes = Encoding.UTF8.GetBytes(
-            "{\"schema\":\"https://docxodus.dev/schemas/render/render-report/v1\","
-            + "\"schemaVersion\":1,\"status\":\"failed\"}");
+            "{\"schema\":\"https://docxodus.dev/schemas/render/render-report/v2\","
+            + "\"schemaVersion\":2,\"status\":\"failed\"}");
         var warning = new DeliverableRenderDiagnostic
         {
             Kind = DeliverableRenderDiagnosticKind.UnsupportedContent,

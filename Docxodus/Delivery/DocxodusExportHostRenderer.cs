@@ -97,8 +97,11 @@ public sealed record DocxodusExportHostRendererOptions
 public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
 {
     private const long MaximumSafeJavaScriptInteger = 9_007_199_254_740_991;
+    // The render-report contract the current host emits (docs/schemas/render-report-v2.schema.json);
+    // v1 was retired when the verified font runtime reshaped the report's font evidence.
     private const string RenderReportSchema =
-        "https://docxodus.dev/schemas/render/render-report/v1";
+        "https://docxodus.dev/schemas/render/render-report/v2";
+    private const int RenderReportSchemaVersion = 2;
     private const string DocxMediaType =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private const string UnrepresentableVersionReason = "document_version_unrepresentable";
@@ -502,7 +505,7 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
         }
     }
 
-    private IReadOnlyDictionary<string, DeliveryRenderResult> ParseResponse(
+    internal IReadOnlyDictionary<string, DeliveryRenderResult> ParseResponse(
         byte[] responseBytes,
         IReadOnlyList<HostWireBatch> wireBatches)
     {
@@ -643,16 +646,8 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
         JsonElement fatal,
         JsonElement report)
     {
-        if (RequiredString(report, "schema") != RenderReportSchema
-            || RequiredInt32(report, "schemaVersion") != 1
-            || RequiredString(report, "status") != "failed")
-            throw new InvalidDataException("The export host returned an invalid failed render report.");
-        var source = RequiredObject(report, "source");
-        if (!string.Equals(RequiredString(source, "rawPackageBytesDigest"),
-                wire.SourceDigest, StringComparison.OrdinalIgnoreCase)
-            || RequiredInt64(source, "documentVersion") != wire.DocumentVersion
-            || RequiredInt64(source, "byteLength") != wire.SourceByteLength)
-            throw new InvalidDataException("The failed render report is bound to different source bytes.");
+        RequireReportHeader(report, "failed", "failed render report");
+        RequireSourceBinding(report, wire, "failed render report");
         ValidateProfileBinding(wire, report, "failed render report");
         var failure = RequiredObject(report, "failure");
         foreach (var field in new[] { "code", "phase", "message", "remediation" })
@@ -685,11 +680,12 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
         if (wire.Outputs.Contains("html", StringComparer.Ordinal)) expectedKinds.Add("html");
         if (wire.Outputs.Contains("pdf", StringComparer.Ordinal)) expectedKinds.Add("pdf");
         var kindIds = RequiredObject(meta, "artifacts");
-        if (!kindIds.EnumerateObject().Select(property => property.Name)
-            .ToHashSet(StringComparer.Ordinal)
-            .SetEquals(expectedKinds))
+        var declaredKinds = kindIds.EnumerateObject().Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!declaredKinds.SetEquals(expectedKinds))
             throw new InvalidDataException(
-                "The export host batch artifacts do not match the requested outputs.");
+                $"The export host batch declares artifacts [{string.Join(", ", declaredKinds.Order())}]; "
+                + $"the requested outputs require [{string.Join(", ", expectedKinds.Order())}].");
         var frames = new Dictionary<string, HostArtifactFrame>(StringComparer.Ordinal);
         foreach (var kind in expectedKinds)
         {
@@ -711,11 +707,15 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
             || pageMap.Availability != PageMapAvailability.Available)
             throw new InvalidDataException(portable.Message
                 ?? "The export host returned a non-portable PageMap.");
-        if (pageMap.DocumentVersion != wire.DocumentVersion
-            || pageMap.Pages.Count != pageCount
-            || !string.Equals(pageMap.RendererFingerprint, fingerprint,
-                StringComparison.Ordinal))
-            throw new InvalidDataException("The export host returned incoherent PageMap metadata.");
+        if (pageMap.DocumentVersion != wire.DocumentVersion)
+            throw new InvalidDataException(
+                $"The PageMap declares document version {pageMap.DocumentVersion}; this batch declared {wire.DocumentVersion}.");
+        if (pageMap.Pages.Count != pageCount)
+            throw new InvalidDataException(
+                $"The PageMap holds {pageMap.Pages.Count} pages; the batch metadata declares {pageCount}.");
+        if (!string.Equals(pageMap.RendererFingerprint, fingerprint, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                "The PageMap renderer fingerprint disagrees with the batch metadata fingerprint.");
 
         var reportBytes = frames["renderReport"].Bytes;
         using var reportDocument = JsonDocument.Parse(reportBytes);
@@ -752,16 +752,8 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
         long pageCount,
         byte[] pageMapBytes)
     {
-        if (RequiredString(report, "schema") != RenderReportSchema
-            || RequiredInt32(report, "schemaVersion") != 1
-            || RequiredString(report, "status") != "complete")
-            throw new InvalidDataException("The export host returned an invalid render report.");
-        var source = RequiredObject(report, "source");
-        if (!string.Equals(RequiredString(source, "rawPackageBytesDigest"),
-                wire.SourceDigest, StringComparison.OrdinalIgnoreCase)
-            || RequiredInt64(source, "documentVersion") != wire.DocumentVersion
-            || RequiredInt64(source, "byteLength") != wire.SourceByteLength)
-            throw new InvalidDataException("The render report is bound to different source bytes.");
+        RequireReportHeader(report, "complete", "render report");
+        RequireSourceBinding(report, wire, "render report");
         ValidateProfileBinding(wire, report, "render report");
         var environment = RequiredObject(report, "environment");
         if (!string.Equals(RequiredString(environment, "rendererFingerprint"), fingerprint,
@@ -825,25 +817,65 @@ public sealed class DocxodusExportHostRenderer : IDeliveryArtifactRenderer
                 $"The render report {bindingName} does not match the returned bytes.");
     }
 
+    /// <summary>Pins the report header to the current contract, naming the exact field that
+    /// diverged — a version drift here once cost a full CI round trip to diagnose.</summary>
+    private static void RequireReportHeader(JsonElement report, string status, string label)
+    {
+        var schema = RequiredString(report, "schema");
+        if (schema != RenderReportSchema)
+            throw new InvalidDataException(
+                $"The {label} declares schema '{schema}'; this adapter requires '{RenderReportSchema}'.");
+        var schemaVersion = RequiredInt32(report, "schemaVersion");
+        if (schemaVersion != RenderReportSchemaVersion)
+            throw new InvalidDataException(
+                $"The {label} declares schemaVersion {schemaVersion}; this adapter requires {RenderReportSchemaVersion}.");
+        var reportStatus = RequiredString(report, "status");
+        if (reportStatus != status)
+            throw new InvalidDataException(
+                $"The {label} declares status '{reportStatus}'; expected '{status}'.");
+    }
+
+    private static void RequireSourceBinding(JsonElement report, HostWireBatch wire, string label)
+    {
+        var source = RequiredObject(report, "source");
+        var digest = RequiredString(source, "rawPackageBytesDigest");
+        if (!string.Equals(digest, wire.SourceDigest, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"The {label} is bound to source digest '{digest}'; this batch's source is '{wire.SourceDigest}'.");
+        var version = RequiredInt64(source, "documentVersion");
+        if (version != wire.DocumentVersion)
+            throw new InvalidDataException(
+                $"The {label} is bound to document version {version}; this batch declared {wire.DocumentVersion}.");
+        var byteLength = RequiredInt64(source, "byteLength");
+        if (byteLength != wire.SourceByteLength)
+            throw new InvalidDataException(
+                $"The {label} is bound to a {byteLength}-byte source; this batch sent {wire.SourceByteLength} bytes.");
+    }
+
     private static void ValidateProfileBinding(
         HostWireBatch wire,
         JsonElement report,
         string label)
     {
         var options = RequiredObject(report, "options");
-        if (RequiredString(options, "reviewProfile") != Name(wire.ReviewProfile)
-            || RequiredString(options, "commentProfile") != Name(wire.CommentProfile))
-            throw new InvalidDataException($"The {label} profile binding is invalid.");
+        var reviewProfile = RequiredString(options, "reviewProfile");
+        var commentProfile = RequiredString(options, "commentProfile");
+        if (reviewProfile != Name(wire.ReviewProfile) || commentProfile != Name(wire.CommentProfile))
+            throw new InvalidDataException(
+                $"The {label} is bound to profiles {reviewProfile}/{commentProfile}; "
+                + $"this batch declared {Name(wire.ReviewProfile)}/{Name(wire.CommentProfile)}.");
 
+        // The v2 report always normalizes reviewProfileAlreadyApplied into options — explicit
+        // false for a markup render, not an absent field — so the binding test is the VALUE:
+        // a resolved-source profile must declare true, any other profile must not.
         var expectsResolvedSource = UsesProfileResolvedSource(wire.ReviewProfile);
         var declaresResolvedSource = options.TryGetProperty(
-            "reviewProfileAlreadyApplied", out var declaration);
-        var exactSourceBindingIsValid = expectsResolvedSource
-            ? declaresResolvedSource && declaration.ValueKind == JsonValueKind.True
-            : !declaresResolvedSource;
-        if (!exactSourceBindingIsValid)
+                "reviewProfileAlreadyApplied", out var declaration)
+            && declaration.ValueKind == JsonValueKind.True;
+        if (expectsResolvedSource != declaresResolvedSource)
             throw new InvalidDataException(
-                $"The {label} exact-source profile binding is invalid.");
+                $"The {label} declares reviewProfileAlreadyApplied={declaresResolvedSource.ToString().ToLowerInvariant()}; "
+                + $"the {Name(wire.ReviewProfile)} profile requires {expectsResolvedSource.ToString().ToLowerInvariant()}.");
         if (expectsResolvedSource && report.TryGetProperty("derivedProfileSource", out _))
             throw new InvalidDataException(
                 $"The {label} rewrote an exact profile-resolved source.");
