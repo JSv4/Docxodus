@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Revision and comment export profiles report what they cannot draw (#444).** Under `markup`,
+  a custom XML revision range now raises `revision_family_not_rendered` and a block-level property
+  revision — paragraph, table, section or numbering — raises
+  `revision_property_change_not_rendered`. Under any visible comment profile, comment threading
+  raises `comment_thread_flattened` and resolved state raises
+  `comment_resolved_state_not_rendered`, because the topology in `commentsExtended` is not read: a
+  reply is drawn as an independent comment and a resolved comment is indistinguishable from an open
+  one. `final` and `original` need none of the revision warnings — they apply the projection and
+  then assert no revision survived it, so an unrenderable family fails the projection instead of
+  passing through unseen. All four route through the `unsupportedContent` policy, so **an existing
+  caller passing `unsupportedContent: "strict"` now gets a closed `resource_policy_failure` where
+  such a document previously exported**; pass `"warn"` to keep the old outcome. Warnings count only
+  what is actually missing: `rPrChange` and tracked cell insert/delete/merge are drawn, so neither
+  is reported, and the package manifest gains `revisions.runPropertyChanges` so the property count
+  can be split without a second inventory pass. The profile contract is now also pinned where it
+  was previously asserted without evidence: PDF text extraction per profile (deleted content
+  extracts in document order under `markup` and never under `final`; inserted content never under
+  `original`), revision rendering inside headers, footers, footnotes and endnotes, a comment range
+  overlapping an insertion and a deletion, and per-profile comment-body rendering (`endnotes`
+  lists every referenced body; `inline` drops a range-less reply body — the flattening the warning
+  discloses; `hidden` renders none). The design doc no longer promises a threaded reply tree or
+  resolved-state rendering the converter does not perform.
+
 - **Render report schema v1 → v2 (#442).** `fonts[]` entries were a closed five-field record
   with a `browser | embedded | configured` source; they now carry the full resolver-backed
   resolution shape, `status` gains `load_failed`, and `source` becomes

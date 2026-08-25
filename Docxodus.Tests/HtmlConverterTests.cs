@@ -4500,6 +4500,271 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Running Story Revision and Comment Overlap Tests
+
+        private static readonly XNamespace XhtmlNs = "http://www.w3.org/1999/xhtml";
+
+        /// <summary>A story paragraph carrying one native insertion and one native deletion.</summary>
+        private static Paragraph RevisedStoryParagraph(string baseText, string insText, string delText, int revisionIdSeed)
+        {
+            return new Paragraph(
+                new Run(new Text(baseText)),
+                new InsertedRun(new Run(new Text(insText)))
+                {
+                    Author = "Reviewer",
+                    Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Id = revisionIdSeed.ToString(),
+                },
+                new DeletedRun(new Run(new DeletedText(delText)))
+                {
+                    Author = "Reviewer",
+                    Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Id = (revisionIdSeed + 1).ToString(),
+                });
+        }
+
+        /// <summary>
+        /// A document with native tracked changes (w:ins and w:del) in four running stories:
+        /// the default header, the default footer, a footnote body, and an endnote body.
+        /// The body cites both notes so the note stories are reachable from the main part.
+        /// </summary>
+        private static byte[] BuildDocWithRevisionsInRunningStories()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(new Paragraph(
+                        new Run(new Text("Body text citing the notes.")),
+                        new Run(new FootnoteReference() { Id = 1 }),
+                        new Run(new EndnoteReference() { Id = 1 })));
+
+                    var headerPart = main.AddNewPart<HeaderPart>();
+                    headerPart.Header = new Header(
+                        RevisedStoryParagraph("Header base", "HEADER-INS", "HEADER-DEL", 101));
+
+                    var footerPart = main.AddNewPart<FooterPart>();
+                    footerPart.Footer = new Footer(
+                        RevisedStoryParagraph("Footer base", "FOOTER-INS", "FOOTER-DEL", 103));
+
+                    var footnotesPart = main.AddNewPart<FootnotesPart>();
+                    footnotesPart.Footnotes = new Footnotes(
+                        new Footnote(new Paragraph(new Run(new SeparatorMark())))
+                        { Type = FootnoteEndnoteValues.Separator, Id = -1 },
+                        new Footnote(new Paragraph(new Run(new ContinuationSeparatorMark())))
+                        { Type = FootnoteEndnoteValues.ContinuationSeparator, Id = 0 },
+                        new Footnote(
+                            RevisedStoryParagraph("Footnote base", "FOOTNOTE-INS", "FOOTNOTE-DEL", 105))
+                        { Id = 1 });
+
+                    var endnotesPart = main.AddNewPart<EndnotesPart>();
+                    endnotesPart.Endnotes = new Endnotes(
+                        new Endnote(new Paragraph(new Run(new SeparatorMark())))
+                        { Type = FootnoteEndnoteValues.Separator, Id = -1 },
+                        new Endnote(new Paragraph(new Run(new ContinuationSeparatorMark())))
+                        { Type = FootnoteEndnoteValues.ContinuationSeparator, Id = 0 },
+                        new Endnote(
+                            RevisedStoryParagraph("Endnote base", "ENDNOTE-INS", "ENDNOTE-DEL", 107))
+                        { Id = 1 });
+
+                    body.Append(new SectionProperties(
+                        new HeaderReference() { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(headerPart) },
+                        new FooterReference() { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(footerPart) },
+                        new PageSize() { Width = 12240u, Height = 15840u },
+                        new PageMargin()
+                        {
+                            Top = 1440, Bottom = 1440, Left = 1440, Right = 1440,
+                            Header = 720, Footer = 720, Gutter = 0,
+                        }));
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        /// <summary>Asserts one story's HTML contains its insertion inside a rev-ins &lt;ins&gt;
+        /// and its deletion inside a rev-del &lt;del&gt;.</summary>
+        private static void AssertStoryRendersRevisionMarkup(XElement story, string insText, string delText)
+        {
+            // The revision class leads the attribute; a fabricated style class may follow it.
+            var ins = story.Descendants(XhtmlNs + "ins")
+                .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-ins"));
+            Assert.Contains(insText, ins.Value);
+
+            var del = story.Descendants(XhtmlNs + "del")
+                .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-del"));
+            Assert.Contains(delText, del.Value);
+        }
+
+        [Fact]
+        public void HC063_TrackedChanges_RenderInRunningStories()
+        {
+            // Issue #444: revisions in running stories (header, footer, footnote, endnote)
+            // must render under <ins>/<del> markup, not just body revisions.
+            byte[] docBytes = BuildDocWithRevisionsInRunningStories();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Running Story Revisions Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        // Non-paginated mode renders all four stories: the default header and
+                        // footer as <header>/<footer> wrappers, the notes as <section> lists.
+                        RenderHeadersAndFooters = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    var header = html.Descendants(XhtmlNs + "header")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("document-header"));
+                    AssertStoryRendersRevisionMarkup(header, "HEADER-INS", "HEADER-DEL");
+
+                    var footer = html.Descendants(XhtmlNs + "footer")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("document-footer"));
+                    AssertStoryRendersRevisionMarkup(footer, "FOOTER-INS", "FOOTER-DEL");
+
+                    var footnotes = html.Descendants(XhtmlNs + "section")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("footnotes"));
+                    AssertStoryRendersRevisionMarkup(footnotes, "FOOTNOTE-INS", "FOOTNOTE-DEL");
+
+                    var endnotes = html.Descendants(XhtmlNs + "section")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("endnotes"));
+                    AssertStoryRendersRevisionMarkup(endnotes, "ENDNOTE-INS", "ENDNOTE-DEL");
+
+                    // Revision metadata reaches stories rendered from other parts.
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-RunningStories.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        /// <summary>A document where one comment range spans both a w:ins run and a w:del run.</summary>
+        private static byte[] BuildDocWithCommentSpanningRevisions()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(new Paragraph(
+                        new Run(new Text("Before the overlap.")),
+                        new CommentRangeStart() { Id = "1" },
+                        new InsertedRun(new Run(new Text("OVERLAP-INS")))
+                        {
+                            Author = "Reviewer",
+                            Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                            Id = "201",
+                        },
+                        new DeletedRun(new Run(new DeletedText("OVERLAP-DEL")))
+                        {
+                            Author = "Reviewer",
+                            Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                            Id = "202",
+                        },
+                        new CommentRangeEnd() { Id = "1" },
+                        new Run(new CommentReference() { Id = "1" }),
+                        new Run(new Text("After the overlap."))));
+
+                    var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment spanning revised text."))))
+                        { Id = "1", Author = "Commenter" });
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC064_Comments_OverlappingTrackedChanges()
+        {
+            // Issue #444: a comment range overlapping insertions and deletions must render
+            // BOTH the revision markup and the comment markup — neither suppresses the other.
+            byte[] docBytes = BuildDocWithCommentSpanningRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Overlapping Comment and Revision Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        RenderComments = true,
+                        // EndnoteStyle renders the comments section in non-paginated mode.
+                        CommentRenderMode = CommentRenderMode.EndnoteStyle,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // (a) Both revisions render with their revision classes and content.
+                    var ins = html.Descendants(XhtmlNs + "ins")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-ins"));
+                    Assert.Contains("OVERLAP-INS", ins.Value);
+
+                    var del = html.Descendants(XhtmlNs + "del")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-del"));
+                    Assert.Contains("OVERLAP-DEL", del.Value);
+
+                    // (b) The comment highlight spans BOTH revisions: each revision element
+                    // carries a highlight span wired to the comment id.
+                    Assert.Contains(ins.Descendants(XhtmlNs + "span"), s =>
+                        (((string)s.Attribute("class")) ?? "").Contains("comment-highlight")
+                        && (string)s.Attribute("data-comment-id") == "1");
+                    Assert.Contains(del.Descendants(XhtmlNs + "span"), s =>
+                        (((string)s.Attribute("class")) ?? "").Contains("comment-highlight")
+                        && (string)s.Attribute("data-comment-id") == "1");
+
+                    // The comment reference marker is present.
+                    Assert.Contains("comment-marker", htmlString);
+                    Assert.Contains("href=\"#comment-1\"", htmlString);
+
+                    // (c) The comment body renders in the comments section.
+                    Assert.Contains("comments-section", htmlString);
+                    Assert.Contains("id=\"comment-1\"", htmlString);
+                    Assert.Contains("Comment spanning revised text.", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-OverlappingRevisions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        #endregion
     }
 }
 
