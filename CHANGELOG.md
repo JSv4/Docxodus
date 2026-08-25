@@ -738,6 +738,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Semantic diff: a nested table's format-only change now gets typed records (#511).** When a
+  table nested inside a cell changed only its formatting — `w:tblPr`, `w:tblGrid`, or a nested
+  paragraph's `w:pPr` — and no content hash moved, `SemanticDiff` descended into the cell only on
+  a `ContentHash` difference, so the nested table produced no `table.style`/`table.width`/
+  `table.properties` record at all; the change was visible only as the outer table's moved
+  `formatDigest`. `IrCell` now retains a `FormatFingerprint` (the ordered fold of its blocks'
+  format fingerprints, which the reader already computed for the enclosing table) and the cell
+  recursion gate consults it alongside `ContentHash`, so format-only nested changes report fully
+  on the nested table's own anchor. Unchanged documents still compare with zero extra recursion.
 - **`@docxodus/export` docs asserted the font runtime was still unimplemented (#442).** The
   README's "Runtime boundaries" section claimed `--font-directory` fails with
   `unsupported_runtime`, the `original` review profile is fail-closed, and the generated-PDF
