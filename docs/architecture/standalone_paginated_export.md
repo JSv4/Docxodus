@@ -576,11 +576,12 @@ source. When #465 supplies an already policy-derived exact profile source, the r
 bytes directly and never applies the policy a second time.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
-range, body, the ordered reply tree, author, date, and resolved state in body, headers, footers,
-footnotes, and endnotes. Missing extended-comment metadata is represented as unknown rather than
-invented. An unsupported story or revision/comment family produces a structured warning naming the
-family and owning part; strict unsupported-content policy fails. HTML, PDF, CLI, and #465 use these
-exact strings.
+range, body, author, and date in body, headers, footers, footnotes, and endnotes. Comment topology
+is not drawn: a reply renders as an independent comment and resolved state is not represented,
+disclosed as `comment_thread_flattened` and `comment_resolved_state_not_rendered` (see "Revision
+and comment families that are not drawn" below). An unsupported story or revision/comment family
+produces a structured warning naming the family; strict unsupported-content policy fails. HTML,
+PDF, CLI, and #465 use these exact strings.
 
 ## Readiness and diagnostics
 

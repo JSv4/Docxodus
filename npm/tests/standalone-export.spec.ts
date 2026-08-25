@@ -949,6 +949,28 @@ test.describe('standalone paginated HTML', () => {
       expect(failure.phase).toBe('package_preflight');
     });
 
+  test('renders comment bodies per visible profile and none for hidden', async ({ page }) => {
+    // The warning tests above prove what the profiles cannot represent; this pins what each
+    // does. endnotes lists every referenced comment body. inline attaches a body to its
+    // comment range, so the reply — which has a reference but no range of its own — has no
+    // anchor and its body is dropped: the flattening the comment_thread_flattened warning
+    // discloses (#540 tracks drawing topology). hidden renders no comment content at all.
+    const source = generateCommentTopologyDocx();
+    const endnotes = await convert(page, source, false, { commentProfile: 'endnotes' });
+    expect(endnotes.html).toContain('Is this clause still needed?');
+    expect(endnotes.html).toContain('No, it was superseded.');
+    expect(endnotes.html).toContain('First Reviewer');
+    expect(endnotes.html).toContain('Second Reviewer');
+
+    const inline = await convert(page, source, false, { commentProfile: 'inline' });
+    expect(inline.html).toContain('Is this clause still needed?');
+    expect(inline.html).not.toContain('No, it was superseded.');
+
+    const hidden = await convert(page, source, false, { commentProfile: 'hidden' });
+    expect(hidden.html).not.toContain('Is this clause still needed?');
+    expect(hidden.html).not.toContain('No, it was superseded.');
+  });
+
   test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'HC006-Test-01.docx')));
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(

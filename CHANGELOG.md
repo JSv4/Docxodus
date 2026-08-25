@@ -19,7 +19,14 @@ All notable changes to this project will be documented in this file.
   such a document previously exported**; pass `"warn"` to keep the old outcome. Warnings count only
   what is actually missing: `rPrChange` and tracked cell insert/delete/merge are drawn, so neither
   is reported, and the package manifest gains `revisions.runPropertyChanges` so the property count
-  can be split without a second inventory pass.
+  can be split without a second inventory pass. The profile contract is now also pinned where it
+  was previously asserted without evidence: PDF text extraction per profile (deleted content
+  extracts in document order under `markup` and never under `final`; inserted content never under
+  `original`), revision rendering inside headers, footers, footnotes and endnotes, a comment range
+  overlapping an insertion and a deletion, and per-profile comment-body rendering (`endnotes`
+  lists every referenced body; `inline` drops a range-less reply body — the flattening the warning
+  discloses; `hidden` renders none). The design doc no longer promises a threaded reply tree or
+  resolved-state rendering the converter does not perform.
 
 - **Render report schema v1 → v2 (#442).** `fonts[]` entries were a closed five-field record
   with a `browser | embedded | configured` source; they now carry the full resolver-backed
