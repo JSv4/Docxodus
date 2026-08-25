@@ -17,6 +17,7 @@ import type {
   WorkerGeneratePackageManifestRequest,
   WorkerErrorCode,
   WorkerVerifyDeliverableRequest,
+  WorkerProveRedlineReversibilityRequest,
   WorkerProjectReviewProfileRequest,
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
@@ -44,6 +45,7 @@ import type {
   EditResult,
   PackageManifest,
   DeliverableVerificationResult,
+  RedlineReversibilityProof,
   SemanticChangeSet,
 } from "./types.js";
 import { ComparisonEngine } from "./types.js";
@@ -174,6 +176,21 @@ function handleProjectReviewProfile(
       };
     }
     return { documentBytes: result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleProveRedlineReversibility(
+  request: WorkerProveRedlineReversibilityRequest
+): { proof?: RedlineReversibilityProof; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.ProveRedlineReversibility(
+      request.baselineBytes,
+      request.intendedFinalBytes,
+      request.redlineBytes
+    );
+    return { proof: JSON.parse(json) as RedlineReversibilityProof };
   } catch (error) {
     return { error: String(error) };
   }
@@ -791,6 +808,20 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "verifyDeliverable",
           success: !result.error,
           verification: result.verification,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "proveRedlineReversibility": {
+        const result = handleProveRedlineReversibility(
+          request as WorkerProveRedlineReversibilityRequest
+        );
+        response = {
+          id: request.id,
+          type: "proveRedlineReversibility",
+          success: !result.error,
+          proof: result.proof,
           error: result.error,
         };
         break;

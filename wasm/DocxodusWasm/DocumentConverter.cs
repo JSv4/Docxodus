@@ -57,6 +57,7 @@ public partial class DocumentConverter
     [JSExport]
     public static string VerifyDeliverable(byte[] docxBytes)
     {
+        ArgumentNullException.ThrowIfNull(docxBytes);
         ValidateVerificationPackageBudget(docxBytes);
         return VerificationOps.VerifyDeliverable(docxBytes);
     }
@@ -71,20 +72,47 @@ public partial class DocumentConverter
         byte[] docxBytes)
     {
         ArgumentNullException.ThrowIfNull(baselineBytes);
+        ArgumentNullException.ThrowIfNull(docxBytes);
         ValidateVerificationPackageBudget(docxBytes, baselineBytes);
         return VerificationOps.VerifyDeliverable(baselineBytes, docxBytes);
     }
 
-    private static void ValidateVerificationPackageBudget(
-        byte[] docxBytes,
-        byte[]? baselineBytes = null)
+    /// <summary>
+    /// Reject an aggregate byte budget overrun before any package is inspected. The running total
+    /// is compared by subtraction so a multi-package call cannot overflow its way under the limit.
+    /// </summary>
+    private static void ValidateVerificationPackageBudget(params byte[]?[] packages)
     {
-        ArgumentNullException.ThrowIfNull(docxBytes);
-        long baselineLength = baselineBytes?.LongLength ?? 0;
-        if (docxBytes.LongLength > MaxDocumentSizeBytes
-            || baselineLength > MaxDocumentSizeBytes - docxBytes.LongLength)
-            throw new ArgumentException(
-                $"Aggregate document bytes exceed the {MaxDocumentSizeBytes / (1024 * 1024)}MB WASM limit.");
+        long remaining = MaxDocumentSizeBytes;
+        foreach (var package in packages)
+        {
+            if (package is null)
+                continue;
+            if (package.LongLength > remaining)
+                throw new ArgumentException(
+                    $"Aggregate document bytes exceed the {MaxDocumentSizeBytes / (1024 * 1024)}MB WASM limit.");
+            remaining -= package.LongLength;
+        }
+    }
+
+    /// <summary>
+    /// Prove that a redline's generated revisions accept to the intended final and reject to the
+    /// baseline without consuming pre-existing review state. Returns the canonical schema-v1 proof
+    /// JSON; the two rebuilt packages stay inside the proof as digests and structured divergences
+    /// rather than crossing the boundary as base64.
+    /// </summary>
+    [JSExport]
+    public static string ProveRedlineReversibility(
+        byte[] baselineBytes,
+        byte[] intendedFinalBytes,
+        byte[] redlineBytes)
+    {
+        ArgumentNullException.ThrowIfNull(baselineBytes);
+        ArgumentNullException.ThrowIfNull(intendedFinalBytes);
+        ArgumentNullException.ThrowIfNull(redlineBytes);
+        ValidateVerificationPackageBudget(baselineBytes, intendedFinalBytes, redlineBytes);
+        return VerificationOps.ProveRedlineReversibility(
+            baselineBytes, intendedFinalBytes, redlineBytes);
     }
 
     /// <summary>
