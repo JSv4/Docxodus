@@ -642,7 +642,7 @@ first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that re
 
 `docxodus/export-browser` turns a DOCX into a complete offline HTML document whose body contains
 the finalized fixed page boxes—not the hidden measurement tree. It returns the HTML together with
-the exact PageMap, renderer fingerprint, warnings, and a schema-v1 render report from that same
+the exact PageMap, renderer fingerprint, warnings, and a schema-v2 render report from that same
 sanitized tree.
 
 ```ts
@@ -667,10 +667,12 @@ External HTTPS/mail/tel links remain user-activated links and are inventoried in
 exporter never follows them. `unsupportedContent: 'strict'` rejects visible placeholders or omitted
 resources instead of returning a nominally complete artifact.
 
-The browser surface currently supports `final` and `markup` revision profiles. `original` fails
-explicitly until the shared revision projection in issue #444 lands. Likewise, `strictFonts: true`
-fails until issue #442 supplies attestable font resolution. The normal browser result is labelled
-`browserObserved`; it is not presented as a verified host-font environment.
+All three revision profiles (`final`, `original`, `markup`) are supported; `final` and `original`
+derive their projection out-of-place and never mutate the caller's bytes. `strictFonts: true`
+turns unresolved or unverified font families into failures; supplying a `fontResolver` (in Node,
+`fontDirectories` on `@docxodus/export`) is what makes families verifiable. A font the browser
+supplied on its own is labelled `browserObserved`; it is not presented as a verified host-font
+environment.
 
 By default the worker loads from `dist/wasm/` beside the package entry point. A deployment that
 hosts those files elsewhere may pass `wasmBasePath`. `docxodus/export-assets.json` is the closed,

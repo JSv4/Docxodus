@@ -86,11 +86,16 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
 
 ## Runtime boundaries
 
-- Explicit font-directory loading is accepted by the public contract but fails with
-  `unsupported_runtime` until issue #442 supplies the verified pre-layout font hook. Browser-observed
-  fonts remain reported honestly; `strictFonts` therefore fails closed.
-- The `original` review profile remains fail-closed until issue #444 completes its projection.
-- The broader generated-PDF fidelity ratchet is extended by issue #443.
+- Repeatable `--font-directory` (API: `fontDirectories`) supplies verified fonts: each file is
+  discovered, licence-checked, hashed, and matched inside the sandboxed page through a resolver
+  binding — font bytes cross the boundary, filesystem paths never do. The render report records
+  every requested family's resolution (`resolved`, `substituted`, `missing`, `load_failed`) with
+  file digests, and `strictFonts` turns unresolved or unverified families into failures. Without
+  font directories the render falls back to browser-observed fonts, reported honestly as
+  unverified. See "Reproducible font configuration" below.
+- All three review profiles (`final`, `original`, `markup`) are supported; `final` and `original`
+  derive their projection out-of-place and never mutate the source bytes.
+- Generated PDFs are covered by the same visual-fidelity ratchet as the HTML renderer.
 - Chromium keeps its process sandbox, so the render host has to permit unprivileged user
   namespaces. Ubuntu 23.10 and later restrict them through AppArmor by default; check with
   `unshare --user --map-root-user true` and permit them with
@@ -100,6 +105,37 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
 Failures are `DocxodusExportError` objects with stable code, phase, remediation, safe detail, and a
 structured failed report when materialization had begun. The CLI additionally writes the underlying
 cause chain to stderr, which is where a Chromium launch diagnostic becomes readable.
+
+## Reproducible font configuration
+
+Layout depends on fonts, so a reproducible render pins them. The supported configuration is the
+license-safe metric-substitute set the visual-parity gates run under (the shared contract in
+`docxodus`'s `font-contract` module; rationale in `npm/tests/visual-parity/README.md`):
+
+| Declared family | Substitute | Debian package | Metric-compatible |
+|---|---|---|---|
+| Calibri | Carlito | fonts-crosextra-carlito | yes |
+| Calibri Light | Carlito | fonts-crosextra-carlito | no — documented approximation |
+| Cambria | Caladea | fonts-crosextra-caladea | yes |
+| Times New Roman | Liberation Serif | fonts-liberation2 | yes |
+| Arial | Liberation Sans | fonts-liberation2 | yes |
+| Courier New | Liberation Mono | fonts-liberation2 | yes |
+
+Install the packages and hand the exporter their directories:
+
+```console
+apt-get install fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2
+docxodus convert contract.docx --to pdf --output contract.pdf \
+  --font-directory /usr/share/fonts/truetype/crosextra \
+  --font-directory /usr/share/fonts/truetype/liberation
+```
+
+The render report then records each family's resolution with the exact file SHA-256, and the
+renderer fingerprint binds the Chromium identity to the font-resolution digest, so two hosts
+running this configuration produce comparable fingerprints. TTF and OTF files are admitted on
+their embedded licensing flags alone; WOFF and WOFF2 files additionally require an explicit
+embedding attestation (`--font-license-attestations`). A font whose embedded license forbids
+embedding is never used — the export fails rather than silently substituting.
 
 ## Framed host
 
