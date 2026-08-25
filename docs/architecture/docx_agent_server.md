@@ -668,6 +668,21 @@ dry-run does not make an otherwise-current live plan stale.
 Image `insert`/`replace`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` actions
 are batchable; image `capabilities` and `list` are rejected as read-only steps.
 
+### `docxodus_deliver` — verified delivery bundle (issue #465)
+
+Builds one verified delivery bundle from a store-scoped baseline document and the current
+session's saved state through the same `DeliveryBundleService` the .NET API and the
+`docxodus-deliver` CLI use — request/policy shapes, artifact vocabulary, manifest, and
+verification are documented in [`delivery_bundle.md`](delivery_bundle.md). `baselinePath`
+resolves through the standard store resolver, so it cannot point outside the served directory.
+The response returns canonical manifest bytes plus every available artifact as base64, bounded
+to 64 MiB before base64 expansion. HTML/PDF/PageMap/render-report artifacts require the
+process-owned export host configuration (`DOCXODUS_NODE_PATH`, `DOCXODUS_EXPORT_HOST_PATH`,
+optionally `DOCXODUS_CHROMIUM_PATH`); tool arguments can never select an executable. Change
+receipts are truthfully unavailable on this surface because issuance requires exact transaction
+snapshots and contributions. Not batchable: a bundle is evidence about a saved document, not a
+mutation.
+
 ### `docxodus_table` — tables
 
 `insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,

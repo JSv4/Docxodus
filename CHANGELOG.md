@@ -17,6 +17,25 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Verified delivery bundles (#465).** `DeliveryBundleService.BuildAsync` derives a requested
+  set of document, render, and evidence artifacts from exact baseline and working snapshots
+  under an explicit two-part revision policy (`preserve`/`accept`/`reject` for pre-existing
+  versus generated revisions), proves the review document's accept-to-final and
+  reject-to-baseline directions, and returns immutable bytes plus a canonical
+  `delivery-bundle-manifest/v1` — or publishes the same result as a fresh, atomically committed
+  directory via `DeliveryBundleDirectoryPublisher`. The schema-v1 artifact vocabulary covers
+  baseline/policy-baseline/working/review/final DOCX, standalone HTML, final and review PDF,
+  PageMap, render report, package manifests, semantic and package deltas, comprehensive
+  deliverable validation, the reversibility proof, and the deterministic change receipt
+  (receipt issuance requires authoritative transaction evidence and stages the final
+  deliverable's canonical verification result as the receipt's validation evidence).
+  `DeliveryBundleVerifier.VerifyJson` re-verifies a manifest against independently supplied
+  artifact bytes. Production HTML/PDF rendering crosses one injected
+  `IDeliveryArtifactRenderer` boundary; `DocxodusExportHostRenderer` drives the epic #434
+  `docxodus-export-host` framed protocol with process-owned executable authority and no PATH
+  discovery. Ships as the `docxodus-deliver` CLI (`tools/delivery`) and the MCP
+  `docxodus_deliver` tool over the same service. See
+  `docs/architecture/delivery_bundle.md`.
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
   A scenario declares a fixture, the tool calls that perform the task, and the invariants that
