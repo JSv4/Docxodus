@@ -1,7 +1,10 @@
 {
   "id": "master-services-agreement",
   "title": "Master Services Agreement",
-  "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, a running header and footer, and one pre-existing tracked change by another reviewer that every later operation must leave live. Built programmatically so the corpus carries no third-party bytes.",
+  "description": "A short commercial agreement shaped around the things the scenarios must not damage: a defined term used three times, a notice period written in words-and-digits, a fee table, a signature block, a running header, a footer carrying a page-number field, one pre-existing comment, and one pre-existing tracked change by another reviewer that every later operation must leave live. Built programmatically so the corpus carries no third-party bytes.",
+  "expectedContent": [
+    "MASTER SERVICES AGREEMENT"
+  ],
   "steps": [
     {
       "tool": "docxodus_create",
@@ -188,6 +191,30 @@
         "action": "set_footer_text",
         "markdown": "Confidential",
         "kind": "default"
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Confidential",
+        "scope": "footers"
+      },
+      "args": {
+        "action": "insert_page_number_field"
+      }
+    },
+    {
+      "tool": "docxodus_comment",
+      "target": {
+        "mode": "text",
+        "query": "Name: Dana Reyes"
+      },
+      "args": {
+        "action": "add",
+        "author": "Prior Reviewer",
+        "initials": "PR",
+        "markdown": "Confirm signatory authority before circulation."
       }
     },
     {

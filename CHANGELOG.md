@@ -40,6 +40,42 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **`docxodus_compare` MCP tool (#466).** A sessionless agent-server tool that turns stored
+  document versions into one native tracked-changes redline: `baselinePath` plus `revisedPath`
+  (two-way `DocxDiff` compare) or `revisedPaths` with per-reviewer `authors` (N-way
+  consolidate), written to `outputPath`. Every path resolves through the document store's
+  containment check like `docxodus_open`'s, the response summarizes generated revisions by
+  author, and the tool is refused as a `docxodus_mutations` step — it mutates no session.
+  Backed entirely by the existing `DocxDiffOps` facade; no new engine surface.
+
+- **All nine #466 scenario families ship in the eval corpus.** Clause insertion into a real
+  auto-numbered list (renumbering proven through rendered labels), comment + threaded reply +
+  footnote + bookmark-anchored internal link (a field-based `REF` cross-reference is not yet
+  authorable — #545 tracks the op), body edit under part-identity protection of the signature
+  block, header, and page-number-field footer, content-control template fill (via the corpus's
+  first programmatic fixture builder, since the tool surface fills but cannot create controls),
+  two-reviewer compare-and-consolidate through `docxodus_compare` with a `redline` invariant
+  group asserting the written redline's attributed revisions through a fresh session, and an
+  edit over pre-existing revisions and comments that must both survive. The
+  master-services-agreement fixture now carries a footer page-number field and a pre-existing
+  comment; every scenario runs in the fast deterministic tier.
+
+- **Workflow evaluation runner completed (#466).** The eval runner now supports multi-anchor
+  steps (`targets` maps an argument name to a content-resolved target, unlocking range formats,
+  moves, and bookmark spans), a `changedPartsMustBeWithin` part-URI allowlist that turns "how
+  many parts changed" into "the right parts changed", and `trackedRevisions`/`comments`
+  invariant groups read through the same MCP dispatcher the steps drive — so a scenario can
+  assert a pre-existing reviewer's markup is still live outside the reversibility path. The
+  scenario schema is now enforced rather than decorative: every scenario file is validated
+  against it, its invariant vocabulary is pinned to the checkers' vocabulary in both
+  directions, and each new checker ships a negative control proving it fails when violated.
+  Every run writes a per-scenario `scorecard.json` — the machine-readable engine baseline
+  later agent-scored runs are compared against — CI uploads eval artifacts on failure, and a
+  weekly `eval-corpus` workflow executes the opt-in tier under `eval/scenarios/corpus/`
+  (`DOCXODUS_RUN_EVAL_CORPUS=1`). Fixtures declare their own `expectedContent` anchor, so the
+  corpus is no longer limited to a single fixture. Delivery change receipts stay deliberately
+  out of the eval artifacts: their lineage must come from mutation evidence captured at
+  execution time, which belongs to the #465 delivery operation.
 - **Multi-author Consolidate coverage and schema conformance for the reversibility proof (#464).**
   The proof suite now exercises `DocxDiff.Consolidate` output: a redline carrying two distinct
   reviewer authors — disjoint edits and a policy-resolved merge conflict — proves reject ≡ shared

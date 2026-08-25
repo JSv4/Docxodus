@@ -505,6 +505,23 @@ internal static class ToolCatalog
             }
             """),
         new ToolDefinition(
+            "docxodus_compare",
+            "Compare stored document versions into one native tracked-changes redline, without an open session: two-way (baselinePath vs revisedPath) or N-way consolidate (baselinePath vs revisedPaths, each reviewer's changes attributed to their author). Every path resolves inside the server's document scope exactly like docxodus_open's; the redline is written to outputPath. The result summarizes the generated revisions by author; open the output with docxodus_open to inspect, comment on, or resolve them.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "baselinePath": { "type": "string", "description": "The earlier version both forms diff against." },
+                "revisedPath": { "type": "string", "description": "Two-way: the later version. Exactly one of revisedPath / revisedPaths." },
+                "revisedPaths": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Consolidate: two or more revised versions merged into one redline over the baseline." },
+                "author": { "type": "string", "description": "Two-way: the author stamped on generated revisions; absent uses the engine default." },
+                "authors": { "type": "array", "items": { "type": "string" }, "description": "Consolidate: reviewer name per revisedPaths entry, same order and length. Absent uses each file's name without extension." },
+                "outputPath": { "type": "string", "description": "Where the redline is written, resolved in the document scope like docxodus_save's path." }
+              },
+              "required": ["baselinePath", "outputPath"]
+            }
+            """),
+        new ToolDefinition(
             "docxodus_mutations",
             "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId.",
             $$"""
