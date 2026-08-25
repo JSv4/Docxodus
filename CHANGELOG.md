@@ -17,6 +17,16 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Multi-author Consolidate coverage and schema conformance for the reversibility proof (#464).**
+  The proof suite now exercises `DocxDiff.Consolidate` output: a redline carrying two distinct
+  reviewer authors — disjoint edits and a policy-resolved merge conflict — proves reject ≡ shared
+  base and accept ≡ policy-resolved composite at the story-text and modeled-semantic levels, with
+  every revision classified as generated for its own reviewer (multi-author attribution is not an
+  ownership conflict). A new contract test validates the emitted canonical proof JSON — from the
+  verifier and from the shared `VerificationOps` facade, in both completed and fail-closed shapes —
+  against the checked-in `redline-reversibility-proof-v1` schema, with negative controls proving
+  the validation rejects each constraint kind the schema relies on.
+
 - **Workflow evaluation scaffold (#466).** Added `eval/`, a corpus of deterministic
   document-workflow scenarios, and `Docxodus.Tests/Eval/`, the scripted caller that runs them.
   A scenario declares a fixture, the tool calls that perform the task, and the invariants that
