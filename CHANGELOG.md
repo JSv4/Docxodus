@@ -807,6 +807,22 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **`PreserveInputRevisions` now carries a modified block's own tracked changes through the
+  redline (#517).** A comparison whose right side already contained tracked changes silently
+  lost them from a *modified* block — the fine renderers emit the accepted view, so accepting
+  the redline could never recover the intended final's review state (the WC012-Math shape: a
+  `w:ins` nested inside `m:r`, dropped because math is opaque to token diffing and the whole
+  paragraph is a modify). Under the flag, a modified right block that carries its own markup
+  now lowers to the whole-block replacement pair whose insert side emits the original element
+  with the markup intact — nested inside this diff's `w:ins` when it sits within an atomic
+  construct, which is exactly what keeps accept-all, reject-all, and selective resolution all
+  correct. Preserved wrappers also keep their **original `w:id`s** (first emission; duplicates
+  renumber off a counter seeded above every preserved id), so the input's revision identity
+  survives into the redline and `RedlineReversibilityVerifier.Prove` now classifies the
+  carried revision as intended-final review state instead of failing closed with
+  `intended_final_revision_missing_from_redline`. Default (non-Preserve) comparisons are
+  unchanged and the fail-closed proof pin for them remains.
+
 - **The markdown projection shows simple-field results (#559).** A `w:fldSimple` — a
   Word-authored `REF`, `STYLEREF`, `SEQ`, or simple `PAGE` field — was dropped by the
   projection's inline walk, so its visible cached result was absent from the markdown/text an

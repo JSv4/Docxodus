@@ -238,6 +238,7 @@ internal static class IrMarkupRenderer
             }
             else
                 state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+            state.SeedGeneratedIdsAbovePreservedOriginals();
         }
 
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
@@ -1595,7 +1596,18 @@ internal static class IrMarkupRenderer
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
-        if (!op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
+        // Word-parity preservation (issue #517): a MODIFIED right block that carries its own tracked
+        // markup cannot ride the fine renderers, which emit the accepted view and would silently drop
+        // that markup from the redline — accepting such a redline could never recover the intended
+        // final's review state. Lower to the conservative whole-block pair, whose insert side emits
+        // the ORIGINAL right element(s) with the foreign markup intact. (PreservedGroup is non-null
+        // exactly when the flag is on, LEFT is clean, and this right block's original carries markup.)
+        bool lowerToPreservedReplace =
+            SourceElement(op.RightAnchor, state.RightSource) is { } preservedRight &&
+            state.PreservedGroup(preservedRight) != null;
+
+        if (!lowerToPreservedReplace &&
+            !op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
             op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
         {
             // Commented paragraphs render finely too: comment range markers + the commentReference run ride
@@ -1606,7 +1618,7 @@ internal static class IrMarkupRenderer
         }
 
         // A Modified TABLE pair with a nested table diff renders row/cell-precise markup (Task 4).
-        if (op.TableDiff is { } tableDiff &&
+        if (!lowerToPreservedReplace && op.TableDiff is { } tableDiff &&
             ResolveBlock(op.LeftAnchor, state.Left) is IrTable &&
             ResolveBlock(op.RightAnchor, state.RightSource) is IrTable)
         {
@@ -7892,7 +7904,7 @@ internal static class IrMarkupRenderer
                     ? state.OpenPreservedRange(rev.Name, id.Value)
                     : PreservedRangeStarts.TryGetValue(rev.Name, out var startName)
                         ? state.ClosePreservedRange(startName, id.Value)
-                        : state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        : state.PreserveOrRenumberId(id.Value);
             }
             rev.Attributes()
                 .Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace != W.w)
@@ -8071,16 +8083,46 @@ internal static class IrMarkupRenderer
                 ? original
                 : null;
 
+        // Preserved-identity ids (issue #517): a preserved wrapper keeps its ORIGINAL w:id whenever
+        // this render has not already emitted it, so the input's revision identity — which the
+        // reversibility proof keys on part-qualified native constituents — survives into the redline.
+        // Duplicated emissions (a mark-deleted group member, malformed duplicate input ids) renumber.
+        // SeedGeneratedIdsAbovePreservedOriginals keeps NextId() from ever colliding with a kept id.
+        private readonly HashSet<string> _usedPreservedIds = new(StringComparer.Ordinal);
+
+        public string PreserveOrRenumberId(string originalId) =>
+            _usedPreservedIds.Add(originalId)
+                ? originalId
+                : NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        /// <summary>Bump the generated-id counter above every tracked-revision id in the preserved
+        /// original maps, so kept original ids and generated ids can never collide.</summary>
+        public void SeedGeneratedIdsAbovePreservedOriginals()
+        {
+            var groups = (PreservedOriginals?.Values ?? Enumerable.Empty<List<XElement>>())
+                .Concat(LeftPreservedOriginals?.Values ?? Enumerable.Empty<List<XElement>>())
+                .SelectMany(g => g)
+                .Concat(LeftDeletedInsertionOriginals?.Values ?? Enumerable.Empty<XElement>());
+            foreach (var member in groups)
+                foreach (var rev in member.DescendantsAndSelf()
+                             .Where(e => TrackedRevisionNames.Contains(e.Name)))
+                    if (int.TryParse((string)rev.Attribute(W.id),
+                            System.Globalization.NumberStyles.Integer,
+                            System.Globalization.CultureInfo.InvariantCulture, out var id) && id >= _nextId)
+                        _nextId = id + 1;
+        }
+
         // Active preserved range ids, shared across emitted clones because one source range can span
         // multiple preserved blocks. The start element name is part of the key: the same malformed input
         // id may legitimately occur in both a move-from and a move-to range. A stack repairs duplicate/nested
         // same-id ranges deterministically while preserving well-formed start/end pairs.
         private readonly Dictionary<(XName StartName, string OriginalId), Stack<string>> _preservedRangeIds = new();
 
-        /// <summary>Allocate and remember a fresh id for one preserved range start.</summary>
+        /// <summary>Remember the id for one preserved range start: the ORIGINAL id when this render
+        /// has not used it yet, else a fresh one (duplicate/nested same-id ranges stay independent).</summary>
         public string OpenPreservedRange(XName startName, string originalId)
         {
-            string fresh = NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string fresh = PreserveOrRenumberId(originalId);
             var key = (startName, originalId);
             if (!_preservedRangeIds.TryGetValue(key, out var ids))
                 _preservedRangeIds[key] = ids = new Stack<string>();

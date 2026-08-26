@@ -201,18 +201,48 @@ public class DocxDiffPreserveInputRevisionsTests
     // ----------------------------------------------------------------- 3: modified block stays schema-clean
 
     [Fact]
-    public void Modified_paragraph_with_foreign_ins_is_schema_clean_and_round_trips()
+    public void Modified_paragraph_with_foreign_markup_preserves_it_via_whole_block_replacement()
     {
         // Right paragraph 1 both differs from left ("quick" → "slow", a real compare edit) AND carries a
-        // foreign insertion — the ModifyBlock path. V1 renders modified paragraphs over the ACCEPTED view,
-        // so the foreign markup is flattened there; the bar is NO nested same-kind wrappers and the
-        // accept-side round trip.
+        // foreign insertion — the ModifyBlock path. The fine renderer emits the accepted view and would
+        // silently drop the foreign marker from the redline (issue #517), so a modified block that carries
+        // its own tracked markup lowers to the whole-block replacement pair: the insert side emits the
+        // ORIGINAL right element with the marker intact, and both round trips hold.
         var left = BodyDoc(R("The quick brown fox"), R("Alpha"));
         var right = BodyDoc(R("The slow brown fox") + Ins("Reviewer B", " jumps"), R("Alpha"));
 
         var result = DocxDiff.Compare(left, right, Preserve());
 
+        Assert.Contains(RevisionWrappersBy(result, "Reviewer B"), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == " jumps");
+        // The foreign wrapper is a direct paragraph child here, so nothing needs to nest.
         AssertNoSameKindNesting(result);
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Modified_math_paragraph_preserves_the_inputs_own_tracked_insertion()
+    {
+        // Issue #517 (WC012-Math): the After document's formula carries its own w:ins nested inside m:r.
+        // Math is opaque to token diffing, so the paragraph is a ModifyBlock whose fine rendering emits the
+        // accepted math — losing the marker means accepting the redline can never recover the intended
+        // final's review state. Under Preserve the block lowers to the whole-block pair; the emitted shape
+        // nests the foreign w:ins inside this diff's w:ins ACROSS the math boundary, which is exactly how
+        // the round trips keep working: accept-all yields After's accepted view, selective resolution of
+        // the diff's wrapper leaves the foreign marker standing, and reject removes the whole insertion.
+        XNamespace m = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        var testFiles = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "TestFiles");
+        var left = new WmlDocument(Path.Combine(testFiles, "WC", "WC012-Math-Before.docx"));
+        var right = new WmlDocument(Path.Combine(testFiles, "WC", "WC012-Math-After.docx"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        var foreign = MainXDoc(result).Descendants(W + "ins")
+            .Where(e => (string?)e.Attribute(W + "author") == "Eric White")
+            .ToList();
+        Assert.Contains(foreign, e =>
+            string.Concat(e.Descendants(m + "t").Select(t => t.Value)) == "2");
         Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
     }
 
