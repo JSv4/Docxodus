@@ -609,6 +609,7 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
   let assisted = false;
   let revisionsLeft = -1;
   let loading = false;
+  let pendingHole = null;
   let scoring = false;
   let scoreQueued = false;
   let scoreTimer = 0;
@@ -782,7 +783,11 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
 
   // ── hole lifecycle ───────────────────────────────────────────────
   async function loadHole(i) {
-    if (loading || i < 0 || i >= course.length) return;
+    if (i < 0 || i >= course.length) return;
+    // Last click wins: a request arriving while a load is in flight is queued
+    // (replacing any earlier queued request) and honored when the load settles,
+    // instead of being silently dropped (#588).
+    if (loading) { pendingHole = i; return; }
     loading = true;
     ui.error.dataset.on = 'false';
     banner(null);
@@ -821,6 +826,13 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
       fail(err);
     } finally {
       loading = false;
+      if (pendingHole !== null && pendingHole !== holeIndex) {
+        const next = pendingHole;
+        pendingHole = null;
+        void loadHole(next);
+      } else {
+        pendingHole = null;
+      }
     }
   }
 
