@@ -2179,6 +2179,17 @@ public sealed partial class DocxSession : IDisposable
     /// already-applied markup — switching to <see cref="TrackedChangeMode.Accept"/> does not
     /// accept existing revisions, and switching to <see cref="TrackedChangeMode.RenderInline"/>
     /// does not retroactively wrap prior direct edits.
+    /// <para>
+    /// This is the RECORDING knob. It is distinct from the RENDERING knob,
+    /// <see cref="WmlToMarkdownConverterSettings.TrackedChanges"/> (reached via
+    /// <see cref="DocxSessionSettings.ProjectionSettings"/>), which controls how existing
+    /// markup is projected by <see cref="Project"/>/<see cref="ProjectAnchor"/>. With the
+    /// projection knob at its <see cref="TrackedChangeMode.Accept"/> default, a projection
+    /// taken after a tracked edit shows the clean accepted text with no inline
+    /// <c>{+ins+}</c>/<c>{-del-}</c> markers — that does NOT mean the edit was recorded
+    /// untracked. Set the projection knob to <see cref="TrackedChangeMode.RenderInline"/>
+    /// to see revision markup in projections (issue #596).
+    /// </para>
     /// </summary>
     public void SetTrackedChanges(TrackedChangeMode mode)
     {

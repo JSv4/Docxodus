@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
+  one-liner from `ToString()` (type, move role, changed format property names, quoted
+  text, anchors, author) instead of the bare type name; the two tracked-changes knobs —
+  `DocxSession.SetTrackedChanges` (how mutations are *recorded*) and
+  `WmlToMarkdownConverterSettings.TrackedChanges` (how projections *render*) — now
+  cross-reference each other in their XML docs so a clean projection after a tracked edit
+  is no longer misread as "the edit wasn't tracked"; and a `docxodus_mutations` step may
+  be written flat (action and arguments directly beside `tool`, the standalone-tool
+  shape) — the MCP server lifts it into `args`, and a step with neither `args` nor
+  `action` gets an error that spells out the nested shape.
+
 ### Fixed
 - **Structural deletes no longer orphan footnote/endnote definitions (#591).**
   `DeleteBlock`, `DeleteRange`, `DeleteSection`, `DeleteTableRow`, and `DeleteTableColumn`
