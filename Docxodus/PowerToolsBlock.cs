@@ -41,7 +41,7 @@ namespace Docxodus
     /// <seealso cref="PowerToolsBlockExtensions.EndPowerToolsBlock"/>
     public class PowerToolsBlock : IDisposable
     {
-        private OpenXmlPackage _package;
+        private OpenXmlPackage? _package;
 
         public PowerToolsBlock(OpenXmlPackage package)
         {

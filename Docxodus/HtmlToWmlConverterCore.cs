@@ -1,4 +1,7 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
+#nullable disable
+
+// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 /***************************************************************************

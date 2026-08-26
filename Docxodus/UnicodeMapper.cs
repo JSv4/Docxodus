@@ -75,8 +75,8 @@ namespace Docxodus
             // unicode characters.
             if (element.Name == W.br)
             {
-                XAttribute typeAttribute = element.Attribute(W.type);
-                string type = typeAttribute != null ? typeAttribute.Value : null;
+                XAttribute? typeAttribute = element.Attribute(W.type);
+                string? type = typeAttribute != null ? typeAttribute.Value : null;
                 if (type == null || type == "textWrapping")
                     return CarriageReturn.ToString();
                 if (type == "page")
@@ -210,13 +210,13 @@ namespace Docxodus
             if (sym.Name != W.sym)
                 throw new ArgumentException(string.Format("Not a w:sym: {0}", sym.Name), "sym");
 
-            XAttribute fontAttribute = sym.Attribute(W.font);
-            string fontAttributeValue = fontAttribute != null ? fontAttribute.Value : null;
+            XAttribute? fontAttribute = sym.Attribute(W.font);
+            string? fontAttributeValue = fontAttribute != null ? fontAttribute.Value : null;
             if (fontAttributeValue == null)
                 throw new ArgumentException("w:sym element has no w:font attribute.", "sym");
 
-            XAttribute charAttribute = sym.Attribute(W._char);
-            string charAttributeValue = charAttribute != null ? charAttribute.Value : null;
+            XAttribute? charAttribute = sym.Attribute(W._char);
+            string? charAttributeValue = charAttribute != null ? charAttribute.Value : null;
             if (charAttributeValue == null)
                 throw new ArgumentException("w:sym element has no w:char attribute.", "sym");
 
@@ -253,9 +253,9 @@ namespace Docxodus
         {
             return textValue
                 .Select(CharToRunChild)
-                .GroupAdjacent(e => e.Name == W.t)
+                .GroupAdjacent(e => e!.Name == W.t)
                 .SelectMany(grouping => grouping.Key
-                    ? StringToSingleRunList(grouping.Select(t => (string) t).StringConcatenate(), runProperties)
+                    ? StringToSingleRunList(grouping.Select(t => (string) t!).StringConcatenate(), runProperties)
                     : grouping.Select(e => new XElement(W.r, runProperties, e)))
                 .ToList();
         }
@@ -305,7 +305,7 @@ namespace Docxodus
         /// </summary>
         /// <param name="character">The character.</param>
         /// <returns>The Open XML element or null, if the character equals <see cref="StartOfHeading" /> (U+0001).</returns>
-        public static XElement CharToRunChild(char character)
+        public static XElement? CharToRunChild(char character)
         {
             // Ignore the special character that represents the Open XML elements we
             // wanted to ignore.

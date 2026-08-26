@@ -25,7 +25,7 @@ namespace Docxodus
         private class FormatConfig
         {
             public CellType CellType;
-            public string FormatCode;
+            public required string FormatCode;
         }
 
         private static Dictionary<string, FormatConfig> ExcelFormatCodeToNetFormatCodeExceptionMap = new Dictionary<string, FormatConfig>()
@@ -53,7 +53,7 @@ namespace Docxodus
         // specified, the first is used for positive numbers and zeros, and the second is used for negative numbers. If only
         // one section is specified, it is used for all numbers. To skip a section, the ending semicolon for that section shall
         // be written.
-        public static string FormatCell(string formatCode, string value, out string color)
+        public static string FormatCell(string? formatCode, string value, out string? color)
         {
             color = null;
 
@@ -162,7 +162,7 @@ namespace Docxodus
             "Yellow",
         };
 
-        private static string FormatDouble(string formatCode, double dv, out string color)
+        private static string FormatDouble(string formatCode, double dv, out string? color)
         {
             color = null;
             var trimmed = formatCode.Trim();

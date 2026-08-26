@@ -12,7 +12,7 @@ namespace Docxodus
         private static readonly Hashtable defaultScalarTypesHash;
         internal static bool IsTypeInList(Collection<string> typeNames)
         {
-            string text = PSObjectIsOfExactType(typeNames);
+            string? text = PSObjectIsOfExactType(typeNames);
             return !string.IsNullOrEmpty(text) && (PSObjectIsEnum(typeNames) || DefaultScalarTypes.defaultScalarTypesHash.ContainsKey(text));
         }
 
@@ -37,7 +37,7 @@ namespace Docxodus
             DefaultScalarTypes.defaultScalarTypesHash.Add("System.Security.SecureString", null);
         }
 
-        internal static string PSObjectIsOfExactType(Collection<string> typeNames)
+        internal static string? PSObjectIsOfExactType(Collection<string> typeNames)
         {
             if (typeNames.Count != 0)
             {
