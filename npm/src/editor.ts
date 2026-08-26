@@ -3775,8 +3775,14 @@ export class DocxEditor {
       const backref = document.createElement("a");
       backref.setAttribute("class", `${prefix}-backref`);
       backref.setAttribute("contenteditable", "false");
-      backref.textContent = "↩";
-      last.append(" ", backref);
+      // The separator space must live INSIDE the chrome element. As a bare text
+      // node in the paragraph it was counted by blockContentText, giving the
+      // committed baseline a phantom trailing character the session's flat text
+      // does not have — every later span commit then computed offsets one past
+      // the session text and died with offset_out_of_range, silently reverting
+      // the user's note edit (#583).
+      backref.textContent = " ↩";
+      last.append(backref);
     }
     li.querySelectorAll<HTMLElement>("[data-anchor]").forEach((b) => this.wireBlock(b));
     return li;
