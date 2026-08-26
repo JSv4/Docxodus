@@ -15,6 +15,7 @@ import {
   type ReviewProfile,
 } from "./index.js";
 import { canonicalJsonBytes } from "./canonical.js";
+import { checkExportEnvironment } from "./environment.js";
 import { humanDiagnostic } from "./diagnostics.js";
 import { writeDiagnosticNoReplace } from "./files.js";
 import { decodeStrictUtf8, strictJsonParse } from "./strict-json.js";
@@ -24,6 +25,9 @@ const MAX_CONFIGURATION_BYTES = 1_048_576;
 const HELP = `Usage:
   docxodus convert <input.docx> --to <html|pdf> --output <path>
     --review-profile <final|original|markup> --comments <hidden|inline|endnotes|margin>
+  docxodus doctor [--browser-executable <path>]
+    Preflight this host: non-root, unprivileged user namespaces, browser resolution.
+    Exit 0 when exports are expected to launch; 1 with remediation guidance otherwise.
 
 Options:
   --document-version <integer>       Immutable source version (default: 0)
@@ -164,8 +168,25 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       process.stderr.write(HELP);
       return 0;
     }
+    if (parsed.positionals[0] === "doctor" && parsed.positionals.length === 1) {
+      // Deployment preflight (issue #595): judge the host before its first conversion.
+      const report = await checkExportEnvironment({
+        browserExecutablePath: parsed.values["browser-executable"]
+          ?? process.env.DOCXODUS_CHROMIUM_PATH ?? undefined,
+      });
+      for (const finding of report.findings) {
+        process.stderr.write(
+          `${finding.severity === "fatal" ? "FAIL" : "note"} ${finding.code}: `
+          + `${finding.message}\n  ${finding.remediation}\n`,
+        );
+      }
+      process.stderr.write(report.ok
+        ? "ok: this host is expected to launch the sandboxed export browser.\n"
+        : "not ok: fix the FAIL findings above before serving conversions.\n");
+      return report.ok ? 0 : 1;
+    }
     if (parsed.positionals.length !== 2 || parsed.positionals[0] !== "convert") {
-      throw new Error("Expected `docxodus convert <input.docx>`.\n\n" + HELP);
+      throw new Error("Expected `docxodus convert <input.docx>` or `docxodus doctor`.\n\n" + HELP);
     }
     const inputPath = parsed.positionals[1];
     const target = oneOf(parsed.values.to, ["html", "pdf"] as const, "--to");

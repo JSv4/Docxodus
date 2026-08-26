@@ -17,6 +17,34 @@ Node.js 22.13 or newer is required. Environments that omit the bundled browser c
 `browserExecutablePath`; the CLI also reads `DOCXODUS_CHROMIUM_PATH`. No PATH-wide browser guessing
 occurs.
 
+## Deployment requirements
+
+The export never launches Chromium without its OS sandbox (`--no-sandbox` is refused by design),
+which imposes two host requirements that most container and CI defaults violate:
+
+1. **Run as a non-root user.** Chromium's sandbox refuses root outright, so a root-run container
+   fails at the first conversion even where user namespaces are fully enabled. In Docker set a
+   non-root `USER`; in Kubernetes use `securityContext.runAsNonRoot` / `runAsUser`.
+2. **Permit unprivileged user namespaces.** Ubuntu 23.10 and later restrict them through AppArmor
+   by default (`sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` permits them; verify with
+   `unshare --user --map-root-user true`). In containers, the seccomp profile must permit `clone`
+   with `CLONE_NEWUSER`, and the user-namespace path must not be dropped via `--cap-drop`.
+
+Verify a host **before** its first user-facing conversion with the exported preflight or the CLI:
+
+```js
+import { checkExportEnvironment } from "@docxodus/export";
+const { ok, findings } = await checkExportEnvironment();
+if (!ok) throw new Error(findings.map((f) => `${f.code}: ${f.remediation}`).join("\n"));
+```
+
+```console
+npx docxodus doctor        # exit 0 when exports are expected to launch; findings otherwise
+```
+
+The probe checks the effective user, the user-namespace path (`unshare` no-op), and browser
+executable resolution; it launches nothing and modifies nothing.
+
 ## Node API
 
 ```js
@@ -96,11 +124,10 @@ input aliases, and duplicate destinations are rejected; the CLI never overwrites
 - All three review profiles (`final`, `original`, `markup`) are supported; `final` and `original`
   derive their projection out-of-place and never mutate the source bytes.
 - Generated PDFs are covered by the same visual-fidelity ratchet as the HTML renderer.
-- Chromium keeps its process sandbox, so the render host has to permit unprivileged user
-  namespaces. Ubuntu 23.10 and later restrict them through AppArmor by default; check with
-  `unshare --user --map-root-user true` and permit them with
-  `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. A launch that fails this way is
-  reported as its own condition rather than as a suspect executable.
+- Chromium keeps its process sandbox, so the render host must not run the export as root and has
+  to permit unprivileged user namespaces — see "Deployment requirements" above, and
+  `checkExportEnvironment()` / `docxodus doctor` for the boot-time preflight. A launch that fails
+  this way is reported as its own condition (root-aware) rather than as a suspect executable.
 
 Failures are `DocxodusExportError` objects with stable code, phase, remediation, safe detail, and a
 structured failed report when materialization had begun. The CLI additionally writes the underlying

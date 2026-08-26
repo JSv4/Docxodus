@@ -463,6 +463,9 @@ async function launchBrowser(
       });
     }
     const sandboxUnavailable = chromiumSandboxUnavailable(cause);
+    // Chromium refuses its sandbox to root outright, so on a root-run host the userns guidance
+    // is a red herring — the same call works unchanged as an unprivileged user (issue #595).
+    const runningAsRoot = typeof process.geteuid === "function" && process.geteuid() === 0;
     exportError(
       "browser_launch_failure",
       "browser_launch",
@@ -470,9 +473,17 @@ async function launchBrowser(
         ? "Chromium could not be launched because this host denies its process sandbox."
         : "Chromium could not be launched for export.",
       sandboxUnavailable
-        ? "Permit unprivileged user namespaces on the render host, for example "
-          + "kernel.apparmor_restrict_unprivileged_userns=0 on Ubuntu 23.10 and later; "
-          + "the export runtime never launches Chromium without its process sandbox."
+        ? runningAsRoot
+          ? "This process runs as root: Chromium's sandbox cannot be used by root, so run the "
+            + "export as an unprivileged user (a non-root USER in Docker, runAsNonRoot in a "
+            + "Kubernetes securityContext); the export runtime never launches Chromium without "
+            + "its process sandbox. checkExportEnvironment() / `docxodus doctor` verify a host "
+            + "before the first conversion."
+          : "Permit unprivileged user namespaces on the render host, for example "
+            + "kernel.apparmor_restrict_unprivileged_userns=0 on Ubuntu 23.10 and later; "
+            + "the export runtime never launches Chromium without its process sandbox. "
+            + "checkExportEnvironment() / `docxodus doctor` verify a host before the first "
+            + "conversion."
         : explicit
           ? "Verify browserExecutablePath and its shared-library dependencies."
           : "Install @playwright/browser-chromium during deployment or provide browserExecutablePath.",
