@@ -906,4 +906,109 @@ public class DocxSessionLinkBookmarkTests
         using (var document = WordprocessingDocument.Open(stream, true)) mutate(document);
         return stream.ToArray();
     }
+
+    // ─── InsertCrossReference (issue #545) ────────────────────────────────
+
+    [Fact]
+    public void LB029_InsertCrossReference_WritesRefFieldWithCachedTargetText()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var paragraphs = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body")
+            .Select(t => t.Anchor.Id).ToArray();
+        var first = paragraphs[0];
+        var second = paragraphs[1];
+        var firstText = session.GetAnchorInfo(first)!.VisibleText;
+        var word = firstText.Split(' ')[0];
+        Assert.True(session.AddBookmark("defs",
+            DocumentRange.In(first, new CharSpan(0, word.Length))).Success);
+
+        var result = session.InsertCrossReference(second, 0, "defs");
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Equal(second, Assert.Single(result.Modified).Id);
+        var xml = XElement.Parse(session.Raw.GetXml(second));
+        var field = Assert.Single(xml.Descendants(
+            XName.Get("fldSimple", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")));
+        var instr = (string?)field.Attribute(
+            XName.Get("instr", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"));
+        Assert.Contains("REF defs", instr);
+        Assert.DoesNotContain("\\r", instr);
+        Assert.DoesNotContain("\\h", instr);
+        // The cached result run holds the bookmarked text, so a renderer that does not
+        // recompute fields shows the referenced content.
+        Assert.Equal(word, field.Value);
+        Assert.StartsWith(word, session.GetAnchorInfo(second)!.VisibleText);
+    }
+
+    [Fact]
+    public void LB030_InsertCrossReference_SwitchesShapeInstructionAndCachedResult()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var paragraphs = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body")
+            .Select(t => t.Anchor.Id).ToArray();
+        Assert.True(session.AddBookmark("target",
+            DocumentRange.In(paragraphs[0], new CharSpan(0, 4))).Success);
+
+        // \r on an unnumbered target caches Word's own value for a numberless paragraph: 0.
+        var number = session.InsertCrossReference(paragraphs[1], 0, "target",
+            new CrossReferenceOptions { ReferenceNumber = true, Hyperlink = true });
+        Assert.True(number.Success, number.Error?.Message);
+        var xml = XElement.Parse(session.Raw.GetXml(paragraphs[1]));
+        var w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var field = Assert.Single(xml.Descendants(XName.Get("fldSimple", w)));
+        var instr = (string?)field.Attribute(XName.Get("instr", w));
+        Assert.Contains("\\r", instr);
+        Assert.Contains("\\h", instr);
+        Assert.Equal("0", field.Value);
+
+        // \p alone caches only the position word; the bookmark is ABOVE this insertion point.
+        var position = session.InsertCrossReference(paragraphs[1], 0, "target",
+            new CrossReferenceOptions { IncludePosition = true });
+        Assert.True(position.Success, position.Error?.Message);
+        var fields = XElement.Parse(session.Raw.GetXml(paragraphs[1]))
+            .Descendants(XName.Get("fldSimple", w)).ToArray();
+        Assert.Equal(2, fields.Length);
+        var positional = fields.Single(f =>
+            ((string?)f.Attribute(XName.Get("instr", w)))!.Contains("\\p"));
+        Assert.Equal("above", positional.Value);
+
+        // Referencing from BEFORE the bookmark caches "below".
+        var below = session.InsertCrossReference(paragraphs[0], 0, "target",
+            new CrossReferenceOptions { IncludePosition = true });
+        Assert.True(below.Success, below.Error?.Message);
+        var belowField = XElement.Parse(session.Raw.GetXml(paragraphs[0]))
+            .Descendants(XName.Get("fldSimple", w))
+            .Single(f => ((string?)f.Attribute(XName.Get("instr", w)))!.Contains("\\p"));
+        Assert.Equal("below", belowField.Value);
+    }
+
+    [Fact]
+    public void LB031_InsertCrossReference_StructuredFailures()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body").Anchor.Id;
+
+        var missing = session.InsertCrossReference(anchor, 0, "no_such_bookmark");
+        Assert.False(missing.Success);
+        Assert.Equal(EditErrorCode.MissingBookmarkTarget, missing.Error!.Code);
+
+        Assert.True(session.AddBookmark("real",
+            DocumentRange.In(anchor, new CharSpan(0, 3))).Success);
+        var outOfRange = session.InsertCrossReference(anchor, 10_000, "real");
+        Assert.False(outOfRange.Success);
+        Assert.Equal(EditErrorCode.OffsetOutOfRange, outOfRange.Error!.Code);
+
+        var badName = session.InsertCrossReference(anchor, 0, "has space");
+        Assert.False(badName.Success);
+        Assert.Equal(EditErrorCode.InvalidBookmarkName, badName.Error!.Code);
+
+        // Undo restores the pre-field paragraph in one step.
+        var before = session.GetAnchorInfo(anchor)!.VisibleText;
+        Assert.True(session.InsertCrossReference(anchor, 0, "real").Success);
+        Assert.True(session.Undo());
+        Assert.Equal(before, session.GetAnchorInfo(anchor)!.VisibleText);
+    }
 }

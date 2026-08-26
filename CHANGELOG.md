@@ -49,6 +49,18 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Field-based internal cross-references from the session surface (#545).**
+  `DocxSession.InsertCrossReference(anchorId, characterOffset, bookmarkName, options?)` inserts
+  a Word-faithful `REF` field targeting an existing bookmark — a real field Word re-resolves on
+  refresh, unlike an internal hyperlink. `CrossReferenceOptions` maps to the field's switches
+  (`ReferenceNumber` → `\r`, `Hyperlink` → `\h`, `IncludePosition` → `\p`), and the written
+  `w:fldSimple` carries a cached result run — the bookmarked text, the target's auto-number
+  under `\r` (`0` when unnumbered, as Word shows), and/or the `above`/`below` position word —
+  so renderers that do not recompute fields display a faithful snapshot. A missing or
+  incoherent bookmark fails with `MissingBookmarkTarget`. Rippled to every transport: the WASM
+  bridge and npm gain `insertCrossReference` (typed `CrossReferenceOptions`), the stdio host
+  and `docx-scalpel` gain `insert_cross_reference`, and the MCP server's `docxodus_links` tool
+  gains the batchable `insert_cross_reference` action.
 - **Delivery-receipt verification on every transport (#520).** The portable JSON change
   receipt (#458) can now be verified from all four client surfaces, each routing through the
   new single-owner facade `DeliveryOps.VerifyChangeReceiptJson` (artifacts as
