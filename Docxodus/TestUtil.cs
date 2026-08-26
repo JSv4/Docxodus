@@ -27,7 +27,7 @@ namespace Docxodus
             }
         }
 
-        private static DirectoryInfo s_TempDir = null;
+        private static DirectoryInfo? s_TempDir = null;
         public static DirectoryInfo TempDir
         {
             get

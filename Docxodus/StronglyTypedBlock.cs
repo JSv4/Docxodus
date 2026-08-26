@@ -40,7 +40,7 @@ namespace Docxodus
     /// <seealso cref="PowerToolsBlockExtensions.EndPowerToolsBlock"/>
     public class StronglyTypedBlock : IDisposable
     {
-        private OpenXmlPackage _package;
+        private OpenXmlPackage? _package;
 
         public StronglyTypedBlock(OpenXmlPackage package)
         {

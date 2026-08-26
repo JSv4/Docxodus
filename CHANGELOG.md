@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Nullable reference types are enabled project-wide (#13).** The core library now compiles
+  with `<Nullable>enable</Nullable>`: every file is null-checked by default, and the inherited
+  OpenXmlPowerTools core opts out through an explicit `#nullable disable` header in each of its
+  32 files instead of an invisible project default. Nine previously-oblivious legacy files were
+  already clean and are now fully checked, and the small remainder (the culture-specific
+  `GetListItemText_*` providers, `SmlCellFormatter`, `SmlToHtmlConverter`, `UnicodeMapper`,
+  `SpreadsheetDocumentManager`, and a few one-warning files) gained honest annotations —
+  behavior-preserving `?` returns and locals, plus flow-proven `!` where a null was already
+  guarded. Callers compiling with nullable enabled now see accurate nullability metadata for
+  those APIs (for example `SmlCellFormatter.FormatCell` declares its nullable `formatCode`
+  and `out color`, and the `GetListItemText_*` providers declare their nullable returns), which
+  may surface new — correct — warnings at call sites that previously compiled silently.
 - **`ReplaceTextRange` with a needle that matches nothing now fails with the new
   `TextNotFound` error code (#490)** — `text_not_found` on the wire — carrying the anchor id
   and the needle, instead of returning an empty list a caller could not distinguish from a

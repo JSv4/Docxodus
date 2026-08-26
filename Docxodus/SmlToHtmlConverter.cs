@@ -131,7 +131,7 @@ namespace Docxodus
                     {
                         p.Element,
                         p.Styles,
-                        StylesString = p.Element.Name.LocalName + "|" + p.Styles.OrderBy(k => k.Key).Select(s => string.Format("{0}: {1};", s.Key, s.Value)).StringConcatenate(),
+                        StylesString = p.Element.Name.LocalName + "|" + p.Styles!.OrderBy(k => k.Key).Select(s => string.Format("{0}: {1};", s.Key, s.Value)).StringConcatenate(),
                     })
                     .GroupBy(p => p.StylesString)
                     .ToList();
@@ -142,7 +142,7 @@ namespace Docxodus
                 {
                     string classNameToUse;
                     var firstOne = grp.First();
-                    var styles = firstOne.Styles;
+                    var styles = firstOne.Styles!;
                     if (styles.ContainsKey("PtStyleName"))
                     {
                         classNameToUse = htmlConverterSettings.CssClassPrefix + styles["PtStyleName"];
@@ -162,7 +162,7 @@ namespace Docxodus
                     }
                     usedCssClassNames.Add(classNameToUse);
                     sb.Append(firstOne.Element.Name.LocalName + "." + classNameToUse + " {" + Environment.NewLine);
-                    foreach (var st in firstOne.Styles.Where(s => s.Key != "PtStyleName"))
+                    foreach (var st in firstOne.Styles!.Where(s => s.Key != "PtStyleName"))
                     {
                         var s = "    " + st.Key + ": " + st.Value + ";" + Environment.NewLine;
                         sb.Append(s);
@@ -194,8 +194,9 @@ namespace Docxodus
                         .Select(e => string.Format("{0}: {1};", e.Key, e.Value))
                         .StringConcatenate();
                     XAttribute st = new XAttribute("style", styleValue);
-                    if (d.Attribute("style") != null)
-                        d.Attribute("style").Value += styleValue;
+                    var existingStyle = d.Attribute("style");
+                    if (existingStyle != null)
+                        existingStyle.Value += styleValue;
                     else
                         d.Add(st);
                 }
@@ -218,7 +219,7 @@ namespace Docxodus
             }
         }
 
-        private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
+        private static object? ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node)
         {
             // Ignore element.

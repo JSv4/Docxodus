@@ -22,19 +22,16 @@ duplicated description is one that will go stale.
 
 ### Nullable Reference Types
 
-The project sets `<Nullable>disable</Nullable>` globally: enabling it today produces
-**~4,800 warnings** in the legacy core. New code should still be annotated.
-
-- **New files**: add `#nullable enable` at the top.
-- **Substantial refactors**: consider adding `#nullable enable` and fixing that file's warnings.
-- **Use proper annotations**: mark nullable parameters/returns with `?`; use null checks or `!`.
-
-About 60% of files in `Docxodus/` already carry `#nullable enable` — everything written for
-this fork. The un-annotated remainder is the inherited OpenXmlPowerTools core
-(`WmlComparer`, `WmlToHtmlConverter`, the `HtmlToWml*` family, `FormattingAssembler`,
-`DocumentBuilder`, `RevisionProcessor`, `PtOpenXmlUtil`, `PtUtil`, `ListItemRetriever`).
-
-See [Issue #13](https://github.com/JSv4/Docxodus/issues/13) for the migration plan.
+`Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
+nullable-checked by default, so a new file needs no directive. The exception is the
+inherited OpenXmlPowerTools core — 32 legacy files (`WmlComparer`, `WmlToHtmlConverter`,
+the `HtmlToWml*` family, `FormattingAssembler`, `DocumentBuilder`, `RevisionProcessor`,
+`PtOpenXmlUtil`, …) carry an explicit `#nullable disable` header holding back ~4,600
+warnings. `grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
+substantially refactoring one of those files, consider removing its header and fixing
+that file's warnings. CS8632 stays in `NoWarn` deliberately: with the project context
+enabled it can only fire inside the opted-out files, where some inert `?` annotations
+are kept for the day each file migrates.
 
 ### Warnings
 

@@ -73,18 +73,18 @@ namespace Docxodus
         private static string GetSheetName(WorksheetPart worksheet, SpreadsheetDocument document)
         {
             //Gets the id of worksheet part
-            string partId = document.WorkbookPart.GetIdOfPart(worksheet);
+            string partId = document.WorkbookPart!.GetIdOfPart(worksheet);
             XDocument workbookDocument = document.WorkbookPart.GetXDocument();
             //Gets the name from sheet tag related to worksheet
             string sheetName =
-                workbookDocument.Root
-                .Element(ns + "sheets")
+                workbookDocument.Root!
+                .Element(ns + "sheets")!
                 .Elements(ns + "sheet")
                 .Where(
                     t =>
-                        t.Attribute(relationshipsns + "id").Value == partId
+                        t.Attribute(relationshipsns + "id")!.Value == partId
                 ).First()
-                .Attribute("name").Value;
+                .Attribute("name")!.Value;
             return sheetName;
         }
         /// <summary>
