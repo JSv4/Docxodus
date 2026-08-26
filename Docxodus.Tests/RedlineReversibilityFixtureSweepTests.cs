@@ -270,6 +270,10 @@ public class RedlineReversibilityFixtureSweepTests
     [InlineData("WC/WC034-Endnotes-After3.docx", "WC/WC034-Endnotes-Before.docx")]
     [InlineData("WC/WC036-Endnote-With-Table-Before.docx", "WC/WC036-Endnote-With-Table-After.docx")]
     [InlineData("WC/WC036-Endnote-With-Table-After.docx", "WC/WC036-Endnote-With-Table-Before.docx")]
+    [InlineData("WC/WC035-Footnote-Before.docx", "WC/WC035-Footnote-After.docx")]
+    [InlineData("WC/WC035-Footnote-After.docx", "WC/WC035-Footnote-Before.docx")]
+    [InlineData("WC/WC035-Endnote-Before.docx", "WC/WC035-Endnote-After.docx")]
+    [InlineData("WC/WC035-Endnote-After.docx", "WC/WC035-Endnote-Before.docx")]
     [InlineData("WC/WC038-Document-With-BR-Before.docx", "WC/WC038-Document-With-BR-After.docx")]
     [InlineData("RC/RC001-Before.docx", "RC/RC001-After1.docx")]
     [InlineData("RC/RC002-Image.docx", "RC/RC002-Image-After1.docx")]
@@ -335,17 +339,24 @@ public class RedlineReversibilityFixtureSweepTests
         Assert.Empty(body.Descendants<InsertedRun>());
     }
 
-    // WC035: when a comparison adds the document's first footnote/endnote, the redline
-    // package gains a notes part. Resolving toward the endpoint that has no notes leaves
-    // that (now content-empty) part behind instead of removing it, so the output package
-    // has a story the expected document never had. Body and note text themselves
-    // round-trip; only the empty-part residue diverges.
+    // WC035 regression pin for the resolve-time note cleanup (issues #516/#552): when a
+    // comparison adds the document's first footnote/endnote, the redline package gains a
+    // notes part. Resolving toward the endpoint that has no notes used to leave the note
+    // itself behind as an empty reference-less husk, and the proof's normalized layer
+    // refused the direction over pure no-notes spelling: Word writes "no notes" either as
+    // an absent part or as an eagerly-created separator-only part (a footnote document
+    // even ships a separator-only endnotes.xml), and the two spellings hashed apart.
+    // The session's selective resolver now deletes a note whose last reference the
+    // resolution carried away (the part stays — Word never prunes one; see the RP050
+    // oracle), and the proof compares the two no-notes spellings as equivalent, saying so
+    // with a separator_only_notes_part_normalized finding. These pairs also run through
+    // RRS004's corpus contract; this pin adds the #516-specific assertions on top.
     [Theory]
     [InlineData("WC/WC035-Footnote-Before.docx", "WC/WC035-Footnote-After.docx", "footnotes")]
     [InlineData("WC/WC035-Footnote-After.docx", "WC/WC035-Footnote-Before.docx", "footnotes")]
     [InlineData("WC/WC035-Endnote-Before.docx", "WC/WC035-Endnote-After.docx", "endnotes")]
     [InlineData("WC/WC035-Endnote-After.docx", "WC/WC035-Endnote-Before.docx", "endnotes")]
-    public void RRS006_KnownGap_ResolvingAwayTheOnlyNoteLeavesAnEmptyNotesPart(
+    public void RRS006_ResolvingAwayTheOnlyNoteRemovesTheNotesPart(
         string leftName,
         string rightName,
         string storyKind)
@@ -367,14 +378,25 @@ public class RedlineReversibilityFixtureSweepTests
         Assert.Null(NotesText(noteless, storyKind));
         Assert.False(string.IsNullOrEmpty(NotesText(noteBearing, storyKind)));
 
-        // Toward the note-bearing endpoint the round-trip is faithful.
+        // Both directions are faithful at story level (empty note stories compare as
+        // absent — see StoryTexts). The noteless direction's part holds nothing but
+        // separator definitions: the reference-less husk is gone.
         Assert.Equal(StoryTexts(noteBearing), StoryTexts(noteBearingOutput));
-
-        // Toward the noteless endpoint the body text round-trips but an empty notes part
-        // is left behind — the residue this pin exists for.
+        Assert.Equal(StoryTexts(noteless), StoryTexts(notelessOutput));
         Assert.Equal(BodyText(noteless), BodyText(notelessOutput));
         Assert.Equal(string.Empty, NotesText(notelessOutput, storyKind));
-        Assert.False(run.Proof.Success);
+
+        // The proof disclosed the no-notes spelling normalization, and after it neither
+        // notes part appears in the divergence view — the #516 residue is gone; what
+        // remains diverging is the generic rebuilt-package delta RRS004 pins.
+        var notelessPath = NotesText(left, storyKind) is null
+            ? run.Proof.RejectToBaseline
+            : run.Proof.AcceptToFinal;
+        Assert.Contains(notelessPath!.Findings, finding =>
+            finding.Code == "separator_only_notes_part_normalized");
+        Assert.DoesNotContain(notelessPath.Divergences, divergence =>
+            divergence.PartUri.Contains("footnotes", StringComparison.Ordinal)
+            || divergence.PartUri.Contains("endnotes", StringComparison.Ordinal));
     }
 
     // WC012-Math: the After document carries its own tracked insertions, and
@@ -594,11 +616,16 @@ public class RedlineReversibilityFixtureSweepTests
         builder.Append("body: ").Append(TextOf(main.Document)).Append('\n');
         AppendStory(builder, "headers", main.HeaderParts.Select(part => TextOf(part.Header)));
         AppendStory(builder, "footers", main.FooterParts.Select(part => TextOf(part.Footer)));
+        // An absent notes part and Word's eagerly-created separator-only part are the same
+        // "no notes" statement (issues #516/#552): a text-empty notes story appends no line,
+        // so the two spellings compare equal here exactly as in the proof's normalized layer.
         AppendStory(builder, "footnotes", main.FootnotesPart is { } footnotes
-            ? new[] { TextOf(footnotes.Footnotes) }
+            && TextOf(footnotes.Footnotes) is { Length: > 0 } footnoteText
+            ? new[] { footnoteText }
             : Array.Empty<string>());
         AppendStory(builder, "endnotes", main.EndnotesPart is { } endnotes
-            ? new[] { TextOf(endnotes.Endnotes) }
+            && TextOf(endnotes.Endnotes) is { Length: > 0 } endnoteText
+            ? new[] { endnoteText }
             : Array.Empty<string>());
         return builder.ToString();
     }

@@ -1204,4 +1204,129 @@ public class DocxSessionRevisionTests
             Assert.True(XNode.DeepEquals(before, MainDocumentRoot(s.Save())));
         }
     }
+
+    // ─── Note cleanup on resolution (issue #516) ─────────────────────────
+
+    /// <summary>
+    /// Issue #516: resolving away a document's first-and-only footnote/endnote must delete
+    /// the note itself, not leave it as an empty reference-less husk in the notes part.
+    /// Word removes a note when the resolution that carries its reference away lands. The
+    /// PART deliberately stays — Word never prunes a notes part (the RP050 oracle keeps its
+    /// separator-only footnotes.xml after accepting the only note's deletion) — so the
+    /// resolved part must hold nothing but separator definitions.
+    /// </summary>
+    [Theory]
+    [InlineData("WC035-Footnote-Before.docx", "WC035-Footnote-After.docx", "footnote")]
+    [InlineData("WC035-Footnote-After.docx", "WC035-Footnote-Before.docx", "footnote")]
+    [InlineData("WC035-Endnote-Before.docx", "WC035-Endnote-After.docx", "endnote")]
+    [InlineData("WC035-Endnote-After.docx", "WC035-Endnote-Before.docx", "endnote")]
+    public void DS418_ResolvingAwayTheOnlyNote_DeletesTheNoteNotJustItsContent(
+        string leftName, string rightName, string kind)
+    {
+        var left = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", leftName));
+        var right = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", rightName));
+        var redline = DocxDiff.Compare(
+            new WmlDocument(leftName, left), new WmlDocument(rightName, right)).DocumentByteArray;
+
+        // Resolve toward the endpoint WITHOUT the note: reject lands on left, accept on right.
+        bool accept = HasNotesPart(left, kind);
+
+        using var session = new DocxSession(redline);
+        for (var revisions = session.ListRevisions(); revisions.Count > 0; revisions = session.ListRevisions())
+        {
+            var edit = accept
+                ? session.AcceptRevision(revisions[0].Id)
+                : session.RejectRevision(revisions[0].Id);
+            Assert.True(edit.Success, edit.Error?.Message);
+        }
+
+        var resolved = session.Save();
+        using var stream = new MemoryStream(resolved, writable: false);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        Assert.Empty(main.Document.Descendants<FootnoteReference>());
+        Assert.Empty(main.Document.Descendants<EndnoteReference>());
+        if (kind == "footnote")
+        {
+            var husks = main.FootnotesPart!.Footnotes!.Elements<Footnote>()
+                .Where(note => note.Type is null
+                    || note.Type == FootnoteEndnoteValues.Normal).ToArray();
+            Assert.Empty(husks);
+        }
+        else
+        {
+            var husks = main.EndnotesPart!.Endnotes!.Elements<Endnote>()
+                .Where(note => note.Type is null
+                    || note.Type == FootnoteEndnoteValues.Normal).ToArray();
+            Assert.Empty(husks);
+        }
+    }
+
+    /// <summary>
+    /// The cleanup in DS418 is scoped to notes whose reference the resolution itself removed:
+    /// a note that was ALREADY dangling before any resolution (its id referenced nowhere) is
+    /// pre-existing document state, and resolving an unrelated revision must not garbage-collect
+    /// it — that would be silent content loss.
+    /// </summary>
+    [Fact]
+    public void DS419_ResolvingUnrelatedRevision_LeavesPreExistingDanglingNoteAlone()
+    {
+        var bytes = BuildWithBody(
+            new XElement(W.p,
+                new XElement(W.r, new XElement(W.t, "Kept. ")),
+                new XElement(W.ins,
+                    new XAttribute(W.id, "101"),
+                    new XAttribute(W.author, "Alice"),
+                    new XAttribute(W.date, "2026-01-01T00:00:00Z"),
+                    new XElement(W.r, new XElement(W.t, "Inserted.")))));
+        bytes = AddDanglingFootnote(bytes, noteId: 7, text: "Orphan note body.");
+
+        using var session = new DocxSession(bytes);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.True(session.RejectRevision(revision.Id).Success);
+
+        var resolved = session.Save();
+        Assert.True(HasNotesPart(resolved, "footnote"), "pre-existing notes part was deleted");
+        using var stream = new MemoryStream(resolved, writable: false);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var texts = document.MainDocumentPart!.FootnotesPart!.Footnotes!
+            .Elements<Footnote>().Select(note => note.InnerText).ToArray();
+        Assert.Contains("Orphan note body.", string.Concat(texts));
+    }
+
+    private static bool HasNotesPart(byte[] bytes, string kind)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return kind == "footnote"
+            ? document.MainDocumentPart!.FootnotesPart is not null
+            : document.MainDocumentPart!.EndnotesPart is not null;
+    }
+
+    /// <summary>Add a footnotes part holding separator stubs plus one real note that nothing
+    /// in the body references — the pre-existing dangling-note shape DS419 protects.</summary>
+    private static byte[] AddDanglingFootnote(byte[] source, int noteId, string text)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(source);
+        ms.Position = 0;
+        using (var wDoc = WordprocessingDocument.Open(ms, true))
+        {
+            var part = wDoc.MainDocumentPart!.AddNewPart<FootnotesPart>();
+            part.Footnotes = new Footnotes(
+                new Footnote(new Paragraph(new Run(new SeparatorMark())))
+                {
+                    Type = FootnoteEndnoteValues.Separator,
+                    Id = -1,
+                },
+                new Footnote(new Paragraph(new Run(new SeparatorMark())))
+                {
+                    Type = FootnoteEndnoteValues.ContinuationSeparator,
+                    Id = 0,
+                },
+                new Footnote(new Paragraph(new Run(new Text(text)))) { Id = noteId });
+            part.Footnotes.Save();
+        }
+        return ms.ToArray();
+    }
 }
