@@ -3653,6 +3653,22 @@ class DocxDiffRevision:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DocxDiffProducts:
+    """The requested products of ONE memoized comparison pass, from
+    ``docx_diff_compare_products`` (issue #594). Unrequested products are
+    ``None``. Each present product equals what the corresponding standalone
+    function returns for the same inputs and settings — the redline as bytes,
+    the anchor-addressed revision tuple, the edit script (parsed JSON object),
+    and the :class:`SemanticChangeSet`.
+    """
+
+    redline: bytes | None = None
+    revisions: tuple["DocxDiffRevision", ...] | None = None
+    edit_script: dict[str, Any] | None = None
+    semantic_changes: "SemanticChangeSet | None" = None
+
+
 class SemanticChangeOperation(str, Enum):
     """Stable v1 operation names in a :class:`SemanticChangeSet`."""
 

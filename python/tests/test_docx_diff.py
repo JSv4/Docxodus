@@ -21,6 +21,8 @@ from docx_scalpel import (
     convert_docx_to_html,
     docx_diff_accept_revisions,
     docx_diff_compare,
+    docx_diff_compare_products,
+    docx_diff_get_revisions,
     docx_diff_get_semantic_changes,
     docx_diff_reject_revisions,
     open_session,
@@ -64,6 +66,29 @@ def test_accept_reject_round_trip(test_files_dir: Path, left_rel: str, right_rel
     # The contract: accept materializes the right side, reject the left.
     assert _text(accepted) == right_text
     assert _text(rejected) == left_text
+
+
+def test_compare_products_serves_every_product_from_one_pass(test_files_dir: Path) -> None:
+    """``docx_diff_compare_products`` (issue #594): one host call, every requested
+    product — and each equal to what its standalone function returns."""
+    left = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    products = docx_diff_compare_products(left, right)
+
+    assert products.redline == docx_diff_compare(left, right)
+    assert products.revisions == docx_diff_get_revisions(left, right)
+    assert products.revisions, "the fixture pair must yield revisions"
+    assert isinstance(products.edit_script, dict) and products.edit_script
+    assert products.semantic_changes is not None
+    assert products.semantic_changes.changes, "semantic changes expected for a differing pair"
+
+    # Selection: unrequested products come back None.
+    only_revisions = docx_diff_compare_products(left, right, products=["revisions"])
+    assert only_revisions.redline is None
+    assert only_revisions.revisions == products.revisions
+    assert only_revisions.edit_script is None
+    assert only_revisions.semantic_changes is None
 
 
 def test_accept_reject_are_distinct(test_files_dir: Path) -> None:

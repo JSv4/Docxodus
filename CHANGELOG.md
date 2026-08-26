@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Memoized comparison: one alignment pass, every data product (#594).**
+  `DocxDiff.CreateComparison(left, right, settings)` returns a `DocxDiffComparison` whose
+  `ToRedline()`, `GetRevisions()`, `GetEditScriptJson()`, and `GetSemanticChanges[Json]()`
+  are each identical to the stateless static of the same name — but the normalization, IR
+  reads, and edit-script build run at most once, and every product is served from that
+  single memoized pass over one consistent input snapshot. The statics now delegate to a
+  single-use instance, so their behavior is unchanged. Rippled to every surface as a
+  one-call multi-product compare: `DocxDiffOps.CompareProducts[Json]` (facade),
+  `DocxDiffBridge.CompareProductsJson` (WASM), `docxDiffCompareProducts` (npm),
+  `docx_diff_compare_products` (Python), and the MCP server's `docxodus_compare` now
+  computes its redline and revision summary from one pass instead of two.
+
 ### Changed
 - **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
   one-liner from `ToString()` (type, move role, changed format property names, quoted

@@ -568,6 +568,28 @@ export interface DocxDiffRevision {
   rightAnchor?: string;
 }
 
+/** A data product selectable in `docxDiffCompareProducts`. */
+export type DocxDiffProduct = "redline" | "revisions" | "editScript" | "semanticChanges";
+
+/**
+ * The requested products of ONE memoized comparison pass, from
+ * `docxDiffCompareProducts` (issue #594). Unrequested products are undefined.
+ * Each present product equals what the corresponding standalone function
+ * returns for the same inputs and settings — except `editScript`, which is
+ * handed over parsed (the standalone `docxDiffGetEditScript` returns the
+ * serialized string).
+ */
+export interface DocxDiffProducts {
+  /** The native tracked-changes redline (what `docxDiffCompare` returns). */
+  redline?: Uint8Array;
+  /** The anchor-addressed revision list (what `docxDiffGetRevisions` returns). */
+  revisions?: DocxDiffRevision[];
+  /** The engine's edit script, parsed. */
+  editScript?: Record<string, unknown>;
+  /** The stable semantic-change schema (what `docxDiffGetSemanticChanges` returns). */
+  semanticChanges?: SemanticChangeSet;
+}
+
 /** Stable v1 operation names emitted by the semantic-change schema. */
 export type SemanticChangeOperation = "insert" | "delete" | "move" | "modify";
 
@@ -1618,6 +1640,14 @@ export interface DocxodusWasmExports {
       leftBytes: Uint8Array,
       rightBytes: Uint8Array,
       settingsJson: string
+    ) => string;
+    /** One memoized pass, every requested product: `{"redlineB64":…, "revisions":[…],
+     *  "editScript":…, "semanticChanges":…}` JSON (issue #594), or a JSON error object. */
+    CompareProductsJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string,
+      productsJson: string
     ) => string;
     /** Accept all tracked revisions in a redlined DOCX → "right"-side bytes, or empty array on error. */
     AcceptRevisions: (bytes: Uint8Array) => Uint8Array;

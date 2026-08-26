@@ -63,6 +63,7 @@ from .types import (
     DocxDiffConsolidatedRevision,
     DocxDiffConsolidateSettings,
     DocxDiffReviewer,
+    DocxDiffProducts,
     DocxDiffRevision,
     DocxDiffSettings,
     DocxSessionSettings,
@@ -122,6 +123,7 @@ __all__ = [
     "verify_deliverable",
     "prove_redline_reversibility",
     "docx_diff_compare",
+    "docx_diff_compare_products",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
     "docx_diff_get_semantic_changes",
@@ -305,6 +307,44 @@ def docx_diff_compare(
     if not isinstance(result, dict) or "docxB64" not in result:
         raise TypeError(f"docx_diff_compare: expected {{docxB64}}, got {result!r}")
     return base64.b64decode(result["docxB64"])
+
+
+def docx_diff_compare_products(
+    left: bytes,
+    right: bytes,
+    settings: DocxDiffSettings | None = None,
+    products: Sequence[str] | None = None,
+) -> DocxDiffProducts:
+    """Compare two DOCX blobs ONCE and return every requested data product from
+    that single memoized pass (issue #594).
+
+    Mirrors .NET ``DocxDiff.CreateComparison``: where a review pipeline calling
+    :func:`docx_diff_compare`, :func:`docx_diff_get_revisions`, and
+    :func:`docx_diff_get_edit_script` separately pays for the alignment per call,
+    this runs it once and serves each product from the same pass — with each
+    product identical to its standalone counterpart.
+
+    ``products`` selects from ``"redline"``, ``"revisions"``, ``"editScript"``,
+    ``"semanticChanges"``; ``None`` selects all four. Unrequested products are
+    ``None`` on the result.
+    """
+    args = _diff_args(left, right, settings)
+    if products is not None:
+        args["products"] = list(products)
+    result = _call("docx_diff_compare_products", args)
+    if not isinstance(result, Mapping):
+        raise TypeError(
+            f"docx_diff_compare_products: expected object, got {type(result).__name__}"
+        )
+    semantic = result.get("semanticChanges")
+    return DocxDiffProducts(
+        redline=base64.b64decode(result["redlineB64"]) if "redlineB64" in result else None,
+        revisions=tuple(
+            DocxDiffRevision._from_wire(r) for r in result["revisions"]
+        ) if "revisions" in result else None,
+        edit_script=dict(result["editScript"]) if "editScript" in result else None,
+        semantic_changes=SemanticChangeSet._from_wire(semantic) if semantic is not None else None,
+    )
 
 
 def docx_diff_get_revisions(

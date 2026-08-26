@@ -54,4 +54,87 @@ public class DocxDiffOpsRoundTripTests
         Assert.Throws<ArgumentException>(() => DocxDiffOps.AcceptRevisions(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => DocxDiffOps.RejectRevisions(Array.Empty<byte>()));
     }
+
+    // ─── CompareProducts — one memoized pass, every product (issue #594) ─────
+
+    [Fact]
+    public void CompareProducts_EachProductMatchesItsStandaloneOp()
+    {
+        var left = Wc("WC001-Digits.docx");
+        var right = Wc("WC001-Digits-Mod.docx");
+
+        var products = DocxDiffOps.CompareProducts(
+            left, right, null,
+            redline: true, revisions: true, editScript: true, semanticChanges: true);
+
+        Assert.Equal(DocxDiffOps.Compare(left, right, null), products.RedlineBytes);
+        Assert.Equal(DocxDiffOps.GetRevisionsJson(left, right, null), products.RevisionsJson);
+        Assert.Equal(DocxDiffOps.GetEditScriptJson(left, right, null), products.EditScriptJson);
+        Assert.Equal(
+            DocxDiffOps.GetSemanticChangesJson(left, right, null),
+            products.SemanticChangesJson);
+    }
+
+    [Fact]
+    public void CompareProducts_UnrequestedProductsAreNull()
+    {
+        var left = Wc("WC001-Digits.docx");
+        var right = Wc("WC001-Digits-Mod.docx");
+
+        var products = DocxDiffOps.CompareProducts(
+            left, right, null,
+            redline: false, revisions: true, editScript: false, semanticChanges: false);
+
+        Assert.Null(products.RedlineBytes);
+        Assert.NotNull(products.RevisionsJson);
+        Assert.Null(products.EditScriptJson);
+        Assert.Null(products.SemanticChangesJson);
+    }
+
+    [Fact]
+    public void CompareProductsJson_EnvelopeCarriesTheStandaloneWireShapes()
+    {
+        var left = Wc("WC001-Digits.docx");
+        var right = Wc("WC001-Digits-Mod.docx");
+
+        var envelope = System.Text.Json.JsonDocument.Parse(
+            DocxDiffOps.CompareProductsJson(left, right, null, null)).RootElement;
+
+        Assert.Equal(
+            DocxDiffOps.Compare(left, right, null),
+            Convert.FromBase64String(envelope.GetProperty("redlineB64").GetString()!));
+
+        var standaloneRevisions = System.Text.Json.JsonDocument
+            .Parse(DocxDiffOps.GetRevisionsJson(left, right, null))
+            .RootElement.GetProperty("revisions");
+        Assert.Equal(
+            standaloneRevisions.GetRawText(),
+            envelope.GetProperty("revisions").GetRawText());
+
+        Assert.True(envelope.TryGetProperty("editScript", out var script)
+            && script.ValueKind == System.Text.Json.JsonValueKind.Object);
+        Assert.True(envelope.TryGetProperty("semanticChanges", out var semantic)
+            && semantic.ValueKind == System.Text.Json.JsonValueKind.Object);
+    }
+
+    [Fact]
+    public void CompareProductsJson_SelectionAndValidation()
+    {
+        var left = Wc("WC001-Digits.docx");
+        var right = Wc("WC001-Digits-Mod.docx");
+
+        var envelope = System.Text.Json.JsonDocument.Parse(
+            DocxDiffOps.CompareProductsJson(left, right, null, "[\"revisions\"]")).RootElement;
+        Assert.True(envelope.TryGetProperty("revisions", out _));
+        Assert.False(envelope.TryGetProperty("redlineB64", out _));
+        Assert.False(envelope.TryGetProperty("editScript", out _));
+        Assert.False(envelope.TryGetProperty("semanticChanges", out _));
+
+        Assert.Throws<ArgumentException>(() =>
+            DocxDiffOps.CompareProductsJson(left, right, null, "[\"typo\"]"));
+        Assert.Throws<ArgumentException>(() =>
+            DocxDiffOps.CompareProductsJson(left, right, null, "[]"));
+        Assert.Throws<ArgumentException>(() =>
+            DocxDiffOps.CompareProductsJson(left, right, null, "{\"redline\":true}"));
+    }
 }
