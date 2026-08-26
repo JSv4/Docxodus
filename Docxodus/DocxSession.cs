@@ -6678,14 +6678,48 @@ public sealed partial class DocxSession : IDisposable
         var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
         if (!parsed.Success)
             return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+        // The anchor addresses exactly one block. Truncating a multi-block payload to
+        // its first block and reporting success was silent data loss (#570).
+        if (parsed.Blocks.Count > 1)
+            return EditResult.Fail(EditErrorCode.UnsupportedMarkdownSyntax,
+                $"payload parses to {parsed.Blocks.Count} markdown blocks but ReplaceText replaces exactly one; " +
+                "join lines with soft breaks (two trailing spaces before the newline), or add blocks with InsertParagraph",
+                anchorId);
         if (ValidatePendingHyperlinks(parsed.Blocks.SelectMany(b => b.RunElements), anchorId) is { } linkError)
             return linkError;
+
+        // An UNESCAPED block marker declares block semantics under the projector-symmetric
+        // contract (the projector emits literal hashes escaped, as "\#\# x"), so honor it the
+        // way InsertParagraph does instead of consuming the marker and applying nothing (#570).
+        // A plain payload leaves the paragraph mark untouched, exactly as before.
+        var declaredStyle = parsed.Blocks.Count == 1
+            ? DeclaredBlockStyleId(parsed.Blocks[0].Kind)
+            : null;
+        XElement? oldPPr = null;
+        if (declaredStyle is not null)
+        {
+            if (RefuseNestedTrackedParagraphPropertyChange(element, anchorId) is { } pending) return pending;
+            if (_trackedChanges == TrackedChangeMode.RenderInline
+                && !Internal.StyleFactory.HasParagraphStyle(_doc!, declaredStyle))
+                return TrackedStructureUnsupported(
+                    $"ReplaceText payload requiring synthesis of style '{declaredStyle}'", anchorId);
+        }
 
         var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
         var oldHyperlinkIds = element.Descendants(W.hyperlink)
             .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
 
-        _history.RecordPreOp(TakeSnapshot());
+        // Snapshot before style synthesis, so undo/rollback restores the styles part too
+        // (same ordering as SetParagraphStyle).
+        var preOp = TakeSnapshot();
+        if (declaredStyle is not null)
+        {
+            if (!Internal.StyleFactory.EnsureParagraphStyle(_doc!, declaredStyle))
+                return EditResult.Fail(EditErrorCode.UnknownStyle, $"style id not found: {declaredStyle}", anchorId);
+            oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
+        }
+
+        _history.RecordPreOp(preOp);
         try
         {
             if (_trackedChanges == TrackedChangeMode.RenderInline)
@@ -6696,6 +6730,16 @@ public sealed partial class DocxSession : IDisposable
             {
                 ApplyReplaceTextAccept(element, parsed.Blocks);
             }
+            if (declaredStyle is not null)
+            {
+                var pPr = element.Element(W.pPr);
+                if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+                pPr.Element(W.pStyle)?.Remove();
+                pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, declaredStyle)));
+                if (_trackedChanges == TrackedChangeMode.RenderInline)
+                    TrackPropertyMutation(pPr, oldPPr!, W.pPrChange,
+                        _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate(), W.rPr, W.sectPr);
+            }
             PromoteHyperlinkRelationships(element);
             if (hyperlinkOwner is { } owner)
             {
@@ -6705,10 +6749,14 @@ public sealed partial class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
+            // A declared style can flip the anchor kind (p → h); report the fresh identity.
+            var updated = declaredStyle is not null
+                ? AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor
+                : target.Anchor;
             return new EditResult
             {
                 Success = true,
-                Modified = new[] { target.Anchor },
+                Modified = new[] { updated },
                 Patch = PatchFor(target),
             };
         }
@@ -6719,6 +6767,23 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
     }
+
+    /// <summary>
+    /// The paragraph style a parsed markdown block explicitly declares — the same mapping
+    /// <see cref="BuildParagraphFromParsedBlock"/> writes for InsertParagraph. Null for plain
+    /// paragraphs and for list items (v1 list payloads deliberately carry no numbering; see
+    /// the note in <see cref="BuildParagraphFromParsedBlock"/>).
+    /// </summary>
+    private static string? DeclaredBlockStyleId(Internal.ParserBlockKind kind) => kind switch
+    {
+        Internal.ParserBlockKind.Heading1 or Internal.ParserBlockKind.Heading2
+            or Internal.ParserBlockKind.Heading3 or Internal.ParserBlockKind.Heading4
+            or Internal.ParserBlockKind.Heading5 or Internal.ParserBlockKind.Heading6 =>
+            $"Heading{(int)kind - (int)Internal.ParserBlockKind.Heading1 + 1}",
+        Internal.ParserBlockKind.Quote => "Quote",
+        Internal.ParserBlockKind.Code => "Code",
+        _ => null,
+    };
 
     public EditResult DeleteBlock(string anchorId)
     {

@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`ReplaceText` now honors the block semantics its payload declares, and refuses
+  multi-block payloads instead of truncating (#570).** A payload opening with an unescaped
+  block marker (`## `, `> `, a fenced code block) used to have the marker consumed by the
+  markdown parser and then dropped: `ReplaceText(p, "## x")` produced an unstyled paragraph
+  reading `x` — neither a heading nor the literal text. Under the projector-symmetric
+  contract (the projector emits literal hashes escaped, as `\#\# x`) an unescaped marker
+  genuinely declares the block's kind, and `ReplaceText` now applies it the way
+  `InsertParagraph` always has: the declared Heading/Quote/Code style is set through the
+  same find-or-create, tracked-`pPrChange`, and undo-restores-the-styles-part machinery as
+  `SetParagraphStyle`, and the returned anchor reflects a kind flip (`p` → `h`). Escaped
+  markers still commit as literal text, plain payloads still leave the paragraph mark
+  untouched, and list payloads keep their documented v1 no-numbering behavior. A payload
+  that parses to more than one markdown block now fails with `unsupported_markdown_syntax`
+  instead of silently applying only the first block and reporting success.
+
 ### Changed
 - **Nullable reference types are enabled project-wide (#13).** The core library now compiles
   with `<Nullable>enable</Nullable>`: every file is null-checked by default, and the inherited
