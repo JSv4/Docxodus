@@ -147,3 +147,18 @@ test('the shipped course validates clean and escalates across the surface', () =
   assert.equal(typeof notes.target, 'function',
     'the footnote hole builds its target programmatically');
 });
+
+// ─── runningTotal ─────────────────────────────────────────────────────
+
+test('running total counts only holes the player actually scored', async () => {
+  const { runningTotal } = await import('../docx-golf.js');
+  const { total, played, assisted } = runningTotal([
+    { strokes: 3, par: 1 },                    // +2, played
+    { strokes: 1, par: 3, assisted: true },    // caddie line — no score
+    null,                                       // not yet played
+    { strokes: 2, par: 3 },                    // -1, played
+  ]);
+  assert.equal(total, 1);
+  assert.equal(played, 2);
+  assert.equal(assisted, 1);
+});

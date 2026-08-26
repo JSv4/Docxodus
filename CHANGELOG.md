@@ -14,6 +14,14 @@ All notable changes to this project will be documented in this file.
   actually attaches numbering, and the same rule applies on both authoring paths
   (`InsertParagraph` and `ReplaceText`'s declared-style payloads), so all roads produce
   the same paragraph mark.
+- **Footnote/endnote body edits no longer vanish on commit (#583).** The editor's note
+  renderer appended the backref separator as a bare text node (`" "` before the `↩`), so the
+  block's committed-text baseline carried a phantom trailing character the session's flat
+  run text does not have. Every later span-based commit of a note body then computed offsets
+  one past the session text and failed with `offset_out_of_range` — at which point the editor
+  re-rendered the block from session truth, silently reverting the user's typing. The
+  separator now lives inside the chrome element the serializer already excludes, so the
+  baseline matches the session and note edits commit like any block edit.
 - **Typed leading block markers no longer vanish on commit (#571).** The editor's
   blur-commit serializer escaped inline markdown (`*`, `_`, backticks, brackets) but not
   block-level markers, so typing `## 2.1 Termination`, `> see clause 4`, `- deliverables`,
@@ -49,6 +57,7 @@ All notable changes to this project will be documented in this file.
   has no comment club (#580) and the diff referee is blind to comment-only differences
   (#579).
 
+### Added
 - **DOCX GOLF, a demo page where the editing surface is the game (`docs/demo/golf.html`).**
   Five holes of document golf, played in the shipped ribbon editor: each hole loads a start
   document as the ball and builds a target document as the pin, and the referee is the
@@ -63,6 +72,7 @@ All notable changes to this project will be documented in this file.
   solved, and every reference reaches zero revisions within par. Demo content only
   (`docs/demo/docx-golf.js` + headless logic tests in `docs/demo/tools/`): no library
   changes, and the page runs against the pinned CDN engine as-is.
+
 ### Changed
 - **Nullable reference types are enabled project-wide (#13).** The core library now compiles
   with `<Nullable>enable</Nullable>`: every file is null-checked by default, and the inherited
