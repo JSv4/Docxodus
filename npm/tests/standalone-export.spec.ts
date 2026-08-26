@@ -927,10 +927,13 @@ test.describe('standalone paginated HTML', () => {
     expect(codes).not.toContain('comment_resolved_state_not_rendered');
 
     // This document used to fail closed under strict through those warnings; the same input
-    // must now export cleanly under the strictest policy.
+    // must now export cleanly under the strictest policy. (endnotes, not inline: an inline
+    // comment marker links to a section that mode does not render, a pre-existing dangling
+    // fragment target that strict fails on and that the retired preflight warnings used to
+    // mask by failing first — tracked separately.)
     const strict = await convert(page, source, false, {
       reviewProfile: 'final',
-      commentProfile: 'inline',
+      commentProfile: 'endnotes',
       unsupportedContent: 'strict',
     });
     expect(strict.pageCount).toBeGreaterThan(0);
