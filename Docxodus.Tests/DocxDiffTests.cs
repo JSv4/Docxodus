@@ -380,6 +380,35 @@ public class DocxDiffTests
     }
 
     [Fact]
+    public void GetRevisions_CommentOnlyDifference_IsAnnotationLayerNotARevision()
+    {
+        // Issue #579: the revision list is CONTENT-only, matching Word's own compare, which
+        // merges comments from both sides rather than redlining them. That exclusion is a
+        // deliberate contract — and it is honest only while the semantic surface this pin's
+        // second half exercises actually reports the comment, which is where the GetRevisions
+        // docs send callers ("what changed between these documents, comments included").
+        var plain = Doc("The clause under review.");
+        byte[] commentedBytes;
+        using (var session = new DocxSession(plain.DocumentByteArray))
+        {
+            var anchor = session.Project().AnchorIndex.Values
+                .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p").Anchor.Id;
+            var added = session.AddComment(anchor, null, "Reviewer", "Please reconsider this clause.");
+            Assert.True(added.Success, added.Error?.Message);
+            commentedBytes = session.Save();
+        }
+        var commented = new WmlDocument("commented.docx", commentedBytes);
+
+        Assert.Empty(DocxDiff.GetRevisions(plain, commented));
+        Assert.Empty(DocxDiff.GetRevisions(commented, plain));
+
+        var changes = DocxDiff.GetSemanticChanges(plain, commented);
+        Assert.Contains(changes.Changes, c =>
+            c.Family == Docxodus.Verification.SemanticChangeFamily.Comment
+            && c.Operation == Docxodus.Verification.SemanticChangeOperation.Insert);
+    }
+
+    [Fact]
     public void GetRevisions_StampsAuthorFromSettings()
     {
         var left = Doc("one two three");
