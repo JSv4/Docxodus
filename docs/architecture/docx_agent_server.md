@@ -380,11 +380,17 @@ entries it owned and clears child links that would otherwise dangle. Documented 
 Deliberately distinct from `docxodus_comment`: the overlay semantically tags regions for
 external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
-### `docxodus_links` — native hyperlinks and bookmarks
+### `docxodus_links` — native hyperlinks, bookmarks, and cross-references
 
 `list_hyperlinks`/`add_hyperlink`/`update_hyperlink`/`remove_hyperlink` and
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
-the first-class session API. Hyperlink targets use `kind: "external"|"internal"`; bookmark
+the first-class session API, and `insert_cross_reference` (issue #545) inserts a Word-faithful
+`REF` field targeting an existing bookmark at a character offset — a real field Word re-resolves
+on refresh, not an internal hyperlink. Its `referenceNumber`/`hyperlink`/`includePosition`
+booleans are the field's `\r`/`\h`/`\p` switches, and the written `w:fldSimple` carries a
+cached result run (the bookmarked text, or the target's auto-number under `referenceNumber`) so
+non-recomputing renderers show a faithful snapshot. A missing or incoherent bookmark fails with
+`missing_bookmark_target`. Hyperlink targets use `kind: "external"|"internal"`; bookmark
 ranges use `startAnchorId`/`startOffset` and `endAnchorId`/`endOffset`. List actions accept the
 same numeric `ProjectionScopes` flag mask as the core API, comments included — a comment
 paragraph is anchor-addressable and owns its own hyperlink relationships like any other story.

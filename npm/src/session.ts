@@ -66,6 +66,7 @@ import type {
   MutationBatchStep,
   MutationBatchStepResult,
   MutationPreconditions,
+  CrossReferenceOptions,
   ReplaceOptions,
   RevisionListEntry,
   SectionInfo,
@@ -896,6 +897,28 @@ export class DocxSession {
   insertFootnote(anchorId: string, characterOffset: number, markdown: string): EditResult {
     return JSON.parse(
       this.wasm.InsertFootnote(this.handle, anchorId, characterOffset, markdown),
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a Word-faithful internal cross-reference — a `REF` field targeting an existing
+   * bookmark — at a character offset (issue #545). The field carries a cached result run
+   * (the bookmarked text, or the target's auto-number under `referenceNumber`), so
+   * renderers that do not recompute fields show a faithful snapshot and Word updates it
+   * like a hand-authored cross-reference. A missing or incoherent bookmark fails with
+   * `missing_bookmark_target`.
+   */
+  insertCrossReference(
+    anchorId: string,
+    characterOffset: number,
+    bookmarkName: string,
+    options?: CrossReferenceOptions,
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertCrossReference(
+        this.handle, anchorId, characterOffset, bookmarkName,
+        options ? JSON.stringify(options) : "",
+      ),
     ) as EditResult;
   }
 
@@ -1905,5 +1928,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

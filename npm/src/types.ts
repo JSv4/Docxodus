@@ -1769,6 +1769,13 @@ export interface DocxodusWasmExports {
     ClearPageNumbering: (handle: number, anchor: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
     InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
+    InsertCrossReference: (
+      handle: number,
+      anchor: string,
+      characterOffset: number,
+      bookmarkName: string,
+      optionsJson: string
+    ) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
     // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).
@@ -2849,6 +2856,17 @@ export interface CrossBlockMatch {
   groups: string[];
   /** One per enclosingAnchors entry when requested. */
   citations?: PageCitation[];
+}
+
+/**
+ * Options for {@link DocxSession.insertCrossReference} — each flag is one of the REF
+ * field's switches: `\r` (reference the target's auto-number), `\h` (hyperlink),
+ * `\p` (relative position, cached as "above"/"below").
+ */
+export interface CrossReferenceOptions {
+  referenceNumber?: boolean;
+  hyperlink?: boolean;
+  includePosition?: boolean;
 }
 
 /**

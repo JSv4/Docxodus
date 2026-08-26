@@ -14,6 +14,7 @@ import pytest
 
 from docx_scalpel import (
     CharSpan,
+    CrossReferenceOptions,
     DocumentRange,
     DocxSession,
     HeaderFooterKind,
@@ -250,3 +251,34 @@ def test_tracked_render_inline_rejects_metadata_mutations(
 
     assert session.list_hyperlinks() == ()
     assert all(b.name != "Tracked" for b in session.list_bookmarks())
+
+
+def test_insert_cross_reference_writes_ref_field_with_typed_failures(
+    session: DocxSession, paragraphs: list[str]
+) -> None:
+    """Issue #545: a Word-faithful REF field targeting a bookmark, with the switch
+    options shaping the instruction, and structured errors an agent can branch on."""
+    assert session.add_bookmark(
+        "Alpha", DocumentRange(paragraphs[0], 0, paragraphs[0], 5)
+    ).success
+
+    inserted = session.insert_cross_reference(
+        paragraphs[1],
+        0,
+        "Alpha",
+        CrossReferenceOptions(hyperlink=True, include_position=True),
+    )
+    assert inserted.success, inserted.error
+    assert [ref.id for ref in inserted.modified] == [paragraphs[1]]
+
+    xml = session.raw.get_xml(paragraphs[1])
+    assert "fldSimple" in xml
+    assert "REF Alpha" in xml
+    assert "\\h" in xml and "\\p" in xml
+    # The bookmark sits above the field, so the position-only cached result is "above".
+    assert ">above<" in xml
+
+    missing = session.insert_cross_reference(paragraphs[1], 0, "Nope")
+    assert not missing.success
+    assert missing.error is not None
+    assert missing.error.code is EditErrorCode.MISSING_BOOKMARK_TARGET

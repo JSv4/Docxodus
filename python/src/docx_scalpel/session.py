@@ -98,6 +98,7 @@ from .types import (
     PageMapStatus,
     PackageManifest,
     PackageManifestInspectionLimits,
+    CrossReferenceOptions,
     ReplaceOptions,
     RevisionListEntry,
     SectionInfo,
@@ -1535,6 +1536,30 @@ class DocxSession:
         )
 
     # -- Footnotes / endnotes ---------------------------------------------
+
+    def insert_cross_reference(
+        self,
+        anchor_id: str,
+        character_offset: int,
+        bookmark_name: str,
+        options: CrossReferenceOptions | None = None,
+    ) -> EditResult:
+        """Insert a Word-faithful internal cross-reference — a ``REF`` field targeting an
+        existing bookmark — at ``character_offset`` within the paragraph ``anchor_id``.
+
+        The field carries a cached result run (the bookmarked text, or the target's
+        auto-number under ``reference_number``), so renderers that do not recompute fields
+        show a faithful snapshot and Word updates it like a hand-authored cross-reference.
+        A missing or incoherent bookmark fails with ``MISSING_BOOKMARK_TARGET``.
+        """
+        args: dict[str, Any] = {
+            "anchorId": anchor_id,
+            "characterOffset": character_offset,
+            "bookmarkName": bookmark_name,
+        }
+        if options is not None:
+            args["options"] = options.to_wire()
+        return EditResult._from_wire(self._call("insert_cross_reference", args))
 
     def insert_footnote(
         self, anchor_id: str, character_offset: int, markdown: str
