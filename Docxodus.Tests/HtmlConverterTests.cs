@@ -4659,6 +4659,93 @@ namespace OxPt
         }
 
         /// <summary>A document where one comment range spans both a w:ins run and a w:del run.</summary>
+        private static byte[] BuildDocWithCustomXmlRevisionRanges()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    var date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                    body.Append(new Paragraph(
+                        new Run(new Text("Before the range. ")),
+                        new CustomXmlInsRangeStart { Id = "301", Author = "Reviewer", Date = date },
+                        new Run(new Text("INSIDE-INS-RANGE")),
+                        new CustomXmlInsRangeEnd { Id = "301" },
+                        new Run(new Text(" between ")),
+                        new CustomXmlDelRangeStart { Id = "302", Author = "Reviewer", Date = date },
+                        new Run(new Text("INSIDE-DEL-RANGE")),
+                        new CustomXmlDelRangeEnd { Id = "302" },
+                        new Run(new Text(" after."))));
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC065_CustomXmlRevisionRanges_DrawVisibleMarkers()
+        {
+            // Issue #538: a custom XML revision range marks a reviewer's tracked add/remove of
+            // a structural wrapper. The wrapper has no text of its own, so under markup each
+            // boundary must draw a perceivable marker carrying the author metadata — a tracked
+            // change that leaves no mark breaks the markup profile's promise silently.
+            byte[] docBytes = BuildDocWithCustomXmlRevisionRanges();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+
+                    // One start and one end marker per range, kind-addressable for CSS.
+                    Assert.Contains("rev-cxml-ins-start", htmlString);
+                    Assert.Contains("rev-cxml-ins-end", htmlString);
+                    Assert.Contains("rev-cxml-del-start", htmlString);
+                    Assert.Contains("rev-cxml-del-end", htmlString);
+                    // The range's own content still renders, between the markers.
+                    Assert.Contains("INSIDE-INS-RANGE", htmlString);
+                    Assert.Contains("INSIDE-DEL-RANGE", htmlString);
+                    // Author metadata is exposed like every other drawn revision family.
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+                    // The stylesheet ships the marker styling it references.
+                    Assert.Contains("rev-cxml-marker", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC066_CustomXmlRevisionRanges_InvisibleWhenNotRenderingTrackedChanges()
+        {
+            byte[] docBytes = BuildDocWithCustomXmlRevisionRanges();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(
+                        wDoc, new WmlToHtmlConverterSettings()).ToString();
+
+                    Assert.DoesNotContain("rev-cxml", htmlString);
+                    Assert.Contains("INSIDE-INS-RANGE", htmlString);
+                    Assert.Contains("INSIDE-DEL-RANGE", htmlString);
+                }
+            }
+        }
+
         private static byte[] BuildDocWithCommentSpanningRevisions()
         {
             using (MemoryStream ms = new MemoryStream())

@@ -819,16 +819,12 @@ test.describe('standalone paginated HTML', () => {
     const markup = await convert(page, source, false, { reviewProfile: 'markup' });
     const warnings = markup.renderReport.warnings;
 
-    // One custom XML range, and two of the three property revisions: the rPrChange beside them
-    // is drawn as a marked format change, so the count must exclude it.
-    expect(warnings).toContainEqual(expect.objectContaining({
-      code: 'revision_family_not_rendered',
-      severity: 'warning',
-      phase: 'package_preflight',
-      message: '1 custom XML revision range is present but is not drawn as markup.',
-      detail: 'customXmlInsRangeStart, customXmlDelRangeStart, customXmlMoveFromRangeStart, '
-        + 'customXmlMoveToRangeStart',
-    }));
+    // The custom XML range is DRAWN since issue #538 (bracket boundary markers), so the old
+    // revision_family_not_rendered warning must never fire for it. Of the three property
+    // revisions, only two warn: the rPrChange beside them is drawn as a marked format change,
+    // so the count must exclude it.
+    expect(warnings.map((warning) => warning.code))
+      .not.toContain('revision_family_not_rendered');
     expect(warnings).toContainEqual(expect.objectContaining({
       code: 'revision_property_change_not_rendered',
       severity: 'warning',

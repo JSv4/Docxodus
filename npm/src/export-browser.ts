@@ -1633,12 +1633,13 @@ async function preflightManifest(
 /**
  * Warns for tracked-revision families the markup profile cannot draw.
  *
- * The converter draws insertions, deletions, moves, run-level format changes, and tracked cell
- * insert/delete/merge (as tinted, struck-through or dashed cells). What it never draws is a custom
- * XML revision range, and the block-level property revisions — paragraph, table, section and
- * numbering — which travel through the projection untouched but leave no mark a reader can see.
+ * The converter draws insertions, deletions, moves, run-level format changes, tracked cell
+ * insert/delete/merge (as tinted, struck-through or dashed cells), and — since issue #538 —
+ * custom XML revision ranges (as bracket boundary markers). What it still never draws is the
+ * block-level property revisions — paragraph, table, section and numbering — which travel
+ * through the projection untouched but leave no mark a reader can see.
  *
- * Only `markup` needs these. `final` and `original` apply the projection and then assert the
+ * Only `markup` needs this. `final` and `original` apply the projection and then assert the
  * derived package has no revisions left at all, so an unrenderable family cannot survive them
  * silently — it fails the projection instead.
  */
@@ -1649,18 +1650,6 @@ function warnUnrenderedRevisionFamilies(
 ): void {
   if (options.reviewProfile !== "markup") return;
   const revisions = manifest.facts.revisions;
-  const customXmlRanges = revisions.otherChanges;
-  if (customXmlRanges > 0) {
-    policyWarning(state, options, {
-      code: "revision_family_not_rendered",
-      phase: "package_preflight",
-      message: customXmlRanges === 1
-        ? "1 custom XML revision range is present but is not drawn as markup."
-        : `${customXmlRanges} custom XML revision ranges are present but are not drawn as markup.`,
-      remediation: "Use the final or original profile, or resolve the custom XML revisions before export.",
-      detail: "customXmlInsRangeStart, customXmlDelRangeStart, customXmlMoveFromRangeStart, customXmlMoveToRangeStart",
-    });
-  }
   // rPrChange is the one property revision the converter draws (as a marked format change), so
   // only the remainder is unrepresented. The manifest counts that subset for exactly this reason;
   // reporting the combined figure would fail a strict export whose content is fully drawn.
