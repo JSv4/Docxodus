@@ -560,7 +560,7 @@ internal static class IrMarkdownEmitter
     {
         IrTextRun tr => tr.Text.Length > 0,
         IrHyperlink h => h.Inlines.Any(RunHasText),
-        IrFieldRun f => !f.IsSimpleField && f.CachedResult.Any(RunHasText),
+        IrFieldRun f => f.CachedResult.Any(RunHasText),
         _ => false,
     };
 
@@ -998,11 +998,10 @@ internal static class IrMarkdownEmitter
                     Add(tr, ReadRunFmt(tr.Format));
                     break;
                 case IrFieldRun f:
-                    // A w:fldSimple is DROPPED from the markdown (the oracle's GroupInlineRuns walks
-                    // only w:r/w:hyperlink/w:ins/w:del, never w:fldSimple) — though its text still
-                    // counts toward TextPreview/cell text (Descendants(w:t)), handled in AppendInlineText.
-                    if (f.IsSimpleField) break;
-                    // Run-based field result runs ARE direct w:r children → the oracle emits them.
+                    // Both field spellings emit their cached-result text (issue #559): the oracle's
+                    // GroupInlineRuns projects a w:fldSimple's runs as ordinary text inside a Flush
+                    // bracket, and run-based field result runs are direct w:r children it always
+                    // emitted. The field stays atomic for mutation addressing either way.
                     Flush();
                     foreach (var rr in f.CachedResult)
                         if (rr is IrTextRun ftr) Add(ftr, ReadRunFmt(ftr.Format));
@@ -1086,8 +1085,7 @@ internal static class IrMarkdownEmitter
                     AppendRunText(inner, sb, ctx);
                 break;
             case IrFieldRun f:
-                // A w:fldSimple is not rendered (see GroupInlineRuns); run-based field result recurses.
-                if (f.IsSimpleField) break;
+                // Both field spellings render their cached result (issue #559; see GroupInlineRuns).
                 foreach (var inner in f.CachedResult)
                     AppendRunText(inner, sb, ctx);
                 break;

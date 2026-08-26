@@ -397,10 +397,11 @@ public class IrMarkdownRuleTests
             "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>"));
     }
 
-    /// <summary>A <c>w:fldSimple</c> is DROPPED from the rendered markdown (the oracle's GroupInlineRuns
-    /// never visits a w:fldSimple), so the paragraph projects only its surrounding text.</summary>
+    /// <summary>A <c>w:fldSimple</c>'s cached-result runs project as ordinary text (issue #559: the
+    /// oracle's GroupInlineRuns emits them inside a Flush bracket, so a Word-authored REF/STYLEREF/SEQ
+    /// field no longer leaves a hole in the markdown an agent reads).</summary>
     [Fact]
-    public void Rule_FldSimple_DroppedFromMarkdown()
+    public void Rule_FldSimple_CachedResultProjectsAsText()
     {
         AssertEquivalent(IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t xml:space=\"preserve\">Date: </w:t></w:r>" +
