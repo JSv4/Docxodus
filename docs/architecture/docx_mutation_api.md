@@ -568,7 +568,20 @@ EditResult AddBookmark(string name, DocumentRange range);
 EditResult RenameBookmark(string name, string newName);
 EditResult MoveBookmark(string name, DocumentRange range);
 EditResult RemoveBookmark(string name);
+
+EditResult InsertCrossReference(string anchorId, int characterOffset, string bookmarkName,
+    CrossReferenceOptions? options = null);
 ```
+
+`InsertCrossReference` (issue #545) writes a Word-faithful internal cross-reference: a
+`w:fldSimple` whose instruction is `REF <bookmark>` plus the requested switches
+(`ReferenceNumber` → `\r`, `Hyperlink` → `\h`, `IncludePosition` → `\p`), inserted at a
+character offset with the same run-splitting discipline as `InsertFootnote`. The cached result
+run holds what Word would currently render — the bookmarked text, the target's auto-number
+under `\r` (`0` when the target is unnumbered, as Word shows), and/or the `above`/`below`
+position word — so non-recomputing renderers display a faithful snapshot while Word updates
+the field like any hand-authored cross-reference. The bookmark must already exist as one
+coherent same-story pair; otherwise the op fails with `MissingBookmarkTarget`.
 
 `HyperlinkTarget.External(uri)` creates or reuses a hyperlink relationship on the XML part that
 owns the link. A header link is related from its `HeaderPart`, a footnote link from its

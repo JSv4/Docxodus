@@ -3388,6 +3388,27 @@ class FindOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossReferenceOptions:
+    """Options for ``DocxSession.insert_cross_reference`` — the REF field's switches:
+    ``\\r`` (reference the target's auto-number), ``\\h`` (hyperlink), ``\\p``
+    (relative position, cached as "above"/"below")."""
+
+    reference_number: bool = False
+    hyperlink: bool = False
+    include_position: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        wire: dict[str, Any] = {}
+        if self.reference_number:
+            wire["referenceNumber"] = True
+        if self.hyperlink:
+            wire["hyperlink"] = True
+        if self.include_position:
+            wire["includePosition"] = True
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
 class ReplaceOptions:
     """Options for ``replace_text_range``."""
 

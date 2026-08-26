@@ -14,6 +14,29 @@ using Docxodus.Internal;
 
 namespace Docxodus;
 
+/// <summary>Options for <see cref="DocxSession.InsertCrossReference"/> — each flag is one
+/// of the <c>REF</c> field's switches.</summary>
+public sealed record CrossReferenceOptions
+{
+    /// <summary>Emit the <c>\r</c> switch: the field shows the bookmarked paragraph's
+    /// auto-number (in relative context) instead of the bookmarked text. The cached result
+    /// is the target's resolved number, or <c>0</c> when the target carries none — the same
+    /// value Word renders for an unnumbered target.</summary>
+    public bool ReferenceNumber { get; init; }
+
+    /// <summary>Emit the <c>\h</c> switch: Word treats the field as a hyperlink jumping to
+    /// the bookmark. No <c>w:hyperlink</c> wrapper is written — the switch itself carries
+    /// the behavior, exactly as Word authors it.</summary>
+    public bool Hyperlink { get; init; }
+
+    /// <summary>Emit the <c>\p</c> switch: the field shows its position relative to the
+    /// bookmark. Alone, the cached result is just <c>above</c>/<c>below</c>; combined with
+    /// <see cref="ReferenceNumber"/> the position word is appended — Word's own composition
+    /// rules. When the bookmark lives in a different story than the field, no position word
+    /// is cached (Word recomputes on open either way).</summary>
+    public bool IncludePosition { get; init; }
+}
+
 public sealed partial class DocxSession
 {
     private static readonly XNamespace LinkR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -275,6 +298,130 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
+
+    /// <summary>
+    /// Insert a Word-faithful internal cross-reference — a <c>REF</c> field targeting
+    /// <paramref name="bookmarkName"/> — at <paramref name="characterOffset"/> within the
+    /// paragraph named by <paramref name="anchorId"/> (issue #545). The field is written as a
+    /// <c>w:fldSimple</c> whose instruction carries the requested switches and whose cached
+    /// result run holds the value Word would currently render (the bookmarked text, or the
+    /// target's auto-number under <c>\r</c>), so renderers that do not recompute fields show a
+    /// faithful snapshot and Word updates it like any hand-authored cross-reference. This is a
+    /// real <c>REF</c> field, not an internal hyperlink: it re-resolves with the target's
+    /// number/text when Word refreshes fields. The bookmark must already exist as one coherent
+    /// same-story pair (<see cref="AddBookmark"/> creates one); a missing or incoherent target
+    /// fails with <see cref="EditErrorCode.MissingBookmarkTarget"/>.
+    /// </summary>
+    public EditResult InsertCrossReference(
+        string anchorId,
+        int characterOffset,
+        string bookmarkName,
+        CrossReferenceOptions? options = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        // The name is embedded verbatim in the field instruction, so the same lexical rule
+        // AddBookmark enforces also keeps the instruction well-formed. Word's own reserved
+        // names (_Ref…) are legal targets — inserting a cross-reference is exactly what
+        // allocates them in Word.
+        if (string.IsNullOrEmpty(bookmarkName) || !BookmarkNamePattern.IsMatch(bookmarkName))
+            return EditResult.Fail(EditErrorCode.InvalidBookmarkName,
+                $"bookmark name must match {BookmarkNamePattern}: '{bookmarkName}'", anchorId);
+
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"InsertCrossReference requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}",
+                anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+
+        var totalText = ParagraphText(element);
+        if (characterOffset < 0 || characterOffset > totalText.Length)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+        if (HasUnsupportedInlineInsertionBoundary(element, characterOffset))
+            return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
+                "InsertCrossReference offset falls inside a revision or unsupported inline container; " +
+                "choose a boundary before or after that container", anchorId);
+
+        if (ResolveBookmarkPair(bookmarkName, hyperlinkTarget: true, anchorId,
+                out var bookmarkStart, out _) is { } pairError)
+            return pairError;
+
+        var opts = options ?? new CrossReferenceOptions();
+        string cached;
+        if (opts.ReferenceNumber)
+        {
+            var prefix = ResolveBookmarkAnchors(bookmarkName)
+                .Select(covered => covered.AutoNumberPrefix)
+                .FirstOrDefault(value => !string.IsNullOrEmpty(value));
+            cached = prefix ?? "0";
+        }
+        else
+        {
+            cached = BookmarkedText(bookmarkName);
+        }
+
+        if (opts.IncludePosition)
+        {
+            // The position word needs both nodes in one tree; a cross-story reference leaves it
+            // to Word's field refresh (the instruction still carries \p either way).
+            var fieldRoot = element.AncestorsAndSelf().Last();
+            var bookmarkRoot = bookmarkStart.AncestorsAndSelf().Last();
+            if (ReferenceEquals(fieldRoot, bookmarkRoot))
+            {
+                var word = XNode.DocumentOrderComparer.Compare(bookmarkStart, element) < 0
+                    ? "above"
+                    : "below";
+                cached = opts.ReferenceNumber ? cached + " " + word : word;
+            }
+        }
+
+        var instruction = new StringBuilder(" REF ").Append(bookmarkName).Append(' ');
+        if (opts.ReferenceNumber) instruction.Append("\\r ");
+        if (opts.IncludePosition) instruction.Append("\\p ");
+        if (opts.Hyperlink) instruction.Append("\\h ");
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            SplitRunsAtOffset(element, characterOffset);
+            SplitInlineContainersAtOffset(element, characterOffset);
+            var cachedText = new XElement(W.t, cached);
+            if (cached.Length == 0 || char.IsWhiteSpace(cached[0]) || char.IsWhiteSpace(cached[^1]))
+                cachedText.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+            var field = new XElement(W.fldSimple,
+                new XAttribute(W.instr, instruction.ToString()),
+                new XElement(W.r, cachedText));
+            UnidHelper.AssignToSelfAndDescendants(field);
+            InsertInlineAtOffset(element, characterOffset, field);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>The visible text the bookmark's start/end markers span — the value a
+    /// <c>REF</c> field caches, taken from the same segment machinery
+    /// <see cref="ListBookmarks"/> reports (paragraph-local slices joined with newlines).</summary>
+    private string BookmarkedText(string bookmarkName) =>
+        ListBookmarks().FirstOrDefault(bookmark =>
+            string.Equals(bookmark.Name, bookmarkName, StringComparison.Ordinal))?.Text
+        ?? string.Empty;
 
     public EditResult AddBookmark(string name, DocumentRange range)
     {

@@ -520,6 +520,30 @@ public static partial class DocxSessionBridge
     public static string InsertEndnote(int h, string anchor, int characterOffset, string markdown) =>
         DocxSessionOps.InsertEndnote(h, anchor, characterOffset, markdown);
 
+    /// <summary>Insert a REF-field internal cross-reference at a character offset (issue #545).
+    /// <paramref name="optionsJson"/> is <c>""</c> for defaults or
+    /// <c>{"referenceNumber":bool,"hyperlink":bool,"includePosition":bool}</c> — the field's
+    /// <c>\r</c>/<c>\h</c>/<c>\p</c> switches.</summary>
+    [JSExport]
+    public static string InsertCrossReference(
+        int h, string anchor, int characterOffset, string bookmarkName, string optionsJson)
+    {
+        CrossReferenceOptions? options = null;
+        if (!string.IsNullOrEmpty(optionsJson))
+        {
+            using var doc = JsonDocument.Parse(optionsJson);
+            var root = doc.RootElement;
+            options = new CrossReferenceOptions
+            {
+                ReferenceNumber = DocxSessionJson.TryGetBool(root, "referenceNumber", false),
+                Hyperlink = DocxSessionJson.TryGetBool(root, "hyperlink", false),
+                IncludePosition = DocxSessionJson.TryGetBool(root, "includePosition", false),
+            };
+        }
+
+        return DocxSessionOps.InsertCrossReference(h, anchor, characterOffset, bookmarkName, options);
+    }
+
     /// <summary>
     /// Add a native Word comment on body paragraph <paramref name="anchor"/> (issue #300).
     /// <paramref name="spanJson"/> is <c>""</c> for the whole block or

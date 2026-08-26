@@ -614,6 +614,14 @@ internal static class Dispatcher
         "move_bookmark" => BookmarkRangeAction(session, args, move: true),
         "rename_bookmark" => DocxSessionOps.RenameBookmark(session.Handle, Str(args, "name"), Str(args, "newName")),
         "remove_bookmark" => DocxSessionOps.RemoveBookmark(session.Handle, Str(args, "name")),
+        "insert_cross_reference" => DocxSessionOps.InsertCrossReference(session.Handle,
+            Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "bookmarkName"),
+            new CrossReferenceOptions
+            {
+                ReferenceNumber = BoolOpt(args, "referenceNumber", false),
+                Hyperlink = BoolOpt(args, "hyperlink", false),
+                IncludePosition = BoolOpt(args, "includePosition", false),
+            }),
         _ => throw new McpToolException($"unknown docxodus_links action: {action}"),
     };
 
@@ -1326,7 +1334,8 @@ internal static class Dispatcher
                 or "set_start" or "clear_start" or "remove",
             "docxodus_comment" => action is "add" or "reply" or "resolve" or "update" or "remove",
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
-                or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark",
+                or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark"
+                or "insert_cross_reference",
             "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
             "docxodus_content_controls" => action is "fill_text" or "fill_rich_text"
