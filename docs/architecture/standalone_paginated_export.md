@@ -576,12 +576,11 @@ source. When #465 supplies an already policy-derived exact profile source, the r
 bytes directly and never applies the policy a second time.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
-range, body, author, and date in body, headers, footers, footnotes, and endnotes. Comment topology
-is not drawn: a reply renders as an independent comment and resolved state is not represented,
-disclosed as `comment_thread_flattened` and `comment_resolved_state_not_rendered` (see "Revision
-and comment families that are not drawn" below). An unsupported story or revision/comment family
-produces a structured warning naming the family; strict unsupported-content policy fails. HTML,
-PDF, CLI, and #465 use these exact strings.
+range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the
+topology recorded in `commentsExtended` — threaded replies and resolved state (see "Revision and
+comment rendering under the profiles" below). An unsupported story produces a structured warning
+naming it; strict unsupported-content policy fails. HTML, PDF, CLI, and #465 use these exact
+strings.
 
 ## Readiness and diagnostics
 
@@ -723,29 +722,29 @@ for a family it has never heard of. `strictFonts` rejects any outcome that is no
 digest-identified, license-evidenced face with complete glyph coverage, which is why a
 browser-observed environment can never satisfy it.
 
-### Revision and comment families that are not drawn
+### Revision and comment rendering under the profiles
 
-`markup` draws insertions, deletions, moves, run-level format changes, tracked cell
-insert/delete/merge — the last as tinted, struck-through or dashed cells — and, since issue
-#538, custom XML revision ranges: each range boundary renders as a bracket marker in the
-family's revision color, titled with the change and its author, because the revision has no
-text of its own to strike or underline. One family still travels through the projection
-untouched and leaves no mark a reader can see, so it is reported rather than approximated:
-the block-level property revisions — paragraph, table, section and numbering — raise
-`revision_property_change_not_rendered`.
+`markup` draws every tracked-revision family: insertions, deletions, moves, run-level format
+changes, tracked cell insert/delete/merge — as tinted, struck-through or dashed cells — custom
+XML revision ranges (issue #538: each range boundary renders as a bracket marker in the family's
+revision color, titled with the change and its author, because the revision has no text of its
+own to strike or underline), and, since issue #539, the block-level property revisions:
+paragraph, table, row, cell and section property changes each mark their block with a titled
+goldenrod change bar or outline. No revision family warns anymore —
+`revision_property_change_not_rendered` and its predecessor `revision_family_not_rendered` are
+retired, and their specs now pin the drawing and the silence together so neither warning can
+come back without the render evidence going with it.
 
-That second warning counts only what is missing. `rPrChange` is a property revision the converter
-does draw, so the manifest counts it separately as `runPropertyChanges` and the warning reports
-`propertyChanges - runPropertyChanges`. Splitting the count in the inventory rather than
-approximating it in the export is what keeps `unsupportedContent: "strict"` honest: a document
-whose only property revisions are run-level format changes is drawn in full and must not fail
-closed. The split costs no extra work — it is one more counter in the pass the manifest already
-makes, not a second inventory pass over the package.
+The manifest still counts `runPropertyChanges` separately from `propertyChanges`. The split is
+kept as inventory — it costs one counter in a pass the manifest already makes, and callers who
+told the two families apart by it keep that visibility even though nothing warns on the
+difference anymore.
 
-`final` and `original` need no such warnings. They apply the projection and then assert the derived
-package retains no revisions at all, so a family that cannot be applied fails the projection instead
-of passing through unseen. This is also what keeps the source package intact: the projection derives
-a new package and the original bytes are never accepted, rejected, or rewritten in place.
+`final` and `original` never needed the warnings. They apply the projection and then assert the
+derived package retains no revisions at all, so a family that cannot be applied fails the
+projection instead of passing through unseen. This is also what keeps the source package intact:
+the projection derives a new package and the original bytes are never accepted, rejected, or
+rewritten in place.
 
 Any visible comment profile also draws the topology recorded in `commentsExtended` (issue
 #540): a reply nests beneath its thread root — an inner replies list in the endnotes section,

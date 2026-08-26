@@ -1624,51 +1624,11 @@ async function preflightManifest(
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
   }
-  // Comment topology now renders (issue #540): replies nest beneath their thread root and
-  // resolved comments carry a badge and muted styling in every visible comment profile, so
-  // there is no longer a comment warning to raise here.
-  if (isSourcePackage) {
-    warnUnrenderedRevisionFamilies(manifest, state, options);
-  }
-}
-
-/**
- * Warns for tracked-revision families the markup profile cannot draw.
- *
- * The converter draws insertions, deletions, moves, run-level format changes, tracked cell
- * insert/delete/merge (as tinted, struck-through or dashed cells), and — since issue #538 —
- * custom XML revision ranges (as bracket boundary markers). What it still never draws is the
- * block-level property revisions — paragraph, table, section and numbering — which travel
- * through the projection untouched but leave no mark a reader can see.
- *
- * Only `markup` needs this. `final` and `original` apply the projection and then assert the
- * derived package has no revisions left at all, so an unrenderable family cannot survive them
- * silently — it fails the projection instead.
- */
-function warnUnrenderedRevisionFamilies(
-  manifest: PackageManifest,
-  state: ExecutionState,
-  options: NormalizedOptions,
-): void {
-  if (options.reviewProfile !== "markup") return;
-  const revisions = manifest.facts.revisions;
-  // rPrChange is the one property revision the converter draws (as a marked format change), so
-  // only the remainder is unrepresented. The manifest counts that subset for exactly this reason;
-  // reporting the combined figure would fail a strict export whose content is fully drawn.
-  const blockPropertyChanges = revisions.propertyChanges - revisions.runPropertyChanges;
-  if (blockPropertyChanges > 0) {
-    policyWarning(state, options, {
-      code: "revision_property_change_not_rendered",
-      phase: "package_preflight",
-      message: blockPropertyChanges === 1
-        ? "1 paragraph, table, section, or numbering property revision is present but is not drawn as markup."
-        : `${blockPropertyChanges} paragraph, table, section, and numbering property revisions are `
-          + "present but are not drawn as markup.",
-      remediation: "Use the final or original profile when block-level property revisions must be reflected in the output.",
-      detail: "numberingChange, pPrChange, sectPrChange, tblGridChange, tblPrChange, "
-        + "tblPrExChange, tcPrChange, trPrChange",
-    });
-  }
+  // Every family the preflight once reported now draws: all tracked-revision families —
+  // insertions, deletions, moves, run and block property changes (issue #539), tracked cell
+  // revisions, custom XML revision ranges (issue #538) — and, since issue #540, comment
+  // topology (replies nest beneath their thread root, resolved comments are badged and muted),
+  // so there is no revision or comment warning left to raise here.
 }
 
 function conversionOptions(options: NormalizedOptions) {

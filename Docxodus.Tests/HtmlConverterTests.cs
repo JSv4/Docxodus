@@ -4746,6 +4746,120 @@ namespace OxPt
             }
         }
 
+        private static byte[] BuildDocWithBlockPropertyRevisions()
+        {
+            const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var body =
+                $"<w:body xmlns:w=\"{w}\">" +
+                // Paragraph whose properties changed with tracking on (was centered, now default).
+                "<w:p><w:pPr>" +
+                "<w:pPrChange w:id=\"501\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:pPr><w:jc w:val=\"center\"/></w:pPr></w:pPrChange>" +
+                "</w:pPr><w:r><w:t>Re-aligned paragraph.</w:t></w:r></w:p>" +
+                // Paragraph whose numbering changed.
+                "<w:p><w:pPr>" +
+                "<w:numberingChange w:id=\"502\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"/>" +
+                "</w:pPr><w:r><w:t>Renumbered paragraph.</w:t></w:r></w:p>" +
+                // Table with tracked table-level, grid, row, row-exception, and cell property changes.
+                "<w:tbl>" +
+                "<w:tblPr><w:tblPrChange w:id=\"503\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:tblPr/></w:tblPrChange></w:tblPr>" +
+                "<w:tblGrid><w:gridCol w:w=\"4000\"/>" +
+                "<w:tblGridChange w:id=\"504\"><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid></w:tblGridChange>" +
+                "</w:tblGrid>" +
+                "<w:tr><w:trPr>" +
+                "<w:trPrChange w:id=\"505\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"><w:trPr/></w:trPrChange>" +
+                "</w:trPr>" +
+                "<w:tblPrEx><w:tblPrExChange w:id=\"506\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:tblPrEx/></w:tblPrExChange></w:tblPrEx>" +
+                "<w:tc><w:tcPr>" +
+                "<w:tcPrChange w:id=\"507\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"><w:tcPr/></w:tcPrChange>" +
+                "</w:tcPr><w:p><w:r><w:t>Restyled cell.</w:t></w:r></w:p></w:tc></w:tr>" +
+                "</w:tbl>" +
+                "<w:p><w:r><w:t>Tail paragraph.</w:t></w:r></w:p>" +
+                // Trailing section properties changed with tracking on.
+                "<w:sectPr><w:sectPrChange w:id=\"508\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:sectPr/></w:sectPrChange></w:sectPr>" +
+                "</w:body>";
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document(new Body());
+                    main.Document.Save();
+                    var xd = main.GetXDocument();
+                    xd.Root.Element(XName.Get("body", w))
+                        .ReplaceWith(XElement.Parse(body));
+                    main.PutXDocument();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC067_BlockPropertyRevisions_DrawPerceivableMarks()
+        {
+            // Issue #539: Word records a tracked formatting change by storing the previous
+            // properties beside the current ones. The block renders in its CURRENT state, so
+            // without a mark the reviewer's re-indent, table restyle, or section change is
+            // invisible under markup — each family must leave a perceivable, kind-addressable
+            // trace with the author metadata the other families expose.
+            byte[] docBytes = BuildDocWithBlockPropertyRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                    };
+
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+
+                    Assert.Contains("rev-para-format-change", htmlString);   // pPrChange + numberingChange
+                    Assert.Contains("rev-table-format-change", htmlString);  // tblPrChange / tblGridChange
+                    Assert.Contains("rev-row-format-change", htmlString);    // trPrChange / tblPrExChange
+                    Assert.Contains("rev-cell-format-change", htmlString);   // tcPrChange
+                    Assert.Contains("rev-section-format-change", htmlString); // sectPrChange
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+                    // The stylesheet ships the marks it references.
+                    Assert.Contains("format-change", GetCssText(htmlString));
+                }
+            }
+        }
+
+        private static string GetCssText(string htmlString)
+        {
+            var html = XElement.Parse(htmlString);
+            return string.Concat(html.Descendants()
+                .Where(e => e.Name.LocalName == "style")
+                .Select(e => e.Value));
+        }
+
+        [Fact]
+        public void HC068_BlockPropertyRevisions_InvisibleWhenNotRenderingTrackedChanges()
+        {
+            byte[] docBytes = BuildDocWithBlockPropertyRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(
+                        wDoc, new WmlToHtmlConverterSettings()).ToString();
+
+                    Assert.DoesNotContain("format-change", htmlString);
+                    Assert.Contains("Re-aligned paragraph.", htmlString);
+                    Assert.Contains("Restyled cell.", htmlString);
+                }
+            }
+        }
+
         private static byte[] BuildDocWithCommentSpanningRevisions()
         {
             using (MemoryStream ms = new MemoryStream())

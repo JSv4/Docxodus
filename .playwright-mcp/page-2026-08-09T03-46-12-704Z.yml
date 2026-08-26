@@ -1,0 +1,12 @@
+- generic [ref=f3e2]:
+  - generic [ref=f3e3]: DOCX
+  - generic [ref=f3e10]: Private · local · WebAssembly
+  - heading "Word editing. Inside this box." [level=1] [ref=f3e11]: Word editing.Inside this box.
+  - paragraph [ref=f3e12]: A real DOCX engine—not a screenshot. Edit native document content and save the Word file locally.
+  - generic [ref=f3e13]:
+    - generic [ref=f3e14]: "01"
+    - generic [ref=f3e15]:
+      - strong [ref=f3e16]: Zero uploads
+      - generic [ref=f3e17]: Your document never leaves this browser.
+  - button "▶ Launch the live editor" [ref=f3e18] [cursor=pointer]
+  - status [ref=f3e19]: Ready when you are

@@ -14,22 +14,17 @@ All notable changes to this project will be documented in this file.
   **A caller that relied on the empty-list no-op** should pass `ExpectedMatchCount = 0`
   (`expectedMatchCount` on the wire) to assert absence as a successful no-op;
   `MaxReplacements = 0` likewise remains a successful found-but-unconsumed no-op.
-- **Revision and comment export profiles report what they cannot draw (#444).** Under `markup`,
-  a block-level property revision — paragraph, table, section or numbering — raises
-  `revision_property_change_not_rendered` (custom XML revision ranges briefly raised
-  `revision_family_not_rendered` in this cycle; #538 below draws them instead, so that
-  warning no longer exists). Under any visible comment profile, comment threading
-  raises `comment_thread_flattened` and resolved state raises
+- **Comment export profiles report what they cannot draw (#444).** Under any visible comment
+  profile, comment threading raises `comment_thread_flattened` and resolved state raises
   `comment_resolved_state_not_rendered`, because the topology in `commentsExtended` is not read: a
   reply is drawn as an independent comment and a resolved comment is indistinguishable from an open
-  one. `final` and `original` need none of the revision warnings — they apply the projection and
-  then assert no revision survived it, so an unrenderable family fails the projection instead of
-  passing through unseen. All four route through the `unsupportedContent` policy, so **an existing
-  caller passing `unsupportedContent: "strict"` now gets a closed `resource_policy_failure` where
-  such a document previously exported**; pass `"warn"` to keep the old outcome. Warnings count only
-  what is actually missing: `rPrChange` and tracked cell insert/delete/merge are drawn, so neither
-  is reported, and the package manifest gains `revisions.runPropertyChanges` so the property count
-  can be split without a second inventory pass. The profile contract is now also pinned where it
+  one. (#444 also introduced revision warnings — `revision_family_not_rendered` and
+  `revision_property_change_not_rendered` — but #538 and #539 below draw those families in this
+  same cycle, so neither warning ships.) Both route through the `unsupportedContent` policy, so
+  **an existing caller passing `unsupportedContent: "strict"` now gets a closed
+  `resource_policy_failure` where such a document previously exported**; pass `"warn"` to keep the
+  old outcome. The package manifest gains `revisions.runPropertyChanges`, splitting run-level from
+  block-level property revisions in the inventory without a second pass. The profile contract is now also pinned where it
   was previously asserted without evidence: PDF text extraction per profile (deleted content
   extracts in document order under `markup` and never under `final`; inserted content never under
   `original`), revision rendering inside headers, footers, footnotes and endnotes, a comment range
@@ -50,6 +45,7 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+<<<<<<< HEAD
 - **The converter draws comment topology (#540).** `WmlToHtmlConverter` now reads
   `commentsExtended.xml` — where Word keeps the *shape* of a comment set — and carries both
   facts it records into every visible comment mode. A reply (`w15:paraIdParent`) nests
@@ -64,6 +60,21 @@ All notable changes to this project will be documented in this file.
   commentsExtended part nothing changes. The standalone export's `comment_thread_flattened`
   and `comment_resolved_state_not_rendered` warnings are retired with the gaps they
   disclosed.
+=======
+- **The converter draws block-level property revisions (#539).** A tracked change to
+  paragraph, numbering, table, row, cell or section properties (`w:pPrChange`,
+  `w:numberingChange`, `w:tblPrChange`, `w:tblGridChange`, `w:trPrChange`, `w:tblPrExChange`,
+  `w:tcPrChange`, `w:sectPrChange`) previously passed through `WmlToHtmlConverter` untouched,
+  leaving no mark a reader could see under tracked-changes rendering. Each family now marks
+  its block — a titled goldenrod change bar on the paragraph
+  (`rev-para-format-change` / `rev-section-format-change`), a dotted outline on the table, row
+  or cell (`rev-table-format-change`, `rev-row-format-change`, `rev-cell-format-change`), and
+  a marker div where a trailing body `w:sectPr` records a section-property change — with the
+  author and date under `IncludeRevisionMetadata`. Outside tracked-changes rendering nothing
+  is emitted. The standalone export's `revision_property_change_not_rendered` warning is
+  retired with the gap it disclosed; `revisions.runPropertyChanges` in the package manifest
+  remains as inventory.
+>>>>>>> origin/main
 - **The converter draws custom XML revision ranges (#538).** `w:customXmlInsRangeStart`/
   `End`, `Del`, `MoveFrom`, and `MoveTo` — a reviewer's tracked add/remove/move of a custom
   XML structural wrapper — previously passed through `WmlToHtmlConverter` untouched, leaving

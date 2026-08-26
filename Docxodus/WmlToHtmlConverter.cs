@@ -1822,6 +1822,30 @@ namespace Docxodus
             sb.AppendLine("    color: #4b0082;");
             sb.AppendLine("}");
 
+            // Block-level property revisions (issue #539) — a goldenrod change bar / outline
+            // in place of markup the block cannot strike or underline. Titles carry the detail.
+            sb.AppendLine($".{prefix}para-format-change {{");
+            sb.AppendLine("    border-left: 3px dotted #b8860b;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+            sb.AppendLine($"table.{prefix}table-format-change {{");
+            sb.AppendLine("    outline: 2px dotted #b8860b;");
+            sb.AppendLine("    outline-offset: 1px;");
+            sb.AppendLine("}");
+            sb.AppendLine($"tr.{prefix}row-format-change {{");
+            sb.AppendLine("    outline: 1px dotted #b8860b;");
+            sb.AppendLine("}");
+            sb.AppendLine($"td.{prefix}cell-format-change {{");
+            sb.AppendLine("    outline: 1px dotted #b8860b;");
+            sb.AppendLine("    outline-offset: -1px;");
+            sb.AppendLine("}");
+            sb.AppendLine($".{prefix}section-format-change {{");
+            sb.AppendLine("    border-left: 3px dotted #b8860b;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("    color: #b8860b;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
             // Table row inserted
             sb.AppendLine($"tr.{prefix}row-ins {{");
             sb.AppendLine("    background-color: #e6ffe6;");
@@ -3098,6 +3122,32 @@ namespace Docxodus
             if (element.Name == W.endnoteReference)
             {
                 return ProcessEndnoteReference(wordDoc, settings, element);
+            }
+
+            // A trailing body-level w:sectPr renders no content of its own, but a tracked
+            // section-property change recorded on it (w:sectPrChange) must still leave a mark
+            // (issue #539): emit a titled marker div where the section metadata sits.
+            if (element.Name == W.sectPr)
+            {
+                var sectPrChange = element.Element(W.sectPrChange);
+                if (!settings.RenderTrackedChanges || sectPrChange == null)
+                    return null;
+                var sectPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                var sectionMarker = new XElement(Xhtml.div,
+                    new XAttribute("class", sectPrefix + "section-format-change"),
+                    new XAttribute("title", "Section properties changed"),
+                    new XText("Section properties changed"));
+                if (settings.IncludeRevisionMetadata)
+                {
+                    var changeAuthor = (string)sectPrChange.Attribute(W.author);
+                    var changeDate = (string)sectPrChange.Attribute(W.date);
+                    if (changeAuthor != null)
+                        sectionMarker.Add(new XAttribute("data-author", changeAuthor));
+                    if (changeDate != null)
+                        sectionMarker.Add(new XAttribute("data-date", changeDate));
+                }
+
+                return sectionMarker;
             }
 
             // Custom XML revision range boundaries (issue #538): a reviewer added, removed, or
@@ -5282,6 +5332,49 @@ namespace Docxodus
                 var paraIns = rPr?.Element(W.ins);
                 var paraDel = rPr?.Element(W.del);
 
+                // Block-level property revisions (issue #539): the paragraph renders in its
+                // CURRENT state, so the recorded previous-properties marker is the only trace
+                // a reviewer's re-format, renumber, or section change leaves. Draw it as a
+                // kind-classed change bar the stylesheet styles, titled with what changed.
+                var pPrChange = pPr?.Element(W.pPrChange);
+                var numberingChange = pPr?.Element(W.numberingChange);
+                var inlineSectPrChange = pPr?.Element(W.sectPr)?.Element(W.sectPrChange);
+                if (pPrChange != null || numberingChange != null || inlineSectPrChange != null)
+                {
+                    var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var classes = new List<string>();
+                    var described = new List<string>();
+                    if (pPrChange != null || numberingChange != null)
+                    {
+                        classes.Add(prefix + "para-format-change");
+                        if (pPrChange != null) described.Add("Paragraph formatting changed");
+                        if (numberingChange != null) described.Add("Numbering changed");
+                    }
+                    if (inlineSectPrChange != null)
+                    {
+                        classes.Add(prefix + "section-format-change");
+                        described.Add("Section properties changed");
+                    }
+
+                    var existingClass = (string)paragraph.Attribute("class");
+                    var combined = string.Join(" ", classes);
+                    paragraph.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + combined : combined);
+                    if (paragraph.Attribute("title") == null)
+                        paragraph.Add(new XAttribute("title", string.Join("; ", described)));
+
+                    var marker = pPrChange ?? numberingChange ?? inlineSectPrChange;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string)marker.Attribute(W.author);
+                        var changeDate = (string)marker.Attribute(W.date);
+                        if (changeAuthor != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+
                 if (paraIns != null)
                 {
                     // Paragraph mark was inserted (paragraph was split from another)
@@ -5523,6 +5616,35 @@ namespace Docxodus
                 CreateColGroup(element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
+
+            // Tracked table-property / grid revisions (issue #539).
+            if (settings.RenderTrackedChanges)
+            {
+                var tblPrChange = element.Elements(W.tblPr).Elements(W.tblPrChange).FirstOrDefault();
+                var tblGridChange = element.Elements(W.tblGrid).Elements(W.tblGridChange).FirstOrDefault();
+                if (tblPrChange != null || tblGridChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string)table.Attribute("class");
+                    var className = revisionPrefix + "table-format-change";
+                    table.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (table.Attribute("title") == null)
+                        table.Add(new XAttribute("title", tblGridChange != null && tblPrChange == null
+                            ? "Table column widths changed"
+                            : "Table properties changed"));
+                    var marker = tblPrChange ?? tblGridChange;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string)marker.Attribute(W.author);
+                        var changeDate = (string)marker.Attribute(W.date);
+                        if (changeAuthor != null && table.Attribute("data-author") == null)
+                            table.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && table.Attribute("data-date") == null)
+                            table.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+            }
             var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
             XAttribute dir = null;
             XAttribute jcToUse = null;
@@ -5781,6 +5903,29 @@ namespace Docxodus
                             cell.Add(new XAttribute("data-date", date));
                     }
                 }
+
+                // Tracked cell-property revision (issue #539): w:tcPrChange. Composes with the
+                // structural cell revisions above by appending to whatever class they set.
+                var tcPrChange = tcPr.Element(W.tcPrChange);
+                if (tcPrChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string)cell.Attribute("class");
+                    var className = revisionPrefix + "cell-format-change";
+                    cell.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (cell.Attribute("title") == null)
+                        cell.Add(new XAttribute("title", "Cell properties changed"));
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string)tcPrChange.Attribute(W.author);
+                        var changeDate = (string)tcPrChange.Attribute(W.date);
+                        if (changeAuthor != null && cell.Attribute("data-author") == null)
+                            cell.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && cell.Attribute("data-date") == null)
+                            cell.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
             }
 
             return cell;
@@ -5806,6 +5951,32 @@ namespace Docxodus
                 var trPr = element.Element(W.trPr);
                 var rowIns = trPr?.Element(W.ins);
                 var rowDel = trPr?.Element(W.del);
+
+                // Tracked row-property revisions (issue #539): w:trPrChange, and the row's
+                // table-property exceptions via w:tblPrExChange.
+                var trPrChange = trPr?.Element(W.trPrChange);
+                var tblPrExChange = element.Elements(W.tblPrEx)
+                    .Elements(W.tblPrExChange).FirstOrDefault();
+                if (trPrChange != null || tblPrExChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string)htmlRow.Attribute("class");
+                    var className = revisionPrefix + "row-format-change";
+                    htmlRow.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (htmlRow.Attribute("title") == null)
+                        htmlRow.Add(new XAttribute("title", "Row properties changed"));
+                    var marker = trPrChange ?? tblPrExChange;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string)marker.Attribute(W.author);
+                        var changeDate = (string)marker.Attribute(W.date);
+                        if (changeAuthor != null && htmlRow.Attribute("data-author") == null)
+                            htmlRow.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && htmlRow.Attribute("data-date") == null)
+                            htmlRow.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
 
                 if (rowIns != null)
                 {

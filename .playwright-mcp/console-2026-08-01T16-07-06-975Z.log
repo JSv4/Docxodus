@@ -1,0 +1,2 @@
+[      73ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:9009/favicon.ico:0
+[     330ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:9009/sample.docx:0
