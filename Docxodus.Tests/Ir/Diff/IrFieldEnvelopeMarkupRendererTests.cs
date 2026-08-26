@@ -37,6 +37,94 @@ public class IrFieldEnvelopeMarkupRendererTests
     }
 
     [Fact]
+    public void Read_FieldEnvelopeDigest_IgnoresFormattingOnlyRunSplit()
+    {
+        // Run segmentation is formatting-sensitive (CoalesceRuns merges only format-equal
+        // neighbors), so a formatting-only span boundary inside the text BEFORE a field must
+        // not move the field's recorded structural position (issue #593).
+        var joined = Paragraph(Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + ComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>"));
+        var split = Paragraph(Doc(
+            "<w:p><w:r><w:t>S</w:t></w:r>"
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">ee </w:t></w:r>"
+            + ComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>"));
+
+        Assert.Equal(joined.ContentHash, split.ContentHash);
+        Assert.Equal(joined.FieldEnvelopeDigest, split.FieldEnvelopeDigest);
+
+        // Guard: genuinely MOVING the field relative to its text neighbors still flips the digest.
+        var moved = Paragraph(Doc(
+            "<w:p>" + ComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:t xml:space=\"preserve\">See  for details.</w:t></w:r></w:p>"));
+        Assert.NotEqual(joined.FieldEnvelopeDigest, moved.FieldEnvelopeDigest);
+    }
+
+    [Fact]
+    public void Render_FormattingOnlySpanAcrossComplexField_StaysFormatOnly()
+    {
+        // Italicizing a span that starts mid-run before the field and covers the whole
+        // envelope: content is identical, only run properties differ. This must survive as a
+        // FormatOnly alignment and render as w:rPrChange — not a whole-paragraph del+ins pair
+        // that re-types the field region (issue #593).
+        var left = Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + ComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>");
+        var right = Doc(
+            "<w:p><w:r><w:t>S</w:t></w:r>"
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">ee </w:t></w:r>"
+            + ItalicComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\"> for</w:t></w:r>"
+            + "<w:r><w:t xml:space=\"preserve\"> details.</w:t></w:r></w:p>");
+
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), new IrDiffSettings());
+        var op = Assert.Single(script.Operations);
+        Assert.Equal(IrEditOpKind.FormatOnlyBlock, op.Kind);
+
+        var redline = DocxDiff.Compare(left, right);
+        AssertSchemaValid(redline);
+        var root = MainXml(redline).Root!;
+        Assert.Empty(root.Descendants(W + "ins"));
+        Assert.Empty(root.Descendants(W + "del"));
+        Assert.Single(root.Descendants(W + "fldChar")
+            .Where(f => (string?)f.Attribute(W + "fldCharType") == "begin"));
+        Assert.NotEmpty(root.Descendants(W + "rPrChange"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        AssertNoRevisionMarkup(accepted);
+        AssertNoRevisionMarkup(rejected);
+        Assert.Equal(Paragraph(right).FieldEnvelopeDigest, Paragraph(accepted).FieldEnvelopeDigest);
+        Assert.Equal(Paragraph(left).FieldEnvelopeDigest, Paragraph(rejected).FieldEnvelopeDigest);
+        Assert.NotEmpty(MainXml(accepted).Root!.Descendants(W + "i"));
+        Assert.Empty(MainXml(rejected).Root!.Descendants(W + "i"));
+    }
+
+    [Fact]
+    public void Revisions_FormattingOnlySpanAcrossComplexField_SurfaceAsFormatChanged()
+    {
+        var left = Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + ComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>");
+        var right = Doc(
+            "<w:p><w:r><w:t>S</w:t></w:r>"
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">ee </w:t></w:r>"
+            + ItalicComplexFieldInner(" REF _Ref12345 \\h ", "Section 2.1")
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\"> for</w:t></w:r>"
+            + "<w:r><w:t xml:space=\"preserve\"> details.</w:t></w:r></w:p>");
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        Assert.DoesNotContain(revisions, r => r.Type == DocxDiffRevisionType.Deleted);
+        Assert.DoesNotContain(revisions, r => r.Type == DocxDiffRevisionType.Inserted);
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.FormatChanged);
+    }
+
+    [Fact]
     public void Render_ComplexFieldCodeAndStateChange_RoundTripsBothFieldVariants()
     {
         var left = Doc(ComplexField(" PAGE ", "7", "w:dirty=\"true\""));
@@ -665,6 +753,13 @@ public class IrFieldEnvelopeMarkupRendererTests
         "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
         "<w:r><w:t>" + result + "</w:t></w:r>" +
         "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+
+    private static string ItalicComplexFieldInner(string instruction, string result) =>
+        "<w:r><w:rPr><w:i/></w:rPr><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+        "<w:r><w:rPr><w:i/></w:rPr><w:instrText xml:space=\"preserve\">" + instruction + "</w:instrText></w:r>" +
+        "<w:r><w:rPr><w:i/></w:rPr><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
+        "<w:r><w:rPr><w:i/></w:rPr><w:t>" + result + "</w:t></w:r>" +
+        "<w:r><w:rPr><w:i/></w:rPr><w:fldChar w:fldCharType=\"end\"/></w:r>";
 
     private static string SimpleField(string instruction, string result, string dirty, string locked, string fieldData) =>
         "<w:p>" + SimpleFieldInner(instruction, result, dirty, locked, fieldData) + "</w:p>";

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **A formatting-only edit crossing a complex-field envelope no longer redlines as a
+  delete+insert pair (#593).** The field-envelope digest recorded each field's raw modeled
+  inline index, and run segmentation is formatting-sensitive — so a formatting span
+  boundary falling mid-run before the field shifted that index, flipped the digest, and
+  demoted a content-equal format-only alignment to a whole-paragraph replace: a human
+  reviewer in Word saw the field region re-typed although nothing textual changed. Field
+  positions are now format-neutral (consecutive text runs collapse to one position), so the
+  change renders as `w:rPrChange` on the affected runs; genuine instruction, begin-state,
+  and reorder differences still take the reversible whole-carrier fallback. The semantic
+  changeset's field-envelope digest tag advanced to `docxodus-ir-field-envelope-v2`, and it
+  no longer reports a `field_envelope` modify for such formatting-only splits.
 - **Markdown-authored headings no longer carry an inert `numId=0` numbering suppressor
   (#572).** The suppressor exists for legal-outline templates whose Heading styles attach
   numbering — `numId=0` keeps the authored text unnumbered — but it was written
