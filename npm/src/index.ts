@@ -7,6 +7,7 @@ import type {
   CompareResult,
   PackageManifest,
   DeliverableVerificationResult,
+  DeliveryReceiptVerificationResult,
   RedlineReversibilityProof,
   DocxodusWasmExports,
   GetRevisionsOptions,
@@ -151,6 +152,9 @@ export type {
   PackageRevisionCounts,
   PackageAnnotationCounts,
   DeliverableVerificationResult,
+  DeliveryArtifactVerification,
+  DeliveryArtifactVerificationStatus,
+  DeliveryReceiptVerificationResult,
   DeliverableVerificationMode,
   DeliverableVerificationDecision,
   DeliverableFindingDisposition,
@@ -677,6 +681,36 @@ export async function verifyDeliverable(
           bytes,
         ),
   ) as DeliverableVerificationResult;
+}
+
+/**
+ * Verify a portable JSON delivery change receipt against supplied artifact bytes.
+ *
+ * The receipt travels as its JSON envelope string; `artifacts` maps each artifact id
+ * the receipt records to the exact bytes to independently re-hash against it. Omitted
+ * artifacts report `"missing"`. Malformed input yields a structured invalid verdict
+ * whose findings carry the reason — never a thrown error.
+ */
+export async function verifyDeliveryReceipt(
+  receiptJson: string,
+  artifacts?: Record<string, Uint8Array>,
+): Promise<DeliveryReceiptVerificationResult> {
+  const exports = ensureInitialized();
+  const artifactsJson =
+    artifacts === undefined
+      ? ""
+      : JSON.stringify(
+          Object.fromEntries(
+            Object.entries(artifacts).map(([artifactId, bytes]) => [
+              artifactId,
+              bytesToBase64(bytes),
+            ]),
+          ),
+        );
+  await yieldToMain();
+  return JSON.parse(
+    exports.DocumentConverter.VerifyDeliveryReceipt(receiptJson, artifactsJson),
+  ) as DeliveryReceiptVerificationResult;
 }
 
 /**

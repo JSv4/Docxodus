@@ -123,6 +123,34 @@ declared contract change — never to silent host-font drift. `environment` disp
 "the two engines lay out the SAME substitute differently" (rasterization, justification, line
 breaking), not "the two engines picked different fonts".
 
+### Standing degraded-environment caveats (issue #537)
+
+Two generated-PDF corpus fixtures request faces the substitution contract cannot fully serve,
+and this is the **accepted, deliberate state** — reported, not gated:
+
+| Case | Request | Degradation |
+|---|---|---|
+| `pdf-final-revisions` | Calibri Light → Carlito | `metricCompatible: false` — no open metric clone of Calibri Light exists (see the table above) |
+| `pdf-endnote-table` | Calibri → Carlito | `glyphCoverage: "partial"` — the document uses a glyph Carlito lacks |
+
+The decision, weighed against the alternatives:
+
+- **Extending the contract** is not possible for Calibri Light (no open metric-compatible face
+  exists to extend it *with*), and patching a single missing glyph with a different face would
+  break the metric story the contract exists to guarantee.
+- **Swapping the fixtures** would trade real Word-authored corpus documents for ones chosen to
+  flatter the font environment — the benchmark would measure less of what users actually send.
+- **Accepting and reporting** keeps the real documents and keeps the caveat visible on every
+  run: `degradedFontEnvironments` in `summary.json` and the `[font environment degraded: …]`
+  note beside the per-case line. Those two cases' raster numbers describe output measured
+  through a font environment that could not satisfy the document; the residual they carry is
+  partly the contract's, not the renderer's — which is exactly why
+  `assertSupportedPdfResult` gates only on the renderer's own guarantees (every face from the
+  configured directories, nothing missing) and *reports* metric compatibility and coverage.
+
+Revisit only if an open metric-compatible Calibri Light appears, or the corpus gains a
+same-category document the contract can fully serve *in addition to* (not instead of) these.
+
 ## Reference-version contract
 
 With fonts pinned, the LibreOffice version was the last uncontracted variable in the comparison

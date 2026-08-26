@@ -42,6 +42,9 @@ internal static class Dispatcher
         // Sessionless: compare reads and writes stored documents only, so it neither needs nor
         // serializes against an open session — the output is opened like any other file.
         if (tool == "docxodus_compare") return Compare(store, args);
+        // Sessionless: receipt verification reads a portable JSON receipt (and optionally
+        // stored artifact files) — no document session is involved.
+        if (tool == "docxodus_verify_receipt") return VerifyReceipt(store, args);
         // Static capability discovery has no document state to serialize against.
         if (tool == "docxodus_images" && OptStr(args, "action") == "capabilities")
             return Images(store, args);
@@ -825,6 +828,38 @@ internal static class Dispatcher
     /// same engine family that produced the redline (GetRevisionsJson /
     /// GetConsolidatedRevisionsJson), so its counts describe the produced markup, not a guess.
     /// </summary>
+    private static string VerifyReceipt(SessionStore store, JsonElement args)
+    {
+        var receiptJson = OptStr(args, "receiptJson");
+        var receiptPath = OptStr(args, "receiptPath");
+        if ((receiptJson is null) == (receiptPath is null))
+            throw new McpToolException("pass exactly one of receiptJson or receiptPath");
+        receiptJson ??= Encoding.UTF8.GetString(
+            store.Documents.Read(store.Documents.Resolve(receiptPath!)));
+
+        string? artifactsJson = null;
+        if (args.TryGetProperty("artifactPaths", out var artifactPaths)
+            && artifactPaths.ValueKind != JsonValueKind.Null)
+        {
+            if (artifactPaths.ValueKind != JsonValueKind.Object)
+                throw new McpToolException("artifactPaths must be an object of {artifactId: path}");
+            var contentById = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in artifactPaths.EnumerateObject())
+            {
+                var path = property.Value.GetString();
+                if (string.IsNullOrWhiteSpace(path))
+                    throw new McpToolException(
+                        $"artifactPaths['{property.Name}'] must be a non-empty path");
+                contentById[property.Name] = Convert.ToBase64String(
+                    store.Documents.Read(store.Documents.Resolve(path)));
+            }
+
+            artifactsJson = JsonSerializer.Serialize(contentById);
+        }
+
+        return DeliveryOps.VerifyChangeReceiptJson(receiptJson, artifactsJson);
+    }
+
     private static string Compare(SessionStore store, JsonElement args)
     {
         var baseline = store.Documents.Read(store.Documents.Resolve(Str(args, "baselinePath")));

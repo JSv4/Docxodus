@@ -2907,6 +2907,118 @@ public class DeliveryChangeReceiptTests
         Assert.True(result.IsValid, string.Join("; ", result.Findings));
     }
 
+    [Fact]
+    public void DCR053_DeliveryOps_VerifyChangeReceiptJson_RoundTripsAcrossTheWire()
+    {
+        // Issue #520: the transports (WASM, npm, stdio host, MCP) all route receipt
+        // verification through this one facade string-in/string-out entry point, so its
+        // wire shape is the cross-surface contract: artifacts travel as {id: base64},
+        // enums as snake_case, and the verdict mirrors DeliveryReceiptVerificationResult.
+        var edit = SingleEdit("Wire-verified clause.", tracked: true);
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var artifacts = RequiredArtifactBytes(edit);
+        var artifactsJson = new JsonObject(artifacts.Select(pair =>
+            new KeyValuePair<string, JsonNode?>(
+                pair.Key, JsonValue.Create(Convert.ToBase64String(pair.Value)))))
+            .ToJsonString();
+
+        var resultJson = Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson(
+            receipt.ToJson(), artifactsJson);
+
+        using var document = JsonDocument.Parse(resultJson);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("isValid").GetBoolean(), resultJson);
+        Assert.True(root.GetProperty("receiptDigestValid").GetBoolean());
+        Assert.True(root.GetProperty("contractValid").GetBoolean());
+        Assert.True(root.GetProperty("citationBindingsValid").GetBoolean());
+        Assert.Equal(0, root.GetProperty("findings").GetArrayLength());
+        var artifactResults = root.GetProperty("artifacts").EnumerateArray().ToArray();
+        Assert.Equal(artifacts.Count, artifactResults.Length);
+        Assert.All(artifactResults, artifact =>
+            Assert.Equal("verified", artifact.GetProperty("status").GetString()));
+        Assert.Contains(artifactResults, artifact =>
+            artifact.GetProperty("artifactId").GetString() == "clean-docx"
+            && artifact.GetProperty("expectedDigest").GetProperty("algorithm").GetString() == "SHA-256"
+            && artifact.GetProperty("expectedLength").GetInt64() > 0);
+    }
+
+    [Fact]
+    public void DCR054_DeliveryOps_VerifyChangeReceiptJson_ReportsTamperAndAbsence()
+    {
+        var edit = SingleEdit("Tamper-checked clause.");
+        var builder = Builder(edit);
+        AddTransactionWithSemantic(builder, edit);
+        var receipt = builder.Build();
+        var artifacts = RequiredArtifactBytes(edit);
+
+        // A tampered artifact byte fails that artifact with digest_mismatch, not the envelope.
+        var tampered = new Dictionary<string, byte[]>(artifacts, StringComparer.Ordinal);
+        var bytes = (byte[])tampered["clean-docx"].Clone();
+        bytes[^1] ^= 0xFF;
+        tampered["clean-docx"] = bytes;
+        var tamperedJson = new JsonObject(tampered.Select(pair =>
+            new KeyValuePair<string, JsonNode?>(
+                pair.Key, JsonValue.Create(Convert.ToBase64String(pair.Value)))))
+            .ToJsonString();
+        using (var document = JsonDocument.Parse(
+            Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson(receipt.ToJson(), tamperedJson)))
+        {
+            var root = document.RootElement;
+            Assert.False(root.GetProperty("isValid").GetBoolean());
+            Assert.True(root.GetProperty("receiptDigestValid").GetBoolean());
+            Assert.Contains(root.GetProperty("artifacts").EnumerateArray(), artifact =>
+                artifact.GetProperty("artifactId").GetString() == "clean-docx"
+                && artifact.GetProperty("status").GetString() == "digest_mismatch");
+        }
+
+        // No artifact bytes at all: the receipt envelope still checks, artifacts report missing.
+        using (var document = JsonDocument.Parse(
+            Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson(receipt.ToJson(), null)))
+        {
+            var root = document.RootElement;
+            Assert.False(root.GetProperty("isValid").GetBoolean());
+            Assert.True(root.GetProperty("receiptDigestValid").GetBoolean());
+            Assert.All(root.GetProperty("artifacts").EnumerateArray(), artifact =>
+                Assert.Equal("missing", artifact.GetProperty("status").GetString()));
+        }
+
+        // Garbage receipt JSON is a structured malformed verdict, not an exception.
+        using (var document = JsonDocument.Parse(
+            Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson("{\"nope\":true}", null)))
+        {
+            var root = document.RootElement;
+            Assert.False(root.GetProperty("isValid").GetBoolean());
+            Assert.False(root.GetProperty("receiptDigestValid").GetBoolean());
+            Assert.NotEqual(0, root.GetProperty("findings").GetArrayLength());
+        }
+    }
+
+    [Fact]
+    public void DCR055_VendoredPortableReceiptFixture_StaysVerifiable()
+    {
+        // TestFiles/Delivery/DR001 is the cross-language receipt fixture: the Python
+        // transport test verifies the same files through the same facade, so this pin
+        // failing means the canonical receipt format drifted — regenerate the fixture
+        // DELIBERATELY (and update both suites) rather than editing it by hand.
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../TestFiles"));
+        var receiptJson = File.ReadAllText(Path.Combine(root, "Delivery", "DR001-Receipt.json"));
+        var artifacts = new JsonObject
+        {
+            ["clean-docx"] = Convert.ToBase64String(
+                File.ReadAllBytes(Path.Combine(root, "HC001-5DayTourPlanTemplate.docx"))),
+            ["semantic-source-to-delivered"] = Convert.ToBase64String(
+                File.ReadAllBytes(Path.Combine(root, "Delivery", "DR001-Semantic.json"))),
+        };
+
+        var resultJson = Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson(
+            receiptJson, artifacts.ToJsonString());
+
+        using var document = JsonDocument.Parse(resultJson);
+        Assert.True(document.RootElement.GetProperty("isValid").GetBoolean(), resultJson);
+    }
+
     private static DeliveryChangeReceipt BuildWithProfile(
         EditFixture edit,
         DeliveryReceiptPrivacyProfile profile)

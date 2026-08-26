@@ -59,6 +59,19 @@ All notable changes to this project will be documented in this file.
   the author and date. Outside tracked-changes rendering the boundaries stay invisible and
   the enclosed content renders unchanged. The standalone export's
   `revision_family_not_rendered` warning is retired with the gap it disclosed.
+- **Delivery-receipt verification on every transport (#520).** The portable JSON change
+  receipt (#458) can now be verified from all four client surfaces, each routing through the
+  new single-owner facade `DeliveryOps.VerifyChangeReceiptJson` (artifacts as
+  `{"artifactId": "<base64>"}`, snake_case enums, malformed input answered with a structured
+  invalid verdict): the WASM bridge gains `DocumentConverter.VerifyDeliveryReceipt`, npm gains
+  `verifyDeliveryReceipt(receiptJson, artifacts?)` with typed
+  `DeliveryReceiptVerificationResult`/`DeliveryArtifactVerification` results, the stdio host
+  and `docx-scalpel` gain `verify_delivery_receipt`, and the MCP server gains the sessionless
+  `docxodus_verify_receipt` tool (receipt and artifacts by path in the document scope, or the
+  receipt inline). A vendored cross-language fixture (`TestFiles/Delivery/DR001-*`) is
+  verified by the C#, Python, and browser suites alike so a canonical-format drift is caught
+  on every side of the wire. Receipt building stays on the typed .NET surface driven by the
+  #465 delivery operation — remote consumers verify; they do not compose.
 - **Verified delivery bundles (#465).** `DeliveryBundleService.BuildAsync` derives a requested
   set of document, render, and evidence artifacts from exact baseline and working snapshots
   under an explicit two-part revision policy (`preserve`/`accept`/`reject` for pre-existing

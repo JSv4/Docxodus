@@ -67,6 +67,7 @@ from .types import (
     DocxDiffSettings,
     DocxSessionSettings,
     DeliverableVerificationResult,
+    DeliveryReceiptVerificationResult,
     RedlineReversibilityProof,
     EditError,
     EditResult,
@@ -214,6 +215,29 @@ def verify_deliverable(
     if not isinstance(result, Mapping):
         raise TypeError(f"verify_deliverable: expected object, got {result!r}")
     return DeliverableVerificationResult._from_wire(result)
+
+
+def verify_delivery_receipt(
+    receipt_json: str,
+    artifacts: Mapping[str, bytes] | None = None,
+) -> DeliveryReceiptVerificationResult:
+    """Verify a portable JSON delivery change receipt against supplied artifact bytes.
+
+    The receipt travels as its JSON envelope string; ``artifacts`` maps each artifact id
+    the receipt records to the exact bytes to re-hash against it. Omitted artifacts
+    report ``MISSING``. Malformed input yields a structured invalid verdict with
+    findings — never an exception from the host.
+    """
+    args: dict[str, object] = {"receiptJson": receipt_json}
+    if artifacts is not None:
+        args["artifactsB64"] = {
+            artifact_id: base64.b64encode(content).decode("ascii")
+            for artifact_id, content in artifacts.items()
+        }
+    result = _call("verify_delivery_receipt", args)
+    if not isinstance(result, Mapping):
+        raise TypeError(f"verify_delivery_receipt: expected object, got {result!r}")
+    return DeliveryReceiptVerificationResult._from_wire(result)
 
 
 def prove_redline_reversibility(

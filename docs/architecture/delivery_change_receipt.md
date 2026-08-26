@@ -417,9 +417,26 @@ components.
 
 ## Surface scope
 
-The builder and verifier are deliberately core-.NET-only for now: nothing is exposed on the
-`*Ops` facades, WASM bridge, npm/TypeScript, stdio Python host, or MCP server, matching the rest
-of the verify track until the delivery operation (#465) fixes the shape callers actually need.
-The cross-surface ripple required by the CLAUDE.md checklist is tracked in #520; the JSON
-receipt itself is already portable, so non-.NET consumers can verify receipts once the ripple
-lands without a schema change.
+Receipt **verification** is exposed on every transport (#520), all routing through the
+single-owner facade `Docxodus.Internal.DeliveryOps.VerifyChangeReceiptJson(receiptJson,
+artifactsBase64Json)` — string in, string out, artifacts as a JSON object of
+`{"artifactId": "<base64>"}`, enums snake_case, and malformed input answered with a
+structured invalid verdict rather than an exception:
+
+| Surface | Entry point |
+|---------|-------------|
+| WASM bridge | `DocumentConverter.VerifyDeliveryReceipt(receiptJson, artifactsJson)` |
+| npm/TypeScript | `verifyDeliveryReceipt(receiptJson, artifacts?)` → `DeliveryReceiptVerificationResult` |
+| stdio Python host | op `verify_delivery_receipt`; `docx_scalpel.verify_delivery_receipt(receipt_json, artifacts?)` |
+| MCP server | sessionless tool `docxodus_verify_receipt` (`receiptPath`/`receiptJson` + `artifactPaths`) |
+
+`TestFiles/Delivery/DR001-*` is the vendored cross-language fixture: the C# `DCR055` pin,
+the Python transport test, and the browser Playwright spec all verify the same receipt and
+artifact bytes, so a canonical-format drift is caught on every side of the wire at once.
+
+Receipt **building** deliberately stays on the typed .NET surface: composing a receipt
+requires manifests, transaction contributions, artifacts, and semantic evidence that only
+the host process holds, and the delivery bundle operation (#465 — `docxodus_deliver`, the
+`docxodus-deliver` CLI, and `DeliveryBundleService`) is the caller-facing shape that drives
+the builder. The receipt JSON it emits is portable; remote consumers verify, they do not
+compose.

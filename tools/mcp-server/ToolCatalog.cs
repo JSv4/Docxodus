@@ -11,7 +11,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus seventeen
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus eighteen
 /// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
 /// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -519,6 +519,19 @@ internal static class ToolCatalog
                 "outputPath": { "type": "string", "description": "Where the redline is written, resolved in the document scope like docxodus_save's path." }
               },
               "required": ["baselinePath", "outputPath"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_verify_receipt",
+            "Verify a portable JSON delivery change receipt without an open session: check the receipt's canonical payload digest, contract, and citation bindings, and independently re-hash any supplied artifact files against the lengths and digests the receipt records. A receipt travels with a delivery bundle (docxodus_deliver); this is the recipient-side check that the received files are exactly what the receipt attests. Malformed input returns a structured invalid verdict with findings, never a crash.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "receiptPath": { "type": "string", "description": "Location of the receipt JSON within the server's document scope. Exactly one of receiptPath / receiptJson." },
+                "receiptJson": { "type": "string", "description": "The receipt envelope JSON inline. Exactly one of receiptPath / receiptJson." },
+                "artifactPaths": { "type": "object", "description": "Optional object mapping each artifact id recorded in the receipt to the file to verify it against, each path resolved in the document scope. An artifact with no supplied file reports status missing." }
+              }
             }
             """),
         new ToolDefinition(
