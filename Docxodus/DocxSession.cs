@@ -2785,7 +2785,7 @@ public sealed partial class DocxSession : IDisposable
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
-            var prunedNotes = PruneNotesOrphanedByResolution(referencedNotesBefore);
+            var prunedNotes = PruneOrphanedNotes(referencedNotesBefore);
 
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -2800,16 +2800,7 @@ public sealed partial class DocxSession : IDisposable
                 }
             }
 
-            foreach (var (note, notePartUri) in prunedNotes)
-            {
-                foreach (var d in note.DescendantsAndSelf())
-                {
-                    var unid = (string?)d.Attribute(PtOpenXml.Unid);
-                    if (unid is null) continue;
-                    if (AnchorForUnid(unid, notePartUri) is { } anch && seenRemoved.Add(anch.Id))
-                        removed.Add(anch);
-                }
-            }
+            AppendPrunedNoteAnchors(prunedNotes, removed, seenRemoved);
 
             // Selective revision resolution must not normalize unrelated package state. The
             // relationship sweep above is deliberately limited to ids carried by this group;
@@ -2890,7 +2881,7 @@ public sealed partial class DocxSession : IDisposable
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
-            var prunedNotes = PruneNotesOrphanedByResolution(referencedNotesBefore);
+            var prunedNotes = PruneOrphanedNotes(referencedNotesBefore);
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
             foreach (var element in removedElements)
@@ -2909,16 +2900,7 @@ public sealed partial class DocxSession : IDisposable
                 }
             }
 
-            foreach (var (note, notePartUri) in prunedNotes)
-            {
-                foreach (var descendant in note.DescendantsAndSelf())
-                {
-                    var unid = (string?)descendant.Attribute(PtOpenXml.Unid);
-                    if (unid is null) continue;
-                    if (AnchorForUnid(unid, notePartUri) is { } anchor && seenRemoved.Add(anchor.Id))
-                        removed.Add(anchor);
-                }
-            }
+            AppendPrunedNoteAnchors(prunedNotes, removed, seenRemoved);
 
             // ResolveAll has already swept only relationships referenced by the groups it
             // resolved. Preserve every unrelated relationship for exact package semantics.
@@ -3033,18 +3015,19 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Word-faithful note cleanup after revision resolution (issue #516). A note whose LAST
-    /// reference was removed by the resolution is deleted from its part — Word removes the
-    /// note when the rejected insertion (or accepted deletion) carries its reference away,
-    /// and without this the note survived as an empty reference-less husk. The PART itself
-    /// always stays: Word never prunes a notes part (the RP050-Deleted-Footnote oracle
-    /// keeps its separator-only footnotes.xml after accepting the only note's deletion),
-    /// and a separator-only part is exactly what Word ships in every fresh document.
-    /// Scoped strictly to ids referenced before and unreferenced after THIS resolution:
-    /// a note that was already dangling is pre-existing document state and stays untouched.
+    /// Word-faithful note cleanup after an op that removes body content (issues #516, #591).
+    /// A note whose LAST reference was removed — by revision resolution carrying the reference
+    /// away, or by a structural delete removing the block that held it — is deleted from its
+    /// part; without this the note survived as a reference-less husk still shipping its full
+    /// text inside the package. The PART itself always stays: Word never prunes a notes part
+    /// (the RP050-Deleted-Footnote oracle keeps its separator-only footnotes.xml after
+    /// accepting the only note's deletion), and a separator-only part is exactly what Word
+    /// ships in every fresh document. Scoped strictly to ids referenced before and
+    /// unreferenced after THIS op: a note that was already dangling is pre-existing
+    /// document state and stays untouched.
     /// </summary>
     /// <returns>The removed note elements with their part uri, for removed-anchor reporting.</returns>
-    private List<(XElement Note, string PartUri)> PruneNotesOrphanedByResolution(
+    private List<(XElement Note, string PartUri)> PruneOrphanedNotes(
         (HashSet<int> Footnotes, HashSet<int> Endnotes) before)
     {
         var removed = new List<(XElement, string)>();
@@ -3085,6 +3068,27 @@ public sealed partial class DocxSession : IDisposable
 
     private static bool IsSeparatorNote(XElement note) =>
         (string?)note.Attribute(W.type) is "separator" or "continuationSeparator";
+
+    /// <summary>Appends the anchors of pruned note definitions (with their descendants) to
+    /// <paramref name="removed"/>, deduplicated through <paramref name="seenRemoved"/> — the
+    /// shared removed-anchor reporting for every op that calls
+    /// <see cref="PruneOrphanedNotes"/>.</summary>
+    private void AppendPrunedNoteAnchors(
+        List<(XElement Note, string PartUri)> prunedNotes,
+        List<Anchor> removed,
+        HashSet<string> seenRemoved)
+    {
+        foreach (var (note, notePartUri) in prunedNotes)
+        {
+            foreach (var descendant in note.DescendantsAndSelf())
+            {
+                var unid = (string?)descendant.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                if (AnchorForUnid(unid, notePartUri) is { } anchor && seenRemoved.Add(anchor.Id))
+                    removed.Add(anchor);
+            }
+        }
+    }
 
     internal IReadOnlyList<int> DefinedNumberingIds()
     {
@@ -6818,6 +6822,7 @@ public sealed partial class DocxSession : IDisposable
         if (structurallyDeletes && ValidateBookmarkRemoval(new[] { element }, anchorId) is { } bookmarkError)
             return bookmarkError;
 
+        var referencedNotesBefore = ReferencedNoteIds();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -6877,6 +6882,10 @@ public sealed partial class DocxSession : IDisposable
                 }
             }
             element.Remove();
+            AppendPrunedNoteAnchors(
+                PruneOrphanedNotes(referencedNotesBefore),
+                removed,
+                new HashSet<string>(removed.Select(a => a.Id), StringComparer.Ordinal));
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
             InvalidateProjectionCache();
@@ -7044,6 +7053,7 @@ public sealed partial class DocxSession : IDisposable
         if (ValidateBookmarkRemoval(structuralRoots, anchorForPatchScope.Anchor.Id) is { } bookmarkError)
             return bookmarkError;
 
+        var referencedNotesBefore = ReferencedNoteIds();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -7091,6 +7101,8 @@ public sealed partial class DocxSession : IDisposable
                         el.Remove();
                     }
                 }
+                AppendPrunedNoteAnchors(
+                    PruneOrphanedNotes(referencedNotesBefore), trackedRemoved, trackedRemovedIds);
                 if (hyperlinkOwner is { } trackedOwner)
                     SweepOrphanedStoryRelationships(trackedOwner.Part);
                 InvalidateProjectionCache();
@@ -7111,6 +7123,7 @@ public sealed partial class DocxSession : IDisposable
                 CollectAnchors(el, includeDescendants: true, index, removed, removedIds);
                 el.Remove();
             }
+            AppendPrunedNoteAnchors(PruneOrphanedNotes(referencedNotesBefore), removed, removedIds);
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
             InvalidateProjectionCache();
@@ -10821,6 +10834,7 @@ public sealed partial class DocxSession : IDisposable
                 "DeleteTableRow across a vertical-merge restart", cellAnchorId);
 
         var before = CaptureTableMetadata(tbl!);
+        var referencedNotesBefore = ReferencedNoteIds();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -10839,6 +10853,11 @@ public sealed partial class DocxSession : IDisposable
                 tr.Remove();
             }
 
+            var prunedNoteAnchors = new List<Anchor>();
+            AppendPrunedNoteAnchors(
+                PruneOrphanedNotes(referencedNotesBefore),
+                prunedNoteAnchors,
+                new HashSet<string>(StringComparer.Ordinal));
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
 
@@ -10847,7 +10866,7 @@ public sealed partial class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Removed = InvalidatedCellAnchors(mapping),
+                Removed = InvalidatedCellAnchors(mapping).Concat(prunedNoteAnchors).ToList(),
                 TableAnchors = mapping,
                 Patch = PatchFor(target!),
             };
@@ -10884,6 +10903,7 @@ public sealed partial class DocxSession : IDisposable
             return bookmarkError;
 
         var before = CaptureTableMetadata(tbl!);
+        var referencedNotesBefore = ReferencedNoteIds();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -10924,6 +10944,11 @@ public sealed partial class DocxSession : IDisposable
                 if (cols is not null && doomed < cols.Count) cols[doomed].Remove();
             }
 
+            var prunedNoteAnchors = new List<Anchor>();
+            AppendPrunedNoteAnchors(
+                PruneOrphanedNotes(referencedNotesBefore),
+                prunedNoteAnchors,
+                new HashSet<string>(StringComparer.Ordinal));
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
 
@@ -10932,7 +10957,7 @@ public sealed partial class DocxSession : IDisposable
             return new EditResult
             {
                 Success = true,
-                Removed = InvalidatedCellAnchors(mapping),
+                Removed = InvalidatedCellAnchors(mapping).Concat(prunedNoteAnchors).ToList(),
                 TableAnchors = mapping,
                 Patch = PatchFor(target!),
             };
