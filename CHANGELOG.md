@@ -760,6 +760,18 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Even/odd running stories follow the page number again (#536).** The paginated renderer's
+  #527 hardening switched even-header/footer selection (and the matching band heights) to the
+  page's one-based position in its section, which flips every story of a section that begins
+  on an even page — `DB001-Sections` lost ink parity with LibreOffice on three of six pages
+  and turned the weekly visual-parity ratchet red on `main`. ECMA-376 §17.10.5 hangs the even
+  story on "even numbered pages": the page NUMBER, which keeps counting across a section
+  boundary unless `w:pgNumType` restarts it — and a restart moves the parity with it, so a
+  section that restarts at 1 on a physically even page shows its odd story, exactly as Word
+  treats a front-matter restart. Selection now keys on the displayed page number (first-page
+  selection under `w:titlePg` is unchanged), and the multi-section parity case measures ink
+  F1 1.0 on all six pages again — the value the ratchet record already pins, so no record
+  refresh is needed.
 - **Resolving away a document's only footnote/endnote no longer leaves a reference-less
   husk, and the reversibility proof accepts Word's two "no notes" spellings (#516, #552).**
   When revision resolution removed a note's last reference — rejecting the insertion that
