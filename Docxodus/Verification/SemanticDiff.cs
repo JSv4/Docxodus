@@ -1316,7 +1316,13 @@ internal static class SemanticDiffEngine
                     CompareCellWidth(lc, rc, part);
                 }
                 var blockOps = cellOp.BlockOps;
-                if (blockOps is null && lc.ContentHash != rc.ContentHash)
+                // Descend on a format-only difference too: a nested table's w:tblPr/w:tblGrid
+                // (or a paragraph's w:pPr) edit moves no content hash, and gating on content
+                // alone left such a change with no typed record at all (issue #511). The
+                // aligner classifies equal-content/changed-format blocks FormatOnlyBlock,
+                // which ProjectOps descends into.
+                if (blockOps is null
+                    && (lc.ContentHash != rc.ContentHash || lc.FormatFingerprint != rc.FormatFingerprint))
                 {
                     var alignment = IrBlockAligner.AlignBlocks(lc.Blocks, rc.Blocks, _settings);
                     blockOps = IrNodeList.From(

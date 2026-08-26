@@ -266,6 +266,17 @@ internal sealed record IrCell(IrAnchor Anchor, IrNodeList<IrBlock> Blocks,
     public IrHash TcPrShellDigest { get; init; }
 
     /// <summary>
+    /// Ordered fold of the cell's blocks' <see cref="IrBlock.FormatFingerprint"/>s — the format-side
+    /// counterpart of <see cref="ContentHash"/>. A nested table's <c>w:tblPr</c>/<c>w:tblGrid</c> (or a
+    /// paragraph's <c>w:pPr</c>) edit moves no content hash, so <see cref="ContentHash"/> alone cannot
+    /// tell the semantic projector that this cell's blocks need descending; gating recursion on this
+    /// fingerprint too is what gives a format-only nested-table change its typed records (issue #511).
+    /// The cell's own <see cref="ShellDigest"/> is deliberately NOT folded in — it is already compared
+    /// (and reported) at the cell level.
+    /// </summary>
+    public IrHash FormatFingerprint { get; init; }
+
+    /// <summary>
     /// True when this cell was delivered by a row-level <c>w:sdt</c> wrapping a <c>w:tc</c>
     /// (the SDT-unwrap discipline in <c>IrReader.BuildRow</c>), rather than being a direct
     /// <c>w:tc</c> child of the <c>w:tr</c>. It is EQUALITY-PARTICIPATING (a positional structural

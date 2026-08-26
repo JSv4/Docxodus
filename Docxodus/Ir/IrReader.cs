@@ -2779,6 +2779,10 @@ internal static class IrReader
             }
         }
 
+        var fingerprintBuilder = new IrContentHashBuilder();
+        foreach (var fingerprint in fingerprints)
+            fingerprintBuilder.AppendHash(fingerprint);
+
         var cell = new IrCell(
             AnchorFor(IrAnchorKind.Tc, tc, ctx),
             IrNodeList.From(blocks),
@@ -2789,6 +2793,7 @@ internal static class IrReader
             Source = ctx.Provenance(tc),
             ShellDigest = shellDigest,
             TcPrShellDigest = tcPrShellDigest,
+            FormatFingerprint = fingerprintBuilder.Build(),
         };
         return (cell, fingerprints);
     }

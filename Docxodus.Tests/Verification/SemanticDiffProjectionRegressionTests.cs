@@ -216,6 +216,68 @@ public class SemanticDiffProjectionRegressionTests
         AssertModifyValuesDiffer(result);
     }
 
+    [Fact]
+    public void Nested_table_format_only_change_reports_typed_records_on_the_nested_anchor()
+    {
+        // Issue #511: identical documents apart from the NESTED table's w:tblStyle and
+        // w:tblW — no content moves, no cell w:tcPr changes. The nested table used to get
+        // no typed record at all (its format edit was visible only as the OUTER table's
+        // moved formatDigest), because the cell recursion gate consulted ContentHash alone.
+        var left = IrTestDocuments.FromBodyXml(
+            FormatOnlyNestedTableXml(nestedStyle: "NestedA", nestedWidth: 800));
+        var right = IrTestDocuments.FromBodyXml(
+            FormatOnlyNestedTableXml(nestedStyle: "NestedB", nestedWidth: 900));
+
+        var result = SemanticDiff.Compare(left, right,
+            new SemanticDiffOptions { IncludePackageChanges = false });
+
+        // The nested table reports its own typed records against its own anchor.
+        var nestedStyle = Assert.Single(result.Changes, change => change.Path == "table.style");
+        Assert.Equal("NestedA", nestedStyle.Before.StringValue);
+        Assert.Equal("NestedB", nestedStyle.After.StringValue);
+        var nestedWidth = Assert.Single(result.Changes, change => change.Path == "table.width");
+        Assert.Equal("800", StringProperty(nestedWidth.Before, "w"));
+        Assert.Equal("900", StringProperty(nestedWidth.After, "w"));
+        var nestedProperties = Assert.Single(result.Changes, change => change.Path == "table.properties");
+        Assert.Equal(nestedStyle.LeftAnchor, nestedProperties.LeftAnchor);
+
+        // Two "table" envelope records: the outer table (its format fingerprint folds the
+        // nested one) and the nested table itself, on distinct anchors.
+        var tableEnvelopes = result.Changes.Where(change => change.Path == "table").ToArray();
+        Assert.Equal(2, tableEnvelopes.Length);
+        Assert.NotEqual(tableEnvelopes[0].LeftAnchor, tableEnvelopes[1].LeftAnchor);
+        Assert.Contains(tableEnvelopes, change => change.LeftAnchor == nestedStyle.LeftAnchor);
+
+        // Format-only: nothing reports as content, cell, or row change.
+        Assert.DoesNotContain(result.Changes, change =>
+            change.Path is "table.cell" or "table.cell.properties" or "table.row.properties" or "block");
+        AssertModifyValuesDiffer(result);
+    }
+
+    /// <summary>Like <see cref="NestedTableXml"/>, but the nested width parameter reaches ONLY the
+    /// nested table's <c>w:tblW</c> — every <c>w:tcPr</c> stays constant, so the change is purely
+    /// table-shell formatting and no content hash moves anywhere.</summary>
+    private static string FormatOnlyNestedTableXml(string nestedStyle, int nestedWidth) =>
+        "<w:tbl>" +
+        "<w:tblPr><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPr>" +
+        "<w:tblGrid>" +
+        string.Concat(Enumerable.Repeat("<w:gridCol w:w=\"1000\"/>", 3)) +
+        "</w:tblGrid>" +
+        "<w:tr><w:tc><w:tcPr/>" +
+        "<w:tbl>" +
+        $"<w:tblPr><w:tblStyle w:val=\"{nestedStyle}\"/>" +
+        $"<w:tblW w:w=\"{nestedWidth}\" w:type=\"dxa\"/></w:tblPr>" +
+        "<w:tblGrid><w:gridCol w:w=\"500\"/><w:gridCol w:w=\"500\"/></w:tblGrid>" +
+        "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"500\" w:type=\"dxa\"/></w:tcPr>" +
+        "<w:p><w:r><w:t>Nested</w:t></w:r></w:p></w:tc>" +
+        "<w:tc><w:tcPr><w:tcW w:w=\"500\" w:type=\"dxa\"/></w:tcPr>" +
+        "<w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr>" +
+        "</w:tbl>" +
+        "<w:p><w:r><w:t>Outer</w:t></w:r></w:p></w:tc>" +
+        "<w:tc><w:tcPr/><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc>" +
+        "<w:tc><w:tcPr/><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr>" +
+        "</w:tbl>";
+
     private static string InlineImageXml(string relId, long widthEmu) =>
         "<w:p><w:r><w:drawing>" +
         "<wp:inline xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
