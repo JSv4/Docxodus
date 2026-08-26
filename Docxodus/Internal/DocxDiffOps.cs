@@ -40,6 +40,127 @@ internal static class DocxDiffOps
         return SerializeRevisions(revisions);
     }
 
+    /// <summary>
+    /// The requested products of ONE memoized comparison pass (issue #594). Unrequested
+    /// products are null. Each non-null product is byte/string-identical to the corresponding
+    /// single-product op on the same inputs and settings.
+    /// </summary>
+    public sealed record DocxDiffProducts(
+        byte[]? RedlineBytes,
+        string? RevisionsJson,
+        string? EditScriptJson,
+        string? SemanticChangesJson);
+
+    /// <summary>
+    /// Compare two DOCX byte arrays ONCE (via <see cref="DocxDiff.CreateComparison"/>) and return
+    /// every requested product from that single pass — the facade counterpart of calling
+    /// <see cref="Compare"/>, <see cref="GetRevisionsJson"/>, <see cref="GetEditScriptJson"/>, and
+    /// <see cref="GetSemanticChangesJson"/> separately, each of which recomputes the diff.
+    /// The semantic product runs its own pipeline pass (its reader differs), but shares the input
+    /// snapshot; note that unlike the standalone <see cref="GetSemanticChangesJson"/>, the bytes
+    /// here are opened as packages for the other products regardless.
+    /// </summary>
+    public static DocxDiffProducts CompareProducts(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        string? settingsJson,
+        bool redline,
+        bool revisions,
+        bool editScript,
+        bool semanticChanges)
+    {
+        var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
+        var comparison = DocxDiff.CreateComparison(left, right, settings);
+        return new DocxDiffProducts(
+            redline ? comparison.ToRedline().DocumentByteArray : null,
+            revisions ? SerializeRevisions(comparison.GetRevisions()) : null,
+            editScript ? comparison.GetEditScriptJson() : null,
+            semanticChanges ? comparison.GetSemanticChangesJson(indented: false) : null);
+    }
+
+    /// <summary>
+    /// Wire form of <see cref="CompareProducts"/> shared by the WASM bridge and the stdio host.
+    /// <paramref name="productsJson"/> is a JSON array drawn from <c>"redline"</c>,
+    /// <c>"revisions"</c>, <c>"editScript"</c>, <c>"semanticChanges"</c>; null/empty selects all
+    /// four. Returns <c>{"redlineB64":…, "revisions":[…], "editScript":…, "semanticChanges":…}</c>
+    /// with unrequested keys omitted — the nested values carry exactly the standalone wire shapes
+    /// (the revisions array elements, the edit-script object, the canonical compact semantic
+    /// object).
+    /// </summary>
+    public static string CompareProductsJson(
+        byte[] leftBytes, byte[] rightBytes, string? settingsJson, string? productsJson)
+    {
+        bool redline = false, revisions = false, editScript = false, semanticChanges = false;
+        if (string.IsNullOrWhiteSpace(productsJson))
+        {
+            redline = revisions = editScript = semanticChanges = true;
+        }
+        else
+        {
+            using var doc = JsonDocument.Parse(productsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                throw new ArgumentException(
+                    "products must be a JSON array of \"redline\"/\"revisions\"/\"editScript\"/\"semanticChanges\"",
+                    nameof(productsJson));
+            foreach (var entry in doc.RootElement.EnumerateArray())
+            {
+                switch (entry.ValueKind == JsonValueKind.String ? entry.GetString() : null)
+                {
+                    case "redline": redline = true; break;
+                    case "revisions": revisions = true; break;
+                    case "editScript": editScript = true; break;
+                    case "semanticChanges": semanticChanges = true; break;
+                    default:
+                        throw new ArgumentException(
+                            $"unknown product {entry}; expected \"redline\", \"revisions\", \"editScript\", or \"semanticChanges\"",
+                            nameof(productsJson));
+                }
+            }
+            if (!(redline || revisions || editScript || semanticChanges))
+                throw new ArgumentException("products selected nothing", nameof(productsJson));
+        }
+
+        var products = CompareProducts(
+            leftBytes, rightBytes, settingsJson, redline, revisions, editScript, semanticChanges);
+
+        var sb = new StringBuilder(256);
+        sb.Append('{');
+        var first = true;
+        void Key(string name)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append('"').Append(name).Append("\":");
+        }
+
+        if (products.RedlineBytes is { } bytes)
+        {
+            Key("redlineB64");
+            sb.Append(DocxSessionJson.JsonString(Convert.ToBase64String(bytes)));
+        }
+        if (products.RevisionsJson is { } revisionsJson)
+        {
+            // Re-emit just the array so the envelope reads {"revisions":[…]} like the standalone op.
+            using var parsed = JsonDocument.Parse(revisionsJson);
+            Key("revisions");
+            sb.Append(parsed.RootElement.GetProperty("revisions").GetRawText());
+        }
+        if (products.EditScriptJson is { } scriptJson)
+        {
+            // The standalone op returns the script indented; the envelope must stay a single
+            // line (the stdio host frames responses as NDJSON), so re-emit it compact.
+            Key("editScript");
+            sb.Append(CompactJson(scriptJson));
+        }
+        if (products.SemanticChangesJson is { } semanticJson)
+        {
+            Key("semanticChanges");
+            sb.Append(semanticJson);
+        }
+        sb.Append('}');
+        return sb.ToString();
+    }
+
     /// <summary>Compare two DOCX byte arrays; return the edit script as a JSON string.</summary>
     public static string GetEditScriptJson(byte[] leftBytes, byte[] rightBytes, string? settingsJson)
     {
@@ -167,6 +288,15 @@ internal static class DocxDiffOps
             settings.CrossParagraphTokenDiff = crossParagraphTokenDiff;
 
         return settings;
+    }
+
+    private static string CompactJson(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        using var buffer = new System.IO.MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+            doc.RootElement.WriteTo(writer);
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     private static bool TryGetBool(JsonElement root, string name, out bool value)

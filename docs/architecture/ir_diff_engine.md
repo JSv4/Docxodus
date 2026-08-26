@@ -45,8 +45,16 @@ It is a sibling to `WmlComparer` in the comparison family. The differences that 
 | `GetEditScriptJson(left, right, settings?)` | `string` | The edit script as indented JSON — the diff-as-data differentiator. |
 | `GetSemanticChanges(left, right, options?)` | `SemanticChangeSet` | Stable, versioned verification schema covering content, formatting, structure, relationships, review data, media, and opaque package changes. |
 | `GetSemanticChangesJson(left, right, options?)` | `string` | Deterministic `docxodus.semantic-changes` JSON; use the returned change set's `ToCanonicalJson()` when compact bytes are required for hashing/signing. |
+| `CreateComparison(left, right, settings?)` | `DocxDiffComparison` | One memoized alignment pass serving every product above (issue #594): each product method is identical to its static, but normalization, the IR reads, and the edit-script build run at most once over one input snapshot. The statics delegate to a single-use instance, so this is also the single owner of their pipelines. Products are lazy and cached; the semantic pass keeps its own reader (it retains sources) but shares the snapshot. |
 
-Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
+Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`, `DocxDiffComparison`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
+
+On the bridges the memoized pass surfaces as a one-call multi-product compare —
+`DocxDiffOps.CompareProducts[Json]` → `DocxDiffBridge.CompareProductsJson` (WASM) /
+`docxDiffCompareProducts` (npm) / `docx_diff_compare_products` (python), each returning the
+requested subset of `{redline, revisions, editScript, semanticChanges}` with every product
+identical to its standalone call; the MCP `docxodus_compare` computes its redline + revision
+summary from the same single pass.
 
 `SemanticDiff` is the audit-oriented sibling of these renderer surfaces. It keeps the edit script as
 its alignment authority, projects all modeled families into a durable schema, and supplements them
