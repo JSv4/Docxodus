@@ -380,6 +380,38 @@ public class DocxDiffTests
     }
 
     [Fact]
+    public void DocxDiffRevision_ToString_IsSelfDescribing()
+    {
+        // Issue #596: the revision record a caller most wants to eyeball while debugging must
+        // not print as the bare type name in logs/interpolation.
+        var left = Doc("first para", "second para", "third para");
+        var right = Doc("first para", "third para");
+
+        var del = Assert.Single(DocxDiff.GetRevisions(left, right),
+            r => r.Type == DocxDiffRevisionType.Deleted);
+        var rendered = del.ToString();
+
+        Assert.StartsWith("Deleted", rendered);
+        Assert.Contains("\"second para\"", rendered);
+        Assert.Contains(del.LeftAnchor!, rendered);
+        Assert.EndsWith($"({del.Author})", rendered);
+        Assert.DoesNotContain(nameof(DocxDiffRevision), rendered);
+    }
+
+    [Fact]
+    public void DocxDiffRevision_ToString_NamesChangedFormatProperties()
+    {
+        var fc = Assert.Single(
+            DocxDiff.GetRevisions(Doc("identical text"), BoldDoc("identical text")),
+            r => r.Type == DocxDiffRevisionType.FormatChanged);
+        var rendered = fc.ToString();
+
+        Assert.StartsWith("FormatChanged [", rendered);
+        Assert.Contains("bold", rendered);
+        Assert.Contains(" ↔ ", rendered); // a format change always carries both anchors
+    }
+
+    [Fact]
     public void GetRevisions_StampsAuthorFromSettings()
     {
         var left = Doc("one two three");

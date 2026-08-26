@@ -1014,6 +1014,53 @@ public sealed class McpMutationTransactionTests : IDisposable
         },
     });
 
+    [Fact]
+    public void MCP596_FlatMutationStep_IsLiftedIntoArgs()
+    {
+        // Issue #596: a step written by symmetry with the standalone tool call — action and
+        // arguments directly beside "tool" instead of nested under "args" — must work.
+        var sessionId = OpenSession(_store, _path);
+        var anchor = FirstAnchor(_store, sessionId);
+
+        var result = J(Dispatcher.Call(_store, "docxodus_mutations", J(JsonSerializer.Serialize(new
+        {
+            sessionId,
+            steps = new object[]
+            {
+                new
+                {
+                    tool = "docxodus_edit",
+                    action = "insert_paragraph",
+                    anchorId = anchor,
+                    position = "after",
+                    markdown = "flat step landed",
+                },
+            },
+        }))));
+
+        Assert.Equal("ok", result.GetProperty("status").GetString());
+        var step = Assert.Single(result.GetProperty("steps").EnumerateArray());
+        Assert.Equal("insert_paragraph", step.GetProperty("action").GetString());
+        Assert.Contains("flat step landed", GetMarkdown(_store, sessionId));
+    }
+
+    [Fact]
+    public void MCP596_StepWithNeitherArgsNorAction_GetsTeachingError()
+    {
+        var sessionId = OpenSession(_store, _path);
+
+        var ex = Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_mutations",
+            J(JsonSerializer.Serialize(new
+            {
+                sessionId,
+                steps = new object[] { new { tool = "docxodus_edit" } },
+            }))));
+
+        // The error must teach the nested shape, not just name the missing key.
+        Assert.Contains("must be nested", ex.Message);
+        Assert.Contains("\"args\"", ex.Message);
+    }
+
     private static string OpenSession(SessionStore store, string path)
     {
         var opened = J(Dispatcher.Call(store, "docxodus_open",
