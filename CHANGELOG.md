@@ -807,6 +807,16 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Inline and margin comment markers are no longer links to nowhere (#563).** The `[n]`
+  comment marker always carried `href="#comment-{id}"`, but only `endnotes` mode renders that
+  target — inline mode has no comments section, and margin mode's note ids are stripped when
+  pagination clones notes into the page margin. Every commented document therefore failed a
+  strict (`unsupportedContent: "strict"`) inline/margin standalone export on a
+  `fragment_target_unavailable` dangling link, and quietly degraded to an inert marker under
+  the default `warn`. The converter now emits the `href` only in `endnotes` mode; in inline
+  and margin modes the marker keeps its element name, id, classes and metadata but is not an
+  anchor, so nothing downstream has to repair a link the converter knew was dangling.
+
 - **`PreserveInputRevisions` now carries a modified block's own tracked changes through the
   redline (#517).** A comparison whose right side already contained tracked changes silently
   lost them from a *modified* block — the fine renderers emit the accepted view, so accepting

@@ -238,36 +238,17 @@ private static object ProcessCommentRangeEnd(XElement element, WmlToHtmlConverte
 
 #### ProcessCommentReference
 
-Creates the superscript marker linking to the comment:
+Creates the superscript `[n]` marker for every render mode: an `<a>` with
+`id="comment-ref-{id}"` and class `{prefix}marker`, plus the metadata each mode needs
+(`data-comment-id` for point comments, `data-parent-id`/`data-resolved`/reply body text
+under `IncludeCommentMetadata` — see issue #540).
 
-```csharp
-private static object ProcessCommentReference(XElement element, WmlToHtmlConverterSettings settings)
-{
-    var tracker = element.Ancestors().First().Annotation<CommentTracker>();
-    var id = (int?)element.Attribute(W.id);
-    var prefix = settings.CommentCssClassPrefix ?? "comment-";
-
-    if (tracker != null && id.HasValue && tracker.Comments.ContainsKey(id.Value))
-    {
-        tracker.ReferencedCommentIds.Add(id.Value);
-
-        // EndnoteStyle: Create anchor link
-        if (settings.CommentRenderMode == CommentRenderMode.EndnoteStyle)
-        {
-            return new XElement(Xhtml.sup,
-                new XAttribute("class", prefix + "marker"),
-                new XAttribute("id", prefix + "ref-" + id.Value),
-                new XElement(Xhtml.a,
-                    new XAttribute("href", "#" + prefix.TrimEnd('-') + "-" + id.Value),
-                    "[" + (tracker.ReferencedCommentIds.Count) + "]"
-                )
-            );
-        }
-    }
-
-    return null;
-}
-```
+The marker carries `href="#comment-{id}"` **only in EndnoteStyle mode**, because only
+`RenderCommentsSection` renders that target. Inline mode has no comments section at all,
+and margin mode's note registry loses its ids when pagination clones notes into the page
+margin — so in those modes the marker is an anchor-free `<a>` rather than a link to
+nowhere (issue #563). The standalone export's fragment-target validation stays as defense
+in depth for genuinely broken documents.
 
 ### 5. Text Highlighting
 
@@ -391,7 +372,8 @@ In margin mode, the entire document body is wrapped in a flexbox container with 
       <span class="comment-highlight" data-comment-id="0">
         This text has a comment
       </span>
-      <sup><a href="#comment-0" class="comment-marker" id="comment-ref-0">[0]</a></sup>
+      <!-- no href: pagination strips the note ids the link would point at (#563) -->
+      <sup><a class="comment-marker" id="comment-ref-0">[0]</a></sup>
     </p>
   </div>
 

@@ -927,16 +927,36 @@ test.describe('standalone paginated HTML', () => {
     expect(codes).not.toContain('comment_resolved_state_not_rendered');
 
     // This document used to fail closed under strict through those warnings; the same input
-    // must now export cleanly under the strictest policy. (endnotes, not inline: an inline
-    // comment marker links to a section that mode does not render, a pre-existing dangling
-    // fragment target that strict fails on and that the retired preflight warnings used to
-    // mask by failing first — tracked separately.)
+    // must now export cleanly under the strictest policy. (Inline and margin strict exports
+    // are proven separately below — issue #563.)
     const strict = await convert(page, source, false, {
       reviewProfile: 'final',
       commentProfile: 'endnotes',
       unsupportedContent: 'strict',
     });
     expect(strict.pageCount).toBeGreaterThan(0);
+  });
+
+  test('strict inline and margin exports survive commented documents', async ({ page }) => {
+    // Issue #563: the [n] comment marker carried href="#comment-N" in every mode, but only
+    // endnotes renders that target, so strict failed any commented inline/margin export on a
+    // dangling fragment target. The marker is now anchor-free outside endnotes; assert the
+    // markup change and the strict outcome together so the href cannot quietly return.
+    const source = generateCommentTopologyDocx();
+    for (const commentProfile of ['inline', 'margin'] as const) {
+      const strict = await convert(page, source, false, {
+        commentProfile,
+        unsupportedContent: 'strict',
+      });
+      expect(strict.pageCount, `${commentProfile} strict export`).toBeGreaterThan(0);
+
+      const marker = await page.evaluate((html: string) => {
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        const el = parsed.querySelector('[id^="comment-ref-"]');
+        return el ? { tag: el.tagName, hasHref: el.hasAttribute('href') } : null;
+      }, strict.html);
+      expect(marker, `${commentProfile} marker`).toEqual({ tag: 'A', hasHref: false });
+    }
   });
 
   test('renders comment bodies per visible profile and none for hidden', async ({ page }) => {

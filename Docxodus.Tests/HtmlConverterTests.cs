@@ -5179,6 +5179,57 @@ namespace OxPt
             }
         }
 
+        [Fact]
+        public void HC073_CommentMarkers_LinkOnlyWhereTheTargetRenders()
+        {
+            // Only EndnoteStyle renders the `#comment-N` targets the marker links point at.
+            // In Inline and Margin modes the marker must not be a link to nowhere, while
+            // keeping its identity (id, class, element name) for downstream selectors
+            // (issue #563).
+            byte[] docBytes = BuildDocWithThreadedComments();
+            foreach (var mode in new[]
+            {
+                CommentRenderMode.EndnoteStyle,
+                CommentRenderMode.Inline,
+                CommentRenderMode.Margin,
+            })
+            {
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    ms.Write(docBytes, 0, docBytes.Length);
+                    using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                    {
+                        var settings = new WmlToHtmlConverterSettings()
+                        {
+                            RenderComments = true,
+                            CommentRenderMode = mode,
+                            IncludeCommentMetadata = true,
+                        };
+                        XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                        var marker = ById(xhtml, "comment-ref-1");
+                        Assert.Equal("a", marker.Name.LocalName);
+                        Assert.Contains("comment-marker", (string)marker.Attribute("class"));
+
+                        if (mode == CommentRenderMode.EndnoteStyle)
+                        {
+                            Assert.Equal("#comment-1", (string)marker.Attribute("href"));
+                            Assert.NotNull(ById(xhtml, "comment-1"));
+                        }
+                        else
+                        {
+                            Assert.Null(marker.Attribute("href"));
+                        }
+
+                        // The reply's marker keeps its metadata in every mode — dropping the
+                        // href must not cost the thread relationship.
+                        var marker2 = ById(xhtml, "comment-ref-2");
+                        Assert.Equal("1", (string)marker2.Attribute("data-parent-id"));
+                    }
+                }
+            }
+        }
+
         #endregion
     }
 }

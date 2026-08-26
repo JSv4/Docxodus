@@ -4682,8 +4682,13 @@ namespace Docxodus
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
             tracker.Comments.TryGetValue(id.Value, out var comment);
 
+            // Only EndnoteStyle renders the `#comment-{id}` targets (RenderCommentsSection);
+            // in Inline and Margin modes the marker stays an anchor-free <a> so it is not a
+            // link to nowhere, while `a[data-comment-id]` selectors keep matching (issue #563).
             var marker = new XElement(Xhtml.a,
-                new XAttribute("href", $"#comment-{id}"),
+                settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    ? new XAttribute("href", $"#comment-{id}")
+                    : null,
                 new XAttribute("id", $"comment-ref-{id}"),
                 new XAttribute("class", prefix + "marker"));
 
