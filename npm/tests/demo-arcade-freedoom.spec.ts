@@ -76,17 +76,26 @@ async function startAutopilot(page: Page) {
 
     let goal: { fx: number; fy: number } | null = null;
     let stuck = 0;
-    // No-progress fallback: an engaged foe whose hp hasn't dropped after
-    // sustained fire is behind a wall (awake but unhittable) — ignore it for
-    // a while and let navigation resume; the game's own boredom timer will
-    // put it back to sleep.
-    let engaged: { key: string; hp: number; ticks: number } | null = null;
+    // Black-box flight recorder for the timeout diagnosis issue #492 asked
+    // for: enough to tell "no path found" from "path found but never stepped"
+    // from "pinned in combat" without re-running anything.
+    const diag = { ticks: 0, bfsCalls: 0, bfsNull: 0, combatTicks: 0, alive: true };
+    // No-progress fallback: sustained fire with no damage dealt means the foe
+    // is behind a wall (awake but unhittable) — ignore its kind for a while
+    // and let navigation resume; the game's own boredom timer will put it
+    // back to sleep. Progress is "any enemy hp dropped since the last tick"
+    // (only the player deals damage; a kill removes the enemy, which also
+    // lowers the total). Tracking the total instead of one foe's positional
+    // key keeps this detector honest when the foe MOVES: a per-position key
+    // reset the counter every cell the foe crossed, so a wall-blocked but
+    // pacing enemy could pin the autopilot in combat indefinitely.
+    let lastTotalHp = Infinity;
     const ignored = new Map<string, number>();
-    const foeKey = (e: any) => `${e.kind}:${e.x.toFixed(0)},${e.y.toFixed(0)}`;
     const timer = setInterval(() => {
+      diag.ticks++;
       if (!a.playing()) return;
       const s = a.game();
-      if (s.mode === 'won') { clearInterval(timer); return; }
+      if (s.mode === 'won') { diag.alive = false; clearInterval(timer); return; }
       const input = a.input;
       if (s.mode === 'dead') return; // the game respawns us; keep no keys held
       const now = Date.now();
@@ -95,21 +104,20 @@ async function startAutopilot(page: Page) {
       // and shot (an enemy still asleep provably has no line of sight — its
       // own wake check would have fired — so shooting at it only hits wall).
       const foe = (s.enemies ?? [])
-        .filter((e: any) => e.awake && !ignored.has(foeKey(e)))
+        .filter((e: any) => e.awake && !ignored.has(e.kind))
         .map((e: any) => ({ e, d: Math.hypot(e.x - s.player.x, e.y - s.player.y) }))
         .filter((f: any) => f.d < 6)
         .sort((x: any, y: any) => x.d - y.d)[0];
+      const totalHp = (s.enemies ?? []).reduce((t: number, e: any) => t + e.hp, 0);
       if (foe) {
-        const key = foeKey(foe.e);
-        if (engaged && engaged.key === key && engaged.hp === foe.e.hp) {
-          if (++engaged.ticks > 50) { // ~3s of fire with no damage: wall between us
-            ignored.set(key, now + 15000);
-            engaged = null;
-            return;
-          }
-        } else {
-          engaged = { key, hp: foe.e.hp, ticks: 0 };
+        if (totalHp < lastTotalHp) diag.combatTicks = 0;
+        else if (++diag.combatTicks > 50) { // ~3s of fire with no damage: wall between us
+          ignored.set(foe.e.kind, now + 15000);
+          diag.combatTicks = 0;
+          lastTotalHp = totalHp;
+          return;
         }
+        lastTotalHp = totalHp;
         const vx = foe.e.x - s.player.x, vy = foe.e.y - s.player.y;
         const fcross = s.player.dx * vy - s.player.dy * vx;
         const fdot = s.player.dx * vx + s.player.dy * vy;
@@ -121,13 +129,19 @@ async function startAutopilot(page: Page) {
         if (aligned) input.set('Space', true); // fresh edge each tick; cooldown gates
         return;
       }
-      engaged = null;
+      diag.combatTicks = 0;
+      lastTotalHp = totalHp;
       input.set('Space', false);
       if (!goal || (Math.floor(s.player.x) === goal.fx && Math.floor(s.player.y) === goal.fy)
         || ++stuck > 25) {
+        diag.bfsCalls++;
         goal = bfsNext();
         stuck = 0;
-        if (!goal) { clearInterval(timer); return; }
+        // No path THIS tick is not "no path ever": a snapshot taken at an
+        // unlucky moment heals by the next planning pass. Killing the timer
+        // here silently ended the run and left the test to burn its whole
+        // 240s budget on a dead autopilot (issue #492) — retry instead.
+        if (!goal) { diag.bfsNull++; return; }
       }
       const tx = goal.fx + 0.5 - s.player.x, ty = goal.fy + 0.5 - s.player.y;
       const cross = s.player.dx * ty - s.player.dy * tx;
@@ -142,8 +156,9 @@ async function startAutopilot(page: Page) {
       }
     }, 60);
     (window as any).__autopilot = {
-      stop: () => clearInterval(timer),
+      stop: () => { diag.alive = false; clearInterval(timer); },
       status: () => ({ ...a.game(), frames: a.frames() }),
+      diag: () => ({ ...diag, goal, stuck, playing: a.playing() }),
     };
   });
 }
@@ -205,11 +220,40 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
     const sigils0 = await page.evaluate(() => (window as any).__arcade.game().sigilsLeft as number);
     expect(sigils0).toBe(5);
     await startAutopilot(page);
-    await page.waitForFunction(
-      (n0) => (window as any).__autopilot.status().sigilsLeft < n0,
-      sigils0,
-      { timeout: 240000, polling: 500 },
-    );
+    try {
+      await page.waitForFunction(
+        (n0) => (window as any).__autopilot.status().sigilsLeft < n0,
+        sigils0,
+        { timeout: 240000, polling: 500 },
+      );
+    } catch (err) {
+      // Issue #492: a bare timeout said nothing about WHY the autopilot made
+      // no progress. Dump the flight recorder and the terrain around the
+      // player so one occurrence is enough to diagnose.
+      const state = await page.evaluate(() => {
+        const a = (window as any).__arcade;
+        const s = a.game();
+        const px = Math.floor(s.player.x), py = Math.floor(s.player.y);
+        const rows: string[] = [];
+        for (let y = Math.max(0, py - 4); y <= py + 4; y++) {
+          const r = s.mapRow(y);
+          if (!r) break;
+          rows.push(r.slice(Math.max(0, px - 10), px + 11));
+        }
+        return {
+          autopilot: (window as any).__autopilot.diag(),
+          player: s.player,
+          mode: s.mode,
+          sigilsLeft: s.sigilsLeft,
+          health: s.health,
+          frames: a.frames(),
+          mapAroundPlayer: rows,
+        };
+      });
+      throw new Error(
+        `autopilot made no pickup before timeout (${(err as Error).message}); state: ${JSON.stringify(state, null, 2)}`,
+      );
+    }
     await page.evaluate(() => (window as any).__autopilot.stop());
     // Still a document the whole time: save the very frame the sigil was
     // taken on and reopen it as a fresh DOCX.
