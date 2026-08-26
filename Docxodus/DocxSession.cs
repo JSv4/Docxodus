@@ -6736,6 +6736,10 @@ public sealed partial class DocxSession : IDisposable
                 if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
                 pPr.Element(W.pStyle)?.Remove();
                 pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, declaredStyle)));
+                // Same suppressor rule as BuildParagraphFromParsedBlock, so a heading
+                // authored through ReplaceText carries the identical paragraph mark (#572).
+                if (HeadingNumberingSuppressor(declaredStyle) is { } suppressor)
+                    SetPPrChildInOrder(pPr, suppressor);
                 if (_trackedChanges == TrackedChangeMode.RenderInline)
                     TrackPropertyMutation(pPr, oldPPr!, W.pPrChange,
                         _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate(), W.rPr, W.sectPr);
@@ -10292,7 +10296,7 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>
-    private static List<XElement> BuildCellParagraphs(string? markdown, ParagraphAlignment? align)
+    private List<XElement> BuildCellParagraphs(string? markdown, ParagraphAlignment? align)
     {
         var result = new List<XElement>();
         if (!string.IsNullOrEmpty(markdown))
