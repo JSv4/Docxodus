@@ -53,6 +53,7 @@ internal static class Dispatcher
         "get_package_manifest" => VerificationOps.GetPackageManifest(Handle(args)),
         "verify_deliverable" => VerifyDeliverable(args),
         "prove_redline_reversibility" => ProveRedlineReversibility(args),
+        "verify_delivery_receipt" => VerifyDeliveryReceipt(args),
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
@@ -367,6 +368,26 @@ internal static class Dispatcher
             throw new FormatException($"args property \"{property}\" must be a string");
 
         return Convert.FromBase64String(Str(args, property));
+    }
+
+    /// <summary>Portable delivery-receipt verification (issue #520): receiptJson plus an
+    /// optional artifactsB64 object of {artifactId: base64} — the exact wire shape
+    /// <see cref="DeliveryOps.VerifyChangeReceiptJson"/> owns, passed through verbatim.</summary>
+    private static string VerifyDeliveryReceipt(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object)
+            throw new FormatException("verify_delivery_receipt args must be an object");
+        var receiptJson = Str(args, "receiptJson");
+        string? artifactsJson = null;
+        if (args.TryGetProperty("artifactsB64", out var artifacts)
+            && artifacts.ValueKind != JsonValueKind.Null)
+        {
+            if (artifacts.ValueKind != JsonValueKind.Object)
+                throw new FormatException("args property \"artifactsB64\" must be an object");
+            artifactsJson = artifacts.GetRawText();
+        }
+
+        return DeliveryOps.VerifyChangeReceiptJson(receiptJson, artifactsJson);
     }
 
     private static string VerifyDeliverable(JsonElement args)

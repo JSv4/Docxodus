@@ -35,6 +35,7 @@ from .enums import (
     DeliverableSemanticChangeFamily,
     DeliverableVerificationDecision,
     DeliverableVerificationMode,
+    DeliveryArtifactVerificationStatus,
     EditErrorCode,
     EmptyParagraphMode,
     HeaderFooterKind,
@@ -750,6 +751,74 @@ class DeliverableArtifactMetadata:
                 if isinstance(page_map, Mapping)
                 else None
             ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryArtifactVerification:
+    """One recorded artifact's independent re-hash verdict from receipt verification."""
+
+    artifact_id: str
+    status: DeliveryArtifactVerificationStatus
+    expected_length: int | None = None
+    actual_length: int | None = None
+    expected_digest: VerificationDigest | None = None
+    actual_digest: VerificationDigest | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliveryArtifactVerification":
+        expected_digest = d.get("expectedDigest")
+        actual_digest = d.get("actualDigest")
+        return cls(
+            artifact_id=str(d["artifactId"]),
+            status=DeliveryArtifactVerificationStatus(str(d["status"])),
+            expected_length=(
+                int(d["expectedLength"]) if d.get("expectedLength") is not None else None
+            ),
+            actual_length=(
+                int(d["actualLength"]) if d.get("actualLength") is not None else None
+            ),
+            expected_digest=(
+                VerificationDigest._from_wire(expected_digest)
+                if isinstance(expected_digest, Mapping)
+                else None
+            ),
+            actual_digest=(
+                VerificationDigest._from_wire(actual_digest)
+                if isinstance(actual_digest, Mapping)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryReceiptVerificationResult:
+    """Portable delivery change receipt verification verdict.
+
+    Mirrors the .NET ``DeliveryReceiptVerificationResult`` through the shared
+    string-in/string-out facade wire shape (issue #520): the envelope booleans, one
+    :class:`DeliveryArtifactVerification` per recorded artifact, and free-form findings.
+    """
+
+    is_valid: bool
+    receipt_digest_valid: bool
+    contract_valid: bool
+    citation_bindings_valid: bool
+    artifacts: tuple[DeliveryArtifactVerification, ...]
+    findings: tuple[str, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliveryReceiptVerificationResult":
+        return cls(
+            is_valid=bool(d["isValid"]),
+            receipt_digest_valid=bool(d["receiptDigestValid"]),
+            contract_valid=bool(d["contractValid"]),
+            citation_bindings_valid=bool(d["citationBindingsValid"]),
+            artifacts=tuple(
+                DeliveryArtifactVerification._from_wire(item)
+                for item in d.get("artifacts", ())
+            ),
+            findings=tuple(str(item) for item in d.get("findings", ())),
         )
 
 

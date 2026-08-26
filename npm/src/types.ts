@@ -1153,6 +1153,37 @@ export interface DeliverableArtifactMetadata {
 }
 
 /** Canonical schema-v1 report returned by every default verification transport. */
+/** One recorded artifact's independent re-hash verdict from receipt verification. */
+export type DeliveryArtifactVerificationStatus =
+  | "verified"
+  | "unavailable"
+  | "missing"
+  | "length_mismatch"
+  | "digest_mismatch"
+  | "invalid_record";
+
+export interface DeliveryArtifactVerification {
+  artifactId: string;
+  status: DeliveryArtifactVerificationStatus;
+  expectedLength?: number;
+  actualLength?: number;
+  expectedDigest?: VerificationDigest;
+  actualDigest?: VerificationDigest;
+}
+
+/**
+ * Portable delivery change receipt verification verdict — the shared facade wire
+ * shape every transport returns (issue #520).
+ */
+export interface DeliveryReceiptVerificationResult {
+  isValid: boolean;
+  receiptDigestValid: boolean;
+  contractValid: boolean;
+  citationBindingsValid: boolean;
+  artifacts: DeliveryArtifactVerification[];
+  findings: string[];
+}
+
 export interface DeliverableVerificationResult {
   schema: "https://docxodus.dev/schemas/verification/deliverable-verification/v1";
   schemaVersion: 1;
@@ -1346,6 +1377,7 @@ export interface DocxodusWasmExports {
   DocumentConverter: {
     GeneratePackageManifest: (bytes: Uint8Array) => string;
     VerifyDeliverable: (bytes: Uint8Array) => string;
+    VerifyDeliveryReceipt: (receiptJson: string, artifactsJson: string) => string;
     VerifyDeliverableWithBaseline: (
       baselineBytes: Uint8Array,
       bytes: Uint8Array
