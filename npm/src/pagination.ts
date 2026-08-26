@@ -2492,7 +2492,19 @@ export class PaginationEngine {
       registryEl.querySelectorAll<HTMLElement>("[data-comment-id]"),
     )) {
       const commentId = entry.dataset.commentId;
-      if (commentId) registry.set(commentId, entry.cloneNode(true) as HTMLElement);
+      if (!commentId) continue;
+      // A reply's note nests inside its thread root (issue #540), so every id in a thread
+      // maps to the root's clone — a reply marker selects the whole thread, and the
+      // placement loop dedupes by the clone's own id so the thread lands once per page.
+      let root = entry;
+      for (
+        let parent = root.parentElement?.closest<HTMLElement>("[data-comment-id]");
+        parent && registryEl.contains(parent);
+        parent = root.parentElement?.closest<HTMLElement>("[data-comment-id]")
+      ) {
+        root = parent;
+      }
+      registry.set(commentId, root.cloneNode(true) as HTMLElement);
     }
     return registry;
   }
@@ -4304,9 +4316,15 @@ export class PaginationEngine {
       marginColumn.style.maxHeight = `${contentAreaHeight}pt`;
       marginColumn.style.overflow = "hidden";
       marginColumn.style.boxSizing = "border-box";
+      const placedThreadRoots = new Set<string>();
       for (const id of pageCommentIds) {
         const source = this.commentMarginRegistry.get(id);
         if (source) {
+          // Every id in a nested thread maps to the same root note; place it once even
+          // when the root's and a reply's markers share the page.
+          const rootId = source.dataset.commentId ?? id;
+          if (placedThreadRoots.has(rootId)) continue;
+          placedThreadRoots.add(rootId);
           const clone = source.cloneNode(true) as HTMLElement;
           this.makeClonedMarginCommentInert(clone);
           marginColumn.appendChild(clone);

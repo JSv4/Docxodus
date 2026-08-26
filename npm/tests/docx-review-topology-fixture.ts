@@ -193,7 +193,8 @@ export function generateCellRevisionDocx(): Uint8Array {
 /**
  * A document with two comments where the second is a reply to the first, and the first is
  * marked resolved. The threading and resolved state live only in commentsExtended, which the
- * converter does not read.
+ * converter reads since issue #540: the reply nests beneath its thread root and the resolved
+ * root is badged and muted.
  */
 export function generateCommentTopologyDocx(): Uint8Array {
   return minimalPackage({
