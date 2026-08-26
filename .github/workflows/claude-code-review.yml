@@ -12,12 +12,15 @@ on:
 
 jobs:
   claude-review:
-    # Dependabot PRs never get repository secrets (including
-    # CLAUDE_CODE_OAUTH_TOKEN) on pull_request-triggered runs — that's a
-    # GitHub security restriction, not something this workflow can work
-    # around. Skip the job there instead of showing a permanently-red,
-    # unfixable check on every dependency-bump PR.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Dependabot and fork PRs never get repository secrets (including
+    # CLAUDE_CODE_OAUTH_TOKEN) or an OIDC id-token on pull_request-triggered
+    # runs — that's a GitHub security restriction, not something this
+    # workflow can work around (fork runs die in seconds on "Unable to get
+    # ACTIONS_ID_TOKEN_REQUEST_URL", issue #338). Skip the job there instead
+    # of showing a permanently-red check the contributor cannot fix.
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     runs-on: ubuntu-latest
     permissions:
