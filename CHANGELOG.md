@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Footnote/endnote body edits no longer vanish on commit (#583).** The editor's note
+  renderer appended the backref separator as a bare text node (`" "` before the `↩`), so the
+  block's committed-text baseline carried a phantom trailing character the session's flat
+  run text does not have. Every later span-based commit of a note body then computed offsets
+  one past the session text and failed with `offset_out_of_range` — at which point the editor
+  re-rendered the block from session truth, silently reverting the user's typing. The
+  separator now lives inside the chrome element the serializer already excludes, so the
+  baseline matches the session and note edits commit like any block edit.
 - **Typed leading block markers no longer vanish on commit (#571).** The editor's
   blur-commit serializer escaped inline markdown (`*`, `_`, backticks, brackets) but not
   block-level markers, so typing `## 2.1 Termination`, `> see clause 4`, `- deliverables`,
