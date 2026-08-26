@@ -782,6 +782,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **The markdown projection shows simple-field results (#559).** A `w:fldSimple` — a
+  Word-authored `REF`, `STYLEREF`, `SEQ`, or simple `PAGE` field — was dropped by the
+  projection's inline walk, so its visible cached result was absent from the markdown/text an
+  agent reads, while the HTML conversion rendered it and the flat text the span machinery
+  addresses included it (the complex `fldChar` spelling of the same field already projected,
+  so the two spellings disagreed). The cached-result runs now project as ordinary inline
+  text on both the oracle and the IR emitter, byte-parity preserved; the field stays atomic
+  for mutation addressing, exactly like a hyperlink wrapper. Inline `w:sdt`/`w:smartTag`
+  carriers deliberately remain projected-out.
 - **Even/odd running stories follow the page number again (#536).** The paginated renderer's
   #527 hardening switched even-header/footer selection (and the matching band heights) to the
   page's one-based position in its section, which flips every story of a section that begins

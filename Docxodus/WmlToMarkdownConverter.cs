@@ -1127,6 +1127,21 @@ public static class WmlToMarkdownConverter
                     Add(r, ReadRunFormatting(r, hyperlinkUrl: null, revision: Revision.Deleted));
                 Flush();
             }
+            else if (child.Name == W.fldSimple)
+            {
+                // A simple field's cached-result runs are what a reader sees — the HTML
+                // converter renders them and the flat text the span machinery addresses
+                // includes them, so dropping them here left a hole in the projection an agent
+                // reads (issue #559: a Word-authored REF/STYLEREF/SEQ field contributed
+                // nothing to the markdown). Project the runs as ordinary text; the field
+                // itself stays atomic for mutation addressing, exactly like a hyperlink
+                // wrapper. Inline w:sdt/w:smartTag carriers deliberately stay projected-out —
+                // their runs remain in the flat text but not the rendered markdown.
+                Flush();
+                foreach (var r in child.Descendants(W.r))
+                    Add(r, ReadRunFormatting(r, hyperlinkUrl: null, revision: Revision.None));
+                Flush();
+            }
         }
         Flush();
         return groups;

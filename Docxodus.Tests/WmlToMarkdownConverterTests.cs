@@ -1165,4 +1165,24 @@ public class WmlToMarkdownConverterTests
                 $"Descendant of boilerplate fn leaked into AnchorIndex: {t.Anchor.Id}");
         }
     }
+
+    // ─── Simple fields and smart tags (issue #559) ────────────────────────
+
+    [Fact]
+    public void MD085_FldSimpleCachedResult_ProjectsAsVisibleText()
+    {
+        // Issue #559: a w:fldSimple's cached-result runs are what a reader sees (the HTML
+        // converter renders them; the flat text Grep searches includes them), so the
+        // projection must show them too — a REF or STYLEREF field must not leave a hole in
+        // what an agent reads.
+        var doc = BuildDoc(body => body.Append(new Paragraph(
+            new Run(new Text("See ") { Space = SpaceProcessingModeValues.Preserve }),
+            new SimpleField(new Run(new Text("Definitions"))) { Instruction = " REF Defs \\h " },
+            new Run(new Text(" for details.") { Space = SpaceProcessingModeValues.Preserve }))));
+
+        var projection = WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings());
+
+        Assert.Contains("See Definitions for details.", projection.Markdown);
+    }
+
 }
