@@ -399,10 +399,11 @@ public class RedlineReversibilityFixtureSweepTests
             || divergence.PartUri.Contains("endnotes", StringComparison.Ordinal));
     }
 
-    // WC012-Math: the After document carries its own tracked insertions, and
-    // DocxDiff.Compare does not reproduce that pre-existing review state in the redline.
-    // Accepting such a redline can never recover the After document exactly, and the proof
-    // must refuse to certify rather than resolve around the loss.
+    // WC012-Math: the After document carries its own tracked insertions, and under DEFAULT
+    // settings DocxDiff.Compare does not reproduce that pre-existing review state in the
+    // redline. Accepting such a redline can never recover the After document exactly, and the
+    // proof must refuse to certify rather than resolve around the loss. The escape hatch is
+    // PreserveInputRevisions, which carries the marker through — RRS009 below.
     [Fact]
     public void RRS007_KnownGap_RedlineMissingIntendedFinalReviewStateFailsClosed()
     {
@@ -418,6 +419,55 @@ public class RedlineReversibilityFixtureSweepTests
         Assert.Null(run.Proof.RejectToBaseline);
         Assert.Contains(run.Proof.Findings, finding =>
             finding.Code == "intended_final_revision_missing_from_redline");
+    }
+
+    // The same pair under PreserveInputRevisions: the redline now carries After's own
+    // tracked insertion — its ORIGINAL w:id intact, nested inside the engine's insertion
+    // across the math boundary — so the intended-final gate passes, the foreign revision
+    // classifies as intended-final review state, and selective resolution of the engine's
+    // wrapper leaves the marker standing. The strict whole-package proof still reports
+    // false like every engine-generated redline (RRS004: the output package is rebuilt).
+    [Fact]
+    public void RRS009_PreserveInputRevisions_CarriesIntendedFinalReviewStateThroughTheRedline()
+    {
+        var left = Fixture("WC/WC012-Math-Before.docx");
+        var right = Fixture("WC/WC012-Math-After.docx");
+        var redline = DocxDiff.Compare(
+            new WmlDocument("left.docx", left),
+            new WmlDocument("right.docx", right),
+            new DocxDiffSettings
+            {
+                AuthorForRevisions = "Docxodus Engine",
+                PreserveInputRevisions = true,
+            }).DocumentByteArray;
+
+        var run = RedlineReversibilityVerifier.Prove(left, right, redline);
+        var proof = run.Proof;
+
+        // The #517 gap is closed under the flag: After's own tracked insertion is present in
+        // the redline under its original identity and classifies as intended-final review
+        // state rather than being reported missing or conflicted.
+        Assert.DoesNotContain(proof.Findings, finding =>
+            finding.Code == "intended_final_revision_missing_from_redline");
+        Assert.Contains(proof.RevisionClassifications, classification =>
+            classification.Disposition == RedlineRevisionDisposition.IntendedFinalPreExisting
+            && classification.Redline?.Author == "Eric White");
+        Assert.DoesNotContain(proof.RevisionClassifications, classification =>
+            classification.Disposition == RedlineRevisionDisposition.Conflicted);
+
+        // RRS004's engine contract: both paths complete and round-trip story content.
+        Assert.True(proof.AcceptToFinal!.Completed, proof.ToJson());
+        Assert.True(proof.RejectToBaseline!.Completed, proof.ToJson());
+        Assert.Equal(StoryTexts(right), StoryTexts(run.AcceptedPackageBytes!));
+        Assert.Equal(StoryTexts(left), StoryTexts(run.RejectedPackageBytes!));
+
+        // Accepting only the engine's changes must leave the foreign marker standing: the
+        // accepted package still carries native review markup (Eric White's insertion).
+        Assert.True(ContainsNativeRevisions(run.AcceptedPackageBytes!));
+
+        // The output package is rebuilt, so the strict whole-package proof does not hold for
+        // engine output today — and the proof must say so rather than succeed.
+        Assert.False(proof.Success, proof.ToJson());
     }
 
     // ------------------------------------------------------------------

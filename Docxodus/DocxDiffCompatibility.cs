@@ -178,7 +178,9 @@ public static class DocxDiffCompatibility
                 + "lose who edited what and where), and 'accept all' is itself a policy that overrides any change a "
                 + "prior reviewer had left unaccepted (effectively rejected). The Word-parity alternative is "
                 + "DocxDiffSettings.PreserveInputRevisions (wins when both are set): the inputs' own markup rides "
-                + "through verbatim for equal blocks and whole-block inserts — accept(output) still equals "
+                + "through verbatim for equal blocks, whole-block inserts, and modified blocks (a modified "
+                + "right block carrying its own markup lowers to a whole-block replacement whose insert side "
+                + "keeps the original markup, ids intact) — accept(output) still equals "
                 + "accept(right), but reject(output) no longer equals left where foreign markup exists (exactly "
                 + "Word's Compare behavior). See ir_diff_engine.md + "
                 + "ooxml_corner_cases.md.", "PreAcceptInputRevisions"),
