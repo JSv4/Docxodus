@@ -13728,7 +13728,7 @@ public sealed partial class DocxSession : IDisposable
         if (snapshot is not null) run.AddFirst(snapshot);
     }
 
-    internal static XElement BuildParagraphFromParsedBlock(Internal.ParsedBlock block)
+    internal XElement BuildParagraphFromParsedBlock(Internal.ParsedBlock block)
     {
         var p = new XElement(W.p);
         var pPr = new XElement(W.pPr);
@@ -13743,13 +13743,10 @@ public sealed partial class DocxSession : IDisposable
             case Internal.ParserBlockKind.Heading6:
                 {
                     int level = (int)block.Kind - (int)Internal.ParserBlockKind.Heading1 + 1;
-                    pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, $"Heading{level}")));
-                    // A document may attach legal-outline numbering to its Heading style.
-                    // Markdown headings are explicit unnumbered blocks; numId=0 prevents the
-                    // inherited prefix from unexpectedly changing the inserted text.
-                    pPr.Add(new XElement(W.numPr,
-                        new XElement(W.ilvl, new XAttribute(W.val, 0)),
-                        new XElement(W.numId, new XAttribute(W.val, 0))));
+                    var styleId = $"Heading{level}";
+                    pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, styleId)));
+                    if (HeadingNumberingSuppressor(styleId) is { } suppressor)
+                        pPr.Add(suppressor);
                     break;
                 }
             case Internal.ParserBlockKind.Quote:
@@ -13768,6 +13765,22 @@ public sealed partial class DocxSession : IDisposable
             p.Add(new XElement(run));
         return p;
     }
+
+    /// <summary>
+    /// The `numId=0` numbering suppressor a markdown-authored heading needs — but ONLY
+    /// when the document's heading style actually attaches numbering (a legal-outline
+    /// template), where it stops the inherited prefix from changing the authored text.
+    /// Written unconditionally it made every markdown heading diff as
+    /// FormatChanged(numId, numLevel) against an identical Style-dropdown heading, whose
+    /// `pPr` carries no `numPr` at all (#572). Null when the style (or its basedOn chain)
+    /// does not number, so all authoring paths produce the same paragraph mark.
+    /// </summary>
+    private XElement? HeadingNumberingSuppressor(string styleId) =>
+        _doc is not null && Internal.StyleFactory.StyleAttachesNumbering(_doc, styleId)
+            ? new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, 0)),
+                new XElement(W.numId, new XAttribute(W.val, 0)))
+            : null;
 
     internal static string ParserBlockKindToAnchorKind(Internal.ParserBlockKind kind) => kind switch
     {

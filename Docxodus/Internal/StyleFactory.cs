@@ -226,6 +226,31 @@ internal static class StyleFactory
             .Any(style => (string?)style.Attribute(W + "styleId") == styleId);
     }
 
+    /// <summary>
+    /// True when the paragraph style — or any style on its basedOn chain — attaches
+    /// list numbering (`w:pPr/w:numPr/w:numId` with a non-zero id). Drives the
+    /// markdown-heading numbering suppressor (#572): only a style that would prefix
+    /// the text needs `numId=0` written on the paragraph to keep it unnumbered.
+    /// </summary>
+    internal static bool StyleAttachesNumbering(WordprocessingDocument doc, string styleId)
+    {
+        var root = doc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (root is null) return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        while (current is not null && seen.Add(current))
+        {
+            var style = root.Elements(W + "style")
+                .FirstOrDefault(s => (string?)s.Attribute(W + "styleId") == current);
+            if (style is null) return false;
+            var numId = (string?)style.Element(W + "pPr")?.Element(W + "numPr")
+                ?.Element(W + "numId")?.Attribute(W + "val");
+            if (numId is not null) return numId != "0";
+            current = (string?)style.Element(W + "basedOn")?.Attribute(W + "val");
+        }
+        return false;
+    }
+
     /// <summary>Canonical definition for a well-known built-in paragraph style, or null if unknown.</summary>
     private static XElement? BuiltInParagraphStyle(string styleId)
     {
