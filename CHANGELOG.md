@@ -747,6 +747,20 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **Resolving away a document's only footnote/endnote no longer leaves a reference-less
+  husk, and the reversibility proof accepts Word's two "no notes" spellings (#516, #552).**
+  When revision resolution removed a note's last reference — rejecting the insertion that
+  carried it, or accepting its deletion — the note survived in its part as an empty husk.
+  `AcceptRevision`/`RejectRevision`/`AcceptAllRevisions`/`RejectAllRevisions` now delete a
+  note whose last reference that resolution itself removed (a note that was already
+  dangling beforehand is untouched, and the notes part itself always stays — Word never
+  prunes one, per the WC/RP oracle corpus). Separately, `RedlineReversibilityVerifier`
+  treats an absent notes part and Word's eagerly-created separator-only part as the same
+  statement: when strict normalized identity fails, both sides are re-compared with
+  separator-only notes parts elided (disclosed via the new
+  `separator_only_notes_part_normalized` info finding), while the raw/OPC digests and
+  reported package identities stay strict. The WC035 note-appearance pairs now run the
+  full RRS004 reversibility corpus contract in all four directions.
 - **Semantic diff: a nested table's format-only change now gets typed records (#511).** When a
   table nested inside a cell changed only its formatting — `w:tblPr`, `w:tblGrid`, or a nested
   paragraph's `w:pPr` — and no content hash moved, `SemanticDiff` descended into the cell only on

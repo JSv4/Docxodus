@@ -652,9 +652,47 @@ public static class RedlineReversibilityVerifier
         bool rawEquivalent = DigestEquals(
             expectedManifest.RawPackageBytesDigest,
             actualManifest.RawPackageBytesDigest);
+
+        // A footnotes/endnotes part holding nothing but separator definitions is Word's own
+        // spelling of "this document has no notes": Word ships one in every fresh document
+        // and never deletes it, and a comparison redline inherits whichever spelling its
+        // note-bearing side used (issues #516/#552). When strict normalized identity fails,
+        // re-compare with that spelling difference removed from BOTH sides — the raw and
+        // OPC digests above stay strict, and the reported package identities keep the real
+        // manifests. The normalization is disclosed as a finding whenever it changes the
+        // verdict or the divergence view.
+        var comparisonExpected = expectedManifest;
+        var comparisonActual = actualManifest;
+        if (!normalizedEquivalent)
+        {
+            var expectedComparable = WithoutSeparatorOnlyNotesParts(
+                expectedBytes, out bool expectedStripped);
+            var actualComparable = WithoutSeparatorOnlyNotesParts(
+                outputBytes, out bool actualStripped);
+            if (expectedStripped || actualStripped)
+            {
+                comparisonExpected = PackageManifestGenerator.Generate(
+                    expectedComparable, options.PackageManifestOptions);
+                comparisonActual = PackageManifestGenerator.Generate(
+                    actualComparable, options.PackageManifestOptions);
+                normalizedEquivalent = DigestEquals(
+                    comparisonExpected.NormalizedSemanticDigest,
+                    comparisonActual.NormalizedSemanticDigest);
+                findingBudget.Add(findings, Finding(
+                    "separator_only_notes_part_normalized",
+                    VerificationFindingSeverity.Info,
+                    $"The {DirectionName(direction)} comparison treats a separator-only "
+                        + "footnotes/endnotes part as equivalent to an absent one.",
+                    revisionIds: Array.Empty<string>(),
+                    remediation: "No action is required; the parts differ only in Word's "
+                        + "no-notes spelling.",
+                    direction: direction));
+            }
+        }
+
         var divergenceEvaluation = CompareEntries(
-            expectedManifest,
-            actualManifest,
+            comparisonExpected,
+            comparisonActual,
             generated,
             semantic.ModeledChanges,
             options.MaxPackageChanges);
@@ -1550,6 +1588,59 @@ public static class RedlineReversibilityVerifier
 
     private static bool DigestEquals(VerificationDigest? left, VerificationDigest? right) =>
         DeliveryReceiptValidation.DigestEquals(left, right);
+
+    /// <summary>
+    /// Return <paramref name="package"/> with any footnotes/endnotes part that holds ONLY
+    /// separator-kind definitions (no real note, not even an empty one) deleted, so the
+    /// two Word spellings of "no notes" — an absent part and Word's eagerly-created
+    /// separator-only part — compare as equivalent. <paramref name="stripped"/> reports
+    /// whether anything was removed; when nothing was, the original array is returned.
+    /// A package the SDK cannot open comes back unchanged — the strict digests already
+    /// carry its comparison.
+    /// </summary>
+    private static byte[] WithoutSeparatorOnlyNotesParts(byte[] package, out bool stripped)
+    {
+        stripped = false;
+        try
+        {
+            using var stream = new MemoryStream();
+            stream.Write(package, 0, package.Length);
+            stream.Position = 0;
+            using (var document =
+                DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, true))
+            {
+                var main = document.MainDocumentPart;
+                if (main is null) return package;
+                if (IsSeparatorOnlyNotesPart(main.FootnotesPart, W.footnote))
+                {
+                    main.DeletePart(main.FootnotesPart!);
+                    stripped = true;
+                }
+                if (IsSeparatorOnlyNotesPart(main.EndnotesPart, W.endnote))
+                {
+                    main.DeletePart(main.EndnotesPart!);
+                    stripped = true;
+                }
+            }
+            return stripped ? stream.ToArray() : package;
+        }
+        catch (Exception)
+        {
+            stripped = false;
+            return package;
+        }
+    }
+
+    private static bool IsSeparatorOnlyNotesPart(
+        DocumentFormat.OpenXml.Packaging.OpenXmlPart? part,
+        System.Xml.Linq.XName noteName)
+    {
+        var root = part?.GetXDocument().Root;
+        if (root is null) return false;
+        var notes = root.Elements(noteName).ToList();
+        return notes.Count > 0 && notes.All(note =>
+            (string?)note.Attribute(W.type) is "separator" or "continuationSeparator");
+    }
 
     private static DocxSession OpenProofSession(
         byte[] bytes,

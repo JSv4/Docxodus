@@ -2761,6 +2761,7 @@ public sealed partial class DocxSession : IDisposable
         // Capture the block anchors the resolution touches BEFORE applying — elements
         // detach during Apply and can no longer be resolved to a part afterwards.
         var modified = RevisionGroupAnchors(group, partUri);
+        var referencedNotesBefore = ReferencedNoteIds();
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -2784,6 +2785,7 @@ public sealed partial class DocxSession : IDisposable
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
+            var prunedNotes = PruneNotesOrphanedByResolution(referencedNotesBefore);
 
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
@@ -2794,6 +2796,17 @@ public sealed partial class DocxSession : IDisposable
                     var unid = (string?)d.Attribute(PtOpenXml.Unid);
                     if (unid is null) continue;
                     if (AnchorForUnid(unid, partUri) is { } anch && seenRemoved.Add(anch.Id))
+                        removed.Add(anch);
+                }
+            }
+
+            foreach (var (note, notePartUri) in prunedNotes)
+            {
+                foreach (var d in note.DescendantsAndSelf())
+                {
+                    var unid = (string?)d.Attribute(PtOpenXml.Unid);
+                    if (unid is null) continue;
+                    if (AnchorForUnid(unid, notePartUri) is { } anch && seenRemoved.Add(anch.Id))
                         removed.Add(anch);
                 }
             }
@@ -2851,6 +2864,7 @@ public sealed partial class DocxSession : IDisposable
             ? Array.Empty<int>()
             : registry.Entries.SelectMany(NumberingIdsIntroducedBy)
                 .Except(_settings.ProtectedRevisionNumberingIds).Distinct().ToArray();
+        var referencedNotesBefore = ReferencedNoteIds();
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -2876,6 +2890,7 @@ public sealed partial class DocxSession : IDisposable
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
+            var prunedNotes = PruneNotesOrphanedByResolution(referencedNotesBefore);
             var removed = new List<Anchor>();
             var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
             foreach (var element in removedElements)
@@ -2890,6 +2905,17 @@ public sealed partial class DocxSession : IDisposable
                     var unid = (string?)descendant.Attribute(PtOpenXml.Unid);
                     if (unid is null) continue;
                     if (AnchorForUnid(unid, partUri) is { } anchor && seenRemoved.Add(anchor.Id))
+                        removed.Add(anchor);
+                }
+            }
+
+            foreach (var (note, notePartUri) in prunedNotes)
+            {
+                foreach (var descendant in note.DescendantsAndSelf())
+                {
+                    var unid = (string?)descendant.Attribute(PtOpenXml.Unid);
+                    if (unid is null) continue;
+                    if (AnchorForUnid(unid, notePartUri) is { } anchor && seenRemoved.Add(anchor.Id))
                         removed.Add(anchor);
                 }
             }
@@ -2990,6 +3016,75 @@ public sealed partial class DocxSession : IDisposable
         if (!root.Elements().Any()) main.DeletePart(part);
         else part.PutXDocument();
     }
+
+    /// <summary>Footnote/endnote ids currently referenced from the main document story —
+    /// the only story OOXML lets a note reference live in.</summary>
+    private (HashSet<int> Footnotes, HashSet<int> Endnotes) ReferencedNoteIds()
+    {
+        var footnotes = new HashSet<int>();
+        var endnotes = new HashSet<int>();
+        var root = _doc?.MainDocumentPart?.GetXDocument().Root;
+        if (root is null) return (footnotes, endnotes);
+        foreach (var reference in root.Descendants(W.footnoteReference))
+            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) footnotes.Add(id);
+        foreach (var reference in root.Descendants(W.endnoteReference))
+            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) endnotes.Add(id);
+        return (footnotes, endnotes);
+    }
+
+    /// <summary>
+    /// Word-faithful note cleanup after revision resolution (issue #516). A note whose LAST
+    /// reference was removed by the resolution is deleted from its part — Word removes the
+    /// note when the rejected insertion (or accepted deletion) carries its reference away,
+    /// and without this the note survived as an empty reference-less husk. The PART itself
+    /// always stays: Word never prunes a notes part (the RP050-Deleted-Footnote oracle
+    /// keeps its separator-only footnotes.xml after accepting the only note's deletion),
+    /// and a separator-only part is exactly what Word ships in every fresh document.
+    /// Scoped strictly to ids referenced before and unreferenced after THIS resolution:
+    /// a note that was already dangling is pre-existing document state and stays untouched.
+    /// </summary>
+    /// <returns>The removed note elements with their part uri, for removed-anchor reporting.</returns>
+    private List<(XElement Note, string PartUri)> PruneNotesOrphanedByResolution(
+        (HashSet<int> Footnotes, HashSet<int> Endnotes) before)
+    {
+        var removed = new List<(XElement, string)>();
+        var main = _doc?.MainDocumentPart;
+        if (main is null) return removed;
+        var after = ReferencedNoteIds();
+        PruneNoteStory(main.FootnotesPart, W.footnote, before.Footnotes, after.Footnotes, removed);
+        PruneNoteStory(main.EndnotesPart, W.endnote, before.Endnotes, after.Endnotes, removed);
+        return removed;
+    }
+
+    private static void PruneNoteStory(
+        OpenXmlPart? part,
+        XName noteName,
+        HashSet<int> referencedBefore,
+        HashSet<int> referencedAfter,
+        List<(XElement, string)> removed)
+    {
+        var root = part?.GetXDocument().Root;
+        if (part is null || root is null) return;
+        var orphaned = referencedBefore.Except(referencedAfter).ToHashSet();
+        if (orphaned.Count == 0) return;
+
+        var partUri = part.Uri.ToString();
+        bool changed = false;
+        foreach (var note in root.Elements(noteName).ToList())
+        {
+            if (!int.TryParse((string?)note.Attribute(W.id), out var id)
+                || !orphaned.Contains(id) || IsSeparatorNote(note))
+                continue;
+            note.Remove();
+            removed.Add((note, partUri));
+            changed = true;
+        }
+
+        if (changed) part.PutXDocument();
+    }
+
+    private static bool IsSeparatorNote(XElement note) =>
+        (string?)note.Attribute(W.type) is "separator" or "continuationSeparator";
 
     internal IReadOnlyList<int> DefinedNumberingIds()
     {
