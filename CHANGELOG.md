@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **DOCX GOLF, a demo page where the editing surface is the game (`docs/demo/golf.html`).**
+  Five holes of document golf, played in the shipped ribbon editor: each hole loads a start
+  document as the ball and builds a target document as the pin, and the referee is the
+  comparison engine itself — the hole is cleared when `docxDiffGetRevisions` between the
+  player's document and the target returns zero revisions. The caddie panel phrases the
+  remaining revisions as the work left, counts strokes by fingerprinting `session.save()`
+  (one committed burst of editing is one swing; undo counts), and offers Target and live
+  redline views (`docxDiffCompare` → `convertDocxToHtml`). Holes escalate across the
+  surface — a one-word fix, clause reordering, scoped defined-term conformance, heading
+  styles, and a table hole — and each ships a content-addressed reference solution that
+  `npm/tests/demo-golf.spec.ts` replays in CI to keep the course honest: no hole starts
+  solved, and every reference reaches zero revisions within par. Demo content only
+  (`docs/demo/docx-golf.js` + headless logic tests in `docs/demo/tools/`): no library
+  changes, and the page runs against the pinned CDN engine as-is.
+
 ### Changed
 - **Nullable reference types are enabled project-wide (#13).** The core library now compiles
   with `<Nullable>enable</Nullable>`: every file is null-checked by default, and the inherited
