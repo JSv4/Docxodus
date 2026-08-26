@@ -45,6 +45,22 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+<<<<<<< HEAD
+- **The converter draws comment topology (#540).** `WmlToHtmlConverter` now reads
+  `commentsExtended.xml` — where Word keeps the *shape* of a comment set — and carries both
+  facts it records into every visible comment mode. A reply (`w15:paraIdParent`) nests
+  beneath its thread root: an inner `ol.comment-replies` in the endnote-style section, a
+  nested note that travels with the root as one page-positioned unit in margin mode (the
+  pagination engine maps every id in a thread to the root note and dedupes per page), and —
+  since a Word-authored reply has no range of its own — an inline marker that carries the
+  reply body, its parent id, and a "Reply by …" title instead of dropping all three. A
+  resolved comment (`w15:done`) is muted (`comment-resolved`) with a "Resolved" header badge,
+  and its range highlight is muted in every mode. `CommentInfo` gains `Resolved` and
+  `ParentId`. A malformed parent graph degrades to the flat rendering; without a
+  commentsExtended part nothing changes. The standalone export's `comment_thread_flattened`
+  and `comment_resolved_state_not_rendered` warnings are retired with the gaps they
+  disclosed.
+=======
 - **The converter draws block-level property revisions (#539).** A tracked change to
   paragraph, numbering, table, row, cell or section properties (`w:pPrChange`,
   `w:numberingChange`, `w:tblPrChange`, `w:tblGridChange`, `w:trPrChange`, `w:tblPrExChange`,
@@ -58,6 +74,7 @@ All notable changes to this project will be documented in this file.
   is emitted. The standalone export's `revision_property_change_not_rendered` warning is
   retired with the gap it disclosed; `revisions.runPropertyChanges` in the package manifest
   remains as inventory.
+>>>>>>> origin/main
 - **The converter draws custom XML revision ranges (#538).** `w:customXmlInsRangeStart`/
   `End`, `Del`, `MoveFrom`, and `MoveTo` — a reviewer's tracked add/remove/move of a custom
   XML structural wrapper — previously passed through `WmlToHtmlConverter` untouched, leaving

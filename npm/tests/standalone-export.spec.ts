@@ -904,54 +904,45 @@ test.describe('standalone paginated HTML', () => {
     expect(strict.pageCount).toBeGreaterThan(0);
   });
 
-  test('warns exactly once that comment threading and resolved state are not drawn',
-    async ({ page }) => {
-      const source = generateCommentTopologyDocx();
-      // The default review profile is final, which preflights the source and the derived package;
-      // comments survive that projection, so a warning per package would report each one twice.
-      const visible = await convert(page, source, false, { commentProfile: 'inline' });
-      const warnings = visible.renderReport.warnings;
+  test('draws comment topology rather than warning about it', async ({ page }) => {
+    // Issue #540: replies nest beneath their thread root and resolved comments carry a badge
+    // and muted styling, so the two topology warnings are retired. Asserting the drawing and
+    // the silence together keeps either warning from returning without the render evidence
+    // going with it.
+    const source = generateCommentTopologyDocx();
+    const endnotes = await convert(page, source, false, { commentProfile: 'endnotes' });
 
-      expect(warnings.filter((warning) => warning.code === 'comment_thread_flattened')).toEqual([
-        expect.objectContaining({
-          severity: 'warning',
-          phase: 'package_preflight',
-          message: '1 comment reply is drawn as an independent comment rather than as a threaded reply.',
-        }),
-      ]);
-      expect(warnings.filter(
-        (warning) => warning.code === 'comment_resolved_state_not_rendered',
-      )).toEqual([
-        expect.objectContaining({
-          severity: 'warning',
-          phase: 'package_preflight',
-          message: '1 resolved comment is drawn identically to an open comment.',
-        }),
-      ]);
+    const drawn = await page.evaluate((html: string) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      return {
+        replyNestedInThread: !!parsed.querySelector('.comment-replies .comment-reply'),
+        rootResolved: !!parsed.querySelector('.comment-resolved'),
+        badge: !!parsed.querySelector('.comment-resolved-badge'),
+      };
+    }, endnotes.html);
+    expect(drawn).toEqual({ replyNestedInThread: true, rootResolved: true, badge: true });
 
-      // hidden renders no comment bodies at all, so neither limitation applies.
-      const hidden = await convert(page, source, false, { commentProfile: 'hidden' });
-      const hiddenCodes = hidden.renderReport.warnings.map((warning) => warning.code);
-      expect(hiddenCodes).not.toContain('comment_thread_flattened');
-      expect(hiddenCodes).not.toContain('comment_resolved_state_not_rendered');
+    const codes = endnotes.renderReport.warnings.map((warning) => warning.code);
+    expect(codes).not.toContain('comment_thread_flattened');
+    expect(codes).not.toContain('comment_resolved_state_not_rendered');
 
-      const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
-        .convertFailure(bytes, {
-          reviewProfile: 'final',
-          commentProfile: 'inline',
-          unsupportedContent: 'strict',
-        }), Array.from(source));
-      expect(failure.unexpectedSuccess).toBeUndefined();
-      expect(failure.code).toBe('resource_policy_failure');
-      expect(failure.phase).toBe('package_preflight');
+    // This document used to fail closed under strict through those warnings; the same input
+    // must now export cleanly under the strictest policy. (endnotes, not inline: an inline
+    // comment marker links to a section that mode does not render, a pre-existing dangling
+    // fragment target that strict fails on and that the retired preflight warnings used to
+    // mask by failing first — tracked separately.)
+    const strict = await convert(page, source, false, {
+      reviewProfile: 'final',
+      commentProfile: 'endnotes',
+      unsupportedContent: 'strict',
     });
+    expect(strict.pageCount).toBeGreaterThan(0);
+  });
 
   test('renders comment bodies per visible profile and none for hidden', async ({ page }) => {
-    // The warning tests above prove what the profiles cannot represent; this pins what each
-    // does. endnotes lists every referenced comment body. inline attaches a body to its
-    // comment range, so the reply — which has a reference but no range of its own — has no
-    // anchor and its body is dropped: the flattening the comment_thread_flattened warning
-    // discloses (#540 tracks drawing topology). hidden renders no comment content at all.
+    // Pins what each visible profile shows. endnotes lists every referenced comment body,
+    // threaded since #540. inline attaches a ranged body to its highlight and a range-less
+    // reply's body to its marker. hidden renders no comment content at all.
     const source = generateCommentTopologyDocx();
     const endnotes = await convert(page, source, false, { commentProfile: 'endnotes' });
     expect(endnotes.html).toContain('Is this clause still needed?');
@@ -961,7 +952,10 @@ test.describe('standalone paginated HTML', () => {
 
     const inline = await convert(page, source, false, { commentProfile: 'inline' });
     expect(inline.html).toContain('Is this clause still needed?');
-    expect(inline.html).not.toContain('No, it was superseded.');
+    // The reply has no range of its own, so its marker is its whole inline presentation:
+    // since #540 it carries the reply body and names its parent instead of dropping both.
+    expect(inline.html).toContain('No, it was superseded.');
+    expect(inline.html).toContain('data-parent-id="1"');
 
     const hidden = await convert(page, source, false, { commentProfile: 'hidden' });
     expect(hidden.html).not.toContain('Is this clause still needed?');

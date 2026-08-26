@@ -4965,6 +4965,220 @@ namespace OxPt
             }
         }
 
+        /// <summary>
+        /// A document whose comment set has a shape: comment 1 is a resolved thread root,
+        /// comment 2 replies to it (Word-style: reference-only, linked through
+        /// <c>w15:paraIdParent</c> in commentsExtended), and comment 3 is an independent open
+        /// comment on a second paragraph.
+        /// </summary>
+        private static byte[] BuildDocWithThreadedComments(bool includeExtendedPart = true)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(
+                        new Paragraph(
+                            new CommentRangeStart { Id = "1" },
+                            new Run(new Text("Thread anchor text.")),
+                            new CommentRangeEnd { Id = "1" },
+                            new Run(new CommentReference { Id = "1" }),
+                            new Run(new CommentReference { Id = "2" })),
+                        new Paragraph(
+                            new CommentRangeStart { Id = "3" },
+                            new Run(new Text("Solo anchor text.")),
+                            new CommentRangeEnd { Id = "3" },
+                            new Run(new CommentReference { Id = "3" })));
+
+                    var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Root comment."))) { ParagraphId = "11AA11AA" })
+                        { Id = "1", Author = "Alice", Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Reply comment."))) { ParagraphId = "22BB22BB" })
+                        { Id = "2", Author = "Bob", Date = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Solo comment."))) { ParagraphId = "33CC33CC" })
+                        { Id = "3", Author = "Alice", Date = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc) });
+
+                    if (includeExtendedPart)
+                    {
+                        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+                        var exPart = main.AddNewPart<WordprocessingCommentsExPart>();
+                        exPart.PutXDocument(new XDocument(
+                            new XElement(w15 + "commentsEx",
+                                new XAttribute(XNamespace.Xmlns + "w15", w15),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "11AA11AA"),
+                                    new XAttribute(w15 + "done", "1")),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "22BB22BB"),
+                                    new XAttribute(w15 + "paraIdParent", "11AA11AA"),
+                                    new XAttribute(w15 + "done", "1")),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "33CC33CC"),
+                                    new XAttribute(w15 + "done", "0")))));
+                    }
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        private static XElement ById(XElement xhtml, string id) =>
+            xhtml.Descendants().First(e => (string)e.Attribute("id") == id);
+
+        [Fact]
+        public void HC069_ThreadedComments_NestRepliesAndMarkResolved()
+        {
+            // Issue #540: comments.xml carries the bodies but commentsExtended.xml carries the
+            // shape — who replied to whom and what was settled. The endnote-style section must
+            // render a reply inside its parent's item and a resolved comment perceivably so,
+            // or the export changes what the review appears to say.
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings() { RenderComments = true };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = xhtml.ToString();
+
+                    // The reply nests inside its parent's list item, in a dedicated replies list,
+                    // and exists nowhere else.
+                    var li1 = ById(xhtml, "comment-1");
+                    var replies = li1.Descendants()
+                        .FirstOrDefault(e => ((string)e.Attribute("class") ?? "").Contains("comment-replies"));
+                    Assert.NotNull(replies);
+                    Assert.Contains(replies.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                    Assert.Equal(1, xhtml.Descendants().Count(e => (string)e.Attribute("id") == "comment-2"));
+
+                    var li2 = ById(xhtml, "comment-2");
+                    Assert.Contains("comment-reply", (string)li2.Attribute("class"));
+
+                    // The resolved thread is marked: a class for styling and a visible badge.
+                    Assert.Contains("comment-resolved", (string)li1.Attribute("class"));
+                    Assert.Contains(li1.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-resolved-badge"));
+
+                    // The independent open comment stays a top-level item with neither mark.
+                    var li3 = ById(xhtml, "comment-3");
+                    Assert.DoesNotContain("comment-reply", (string)li3.Attribute("class") ?? "");
+                    Assert.DoesNotContain("comment-resolved", (string)li3.Attribute("class") ?? "");
+                    Assert.DoesNotContain(li1.Descendants(), e => (string)e.Attribute("id") == "comment-3");
+
+                    // The stylesheet ships what the markup references.
+                    Assert.Contains("comment-replies", htmlString);
+                    Assert.Contains(".comment-resolved", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC070_ThreadedComments_MarginModeNestsAndMarks()
+        {
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                    };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // The reply's note lives inside the parent's margin note — the thread moves
+                    // as one page-positioned unit — and has no top-level note of its own.
+                    var note1 = ById(xhtml, "comment-1");
+                    Assert.Contains(note1.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                    Assert.Equal(1, xhtml.Descendants().Count(e => (string)e.Attribute("id") == "comment-2"));
+                    var note2 = ById(xhtml, "comment-2");
+                    Assert.Contains("comment-margin-reply", (string)note2.Attribute("class"));
+
+                    Assert.Contains("comment-resolved", (string)note1.Attribute("class"));
+                    var note3 = ById(xhtml, "comment-3");
+                    Assert.DoesNotContain("comment-resolved", (string)note3.Attribute("class") ?? "");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC071_ThreadedComments_InlineModeMarksHighlightAndReplyMarker()
+        {
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Inline,
+                        IncludeCommentMetadata = true,
+                    };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // The resolved thread's highlighted range is distinguishable from an open one.
+                    var highlight1 = xhtml.Descendants()
+                        .First(e => (string)e.Attribute("data-comment-id") == "1"
+                            && ((string)e.Attribute("class") ?? "").Contains("comment-highlight"));
+                    Assert.Contains("comment-resolved", (string)highlight1.Attribute("class"));
+                    var highlight3 = xhtml.Descendants()
+                        .First(e => (string)e.Attribute("data-comment-id") == "3"
+                            && ((string)e.Attribute("class") ?? "").Contains("comment-highlight"));
+                    Assert.DoesNotContain("comment-resolved", (string)highlight3.Attribute("class"));
+
+                    // Inline mode has no comments section, so the reply's marker is its whole
+                    // presentation: it must carry the reply relationship and the body text that
+                    // would otherwise be dropped.
+                    var marker2 = ById(xhtml, "comment-ref-2");
+                    Assert.Equal("1", (string)marker2.Attribute("data-parent-id"));
+                    Assert.Equal("Reply comment.", (string)marker2.Attribute("data-comment"));
+                    Assert.Contains("Bob", (string)marker2.Attribute("title"));
+                    Assert.Contains("Reply comment.", (string)marker2.Attribute("title"));
+                }
+            }
+        }
+
+        [Fact]
+        public void HC072_CommentsWithoutExtendedPart_RenderFlatAndUnmarked()
+        {
+            // No commentsExtended part means no topology: every comment is a top-level open
+            // comment, exactly as before issue #540.
+            byte[] docBytes = BuildDocWithThreadedComments(includeExtendedPart: false);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings() { RenderComments = true };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-replies"));
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-resolved"));
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-reply"));
+                    var li1 = ById(xhtml, "comment-1");
+                    Assert.DoesNotContain(li1.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                }
+            }
+        }
+
         #endregion
     }
 }

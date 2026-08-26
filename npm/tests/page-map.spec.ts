@@ -530,4 +530,48 @@ test.describe('PageMap materialization and citation navigation', () => {
     expect(result.registryCommentIds).toBe(1);
     expect(result.activeBackrefs).toBe(0);
   });
+
+  test('places a nested comment thread as one margin unit, never duplicating the reply', async ({ page }) => {
+    // Issue #540: the converter nests a reply's margin note inside its parent's, so the thread
+    // travels as one page-positioned unit. The reply's own marker must select that same thread
+    // root — materializing the nested note a second time would show the reply twice on the page.
+    await page.setContent('<div id="viewer"></div>');
+    await addBundle(page);
+    const result = await page.evaluate((html) => {
+      (window as any).DocxodusPagination.paginateHtml(html, 'viewer', {
+        showPageNumbers: false,
+        layoutToken: { documentVersion: 0, rendererFingerprint: 'margin-thread-v1' },
+      });
+      const margin = document.querySelector<HTMLElement>('#pagination-container .page-comment-margin');
+      return {
+        rootNotes: margin?.querySelectorAll('[data-comment-id="1"]').length ?? 0,
+        replyNotes: margin?.querySelectorAll('[data-comment-id="2"]').length ?? 0,
+        replyInsideRoot: !!margin?.querySelector('[data-comment-id="1"] [data-comment-id="2"]'),
+      };
+    }, shell(`
+      <aside id="pagination-comment-margin-registry" style="display:none">
+        <div id="comment-1" data-comment-id="1" data-source-anchor-id="cmt:cmt:thread-root">
+          <p data-source-anchor-id="p:cmt:thread-root-body">Root comment</p>
+          <div class="comment-margin-replies">
+            <div id="comment-2" data-comment-id="2" data-source-anchor-id="cmt:cmt:thread-reply">
+              <p data-source-anchor-id="p:cmt:thread-reply-body">Reply comment</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <div data-section-index="0"
+           data-page-width="180" data-page-height="120"
+           data-content-width="120" data-content-height="110"
+           data-margin-top="1" data-margin-right="50"
+           data-margin-bottom="1" data-margin-left="10">
+        <p data-source-anchor-id="p:body:anchored" style="height:50pt;margin:0">
+          <span data-comment-id="1">ranged text</span>
+          <a data-comment-id="2" href="#comment-2">[2]</a>
+        </p>
+      </div>`));
+
+    expect(result.rootNotes).toBe(1);
+    expect(result.replyNotes).toBe(1);
+    expect(result.replyInsideRoot).toBe(true);
+  });
 });

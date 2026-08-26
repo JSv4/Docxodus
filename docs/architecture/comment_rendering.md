@@ -101,8 +101,15 @@ public class CommentInfo
     public string Date { get; set; }
     public string Initials { get; set; }
     public List<XElement> ContentParagraphs { get; set; }
+    public bool Resolved { get; set; }   // w15:done in commentsExtended (issue #540)
+    public int? ParentId { get; set; }   // resolved from w15:paraIdParent (issue #540)
 }
 ```
+
+`Resolved` and `ParentId` come from `commentsExtended.xml` (`WordprocessingCommentsExPart`),
+which `LoadCommentTopology` reads after the comments load. Word keys each `w15:commentEx` on
+the comment's *last* body paragraph's `w14:paraId`; an absent part, an unmatched entry, or a
+parent outside the loaded set all degrade to the flat, open rendering.
 
 #### CommentTracker
 
@@ -578,17 +585,38 @@ The `CommentRenderMode` enum values:
 - `Inline` (1): Comments as tooltips with data attributes
 - `Margin` (2): CSS-positioned margin comments
 
+## Comment Topology (issue #540)
+
+The comment set's *shape* lives in `commentsExtended.xml`: `w15:paraIdParent` makes a comment a
+reply, `w15:done` marks it resolved. Every visible mode draws both:
+
+- **EndnoteStyle**: a reply's `<li>` nests inside its parent's item in an inner
+  `ol.comment-replies` (recursively for reply-to-reply), wearing `comment-reply` alongside the
+  base class. A resolved comment's item wears `comment-resolved` (muted via CSS) and its header
+  carries a `span.comment-resolved-badge` reading "Resolved".
+- **Margin**: a reply's note nests inside its parent's note in `div.comment-margin-replies`
+  (class `comment-margin-reply`), so the whole thread positions as one page unit; the
+  pagination engine maps every id in a thread to the root note and dedupes per page so a
+  reply's marker never materializes the thread twice. Resolved notes wear `comment-resolved`
+  and the header badge.
+- **Inline**: a resolved comment's highlight span wears `comment-resolved`. A Word-authored
+  reply has no range of its own, so its `[n]` marker is its whole presentation: under
+  `IncludeCommentMetadata` it carries `data-parent-id`, `data-comment` (the body text), and a
+  "Reply by {author}: {text}" title. `data-resolved="true"` is stamped on resolved markers.
+- The resolved highlight class applies in *every* mode — a settled objection must not read as
+  a live one anywhere.
+
+A malformed parent graph (cycle, self-reference, missing parent) degrades safely: whatever a
+first pass cannot reach through a parent renders flat in a second pass, and a shared
+rendered-set guarantees each comment renders exactly once.
+
 ## Limitations
 
-1. **Reply threads**: Word supports threaded comment replies, but these are flattened in the current implementation
-2. **Resolved comments**: The resolved/done state of comments is not currently rendered
-3. **Comment highlighting colors**: Word allows different highlight colors per comment; currently all use the same CSS
-4. **Overlapping comments**: When multiple comments cover the same text, they are nested; only the innermost comment's metadata is most visible
-5. **Margin mode positioning**: Comments in margin mode are rendered in document order, not positioned adjacent to their anchor text (would require JavaScript for dynamic positioning)
+1. **Comment highlighting colors**: Word allows different highlight colors per comment; currently all use the same CSS
+2. **Overlapping comments**: When multiple comments cover the same text, they are nested; only the innermost comment's metadata is most visible
+3. **Margin mode positioning**: Comments in margin mode are rendered in document order, not positioned adjacent to their anchor text (would require JavaScript for dynamic positioning)
 
 ## Future Enhancements
 
-- Support for comment reply threads
 - Per-author highlight colors (similar to revision author colors)
-- Resolved/active comment state indication
 - JavaScript-based dynamic positioning for margin mode comments

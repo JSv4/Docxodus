@@ -576,12 +576,11 @@ source. When #465 supplies an already policy-derived exact profile source, the r
 bytes directly and never applies the policy a second time.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
-range, body, author, and date in body, headers, footers, footnotes, and endnotes. Comment topology
-is not drawn: a reply renders as an independent comment and resolved state is not represented,
-disclosed as `comment_thread_flattened` and `comment_resolved_state_not_rendered` (see "Revision
-and comment families that are not drawn" below). An unsupported story or revision/comment family
-produces a structured warning naming the family; strict unsupported-content policy fails. HTML,
-PDF, CLI, and #465 use these exact strings.
+range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the
+topology recorded in `commentsExtended` — threaded replies and resolved state (see "Revision and
+comment rendering under the profiles" below). An unsupported story produces a structured warning
+naming it; strict unsupported-content policy fails. HTML, PDF, CLI, and #465 use these exact
+strings.
 
 ## Readiness and diagnostics
 
@@ -723,7 +722,7 @@ for a family it has never heard of. `strictFonts` rejects any outcome that is no
 digest-identified, license-evidenced face with complete glyph coverage, which is why a
 browser-observed environment can never satisfy it.
 
-### Revision and comment families that are not drawn
+### Revision and comment rendering under the profiles
 
 `markup` draws every tracked-revision family: insertions, deletions, moves, run-level format
 changes, tracked cell insert/delete/merge — as tinted, struck-through or dashed cells — custom
@@ -747,18 +746,20 @@ projection instead of passing through unseen. This is also what keeps the source
 the projection derives a new package and the original bytes are never accepted, rejected, or
 rewritten in place.
 
-Any visible comment profile renders comment bodies, ranges and authors, but not the topology
-recorded in `commentsExtended`: a reply is drawn as an independent comment
-(`comment_thread_flattened`) and a resolved comment is drawn identically to an open one
-(`comment_resolved_state_not_rendered`). Both silently change what a review PDF means, which is why
-they are reported instead of approximated. Comments survive the `final`/`original` projection
-unchanged, so these two are raised against the source package only; the derived preflight would
-otherwise report each of them twice.
+Any visible comment profile also draws the topology recorded in `commentsExtended` (issue
+#540): a reply nests beneath its thread root — an inner replies list in the endnotes section,
+a nested note travelling with the root in the margin, a body-carrying titled marker inline —
+and a resolved comment is muted and badged in every mode, so a settled objection cannot read
+as a live one in a PDF that gets signed or filed. The former `comment_thread_flattened` and
+`comment_resolved_state_not_rendered` warnings are retired with the gaps they disclosed, and
+their spec now pins the drawing and the silence together so neither can come back without the
+render evidence going with it.
 
-Both comment warnings route through the `unsupportedContent` policy, so `strict` turns the first one
-raised into a closed `resource_policy_failure` in `package_preflight` rather than a warning a
-caller has to notice. As everywhere else in preflight, a strict export reports the first policy
-breach and stops; `warn` is what enumerates every one of them in a single pass.
+The remaining preflight warnings route through the `unsupportedContent` policy, so `strict`
+turns the first one raised into a closed `resource_policy_failure` in `package_preflight`
+rather than a warning a caller has to notice. As everywhere else in preflight, a strict export
+reports the first policy breach and stops; `warn` is what enumerates every one of them in a
+single pass.
 
 
 ## Error taxonomy and limits

@@ -1,0 +1,99 @@
+- generic [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]:
+        - generic [ref=f1e8]: Docxodus
+        - generic [ref=f1e9]: no document
+      - generic [ref=f1e10]:
+        - button "New" [ref=f1e11] [cursor=pointer]
+        - generic [ref=f1e12] [cursor=pointer]: Open
+        - button "Save" [disabled] [ref=f1e13]
+      - generic [ref=f1e14]:
+        - button "Undo" [ref=f1e15] [cursor=pointer]: ↶
+        - button "Redo" [ref=f1e16] [cursor=pointer]: ↷
+      - status [ref=f1e17]: Booting WASM…
+    - tablist [ref=f1e18]:
+      - tab "Home" [selected] [ref=f1e19] [cursor=pointer]
+      - tab "Insert" [ref=f1e20] [cursor=pointer]
+      - tab "Layout" [ref=f1e21] [cursor=pointer]
+    - generic:
+      - generic:
+        - generic:
+          - generic: Text
+          - generic:
+            - button "B" [disabled]
+            - button "I" [disabled]
+            - button "U" [disabled]
+            - button "S" [disabled]
+            - button "</>" [disabled]
+            - button "x²" [disabled]
+            - button "x₂" [disabled]
+          - generic:
+            - spinbutton "Font size in points — type any value or pick a preset" [disabled]
+            - combobox "Font family — applies to the selection" [disabled]:
+              - option "Font…" [disabled] [selected]
+              - option "Calibri" [disabled]
+              - option "Times New Roman" [disabled]
+              - option "Arial" [disabled]
+              - option "Georgia" [disabled]
+              - option "Cambria" [disabled]
+              - option "Courier New" [disabled]
+              - option "Verdana" [disabled]
+              - option "Garamond" [disabled]
+        - generic:
+          - generic: Paragraph
+          - generic:
+            - button "Align left" [disabled]
+            - button "Align center" [disabled]
+            - button "Align right" [disabled]
+            - button "Justify" [disabled]
+            - button "Decrease indent" [disabled]
+            - button "Increase indent" [disabled]
+          - generic:
+            - button "• List" [disabled]
+            - button "1. List" [disabled]
+            - button "Page break" [disabled]
+        - generic:
+          - generic: Block
+          - generic:
+            - combobox "Paragraph style" [disabled]:
+              - option "Style…" [disabled] [selected]
+              - option "Normal" [disabled]
+              - option "Heading 1" [disabled]
+              - option "Heading 2" [disabled]
+              - option "Heading 3" [disabled]
+              - option "Title" [disabled]
+          - generic:
+            - button "Delete block" [disabled]
+    - generic [ref=f1e22]:
+      - generic [ref=f1e23]:
+        - generic [ref=f1e24]: anchor
+        - generic [ref=f1e25]: —
+      - generic [ref=f1e26]:
+        - generic [ref=f1e27]: blocks
+        - generic [ref=f1e28]: —
+      - generic [ref=f1e29]:
+        - generic [ref=f1e30]: session
+        - generic [ref=f1e31]: —
+      - generic [ref=f1e32]:
+        - generic [ref=f1e33]: last op
+        - generic [ref=f1e34]: —
+  - paragraph [ref=f1e36]: Click any paragraph, heading, table cell, footnote or header/footer line to edit it. Enter splits a block, Backspace at the start merges it into the previous one, Ctrl+Z undoes. Only the block you changed re-renders — everything else keeps full fidelity, and Save writes a lossless .docx.
+  - generic [ref=f1e39]:
+    - generic [ref=f1e40]:
+      - generic [ref=f1e43]: DOCX
+      - generic [ref=f1e48]: B
+      - generic [ref=f1e49]: ±
+      - generic [ref=f1e50]: ↓
+    - generic [ref=f1e51]:
+      - generic [ref=f1e52]: Local .NET runtime
+      - heading "Booting .NET inside your browser" [level=2] [ref=f1e53]
+      - paragraph [ref=f1e54]: Streaming the trimmed WebAssembly runtime. No document bytes are sent to a server.
+      - generic [ref=f1e55]:
+        - generic [ref=f1e56]: "01"
+        - generic [ref=f1e57]:
+          - strong [ref=f1e58]: Zero-upload architecture
+          - generic [ref=f1e59]: Your source file and edits never leave this browser session.
+      - generic [ref=f1e62]:
+        - generic [ref=f1e63]: Loading engine
+        - generic [ref=f1e64]: DOCX → WASM → DOCX

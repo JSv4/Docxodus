@@ -1,0 +1,200 @@
+- generic [active] [ref=f2e1]:
+  - banner [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - generic [ref=f2e4]:
+        - link "Docxodus home" [ref=f2e5] [cursor=pointer]:
+          - /url: ./
+          - text: Docxodus
+        - navigation "Primary navigation" [ref=f2e7]:
+          - link "GitHub" [ref=f2e8] [cursor=pointer]:
+            - /url: https://github.com/JSv4/Docxodus
+          - link "npm" [ref=f2e9] [cursor=pointer]:
+            - /url: https://www.npmjs.com/package/docxodus
+          - link "Full editor" [ref=f2e10] [cursor=pointer]:
+            - /url: ./app.html
+          - link "Compact player" [ref=f2e11] [cursor=pointer]:
+            - /url: ./player.html
+          - link "Observatory" [ref=f2e12] [cursor=pointer]:
+            - /url: ./observatory.html
+          - link "Arcade" [ref=f2e13] [cursor=pointer]:
+            - /url: ./arcade.html
+          - link "Launch demo ↓" [ref=f2e14] [cursor=pointer]:
+            - /url: "#live-editor"
+      - generic [ref=f2e15]:
+        - generic [ref=f2e16]:
+          - generic [ref=f2e17]: The document engine for the browser
+          - heading "Word files. No server required." [level=1] [ref=f2e18]: Word files.No server required.
+          - paragraph [ref=f2e19]: Render, edit, redline, and save real DOCX documents with .NET-grade OOXML fidelity—entirely inside the browser via WebAssembly.
+          - generic [ref=f2e20]:
+            - link "Try the live editor" [ref=f2e21] [cursor=pointer]:
+              - /url: "#live-editor"
+              - text: Try the live editor
+              - generic [ref=f2e22]: ↘
+            - link "Open full screen" [ref=f2e23] [cursor=pointer]:
+              - /url: ./app.html
+              - text: Open full screen
+              - generic [ref=f2e24]: ↗
+            - button "Embed it" [ref=f2e25] [cursor=pointer]:
+              - text: Embed it
+              - generic [ref=f2e26]: </>
+            - link "View source" [ref=f2e27] [cursor=pointer]:
+              - /url: https://github.com/JSv4/Docxodus
+              - text: View source
+              - generic [ref=f2e28]: ↗
+          - generic "Key guarantees" [ref=f2e29]:
+            - generic [ref=f2e30]: Nothing uploaded
+            - generic [ref=f2e31]: Real DOCX output
+            - generic [ref=f2e32]: Open source
+        - generic "Docxodus capabilities" [ref=f2e33]:
+          - article [ref=f2e34]:
+            - generic [ref=f2e35]:
+              - generic [ref=f2e36]: ⌁
+              - generic [ref=f2e37]: Faithful render
+            - strong [ref=f2e38]: Word-grade document structure
+            - paragraph [ref=f2e39]: Tables, numbering, footnotes, headers, styles, and tracked changes stay document-native.
+          - article [ref=f2e40]:
+            - generic [ref=f2e41]:
+              - generic [ref=f2e42]: ✦
+              - generic [ref=f2e43]: Surgical edit
+            - strong [ref=f2e44]: Edit without flattening
+            - paragraph [ref=f2e45]: Formatting and text edits flow back into OOXML—not a canvas, screenshot, or lossy HTML export.
+          - article [ref=f2e46]:
+            - generic [ref=f2e47]:
+              - generic [ref=f2e48]: ↓
+              - generic [ref=f2e49]: Private by design
+            - strong [ref=f2e50]: Save locally as .docx
+            - paragraph [ref=f2e51]: The source document and every edit remain in your browser session.
+  - main [ref=f2e52]:
+    - paragraph [ref=f2e53]: Not a screenshot
+    - heading "The document below is live." [level=2] [ref=f2e54]
+    - paragraph [ref=f2e55]:
+      - text: This is the shipped editor surface — the same ribbon, tables, footnotes and header/footer tools you get from
+      - code [ref=f2e56]: createRibbonEditor
+      - text: in the npm package. It narrows to a one-handed layout on a phone.
+      - link "Open it full screen ↗" [ref=f2e57] [cursor=pointer]:
+        - /url: ./app.html
+    - region "Live Docxodus editor" [ref=f2e58]:
+      - generic [ref=f2e59]:
+        - status [ref=f2e60]:
+          - generic [ref=f2e62]: Streaming the WebAssembly engine…
+        - generic [ref=f2e63]: ● Local session · zero upload
+      - generic [ref=f2e66]:
+        - generic [ref=f2e67]:
+          - generic [ref=f2e68]:
+            - generic [ref=f2e69]:
+              - generic [ref=f2e71]: Docxodus
+              - generic [ref=f2e72]: docxodus-demo.docx
+            - generic [ref=f2e73]:
+              - button "New" [ref=f2e74] [cursor=pointer]
+              - generic [ref=f2e75] [cursor=pointer]: Open
+              - button "Save" [disabled] [ref=f2e76]
+            - generic [ref=f2e77]:
+              - button "Undo" [ref=f2e78] [cursor=pointer]: ↶
+              - button "Redo" [ref=f2e79] [cursor=pointer]: ↷
+            - status [ref=f2e80]: Booting WASM…
+          - tablist [ref=f2e81]:
+            - tab "Home" [selected] [ref=f2e82] [cursor=pointer]
+            - tab "Insert" [ref=f2e83] [cursor=pointer]
+            - tab "Layout" [ref=f2e84] [cursor=pointer]
+          - generic:
+            - generic:
+              - generic:
+                - generic: Text
+                - generic:
+                  - button "B" [disabled]
+                  - button "I" [disabled]
+                  - button "U" [disabled]
+                  - button "S" [disabled]
+                  - button "</>" [disabled]
+                  - button "x²" [disabled]
+                  - button "x₂" [disabled]
+                - generic:
+                  - spinbutton "Font size in points — type any value or pick a preset" [disabled]
+                  - combobox "Font family — applies to the selection" [disabled]:
+                    - option "Font…" [disabled] [selected]
+                    - option "Calibri" [disabled]
+                    - option "Times New Roman" [disabled]
+                    - option "Arial" [disabled]
+                    - option "Georgia" [disabled]
+                    - option "Cambria" [disabled]
+                    - option "Courier New" [disabled]
+                    - option "Verdana" [disabled]
+                    - option "Garamond" [disabled]
+              - generic:
+                - generic: Paragraph
+                - generic:
+                  - button "Align left" [disabled]
+                  - button "Align center" [disabled]
+                  - button "Align right" [disabled]
+                  - button "Justify" [disabled]
+                  - button "Decrease indent" [disabled]
+                  - button "Increase indent" [disabled]
+                - generic:
+                  - button "Bullets" [disabled]
+                  - button "Numbered" [disabled]
+                  - button "Page break" [disabled]
+              - generic:
+                - generic: Block
+                - generic:
+                  - combobox "Paragraph style" [disabled]:
+                    - option "Style…" [disabled] [selected]
+                    - option "Normal" [disabled]
+                    - option "Heading 1" [disabled]
+                    - option "Heading 2" [disabled]
+                    - option "Heading 3" [disabled]
+                    - option "Title" [disabled]
+                - generic:
+                  - button "Delete block" [disabled]
+          - generic [ref=f2e85]:
+            - generic [ref=f2e86]:
+              - generic [ref=f2e87]: anchor
+              - generic [ref=f2e88]: —
+            - generic [ref=f2e89]:
+              - generic [ref=f2e90]: blocks
+              - generic [ref=f2e91]: —
+            - generic [ref=f2e92]:
+              - generic [ref=f2e93]: session
+              - generic [ref=f2e94]: —
+            - generic [ref=f2e95]:
+              - generic [ref=f2e96]: last op
+              - generic [ref=f2e97]: —
+        - paragraph [ref=f2e99]: Click any paragraph, heading, table cell, footnote or header/footer line to edit it. Enter splits a block, Backspace at the start merges it into the previous one, Ctrl+Z undoes. Only the block you changed re-renders — everything else keeps full fidelity, and Save writes a lossless .docx.
+        - generic [ref=f2e102]:
+          - generic [ref=f2e103]:
+            - generic [ref=f2e106]: DOCX
+            - generic [ref=f2e111]: B
+            - generic [ref=f2e112]: ±
+            - generic [ref=f2e113]: ↓
+          - generic [ref=f2e114]:
+            - generic [ref=f2e115]: Running locally in this tab
+            - heading "Booting .NET inside your browser" [level=2] [ref=f2e116]
+            - paragraph [ref=f2e117]: Streaming the trimmed WebAssembly runtime. No document bytes are sent to a server.
+            - generic [ref=f2e118]:
+              - generic [ref=f2e119]: "01"
+              - generic [ref=f2e120]:
+                - strong [ref=f2e121]: Zero-upload architecture
+                - generic [ref=f2e122]: Your source file and edits never leave this browser session.
+            - generic [ref=f2e125]:
+              - generic [ref=f2e126]: Loading engine
+              - generic [ref=f2e127]: DOCX → WASM → DOCX
+    - generic "Editor feature summary" [ref=f2e128]:
+      - article [ref=f2e129]:
+        - text: 01 / EDIT
+        - strong [ref=f2e130]: Real editing controls
+        - paragraph [ref=f2e131]: Format text, restyle paragraphs, build tables, cite footnotes, and keep working in the original document model.
+      - article [ref=f2e132]:
+        - text: 02 / VIEW
+        - strong [ref=f2e133]: Continuous or paginated
+        - paragraph [ref=f2e134]: Switch to page boxes, or open the header and footer bands, without reopening the file or losing session edits.
+      - article [ref=f2e135]:
+        - text: 03 / SAVE
+        - strong [ref=f2e136]: Lossless DOCX download
+        - paragraph [ref=f2e137]: Export the edited Office file locally. There is no conversion server in the middle.
+  - contentinfo [ref=f2e138]:
+    - text: Engine delivered by
+    - link "jsDelivr" [ref=f2e139] [cursor=pointer]:
+      - /url: https://www.jsdelivr.com/package/npm/docxodus
+    - text: from
+    - link "docxodus@9.9.0" [ref=f2e140] [cursor=pointer]:
+      - /url: https://www.npmjs.com/package/docxodus
+    - text: . Everything runs client-side.

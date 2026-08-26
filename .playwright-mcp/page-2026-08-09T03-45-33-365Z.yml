@@ -1,0 +1,99 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e9]: Docxodus
+        - generic [ref=e10]: docxodus-demo-guide.docx
+      - generic [ref=e11]:
+        - button "New" [ref=e12] [cursor=pointer]
+        - generic [ref=e13] [cursor=pointer]: Open
+        - button "Save" [disabled] [ref=e14]
+      - generic [ref=e15]:
+        - button "Undo" [ref=e16] [cursor=pointer]: ↶
+        - button "Redo" [ref=e17] [cursor=pointer]: ↷
+      - status [ref=e18]: Booting WASM…
+    - tablist [ref=e19]:
+      - tab "Home" [selected] [ref=e20] [cursor=pointer]
+      - tab "Insert" [ref=e21] [cursor=pointer]
+      - tab "Layout" [ref=e22] [cursor=pointer]
+    - generic:
+      - generic:
+        - generic:
+          - generic: Text
+          - generic:
+            - button "B" [disabled]
+            - button "I" [disabled]
+            - button "U" [disabled]
+            - button "S" [disabled]
+            - button "</>" [disabled]
+            - button "x²" [disabled]
+            - button "x₂" [disabled]
+          - generic:
+            - spinbutton "Font size in points — type any value or pick a preset" [disabled]
+            - combobox "Font family — applies to the selection" [disabled]:
+              - option "Font…" [disabled] [selected]
+              - option "Calibri" [disabled]
+              - option "Times New Roman" [disabled]
+              - option "Arial" [disabled]
+              - option "Georgia" [disabled]
+              - option "Cambria" [disabled]
+              - option "Courier New" [disabled]
+              - option "Verdana" [disabled]
+              - option "Garamond" [disabled]
+        - generic:
+          - generic: Paragraph
+          - generic:
+            - button "Align left" [disabled]
+            - button "Align center" [disabled]
+            - button "Align right" [disabled]
+            - button "Justify" [disabled]
+            - button "Decrease indent" [disabled]
+            - button "Increase indent" [disabled]
+          - generic:
+            - button "Bullets" [disabled]
+            - button "Numbered" [disabled]
+            - button "Page break" [disabled]
+        - generic:
+          - generic: Block
+          - generic:
+            - combobox "Paragraph style" [disabled]:
+              - option "Style…" [disabled] [selected]
+              - option "Normal" [disabled]
+              - option "Heading 1" [disabled]
+              - option "Heading 2" [disabled]
+              - option "Heading 3" [disabled]
+              - option "Title" [disabled]
+          - generic:
+            - button "Delete block" [disabled]
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e25]: anchor
+        - generic [ref=e26]: —
+      - generic [ref=e27]:
+        - generic [ref=e28]: blocks
+        - generic [ref=e29]: —
+      - generic [ref=e30]:
+        - generic [ref=e31]: session
+        - generic [ref=e32]: —
+      - generic [ref=e33]:
+        - generic [ref=e34]: last op
+        - generic [ref=e35]: —
+  - paragraph [ref=e37]: Click any paragraph, heading, table cell, footnote or header/footer line to edit it. Enter splits a block, Backspace at the start merges it into the previous one, Ctrl+Z undoes. Only the block you changed re-renders — everything else keeps full fidelity, and Save writes a lossless .docx.
+  - generic [ref=e40]:
+    - generic [ref=e41]:
+      - generic [ref=e44]: DOCX
+      - generic [ref=e49]: B
+      - generic [ref=e50]: ±
+      - generic [ref=e51]: ↓
+    - generic [ref=e52]:
+      - generic [ref=e53]: Running locally in this tab
+      - heading "Booting .NET inside your browser" [level=2] [ref=e54]
+      - paragraph [ref=e55]: Streaming the trimmed WebAssembly runtime. No document bytes are sent to a server.
+      - generic [ref=e56]:
+        - generic [ref=e57]: "01"
+        - generic [ref=e58]:
+          - strong [ref=e59]: Zero-upload architecture
+          - generic [ref=e60]: Your source file and edits never leave this browser session.
+      - generic [ref=e63]:
+        - generic [ref=e64]: Loading engine
+        - generic [ref=e65]: DOCX → WASM → DOCX

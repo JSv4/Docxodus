@@ -1624,55 +1624,11 @@ async function preflightManifest(
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
   }
-  // Every tracked-revision family now draws under the markup profile — insertions, deletions,
-  // moves, run and block property changes (issue #539), tracked cell revisions, and custom XML
-  // revision ranges (issue #538) — so there is no longer a revision warning to raise here.
-  // Comment topology (threading, resolved state) is still flattened; that warning remains.
-  if (isSourcePackage) {
-    warnUnrenderedCommentTopology(manifest, state, options);
-  }
-}
-
-/**
- * Warns when a visible comment profile cannot represent the source's comment topology.
- *
- * Comment bodies, ranges and authors render, but the threading recorded in commentsExtended does
- * not: a reply is drawn as an independent comment, and a resolved comment is indistinguishable
- * from an open one. That silently changes what a review PDF means, so it is reported rather than
- * approximated.
- *
- * Comments survive the `final`/`original` projection unchanged, so this must run against the
- * source package only — the derived preflight would otherwise report every one of them twice.
- */
-function warnUnrenderedCommentTopology(
-  manifest: PackageManifest,
-  state: ExecutionState,
-  options: NormalizedOptions,
-): void {
-  if (options.commentProfile === "hidden") return;
-  const annotations = manifest.facts.annotations;
-  if (annotations.commentReplies > 0) {
-    policyWarning(state, options, {
-      code: "comment_thread_flattened",
-      phase: "package_preflight",
-      message: annotations.commentReplies === 1
-        ? "1 comment reply is drawn as an independent comment rather than as a threaded reply."
-        : `${annotations.commentReplies} comment replies are drawn as independent comments rather `
-          + "than as threaded replies.",
-      remediation: "Read the exported comments in document order, which preserves reply sequence, "
-        + "or flatten the threads in Word before export.",
-    });
-  }
-  if (annotations.resolvedComments > 0) {
-    policyWarning(state, options, {
-      code: "comment_resolved_state_not_rendered",
-      phase: "package_preflight",
-      message: annotations.resolvedComments === 1
-        ? "1 resolved comment is drawn identically to an open comment."
-        : `${annotations.resolvedComments} resolved comments are drawn identically to open comments.`,
-      remediation: "Delete the resolved comments before export so the output carries only open ones.",
-    });
-  }
+  // Every family the preflight once reported now draws: all tracked-revision families —
+  // insertions, deletions, moves, run and block property changes (issue #539), tracked cell
+  // revisions, custom XML revision ranges (issue #538) — and, since issue #540, comment
+  // topology (replies nest beneath their thread root, resolved comments are badged and muted),
+  // so there is no revision or comment warning left to raise here.
 }
 
 function conversionOptions(options: NormalizedOptions) {

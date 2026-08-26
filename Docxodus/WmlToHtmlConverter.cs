@@ -638,6 +638,18 @@ namespace Docxodus
         public string Initials { get; set; }
         internal XElement SourceElement { get; set; }
         public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
+
+        /// <summary>
+        /// True when commentsExtended marks this comment resolved (<c>w15:done</c>). False when
+        /// the part or the entry is absent — an unannotated comment is an open one.
+        /// </summary>
+        public bool Resolved { get; set; }
+
+        /// <summary>
+        /// The id of the comment this one replies to, resolved from <c>w15:paraIdParent</c> in
+        /// commentsExtended; null for a top-level comment (issue #540).
+        /// </summary>
+        public int? ParentId { get; set; }
     }
 
     /// <summary>
@@ -2103,6 +2115,33 @@ namespace Docxodus
             sb.AppendLine("    background-color: #f5f5f5;");
             sb.AppendLine("    border-left: 3px solid #1976d2;");
             sb.AppendLine("    border-radius: 0 4px 4px 0;");
+            sb.AppendLine("}");
+
+            // Comment topology (issue #540): replies nest beneath their parent, resolved
+            // comments read as settled rather than live.
+            sb.AppendLine($"ol.{prefix}replies {{");
+            sb.AppendLine("    list-style: none;");
+            sb.AppendLine("    margin: 0.75em 0 0 0;");
+            sb.AppendLine("    padding-left: 1.5em;");
+            sb.AppendLine("    border-left: 2px solid #bbdefb;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($".{prefix}resolved {{");
+            sb.AppendLine("    opacity: 0.65;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}resolved-badge {{");
+            sb.AppendLine("    background-color: #2e7d32;");
+            sb.AppendLine("    color: #fff;");
+            sb.AppendLine("    border-radius: 8px;");
+            sb.AppendLine("    padding: 0 0.5em;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"div.{prefix}margin-replies {{");
+            sb.AppendLine("    margin-top: 0.5em;");
+            sb.AppendLine("    padding-left: 0.75em;");
+            sb.AppendLine("    border-left: 2px solid #bbdefb;");
             sb.AppendLine("}");
 
             // Comment header
@@ -4356,6 +4395,53 @@ namespace Docxodus
                     ContentParagraphs = comment.Elements(W.p).ToList()
                 };
             }
+
+            LoadCommentTopology(wordDoc, tracker);
+        }
+
+        /// <summary>
+        /// Read the comment set's shape from commentsExtended.xml (issue #540): which comment
+        /// replies to which (<c>w15:paraIdParent</c>) and which is resolved (<c>w15:done</c>).
+        /// Word keys each <c>w15:commentEx</c> on the comment's <em>last</em> body paragraph's
+        /// <c>w14:paraId</c>. Absent part, unmatched entry, or a parent outside the loaded set
+        /// all degrade to the flat, open rendering.
+        /// </summary>
+        private static void LoadCommentTopology(WordprocessingDocument wordDoc, CommentTracker tracker)
+        {
+            var extendedPart = wordDoc.MainDocumentPart.WordprocessingCommentsExPart;
+            if (extendedPart == null || !tracker.Comments.Any())
+                return;
+
+            var extendedRoot = extendedPart.GetXDocument().Root;
+            if (extendedRoot == null)
+                return;
+
+            var w15 = W15.w15;
+            var commentsByParaId = new Dictionary<string, CommentInfo>(StringComparer.Ordinal);
+            foreach (var comment in tracker.Comments.Values)
+            {
+                var paraId = (string)comment.ContentParagraphs.LastOrDefault()?.Attribute(W14.paraId);
+                if (paraId != null && !commentsByParaId.ContainsKey(paraId))
+                    commentsByParaId[paraId] = comment;
+            }
+
+            foreach (var commentEx in extendedRoot.Elements(w15 + "commentEx"))
+            {
+                var paraId = (string)commentEx.Attribute(w15 + "paraId");
+                if (paraId == null || !commentsByParaId.TryGetValue(paraId, out var comment))
+                    continue;
+
+                comment.Resolved = Docxodus.Internal.CommentOps.ParseDone(
+                    (string)commentEx.Attribute(w15 + "done"));
+
+                var parentParaId = (string)commentEx.Attribute(w15 + "paraIdParent");
+                if (parentParaId != null
+                    && commentsByParaId.TryGetValue(parentParaId, out var parent)
+                    && parent.Id != comment.Id)
+                {
+                    comment.ParentId = parent.Id;
+                }
+            }
         }
 
         private static CommentTracker GetCommentTracker(XElement element)
@@ -4613,9 +4699,34 @@ namespace Docxodus
                     marker.Add(SourceAnchorIdentityAttribute(settings, comment.SourceElement));
             }
 
-            if (comment != null && settings.IncludeCommentMetadata && comment.Author != null)
+            if (comment != null && settings.IncludeCommentMetadata)
             {
-                marker.Add(new XAttribute("title", $"Comment by {comment.Author}"));
+                // A reply's marker names its parent so the relationship survives into modes with
+                // no comments section (issue #540).
+                if (comment.ParentId.HasValue)
+                    marker.Add(new XAttribute("data-parent-id", comment.ParentId.Value.ToString()));
+                if (comment.Resolved)
+                    marker.Add(new XAttribute("data-resolved", "true"));
+
+                if (settings.CommentRenderMode == CommentRenderMode.Inline && comment.ParentId.HasValue)
+                {
+                    // Inline mode presents a ranged comment through its highlight tooltip, but a
+                    // Word-authored reply has no range of its own — this marker is its entire
+                    // presentation, so it carries the body text the highlight would have carried.
+                    var replyText = comment.ContentParagraphs
+                        .SelectMany(p => p.Descendants(W.t)
+                            .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any())))
+                        .Select(t => t.Value)
+                        .StringConcatenate();
+                    marker.Add(new XAttribute("data-comment", replyText ?? ""));
+                    marker.Add(new XAttribute("title", comment.Author != null
+                        ? $"Reply by {comment.Author}: {replyText}"
+                        : $"Reply: {replyText}"));
+                }
+                else if (comment.Author != null)
+                {
+                    marker.Add(new XAttribute("title", $"Comment by {comment.Author}"));
+                }
             }
 
             marker.Add(new XText($"[{id}]"));
@@ -4651,16 +4762,31 @@ namespace Docxodus
             var prefix = settings.CommentCssClassPrefix ?? "comment-";
 
             // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = tracker.ReferencedCommentIds.Any()
+            var orderedComments = (tracker.ReferencedCommentIds.Any()
                 ? tracker.ReferencedCommentIds
                     .Where(id => tracker.Comments.ContainsKey(id))
                     .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id);
+                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
+
+            // Replies nest inside their parent's item (issue #540). A reply whose parent is not
+            // in the set renders top-level rather than disappearing, and the rendered set guards
+            // malformed parent cycles the same way — whatever the first pass could not reach
+            // through a parent renders flat in the second.
+            var repliesByParent = orderedComments
+                .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
+                .GroupBy(c => c.ParentId.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var renderedIds = new HashSet<int>();
 
             var commentItems = orderedComments
-                .Select(c => RenderCommentItem(wordDoc, settings, c, prefix))
+                .Where(c => !(c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value)))
+                .Select(c => RenderCommentThread(wordDoc, settings, c, prefix, repliesByParent, renderedIds))
                 .Where(item => item != null)
                 .ToList();
+            commentItems.AddRange(orderedComments
+                .Where(c => !renderedIds.Contains(c.Id))
+                .Select(c => RenderCommentThread(wordDoc, settings, c, prefix, repliesByParent, renderedIds))
+                .Where(item => item != null));
 
             if (!commentItems.Any())
                 return null;
@@ -4673,12 +4799,52 @@ namespace Docxodus
                     commentItems));
         }
 
+        /// <summary>
+        /// Render one comment item and, beneath it, the items of every reply that names it as
+        /// parent (issue #540). <paramref name="renderedIds"/> spans the whole section so a
+        /// malformed parent graph can never render a comment twice or loop.
+        /// </summary>
+        private static XElement RenderCommentThread(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix,
+            Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
+        {
+            if (!renderedIds.Add(comment.Id))
+                return null;
+
+            var li = RenderCommentItem(wordDoc, settings, comment, prefix);
+            if (li == null)
+                return null;
+
+            if (repliesByParent.TryGetValue(comment.Id, out var replies))
+            {
+                var replyItems = replies
+                    .Select(reply => RenderCommentThread(
+                        wordDoc, settings, reply, prefix, repliesByParent, renderedIds))
+                    .Where(item => item != null)
+                    .ToList();
+                if (replyItems.Any())
+                {
+                    li.Add(new XElement(Xhtml.ol,
+                        new XAttribute("class", prefix + "replies"),
+                        replyItems));
+                }
+            }
+
+            return li;
+        }
+
         private static XElement RenderCommentItem(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix)
         {
+            var itemClass = prefix.TrimEnd('-');
+            if (comment.ParentId.HasValue)
+                itemClass += " " + prefix + "reply";
+            if (comment.Resolved)
+                itemClass += " " + prefix + "resolved";
+
             var li = new XElement(Xhtml.li,
                 new XAttribute("id", $"comment-{comment.Id}"),
-                new XAttribute("class", prefix.TrimEnd('-')),
+                new XAttribute("class", itemClass),
                 SourceAnchorIdentityAttribute(settings, comment.SourceElement));
 
             if (settings.IncludeCommentMetadata)
@@ -4709,6 +4875,13 @@ namespace Docxodus
                         new XAttribute("class", prefix + "date"),
                         dt.ToString("MMM d, yyyy")));
                 }
+            }
+
+            if (comment.Resolved)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "resolved-badge"),
+                    "Resolved"));
             }
 
             header.Add(new XElement(Xhtml.a,
@@ -4763,15 +4936,32 @@ namespace Docxodus
                 return marginColumn;
 
             // Use referenced order if available, otherwise use comment ID order
-            var orderedComments = tracker.ReferencedCommentIds.Any()
+            var orderedComments = (tracker.ReferencedCommentIds.Any()
                 ? tracker.ReferencedCommentIds
                     .Where(id => tracker.Comments.ContainsKey(id))
                     .Select(id => tracker.Comments[id])
-                : tracker.Comments.Values.OrderBy(c => c.Id);
+                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
 
-            foreach (var comment in orderedComments)
+            // Replies nest inside their parent's note so the thread positions as one unit
+            // (issue #540); the guards mirror RenderCommentsSection.
+            var repliesByParent = orderedComments
+                .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
+                .GroupBy(c => c.ParentId.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var renderedIds = new HashSet<int>();
+
+            foreach (var comment in orderedComments
+                .Where(c => !(c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))))
             {
-                var marginNote = RenderMarginCommentNote(settings, comment, prefix);
+                var marginNote = RenderMarginCommentThread(
+                    settings, comment, prefix, repliesByParent, renderedIds);
+                if (marginNote != null)
+                    marginColumn.Add(marginNote);
+            }
+            foreach (var comment in orderedComments.Where(c => !renderedIds.Contains(c.Id)))
+            {
+                var marginNote = RenderMarginCommentThread(
+                    settings, comment, prefix, repliesByParent, renderedIds);
                 if (marginNote != null)
                     marginColumn.Add(marginNote);
             }
@@ -4779,12 +4969,47 @@ namespace Docxodus
             return marginColumn;
         }
 
+        private static XElement RenderMarginCommentThread(WmlToHtmlConverterSettings settings,
+            CommentInfo comment, string prefix,
+            Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
+        {
+            if (!renderedIds.Add(comment.Id))
+                return null;
+
+            var note = RenderMarginCommentNote(settings, comment, prefix);
+            if (note == null)
+                return null;
+
+            if (repliesByParent.TryGetValue(comment.Id, out var replies))
+            {
+                var replyNotes = replies
+                    .Select(reply => RenderMarginCommentThread(
+                        settings, reply, prefix, repliesByParent, renderedIds))
+                    .Where(item => item != null)
+                    .ToList();
+                if (replyNotes.Any())
+                {
+                    note.Add(new XElement(Xhtml.div,
+                        new XAttribute("class", prefix + "margin-replies"),
+                        replyNotes));
+                }
+            }
+
+            return note;
+        }
+
         private static XElement RenderMarginCommentNote(WmlToHtmlConverterSettings settings,
             CommentInfo comment, string prefix)
         {
+            var noteClass = prefix + "margin-note";
+            if (comment.ParentId.HasValue)
+                noteClass += " " + prefix + "margin-reply";
+            if (comment.Resolved)
+                noteClass += " " + prefix + "resolved";
+
             var note = new XElement(Xhtml.div,
                 new XAttribute("id", $"comment-{comment.Id}"),
-                new XAttribute("class", prefix + "margin-note"),
+                new XAttribute("class", noteClass),
                 new XAttribute("data-comment-id", comment.Id.ToString()),
                 SourceAnchorIdentityAttribute(settings, comment.SourceElement));
 
@@ -4816,6 +5041,13 @@ namespace Docxodus
                         new XAttribute("class", prefix + "margin-date"),
                         dt.ToString("MMM d")));
                 }
+            }
+
+            if (comment.Resolved)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "resolved-badge"),
+                    "Resolved"));
             }
 
             header.Add(new XElement(Xhtml.a,
@@ -6716,8 +6948,17 @@ namespace Docxodus
                     foreach (var commentId in tracker.OpenRanges.OrderBy(id => id))
                     {
                         tracker.RenderedRangeIds.Add(commentId);
+                        // A resolved comment's range must not read as a live objection in any
+                        // presentation mode (issue #540).
+                        var highlightClass = prefix + "highlight";
+                        if (tracker.Comments.TryGetValue(commentId, out var rangeComment)
+                            && rangeComment.Resolved)
+                        {
+                            highlightClass += " " + prefix + "resolved";
+                        }
+
                         var highlightSpan = new XElement(Xhtml.span,
-                            new XAttribute("class", prefix + "highlight"),
+                            new XAttribute("class", highlightClass),
                             new XAttribute("data-comment-id", commentId.ToString()));
 
                         // Add tooltip in inline mode

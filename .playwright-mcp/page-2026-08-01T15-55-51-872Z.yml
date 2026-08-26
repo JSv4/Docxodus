@@ -1,0 +1,81 @@
+- generic [active] [ref=f22e1]:
+  - generic [ref=f22e2]:
+    - generic [ref=f22e3]:
+      - generic [ref=f22e4]:
+        - text: Docxodus
+        - generic [ref=f22e6]: no document
+      - generic [ref=f22e7]:
+        - button "New" [ref=f22e8] [cursor=pointer]
+        - generic [ref=f22e9] [cursor=pointer]: Open
+        - button "Save" [disabled] [ref=f22e10]
+      - generic [ref=f22e11]:
+        - button "↶" [ref=f22e12] [cursor=pointer]
+        - button "↷" [ref=f22e13] [cursor=pointer]
+      - generic [ref=f22e14]: Booting WASM…
+    - tablist [ref=f22e15]:
+      - tab "Home" [selected] [ref=f22e16] [cursor=pointer]
+      - tab "Insert" [ref=f22e17] [cursor=pointer]
+      - tab "Layout" [ref=f22e18] [cursor=pointer]
+    - generic:
+      - generic:
+        - generic:
+          - generic: Text
+          - generic:
+            - button "B" [disabled]
+            - button "I" [disabled]
+            - button "U" [disabled]
+            - button "S" [disabled]
+            - button "</>" [disabled]
+            - button "x²" [disabled]
+            - button "x₂" [disabled]
+          - generic:
+            - spinbutton "Font size in points — type any value or pick a preset" [disabled]
+            - combobox "Font family — applies to the selection" [disabled]:
+              - option "Font…" [disabled] [selected]
+              - option "Calibri" [disabled]
+              - option "Times New Roman" [disabled]
+              - option "Arial" [disabled]
+              - option "Georgia" [disabled]
+              - option "Cambria" [disabled]
+              - option "Courier New" [disabled]
+              - option "Verdana" [disabled]
+              - option "Garamond" [disabled]
+        - generic:
+          - generic: Paragraph
+          - generic:
+            - button "Align left" [disabled]
+            - button "Align center" [disabled]
+            - button "Align right" [disabled]
+            - button "Justify" [disabled]
+            - button "Decrease indent" [disabled]
+            - button "Increase indent" [disabled]
+          - generic:
+            - button "• List" [disabled]
+            - button "1. List" [disabled]
+            - button "Page break" [disabled]
+        - generic:
+          - generic: Block
+          - generic:
+            - combobox "Paragraph style" [disabled]:
+              - option "Style…" [disabled] [selected]
+              - option "Normal" [disabled]
+              - option "Heading 1" [disabled]
+              - option "Heading 2" [disabled]
+              - option "Heading 3" [disabled]
+              - option "Title" [disabled]
+          - generic:
+            - button "Delete block" [disabled]
+    - generic [ref=f22e19]:
+      - generic [ref=f22e20]:
+        - generic [ref=f22e21]: anchor
+        - generic [ref=f22e22]: —
+      - generic [ref=f22e23]:
+        - generic [ref=f22e24]: blocks
+        - generic [ref=f22e25]: —
+      - generic [ref=f22e26]:
+        - generic [ref=f22e27]: session
+        - generic [ref=f22e28]: —
+      - generic [ref=f22e29]:
+        - generic [ref=f22e30]: last op
+        - generic [ref=f22e31]: —
+  - paragraph [ref=f22e32]: Click any paragraph, heading, table cell, footnote or header/footer line to edit it. Enter splits a block, Backspace at the start merges it into the previous one, Ctrl+Z undoes. Only the block you changed re-renders — everything else keeps full fidelity, and Save writes a lossless .docx.
