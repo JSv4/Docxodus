@@ -130,6 +130,17 @@ class DeliverableCheckStatus(str, Enum):
     UNAVAILABLE_EVIDENCE = "unavailableEvidence"
 
 
+class DeliveryArtifactVerificationStatus(str, Enum):
+    """One artifact's independent re-hash verdict from delivery-receipt verification."""
+
+    VERIFIED = "verified"
+    UNAVAILABLE = "unavailable"
+    MISSING = "missing"
+    LENGTH_MISMATCH = "length_mismatch"
+    DIGEST_MISMATCH = "digest_mismatch"
+    INVALID_RECORD = "invalid_record"
+
+
 class DeliverablePackageChangeKind(str, Enum):
     ENTRY_ADDED = "entryAdded"
     ENTRY_REMOVED = "entryRemoved"

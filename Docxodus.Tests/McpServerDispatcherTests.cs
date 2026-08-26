@@ -1609,6 +1609,7 @@ public class McpServerDispatcherTests : IDisposable
             "docxodus_search",
             "docxodus_table",
             "docxodus_track_changes",
+            "docxodus_verify_receipt",
         };
 
         Assert.Equal(expectedNames.Length, ToolCatalog.Tools.Count);
@@ -2795,5 +2796,63 @@ public class McpServerDispatcherTests : IDisposable
         var failure = batch.GetProperty("failure");
         Assert.Equal("replace_text_range", failure.GetProperty("action").GetString());
         Assert.Equal("text_not_found", failure.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void MCP154_VerifyReceipt_ChecksStoredArtifactsAndReportsTamper()
+    {
+        // Issue #520: recipient-side receipt verification over the document scope, with no
+        // open session. Build a real receipt, hand the tool its JSON and the clean-docx
+        // artifact by path, then tamper the artifact file and watch the verdict flip.
+        var deliveredBytes = DocxSession.CreateBlankDocxBytes();
+        var manifest = Docxodus.Verification.PackageManifestGenerator.Generate(deliveredBytes);
+        var builder = new Docxodus.Verification.DeliveryChangeReceiptBuilder(manifest, 0)
+            .SetDeliveredDocument(manifest, 0);
+        builder.AddArtifact(Docxodus.Verification.DeliveryArtifactInput.Available(
+            "clean-docx",
+            Docxodus.Verification.DeliveryArtifactRole.CleanDocx,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            deliveredBytes) with
+        {
+            Document = Docxodus.Verification.DeliveryDocumentIdentity.FromManifest(manifest, 0),
+            RelativePath = "delivery/clean.docx",
+        });
+        var semanticChanges = Docxodus.Verification.SemanticDiff.Compare(
+            new WmlDocument("before.docx", deliveredBytes),
+            new WmlDocument("after.docx", deliveredBytes));
+        builder.AddSemanticChangeSet(
+            Docxodus.Verification.DeliverySemanticChangeSetInput.ForSourceToDelivered(
+                semanticChanges));
+        var receipt = builder.Build();
+
+        var receiptPath = Path.Combine(_root, "receipt.json");
+        File.WriteAllText(receiptPath, receipt.ToJson());
+        var artifactPath = Path.Combine(_root, "clean.docx");
+        File.WriteAllBytes(artifactPath, deliveredBytes);
+        File.WriteAllBytes(
+            Path.Combine(_root, "semantic.json"), semanticChanges.ToCanonicalUtf8Bytes());
+
+        var verified = Parse(Dispatcher.Call(_store, "docxodus_verify_receipt", J(
+            """{"receiptPath":"receipt.json","artifactPaths":{"clean-docx":"clean.docx","semantic-source-to-delivered":"semantic.json"}}""")));
+        Assert.True(verified.GetProperty("isValid").GetBoolean(), verified.GetRawText());
+        Assert.Contains(verified.GetProperty("artifacts").EnumerateArray(), artifact =>
+            artifact.GetProperty("artifactId").GetString() == "clean-docx"
+            && artifact.GetProperty("status").GetString() == "verified");
+
+        var tampered = (byte[])deliveredBytes.Clone();
+        tampered[^1] ^= 0xFF;
+        File.WriteAllBytes(artifactPath, tampered);
+        var rejected = Parse(Dispatcher.Call(_store, "docxodus_verify_receipt", J(
+            """{"receiptPath":"receipt.json","artifactPaths":{"clean-docx":"clean.docx","semantic-source-to-delivered":"semantic.json"}}""")));
+        Assert.False(rejected.GetProperty("isValid").GetBoolean());
+        Assert.Contains(rejected.GetProperty("artifacts").EnumerateArray(), artifact =>
+            artifact.GetProperty("artifactId").GetString() == "clean-docx"
+            && artifact.GetProperty("status").GetString() == "digest_mismatch");
+
+        // The tool is sessionless and its receipt input is exactly one of path or inline JSON.
+        var ex = Assert.Throws<McpToolException>(() => Dispatcher.Call(
+            _store, "docxodus_verify_receipt", J(
+                """{"receiptPath":"receipt.json","receiptJson":"{}"}""")));
+        Assert.Contains("exactly one", ex.Message, StringComparison.Ordinal);
     }
 }

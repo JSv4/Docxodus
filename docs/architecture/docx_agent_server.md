@@ -214,8 +214,8 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, four read/preview tools, twelve grouped-intent tools, and two sessionless
-operations (`docxodus_compare`, `docxodus_deliver`). Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, four read/preview tools, twelve grouped-intent tools, and three sessionless
+operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -697,6 +697,18 @@ optionally `DOCXODUS_CHROMIUM_PATH`); tool arguments can never select an executa
 receipts are truthfully unavailable on this surface because issuance requires exact transaction
 snapshots and contributions. Not batchable: a bundle is evidence about a saved document, not a
 mutation.
+
+### `docxodus_verify_receipt` — portable receipt verification (issue #520)
+
+Sessionless recipient-side check of a delivery change receipt: the receipt's canonical payload
+digest, contract, and citation bindings are validated, and each artifact file supplied through
+`artifactPaths` (`{artifactId: path}`, every path resolved in the document scope) is
+independently re-hashed against the length and digest the receipt records. The receipt arrives
+as exactly one of `receiptPath` (a JSON file in the scope) or `receiptJson` (inline). Routing is
+through the shared `DeliveryOps.VerifyChangeReceiptJson` facade, so the verdict shape —
+`isValid`, the envelope booleans, per-artifact statuses (`verified`/`missing`/
+`digest_mismatch`/…), and findings — is identical across the WASM, npm, Python, and MCP
+transports, and malformed input returns a structured invalid verdict rather than an error.
 
 ### `docxodus_table` — tables
 

@@ -78,6 +78,22 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// Verify a portable JSON delivery change receipt against optionally supplied artifact
+    /// bytes. <paramref name="artifactsJson"/> is a JSON object of
+    /// <c>{"artifactId": "&lt;base64&gt;"}</c>; pass an empty string to check the receipt
+    /// envelope alone. Malformed input returns a structured invalid verdict whose findings
+    /// carry the reason — never a thrown error.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliveryReceipt(string receiptJson, string artifactsJson)
+    {
+        ArgumentNullException.ThrowIfNull(receiptJson);
+        return DeliveryOps.VerifyChangeReceiptJson(
+            receiptJson,
+            string.IsNullOrEmpty(artifactsJson) ? null : artifactsJson);
+    }
+
+    /// <summary>
     /// Reject an aggregate byte budget overrun before any package is inspected. The running total
     /// is compared by subtraction so a multi-package call cannot overflow its way under the limit.
     /// </summary>
