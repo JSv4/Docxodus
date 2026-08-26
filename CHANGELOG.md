@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Typed leading block markers no longer vanish on commit (#571).** The editor's
+  blur-commit serializer escaped inline markdown (`*`, `_`, backticks, brackets) but not
+  block-level markers, so typing `## 2.1 Termination`, `> see clause 4`, `- deliverables`,
+  or `12. December invoice` at the start of a paragraph committed with the marker
+  characters silently deleted — and a list marker after a Shift+Enter soft break was
+  promoted to its own markdown block and the whole line dropped. The serializer now
+  escapes leading `#`, `>`, `|`, `- `/`+ `, and ordered-list markers on every line of the
+  payload, the write-side half of the projector's existing contract (it already emits
+  literal hashes as `\#\#`, and the parser unescapes `\X` generically).
 - **`ReplaceText` now honors the block semantics its payload declares, and refuses
   multi-block payloads instead of truncating (#570).** A payload opening with an unescaped
   block marker (`## `, `> `, a fenced code block) used to have the marker consumed by the
@@ -19,6 +28,22 @@ All notable changes to this project will be documented in this file.
   untouched, and list payloads keep their documented v1 no-numbering behavior. A payload
   that parses to more than one markdown block now fails with `unsupported_markdown_syntax`
   instead of silently applying only the first block and reporting success.
+
+### Added
+- **DOCX GOLF, a demo page where the editing surface is the game (`docs/demo/golf.html`).**
+  Five holes of document golf, played in the shipped ribbon editor: each hole loads a start
+  document as the ball and builds a target document as the pin, and the referee is the
+  comparison engine itself — the hole is cleared when `docxDiffGetRevisions` between the
+  player's document and the target returns zero revisions. The caddie panel phrases the
+  remaining revisions as the work left, counts strokes by fingerprinting `session.save()`
+  (one committed burst of editing is one swing; undo counts), and offers Target and live
+  redline views (`docxDiffCompare` → `convertDocxToHtml`). Holes escalate across the
+  surface — a one-word fix, clause reordering, scoped defined-term conformance, heading
+  styles, and a table hole — and each ships a content-addressed reference solution that
+  `npm/tests/demo-golf.spec.ts` replays in CI to keep the course honest: no hole starts
+  solved, and every reference reaches zero revisions within par. Demo content only
+  (`docs/demo/docx-golf.js` + headless logic tests in `docs/demo/tools/`): no library
+  changes, and the page runs against the pinned CDN engine as-is.
 
 ### Changed
 - **Nullable reference types are enabled project-wide (#13).** The core library now compiles
@@ -73,7 +98,6 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
-<<<<<<< HEAD
 - **The converter draws comment topology (#540).** `WmlToHtmlConverter` now reads
   `commentsExtended.xml` — where Word keeps the *shape* of a comment set — and carries both
   facts it records into every visible comment mode. A reply (`w15:paraIdParent`) nests
@@ -88,7 +112,6 @@ All notable changes to this project will be documented in this file.
   commentsExtended part nothing changes. The standalone export's `comment_thread_flattened`
   and `comment_resolved_state_not_rendered` warnings are retired with the gaps they
   disclosed.
-=======
 - **The converter draws block-level property revisions (#539).** A tracked change to
   paragraph, numbering, table, row, cell or section properties (`w:pPrChange`,
   `w:numberingChange`, `w:tblPrChange`, `w:tblGridChange`, `w:trPrChange`, `w:tblPrExChange`,
@@ -102,7 +125,6 @@ All notable changes to this project will be documented in this file.
   is emitted. The standalone export's `revision_property_change_not_rendered` warning is
   retired with the gap it disclosed; `revisions.runPropertyChanges` in the package manifest
   remains as inventory.
->>>>>>> origin/main
 - **The converter draws custom XML revision ranges (#538).** `w:customXmlInsRangeStart`/
   `End`, `Del`, `MoveFrom`, and `MoveTo` — a reviewer's tracked add/remove/move of a custom
   XML structural wrapper — previously passed through `WmlToHtmlConverter` untouched, leaving
