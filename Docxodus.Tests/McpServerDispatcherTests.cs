@@ -2855,4 +2855,36 @@ public class McpServerDispatcherTests : IDisposable
                 """{"receiptPath":"receipt.json","receiptJson":"{}"}""")));
         Assert.Contains("exactly one", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void MCP155_InsertCrossReference_WritesRefFieldAndFailsTypedOnMissingBookmark()
+    {
+        // Issue #545: a REF field targeting a bookmark, insertable from the agent surface —
+        // a real cross-reference Word re-resolves, not an internal hyperlink.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Assert.True(ReplaceText(_store, sessionId, anchor, "Definitions clause here.")
+            .GetProperty("success").GetBoolean());
+        Assert.True(Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add_bookmark","name":"Defs","startAnchorId":"{{anchor}}","startOffset":0,"endAnchorId":"{{anchor}}","endOffset":11}""")))
+            .GetProperty("success").GetBoolean());
+
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_cross_reference","anchorId":"{{anchor}}","characterOffset":24,"bookmarkName":"Defs","hyperlink":true}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean(), inserted.GetRawText());
+
+        // The cached result renders in the HTML conversion, so the referenced text appears
+        // twice: once as the bookmarked content, once inside the field.
+        var html = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
+            .GetProperty("html").GetString()!;
+        Assert.Equal(2, html.Split("Definitions").Length - 1);
+
+        var missing = Parse(Dispatcher.Call(_store, "docxodus_links", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_cross_reference","anchorId":"{{anchor}}","characterOffset":0,"bookmarkName":"Nope"}""")));
+        Assert.False(missing.GetProperty("success").GetBoolean());
+        Assert.Equal("missing_bookmark_target",
+            missing.GetProperty("error").GetProperty("code").GetString());
+    }
 }

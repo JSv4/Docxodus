@@ -408,13 +408,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_links",
-            "Enumerate and safely mutate native Word hyperlinks and bookmarks across body, headers, footers, footnotes, and endnotes. Internal hyperlinks target an existing bookmark with relationship-free w:anchor markup; external links use the containing story part's relationship. Bookmark ranges may cross paragraphs in one story part but not package parts. Tracked render-inline mode rejects these metadata mutations explicitly.",
+            "Enumerate and safely mutate native Word hyperlinks and bookmarks across body, headers, footers, footnotes, and endnotes, and insert REF-field cross-references that target a bookmark. Internal hyperlinks target an existing bookmark with relationship-free w:anchor markup; external links use the containing story part's relationship. Bookmark ranges may cross paragraphs in one story part but not package parts. insert_cross_reference writes a real Word REF field with a cached result (the bookmarked text, or the target's auto-number under referenceNumber), so it updates with the target when Word refreshes fields — unlike an internal hyperlink. Tracked render-inline mode rejects the metadata mutations explicitly.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark"] },
+                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark", "insert_cross_reference"] },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
                 "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
                 "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
@@ -426,7 +426,12 @@ internal static class ToolCatalog
                 "newName": { "type": "string", "description": "rename_bookmark destination name; inbound internal links are retargeted atomically." },
                 "startAnchorId": { "type": "string", "description": "add/move_bookmark range start paragraph." },
                 "endAnchorId": { "type": "string", "description": "add/move_bookmark range end paragraph in the same story part." },
-                "endOffset": { "type": "integer", "description": "add/move_bookmark exclusive end boundary." }
+                "endOffset": { "type": "integer", "description": "add/move_bookmark exclusive end boundary." },
+                "characterOffset": { "type": "integer", "description": "insert_cross_reference: zero-based character boundary in anchorId's paragraph where the field is inserted." },
+                "bookmarkName": { "type": "string", "description": "insert_cross_reference: existing bookmark the REF field targets; a missing or incoherent bookmark fails with missing_bookmark_target." },
+                "referenceNumber": { "type": "boolean", "description": "insert_cross_reference: emit the \\r switch — show the target's auto-number instead of its text (cached 0 when the target is unnumbered)." },
+                "hyperlink": { "type": "boolean", "description": "insert_cross_reference: emit the \\h switch — the field jumps to the bookmark like a link." },
+                "includePosition": { "type": "boolean", "description": "insert_cross_reference: emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." }
               },
               "required": ["sessionId", "action"]
             }

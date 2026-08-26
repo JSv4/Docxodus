@@ -373,7 +373,7 @@ test.describe('Paginated preview substitutes real page numbers', () => {
     );
   });
 
-  test('PAGE fields continue logically while odd/even stories use section-relative parity', async ({
+  test('PAGE fields continue logically while odd/even stories follow the displayed number', async ({
     page,
   }) => {
     await page.setContent(`
@@ -424,11 +424,13 @@ test.describe('Paginated preview substitutes real page numbers', () => {
     });
 
     expect(result).toEqual([
-      // OOXML counts odd/even stories from page one in each section, regardless of w:start.
-      { physical: 1, section: 0, displayed: 10, footer: 'S0 odd 10' },
-      { physical: 2, section: 0, displayed: 11, footer: 'S0 even 11' },
-      // Section 1 omits w:start, so PAGE continues to 12 while its first page is still odd.
-      { physical: 3, section: 1, displayed: 12, footer: 'S1 odd 12' },
+      // ECMA-376 §17.10.5 hangs the even story on "even numbered pages" — the displayed
+      // number, restart-aware, exactly the number the PAGE field prints (issue #536). A
+      // start of 10 therefore begins the section on its EVEN story.
+      { physical: 1, section: 0, displayed: 10, footer: 'S0 even 10' },
+      { physical: 2, section: 0, displayed: 11, footer: 'S0 odd 11' },
+      // Section 1 omits w:start, so PAGE continues to 12 — an even page, even story.
+      { physical: 3, section: 1, displayed: 12, footer: 'S1 even 12' },
     ]);
   });
 });

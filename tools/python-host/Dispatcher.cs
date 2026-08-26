@@ -131,6 +131,9 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_endnote" => DocxSessionOps.InsertEndnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
+        "insert_cross_reference" => DocxSessionOps.InsertCrossReference(
+            Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"),
+            Str(args, "bookmarkName"), ParseCrossReferenceOptions(args)),
 
         "add_comment" => AddComment(args),
         "add_comment_reply" => DocxSessionOps.AddCommentReply(
@@ -794,6 +797,23 @@ internal static class Dispatcher
         return DocxSessionJson.ParseFindOptions(o);
     }
 
+    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("options", out var options)
+            || options.ValueKind != JsonValueKind.Object)
+            return null;
+        return new CrossReferenceOptions
+        {
+            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
+                && number.ValueKind == JsonValueKind.True,
+            Hyperlink = options.TryGetProperty("hyperlink", out var link)
+                && link.ValueKind == JsonValueKind.True,
+            IncludePosition = options.TryGetProperty("includePosition", out var position)
+                && position.ValueKind == JsonValueKind.True,
+        };
+    }
+
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
         if (args.ValueKind != JsonValueKind.Object) return null;
@@ -911,7 +931,7 @@ internal static class Dispatcher
         or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
-        or "insert_footnote" or "insert_endnote"
+        or "insert_footnote" or "insert_endnote" or "insert_cross_reference"
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"
         or "accept_revision" or "reject_revision"

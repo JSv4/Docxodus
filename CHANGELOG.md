@@ -49,6 +49,18 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **Field-based internal cross-references from the session surface (#545).**
+  `DocxSession.InsertCrossReference(anchorId, characterOffset, bookmarkName, options?)` inserts
+  a Word-faithful `REF` field targeting an existing bookmark — a real field Word re-resolves on
+  refresh, unlike an internal hyperlink. `CrossReferenceOptions` maps to the field's switches
+  (`ReferenceNumber` → `\r`, `Hyperlink` → `\h`, `IncludePosition` → `\p`), and the written
+  `w:fldSimple` carries a cached result run — the bookmarked text, the target's auto-number
+  under `\r` (`0` when unnumbered, as Word shows), and/or the `above`/`below` position word —
+  so renderers that do not recompute fields display a faithful snapshot. A missing or
+  incoherent bookmark fails with `MissingBookmarkTarget`. Rippled to every transport: the WASM
+  bridge and npm gain `insertCrossReference` (typed `CrossReferenceOptions`), the stdio host
+  and `docx-scalpel` gain `insert_cross_reference`, and the MCP server's `docxodus_links` tool
+  gains the batchable `insert_cross_reference` action.
 - **Delivery-receipt verification on every transport (#520).** The portable JSON change
   receipt (#458) can now be verified from all four client surfaces, each routing through the
   new single-owner facade `DeliveryOps.VerifyChangeReceiptJson` (artifacts as
@@ -769,6 +781,18 @@ All notable changes to this project will be documented in this file.
   text on both the oracle and the IR emitter, byte-parity preserved; the field stays atomic
   for mutation addressing, exactly like a hyperlink wrapper. Inline `w:sdt`/`w:smartTag`
   carriers deliberately remain projected-out.
+- **Even/odd running stories follow the page number again (#536).** The paginated renderer's
+  #527 hardening switched even-header/footer selection (and the matching band heights) to the
+  page's one-based position in its section, which flips every story of a section that begins
+  on an even page — `DB001-Sections` lost ink parity with LibreOffice on three of six pages
+  and turned the weekly visual-parity ratchet red on `main`. ECMA-376 §17.10.5 hangs the even
+  story on "even numbered pages": the page NUMBER, which keeps counting across a section
+  boundary unless `w:pgNumType` restarts it — and a restart moves the parity with it, so a
+  section that restarts at 1 on a physically even page shows its odd story, exactly as Word
+  treats a front-matter restart. Selection now keys on the displayed page number (first-page
+  selection under `w:titlePg` is unchanged), and the multi-section parity case measures ink
+  F1 1.0 on all six pages again — the value the ratchet record already pins, so no record
+  refresh is needed.
 - **Resolving away a document's only footnote/endnote no longer leaves a reference-less
   husk, and the reversibility proof accepts Word's two "no notes" spellings (#516, #552).**
   When revision resolution removed a note's last reference — rejecting the insertion that

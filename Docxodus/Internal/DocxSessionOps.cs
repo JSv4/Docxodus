@@ -544,6 +544,15 @@ internal static class DocxSessionOps
     public static string ListHyperlinks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
         DocxSessionJson.SerializeHyperlinks(SessionRegistry.Get(handle).ListHyperlinks(scopes));
 
+    /// <summary>Insert a REF-field internal cross-reference (issue #545); see
+    /// <see cref="DocxSession.InsertCrossReference"/>. Options arrive typed — each transport
+    /// parses its own <c>{referenceNumber, hyperlink, includePosition}</c> wire object.</summary>
+    public static string InsertCrossReference(int handle, string anchorId, int characterOffset,
+        string bookmarkName, CrossReferenceOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertCrossReference(anchorId, characterOffset, bookmarkName, options));
+
     public static string AddHyperlink(int handle, string anchorId, int start, int length,
         string kind, string target)
     {
