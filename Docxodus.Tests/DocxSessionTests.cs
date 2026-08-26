@@ -2189,18 +2189,25 @@ public class DocxSessionTests
     }
 
     [Fact]
-    public void DS056_MarkdownHeading_ExplicitlySuppressesStyleNumbering()
+    public void DS056_MarkdownHeading_SuppressesStyleNumberingOnlyWhenTheStyleNumbers()
     {
-        var parsed = Docxodus.Internal.MarkdownPayloadParser.Parse("## Unnumbered heading");
-        Assert.True(parsed.Success, parsed.Error?.Message);
-
-        var paragraph = DocxSession.BuildParagraphFromParsedBlock(Assert.Single(parsed.Blocks));
+        // The suppressor exists for legal-outline templates whose Heading styles attach
+        // numbering: numId=0 keeps the authored text unnumbered. A style with no
+        // numbering gets no suppressor, so markdown-authored and Style-dropdown headings
+        // carry identical paragraph marks (#572). The numbered side of the rule is
+        // pinned by DS572b/DS572c in DocxSessionHeadingNumberingTests.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.InsertParagraph(anchor, Position.After, "## Unnumbered heading");
+        Assert.True(r.Success, r.Error?.Message);
 
         XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-        var numPr = paragraph.Element(w + "pPr")?.Element(w + "numPr");
-        Assert.NotNull(numPr);
-        Assert.Equal("0", (string?)numPr!.Element(w + "numId")?.Attribute(w + "val"));
-        Assert.Equal("0", (string?)numPr.Element(w + "ilvl")?.Attribute(w + "val"));
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var heading = doc.MainDocumentPart!.GetXDocument().Root!
+            .Descendants(w + "p")
+            .Single(p => (string?)p.Element(w + "pPr")?.Element(w + "pStyle")?.Attribute(w + "val") == "Heading2");
+        Assert.Null(heading.Element(w + "pPr")?.Element(w + "numPr"));
     }
 
     // ─── Phase 6: cell content + tracked-change mode ─────────────────────
