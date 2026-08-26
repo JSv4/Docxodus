@@ -95,7 +95,13 @@ public class WmlToMarkdownConverterSettings
     /// </summary>
     public int TableInlineCellMax { get; set; } = 80;
 
-    /// <summary>How tracked changes (<c>w:ins</c>, <c>w:del</c>) are projected.</summary>
+    /// <summary>
+    /// How tracked changes (<c>w:ins</c>, <c>w:del</c>) are projected. Rendering only —
+    /// distinct from <see cref="DocxSession.SetTrackedChanges"/>, which controls how session
+    /// mutations are RECORDED: an edit recorded as a tracked change still projects as clean
+    /// accepted text under this knob's <see cref="TrackedChangeMode.Accept"/> default
+    /// (issue #596).
+    /// </summary>
     public TrackedChangeMode TrackedChanges { get; set; } = TrackedChangeMode.Accept;
 
     /// <summary>
