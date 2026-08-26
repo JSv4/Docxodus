@@ -1127,4 +1127,35 @@ public sealed class DocxDiffRevision
         formatChange: r.FormatChange is { } fc ? new DocxDiffFormatChange(fc) : null,
         leftAnchor: r.LeftAnchor,
         rightAnchor: r.RightAnchor);
+
+    /// <summary>
+    /// Self-describing one-line rendering — type, move role, changed format property names,
+    /// quoted (truncated) text, anchors, and author — so a revision prints usefully in logs
+    /// and string interpolation instead of as the bare type name (issue #596). For example:
+    /// <c>Deleted "[8]%" @ p:body:abca8bfa ↔ p:body:dad1d7ec (Open-Xml-PowerTools)</c>.
+    /// </summary>
+    public override string ToString()
+    {
+        var sb = new System.Text.StringBuilder(Type.ToString());
+        if (Type == DocxDiffRevisionType.Moved)
+        {
+            sb.Append(IsMoveSource == true ? " (source" : " (destination");
+            if (MoveGroupId is { } group) sb.Append(" #").Append(group);
+            sb.Append(')');
+        }
+        if (FormatChange is { } change && change.ChangedPropertyNames.Count > 0)
+            sb.Append(" [").Append(string.Join(", ", change.ChangedPropertyNames)).Append(']');
+        var text = Text.ReplaceLineEndings(" ");
+        if (text.Length > 60) text = text[..59] + "…";
+        sb.Append(" \"").Append(text).Append('"');
+        if (LeftAnchor is not null || RightAnchor is not null)
+        {
+            sb.Append(" @ ");
+            if (LeftAnchor is not null && RightAnchor is not null)
+                sb.Append(LeftAnchor).Append(" ↔ ").Append(RightAnchor);
+            else
+                sb.Append(LeftAnchor ?? RightAnchor);
+        }
+        return sb.Append(" (").Append(Author).Append(')').ToString();
+    }
 }

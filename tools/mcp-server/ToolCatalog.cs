@@ -560,9 +560,9 @@ internal static class ToolCatalog
                     "type": "object",
                     "properties": {
                       "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_content_controls", "docxodus_track_changes"] },
-                      "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch). transactionId is forbidden here; it belongs only at the batch root." }
+                      "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch). transactionId is forbidden here; it belongs only at the batch root. May be omitted by writing the action and its arguments directly beside \"tool\" (the same flat shape as the standalone tool call); the server lifts them into args." }
                     },
-                    "required": ["tool", "args"]
+                    "required": ["tool"]
                   }
                 }
               },

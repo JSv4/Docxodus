@@ -267,7 +267,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | Op | Created | Removed | Modified | Patch scope |
 |---|---|---|---|---|
 | `ReplaceText(p, md)` | — (markdown subset can't introduce inline anchors in v1) | descendant inline anchors that no longer exist (rare) | `p` | `p` |
-| `DeleteBlock(p)` (or `h`/`li`/`tbl`) | — | `p` + all descendant anchors | — | nearest stable ancestor |
+| `DeleteBlock(p)` (or `h`/`li`/`tbl`) | — | `p` + all descendant anchors, plus any `fn`/`en` definition whose last reference the delete removed (issue #591 — the same Word-faithful prune revision resolution performs; shared notes, pre-existing danglers, and the separator notes survive; likewise for `DeleteRange`/`DeleteSection`/`DeleteTableRow`/`DeleteTableColumn`) | — | nearest stable ancestor |
 | `DeleteBlock(fn)` / `DeleteBlock(en)` / `DeleteBlock(cmt)` | — | the definition anchor (and any cross-references it pointed at — those become "gone" but aren't separately addressed) | — | nearest stable ancestor in the body |
 | `InsertParagraph(p, pos, md)` | one anchor per new block | — | — | smallest enclosing common parent |
 | `SplitParagraph(p, offset)` | the **second** half | — | `p` (first half — convention) | enclosing parent |

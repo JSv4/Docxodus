@@ -4,7 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **The revision list's comment exclusion is now an explicit, pinned contract (#579).**
+  `DocxDiff.GetRevisions` deliberately reports content only: a comment added, removed, or
+  edited between two versions is annotation-layer and does not surface as a revision —
+  matching Word's own compare (which merges comments rather than redlining them) and the
+  markup surface (`Compare` carries and threads comments; a comment "revision" would have
+  no markup to accept or reject). The XML docs and design doc now state this and direct
+  "what changed, comments included" callers to `GetSemanticChanges` (family `comment`,
+  which reports comment-part insert/delete/modify precisely on every transport) or
+  `DocxSession.ListComments` parity; a new test pins both halves of the contract. No
+  behavior changed.
+- **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
+  one-liner from `ToString()` (type, move role, changed format property names, quoted
+  text, anchors, author) instead of the bare type name; the two tracked-changes knobs —
+  `DocxSession.SetTrackedChanges` (how mutations are *recorded*) and
+  `WmlToMarkdownConverterSettings.TrackedChanges` (how projections *render*) — now
+  cross-reference each other in their XML docs so a clean projection after a tracked edit
+  is no longer misread as "the edit wasn't tracked"; and a `docxodus_mutations` step may
+  be written flat (action and arguments directly beside `tool`, the standalone-tool
+  shape) — the MCP server lifts it into `args`, and a step with neither `args` nor
+  `action` gets an error that spells out the nested shape.
+
 ### Fixed
+- **Structural deletes no longer orphan footnote/endnote definitions (#591).**
+  `DeleteBlock`, `DeleteRange`, `DeleteSection`, `DeleteTableRow`, and `DeleteTableColumn`
+  removed a note's body-side reference but left its full definition — often substantive
+  commentary — shipping invisibly inside `word/footnotes.xml`/`word/endnotes.xml`. The
+  delete family now runs the same Word-faithful pruner revision resolution has used since
+  #516: a definition whose *last* reference the op removed is deleted (and reported in
+  `EditResult.Removed`), while definitions still referenced elsewhere, pre-existing
+  danglers, the Word-reserved separator notes, and the notes part itself all survive.
+  Tracked-mode deletes are unaffected — the reference lives on inside `w:del`, and the
+  definition is pruned when the revision is accepted, as before.
 - **Markdown-authored headings no longer carry an inert `numId=0` numbering suppressor
   (#572).** The suppressor exists for legal-outline templates whose Heading styles attach
   numbering — `numId=0` keeps the authored text unnumbered — but it was written
