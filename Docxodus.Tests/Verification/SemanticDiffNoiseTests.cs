@@ -170,4 +170,64 @@ public class SemanticDiffNoiseTests
         }
         return new WmlDocument(source.FileName, stream.ToArray());
     }
+
+    [Fact]
+    public void Comment_ranged_paragraph_with_revision_markup_round_trips_without_noise()
+    {
+        // Issue #546 observed a comment-ranged paragraph carrying live tracked-change markup
+        // shifting its content-derived anchor id on every no-edit open → save cycle, which made
+        // the semantic surface report a phantom comment modification. The shape is authored the
+        // way the eval corpus authored it — a sub-span comment added first, then a tracked
+        // replacement threading through the commented paragraph — and must round-trip silent.
+        byte[] authored;
+        using (var author = new Docxodus.DocxSession(
+            Docxodus.DocxSession.CreateBlankDocxBytes()))
+        {
+            var seed = author.Project().AnchorIndex.Values
+                .First(target => target.Anchor.Kind == "p" && target.Anchor.Scope == "body")
+                .Anchor.Id;
+            var inserted = author.InsertParagraph(
+                seed, Docxodus.Position.After,
+                "The Client shall pay the **annual fees** set out below, invoiced quarterly in advance.");
+            Assert.True(inserted.Success, inserted.Error?.Message);
+            var anchor = inserted.Created.Single().Id;
+
+            var visible = "The Client shall pay the annual fees set out below, invoiced quarterly in advance.";
+            var start = visible.IndexOf("invoiced", StringComparison.Ordinal);
+            var comment = author.AddComment(
+                anchor,
+                new Docxodus.CharSpan(start, "invoiced quarterly in advance.".Length),
+                "Prior Reviewer",
+                "Confirm before circulation.");
+            Assert.True(comment.Success, comment.Error?.Message);
+
+            author.SetTrackedChanges(Docxodus.TrackedChangeMode.RenderInline);
+            author.SetRevisionAuthor("Prior Reviewer");
+            var edits = author.ReplaceTextRange(
+                anchor, "in advance.", "in advance, net forty-five (45) days.");
+            Assert.True(edits.All(result => result.Success),
+                edits.FirstOrDefault(result => !result.Success)?.Error?.Message);
+            author.SetTrackedChanges(Docxodus.TrackedChangeMode.Accept);
+            authored = author.Save();
+        }
+
+        byte[] resaved;
+        string[] anchorsBefore;
+        using (var session = new Docxodus.DocxSession(authored))
+        {
+            anchorsBefore = session.Project().AnchorIndex.Keys
+                .OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            resaved = session.Save();
+        }
+
+        var diff = SemanticDiff.Compare(
+            new WmlDocument("before.docx", authored),
+            new WmlDocument("after.docx", resaved));
+        Assert.Empty(diff.Changes);
+
+        using var reopened = new Docxodus.DocxSession(resaved);
+        var anchorsAfter = reopened.Project().AnchorIndex.Keys
+            .OrderBy(id => id, StringComparer.Ordinal).ToArray();
+        Assert.Equal(anchorsBefore, anchorsAfter);
+    }
 }
