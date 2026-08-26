@@ -161,6 +161,22 @@ test.describe('DOCX GOLF', () => {
     expect(await page.evaluate(() => (window as any).__golf.scorecard()[0])).toBeNull();
   });
 
+  test('rapid hole-nav clicks land on the LAST clicked hole', async ({ page }) => {
+    test.setTimeout(180000);
+    await bootCourse(page);
+
+    // Six fast clicks while loads are in flight — the last one must win.
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll<HTMLButtonElement>('[data-dxg="holes"] button');
+      for (const n of [2, 3, 4, 5, 1, 6]) buttons[n - 1].click();
+    });
+    await page.waitForFunction(
+      () => (window as any).__golf.holeIndex() === 5 && (window as any).__golf.revisionsLeft() >= 0,
+      { timeout: 60000 },
+    );
+    expect(await page.evaluate(() => (window as any).__golf.hole().id)).toBe('footnote-drill');
+  });
+
   test('reset re-tees the hole: strokes and diffs return to the start', async ({ page }) => {
     test.setTimeout(180000);
     await bootCourse(page);
