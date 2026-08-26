@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Markdown-authored headings no longer carry an inert `numId=0` numbering suppressor
+  (#572).** The suppressor exists for legal-outline templates whose Heading styles attach
+  numbering — `numId=0` keeps the authored text unnumbered — but it was written
+  unconditionally, so in ordinary documents a markdown-authored heading diffed as
+  `FormatChanged (numId, numLevel)` against a visually identical Style-dropdown heading.
+  The suppressor is now written only when the resolved style (or its `basedOn` chain)
+  actually attaches numbering, and the same rule applies on both authoring paths
+  (`InsertParagraph` and `ReplaceText`'s declared-style payloads), so all roads produce
+  the same paragraph mark.
 - **Typed leading block markers no longer vanish on commit (#571).** The editor's
   blur-commit serializer escaped inline markdown (`*`, `_`, backticks, brackets) but not
   block-level markers, so typing `## 2.1 Termination`, `> see clause 4`, `- deliverables`,
