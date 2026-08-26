@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Typed leading block markers no longer vanish on commit (#571).** The editor's
+  blur-commit serializer escaped inline markdown (`*`, `_`, backticks, brackets) but not
+  block-level markers, so typing `## 2.1 Termination`, `> see clause 4`, `- deliverables`,
+  or `12. December invoice` at the start of a paragraph committed with the marker
+  characters silently deleted — and a list marker after a Shift+Enter soft break was
+  promoted to its own markdown block and the whole line dropped. The serializer now
+  escapes leading `#`, `>`, `|`, `- `/`+ `, and ordered-list markers on every line of the
+  payload, the write-side half of the projector's existing contract (it already emits
+  literal hashes as `\#\#`, and the parser unescapes `\X` generically).
+
 ### Changed
 - **Nullable reference types are enabled project-wide (#13).** The core library now compiles
   with `<Nullable>enable</Nullable>`: every file is null-checked by default, and the inherited

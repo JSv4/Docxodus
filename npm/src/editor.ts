@@ -324,6 +324,29 @@ function escapeInlineMarkdown(text: string): string {
   return text.replace(/([\\`*_[\]])/g, "\\$1");
 }
 
+/**
+ * Escape block-construct markers at the start of every line of the assembled
+ * payload (#571). The projector escapes literal markers on the way out
+ * (`\#\# x`) and the parser unescapes `\X` generically, so this is the
+ * serializer's half of that contract: a typed leading `## `, `> `, `- `,
+ * `+ `, `1. `, or `|` must commit as literal text, not be consumed as a
+ * heading/quote/list marker — and a list marker after a soft break must not
+ * be split into a second block the session then discards. Line starts only:
+ * the parser detects block constructs at line start, and `*` needs no rule
+ * here because a literal `*` is already inline-escaped, so an unescaped
+ * leading `*` can only be our own emphasis emission.
+ */
+function escapeLeadingBlockMarkers(md: string): string {
+  return md
+    .split("\n")
+    .map((line) => {
+      if (/^[#>|]/.test(line) || /^[-+] /.test(line)) return "\\" + line;
+      if (/^\d+\. /.test(line)) return line.replace(".", "\\.");
+      return line;
+    })
+    .join("\n");
+}
+
 function collectInlineSegments(node: Node, out: InlineSeg[]): void {
   node.childNodes.forEach((child) => {
     // Skip converter-generated chrome (list markers, note citation markers, note backrefs) —
@@ -397,7 +420,7 @@ export function serializeInlineMarkdown(block: HTMLElement): string {
       merged.push({ ...s });
     }
   }
-  return merged.map(segToMarkdown).join("").trim();
+  return escapeLeadingBlockMarkers(merged.map(segToMarkdown).join("").trim());
 }
 
 // ─── M2: structural editing (split / merge) ─────────────────────────────────
