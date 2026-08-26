@@ -725,12 +725,14 @@ browser-observed environment can never satisfy it.
 
 ### Revision and comment families that are not drawn
 
-`markup` draws insertions, deletions, moves, run-level format changes, and tracked cell
-insert/delete/merge — the last as tinted, struck-through or dashed cells. Two families it does not
-draw travel through the projection untouched and leave no mark a reader can see, so each is
-reported rather than approximated: a custom XML revision range raises
-`revision_family_not_rendered`, and the block-level property revisions — paragraph, table, section
-and numbering — raise `revision_property_change_not_rendered`.
+`markup` draws insertions, deletions, moves, run-level format changes, tracked cell
+insert/delete/merge — the last as tinted, struck-through or dashed cells — and, since issue
+#538, custom XML revision ranges: each range boundary renders as a bracket marker in the
+family's revision color, titled with the change and its author, because the revision has no
+text of its own to strike or underline. One family still travels through the projection
+untouched and leaves no mark a reader can see, so it is reported rather than approximated:
+the block-level property revisions — paragraph, table, section and numbering — raise
+`revision_property_change_not_rendered`.
 
 That second warning counts only what is missing. `rPrChange` is a property revision the converter
 does draw, so the manifest counts it separately as `runPropertyChanges` and the warning reports

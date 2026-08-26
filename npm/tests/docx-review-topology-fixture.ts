@@ -89,13 +89,12 @@ function minimalPackage({
 }
 
 /**
- * A document carrying both sides of the property-revision split plus the one family that is
- * genuinely never drawn.
+ * A document carrying both sides of the property-revision split plus a custom XML range.
  *
- * Two `w:pPrChange` and one `w:customXmlInsRangeStart` are unrepresentable; the `w:rPrChange`
- * and the `w:ins` beside them are drawn, and exist so the warnings can be shown to count only
- * what is actually missing. Manifest counts: `propertyChanges` 3, `runPropertyChanges` 1,
- * `otherChanges` 1, `insertions` 1.
+ * Two `w:pPrChange` are unrepresentable; the `w:rPrChange`, the `w:ins`, and (since issue
+ * #538) the `w:customXmlInsRangeStart`/`End` pair beside them are drawn, and exist so the
+ * warnings can be shown to count only what is actually missing. Manifest counts:
+ * `propertyChanges` 3, `runPropertyChanges` 1, `otherChanges` 1, `insertions` 1.
  */
 export function generateUnrenderableRevisionDocx(): Uint8Array {
   return minimalPackage({

@@ -1781,6 +1781,35 @@ namespace Docxodus
             sb.AppendLine("    vertical-align: middle;");
             sb.AppendLine("}");
 
+            // Custom XML revision range boundaries (issue #538) — bracket glyphs in the owning
+            // family's revision color. The glyph is CSS content so copied text stays clean.
+            sb.AppendLine($"span.{prefix}cxml-marker {{");
+            sb.AppendLine("    font-weight: bold;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-del-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-start::before {{");
+            sb.AppendLine("    content: \"\\27E6\";"); // ⟦
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-del-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-end::before {{");
+            sb.AppendLine("    content: \"\\27E7\";"); // ⟧
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start, span.{prefix}cxml-ins-end {{");
+            sb.AppendLine("    color: #006400;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-del-start, span.{prefix}cxml-del-end {{");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start, span.{prefix}cxml-move-from-end,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-start, span.{prefix}cxml-move-to-end {{");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("}");
+
             // Table row inserted
             sb.AppendLine($"tr.{prefix}row-ins {{");
             sb.AppendLine("    background-color: #e6ffe6;");
@@ -3030,6 +3059,19 @@ namespace Docxodus
             if (element.Name == W.endnoteReference)
             {
                 return ProcessEndnoteReference(wordDoc, settings, element);
+            }
+
+            // Custom XML revision range boundaries (issue #538): a reviewer added, removed, or
+            // moved a custom XML structural wrapper around this range with tracking on. The
+            // wrapper draws no text of its own, so under markup each boundary renders as a
+            // visible bracket marker; outside markup rendering they stay invisible (the
+            // enclosed content renders either way).
+            if (element.Name == W.customXmlInsRangeStart || element.Name == W.customXmlInsRangeEnd
+                || element.Name == W.customXmlDelRangeStart || element.Name == W.customXmlDelRangeEnd
+                || element.Name == W.customXmlMoveFromRangeStart || element.Name == W.customXmlMoveFromRangeEnd
+                || element.Name == W.customXmlMoveToRangeStart || element.Name == W.customXmlMoveToRangeEnd)
+            {
+                return ProcessCustomXmlRevisionRange(settings, element);
             }
 
             // Handle comment range start
@@ -4372,6 +4414,77 @@ namespace Docxodus
             // Walk up to the document root to find the tracker
             var root = element.AncestorsAndSelf().LastOrDefault();
             return root?.Annotation<AnnotationTracker>();
+        }
+
+        /// <summary>
+        /// Render one custom XML revision range boundary as a visible marker span (issue #538).
+        /// The range brackets content whose custom XML structural wrapper a reviewer added,
+        /// removed, or moved with tracking on — there is no text of the revision's own to strike
+        /// or underline, so the boundary itself becomes the perceivable mark: a kind-classed
+        /// span the stylesheet draws as an opening/closing bracket in the family's revision
+        /// color, titled with what happened and (under <see
+        /// cref="WmlToHtmlConverterSettings.IncludeRevisionMetadata"/>) who did it and when.
+        /// A range may legally span block boundaries, which is why the boundaries render as
+        /// independent markers rather than one wrapping element.
+        /// </summary>
+        private static object ProcessCustomXmlRevisionRange(
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderTrackedChanges)
+                return null;
+
+            var localName = element.Name.LocalName;
+            var isStart = localName.EndsWith("Start", StringComparison.Ordinal);
+            string kind, described;
+            if (localName.StartsWith("customXmlIns", StringComparison.Ordinal))
+            {
+                kind = "ins";
+                described = "inserted";
+            }
+            else if (localName.StartsWith("customXmlDel", StringComparison.Ordinal))
+            {
+                kind = "del";
+                described = "deleted";
+            }
+            else if (localName.StartsWith("customXmlMoveFrom", StringComparison.Ordinal))
+            {
+                kind = "move-from";
+                described = "moved from here";
+            }
+            else
+            {
+                kind = "move-to";
+                described = "moved here";
+            }
+
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var span = new XElement(Xhtml.span,
+                new XAttribute("class",
+                    $"{prefix}cxml-marker {prefix}cxml-{kind}-{(isStart ? "start" : "end")}"));
+
+            var title = $"Custom XML {described} ({(isStart ? "start" : "end")} of range)";
+            if (settings.IncludeRevisionMetadata)
+            {
+                // Only the range START carries CT_TrackChange identity; the end is a bare id.
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+                if (author != null)
+                {
+                    span.Add(new XAttribute("data-author", author));
+                    title += $" — {author}";
+                }
+                if (date != null)
+                {
+                    span.Add(new XAttribute("data-date", date));
+                    title += $", {date}";
+                }
+            }
+
+            span.Add(new XAttribute("title", title));
+            // Keep the element non-self-closing; the bracket glyph itself is CSS content, so
+            // copied text stays clean.
+            span.Add(new XText(""));
+            return span;
         }
 
         private static object ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)

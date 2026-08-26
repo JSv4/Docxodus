@@ -15,9 +15,10 @@ All notable changes to this project will be documented in this file.
   (`expectedMatchCount` on the wire) to assert absence as a successful no-op;
   `MaxReplacements = 0` likewise remains a successful found-but-unconsumed no-op.
 - **Revision and comment export profiles report what they cannot draw (#444).** Under `markup`,
-  a custom XML revision range now raises `revision_family_not_rendered` and a block-level property
-  revision — paragraph, table, section or numbering — raises
-  `revision_property_change_not_rendered`. Under any visible comment profile, comment threading
+  a block-level property revision — paragraph, table, section or numbering — raises
+  `revision_property_change_not_rendered` (custom XML revision ranges briefly raised
+  `revision_family_not_rendered` in this cycle; #538 below draws them instead, so that
+  warning no longer exists). Under any visible comment profile, comment threading
   raises `comment_thread_flattened` and resolved state raises
   `comment_resolved_state_not_rendered`, because the topology in `commentsExtended` is not read: a
   reply is drawn as an independent comment and a resolved comment is indistinguishable from an open
@@ -49,6 +50,15 @@ All notable changes to this project will be documented in this file.
   fingerprint, fingerprints from before this change do not compare equal to ones after it.
 
 ### Added
+- **The converter draws custom XML revision ranges (#538).** `w:customXmlInsRangeStart`/
+  `End`, `Del`, `MoveFrom`, and `MoveTo` — a reviewer's tracked add/remove/move of a custom
+  XML structural wrapper — previously passed through `WmlToHtmlConverter` untouched, leaving
+  no mark a reader could see under the `markup` profile. Each range boundary now renders as a
+  bracket marker span (`rev-cxml-…-start`/`-end`) drawn as CSS-content brackets in the owning
+  family's revision color, titled with what happened and, under `IncludeRevisionMetadata`,
+  the author and date. Outside tracked-changes rendering the boundaries stay invisible and
+  the enclosed content renders unchanged. The standalone export's
+  `revision_family_not_rendered` warning is retired with the gap it disclosed.
 - **Verified delivery bundles (#465).** `DeliveryBundleService.BuildAsync` derives a requested
   set of document, render, and evidence artifacts from exact baseline and working snapshots
   under an explicit two-part revision policy (`preserve`/`accept`/`reject` for pre-existing
