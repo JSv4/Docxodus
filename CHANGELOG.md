@@ -760,6 +760,15 @@ All notable changes to this project will be documented in this file.
   version bump at release time.
 
 ### Fixed
+- **The markdown projection shows simple-field results (#559).** A `w:fldSimple` — a
+  Word-authored `REF`, `STYLEREF`, `SEQ`, or simple `PAGE` field — was dropped by the
+  projection's inline walk, so its visible cached result was absent from the markdown/text an
+  agent reads, while the HTML conversion rendered it and the flat text the span machinery
+  addresses included it (the complex `fldChar` spelling of the same field already projected,
+  so the two spellings disagreed). The cached-result runs now project as ordinary inline
+  text on both the oracle and the IR emitter, byte-parity preserved; the field stays atomic
+  for mutation addressing, exactly like a hyperlink wrapper. Inline `w:sdt`/`w:smartTag`
+  carriers deliberately remain projected-out.
 - **Resolving away a document's only footnote/endnote no longer leaves a reference-less
   husk, and the reversibility proof accepts Word's two "no notes" spellings (#516, #552).**
   When revision resolution removed a note's last reference — rejecting the insertion that
