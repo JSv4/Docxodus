@@ -545,7 +545,10 @@ session mutations, and this mutates no session.
 `docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment`/`docxodus_links`/
 `docxodus_images`/`docxodus_content_controls`/`docxodus_track_changes` (their `undo`/`redo` and
 read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
-sequence of *mutations*).
+sequence of *mutations*). A step may also be written flat — the action and its arguments
+directly beside `tool`, the same shape as the standalone tool call — and the server lifts the
+non-envelope keys into `args` (issue #596); a step with neither `args` nor `action` gets an
+error that spells out the nested shape.
 
 `mode: atomic` is the recommended default. The server preflights every supported
 action, required argument/enum, and step precondition against the batch-start state

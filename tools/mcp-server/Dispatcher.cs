@@ -1282,7 +1282,9 @@ internal static class Dispatcher
             var stepTool = step.TryGetProperty("tool", out var toolEl) && toolEl.ValueKind == JsonValueKind.String
                 ? toolEl.GetString()! : throw new McpToolException("mutation step missing string \"tool\"");
             var stepArgs = step.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
-                ? a : throw new McpToolException("mutation step missing object \"args\"");
+                ? a : LiftFlatStepArgs(step) ?? throw new McpToolException(
+                    "mutation step missing object \"args\" — step arguments must be nested, e.g. "
+                    + "{\"tool\":\"docxodus_edit\",\"args\":{\"action\":\"replace_text_range\",\"anchorId\":\"…\",\"find\":\"…\",\"replace\":\"…\"}}");
             var action = stepArgs.TryGetProperty("action", out var actEl) && actEl.ValueKind == JsonValueKind.String
                 ? actEl.GetString()! : throw new McpToolException("mutation step args missing string \"action\"");
 
@@ -1315,6 +1317,32 @@ internal static class Dispatcher
                 () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Accepts the flat step shape a caller writes by symmetry with the standalone tools —
+    /// <c>{"tool":"docxodus_edit","action":"replace_text_range", …}</c> — by lifting every
+    /// non-envelope property into the args object the batch machinery expects (issue #596).
+    /// Returns null when the step carries no string "action", i.e. it is not recognizably
+    /// the flat shape and the caller should get the missing-args guidance instead.
+    /// </summary>
+    private static JsonElement? LiftFlatStepArgs(JsonElement step)
+    {
+        if (!step.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.String)
+            return null;
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var property in step.EnumerateObject())
+            {
+                if (property.NameEquals("tool")) continue;
+                property.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        using var lifted = JsonDocument.Parse(buffer.ToArray());
+        return lifted.RootElement.Clone();
     }
 
     private static EditError? ValidateMutationBatchAction(string tool, string action)
