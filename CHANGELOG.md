@@ -14,7 +14,6 @@ All notable changes to this project will be documented in this file.
   escapes leading `#`, `>`, `|`, `- `/`+ `, and ordered-list markers on every line of the
   payload, the write-side half of the projector's existing contract (it already emits
   literal hashes as `\#\#`, and the parser unescapes `\X` generically).
-
 - **`ReplaceText` now honors the block semantics its payload declares, and refuses
   multi-block payloads instead of truncating (#570).** A payload opening with an unescaped
   block marker (`## `, `> `, a fenced code block) used to have the marker consumed by the
@@ -29,7 +28,18 @@ All notable changes to this project will be documented in this file.
   untouched, and list payloads keep their documented v1 no-numbering behavior. A payload
   that parses to more than one markdown block now fails with `unsupported_markdown_syntax`
   instead of silently applying only the first block and reporting success.
+
 ### Added
+- **DOCX GOLF round 2 (#573, #574).** A sixth hole plays the notes surface — add the
+  citation footnote with Insert → Footnote, and the DocxDiff referee reads the note parts
+  too. A stuck player can concede with **Show me**: the caddie plays the hole's
+  content-addressed reference line on the live document and the scorecard marks the hole
+  caddie-assisted instead of scoring it. On a phone the caddie panel collapses to its head
+  strip (brand, hole nav, a mini strokes/par/diffs readout) behind a toggle, so the
+  document keeps the screen. The planned comment hole is deliberately absent: the ribbon
+  has no comment club (#580) and the diff referee is blind to comment-only differences
+  (#579).
+
 - **DOCX GOLF, a demo page where the editing surface is the game (`docs/demo/golf.html`).**
   Five holes of document golf, played in the shipped ribbon editor: each hole loads a start
   document as the ball and builds a target document as the pin, and the referee is the

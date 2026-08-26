@@ -129,10 +129,11 @@ test('validateCourse accepts builder functions in place of paragraph lists', () 
 
 test('the shipped course validates clean and escalates across the surface', () => {
   assert.deepEqual(validateCourse(COURSE), []);
-  assert.ok(COURSE.length >= 4, 'course should have at least four holes');
+  assert.ok(COURSE.length >= 6, 'course should have at least six holes');
   assert.equal(COURSE[0].par, 1, 'hole 1 is the one-stroke teaching hole');
-  // At least one hole must exercise heading styles, and one must be built
-  // programmatically (the table hole) — the surface breadth is the point.
+  // At least one hole must exercise heading styles, one must be built
+  // programmatically (the table hole), and one must play the notes surface —
+  // the surface breadth is the point.
   assert.ok(
     COURSE.some((h) => Array.isArray(h.target) && h.target.some((p) => /^#{1,3} /.test(p))),
     'a hole should target markdown heading styles',
@@ -141,4 +142,8 @@ test('the shipped course validates clean and escalates across the surface', () =
     COURSE.some((h) => typeof h.start === 'function'),
     'a hole should build its documents programmatically (tables)',
   );
+  const notes = COURSE.find((h) => h.surface === 'notes');
+  assert.ok(notes, 'a hole should play the footnote surface');
+  assert.equal(typeof notes.target, 'function',
+    'the footnote hole builds its target programmatically');
 });

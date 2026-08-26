@@ -33,6 +33,12 @@
       #app { height: 58%; }
       #caddie { width: auto; height: 42%; border-left: 0; border-top: 1px solid #d7dfd9; }
     }
+    /* Phone: the caddie collapses to its head strip (the panel's compact mode);
+       the document keeps the screen, and the expanded sheet is capped. */
+    @media (max-width: 640px) {
+      #app { flex: 1; height: auto; min-height: 0; }
+      #caddie { height: auto; max-height: 62%; overflow: auto; }
+    }
     #home {
       position: fixed; top: 10px; right: 356px; z-index: 50;
       font: 12px/1 system-ui, sans-serif; color: #33465b;
