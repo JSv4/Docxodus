@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
+  one-liner from `ToString()` (type, move role, changed format property names, quoted
+  text, anchors, author) instead of the bare type name; the two tracked-changes knobs —
+  `DocxSession.SetTrackedChanges` (how mutations are *recorded*) and
+  `WmlToMarkdownConverterSettings.TrackedChanges` (how projections *render*) — now
+  cross-reference each other in their XML docs so a clean projection after a tracked edit
+  is no longer misread as "the edit wasn't tracked"; and a `docxodus_mutations` step may
+  be written flat (action and arguments directly beside `tool`, the standalone-tool
+  shape) — the MCP server lifts it into `args`, and a step with neither `args` nor
+  `action` gets an error that spells out the nested shape.
+
 ### Fixed
 - **A formatting-only edit crossing a complex-field envelope no longer redlines as a
   delete+insert pair (#593).** The field-envelope digest recorded each field's raw modeled
@@ -16,6 +28,16 @@ All notable changes to this project will be documented in this file.
   and reorder differences still take the reversible whole-carrier fallback. The semantic
   changeset's field-envelope digest tag advanced to `docxodus-ir-field-envelope-v2`, and it
   no longer reports a `field_envelope` modify for such formatting-only splits.
+- **Structural deletes no longer orphan footnote/endnote definitions (#591).**
+  `DeleteBlock`, `DeleteRange`, `DeleteSection`, `DeleteTableRow`, and `DeleteTableColumn`
+  removed a note's body-side reference but left its full definition — often substantive
+  commentary — shipping invisibly inside `word/footnotes.xml`/`word/endnotes.xml`. The
+  delete family now runs the same Word-faithful pruner revision resolution has used since
+  #516: a definition whose *last* reference the op removed is deleted (and reported in
+  `EditResult.Removed`), while definitions still referenced elsewhere, pre-existing
+  danglers, the Word-reserved separator notes, and the notes part itself all survive.
+  Tracked-mode deletes are unaffected — the reference lives on inside `w:del`, and the
+  definition is pruned when the revision is accepted, as before.
 - **Markdown-authored headings no longer carry an inert `numId=0` numbering suppressor
   (#572).** The suppressor exists for legal-outline templates whose Heading styles attach
   numbering — `numId=0` keeps the authored text unnumbered — but it was written
