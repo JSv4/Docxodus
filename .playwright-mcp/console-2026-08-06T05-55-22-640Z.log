@@ -1,9 +1,0 @@
-[     437ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/favicon.ico:0
-[     620ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/sample.docx:0
-[   47062ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785995722723:4328
-[  280959ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785995722723:4328
-[  286538ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785995722723:4328
-[  546715ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785995722723:4328
-[  859894ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/sample.docx:0
-[  894554ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785996582242:4328
-[  900432ms] [WARNING] Auto scrolling has been attached to an element that appears not to be scrollable {element: div.docx-body-flow, overflowX: visible, overflowY: visible} @ http://localhost:8899/editor.bundle.js?t=1785996582242:4328

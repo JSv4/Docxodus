@@ -59,3 +59,8 @@ Docxodus.Tests/Ir/Diff/FuzzArtifacts/
 # macOS
 .DS_Store
 tools/mcp-server/smoke/__pycache__/
+
+# Local session artifacts that must never ship
+/.playwright-mcp/
+/observatory-960-live.png
+/python/uv.lock

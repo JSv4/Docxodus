@@ -1,3 +1,0 @@
-[      50ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8998/favicon.ico:0
-[     290ms] [LOG] Docxodus WASM Test Harness Ready @ http://localhost:8998/test-harness.html:729
-[     328ms] [LOG] Version: {Library: Docxodus WASM, DotnetVersion: 10.0.9, Platform: browser-wasm} @ http://localhost:8998/test-harness.html:730
