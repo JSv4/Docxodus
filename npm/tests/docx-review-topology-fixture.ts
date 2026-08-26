@@ -89,19 +89,19 @@ function minimalPackage({
 }
 
 /**
- * A document carrying both sides of the property-revision split plus a custom XML range.
+ * A document carrying every property-revision shape the markup profile draws.
  *
- * Two `w:pPrChange` are unrepresentable; the `w:rPrChange`, the `w:ins`, and (since issue
- * #538) the `w:customXmlInsRangeStart`/`End` pair beside them are drawn, and exist so the
- * warnings can be shown to count only what is actually missing. Manifest counts:
+ * Two `w:pPrChange` draw as titled paragraph change bars (issue #539); the `w:rPrChange`,
+ * the `w:ins`, and the `w:customXmlInsRangeStart`/`End` pair (issue #538) beside them draw
+ * as well, so no revision warning may fire for any of it. Manifest counts:
  * `propertyChanges` 3, `runPropertyChanges` 1, `otherChanges` 1, `insertions` 1.
  */
-export function generateUnrenderableRevisionDocx(): Uint8Array {
+export function generateBlockPropertyRevisionDocx(): Uint8Array {
   return minimalPackage({
     body: `<w:p>
     <w:pPr>
       <w:jc w:val="center"/>
-      <!-- Word records the previous paragraph properties; markup cannot draw this. -->
+      <!-- Word records the previous paragraph properties; markup draws a change bar. -->
       <w:pPrChange w:id="10" ${AUTHORED}>
         <w:pPr><w:jc w:val="left"/></w:pPr>
       </w:pPrChange>
@@ -123,7 +123,7 @@ export function generateUnrenderableRevisionDocx(): Uint8Array {
       <w:ind w:left="720"/>
       <w:pPrChange w:id="13" ${AUTHORED}><w:pPr/></w:pPrChange>
     </w:pPr>
-    <!-- A custom XML revision range; the converter has no handling for these at all. -->
+    <!-- A custom XML revision range; drawn as bracket boundary markers since #538. -->
     <w:customXmlInsRangeStart w:id="14" ${AUTHORED}/>
     <w:r><w:t>Indented, and wrapped in custom XML by a reviewer.</w:t></w:r>
     <w:customXmlInsRangeEnd w:id="14"/>

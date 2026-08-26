@@ -1624,48 +1624,12 @@ async function preflightManifest(
       fail("resource_policy_failure", "package_preflight", warning.message, warning.remediation);
     }
   }
+  // Every tracked-revision family now draws under the markup profile — insertions, deletions,
+  // moves, run and block property changes (issue #539), tracked cell revisions, and custom XML
+  // revision ranges (issue #538) — so there is no longer a revision warning to raise here.
+  // Comment topology (threading, resolved state) is still flattened; that warning remains.
   if (isSourcePackage) {
-    warnUnrenderedRevisionFamilies(manifest, state, options);
     warnUnrenderedCommentTopology(manifest, state, options);
-  }
-}
-
-/**
- * Warns for tracked-revision families the markup profile cannot draw.
- *
- * The converter draws insertions, deletions, moves, run-level format changes, tracked cell
- * insert/delete/merge (as tinted, struck-through or dashed cells), and — since issue #538 —
- * custom XML revision ranges (as bracket boundary markers). What it still never draws is the
- * block-level property revisions — paragraph, table, section and numbering — which travel
- * through the projection untouched but leave no mark a reader can see.
- *
- * Only `markup` needs this. `final` and `original` apply the projection and then assert the
- * derived package has no revisions left at all, so an unrenderable family cannot survive them
- * silently — it fails the projection instead.
- */
-function warnUnrenderedRevisionFamilies(
-  manifest: PackageManifest,
-  state: ExecutionState,
-  options: NormalizedOptions,
-): void {
-  if (options.reviewProfile !== "markup") return;
-  const revisions = manifest.facts.revisions;
-  // rPrChange is the one property revision the converter draws (as a marked format change), so
-  // only the remainder is unrepresented. The manifest counts that subset for exactly this reason;
-  // reporting the combined figure would fail a strict export whose content is fully drawn.
-  const blockPropertyChanges = revisions.propertyChanges - revisions.runPropertyChanges;
-  if (blockPropertyChanges > 0) {
-    policyWarning(state, options, {
-      code: "revision_property_change_not_rendered",
-      phase: "package_preflight",
-      message: blockPropertyChanges === 1
-        ? "1 paragraph, table, section, or numbering property revision is present but is not drawn as markup."
-        : `${blockPropertyChanges} paragraph, table, section, and numbering property revisions are `
-          + "present but are not drawn as markup.",
-      remediation: "Use the final or original profile when block-level property revisions must be reflected in the output.",
-      detail: "numberingChange, pPrChange, sectPrChange, tblGridChange, tblPrChange, "
-        + "tblPrExChange, tcPrChange, trPrChange",
-    });
   }
 }
 

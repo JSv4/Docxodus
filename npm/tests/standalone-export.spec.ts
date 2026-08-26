@@ -9,7 +9,7 @@ import {
   generateCellRevisionDocx,
   generateCommentTopologyDocx,
   generateRenderedRevisionOnlyDocx,
-  generateUnrenderableRevisionDocx,
+  generateBlockPropertyRevisionDocx,
 } from './docx-review-topology-fixture.js';
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
@@ -814,29 +814,31 @@ test.describe('standalone paginated HTML', () => {
       }
     });
 
-  test('warns only for the revision families the markup profile cannot draw', async ({ page }) => {
-    const source = generateUnrenderableRevisionDocx();
+  test('draws block property revisions rather than warning about them', async ({ page }) => {
+    // The premise of the retired revision warnings was "the converter does not draw this".
+    // Since issue #539 the block-level property revisions draw too — a paragraph whose
+    // properties changed carries a titled goldenrod change bar — so every revision family
+    // renders and no revision warning may fire. Asserting the drawing and the silence
+    // together means the warning cannot come back without the render evidence going with it.
+    const source = generateBlockPropertyRevisionDocx();
     const markup = await convert(page, source, false, { reviewProfile: 'markup' });
-    const warnings = markup.renderReport.warnings;
 
-    // The custom XML range is DRAWN since issue #538 (bracket boundary markers), so the old
-    // revision_family_not_rendered warning must never fire for it. Of the three property
-    // revisions, only two warn: the rPrChange beside them is drawn as a marked format change,
-    // so the count must exclude it.
-    expect(warnings.map((warning) => warning.code))
-      .not.toContain('revision_family_not_rendered');
-    expect(warnings).toContainEqual(expect.objectContaining({
-      code: 'revision_property_change_not_rendered',
-      severity: 'warning',
-      phase: 'package_preflight',
-      message: '2 paragraph, table, section, and numbering property revisions are present but are '
-        + 'not drawn as markup.',
-    }));
-    // No remediation may point at a profile that shows less than the one being warned about.
-    for (const warning of warnings) expect(warning.remediation).not.toContain('commentProfile: hidden');
+    const drawn = await page.evaluate((html: string) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const styles = Array.from(parsed.querySelectorAll('style'), (node) => node.textContent).join('');
+      return {
+        paraMarks: parsed.querySelectorAll('.rev-para-format-change').length,
+        styled: styles.includes('.rev-para-format-change'),
+      };
+    }, markup.html);
+    expect(drawn).toEqual({ paraMarks: 2, styled: true });
+
+    const codes = markup.renderReport.warnings.map((warning) => warning.code);
+    expect(codes).not.toContain('revision_family_not_rendered');
+    expect(codes).not.toContain('revision_property_change_not_rendered');
 
     // final applies the projection and then asserts no revision survives it, so no family can
-    // pass through silently and neither warning applies.
+    // pass through silently and neither retired warning may reappear there either.
     const final = await convert(page, source, false, { reviewProfile: 'final' });
     const finalCodes = final.renderReport.warnings.map((warning) => warning.code);
     expect(finalCodes).not.toContain('revision_family_not_rendered');
@@ -888,19 +890,18 @@ test.describe('standalone paginated HTML', () => {
     expect(strict.pageCount).toBeGreaterThan(0);
   });
 
-  test('fails closed under strict for a revision family it cannot draw', async ({ page }) => {
-    const source = generateUnrenderableRevisionDocx();
-    const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
-      .convertFailure(bytes, {
-        reviewProfile: 'markup',
-        commentProfile: 'hidden',
-        unsupportedContent: 'strict',
-      }), Array.from(source));
-
-    expect(failure.unexpectedSuccess).toBeUndefined();
-    expect(failure.code).toBe('resource_policy_failure');
-    expect(failure.phase).toBe('package_preflight');
-    expect(failure.report.status).toBe('failed');
+  test('survives strict now that every revision family is drawn', async ({ page }) => {
+    // This document used to fail closed under strict: its pPrChange pair raised
+    // revision_property_change_not_rendered and strict escalated it. With the family drawn
+    // (issue #539) the warning is retired, so the same document must export cleanly under
+    // the strictest policy.
+    const source = generateBlockPropertyRevisionDocx();
+    const strict = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      commentProfile: 'hidden',
+      unsupportedContent: 'strict',
+    });
+    expect(strict.pageCount).toBeGreaterThan(0);
   });
 
   test('warns exactly once that comment threading and resolved state are not drawn',
