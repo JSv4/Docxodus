@@ -151,6 +151,9 @@ const H2_NOTICES_FIXED =
 
 const H5_FEE_INTRO = 'Rates below are fixed for the term of the engagement.';
 
+const H6_BODY = 'The Lender may rely on the opinions set out in the Master Agreement.';
+const H6_NOTE = 'As defined in the Master Agreement dated January 5, 2026.';
+
 function buildFeeSchedule(session, build, { discoveryRate, duplicateRow }) {
   build.paragraphs(['# Fee Schedule', H5_FEE_INTRO]);
   const intro = session.findAllByText(H5_FEE_INTRO)[0];
@@ -330,6 +333,27 @@ export const COURSE = [
       return results;
     },
   },
+  {
+    id: 'footnote-drill',
+    title: 'Footnote drill',
+    par: 2,
+    surface: 'notes',
+    brief:
+      'The reliance clause needs its citation. Put your caret at the very END of the ' +
+      'body paragraph, use Insert → Footnote, and make the note read exactly: ' +
+      '"As defined in the Master Agreement dated January 5, 2026." Then click back ' +
+      'into the body — notes are part of the document, and the referee reads them too.',
+    start: ['# Reliance Letter', H6_BODY],
+    target: (session, build) => {
+      build.paragraphs(['# Reliance Letter', H6_BODY]);
+      const body = session.findAllByText('The Lender may rely')[0];
+      build.check(session.insertFootnote(body.id, H6_BODY.length, H6_NOTE), 'target footnote');
+    },
+    solve(session) {
+      const body = session.findAllByText('The Lender may rely')[0];
+      return [session.insertFootnote(body.id, H6_BODY.length, H6_NOTE)];
+    },
+  },
 ];
 
 // ─── Document building (driver-side, engine required) ─────────────────
@@ -399,6 +423,14 @@ function resetBody(session) {
     if (block.id === seedId) continue;
     check(session.deleteBlock(block.id), `clearing ${block.id}`);
   }
+  // Note definitions live in their own parts and outlive the body paragraphs
+  // whose markers cited them — sweep them too, or the footnote hole haunts
+  // every later hole the way ghost headings once did.
+  for (const kind of ['fn', 'en']) {
+    for (const note of session.findByKind(kind)) {
+      check(session.deleteBlock(note.id), `clearing ${kind} ${note.id}`);
+    }
+  }
 }
 
 // ─── The caddie panel (page chrome) ───────────────────────────────────
@@ -409,7 +441,23 @@ const PANEL_CSS = `
   border-left: 1px solid #d7dfd9; }
 .dxg * { box-sizing: border-box; }
 .dxg-head { padding: 12px 14px 10px; border-bottom: 1px solid #d7dfd9; }
+.dxg-headrow { display: flex; align-items: center; gap: 10px; }
 .dxg-brand { font: 700 15px/1 "SF Mono", Consolas, monospace; letter-spacing: .08em; color: #14532d; }
+.dxg-mini { display: none; font: 600 11.5px/1 "SF Mono", Consolas, monospace; color: #45524b;
+  margin-left: auto; white-space: nowrap; }
+.dxg-toggle { display: none; font: 600 11.5px/1 system-ui, sans-serif; padding: 6px 10px;
+  border: 1px solid #c3cfc6; border-radius: 8px; background: #fff; color: #33413a; cursor: pointer; }
+.dxg-toggle[aria-expanded="true"] { background: #14532d; border-color: #14532d; color: #fff; }
+/* Compact (phone) mode: the panel collapses to its head — brand, mini score,
+   toggle, hole nav — and the body/foot appear only while the toggle is open,
+   so the document keeps the screen. Driver sets data-compact from a media
+   query and data-open from the toggle. */
+.dxg[data-compact="true"] .dxg-mini { display: inline; }
+.dxg[data-compact="true"] .dxg-toggle { display: inline-block; }
+.dxg[data-compact="true"]:not([data-open="true"]) .dxg-body,
+.dxg[data-compact="true"]:not([data-open="true"]) .dxg-foot { display: none; }
+.dxg[data-compact="true"] .dxg-view { max-height: 30vh; }
+.dxg[data-compact="true"] .dxg-view iframe { height: 28vh; }
 .dxg-holes { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
 .dxg-holes button { font: 600 12px/1 "SF Mono", Consolas, monospace; padding: 6px 0;
   width: 34px; border: 1px solid #c3cfc6; border-radius: 7px; background: #fff;
@@ -464,7 +512,12 @@ export function mountGolfPanel(root) {
   root.classList.add('dxg');
   root.innerHTML = `
     <div class="dxg-head">
-      <div class="dxg-brand">⛳ DOCX GOLF</div>
+      <div class="dxg-headrow">
+        <div class="dxg-brand">⛳ DOCX GOLF</div>
+        <span class="dxg-mini" data-dxg="mini"></span>
+        <button class="dxg-toggle" data-dxg="toggle" aria-expanded="false"
+          title="Show the caddie">☰ Caddie</button>
+      </div>
       <div class="dxg-holes" data-dxg="holes"></div>
     </div>
     <div class="dxg-body">
@@ -492,18 +545,21 @@ export function mountGolfPanel(root) {
     </div>
     <div class="dxg-foot">
       <button data-dxg="reset">↻ Reset hole</button>
+      <button data-dxg="showme" title="Concede: the caddie plays the reference line">🏳 Show me</button>
       <button class="dxg-next" data-dxg="next">Next hole ▶</button>
     </div>`;
 
   const grab = (name) => root.querySelector(`[data-dxg="${name}"]`);
   return {
     ui: {
+      panel: root,
       holes: grab('holes'), banner: grab('banner'), error: grab('error'),
       title: grab('title'), parchip: grab('parchip'), surface: grab('surface'),
       brief: grab('brief'), score: grab('score'), strokes: grab('strokes'),
       par: grab('par'), diffs: grab('diffs'), tabs: grab('tabs'),
       view: grab('view'), hints: grab('hints'),
       reset: grab('reset'), next: grab('next'),
+      showme: grab('showme'), toggle: grab('toggle'), mini: grab('mini'),
     },
   };
 }
@@ -534,6 +590,7 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
   let targetBytes = null;
   let targetHtml = null; // lazy per hole
   let cleared = false;
+  let assisted = false;
   let revisionsLeft = -1;
   let loading = false;
   let scoring = false;
@@ -573,6 +630,8 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     revisionsLeft = revisions.length;
     ui.diffs.textContent = String(revisionsLeft);
     ui.strokes.textContent = String(counter.strokes());
+    ui.mini.textContent =
+      `${counter.strokes()} strokes · par ${course[holeIndex]?.par ?? '–'} · ${revisionsLeft} left`;
     ui.hints.innerHTML = '';
     if (revisionsLeft === 0) {
       const li = document.createElement('li');
@@ -686,11 +745,14 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     cleared = true;
     const strokes = Math.max(1, counter.strokes());
     const hole = course[holeIndex];
-    scorecard[holeIndex] = { strokes, par: hole.par, name: scoreName(strokes, hole.par) };
+    const name = assisted ? 'caddie-assisted' : scoreName(strokes, hole.par);
+    scorecard[holeIndex] = { strokes, par: hole.par, name, assisted };
     const done = scorecard.filter(Boolean);
     const total = done.reduce((n, s) => n + s.strokes - s.par, 0);
     banner(
-      `⛳ HOLE CLEAR — ${scoreName(strokes, hole.par)} (${strokes}/${hole.par})`,
+      assisted
+        ? `🏳 The caddie played the line — hole cleared, no score`
+        : `⛳ HOLE CLEAR — ${name} (${strokes}/${hole.par})`,
       done.length === course.length
         ? `Round complete: ${total > 0 ? '+' + total : total === 0 ? 'even par' : total} for the course. New round: pick any hole.`
         : `Running total ${total > 0 ? '+' + total : total === 0 ? 'even' : total} · next hole when you are ready.`,
@@ -708,6 +770,7 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
       const hole = course[i];
       holeIndex = i;
       cleared = false;
+      assisted = false;
       scorecard[i] = null;
       targetHtml = null;
 
@@ -744,6 +807,36 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
   ui.reset.addEventListener('click', () => { void loadHole(holeIndex); });
   ui.next.addEventListener('click', () => {
     void loadHole(Math.min(course.length - 1, holeIndex + 1));
+  });
+  // Concede: the caddie plays the reference line on the live document. The
+  // hole clears, but the scorecard marks it assisted rather than scoring it.
+  ui.showme.addEventListener('click', () => {
+    if (loading || cleared || holeIndex < 0) return;
+    try {
+      assisted = true;
+      course[holeIndex].solve(session);
+      editor.refresh();
+      void runScore();
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+  // Compact (phone) mode: collapse the panel to its head behind a toggle.
+  const compactQuery = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 640px)')
+    : null;
+  const applyCompact = () => {
+    const compact = Boolean(compactQuery?.matches);
+    ui.panel.dataset.compact = String(compact);
+    if (!compact) delete ui.panel.dataset.open;
+  };
+  compactQuery?.addEventListener('change', applyCompact);
+  applyCompact();
+  ui.toggle.addEventListener('click', () => {
+    const open = ui.panel.dataset.open === 'true';
+    ui.panel.dataset.open = String(!open);
+    ui.toggle.setAttribute('aria-expanded', String(!open));
   });
 
   const controller = {

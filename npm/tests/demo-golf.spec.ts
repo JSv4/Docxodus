@@ -144,6 +144,23 @@ test.describe('DOCX GOLF', () => {
     await expect(page.frameLocator('#caddie iframe').locator('body')).toContainText('Purchaser');
   });
 
+  test('show me: the caddie plays the line and the scorecard says so', async ({ page }) => {
+    test.setTimeout(180000);
+    await bootCourse(page);
+
+    await page.locator('[data-dxg="showme"]').click();
+    await page.waitForFunction(() => (window as any).__golf.cleared(), { timeout: 60000 });
+    expect(await page.evaluate(() => (window as any).__golf.revisionsLeft())).toBe(0);
+    const entry = await page.evaluate(() => (window as any).__golf.scorecard()[0]);
+    expect(entry.assisted, 'a shown hole must be marked caddie-assisted').toBe(true);
+    await expect(page.locator('[data-dxg="banner"]')).toContainText('caddie');
+
+    // Reset clears the assist and re-tees.
+    await page.locator('[data-dxg="reset"]').click();
+    await page.waitForFunction(() => (window as any).__golf.revisionsLeft() > 0, { timeout: 60000 });
+    expect(await page.evaluate(() => (window as any).__golf.scorecard()[0])).toBeNull();
+  });
+
   test('reset re-tees the hole: strokes and diffs return to the start', async ({ page }) => {
     test.setTimeout(180000);
     await bootCourse(page);
@@ -158,5 +175,30 @@ test.describe('DOCX GOLF', () => {
     expect(await page.evaluate(() => (window as any).__golf.revisionsLeft())).toBe(before);
     expect(await page.evaluate(() => (window as any).__golf.cleared())).toBe(false);
     await expect(page.locator('[data-dxg="banner"]')).not.toBeVisible();
+  });
+});
+
+test.describe('DOCX GOLF on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('the caddie collapses to a strip and expands on demand', async ({ page }) => {
+    test.setTimeout(180000);
+    await bootCourse(page);
+
+    // Compact: the panel body starts collapsed behind a toggle, with a mini
+    // score strip keeping strokes/par/diffs visible, and the document keeps
+    // the bulk of the screen.
+    const panel = page.locator('#caddie.dxg');
+    await expect(panel).toHaveAttribute('data-compact', 'true');
+    await expect(page.locator('[data-dxg="brief"]')).not.toBeVisible();
+    await expect(page.locator('[data-dxg="mini"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="mini"]')).toContainText('2'); // hole 1 tees with 2 diffs
+
+    await page.locator('[data-dxg="toggle"]').click();
+    await expect(page.locator('[data-dxg="brief"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="hints"]')).toBeVisible();
+
+    await page.locator('[data-dxg="toggle"]').click();
+    await expect(page.locator('[data-dxg="brief"]')).not.toBeVisible();
   });
 });
