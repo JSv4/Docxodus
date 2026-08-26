@@ -734,8 +734,8 @@ internal static class SemanticDiffEngine
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.Field, part,
                     "paragraph.field_envelope", la, ra,
                     left.Anchor.Scope, right.Anchor.Scope, null,
-                    Digest(left.FieldEnvelopeDigest, "docxodus-ir-field-envelope-v1"),
-                    Digest(right.FieldEnvelopeDigest, "docxodus-ir-field-envelope-v1"));
+                    Digest(left.FieldEnvelopeDigest, "docxodus-ir-field-envelope-v2"),
+                    Digest(right.FieldEnvelopeDigest, "docxodus-ir-field-envelope-v2"));
             }
 
             EmitTokenChanges(left, right, op.TokenDiff, part);
