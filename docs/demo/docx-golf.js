@@ -59,6 +59,22 @@ export function createStrokeCounter(initial) {
   };
 }
 
+/** The course score so far: strokes-vs-par summed over the holes the player
+ *  actually scored. A caddie-assisted hole is cleared but not played — it
+ *  contributes nothing to the total (#584). */
+export function runningTotal(scorecard) {
+  let total = 0;
+  let played = 0;
+  let assisted = 0;
+  for (const entry of scorecard) {
+    if (!entry) continue;
+    if (entry.assisted) { assisted++; continue; }
+    played++;
+    total += entry.strokes - entry.par;
+  }
+  return { total, played, assisted };
+}
+
 /** FNV-1a over the saved bytes — the stroke counter's state token. Cheap
  *  enough to run on a poll tick, and collision-safe enough for "did the
  *  document change since last look". */
@@ -201,9 +217,9 @@ export const COURSE = [
     brief:
       'The closing clauses were pasted back in the wrong order, and one defined term ' +
       'was never conformed. Get Governing Law — heading AND body — ahead of ' +
-      'Indemnification, and make the Notices clause say "the Company". Delete block ' +
-      'and some retyping will get you there. Mind the Recitals: the definition of ' +
-      '"the Company" must not change.',
+      'Indemnification, and make the Notices clause say "the Company". The ⠿ handle ' +
+      'beside each block moves it (Move up / Move down). Mind the Recitals: the ' +
+      'definition of "the Company" must not change.',
     start: [
       '# Master Services Agreement',
       '## Recitals',
@@ -748,14 +764,18 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     const name = assisted ? 'caddie-assisted' : scoreName(strokes, hole.par);
     scorecard[holeIndex] = { strokes, par: hole.par, name, assisted };
     const done = scorecard.filter(Boolean);
-    const total = done.reduce((n, s) => n + s.strokes - s.par, 0);
+    const score = runningTotal(scorecard);
+    const totalText = score.total > 0 ? '+' + score.total : score.total === 0 ? 'even' : String(score.total);
+    const assistedNote = score.assisted > 0
+      ? ` (${score.assisted} hole${score.assisted === 1 ? '' : 's'} shown by the caddie)`
+      : '';
     banner(
       assisted
         ? `🏳 The caddie played the line — hole cleared, no score`
         : `⛳ HOLE CLEAR — ${name} (${strokes}/${hole.par})`,
       done.length === course.length
-        ? `Round complete: ${total > 0 ? '+' + total : total === 0 ? 'even par' : total} for the course. New round: pick any hole.`
-        : `Running total ${total > 0 ? '+' + total : total === 0 ? 'even' : total} · next hole when you are ready.`,
+        ? `Round complete: ${totalText} over ${score.played} scored hole${score.played === 1 ? '' : 's'}${assistedNote}. New round: pick any hole.`
+        : `Running total ${totalText}${assistedNote} · next hole when you are ready.`,
     );
     paintChrome();
   }
