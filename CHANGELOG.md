@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Structural deletes no longer orphan footnote/endnote definitions (#591).**
+  `DeleteBlock`, `DeleteRange`, `DeleteSection`, `DeleteTableRow`, and `DeleteTableColumn`
+  removed a note's body-side reference but left its full definition — often substantive
+  commentary — shipping invisibly inside `word/footnotes.xml`/`word/endnotes.xml`. The
+  delete family now runs the same Word-faithful pruner revision resolution has used since
+  #516: a definition whose *last* reference the op removed is deleted (and reported in
+  `EditResult.Removed`), while definitions still referenced elsewhere, pre-existing
+  danglers, the Word-reserved separator notes, and the notes part itself all survive.
+  Tracked-mode deletes are unaffected — the reference lives on inside `w:del`, and the
+  definition is pruned when the revision is accepted, as before.
 - **Markdown-authored headings no longer carry an inert `numId=0` numbering suppressor
   (#572).** The suppressor exists for legal-outline templates whose Heading styles attach
   numbering — `numId=0` keeps the authored text unnumbered — but it was written
