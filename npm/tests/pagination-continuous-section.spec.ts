@@ -319,10 +319,12 @@ test.describe('Continuous section breaks', () => {
       .toEqual(ownedBySecondSection.map((_, index) => index + 1));
     expect(ownedBySecondSection.map((index) => result.displayedPageNumbers[index]))
       .toEqual(ownedBySecondSection.map((_, index) => index + 10));
+    // Even/odd stories alternate with the DISPLAYED number (10, 11, 12, …), not the
+    // one-based position in section — see the issue #536 parity tests below.
     expect(ownedBySecondSection.map((index) => result.headers[index]))
       .toEqual(ownedBySecondSection.map((_, index) =>
         index === 0 ? 'section-one-first'
-          : (index + 1) % 2 === 0 ? 'section-one-even' : 'section-one-default'));
+          : (index + 10) % 2 === 0 ? 'section-one-even' : 'section-one-default'));
     expect(result.content.flat()).toEqual(['before 1', 'after continuation']);
     const renderedWords = result.footnotes.join(' ');
     for (const word of words.split(' ')) {
@@ -453,6 +455,64 @@ test.describe('Continuous section breaks', () => {
     expect(result.sectionFillers).toEqual([false, false, true, false]);
     expect(result.sectionIndices).toEqual([0, 0, 0, 1]);
     expect(result.pagesInSection).toEqual([1, 2, 3, 1]);
+  });
+
+  test('even/odd stories follow the page number, not the position in section', async ({
+    page,
+  }) => {
+    // Issue #536: ECMA-376 §17.10.5 hangs the even story on "even numbered pages" — the
+    // page NUMBER, which keeps counting across a section boundary unless w:pgNumType
+    // restarts it. Word and LibreOffice both render DB001-Sections this way; selecting by
+    // position-in-section flips every story in a section that begins on an even page.
+    await page.setContent(staging(`
+      <div id="pagination-hf-registry">
+        <div data-section="0" data-hf-type="header-default"><p>s0 odd</p></div>
+        <div data-section="1" data-hf-type="header-default"><p>s1 odd</p></div>
+        <div data-section="1" data-hf-type="header-even"><p>s1 even</p></div>
+      </div>
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt">alpha</p>
+      </div>
+      <div data-section-index="1" ${PAGE_GEOMETRY}>
+        <p style="height: 60pt">beta</p>
+        <p style="height: 60pt">gamma</p>
+        <p style="height: 60pt">delta</p>
+      </div>`));
+
+    const result = await paginate(page);
+
+    // Section 1 begins on global page 2: its stories alternate with the DOCUMENT page
+    // number (even, odd, even), not with its own one-based position (which would give
+    // the exact opposite sequence).
+    expect(result.sectionIndices).toEqual([0, 1, 1, 1]);
+    expect(result.pagesInSection).toEqual([1, 1, 2, 3]);
+    expect(result.displayedPageNumbers).toEqual([1, 2, 3, 4]);
+    expect(result.headers).toEqual(['s0 odd', 's1 even', 's1 odd', 's1 even']);
+  });
+
+  test('a numbering restart moves story parity with the displayed number', async ({
+    page,
+  }) => {
+    // The page that RESTARTS at 1 displays an odd number, so it takes the odd story even
+    // though its physical ordinal is even — exactly how Word treats a front-matter restart.
+    await page.setContent(staging(`
+      <div id="pagination-hf-registry">
+        <div data-section="0" data-hf-type="header-default"><p>s0 odd</p></div>
+        <div data-section="1" data-hf-type="header-default"><p>s1 odd</p></div>
+        <div data-section="1" data-hf-type="header-even"><p>s1 even</p></div>
+      </div>
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt">alpha</p>
+      </div>
+      <div data-section-index="1" data-page-num-start="1" ${PAGE_GEOMETRY}>
+        <p style="height: 60pt">beta</p>
+        <p style="height: 60pt">gamma</p>
+      </div>`));
+
+    const result = await paginate(page);
+
+    expect(result.displayedPageNumbers).toEqual([1, 1, 2]);
+    expect(result.headers).toEqual(['s0 odd', 's1 odd', 's1 even']);
   });
 
   test('checks the physical-page limit before allocating an over-limit page', async ({ page }) => {

@@ -715,8 +715,12 @@ export class PaginationEngine {
       this.checkpoint();
       if (page.element.dataset.sectionFiller === "true") continue;
       const pageInSection = parseInt(page.element.dataset.pageInSection || "1", 10);
-      const header = this.selectHeader(page.sectionIndex, pageInSection);
-      const footer = this.selectFooter(page.sectionIndex, pageInSection);
+      const displayedPageNumber = parseInt(
+        page.element.dataset.displayedPageNumber || String(page.pageNumber),
+        10,
+      );
+      const header = this.selectHeader(page.sectionIndex, pageInSection, displayedPageNumber);
+      const footer = this.selectFooter(page.sectionIndex, pageInSection, displayedPageNumber);
       if (header) this.collectExpectedSourceAnchors(header, this.expectedPageMapAnchorIds);
       if (footer) this.collectExpectedSourceAnchors(footer, this.expectedPageMapAnchorIds);
     }
@@ -1595,9 +1599,9 @@ export class PaginationEngine {
    */
   private smallestEffectiveContentHeight(dims: PageDimensions, sectionIndex: number): number {
     return Math.min(
-      this.getPageBands(dims, sectionIndex, 1).bodyHeight,
-      this.getPageBands(dims, sectionIndex, 2).bodyHeight,
-      this.getPageBands(dims, sectionIndex, 3).bodyHeight
+      this.getPageBands(dims, sectionIndex, 1, 1).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 2, 2).bodyHeight,
+      this.getPageBands(dims, sectionIndex, 3, 3).bodyHeight
     );
   }
 
@@ -3038,6 +3042,7 @@ export class PaginationEngine {
   private selectHeader(
     sectionIndex: number,
     pageInSection: number,
+    displayedPageNumber: number,
   ): HTMLElement | undefined {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     if (!sectionHf) return undefined;
@@ -3047,9 +3052,12 @@ export class PaginationEngine {
       return sectionHf.headerFirst;
     }
 
-    // OOXML counts odd/even pages from one inside each section, independently of a PAGE-field
-    // restart or format. The displayed page number is deliberately irrelevant here.
-    if (pageInSection % 2 === 0 && sectionHf.headerEven) {
+    // ECMA-376 §17.10.5 hangs the even story on "even numbered pages": the PAGE NUMBER,
+    // which keeps counting across a section boundary unless w:pgNumType restarts it (and a
+    // restart moves the parity with it). Word and LibreOffice both render DB001-Sections
+    // this way; selecting by position-in-section flips every story of a section that
+    // begins on an even page (issue #536).
+    if (displayedPageNumber % 2 === 0 && sectionHf.headerEven) {
       return sectionHf.headerEven;
     }
 
@@ -3061,6 +3069,7 @@ export class PaginationEngine {
   private selectFooter(
     sectionIndex: number,
     pageInSection: number,
+    displayedPageNumber: number,
   ): HTMLElement | undefined {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     if (!sectionHf) return undefined;
@@ -3070,7 +3079,7 @@ export class PaginationEngine {
       return sectionHf.footerFirst;
     }
 
-    if (pageInSection % 2 === 0 && sectionHf.footerEven) {
+    if (displayedPageNumber % 2 === 0 && sectionHf.footerEven) {
       return sectionHf.footerEven;
     }
 
@@ -3092,6 +3101,7 @@ export class PaginationEngine {
     dims: PageDimensions,
     sectionIndex: number,
     pageInSection: number,
+    displayedPageNumber: number,
   ): PageBands {
     const sectionHf = this.hfRegistry.get(sectionIndex);
     return resolvePageBands(
@@ -3100,13 +3110,15 @@ export class PaginationEngine {
         sectionHf?.headerFirstHeight,
         sectionHf?.headerEvenHeight,
         sectionHf?.headerDefaultHeight,
-        pageInSection
+        pageInSection,
+        displayedPageNumber
       ),
       this.selectStoryHeight(
         sectionHf?.footerFirstHeight,
         sectionHf?.footerEvenHeight,
         sectionHf?.footerDefaultHeight,
-        pageInSection
+        pageInSection,
+        displayedPageNumber
       )
     );
   }
@@ -3120,9 +3132,10 @@ export class PaginationEngine {
     even: number | undefined,
     fallback: number | undefined,
     pageInSection: number,
+    displayedPageNumber: number,
   ): number {
     if (pageInSection === 1 && first != null) return first;
-    if (pageInSection % 2 === 0 && even != null) return even;
+    if (displayedPageNumber % 2 === 0 && even != null) return even;
     return fallback ?? 0;
   }
 
@@ -3214,7 +3227,7 @@ export class PaginationEngine {
 
     // Get effective content height for first page (accounts for header/footer sizes)
     let { bodyHeight: effectiveContentHeight } = this.getPageBands(
-      dimensionsFor(), pageSectionIndex, pageInSection()
+      dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber()
     );
     let remainingHeight = effectiveContentHeight;
 
@@ -3252,6 +3265,7 @@ export class PaginationEngine {
         dimensionsFor(owner),
         owner,
         pageInSection(owner),
+        displayedPageNumber(owner),
       );
       effectiveContentHeight = bands.bodyHeight;
       remainingHeight = effectiveContentHeight;
@@ -3275,6 +3289,7 @@ export class PaginationEngine {
         ownedDimensions,
         pageSectionIndex,
         pageInSection(),
+        displayedPageNumber(),
       );
       const partition = this.splitContinuationForPage(
         currentContinuation!,
@@ -3320,6 +3335,7 @@ export class PaginationEngine {
         ownedDimensions,
         pageSectionIndex,
         ownedPageInSection,
+        ownedDisplayedPageNumber,
       );
       const maxFootnoteHeight = pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
       // `prepareCurrentContinuation` has already packed the exact head for this
@@ -3425,6 +3441,7 @@ export class PaginationEngine {
         dimensionsFor(),
         pageSectionIndex,
         pageInSection(),
+        displayedPageNumber(),
       );
       effectiveContentHeight = newBands.bodyHeight;
       remainingHeight = effectiveContentHeight;
@@ -3491,6 +3508,7 @@ export class PaginationEngine {
           ownerDimensions,
           pageSectionIndex,
           pageInSection(),
+          displayedPageNumber(),
         );
         const ownerMaxFootnoteArea = ownerBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
         if (currentFootnoteHeight > ownerMaxFootnoteArea) {
@@ -3534,6 +3552,7 @@ export class PaginationEngine {
         blockDimensions,
         block.sectionIndex,
         nextBlockPageInSection,
+        displayedPageNumber(block.sectionIndex, nextBlockPageInSection, pageNumber + 1),
       ).bodyHeight;
 
       // Handle explicit page breaks
@@ -3597,6 +3616,11 @@ export class PaginationEngine {
               dimensionsFor(block.sectionIndex),
               block.sectionIndex,
               pageInSection(block.sectionIndex, pageNumber + 1),
+              displayedPageNumber(
+                block.sectionIndex,
+                pageInSection(block.sectionIndex, pageNumber + 1),
+                pageNumber + 1,
+              ),
             );
             const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
               keepChain,
@@ -4198,12 +4222,12 @@ export class PaginationEngine {
     pageBox.dataset.pageInSection = String(pageInSection);
 
     // Where the three bands sit on this page (no re-measurement needed)
-    const bands = this.getPageBands(dims, sectionIndex, pageInSection);
+    const bands = this.getPageBands(dims, sectionIndex, pageInSection, displayedPageNumber);
 
     // Add header if available for this section/page
     const headerSource = isSectionFiller
       ? undefined
-      : this.selectHeader(sectionIndex, pageInSection);
+      : this.selectHeader(sectionIndex, pageInSection, displayedPageNumber);
 
     if (headerSource) {
       const headerDiv = this.document.createElement("div");
@@ -4294,7 +4318,7 @@ export class PaginationEngine {
     // Add footer if available for this section/page
     const footerSource = isSectionFiller
       ? undefined
-      : this.selectFooter(sectionIndex, pageInSection);
+      : this.selectFooter(sectionIndex, pageInSection, displayedPageNumber);
     if (footerSource) {
       const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
