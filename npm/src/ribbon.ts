@@ -671,6 +671,22 @@ class RibbonSurface implements RibbonEditor {
       style.value = "";
     });
 
+    // Comment authoring (issue #580): the button comments the live selection (whole block
+    // when collapsed) with the typed text, attributed to the configured revision author.
+    const commentButton = this.control("comment");
+    if (commentButton) {
+      this.keepSelection(commentButton);
+      commentButton.addEventListener("click", () => {
+        if (!this.live) return;
+        const input = this.control<HTMLInputElement>("commenttext");
+        const text = input?.value.trim() || "New comment.";
+        this.run("comment", () =>
+          this.live!.addComment(text, this.options.revisionAuthor ?? "Reviewer"));
+        if (input) input.value = "";
+        this.renderThreads();
+      });
+    }
+
     this.wireFileActions();
     this.wireLayout();
     this.wirePicker();
@@ -817,6 +833,60 @@ class RibbonSurface implements RibbonEditor {
       else panel.removeAttribute("data-active");
     }
     if (name === "layout") this.syncPageNumbering();
+    if (name === "review") this.renderThreads();
+  }
+
+  /** Re-render the Review tab's thread list from session truth ({@link DocxEditor.listComments}):
+   *  one row per comment, replies indented under their thread root, resolve/reopen per root. */
+  private renderThreads(): void {
+    const host = this.control("threads");
+    if (!host || !this.live) return;
+    const doc = this.element.ownerDocument ?? document;
+    host.textContent = "";
+    const comments = this.live.listComments();
+    if (comments.length === 0) {
+      const empty = doc.createElement("span");
+      empty.className = "dxr-note";
+      empty.textContent = "No comments yet.";
+      host.appendChild(empty);
+      return;
+    }
+    for (const entry of comments) {
+      const row = doc.createElement("div");
+      row.className = "dxr-thread";
+      row.setAttribute("data-thread", entry.anchorId);
+      if (entry.resolved) row.setAttribute("data-resolved", "");
+      if (entry.parentAnchorId) row.setAttribute("data-reply", "");
+
+      const author = doc.createElement("span");
+      author.className = "dxr-tauthor";
+      author.textContent = entry.author || "—";
+      row.appendChild(author);
+
+      const text = doc.createElement("span");
+      text.className = "dxr-ttext";
+      text.textContent = entry.text;
+      text.title = entry.text;
+      row.appendChild(text);
+
+      // Resolution is a THREAD state: Word keys it on the root, so replies get no toggle.
+      if (!entry.parentAnchorId) {
+        const toggle = doc.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = entry.resolved ? "Reopen" : "Resolve";
+        toggle.title = entry.resolved
+          ? "Reopen this comment thread"
+          : "Mark this comment thread resolved";
+        toggle.addEventListener("click", () => {
+          if (!this.live) return;
+          this.run(entry.resolved ? "reopen comment" : "resolve comment", () =>
+            this.live!.setCommentResolved(entry.anchorId, !entry.resolved));
+          this.renderThreads();
+        });
+        row.appendChild(toggle);
+      }
+      host.appendChild(row);
+    }
   }
 
   // ── selection-driven state ──────────────────────────────────────────────────
