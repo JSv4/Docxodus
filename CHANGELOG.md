@@ -67,7 +67,16 @@ All notable changes to this project will be documented in this file.
   computes its redline and revision summary from one pass instead of two.
 
 ### Changed
-- **The revision list's comment exclusion is now an explicit, pinned contract (#579).**
+- **DOCX GOLF: the caddie panel now explains itself.** First-time players could not tell
+  how to play or which controls advance the round, so the panel grows a collapsible
+  "How to play" guide that opens with the course (edit the document → click outside to
+  commit a stroke → zero diffs left clears the hole) and folds away after the first hole
+  clear; the hole-number strip is labeled **Holes** and each button names its hole and
+  par; the Caddie/Target/Redline tabs, the strokes/par/diffs-left scoreboard, and the
+  footer buttons carry explanatory tooltips; the Target and Redline views say
+  "Rendering…"/"Comparing…" while the engine works instead of freezing the previous view;
+  and **Next hole** is always on screen — locked with a "clear the hole to unlock" hint
+  until the referee reads zero revisions — instead of appearing from nowhere on clear.
   `DocxDiff.GetRevisions` deliberately reports content only: a comment added, removed, or
   edited between two versions is annotation-layer and does not surface as a revision —
   matching Word's own compare (which merges comments rather than redlining them) and the
@@ -89,6 +98,14 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **DOCX GOLF: the Redline tab now shows an actual redline.** The view compares the
+  player's document against the target (`docxDiffCompare`) and rendered the result with
+  default conversion options — and `convertDocxToHtml` *accepts* revisions by default, so
+  the tracked-changes document displayed as the clean target with no visible markup at
+  all. The conversion now asks for the markup (`renderTrackedChanges` +
+  `showDeletedContent` + `renderMoveOperations`), and the Playwright spec pins the fix by
+  asserting the deleted text is visible in the rendered frame — the old assertion checked
+  only for target-side text, which a clean render also contains.
 - **A formatting-only edit before an inline content control no longer redlines as a
   delete+insert pair (#600).** The inline-envelope digest — the structural signal protecting
   inline SDT/smartTag wrappers with a reversible whole-paragraph fallback — recorded each
