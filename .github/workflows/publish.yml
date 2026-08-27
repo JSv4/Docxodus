@@ -343,7 +343,11 @@ jobs:
           npm ci
           npx playwright-core install-deps chromium
           npm test
-          npm run test:package-boundary
+
+      # Same script ci.yml runs on every pull request, so the packaging contract has one
+      # definition rather than two that drift apart between releases.
+      - name: Release preflight (package boundaries)
+        run: RELEASE_PREFLIGHT_SKIP_INSTALL=1 ./scripts/release-preflight.sh
 
       - name: Publish browser/WASM package
         run: |

@@ -90,6 +90,14 @@ jobs:
       - name: TypeScript type check
         run: cd npm && npx tsc --noEmit
 
+      # Asserts the packaging contract publish.yml relies on. Runs here so a broken
+      # package boundary fails a pull request instead of a release: publish.yml only
+      # triggers on a `v*` tag, and two bugs reached the v10.0.0 tag precisely because
+      # nothing exercised its steps before then. Browser-free (`npm pack --dry-run`),
+      # so it costs well under a minute.
+      - name: Release preflight (package boundaries)
+        run: RELEASE_PREFLIGHT_SKIP_INSTALL=1 ./scripts/release-preflight.sh
+
   # The docx-scalpel (python/) suite is a client of the .NET core: pyhost.csproj
   # project-references Docxodus.csproj, so a core change that breaks a DocxSession
   # op fails here. That is the point of running it on every PR rather than
