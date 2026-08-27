@@ -40,8 +40,8 @@ its `[JSExport]`s by name at runtime, invisibly to ILLink). `Docxodus`,
 via `TrimmableAssembly` — everything not reachable from the bridge surface
 (`DocumentConverter`, `DocumentComparer`, `DocxDiffBridge`, `DocxSessionBridge`) is
 removed. That deletes the modules never exported to the browser (HtmlToWml,
-DocumentBuilder, DocumentAssembler, WmlToXml, …) and the unreachable halves of the
-Open XML SDK. No exported API changes.
+DocumentBuilder, OpenXmlRegex, …) and the unreachable halves of the Open XML SDK.
+No exported API changes.
 
 Feature switches: `InvariantGlobalization` (no ICU), `InvariantTimezone` (no tz
 database, −240 KB from `dotnet.native.wasm`), `TrimmerRemoveSymbols`,

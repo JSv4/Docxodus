@@ -18,7 +18,7 @@
     <!-- IL Trimming — only code reachable from the [JSExport] bridge surface ships.
          Docxodus and DocumentFormat.OpenXml are trimmed (see the ItemGroup below);
          modules never exported to the browser (HtmlToWml, DocumentBuilder,
-         DocumentAssembler, ...) are removed. Validated by the full Playwright
+         OpenXmlRegex, ...) are removed. Validated by the full Playwright
          suite plus tests/trim-validation.spec.ts, which pins the two paths where
          trimming could bite at runtime (reflective GetPackage(), OpenXmlValidator).
          See docs/architecture/wasm-packaging.md. -->

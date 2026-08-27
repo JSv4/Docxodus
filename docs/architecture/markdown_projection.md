@@ -20,7 +20,7 @@ paragraph, addressable identically from a text pipeline and from a DOM.
 
 ## Non-Goals
 
-- **Round-trip rendering** (Markdown → DOCX). That problem already has `HtmlToWmlConverter` and `DocumentAssembler`; this converter is one-way.
+- **Round-trip rendering** (Markdown → DOCX). That problem already has `HtmlToWmlConverter` and the `DocxSession` markdown payload path; this converter is one-way.
 - **GFM-perfect tables.** Word tables (merged cells, nested tables, cell-level shading, vertical text, …) exceed GFM. We render what fits and surface the rest as opaque anchors.
 - **Preserving every formatting nuance.** Bold/italic/code/links/headings/lists/quotes carry over. Font sizes, colors, character spacing, etc. do not — they're recoverable by anchor lookup if needed.
 
@@ -392,9 +392,9 @@ Phase 2's first test (`MD001_HeadingAndParagraph`) should round-trip a fixture m
 **Reuse, don't reinvent.**
 
 - Unid attribute name: `PtOpenXml.Unid` (defined in `Docxodus/PtOpenXmlUtil.cs`).
-- The existing Unid-assignment logic lives in two places, neither of which is general-purpose:
+- The existing Unid-assignment logic was not general-purpose:
   - `WmlComparer.AssignUnidToAllElements(XElement)` — private to `WmlComparer.cs:8655`. Walks descendants, adds a Unid where missing. Also handles the special `w:footnote`/`w:endnote` case where the container itself needs a Unid.
-  - `WmlToXmlUtil.AssignUnidToBlc` — block-level only, on a `WmlDocument` or `WordprocessingDocument`.
+  - A second, block-level-only variant lived in `WmlToXmlUtil`, since removed with that module.
 - For Phase 1, **extract the `WmlComparer` helper into a shared internal utility** (e.g. `UnidHelper.AssignToAllBlockElements`) and call it from both `WmlComparer` and the new converter. Don't duplicate.
 
 **First deliverable (mergeable on its own):**

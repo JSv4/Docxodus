@@ -17,7 +17,7 @@ namespace Docxodus.Tests;
 
 /// <summary>
 /// Regression for issue #153 — <see cref="WmlComparer.AddFootnotesEndnotesParts"/>
-/// (and the matching path in <see cref="DocumentBuilder"/> / <see cref="WmlToXml"/>)
+/// (and the matching path in <see cref="DocumentBuilder"/>)
 /// was building w:footnotes / w:endnotes / w:numbering / w:comments roots from a
 /// shared static <c>XAttribute[]</c>. <see cref="System.Xml.Linq.XAttribute"/> can
 /// only have one parent, so two parallel callers would race and one would throw

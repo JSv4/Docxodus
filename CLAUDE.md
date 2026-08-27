@@ -39,7 +39,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**134 warnings**, the test project with **808** (mostly StyleCop `SA1633`/`SA1636` file
+**131 warnings**, the test project with **774** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -196,7 +196,6 @@ detail; this file deliberately does not restate them.
 | `ExternalAnnotationProjector.cs` | Incremental annotation overlay on pre-converted HTML | `incremental_annotation_overlay.md`, `custom_annotations.md` |
 | `OpenContractExporter.cs` | Export to OpenContracts format | `opencontracts_export.md` |
 | `DocumentBuilder.cs` | Merge / split DOCX | — |
-| `DocumentAssembler.cs` | Template population from XML via content controls | — |
 | `OpenXmlRegex.cs` | Regex search/replace in DOCX | — |
 | `RevisionProcessor.cs` | Accept/reject tracked revisions | `tracked_changes.md` |
 | `FormattingAssembler.cs` | Resolve and flatten formatting | — |
@@ -217,23 +216,30 @@ WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured 
 `wasm-optimization-plan.md`, `skiasharp-removal-plan.md`, `ui_responsiveness.md`,
 `profiling-results.md`. Python wrapper: `python_docxodus.md`.
 
-### Scope: WordprocessingML only
+### Scope: the DOCX toolchain, nothing else
 
-Docxodus handles `.docx`/`.docm`/`.dotx`/`.dotm`. The inherited OpenXmlPowerTools
-SpreadsheetML and PresentationML modules (`SpreadsheetWriter`, `WorksheetAccessor`,
-`SmlToHtmlConverter`, `XlsxTables`, `ChartUpdater`, `PresentationBuilder`, `TextReplacer`,
-and the `SmlDocument`/`PmlDocument` wrappers) were removed when the library narrowed to
-WordprocessingML — see the `### Removed` entry in `CHANGELOG.md`. `GetDocumentType()`
-still recognises XLSX and PPTX packages so that feeding one in throws a clear
-`PowerToolsDocumentException` instead of failing deeper in the stack. Don't reintroduce
-non-Wordprocessing format support here.
+Docxodus handles `.docx`/`.docm`/`.dotx`/`.dotm`, and every module in `Docxodus/` earns its
+place by serving `DocxSession`, `DocxDiff`, `WmlComparer`, or the render/projection paths.
+Two rounds of the inherited OpenXmlPowerTools fork were removed on that rule — see the
+`### Removed` entry in `CHANGELOG.md` for the full list:
 
-### Coverage gaps worth knowing
+- **Non-Wordprocessing formats.** `SpreadsheetWriter`, `WorksheetAccessor`,
+  `SmlToHtmlConverter`, `XlsxTables`, `ChartUpdater`, `PresentationBuilder`, `TextReplacer`,
+  and the `SmlDocument`/`PmlDocument` wrappers. `GetDocumentType()` still recognises XLSX and
+  PPTX packages so that feeding one in throws a clear `PowerToolsDocumentException` instead of
+  failing deeper in the stack.
+- **DOCX code with no callers.** `WmlToXml` (DOCX → custom XML), `DocumentAssembler`
+  (content-control templating), `ReferenceAdder` (TOC/TOF/TOA fields, plus the `WmlDocument`
+  partial that exposed them), `PowerToolsBlock`, `PowerToolsBlockExtensions`,
+  `StronglyTypedBlock`, and `OxPtHelpers`.
 
-`WmlToXml.cs`, `ReferenceAdder.cs`, `PowerToolsBlock.cs`, `StronglyTypedBlock.cs` and
-`DocumentAssembler.cs` are DOCX code with **no production callers** — they survive as
-inherited public API, and only `DocumentAssembler` has a test file. Treat changes there as
-unguarded, and consider whether the caller you're about to add is really the right home.
+Don't reintroduce either category. Before adding a module here, ask which of the three
+engines it serves; if the answer is "none", it belongs somewhere else.
+
+The `TestFiles/DA*.docx` fixtures outlived `DocumentAssembler` deliberately — they are
+content-control-heavy real Word documents, and the `Ir*` tests glob `TestFiles/**/*.docx` as
+a corpus. Deleting an unreferenced `.docx` silently shrinks that corpus; check the globs
+before you do.
 
 ## Feature Development Workflow
 

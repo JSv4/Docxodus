@@ -531,11 +531,6 @@ namespace OxPt
             var fiReassembled = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "DB009-Reassembled.docx"));
 
             DocumentBuilder.BuildDocument(sources, fiReassembled.FullName);
-            using (WordprocessingDocument doc = WordprocessingDocument.Open(fiReassembled.FullName, true))
-            {
-                ReferenceAdder.AddToc(doc, "/w:document/w:body/w:p[1]",
-                    @"TOC \o '1-3' \h \z \u", null, null);
-            }
             Validate(fiReassembled);
         }
 

@@ -253,7 +253,6 @@ TypeScript API and React hooks.
 | | |
 |---|---|
 | **DocumentBuilder** | Merge and split DOCX files, with section and style fidelity |
-| **DocumentAssembler** | Populate templates from XML data via content controls |
 | **OpenXmlRegex** | Regex search/replace across DOCX |
 | **RevisionProcessor** | Accept and reject tracked revisions, byte-to-byte |
 | **FormattingAssembler** | Resolve and flatten inherited formatting |

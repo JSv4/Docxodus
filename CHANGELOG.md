@@ -32,6 +32,42 @@ All notable changes to this project will be documented in this file.
   **To keep the old behaviour**, pin `Docxodus` to `9.x`, or move spreadsheet and presentation
   work to a library that targets those formats. There is no flag that restores them.
 
+- **BREAKING: inherited DOCX modules with no production callers are gone.** A second pass
+  removed WordprocessingML code that nothing in the library and no transport called — it
+  survived only as inherited public API. The sole consumers were the modules' own test files,
+  plus one `ReferenceAdder.AddToc` call at the end of the `DB009` document-builder test (that
+  test covers `DocumentBuilder`, so the call was dropped and its assertions left intact).
+  Removed public types: `WmlToXml` and
+  `WmlToXmlUtil` (DOCX → custom XML) with their settings and rule types (`WmlToXmlSettings`,
+  `ContentTypeRule`, `GlobalValidationRule`, `BlockLevelContentValidationRule`,
+  `ValidationRuleDocumentTypeInfo`, `WmlToXmlValidationError`, `WmlToXmlProgressInfo`,
+  `WmlToXmlContentTypeMetrics`, `TransformInfo`, `ContentApplierException`, and the
+  `Docxodus.ValidationErrorType` enum — note this is *not* the SDK's
+  `DocumentFormat.OpenXml.Validation.ValidationErrorType`, which is untouched);
+  `DocumentAssembler` (content-control templating from XML data); `ReferenceAdder`, together
+  with the `WmlDocument.AddToc` / `AddTof` / `AddToa` partial-class methods that wrapped it;
+  `PowerToolsBlock`, `PowerToolsBlockExtensions` (`BeginPowerToolsBlock` /
+  `EndPowerToolsBlock`), and `StronglyTypedBlock`.
+
+  **What changes for a caller who passes nothing:** nothing. None of this was reachable from
+  `DocxSession`, `DocxDiff`, `WmlComparer`, the converters, or any WASM / npm / Python / MCP
+  surface. Code that called these types directly breaks at compile time; there is no runtime
+  behaviour change and no silent difference.
+
+  **To keep the old behaviour**, pin `Docxodus` to `9.x`. There is no drop-in replacement for
+  either feature: Docxodus has no field-insertion API, so a `TOC`/`TOF`/`TOA` field now has to
+  be written as raw OOXML through `DocxSession`'s `Raw.InsertXml`, and template population is
+  not a supported capability at all — `HtmlToWmlConverter` is the closest generative path.
+
+  Losing reference-field *authoring* is a real capability regression, not just a dead-code
+  removal: raw OOXML is exactly the detail this library exists to hide. **#607** tracks
+  restoring TOC/TOF/TOA as first-class, anchor-addressed session ops across every surface.
+
+  The `TestFiles/DA*.docx` fixtures are deliberately retained: they are content-control-heavy
+  Word documents and the IR corpus tests glob `TestFiles/**/*.docx`, so removing them would
+  have shrunk that corpus by 89 documents. Only the `DA*.xml` data payloads, which nothing
+  globs and nothing names, were deleted with the feature.
+
 ### Added
 - **`@docxodus/export` deployment preflight (#595).** The export refuses to launch Chromium
   without its OS sandbox, which turns two host properties most container defaults violate
