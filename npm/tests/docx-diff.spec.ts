@@ -96,6 +96,40 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
     expect(parsed).toBeTruthy();
   });
 
+  test('CompareProductsJson serves every product from one pass (issue #594)', async ({ page }) => {
+    const left = readTestFile('WC/WC001-Digits.docx');
+    const right = readTestFile('WC/WC001-Digits-Mod.docx');
+
+    const result = await page.evaluate(
+      ([l, r]) => {
+        const t = (window as any).DocxodusTests;
+        const all = t.docxDiffCompareProducts(new Uint8Array(l), new Uint8Array(r));
+        const standalone = t.docxDiffGetRevisions(new Uint8Array(l), new Uint8Array(r));
+        const only = t.docxDiffCompareProducts(
+          new Uint8Array(l), new Uint8Array(r), '', '["revisions"]');
+        return { all, standalone, only };
+      },
+      [Array.from(left), Array.from(right)]
+    );
+
+    expect(result.all.error).toBeUndefined();
+    const envelope = result.all.envelope;
+    // The redline travels base64; a real DOCX package is non-trivial.
+    expect(typeof envelope.redlineB64).toBe('string');
+    expect(envelope.redlineB64.length).toBeGreaterThan(1000);
+    // The revisions are exactly the standalone op's wire shape.
+    expect(envelope.revisions).toEqual(result.standalone.revisions);
+    expect(envelope.editScript).toBeTruthy();
+    expect(envelope.semanticChanges).toBeTruthy();
+
+    // Selection: unrequested keys are omitted entirely.
+    const selected = result.only.envelope;
+    expect(selected.revisions).toEqual(result.standalone.revisions);
+    expect(selected.redlineB64).toBeUndefined();
+    expect(selected.editScript).toBeUndefined();
+    expect(selected.semanticChanges).toBeUndefined();
+  });
+
   test('settings JSON is honored (detectMoves=false still diffs)', async ({ page }) => {
     const left = readTestFile('WC/WC001-Digits.docx');
     const right = readTestFile('WC/WC001-Digits-Mod.docx');

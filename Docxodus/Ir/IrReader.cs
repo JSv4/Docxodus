@@ -985,11 +985,23 @@ internal static class IrReader
     private static void AppendFieldEnvelopeEntries(
         IReadOnlyList<IrInline> inlines, string prefix, List<XElement> fields)
     {
+        // Format-neutral structural position: consecutive text runs collapse to ONE position.
+        // Run segmentation is formatting-sensitive (CoalesceRuns merges only format-equal
+        // neighbors), so a formatting-only span boundary inside a text stretch would otherwise
+        // shift the raw inline index of every following field, flip this digest, and lower a
+        // content-equal FormatOnly alignment to a whole-paragraph del+ins pair (issue #593).
+        // Non-text inlines always advance the position, so genuinely reordering a field
+        // relative to its neighbors is still a structural difference.
+        int position = -1;
+        bool previousWasText = false;
         for (int i = 0; i < inlines.Count; i++)
         {
+            bool isText = inlines[i] is IrTextRun;
+            if (!(isText && previousWasText)) position++;
+            previousWasText = isText;
             string path = prefix.Length == 0
-                ? i.ToString(CultureInfo.InvariantCulture)
-                : prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+                ? position.ToString(CultureInfo.InvariantCulture)
+                : prefix + "/" + position.ToString(CultureInfo.InvariantCulture);
             switch (inlines[i])
             {
                 case IrFieldRun field:

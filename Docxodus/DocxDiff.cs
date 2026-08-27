@@ -48,7 +48,7 @@ public static class DocxDiff
     // The diff engine reads with provenance OFF (it never needs element-level provenance and the lower
     // footprint matters for bulk pipelines) and revisions ACCEPTED (the IR the script is built over is
     // the accepted view of each side). The markup renderer re-reads internally with its own options.
-    private static readonly IrReaderOptions ReadOpts =
+    internal static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };
 
     /// <summary>
@@ -64,40 +64,29 @@ public static class DocxDiff
     /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
     /// <returns>A new <see cref="WmlDocument"/> with tracked-changes markup; the inputs are unchanged.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
-    public static WmlDocument Compare(WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null)
+    public static WmlDocument Compare(WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).ToRedline();
+
+    /// <summary>
+    /// Create a memoized comparison of <paramref name="left"/> and <paramref name="right"/> that
+    /// runs the alignment once and serves every data product from that single pass (issue #594) —
+    /// the multi-product counterpart of calling <see cref="Compare"/>, <see cref="GetRevisions"/>,
+    /// and <see cref="GetEditScriptJson"/> separately, each of which recomputes the diff. Each
+    /// product is identical to what the corresponding static returns for the same inputs and
+    /// settings; the statics themselves delegate to a single-use instance of this. Nothing is
+    /// computed until the first product is requested. See <see cref="DocxDiffComparison"/> for
+    /// snapshot, memoization, and memory semantics.
+    /// </summary>
+    /// <param name="left">The earlier/original document.</param>
+    /// <param name="right">The later/revised document.</param>
+    /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
+    public static DocxDiffComparison CreateComparison(
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var s = settings ?? new DocxDiffSettings();
-        // Exact identity is a no-op even for Strict OOXML or revision-bearing packages. An explicit
-        // accept-all request is an exception: it is an intentional transformation, so carry it out
-        // below. Compatibility gates still run before taking the fast path when callers enabled them.
-        if (DocxCompare.HasIdenticalPackageBytes(left, right) &&
-            !(s.PreAcceptInputRevisions && !s.PreserveInputRevisions))
-        {
-            if (s.OnCompatibilityWarning != null || s.ThrowOnCompatibilityWarning)
-            {
-                var preflightLeft = PreAccept(s, left);
-                var preflightRight = PreAccept(s, right);
-                PreflightCompatibility(s, preflightLeft, preflightRight);
-            }
-
-            return new WmlDocument(left);
-        }
-        // Opt-in accept-all pre-flatten (default off → no-op): diff (and clone the output from) the accepted
-        // view of both inputs so no pre-existing input revision survives into the result. See the flag's docs.
-        left = PreAccept(s, left);
-        right = PreAccept(s, right);
-        PreflightCompatibility(s, left, right);
-        if (DocxCompare.HasIdenticalPackageBytes(left, right))
-            return new WmlDocument(left);
-        var diff = s.ToIrDiffSettings();
-        var irLeft = IrReader.Read(left, ReadOpts);
-        var irRight = IrReader.Read(right, ReadOpts);
-        var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
-        // IrMarkupRenderer re-reads both packages with provenance (RetainSources=true) to clone source
-        // block elements; it takes the WmlDocuments, not the IR snapshots above.
-        return IrMarkupRenderer.Render(script, left, right, diff);
+        return new DocxDiffComparison(left, right, settings);
     }
 
     /// <summary>
@@ -106,30 +95,26 @@ public static class DocxDiff
     /// view, analogous to <see cref="WmlComparer"/>'s <c>GetRevisions</c> but anchor-addressed and produced
     /// directly off the IR script (no produce-then-reparse round-trip).
     /// </summary>
+    /// <remarks>
+    /// <b>The revision list is CONTENT-only; comments are annotation-layer (issue #579).</b> A
+    /// comment added, removed, or edited between the two versions is NOT reported here — matching
+    /// Word's own compare, which merges comments from both sides rather than redlining them, and
+    /// matching this engine's markup behavior (<see cref="Compare"/> carries and threads comments;
+    /// a comment "revision" would have no markup to accept or reject). A caller asking "what
+    /// changed between these documents, comments included" wants
+    /// <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>, whose
+    /// <c>comment</c> family reports comment-part differences precisely (insert/delete/modify),
+    /// on every transport; <see cref="DocxSession.ListComments"/> parity checks are the
+    /// session-level alternative.
+    /// </remarks>
     /// <param name="left">The earlier/original document.</param>
     /// <param name="right">The later/revised document.</param>
     /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
     /// <returns>The revisions in document order.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
     public static IReadOnlyList<DocxDiffRevision> GetRevisions(
-        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null)
-    {
-        ArgumentNullException.ThrowIfNull(left);
-        ArgumentNullException.ThrowIfNull(right);
-        var s = settings ?? new DocxDiffSettings();
-        left = PreAccept(s, left);
-        right = PreAccept(s, right);
-        PreflightCompatibility(s, left, right);
-        // CrossParagraphTokenDiff is a MARKUP-only refinement (see DocxDiffSettings.CrossParagraphTokenDiff):
-        // the revision list is projected off the un-fused edit script, so force it off here — a
-        // CrossParagraphRunBlock op never reaches the revision renderer.
-        var diff = s.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
-        var irLeft = IrReader.Read(left, ReadOpts);
-        var irRight = IrReader.Read(right, ReadOpts);
-        var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
-        var rendered = IrRevisionRenderer.Render(script, irLeft, irRight, diff);
-        return rendered.Select(DocxDiffRevision.FromIr).ToList();
-    }
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).GetRevisions();
 
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and return the engine's edit script as
@@ -144,23 +129,8 @@ public static class DocxDiff
     /// <returns>The edit script serialized as indented JSON.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
     public static string GetEditScriptJson(
-        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null)
-    {
-        ArgumentNullException.ThrowIfNull(left);
-        ArgumentNullException.ThrowIfNull(right);
-        var s = settings ?? new DocxDiffSettings();
-        left = PreAccept(s, left);
-        right = PreAccept(s, right);
-        PreflightCompatibility(s, left, right);
-        // CrossParagraphTokenDiff is a MARKUP-only refinement (see DocxDiffSettings.CrossParagraphTokenDiff):
-        // the edit script as data stays un-fused (the JSON serializer has no cross-paragraph cell shape),
-        // so force it off here.
-        var diff = s.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
-        var irLeft = IrReader.Read(left, ReadOpts);
-        var irRight = IrReader.Read(right, ReadOpts);
-        var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
-        return IrEditScriptJson.Write(script);
-    }
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).GetEditScriptJson();
 
     /// <summary>
     /// Compare two documents and return the stable, versioned semantic change schema. Unlike
