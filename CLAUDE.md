@@ -24,10 +24,11 @@ duplicated description is one that will go stale.
 
 `Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
 nullable-checked by default, so a new file needs no directive. The exception is the
-inherited OpenXmlPowerTools core — 32 legacy files (`WmlComparer`, `WmlToHtmlConverter`,
+inherited OpenXmlPowerTools core — 21 legacy files (`WmlComparer`, `WmlToHtmlConverter`,
 the `HtmlToWml*` family, `FormattingAssembler`, `DocumentBuilder`, `RevisionProcessor`,
-`PtOpenXmlUtil`, …) carry an explicit `#nullable disable` header holding back ~4,600
-warnings. `grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
+`PtOpenXmlUtil`, …) carry an explicit `#nullable disable` header. They hold back a lot:
+stripping all 21 takes the library from 131 warnings to **3,659**.
+`grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
 substantially refactoring one of those files, consider removing its header and fixing
 that file's warnings. CS8632 stays in `NoWarn` deliberately: with the project context
 enabled it can only fire inside the opted-out files, where some inert `?` annotations
