@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`@docxodus/export` deployment preflight (#595).** The export refuses to launch Chromium
+  without its OS sandbox, which turns two host properties most container defaults violate
+  into first-conversion failures: the process must not be root (Chromium's sandbox refuses
+  root even where user namespaces are fully enabled) and unprivileged user namespaces must
+  be permitted. `checkExportEnvironment()` now probes both plus browser-executable
+  resolution and returns `{ ok, findings }` with per-finding remediation; the CLI grows
+  `docxodus doctor` over the same probe (exit 0/1), so deployments can fail at boot with
+  configuration guidance. The sandbox-unavailable launch remediation is now root-aware —
+  a root-run container is told to run unprivileged instead of being sent to the userns
+  knob — and the README gains a prominent "Deployment requirements" section with the
+  Docker/Kubernetes phrasing (non-root user, seccomp permitting `clone` with
+  `CLONE_NEWUSER`, the Ubuntu AppArmor sysctl). The sandbox policy itself is unchanged.
 - **The ribbon can author comments (#580).** A Review tab joins the shipped editor surface:
   a Comment button adds a **native** Word comment on the current selection (the whole block
   when the caret is collapsed) via the session's `AddComment` family, attributed to the

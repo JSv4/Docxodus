@@ -42,6 +42,14 @@ import { verifyPdf } from "./pdf.js";
 
 export * from "./contracts.js";
 export {
+  checkExportEnvironment,
+  evaluateExportEnvironment,
+  type ExportEnvironmentFinding,
+  type ExportEnvironmentFindingCode,
+  type ExportEnvironmentProbes,
+  type ExportEnvironmentReport,
+} from "./environment.js";
+export {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
   DEFAULT_EXPORT_TIMEOUT_MS,
   HARD_EXPORT_RESOURCE_LIMITS,
