@@ -18,6 +18,16 @@ All notable changes to this project will be documented in this file.
   computes its redline and revision summary from one pass instead of two.
 
 ### Changed
+- **The revision list's comment exclusion is now an explicit, pinned contract (#579).**
+  `DocxDiff.GetRevisions` deliberately reports content only: a comment added, removed, or
+  edited between two versions is annotation-layer and does not surface as a revision —
+  matching Word's own compare (which merges comments rather than redlining them) and the
+  markup surface (`Compare` carries and threads comments; a comment "revision" would have
+  no markup to accept or reject). The XML docs and design doc now state this and direct
+  "what changed, comments included" callers to `GetSemanticChanges` (family `comment`,
+  which reports comment-part insert/delete/modify precisely on every transport) or
+  `DocxSession.ListComments` parity; a new test pins both halves of the contract. No
+  behavior changed.
 - **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
   one-liner from `ToString()` (type, move role, changed format property names, quoted
   text, anchors, author) instead of the bare type name; the two tracked-changes knobs —

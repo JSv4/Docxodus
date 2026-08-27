@@ -95,6 +95,18 @@ public static class DocxDiff
     /// view, analogous to <see cref="WmlComparer"/>'s <c>GetRevisions</c> but anchor-addressed and produced
     /// directly off the IR script (no produce-then-reparse round-trip).
     /// </summary>
+    /// <remarks>
+    /// <b>The revision list is CONTENT-only; comments are annotation-layer (issue #579).</b> A
+    /// comment added, removed, or edited between the two versions is NOT reported here — matching
+    /// Word's own compare, which merges comments from both sides rather than redlining them, and
+    /// matching this engine's markup behavior (<see cref="Compare"/> carries and threads comments;
+    /// a comment "revision" would have no markup to accept or reject). A caller asking "what
+    /// changed between these documents, comments included" wants
+    /// <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>, whose
+    /// <c>comment</c> family reports comment-part differences precisely (insert/delete/modify),
+    /// on every transport; <see cref="DocxSession.ListComments"/> parity checks are the
+    /// session-level alternative.
+    /// </remarks>
     /// <param name="left">The earlier/original document.</param>
     /// <param name="right">The later/revised document.</param>
     /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
