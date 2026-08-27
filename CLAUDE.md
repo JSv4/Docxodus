@@ -294,6 +294,50 @@ changes for a caller who passes nothing, and how to pin the old behaviour.
 
 Reference commits: `#206`, `#209`; reference tags: `v6.1.0`, `v6.2.0`.
 
+### What the tag actually publishes
+
+Pushing `vX.Y.Z` fires `publish.yml`, which derives the version from the tag and publishes
+**four NuGet packages** (`Docxodus`, `Redline`, `Docx2Html`, `Docx2OC`), **two npm packages**
+(`docxodus`, then `@docxodus/export`), and twelve self-contained CLI binaries (three tools ×
+four RIDs) as workflow artifacts. Release assets stay empty — the binaries are artifacts, not
+attachments, and have
+been for every release; an empty asset list is not a failed run.
+
+**`docx-scalpel` does not ship from a `vX.Y.Z` tag.** PyPI is driven by
+`python-publish.yml` on a separate `docx-scalpel-v<PEP440>` tag. That decoupling is
+deliberate (see the header comment in that workflow): a Python-only point release should not
+drag core/npm/binaries along, and a core release should not force a PyPI bump. Cut a
+`docx-scalpel-v*` tag when the wheel needs to move — not as part of every release.
+
+**The run can partially succeed, and the order matters.** Each registry is published by a
+different job. NuGet goes first and independently; `docxodus` and `@docxodus/export` publish
+in that order in one job, because the companion peer-depends on the exact matching
+`docxodus` version, so it *cannot* go first. A failure in the companion step therefore
+leaves NuGet and `docxodus` published while `@docxodus/export` is not. Re-run with
+`gh workflow run publish.yml --ref main -f version=X.Y.Z` after fixing: NuGet pushes use
+`--skip-duplicate`, and an already-published npm version fails loudly rather than silently
+overwriting.
+
+**One-time bootstrap for `@docxodus/export`.** The companion publishes through npm OIDC
+trusted publishing, which is configured *per package* and therefore cannot be configured for
+a package that does not exist yet. Its first-ever publish fails with
+`404 Not Found - PUT https://registry.npmjs.org/@docxodus%2fexport`, which reads like a
+permissions bug and is not one. Bootstrap it once by hand — create the `@docxodus` scope,
+publish one version with a token, then configure trusted publishing on the package — after
+which CI owns it. Until that is done, expect every release to publish everything except the
+companion.
+
+### Post-release: re-pin the demos
+
+`docs/demo/` loads the library from jsDelivr, so its `docxodus@X.Y.Z` pins can only move
+*after* npm publishes and the CDN serves the new bundle. Confirm with a real fetch
+(`curl -I https://cdn.jsdelivr.net/npm/docxodus@X.Y.Z/dist/embed.bundle.js`), then update the
+demo pages, `docs/demo/README.md`, `docs/npm-package.md`, `npm/README.md`,
+`npm/examples/embed.html`, and the `RELEASE_ENGINE` constant in
+`npm/tests/social-demo.spec.ts` — that spec is the guard that proves the demos load the pin
+rather than a 404, so run it. One reference in `docs/demo/README.md` is prose recounting a
+past pin-ahead-of-release; leave it alone.
+
 ## Dependencies
 
 - **DocumentFormat.OpenXml** 3.5.1
