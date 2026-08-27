@@ -418,6 +418,29 @@ test.describe('The landing page on a phone', () => {
     expect(geometry.tapTargets).toBeGreaterThanOrEqual(40);
     expect(geometry.clearOfCentre).toBe(true);
 
+    // The phone card presents the game, not the paper: the page's white side
+    // margins are cropped so the bezel spans (nearly) the whole card, and the
+    // card hugs the game screen instead of stretching 80dvh of blank paper
+    // with the controls floating far below the action.
+    const presentation = await page.evaluate(() => {
+      const frame = document.querySelector('#frame')!.getBoundingClientRect();
+      const canvas = ((window as any).__arcade.canvasElement() as HTMLElement)
+        .getBoundingClientRect();
+      const dpad = document.querySelector('.dxa-dpad')!.getBoundingClientRect();
+      return {
+        canvasShare: canvas.width / frame.width,
+        cardHeight: frame.height,
+        padGap: dpad.top - canvas.bottom,
+      };
+    });
+    expect(presentation.canvasShare,
+      'the margins are cropped — the bezel fills the card').toBeGreaterThan(0.9);
+    expect(presentation.cardHeight,
+      'the card hugs the game instead of stretching to 80dvh').toBeLessThan(720);
+    expect(presentation.padGap,
+      'the D-pad sits just under the game screen, near the action').toBeLessThan(160);
+    expect(presentation.padGap, 'and clear of the bezel itself').toBeGreaterThan(0);
+
     // Holding ▶ runs the pilcrow right, through the same input the keyboard
     // feeds — the control is wired to the simulation, not to a stub.
     const before = await page.evaluate(() => (window as any).__arcade.game().player.x as number);

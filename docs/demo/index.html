@@ -265,9 +265,25 @@
       /* The arcade also spends its bottom ~190px on the thumb controls, so it
          gets the taller frame — a letterboxed 92 × 26 game screen is unplayable.
          Sized in dvh where that exists: vh on a phone is the tall viewport with
-         the browser chrome hidden, which would push the controls under it. */
+         the browser chrome hidden, which would push the controls under it.
+         (After boot the script below shrinks this to hug the game screen, so
+         the thumb controls land under the action instead of over blank paper.) */
       [data-demo="arcade"] #workspace { height: min(86vh, 720px); }
       [data-demo="arcade"] #workspace { height: min(80dvh, 720px); }
+      /* Crop the letter page's white side margins so the game screen runs
+         edge-to-edge on a phone. The editor's fit-to-width zoom measures the
+         surface element, so widening it by the margins' share of the page
+         (2 × 1in of 8.5in ≈ 15.4% per side, the blank doc the arcade seeds)
+         lands the 6.5in text column — the game bezel — exactly on the card's
+         visible width, with the margins hanging clipped off both edges. The
+         document itself is untouched; this is presentation, like a word
+         processor hiding whitespace. Arcade only: in the editor demo the
+         margins are part of the document being edited. */
+      [data-demo="arcade"] #workspace .dxr-scroll { overflow-x: hidden; }
+      [data-demo="arcade"] #workspace .dxr-surface {
+        margin-left: -15.4%; margin-right: -15.4%;
+        padding-left: 0; padding-right: 0;
+      }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important;
@@ -511,6 +527,35 @@
           ui: dock.ui,
         });
         dock.show();
+
+        // On a phone the CSS default keeps the card 80dvh tall — mostly blank
+        // paper below the game, with the thumb controls floating over it far
+        // from the action. Once the arcade is live the card hugs the game
+        // instead: the canvas paragraph's bottom edge plus room for the pad
+        // and dock, so the thumbs land directly under the screen they steer.
+        // Re-measured on resize (rotation, browser-chrome collapse).
+        const workspace = $("workspace");
+        const hugCard = () => {
+          if (!window.matchMedia("(max-width: 620px)").matches) {
+            workspace.style.removeProperty("height");
+            return;
+          }
+          const canvas = controller.canvasElement();
+          if (!canvas) return;
+          const bottom = canvas.getBoundingClientRect().bottom
+            - workspace.getBoundingClientRect().top;
+          // 240px ≈ the caption's first lines + the pad cluster + the dock.
+          const hugged = Math.ceil(bottom + 240);
+          workspace.style.height =
+            `${Math.max(430, Math.min(hugged, Math.round(innerHeight * 0.8)))}px`;
+        };
+        requestAnimationFrame(hugCard);
+        let hugTimer = 0;
+        addEventListener("resize", () => {
+          clearTimeout(hugTimer);
+          hugTimer = setTimeout(hugCard, 160);
+        });
+
         window.__arcade = { ...controller, editor, ribbon, session, bridge, dock };
         window.__ribbon = ribbon;
         setStatus(`Live — the arcade booted in ${Math.round(performance.now() - started)} ms.`, "ready");

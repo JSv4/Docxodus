@@ -25,7 +25,9 @@
     html, body { height: 100%; }
     body { margin: 0; background: #e8ecf2; }
     html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-    #layout { display: flex; height: 100%; min-height: 0; }
+    /* dvh tracks the browser chrome's dynamic collapse on phones; 100% is the
+       fallback for engines without it. */
+    #layout { display: flex; height: 100%; height: 100dvh; min-height: 0; }
     #app { flex: 1; min-width: 0; height: 100%; }
     #caddie { width: 340px; flex: none; height: 100%; }
     @media (max-width: 900px) {
@@ -33,11 +35,16 @@
       #app { height: 58%; }
       #caddie { width: auto; height: 42%; border-left: 0; border-top: 1px solid #d7dfd9; }
     }
-    /* Phone: the caddie collapses to its head strip (the panel's compact mode);
-       the document keeps the screen, and the expanded sheet is capped. */
+    /* Phone: the caddie (docx-golf.js) docks itself as a fixed scorecard bar
+       with a bottom sheet, so the document takes the whole column and only
+       reserves the bar's height at the bottom. */
     @media (max-width: 640px) {
-      #app { flex: 1; height: auto; min-height: 0; }
-      #caddie { height: auto; max-height: 62%; overflow: auto; }
+      #app { flex: 1; height: auto; min-height: 0;
+        padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+      #caddie { width: auto; height: auto; max-height: none; overflow: visible; border-top: 0; }
+      /* The ribbon's compact table picker docks to the viewport bottom, which
+         the caddie bar now owns — lift it above the bar. */
+      #app .dxr-pop[data-open] { bottom: calc(96px + env(safe-area-inset-bottom)); }
     }
     #home {
       position: fixed; top: 10px; right: 356px; z-index: 50;

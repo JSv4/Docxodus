@@ -470,6 +470,12 @@ page rather than a narrower one whose lines break where Word's never would.
 **No command is removed in compact** — the strip scrolls instead. That is the one rule the previous
 hand-rolled mini toolbar broke, and the reason the compact player kept falling behind the editor.
 
+A strip that scrolls must also *say so*: every scrolling strip (title bar, tab strip, panels, rail)
+stamps `data-fade` with the edges that hide more content, and the stylesheet dissolves content at
+exactly those edges — the horizontal twin of the document scroller's gradient veils. Without it the
+clipped edge reads as a squashed layout, which is precisely how it was reported from phones. The
+fade lifts the moment a strip fits, so nothing is faded unless there is more behind it.
+
 `chrome: "compact"` or `"full"` pins the density (what `player.html` does, since a host site may
 size its iframe wide enough to trip the roomy layout); `"auto"` is the default.
 

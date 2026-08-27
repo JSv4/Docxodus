@@ -53,24 +53,58 @@ async function waitForBoot(page: Page) {
   expect(err, `arcade boot failed: ${err}`).toBeUndefined();
 }
 
-/** Distinct line-box tops inside the canvas paragraph. The frame is 26 rows
- * joined by `w:br`, so an intact render is exactly 26 line boxes; every
- * over-wide row that wraps adds one more. Fragments on the same line share
- * their top (same font size throughout the canvas), while the paragraph's
- * exact 10pt line pitch is ≥ ~5px even under the phone's fit-to-width zoom,
- * so a small fixed tolerance separates lines reliably — including when the
- * inflated glyph boxes are TALLER than the line pitch. */
+/** Visual line boxes inside the canvas paragraph. The frame is 26 rows
+ * joined by `w:br`, so an intact render is exactly 26; every over-wide row
+ * that WRAPS adds one more. Rows are read from the `<br>` structure (the
+ * same segmentation `rowWidthSpreadInCells` uses) and each row contributes
+ * 1 + how many full LINE PITCHES its own fragments' tops span: a real fold
+ * displaces fragments by a whole pitch, while sub-pitch offsets are
+ * rendering artifacts, not wraps — inflated glyph boxes overflow the exact
+ * 10pt line box by half a leading, and mixed fallback faces differ in
+ * ascent, offsets that scale with the fit zoom and so cannot be separated
+ * from real folds by any fixed pixel tolerance (the margin-cropped phone
+ * presentation zooms ~40% past where 2px was safe). The pitch is measured
+ * from the rows themselves: the median gap between consecutive row tops. */
 async function canvasLineBoxes(page: Page): Promise<number> {
   return page.evaluate(() => {
     const el = (window as any).__arcade.canvasElement() as HTMLElement;
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const rects = Array.from(range.getClientRects()).filter((r) => r.height >= 2);
-    const tops: number[] = [];
-    for (const r of rects) {
-      if (!tops.some((t) => Math.abs(t - r.top) < 2)) tops.push(r.top);
-    }
-    return tops.length;
+    const rows: Text[][] = [];
+    let current: Text[] = [];
+    const walk = (node: Node) => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeName === 'BR') { rows.push(current); current = []; }
+        else if (child.nodeType === Node.TEXT_NODE) current.push(child as Text);
+        else walk(child);
+      }
+    };
+    walk(el);
+    rows.push(current);
+
+    const measured = rows
+      .map((nodes) => {
+        let first = Infinity;
+        let last = -Infinity;
+        for (const text of nodes) {
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          for (const r of Array.from(range.getClientRects())) {
+            if (r.height < 2) continue;
+            first = Math.min(first, r.top);
+            last = Math.max(last, r.top);
+          }
+        }
+        return first === Infinity ? null : { top: first, spread: last - first };
+      })
+      .filter((row): row is { top: number; spread: number } => row !== null);
+
+    const gaps = measured
+      .slice(1)
+      .map((row, i) => row.top - measured[i].top)
+      .filter((gap) => gap > 0)
+      .sort((a, b) => a - b);
+    const pitch = gaps[Math.floor(gaps.length / 2)] || 1;
+
+    return measured.reduce((total, row) => total + 1 + Math.round(row.spread / pitch), 0);
   });
 }
 

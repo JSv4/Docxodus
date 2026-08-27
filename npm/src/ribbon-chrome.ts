@@ -23,7 +23,7 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "8";
+export const RIBBON_STYLE_VERSION = "9";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
 
 /**
@@ -93,6 +93,27 @@ export const RIBBON_CSS = `
 /* Touch devices get bigger hit targets everywhere the token is used. */
 @media (pointer: coarse) { .dxr { --dxr-tap: 40px; } }
 
+/* ── Scroll-edge affordances ──────────────────────────────────────────────────
+   The chrome's strips (title bar, tabs, panels, rail) scroll horizontally
+   rather than squashing or wrapping — the compact rule is "no command is
+   removed, the strip scrolls". But a hard clip mid-control reads as a broken
+   layout, especially on a phone, so ribbon.ts measures every strip and stamps
+   data-fade with the edges that hide more content ("l", "r", or both). The
+   mask dissolves content at exactly those edges — the horizontal twin of
+   .dxr-scroll's gradient veils — and lifts entirely once the strip fits, so
+   nothing is ever faded unless there is more behind it. */
+.dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail { --dxr-fade-l: 0px; --dxr-fade-r: 0px; }
+.dxr [data-fade] {
+  -webkit-mask-image: linear-gradient(to right,
+    transparent, #000 var(--dxr-fade-l),
+    #000 calc(100% - var(--dxr-fade-r)), transparent);
+  mask-image: linear-gradient(to right,
+    transparent, #000 var(--dxr-fade-l),
+    #000 calc(100% - var(--dxr-fade-r)), transparent);
+}
+.dxr [data-fade~="l"] { --dxr-fade-l: 28px; }
+.dxr [data-fade~="r"] { --dxr-fade-r: 28px; }
+
 /* ── Chrome shell ─────────────────────────────────────────────────────────── */
 .dxr-chrome {
   position: sticky;
@@ -103,12 +124,17 @@ export const RIBBON_CSS = `
   border-bottom: 1px solid var(--dxr-rule);
 }
 
+/* Scrolls in EVERY density (compact just tightens it): the fade affordance
+   marks any overflowing strip as scrollable, so it must actually be. */
 .dxr-titlebar {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 6px 10px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.dxr-titlebar::-webkit-scrollbar { display: none; }
 .dxr-brand {
   display: flex;
   align-items: baseline;
@@ -538,10 +564,7 @@ export const RIBBON_CSS = `
 .dxr[data-chrome="compact"] .dxr-titlebar {
   gap: 6px;
   padding: 5px 8px 0;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.dxr[data-chrome="compact"] .dxr-titlebar::-webkit-scrollbar { display: none; }
 .dxr[data-chrome="compact"] .dxr-brandname { display: none; }
 .dxr[data-chrome="compact"] .dxr-brand { flex: 0 1 auto; }
 /* A filename clipped to "do..." tells you less than no filename at all, so it keeps a
