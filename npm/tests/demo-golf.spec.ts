@@ -52,6 +52,12 @@ test.describe('DOCX GOLF', () => {
     // Player → target phrasing: the caddie asks for the typo's removal (and
     // the correction's insertion) — assert on the list, not its ordering.
     await expect(page.locator('[data-dxg="hints"]')).toContainText('Purchasr');
+    // First-visit orientation: the how-to-play guide opens with the course,
+    // and Next hole is visible but locked until the hole clears.
+    await expect(page.locator('[data-dxg="howto"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="howto"] summary')).toContainText('How to play');
+    await expect(page.locator('[data-dxg="next"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="next"]')).toBeDisabled();
     // The ball is a real document in the real editor.
     await expect(page.locator('#app [contenteditable]').first()).toBeVisible();
   });
@@ -139,9 +145,14 @@ test.describe('DOCX GOLF', () => {
     await expect(frame.locator('body')).toContainText('the Purchaser identified');
 
     await page.locator('[data-dxg="tabs"] button[data-view="redline"]').click();
-    // The redline of an untouched hole 1 shows the correction as a revision:
-    // the target's spelling must appear in the compared output.
-    await expect(page.frameLocator('#caddie iframe').locator('body')).toContainText('Purchaser');
+    // The redline of an untouched hole 1 must show BOTH sides of the
+    // correction as tracked changes: the target's spelling (the insertion)
+    // AND the player's typo (the deletion). The deletion is the regression
+    // guard — a converter that accepts revisions before rendering (the
+    // default) shows only the clean target text, and that is no redline.
+    const redline = page.frameLocator('#caddie iframe').locator('body');
+    await expect(redline).toContainText('Purchaser');
+    await expect(redline).toContainText('Purchasr');
   });
 
   test('show me: the caddie plays the line and the scorecard says so', async ({ page }) => {
@@ -184,6 +195,8 @@ test.describe('DOCX GOLF', () => {
     const before = await page.evaluate(() => (window as any).__golf.revisionsLeft());
     await page.evaluate(async () => { await (window as any).__golf.playReference(); });
     expect(await page.evaluate(() => (window as any).__golf.cleared())).toBe(true);
+    // Clearing unlocks the (always-visible) Next hole button…
+    await expect(page.locator('[data-dxg="next"]')).toBeEnabled();
 
     await page.locator('[data-dxg="reset"]').click();
     await page.waitForFunction(() => (window as any).__golf.revisionsLeft() > 0, { timeout: 60000 });
@@ -191,6 +204,8 @@ test.describe('DOCX GOLF', () => {
     expect(await page.evaluate(() => (window as any).__golf.revisionsLeft())).toBe(before);
     expect(await page.evaluate(() => (window as any).__golf.cleared())).toBe(false);
     await expect(page.locator('[data-dxg="banner"]')).not.toBeVisible();
+    // …and re-teeing locks it again.
+    await expect(page.locator('[data-dxg="next"]')).toBeDisabled();
   });
 });
 
