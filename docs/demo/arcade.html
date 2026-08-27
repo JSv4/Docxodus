@@ -52,6 +52,19 @@
     body:has(.dxr[data-state="loading"]) #home,
     body:has(.dxr[data-state="error"]) #home { display: none; }
 
+    /* Phone: crop the letter page's white side margins so the game screen
+       runs edge-to-edge. The editor's fit-to-width zoom measures the surface
+       element, so widening it by the margins' share of the page (2 × 1in of
+       the 8.5in blank doc the arcade seeds ≈ 15.4% per side) lands the 6.5in
+       text column — the game bezel — exactly on the screen width, with the
+       white margins hanging clipped off both edges. Presentation only: the
+       document keeps its margins, and Save ships them untouched. */
+    @media (max-width: 640px) {
+      #app .dxr-scroll { overflow-x: hidden; }
+      #app .dxr-surface { margin-left: -15.4%; margin-right: -15.4%;
+        padding-left: 0; padding-right: 0; }
+    }
+
     /* The dock, the "⋯" sheet and the thumb pad are styled by arcade-dock.js
        (`.dxa-*`), which owns both its layouts. Nothing about them is page-local
        any more — the landing page mounts the identical controls. */

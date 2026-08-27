@@ -18,6 +18,14 @@ All notable changes to this project will be documented in this file.
   Reset/Show me/Next) raises as a bottom sheet over the document, with a grab handle and
   a scrim. Clearing a hole raises the sheet so the banner and the unlocked Next hole are
   never celebrated off-screen. Demo-content change (`docs/demo/`), not npm surface.
+- **The arcade presents the game, not the paper, on a phone** — Freedoom E1M1 included.
+  On the landing page and the cabinet the letter page's white side margins are cropped at
+  phone widths (the fit-to-width zoom measures the surface element, so widening it by the
+  margins' share lands the 6.5in game bezel edge-to-edge — presentation only, the document
+  and its Save keep their margins), which makes every cartridge's screen ~30% larger and
+  the raycasters' HUD readable. The landing page's arcade card also hugs the game screen
+  after boot instead of stretching 80dvh of blank paper, so the thumb D-pad and FIRE land
+  directly under the action. Demo-content change (`docs/demo/`), not npm surface.
 
 ## [10.0.0] - 2026-08-27
 
