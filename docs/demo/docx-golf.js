@@ -474,7 +474,10 @@ const PANEL_CSS = `
 .dxg[data-compact="true"]:not([data-open="true"]) .dxg-foot { display: none; }
 .dxg[data-compact="true"] .dxg-view { max-height: 30vh; }
 .dxg[data-compact="true"] .dxg-view iframe { height: 28vh; }
-.dxg-holes { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
+.dxg-holesrow { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+.dxg-holeslabel { font: 600 10.5px/1 "SF Mono", Consolas, monospace; letter-spacing: .07em;
+  text-transform: uppercase; color: #6b7a71; }
+.dxg-holes { display: flex; gap: 5px; flex-wrap: wrap; }
 .dxg-holes button { font: 600 12px/1 "SF Mono", Consolas, monospace; padding: 6px 0;
   width: 34px; border: 1px solid #c3cfc6; border-radius: 7px; background: #fff;
   color: #33413a; cursor: pointer; }
@@ -482,6 +485,12 @@ const PANEL_CSS = `
 .dxg-holes button[data-cleared="true"] { border-color: #16a34a; color: #16a34a; }
 .dxg-holes button[data-cleared="true"][aria-pressed="true"] { color: #fff; }
 .dxg-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }
+.dxg-howto { border: 1px solid #cfe3d4; border-radius: 10px; background: #eef6f0;
+  margin: 0 0 12px; padding: 8px 12px; }
+.dxg-howto summary { cursor: pointer; font-weight: 700; font-size: 12.5px; color: #14532d; }
+.dxg-howto ol { margin: 8px 0 4px; padding-left: 20px; }
+.dxg-howto li { margin: 4px 0; color: #33413a; }
+.dxg-howto p { margin: 8px 0 2px; color: #45524b; }
 .dxg-title { font-weight: 700; font-size: 14px; }
 .dxg-chips { display: flex; gap: 6px; margin: 6px 0 8px; }
 .dxg-chip { font: 600 10.5px/1 "SF Mono", Consolas, monospace; letter-spacing: .06em;
@@ -503,12 +512,16 @@ const PANEL_CSS = `
 .dxg-hints li { margin: 4px 0; font: 12.5px/1.45 "SF Mono", Consolas, monospace; color: #7c2d12; }
 .dxg-hints .dxg-done { list-style: none; margin-left: -16px; color: #16a34a; font-weight: 700; }
 .dxg-view iframe { display: block; width: 100%; height: 42vh; border: 0; }
+.dxg-busy { margin: 0; padding: 14px 12px; color: #6b7a71; font-size: 12px; }
 .dxg-note { color: #8a978e; font-size: 11.5px; margin: 8px 2px 0; }
 .dxg-foot { padding: 10px 14px; border-top: 1px solid #d7dfd9; display: flex; gap: 8px; }
 .dxg-foot button { font: 600 12.5px/1 system-ui, sans-serif; padding: 9px 12px;
   border: 1px solid #c3cfc6; border-radius: 9px; background: #fff; color: #33413a; cursor: pointer; }
-.dxg-foot .dxg-next { flex: 1; background: #14532d; border-color: #14532d; color: #fff; display: none; }
-.dxg-foot .dxg-next[data-on="true"] { display: block; }
+/* Next is always visible so the player knows advancing exists — it just stays
+   locked until the referee reads zero diffs. */
+.dxg-foot .dxg-next { flex: 1; background: #14532d; border-color: #14532d; color: #fff; }
+.dxg-foot .dxg-next[disabled] { background: #eef2ef; border-color: #d7dfd9; color: #9aa79f;
+  cursor: default; }
 .dxg-banner { display: none; margin: 0 0 10px; padding: 12px 14px; border-radius: 10px;
   background: #dcfce7; border: 1px solid #86efac; color: #14532d; font-weight: 600; }
 .dxg-banner[data-on="true"] { display: block; }
@@ -534,35 +547,53 @@ export function mountGolfPanel(root) {
         <button class="dxg-toggle" data-dxg="toggle" aria-expanded="false"
           title="Show the caddie">☰ Caddie</button>
       </div>
-      <div class="dxg-holes" data-dxg="holes"></div>
+      <div class="dxg-holesrow">
+        <span class="dxg-holeslabel">Holes</span>
+        <div class="dxg-holes" data-dxg="holes" role="group" aria-label="Pick a hole"></div>
+      </div>
     </div>
     <div class="dxg-body">
       <div class="dxg-banner" data-dxg="banner"></div>
       <div class="dxg-error" data-dxg="error"></div>
+      <details class="dxg-howto" data-dxg="howto" open>
+        <summary>How to play</summary>
+        <ol>
+          <li><b>Edit the document</b> on the left — it is a real Word file, and it is your ball.</li>
+          <li><b>Click outside the paragraph</b> to commit the edit. Each committed burst of
+            edits is one stroke, undo included.</li>
+          <li>Match the target document. When <b>diffs left</b> reaches <b>0</b> the hole is
+            cleared and <b>Next hole</b> unlocks.</li>
+        </ol>
+        <p>Stuck? <b>Target</b> shows the document you are aiming for, <b>Redline</b> shows
+          your differences as tracked changes, and <b>Show me</b> concedes the hole to the
+          caddie (cleared, but not scored).</p>
+      </details>
       <div class="dxg-title" data-dxg="title"></div>
       <div class="dxg-chips">
-        <span class="dxg-chip" data-dxg="parchip"></span>
-        <span class="dxg-chip" data-dxg="surface"></span>
+        <span class="dxg-chip" data-dxg="parchip" title="The reference solution clears the hole in this many strokes"></span>
+        <span class="dxg-chip" data-dxg="surface" title="The part of the editing surface this hole plays"></span>
       </div>
       <p class="dxg-brief" data-dxg="brief"></p>
       <div class="dxg-score" data-dxg="score">
-        <div><b data-dxg="strokes">0</b><span>strokes</span></div>
-        <div><b data-dxg="par">–</b><span>par</span></div>
-        <div class="dxg-diffs"><b data-dxg="diffs">–</b><span>diffs left</span></div>
+        <div title="Committed edits so far — undo counts too"><b data-dxg="strokes">0</b><span>strokes</span></div>
+        <div title="The reference solution's stroke count"><b data-dxg="par">–</b><span>par</span></div>
+        <div class="dxg-diffs" title="Differences between your document and the target — zero clears the hole"><b data-dxg="diffs">–</b><span>diffs left</span></div>
       </div>
       <div class="dxg-tabs" data-dxg="tabs">
-        <button data-view="caddie" aria-pressed="true">Caddie</button>
-        <button data-view="target" aria-pressed="false">Target</button>
-        <button data-view="redline" aria-pressed="false">Redline</button>
+        <button data-view="caddie" aria-pressed="true"
+          title="The caddie's list of the work remaining">Caddie</button>
+        <button data-view="target" aria-pressed="false"
+          title="The document you are trying to match">Target</button>
+        <button data-view="redline" aria-pressed="false"
+          title="Your document compared against the target, as tracked changes">Redline</button>
       </div>
       <div class="dxg-view" data-dxg="view"><ul class="dxg-hints" data-dxg="hints"></ul></div>
-      <p class="dxg-note">Edits score when they commit — click outside a paragraph to bank a stroke.
-        The redline is your document compared against the target.</p>
+      <p class="dxg-note">Edits score when they commit — click outside a paragraph to bank a stroke.</p>
     </div>
     <div class="dxg-foot">
-      <button data-dxg="reset">↻ Reset hole</button>
-      <button data-dxg="showme" title="Concede: the caddie plays the reference line">🏳 Show me</button>
-      <button class="dxg-next" data-dxg="next">Next hole ▶</button>
+      <button data-dxg="reset" title="Re-tee this hole: the document and your strokes go back to the start">↻ Reset</button>
+      <button data-dxg="showme" title="Concede: the caddie makes the edits for you — the hole clears but is not scored">🏳 Show me</button>
+      <button class="dxg-next" data-dxg="next" disabled title="Clear the hole to unlock">Next hole ▶</button>
     </div>`;
 
   const grab = (name) => root.querySelector(`[data-dxg="${name}"]`);
@@ -576,6 +607,7 @@ export function mountGolfPanel(root) {
       view: grab('view'), hints: grab('hints'),
       reset: grab('reset'), next: grab('next'),
       showme: grab('showme'), toggle: grab('toggle'), mini: grab('mini'),
+      howto: grab('howto'),
     },
   };
 }
@@ -621,7 +653,8 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
   course.forEach((hole, i) => {
     const b = document.createElement('button');
     b.textContent = String(i + 1);
-    b.title = hole.title;
+    b.title = `Hole ${i + 1} — ${hole.title} (par ${hole.par})`;
+    b.setAttribute('aria-label', b.title);
     b.addEventListener('click', () => { void loadHole(i); });
     holeButtons.push(b);
     ui.holes.appendChild(b);
@@ -640,7 +673,17 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     ui.par.textContent = String(hole.par);
     ui.strokes.textContent = String(counter.strokes());
     ui.score.dataset.cleared = String(cleared);
+    // Next stays on screen so the player knows advancing exists; it unlocks
+    // when the hole clears. On the last hole the clear banner offers the new
+    // round instead, so the button stays locked.
+    const lastHole = holeIndex === course.length - 1;
     ui.next.dataset.on = String(cleared);
+    ui.next.disabled = !cleared || lastHole;
+    ui.next.title = !cleared
+      ? 'Clear the hole to unlock'
+      : lastHole
+        ? 'End of the course — pick any hole above to play again'
+        : 'Tee up the next hole';
   }
 
   function paintScore(revisions) {
@@ -690,6 +733,24 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     ui.view.appendChild(frame);
   };
 
+  // The redline DOCX is a tracked-changes document, and `convertDocxToHtml`
+  // ACCEPTS revisions by default (the converter runs RevisionAccepter) — so
+  // rendering it with default options shows the clean target and no redline
+  // at all. Ask for the markup explicitly.
+  const REDLINE_HTML_OPTIONS = {
+    renderTrackedChanges: true,
+    showDeletedContent: true,
+    renderMoveOperations: true,
+  };
+
+  const busyView = (label) => {
+    ui.view.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'dxg-busy';
+    p.textContent = label;
+    ui.view.appendChild(p);
+  };
+
   async function renderView() {
     if (view === 'caddie') {
       ui.view.innerHTML = '';
@@ -702,7 +763,7 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
       return;
     }
     const redline = await engine.docxDiffCompare(session.save(), targetBytes);
-    iframeView(await engine.convertDocxToHtml(redline));
+    iframeView(await engine.convertDocxToHtml(redline, REDLINE_HTML_OPTIONS));
   }
 
   for (const b of ui.tabs.querySelectorAll('button')) {
@@ -711,6 +772,10 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
       for (const other of ui.tabs.querySelectorAll('button')) {
         other.setAttribute('aria-pressed', String(other === b));
       }
+      // Target and redline renders go through the engine and can take a
+      // beat — say so instead of leaving the last view frozen in place.
+      if (view === 'target' && !targetHtml) busyView('Rendering the target…');
+      else if (view === 'redline') busyView('Comparing your document against the target…');
       renderView().catch(fail);
     });
   }
@@ -758,8 +823,13 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     }
   }, POLL_MS);
 
+  let howtoFolded = false;
+
   function holeClear() {
     cleared = true;
+    // The player has proven they know how to play — fold the guide away
+    // (once; if they re-open it later it stays open).
+    if (!howtoFolded) { howtoFolded = true; ui.howto.open = false; }
     const strokes = Math.max(1, counter.strokes());
     const hole = course[holeIndex];
     const name = assisted ? 'caddie-assisted' : scoreName(strokes, hole.par);
