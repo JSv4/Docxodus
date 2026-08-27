@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-08-27
+
 ### Removed
 - **BREAKING: Docxodus is WordprocessingML only.** The inherited OpenXmlPowerTools
   SpreadsheetML and PresentationML modules are gone, along with the legacy example trees that
