@@ -90,7 +90,7 @@ runtime location auto-detected — no build step, no configuration:
 ```html
 <div id="doc" style="height: 100dvh"></div>
 <script type="module">
-  import { createRibbonEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js';
+  import { createRibbonEditor } from 'https://cdn.jsdelivr.net/npm/docxodus@10.0.0/dist/embed.bundle.js';
   const ribbon = await createRibbonEditor('#doc', './contract.docx'); // or bytes / Blob / File
   // ...later: const editedBytes = ribbon.save();
 </script>
@@ -578,7 +578,7 @@ so a page can embed a full viewer or editor without hosting anything itself.
 <div id="app" style="height: 100dvh"></div>
 <script type="module">
   import { createViewer, createEditor, createRibbonEditor }
-    from 'https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.bundle.js';
+    from 'https://cdn.jsdelivr.net/npm/docxodus@10.0.0/dist/embed.bundle.js';
 
   // Choose a factory, or render several into separate containers as shown.
   // Source may be a URL, Uint8Array, ArrayBuffer, Blob, or File.
@@ -608,7 +608,7 @@ For pages that can't use modules, `dist/embed.iife.js` exposes the same surface 
 
 ```html
 <div id="doc"></div>
-<script src="https://cdn.jsdelivr.net/npm/docxodus@9.2.0/dist/embed.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docxodus@10.0.0/dist/embed.iife.js"></script>
 <script>
   Docxodus.createRibbonEditor('#doc').then((ribbon) => { /* ... */ });
 </script>
@@ -624,7 +624,7 @@ first `<bundle dir>/wasm/`, then `<bundle dir>/` as a fallback. On a CDN that re
 
 ### CDN caveats
 
-- **Pin an exact version in production** (`docxodus@9.2.0`, not `@latest`) — CDN responses are
+- **Pin an exact version in production** (`docxodus@10.0.0`, not `@latest`) — CDN responses are
   cached as immutable, and the wire shapes between the JS wrappers and the WASM assemblies must
   come from the same release.
 - The build patches the .NET loader to fetch with `credentials: "omit"` — required because the

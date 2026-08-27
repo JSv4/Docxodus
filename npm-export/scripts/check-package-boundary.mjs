@@ -51,7 +51,11 @@ try {
   }
   const unexpected = paths.filter((path) => {
     if (path === 'LICENSE' || path === 'README.md' || path === 'package.json') return false;
-    if (/^dist\/[^/]+\.(?:js|d\.ts)(?:\.map)?$/.test(path)) return false;
+    // Compiled output only, at any depth under dist/. The nesting matters: the font runtime
+    // (#442/#529) ships as dist/fonts/*, which index.js imports, so a flat-only pattern here
+    // rejects a package that is correct — and did, on the v10.0.0 release run. Extensions stay
+    // pinned so source, assets, and fixtures are still caught.
+    if (/^dist\/(?:[^/]+\/)*[^/]+\.(?:js|d\.ts)(?:\.map)?$/.test(path)) return false;
     return true;
   });
   assert.deepEqual(unexpected, [], `package contains undeclared files:\n${unexpected.join('\n')}`);
