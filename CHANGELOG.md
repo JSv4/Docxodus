@@ -17,8 +17,29 @@ All notable changes to this project will be documented in this file.
   knob — and the README gains a prominent "Deployment requirements" section with the
   Docker/Kubernetes phrasing (non-root user, seccomp permitting `clone` with
   `CLONE_NEWUSER`, the Ubuntu AppArmor sysctl). The sandbox policy itself is unchanged.
+- **Memoized comparison: one alignment pass, every data product (#594).**
+  `DocxDiff.CreateComparison(left, right, settings)` returns a `DocxDiffComparison` whose
+  `ToRedline()`, `GetRevisions()`, `GetEditScriptJson()`, and `GetSemanticChanges[Json]()`
+  are each identical to the stateless static of the same name — but the normalization, IR
+  reads, and edit-script build run at most once, and every product is served from that
+  single memoized pass over one consistent input snapshot. The statics now delegate to a
+  single-use instance, so their behavior is unchanged. Rippled to every surface as a
+  one-call multi-product compare: `DocxDiffOps.CompareProducts[Json]` (facade),
+  `DocxDiffBridge.CompareProductsJson` (WASM), `docxDiffCompareProducts` (npm),
+  `docx_diff_compare_products` (Python), and the MCP server's `docxodus_compare` now
+  computes its redline and revision summary from one pass instead of two.
 
 ### Changed
+- **The revision list's comment exclusion is now an explicit, pinned contract (#579).**
+  `DocxDiff.GetRevisions` deliberately reports content only: a comment added, removed, or
+  edited between two versions is annotation-layer and does not surface as a revision —
+  matching Word's own compare (which merges comments rather than redlining them) and the
+  markup surface (`Compare` carries and threads comments; a comment "revision" would have
+  no markup to accept or reject). The XML docs and design doc now state this and direct
+  "what changed, comments included" callers to `GetSemanticChanges` (family `comment`,
+  which reports comment-part insert/delete/modify precisely on every transport) or
+  `DocxSession.ListComments` parity; a new test pins both halves of the contract. No
+  behavior changed.
 - **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
   one-liner from `ToString()` (type, move role, changed format property names, quoted
   text, anchors, author) instead of the bare type name; the two tracked-changes knobs —
@@ -31,6 +52,17 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **A formatting-only edit crossing a complex-field envelope no longer redlines as a
+  delete+insert pair (#593).** The field-envelope digest recorded each field's raw modeled
+  inline index, and run segmentation is formatting-sensitive — so a formatting span
+  boundary falling mid-run before the field shifted that index, flipped the digest, and
+  demoted a content-equal format-only alignment to a whole-paragraph replace: a human
+  reviewer in Word saw the field region re-typed although nothing textual changed. Field
+  positions are now format-neutral (consecutive text runs collapse to one position), so the
+  change renders as `w:rPrChange` on the affected runs; genuine instruction, begin-state,
+  and reorder differences still take the reversible whole-carrier fallback. The semantic
+  changeset's field-envelope digest tag advanced to `docxodus-ir-field-envelope-v2`, and it
+  no longer reports a `field_envelope` modify for such formatting-only splits.
 - **Structural deletes no longer orphan footnote/endnote definitions (#591).**
   `DeleteBlock`, `DeleteRange`, `DeleteSection`, `DeleteTableRow`, and `DeleteTableColumn`
   removed a note's body-side reference but left its full definition — often substantive

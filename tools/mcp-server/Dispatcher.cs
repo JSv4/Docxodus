@@ -886,8 +886,13 @@ internal static class Dispatcher
             var settingsJson = OptStr(args, "author") is { } author
                 ? JsonSerializer.Serialize(new { authorForRevisions = author })
                 : null;
-            redline = DocxDiffOps.Compare(baseline, revised, settingsJson);
-            revisionsJson = DocxDiffOps.GetRevisionsJson(baseline, revised, settingsJson);
+            // One memoized pass serves both products (issue #594) — this used to run the
+            // full comparison twice, once per product.
+            var products = DocxDiffOps.CompareProducts(
+                baseline, revised, settingsJson,
+                redline: true, revisions: true, editScript: false, semanticChanges: false);
+            redline = products.RedlineBytes!;
+            revisionsJson = products.RevisionsJson!;
         }
         else
         {

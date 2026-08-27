@@ -98,6 +98,27 @@ public static partial class DocxDiffBridge
     }
 
     /// <summary>
+    /// Compare two DOCX byte arrays ONCE and return every requested data product from that
+    /// single memoized pass (issue #594) — <c>{"redlineB64":…, "revisions":[…],
+    /// "editScript":…, "semanticChanges":…}</c>, or a JSON error object.
+    /// <paramref name="productsJson"/> is a JSON array drawn from <c>"redline"</c>,
+    /// <c>"revisions"</c>, <c>"editScript"</c>, <c>"semanticChanges"</c>; empty selects all four.
+    /// </summary>
+    [JSExport]
+    public static string CompareProductsJson(
+        byte[] leftBytes, byte[] rightBytes, string settingsJson, string productsJson)
+    {
+        try
+        {
+            return DocxDiffOps.CompareProductsJson(leftBytes, rightBytes, settingsJson, productsJson);
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
     /// Accept every tracked revision in a redlined DOCX and return the resulting
     /// bytes (materializes the "right"/revised side). The byte-in, byte-out
     /// counterpart of <see cref="Compare"/> — <c>AcceptRevisions(Compare(left, right))</c>

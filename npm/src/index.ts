@@ -15,6 +15,8 @@ import type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  DocxDiffProduct,
+  DocxDiffProducts,
   SemanticChange,
   SemanticChangeFamily,
   SemanticChangeOperation,
@@ -392,6 +394,8 @@ export type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  DocxDiffProduct,
+  DocxDiffProducts,
   SemanticChange,
   SemanticChangeFamily,
   SemanticChangeOperation,
@@ -1288,21 +1292,62 @@ export async function docxDiffGetRevisions(
   }
 
   const parsed = JSON.parse(result);
-  return (parsed.revisions || parsed.Revisions || []).map((r: any) => ({
-    revisionType: r.revisionType ?? r.RevisionType,
-    text: r.text ?? r.Text,
-    author: r.author ?? r.Author,
-    date: r.date ?? r.Date,
-    moveGroupId: r.moveGroupId ?? r.MoveGroupId ?? undefined,
-    isMoveSource: r.isMoveSource ?? r.IsMoveSource ?? undefined,
-    formatChange: (r.formatChange || r.FormatChange) ? {
-      oldProperties: r.formatChange?.oldProperties ?? r.FormatChange?.OldProperties,
-      newProperties: r.formatChange?.newProperties ?? r.FormatChange?.NewProperties,
-      changedPropertyNames: r.formatChange?.changedPropertyNames ?? r.FormatChange?.ChangedPropertyNames,
-    } : undefined,
-    leftAnchor: r.leftAnchor ?? r.LeftAnchor ?? undefined,
-    rightAnchor: r.rightAnchor ?? r.RightAnchor ?? undefined,
-  }));
+  return (parsed.revisions || parsed.Revisions || []).map(mapDocxDiffRevision);
+}
+
+/**
+ * Compare two DOCX documents ONCE and return every requested data product from
+ * that single memoized pass (issue #594). Where a review pipeline calling
+ * {@link docxDiffCompare}, {@link docxDiffGetRevisions}, and
+ * {@link docxDiffGetEditScript} separately pays for the alignment per call, this
+ * runs it once — each product identical to its standalone counterpart (the edit
+ * script is handed over parsed rather than as the serialized string).
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @param products - Products to compute; omit for all four.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffCompareProducts(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings,
+  products?: DocxDiffProduct[]
+): Promise<DocxDiffProducts> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.CompareProductsJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings),
+    products ? JSON.stringify(products) : ""
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to compare products: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return {
+    redline: typeof parsed.redlineB64 === "string"
+      ? Uint8Array.from(atob(parsed.redlineB64), c => c.charCodeAt(0))
+      : undefined,
+    revisions: Array.isArray(parsed.revisions)
+      ? parsed.revisions.map(mapDocxDiffRevision)
+      : undefined,
+    editScript: parsed.editScript !== undefined
+      ? (parsed.editScript as Record<string, unknown>)
+      : undefined,
+    semanticChanges: parsed.semanticChanges !== undefined
+      ? (parsed.semanticChanges as SemanticChangeSet)
+      : undefined,
+  };
 }
 
 /**
