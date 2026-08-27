@@ -893,11 +893,19 @@ internal static class IrReader
     private static void AppendTextboxInlineEnvelopeEntries(
         IReadOnlyList<IrInline> inlines, string prefix, XElement stream)
     {
+        // Format-neutral positions, for the same reason as AppendFieldEnvelopeEntries and
+        // InlineElementPath: consecutive text runs collapse so a formatting-only run split
+        // cannot shift a following carrier's recorded place (issues #593/#600).
+        int position = -1;
+        bool previousWasText = false;
         for (int i = 0; i < inlines.Count; i++)
         {
+            bool isText = inlines[i] is IrTextRun;
+            if (!(isText && previousWasText)) position++;
+            previousWasText = isText;
             string path = prefix.Length == 0
-                ? i.ToString(CultureInfo.InvariantCulture)
-                : prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+                ? position.ToString(CultureInfo.InvariantCulture)
+                : prefix + "/" + position.ToString(CultureInfo.InvariantCulture);
             switch (inlines[i])
             {
                 case IrTextbox textbox:
@@ -1063,8 +1071,17 @@ internal static class IrReader
         }
     }
 
-    /// <summary>Path segments include the actual sibling index, not merely the wrapper ordinal: moving one
-    /// carrier past a plain run is structural even if the carrier XML itself is byte-identical.</summary>
+    /// <summary>
+    /// Path segments carry a FORMAT-NEUTRAL sibling position, not merely the wrapper ordinal:
+    /// consecutive plain text runs collapse to one position (run segmentation is
+    /// formatting-sensitive, so a formatting-only span boundary splitting a run before the
+    /// carrier must not move the carrier's recorded place — issue #600, the inline sibling of
+    /// the field-envelope fix in #593), while every non-plain sibling advances the position, so
+    /// reordering a carrier against another carrier or a structural run stays a digest
+    /// difference. The one rearrangement this cannot see — a carrier moved across a plain-run
+    /// stretch boundary, which merges two stretches — changes the visible token order, so the
+    /// content hash owns it and the pinned round-trip invariant still holds on the fine path.
+    /// </summary>
     private static string InlineElementPath(XElement paragraph, XElement element)
     {
         var segments = new Stack<string>();
@@ -1073,10 +1090,36 @@ internal static class IrReader
         {
             if (current.Parent is not XElement)
                 return string.Join("/", segments);
-            int siblingIndex = current.ElementsBeforeSelf().Count();
-            segments.Push($"{current.Name.NamespaceName}:{current.Name.LocalName}[{siblingIndex}]");
+            int position = FormatNeutralSiblingPosition(current);
+            segments.Push($"{current.Name.NamespaceName}:{current.Name.LocalName}[{position}]");
         }
         return string.Join("/", segments);
+    }
+
+    // Run children that carry only text-grade content. A run holding anything else (a drawing,
+    // field plumbing, a note reference, …) is structural and always occupies its own position.
+    private static readonly HashSet<XName> PlainRunChildNames = new()
+    {
+        W + "rPr", W + "t", W + "tab", W + "br", W + "cr", W + "noBreakHyphen",
+        W + "softHyphen", W + "sym", W + "lastRenderedPageBreak",
+    };
+
+    private static bool IsPlainTextRun(XElement element) =>
+        element.Name == W + "r" &&
+        element.Elements().All(child => PlainRunChildNames.Contains(child.Name));
+
+    private static int FormatNeutralSiblingPosition(XElement element)
+    {
+        int position = -1;
+        bool previousWasPlainRun = false;
+        foreach (var sibling in element.Parent!.Elements())
+        {
+            bool plain = IsPlainTextRun(sibling);
+            if (!(plain && previousWasPlainRun)) position++;
+            previousWasPlainRun = plain;
+            if (ReferenceEquals(sibling, element)) return position;
+        }
+        return position;
     }
 
     /// <summary>
