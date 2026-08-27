@@ -182,4 +182,58 @@ test.describe('ribbon surface', () => {
     expect(driven.copy).toBe('boom');
     expect(driven.retryVisible).toBe(true);
   });
+
+  test('the Review tab authors and resolves native comments (issue #580)', async ({ page }) => {
+    await openEditorHost(page);
+
+    // The Review tab reveals the comment panel in its empty state.
+    await page.click('.dxr-tab[data-tab="review"]');
+    await expect(page.locator('.dxr-panel[data-panel="review"]')).toHaveAttribute('data-active', '');
+    await expect(page.locator('[data-dxr="threads"]')).toContainText('No comments yet');
+
+    // Give the block text (an empty paragraph is rightly refused with empty_comment_span),
+    // leave it uncommitted — addComment must sync the typing before commenting — and author.
+    await page.click('#editor [data-anchor][contenteditable="true"]');
+    await page.keyboard.type('The indemnity clause needs review.');
+    await page.fill('[data-dxr="commenttext"]', 'Please reconsider this clause.');
+    await page.click('button[data-dxr="comment"]');
+
+    // Session truth: exactly one NATIVE comment thread carrying the typed text.
+    const entries = await page.evaluate(() =>
+      (window as any).__demo.getEditor().listComments());
+    expect(entries).toHaveLength(1);
+    expect(entries[0].text).toContain('Please reconsider this clause.');
+    expect(entries[0].resolved).toBeFalsy();
+
+    // The panel shows the thread and its input was cleared for the next comment.
+    await expect(page.locator('.dxr-thread')).toHaveCount(1);
+    await expect(page.locator('.dxr-thread .dxr-ttext')).toContainText('Please reconsider');
+    await expect(page.locator('[data-dxr="commenttext"]')).toHaveValue('');
+
+    // Resolve from the thread row: session truth flips and the row shows it.
+    await page.click('.dxr-thread button');
+    await expect(page.locator('.dxr-thread[data-resolved]')).toHaveCount(1);
+    const resolved = await page.evaluate(() =>
+      (window as any).__demo.getEditor().listComments()[0].resolved);
+    expect(resolved).toBe(true);
+
+    // Reopen: the toggle is symmetric.
+    await page.click('.dxr-thread button');
+    await expect(page.locator('.dxr-thread[data-resolved]')).toHaveCount(0);
+
+    // The comment survives a save round-trip as native OOXML (not an overlay).
+    const persisted = await page.evaluate(async () => {
+      const editor = (window as any).__demo.getEditor();
+      const bytes: Uint8Array = editor.save();
+      const exports = editor.exports;
+      const handle = exports.DocxSessionBridge.OpenSession(bytes, '');
+      try {
+        return JSON.parse(exports.DocxSessionBridge.ListComments(handle));
+      } finally {
+        exports.DocxSessionBridge.CloseSession(handle);
+      }
+    });
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].text).toContain('Please reconsider this clause.');
+  });
 });

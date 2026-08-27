@@ -138,6 +138,26 @@ readable.
 
 ---
 
+## 4a. Review
+
+| Control | `DocxEditor` command | Session op |
+|---------|---------------------|-----------|
+| Comment text + 💬 Comment | `addComment(markdown, author)` | `AddComment` (native comment part + threading + range markers) |
+| Thread list | `listComments()` | `ListComments` |
+| Resolve / Reopen (thread roots only) | `setCommentResolved(anchorId, resolved)` | `SetCommentResolved` |
+
+Comment authoring over the session's **native** comment family (issue #580 — the annotation
+type legal review runs on). The button comments the live selection span; with a collapsed
+caret it comments the whole block. Uncommitted typing is synced first, the author is the
+ribbon's configured `revisionAuthor` (default `Reviewer`), and an empty block is refused by
+the session with `empty_comment_span` (a comment needs text to range over). The thread list
+is re-read from session truth on every Review-tab visit and after each comment op; replies
+render indented under their root, and resolve/reopen appears only on roots because Word keys
+resolution on the thread (`commentsExtended`), not on individual replies. Resolution is
+thread metadata, so toggling it re-reads the list without re-rendering the document.
+
+---
+
 ## 5. Table (contextual)
 
 ![Contextual Table tab](../images/editor/ribbon-table-contextual.png)

@@ -17,6 +17,15 @@ All notable changes to this project will be documented in this file.
   knob — and the README gains a prominent "Deployment requirements" section with the
   Docker/Kubernetes phrasing (non-root user, seccomp permitting `clone` with
   `CLONE_NEWUSER`, the Ubuntu AppArmor sysctl). The sandbox policy itself is unchanged.
+- **The ribbon can author comments (#580).** A Review tab joins the shipped editor surface:
+  a Comment button adds a **native** Word comment on the current selection (the whole block
+  when the caret is collapsed) via the session's `AddComment` family, attributed to the
+  configured revision author; a live thread list — session truth via `ListComments` — shows
+  every thread with replies indented, and thread roots carry Resolve/Reopen over
+  `SetCommentResolved`. Backing this, `DocxEditor` gains `addComment(markdown, author)`,
+  `listComments()`, and `setCommentResolved(anchorId, resolved)` commands (bridge methods
+  optional, so older WASM bundles degrade to no-ops). An empty block is refused by the
+  session (`empty_comment_span`); comments survive save as native OOXML.
 - **Memoized comparison: one alignment pass, every data product (#594).**
   `DocxDiff.CreateComparison(left, right, settings)` returns a `DocxDiffComparison` whose
   `ToRedline()`, `GetRevisions()`, `GetEditScriptJson()`, and `GetSemanticChanges[Json]()`

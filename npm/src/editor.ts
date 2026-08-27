@@ -34,7 +34,7 @@ import {
   autoScrollWindowForElements,
 } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { TrackedChangeMode } from "./types.js";
-import type { HeaderFooterKind, NumberFormat } from "./types.js";
+import type { CommentListEntry, HeaderFooterKind, NumberFormat } from "./types.js";
 import { diffUnits, needsRemount, tokenOf, unidOf } from "./editor-reconcile.js";
 import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
 
@@ -135,6 +135,18 @@ export interface DocxEditorExports {
       characterOffset: number,
       markdown: string,
     ) => string;
+    /** Native comment authoring (optional: older WASM bundles predate it; issue #580). */
+    AddComment?: (
+      handle: number,
+      anchor: string,
+      spanJson: string,
+      author: string,
+      initials: string,
+      date: string,
+      markdown: string,
+    ) => string;
+    SetCommentResolved?: (handle: number, commentAnchor: string, resolved: boolean) => string;
+    ListComments?: (handle: number) => string;
     /** Incremental-reconcile endpoints (optional: older WASM bundles predate them;
      *  the editor falls back to full remounts / full projections without them). */
     ListBlocks?: (handle: number) => string;
@@ -3117,6 +3129,57 @@ export class DocxEditor {
     const res = this.parseEdit(call.call(bridge, this.handle, fullId, offset, markdown));
     if (!res.success) return;
     this.reconcile(idx, false);
+  }
+
+  /**
+   * Add a native Word comment on the current selection in the active block — or on the whole
+   * block when the selection is collapsed (a null span comments the paragraph). The definition,
+   * threading parts, and body-side range markers are written by the session's `AddComment`
+   * (issue #300); the re-render shows the marker chrome the converter already draws. The
+   * annotation type legal review runs on, finally authorable from the shipped surface
+   * (issue #580).
+   */
+  addComment(markdown = "New comment.", author = "Reviewer"): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.AddComment) return; // bridge predates comment authoring
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return;
+    const idx = this.blockIndex(block);
+    // Span first: syncBlock re-renders the block and would drop the live selection.
+    const span = selectionSpanIn(block);
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      bridge.AddComment(
+        this.handle, fullId, span ? JSON.stringify(span) : "", author, "", "", markdown,
+      ),
+    );
+    if (!res.success) return;
+    this.reconcile(idx, false);
+  }
+
+  /** The document's native comment threads (session truth), for review UIs — flat entries
+   *  with `parentAnchorId` linking replies and `resolved` carrying thread state. */
+  listComments(): CommentListEntry[] {
+    if (this.closed) return [];
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.ListComments) return [];
+    try {
+      return JSON.parse(bridge.ListComments(this.handle)) as CommentListEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Resolve or reopen a comment thread by its `cmt` anchor id (from {@link listComments}).
+   *  Resolution is thread metadata (`commentsExtended`), not body markup, so no re-render is
+   *  needed — a review UI re-reads {@link listComments} for the new state. */
+  setCommentResolved(commentAnchorId: string, resolved: boolean): void {
+    if (this.closed) return;
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.SetCommentResolved) return;
+    this.parseEdit(bridge.SetCommentResolved(this.handle, commentAnchorId, resolved));
   }
 
   private applyParagraphFormat(op: {
