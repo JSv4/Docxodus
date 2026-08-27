@@ -6,13 +6,13 @@ using System.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-// Docxodus defines its own Table/TableRow/TableCell/… types that clash with the WordprocessingML ones,
-// so DON'T `using Docxodus;` here — alias only the one Docxodus type this file needs.
+// Alias only the one Docxodus type this file needs rather than `using Docxodus;`, so the
+// WordprocessingML type names below always resolve to the SDK's.
 using WmlDocument = Docxodus.WmlDocument;
 using WpTable = DocumentFormat.OpenXml.Wordprocessing.Table;
 
-// Deliberately NOT under the `Docxodus` namespace: that would make Docxodus' own Table/TableRow/TableCell
-// (from XlsxTables) visible by the enclosing-namespace rule and clash with the WordprocessingML types.
+// Deliberately NOT under the `Docxodus` namespace: the enclosing-namespace rule would pull every
+// Docxodus type into scope here, and this file wants an unambiguous WordprocessingML vocabulary.
 namespace DocxodusDiffParityFixtures;
 
 /// <summary>

@@ -17,13 +17,20 @@ browser-wasm) and copies the AppBundle's `_framework/` into `npm/dist/wasm/`:
   precompressed content
 - **no** `.map` / `.symbols` debug artifacts (use a Debug build when you need them)
 
-| Metric | Before (≤ 9.0.0) | Now |
+| Metric | Before (≤ 9.0.0) | Now (v10.0.0) |
 |---|---|---|
-| Browser-fetched payload, uncompressed | 16.7 MB | **~12.9 MB** |
-| Wire transfer on a brotli-serving host | *(no .br shipped)* | **~3.3 MB** |
-| Wire transfer on a gzip-on-the-fly host | ~5.3 MB | **~4.1 MB** |
-| Largest asset: DocumentFormat.OpenXml.wasm | 7.3 MB | 5.1 MB |
-| Docxodus.wasm | 2.9 MB | 1.8 MB |
+| Browser-fetched payload, uncompressed | 16.7 MB | **14.7 MB** |
+| Wire transfer on a brotli-serving host | *(no .br shipped)* | **3.60 MB** |
+| Wire transfer on a gzip-on-the-fly host | ~5.3 MB | **4.63 MB** |
+| Largest asset: DocumentFormat.OpenXml.wasm | 7.3 MB | 5.0 MB |
+| Docxodus.wasm | 2.9 MB | 3.3 MB |
+
+The `Docxodus.wasm` row grew rather than shrank: the trimmer already removed the
+SpreadsheetML/PresentationML modules from the browser payload long before they were deleted
+from the source tree in v10.0.0, so that purge moved this number by nothing. What moved it is
+everything added since 9.0.0 — the session op surface, the delivery/verification subsystems,
+and pagination. The guardrail that matters is the brotli wire total, which
+`scripts/build-wasm.sh` prints and holds under a 4096 KB budget.
 
 ## Trimming policy
 
@@ -33,9 +40,8 @@ its `[JSExport]`s by name at runtime, invisibly to ILLink). `Docxodus`,
 via `TrimmableAssembly` — everything not reachable from the bridge surface
 (`DocumentConverter`, `DocumentComparer`, `DocxDiffBridge`, `DocxSessionBridge`) is
 removed. That deletes the modules never exported to the browser (HtmlToWml,
-DocumentBuilder, PresentationBuilder, SpreadsheetWriter, ChartUpdater,
-DocumentAssembler, …) and the unreachable halves of the Open XML SDK. No exported API
-changes.
+DocumentBuilder, DocumentAssembler, WmlToXml, …) and the unreachable halves of the
+Open XML SDK. No exported API changes.
 
 Feature switches: `InvariantGlobalization` (no ICU), `InvariantTimezone` (no tz
 database, −240 KB from `dotnet.native.wasm`), `TrimmerRemoveSymbols`,

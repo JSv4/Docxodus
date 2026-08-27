@@ -254,9 +254,7 @@ TypeScript API and React hooks.
 |---|---|
 | **DocumentBuilder** | Merge and split DOCX files, with section and style fidelity |
 | **DocumentAssembler** | Populate templates from XML data via content controls |
-| **PresentationBuilder** | Merge and split PPTX |
-| **SpreadsheetWriter** | Streaming XLSX creation |
-| **OpenXmlRegex** | Regex search/replace across DOCX and PPTX |
+| **OpenXmlRegex** | Regex search/replace across DOCX |
 | **RevisionProcessor** | Accept and reject tracked revisions, byte-to-byte |
 | **FormattingAssembler** | Resolve and flatten inherited formatting |
 | **MetricsGetter** | Extract document metrics — styles, fonts, languages |

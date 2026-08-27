@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING: Docxodus is WordprocessingML only.** The inherited OpenXmlPowerTools
+  SpreadsheetML and PresentationML modules are gone, along with the legacy example trees that
+  exercised them. Removed public types: `SpreadsheetWriter`, `WorksheetAccessor`,
+  `SpreadsheetDocumentManager`, `SmlToHtmlConverter`, `SmlDataRetriever`, `SmlCellFormatter`,
+  `XlsxTables` (and the `Docxodus.Table`/`TableRow`/`TableCell`/`Cell` types it defined),
+  `ChartUpdater`, `PresentationBuilder`, `TextReplacer`, the `SmlDocument` and `PmlDocument`
+  wrappers, `PresentationMLUtil`, `SpreadsheetMLUtil`, and the unreferenced `OxPtHelpers`
+  helpers (`AddDocxTextHelper`, `HtmlConverterHelper`, `ValidationHelper`, `DocxMetrics`,
+  `GetMetricsHelper`). Removed members: `OpenXmlMemoryStreamDocument.CreateSpreadsheetDocument`
+  / `CreatePresentationDocument` / `GetSpreadsheetDocument` / `GetPresentationDocument` /
+  `GetModifiedSmlDocument` / `GetModifiedPmlDocument`; `MetricsGetter.GetXlsxMetrics` /
+  `GetPptxMetrics` / `GetTableInfoForSheet` and the `MetricsGetterSettings.IncludeXlsxTableCellData`
+  flag; `Util.IsSpreadsheetML` / `IsPresentationML` and their extension arrays;
+  `PtOpenXmlUtil.FixUpPresentationDocument`.
+
+  **What changes for a caller who passes nothing:** nothing on the DOCX path — `DocxSession`,
+  `DocxDiff`, `WmlComparer`, `WmlToHtmlConverter`, and every WASM / npm / Python / MCP surface
+  are untouched, and no transport ever exposed these types. Code that opened an `.xlsx` or
+  `.pptx` breaks at compile time. Where it previously reached the format sniffing at runtime,
+  `DocxodusDocument.FromFileName` / `FromDocument` and the transitional converter now throw
+  `PowerToolsDocumentException` with an explicit "WordprocessingML only" message instead of
+  returning a spreadsheet or presentation wrapper — the packages are still *recognised*, so the
+  failure is a clear one rather than a cast or schema error deeper in the stack.
+
+  **To keep the old behaviour**, pin `Docxodus` to `9.x`, or move spreadsheet and presentation
+  work to a library that targets those formats. There is no flag that restores them.
+
 ### Added
 - **`@docxodus/export` deployment preflight (#595).** The export refuses to launch Chromium
   without its OS sandbox, which turns two host properties most container defaults violate

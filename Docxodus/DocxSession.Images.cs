@@ -448,8 +448,8 @@ public sealed partial class DocxSession
             // A blip extension that names its OWN image relationship is a SECOND payload behind the
             // same a:blip: an SVG keeps the vector art in a:extLst/asvg:svgBlip while a:blip/@r:embed
             // holds only the raster fallback, and Word's artistic effects keep the untouched original
-            // in a14:imgProps/a14:imgLayer (see the A14.imgLayer → R.embed mapping in
-            // PresentationBuilder). Descendants(A.blip) counts one blip either way, so without this
+            // in a14:imgProps/a14:imgLayer, which carries its own r:embed.
+            // Descendants(A.blip) counts one blip either way, so without this
             // check the occurrence would claim canMutate and ReplaceImage would swap only the
             // fallback: an SVG-aware renderer keeps showing the OLD picture while the API reports
             // success, and RemoveImage's sweep can strip the fallback part while the second payload

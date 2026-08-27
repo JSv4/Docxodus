@@ -98,7 +98,7 @@ Two rules that matter more than the list:
 | Four capability sections | Each opens with a **real screenshot**, then explains what the screenshot proves |
 | Get started | Four runtimes, four snippets, none longer than six lines |
 | Where it runs | The package/install table a developer scrolls to find |
-| What else is in the box | The long tail (merge, split, templates, spreadsheets) without burying the headline |
+| What else is in the box | The long tail (merge, split, templates, regex replace) without burying the headline |
 | Documentation | Route the reader into `docs/architecture/` |
 
 **Screenshots carry this README.** A document toolkit is judged on output fidelity, and no prose

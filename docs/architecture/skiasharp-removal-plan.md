@@ -177,7 +177,6 @@ namespace Docxodus
 |------|------|--------|
 | `WmlToHtmlConverter.cs` | 5653 | Use `FontFamilyHelper.KnownFamilies` |
 | `HtmlToWmlConverterCore.cs` | 1871 | Use `FontFamilyHelper.KnownFamilies` |
-| `SmlToHtmlConverter.cs` | 239 | Use `FontFamilyHelper.KnownFamilies` |
 | `PtOpenXmlUtil.cs` | 755 | Use `FontFamilyHelper.KnownFamilies` |
 
 ---

@@ -69,6 +69,14 @@ namespace Docxodus
 
     public class DocxodusDocument
     {
+        /// <summary>
+        /// Docxodus is a WordprocessingML toolchain. SpreadsheetML and PresentationML packages are
+        /// still recognised by <see cref="GetDocumentType()"/> so that feeding one in fails here with
+        /// a clear message rather than deeper in the stack with a cast or schema error.
+        /// </summary>
+        internal const string NotWordprocessingMessage =
+            "Docxodus handles WordprocessingML (.docx/.docm/.dotx/.dotm) only; this package is SpreadsheetML or PresentationML.";
+
         public string FileName { get; set; }
         public byte[] DocumentByteArray { get; set; }
 
@@ -86,10 +94,8 @@ namespace Docxodus
             }
             if (type == typeof(WordprocessingDocument))
                 return new WmlDocument(fileName, bytes);
-            if (type == typeof(SpreadsheetDocument))
-                return new SmlDocument(fileName, bytes);
-            if (type == typeof(PresentationDocument))
-                return new PmlDocument(fileName, bytes);
+            if (type == typeof(SpreadsheetDocument) || type == typeof(PresentationDocument))
+                throw new PowerToolsDocumentException(NotWordprocessingMessage);
             if (type == typeof(Package))
             {
                 DocxodusDocument pkg = new DocxodusDocument(bytes);
@@ -104,10 +110,8 @@ namespace Docxodus
             Type type = doc.GetDocumentType();
             if (type == typeof(WordprocessingDocument))
                 return new WmlDocument(doc);
-            if (type == typeof(SpreadsheetDocument))
-                return new SmlDocument(doc);
-            if (type == typeof(PresentationDocument))
-                return new PmlDocument(doc);
+            if (type == typeof(SpreadsheetDocument) || type == typeof(PresentationDocument))
+                throw new PowerToolsDocumentException(NotWordprocessingMessage);
             return null;    // This should not be possible from a valid DocxodusDocument object
         }
 
@@ -187,41 +191,9 @@ namespace Docxodus
                         }
                     }
                 }
-                else if (type == typeof(SpreadsheetDocument))
+                else if (type == typeof(SpreadsheetDocument) || type == typeof(PresentationDocument))
                 {
-                    using (SpreadsheetDocument sDoc = SpreadsheetDocument.Open(ms, true))
-                    {
-                        // following code forces the SDK to serialize
-                        foreach (var part in sDoc.Parts)
-                        {
-                            try
-                            {
-                                var z = part.OpenXmlPart.RootElement;
-                            }
-                            catch (Exception)
-                            {
-                                continue;
-                            }
-                        }
-                    }
-                }
-                else if (type == typeof(PresentationDocument))
-                {
-                    using (PresentationDocument sDoc = PresentationDocument.Open(ms, true))
-                    {
-                        // following code forces the SDK to serialize
-                        foreach (var part in sDoc.Parts)
-                        {
-                            try
-                            {
-                                var z = part.OpenXmlPart.RootElement;
-                            }
-                            catch (Exception)
-                            {
-                                continue;
-                            }
-                        }
-                    }
+                    throw new PowerToolsDocumentException(NotWordprocessingMessage);
                 }
                 this.FileName = fileName;
                 DocumentByteArray = ms.ToArray();
@@ -407,120 +379,6 @@ namespace Docxodus
         }
     }
 
-    public partial class SmlDocument : DocxodusDocument
-    {
-        public SmlDocument(DocxodusDocument original)
-            : base(original)
-        {
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(DocxodusDocument original, bool convertToTransitional)
-            : base(original, convertToTransitional)
-        {
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(string fileName)
-            : base(fileName)
-        {
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(string fileName, bool convertToTransitional)
-            : base(fileName, convertToTransitional)
-        {
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(string fileName, byte[] byteArray)
-            : base(byteArray)
-        {
-            FileName = fileName;
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(string fileName, byte[] byteArray, bool convertToTransitional)
-            : base(byteArray, convertToTransitional)
-        {
-            FileName = fileName;
-            if (GetDocumentType() != typeof(SpreadsheetDocument))
-                throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-        }
-
-        public SmlDocument(string fileName, MemoryStream memStream)
-            : base(fileName, memStream)
-        {
-        }
-
-        public SmlDocument(string fileName, MemoryStream memStream, bool convertToTransitional)
-            : base(fileName, memStream, convertToTransitional)
-        {
-        }
-    }
-
-    public partial class PmlDocument : DocxodusDocument
-    {
-        public PmlDocument(DocxodusDocument original)
-            : base(original)
-        {
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(DocxodusDocument original, bool convertToTransitional)
-            : base(original, convertToTransitional)
-        {
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(string fileName)
-            : base(fileName)
-        {
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(string fileName, bool convertToTransitional)
-            : base(fileName, convertToTransitional)
-        {
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(string fileName, byte[] byteArray)
-            : base(byteArray)
-        {
-            FileName = fileName;
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(string fileName, byte[] byteArray, bool convertToTransitional)
-            : base(byteArray, convertToTransitional)
-        {
-            FileName = fileName;
-            if (GetDocumentType() != typeof(PresentationDocument))
-                throw new PowerToolsDocumentException("Not a Presentation document.");
-        }
-
-        public PmlDocument(string fileName, MemoryStream memStream)
-            : base(fileName, memStream)
-        {
-        }
-
-        public PmlDocument(string fileName, MemoryStream memStream, bool convertToTransitional)
-            : base(fileName, memStream, convertToTransitional)
-        {
-        }
-    }
-
     public class OpenXmlMemoryStreamDocument : IDisposable
     {
         private DocxodusDocument Document;
@@ -569,42 +427,6 @@ namespace Docxodus
             }
             return new OpenXmlMemoryStreamDocument(stream);
         }
-        public static OpenXmlMemoryStreamDocument CreateSpreadsheetDocument()
-        {
-            MemoryStream stream = new MemoryStream();
-            using (SpreadsheetDocument doc = SpreadsheetDocument.Create(stream, DocumentFormat.OpenXml.SpreadsheetDocumentType.Workbook))
-            {
-                doc.AddWorkbookPart();
-                XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-                XNamespace relationshipsns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-                doc.WorkbookPart.PutXDocument(new XDocument(
-                    new XElement(ns + "workbook",
-                        new XAttribute("xmlns", ns),
-                        new XAttribute(XNamespace.Xmlns + "r", relationshipsns),
-                        new XElement(ns + "sheets"))));
-            }
-            return new OpenXmlMemoryStreamDocument(stream);
-        }
-        public static OpenXmlMemoryStreamDocument CreatePresentationDocument()
-        {
-            MemoryStream stream = new MemoryStream();
-            using (PresentationDocument doc = PresentationDocument.Create(stream, DocumentFormat.OpenXml.PresentationDocumentType.Presentation))
-            {
-                doc.AddPresentationPart();
-                XNamespace ns = "http://schemas.openxmlformats.org/presentationml/2006/main";
-                XNamespace relationshipsns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-                XNamespace drawingns = "http://schemas.openxmlformats.org/drawingml/2006/main";
-                doc.PresentationPart.PutXDocument(new XDocument(
-                    new XElement(ns + "presentation",
-                        new XAttribute(XNamespace.Xmlns + "a", drawingns),
-                        new XAttribute(XNamespace.Xmlns + "r", relationshipsns),
-                        new XAttribute(XNamespace.Xmlns + "p", ns),
-                        new XElement(ns + "sldMasterIdLst"),
-                        new XElement(ns + "sldIdLst"),
-                        new XElement(ns + "notesSz", new XAttribute("cx", "6858000"), new XAttribute("cy", "9144000")))));
-            }
-            return new OpenXmlMemoryStreamDocument(stream);
-        }
 
         public static OpenXmlMemoryStreamDocument CreatePackage()
         {
@@ -633,34 +455,6 @@ namespace Docxodus
                 throw new PowerToolsDocumentException(e.Message);
             }
         }
-        public SpreadsheetDocument GetSpreadsheetDocument()
-        {
-            try
-            {
-                if (GetDocumentType() != typeof(SpreadsheetDocument))
-                    throw new PowerToolsDocumentException("Not a Spreadsheet document.");
-                return SpreadsheetDocument.Open(DocPackage);
-            }
-            catch (Exception e)
-            {
-                throw new PowerToolsDocumentException(e.Message);
-            }
-        }
-
-        public PresentationDocument GetPresentationDocument()
-        {
-            try
-            {
-                if (GetDocumentType() != typeof(PresentationDocument))
-                    throw new PowerToolsDocumentException("Not a Presentation document.");
-                return PresentationDocument.Open(DocPackage);
-            }
-            catch (Exception e)
-            {
-                throw new PowerToolsDocumentException(e.Message);
-            }
-        }
-
         public Type GetDocumentType()
         {
             PackageRelationship relationship = DocPackage.GetRelationshipsByType("http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument").FirstOrDefault();
@@ -702,18 +496,6 @@ namespace Docxodus
         {
             FinalizePackage();
             return new WmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
-        }
-
-        public SmlDocument GetModifiedSmlDocument()
-        {
-            FinalizePackage();
-            return new SmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
-        }
-
-        public PmlDocument GetModifiedPmlDocument()
-        {
-            FinalizePackage();
-            return new PmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         // Disposes the live package and applies the shared output ZIP policy (compression from
