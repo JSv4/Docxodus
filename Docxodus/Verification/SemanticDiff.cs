@@ -726,8 +726,8 @@ internal static class SemanticDiffEngine
                 Add(SemanticChangeOperation.Modify, SemanticChangeFamily.ContentControl, part,
                     "paragraph.inline_content_control", la, ra,
                     left.Anchor.Scope, right.Anchor.Scope, null,
-                    Digest(left.InlineEnvelopeDigest, "docxodus-ir-inline-envelope-v1"),
-                    Digest(right.InlineEnvelopeDigest, "docxodus-ir-inline-envelope-v1"));
+                    Digest(left.InlineEnvelopeDigest, "docxodus-ir-inline-envelope-v2"),
+                    Digest(right.InlineEnvelopeDigest, "docxodus-ir-inline-envelope-v2"));
             }
             if (left.FieldEnvelopeDigest != right.FieldEnvelopeDigest)
             {

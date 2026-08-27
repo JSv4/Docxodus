@@ -40,6 +40,18 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **A formatting-only edit before an inline content control no longer redlines as a
+  delete+insert pair (#600).** The inline-envelope digest — the structural signal protecting
+  inline SDT/smartTag wrappers with a reversible whole-paragraph fallback — recorded each
+  carrier's raw XML sibling index, so a formatting span boundary splitting a text run before
+  the carrier shifted that index, flipped the digest, and demoted a content-equal
+  format-only alignment to a whole-paragraph replace, exactly the #593 shape on a different
+  digest. Carrier positions are now format-neutral (consecutive plain text runs collapse to
+  one position; runs holding structural content still advance it), so the change renders as
+  `w:rPrChange`; wrapper metadata changes, carrier reorders against structural neighbors,
+  and edits inside the control keep the whole-carrier fallback, and a carrier moved across a
+  merged text stretch is owned by the content hash with the round-trip invariant pinned. The
+  semantic changeset's tag advanced to `docxodus-ir-inline-envelope-v2`.
 - **A formatting-only edit crossing a complex-field envelope no longer redlines as a
   delete+insert pair (#593).** The field-envelope digest recorded each field's raw modeled
   inline index, and run segmentation is formatting-sensitive — so a formatting span

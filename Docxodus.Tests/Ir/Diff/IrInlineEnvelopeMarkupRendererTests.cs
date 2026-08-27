@@ -37,6 +37,110 @@ public class IrInlineEnvelopeMarkupRendererTests
         "w:element=\"country-region\"><w:r><w:t>" + text +
         "</w:t></w:r></w:smartTag></w:p>";
 
+    private static string SdtInner(string tag, string text = "controlled") =>
+        "<w:sdt><w:sdtPr><w:tag w:val=\"" + tag + "\"/></w:sdtPr>" +
+        "<w:sdtContent><w:r><w:t>" + text + "</w:t></w:r></w:sdtContent></w:sdt>";
+
+    private static IrParagraph Paragraph(WmlDocument doc) =>
+        IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
+
+    [Fact]
+    public void Read_InlineEnvelopeDigest_IgnoresFormattingOnlyRunSplit()
+    {
+        // Run segmentation is formatting-sensitive, so a formatting-only span boundary in the
+        // text BEFORE an inline carrier must not move the carrier's recorded position
+        // (issue #600 — the inline-envelope sibling of the field-envelope fix in #593).
+        var joined = Paragraph(Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + SdtInner("stable")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>"));
+        var split = Paragraph(Doc(
+            "<w:p><w:r><w:t>S</w:t></w:r>"
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">ee </w:t></w:r>"
+            + SdtInner("stable")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>"));
+
+        Assert.Equal(joined.ContentHash, split.ContentHash);
+        Assert.Equal(joined.InlineEnvelopeDigest, split.InlineEnvelopeDigest);
+
+        // Guard: swapping the carrier with its text neighbor is still a structural difference.
+        var swapped = Paragraph(Doc(
+            "<w:p>" + SdtInner("stable")
+            + "<w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>"));
+        Assert.NotEqual(joined.InlineEnvelopeDigest, swapped.InlineEnvelopeDigest);
+    }
+
+    [Fact]
+    public void Render_FormattingOnlySpanBeforeInlineSdt_StaysFormatOnly()
+    {
+        // Italicizing a span that starts mid-run BEFORE the carrier and does not touch the
+        // carrier itself: content is identical, only run properties differ. This must survive
+        // as a FormatOnly alignment and render as w:rPrChange — not a whole-paragraph del+ins
+        // pair re-typing the controlled region (issue #600). A formatting change reaching INTO
+        // the sdtContent still takes the whole-carrier fallback, because the envelope entry
+        // embeds the carrier XML — that conservatism is pinned by
+        // Render_InlineSdtInnerTextChange_UsesWholeParagraphFallback.
+        var left = Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r>"
+            + SdtInner("stable")
+            + "<w:r><w:t xml:space=\"preserve\"> for details.</w:t></w:r></w:p>");
+        var right = Doc(
+            "<w:p><w:r><w:t>S</w:t></w:r>"
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\">ee </w:t></w:r>"
+            + SdtInner("stable")
+            + "<w:r><w:rPr><w:i/></w:rPr><w:t xml:space=\"preserve\"> for</w:t></w:r>"
+            + "<w:r><w:t xml:space=\"preserve\"> details.</w:t></w:r></w:p>");
+
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), new IrDiffSettings());
+        var op = Assert.Single(script.Operations);
+        Assert.Equal(IrEditOpKind.FormatOnlyBlock, op.Kind);
+
+        var redline = DocxDiff.Compare(left, right);
+        AssertSchemaValid(redline);
+        var root = MainXml(redline);
+        Assert.Empty(root.Descendants(W + "ins"));
+        Assert.Empty(root.Descendants(W + "del"));
+        Assert.Single(root.Descendants(W + "sdt"));
+        Assert.NotEmpty(root.Descendants(W + "rPrChange"));
+
+        // Reject legitimately keeps the right side's run segmentation with the left formats
+        // restored (modeled-semantic, not byte, equivalence — the #532-#534 convention), so
+        // assert the semantics: text, carrier structure, and the formatting delta itself.
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        AssertNoRevisionMarkup(accepted);
+        AssertNoRevisionMarkup(rejected);
+        Assert.NotEmpty(MainXml(accepted).Descendants(W + "i"));
+        Assert.Empty(MainXml(rejected).Descendants(W + "i"));
+        Assert.Single(MainXml(accepted).Descendants(W + "sdt"));
+        Assert.Single(MainXml(rejected).Descendants(W + "sdt"));
+        Assert.Equal(Paragraph(left).ContentHash, Paragraph(rejected).ContentHash);
+        Assert.Equal(Paragraph(left).InlineEnvelopeDigest, Paragraph(rejected).InlineEnvelopeDigest);
+        Assert.Equal(Paragraph(right).InlineEnvelopeDigest, Paragraph(accepted).InlineEnvelopeDigest);
+    }
+
+    [Fact]
+    public void Render_InlineSdtMovedAcrossATextStretch_StillRoundTrips()
+    {
+        // Moving the carrier past one of two adjacent text runs merges a text stretch, which a
+        // format-neutral position encoding cannot distinguish from a formatting split in
+        // reverse — so this move is caught by the CONTENT hash instead of the envelope digest.
+        // Whatever path renders it, the package invariant must hold: accept keeps the right
+        // inline tree, reject restores the left one.
+        var left = Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">alpha </w:t></w:r>"
+            + SdtInner("stable")
+            + "<w:r><w:t xml:space=\"preserve\"> omega</w:t></w:r></w:p>");
+        var right = Doc(
+            "<w:p><w:r><w:t xml:space=\"preserve\">alpha </w:t></w:r>"
+            + "<w:r><w:t xml:space=\"preserve\"> omega</w:t></w:r>"
+            + SdtInner("stable") + "</w:p>");
+
+        AssertRoundTrips(left, right);
+        AssertRoundTrips(right, left);
+    }
+
     [Fact]
     public void Render_InlineSdtAdditionAndRemoval_RoundTripsExactInlineShape()
     {
