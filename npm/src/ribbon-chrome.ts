@@ -478,6 +478,25 @@ export const RIBBON_CSS = `
   box-shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 12px 24px rgba(15, 23, 42, .06);
 }
 
+/* ── Review: comment threads ──────────────────────────────────────────────── */
+.dxr-threads {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 92px; overflow-y: auto; min-width: 260px; padding-right: 2px;
+}
+.dxr-thread {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; line-height: 1.3; padding: 3px 6px;
+  border: 1px solid var(--dxr-rule); border-radius: 4px; background: var(--dxr-chrome-sunk);
+}
+.dxr-thread[data-resolved] { opacity: 0.55; }
+.dxr-thread[data-reply] { margin-left: 14px; }
+.dxr-thread .dxr-tauthor { font-weight: 600; white-space: nowrap; }
+.dxr-thread .dxr-ttext {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.dxr-thread button { flex: none; }
+.dxr-group.dxr-grow { flex: 1; min-width: 0; }
+
 /* ── Table size picker ────────────────────────────────────────────────────── */
 .dxr-pop {
   display: none;
@@ -807,6 +826,7 @@ export const RIBBON_HTML = `
     <button type="button" class="dxr-tab" role="tab" data-tab="home" aria-selected="true">Home</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="insert" aria-selected="false">Insert</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="layout" aria-selected="false">Layout</button>
+    <button type="button" class="dxr-tab" role="tab" data-tab="review" aria-selected="false">Review</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="table" data-contextual aria-selected="false" hidden>Table</button>
   </div>
 
@@ -968,6 +988,31 @@ export const RIBBON_HTML = `
         </div>
         <div class="dxr-row">
           <span class="dxr-note">Added to the footer story.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- REVIEW ────────────────────────────────────────────────────────────
+         Comment authoring over the session's native comment family (issue #580):
+         the button comments the selection (the whole block when collapsed), and
+         the thread list is live session truth with resolve/reopen per thread. -->
+    <div class="dxr-panel" data-panel="review">
+      <div class="dxr-group">
+        <span class="dxr-glabel">Comments</span>
+        <div class="dxr-row">
+          <input data-dxr="commenttext" type="text" placeholder="Comment text&#8230;"
+                 title="The comment body; markdown is honored" />
+          <button type="button" data-dxr="comment"
+                  title="Comment on the selection, or on the whole block when nothing is selected">&#128172; Comment</button>
+        </div>
+        <div class="dxr-row">
+          <span class="dxr-note">Comments the selected text; the whole block when the caret is collapsed.</span>
+        </div>
+      </div>
+      <div class="dxr-group dxr-grow">
+        <span class="dxr-glabel">Threads</span>
+        <div class="dxr-threads" data-dxr="threads" aria-live="polite">
+          <span class="dxr-note">No comments yet.</span>
         </div>
       </div>
     </div>

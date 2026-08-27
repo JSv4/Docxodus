@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **The ribbon can author comments (#580).** A Review tab joins the shipped editor surface:
+  a Comment button adds a **native** Word comment on the current selection (the whole block
+  when the caret is collapsed) via the session's `AddComment` family, attributed to the
+  configured revision author; a live thread list — session truth via `ListComments` — shows
+  every thread with replies indented, and thread roots carry Resolve/Reopen over
+  `SetCommentResolved`. Backing this, `DocxEditor` gains `addComment(markdown, author)`,
+  `listComments()`, and `setCommentResolved(anchorId, resolved)` commands (bridge methods
+  optional, so older WASM bundles degrade to no-ops). An empty block is refused by the
+  session (`empty_comment_span`); comments survive save as native OOXML.
+
 ### Changed
 - **Agent-facing DX round (#596).** `DocxDiffRevision` now renders a self-describing
   one-liner from `ToString()` (type, move role, changed format property names, quoted
