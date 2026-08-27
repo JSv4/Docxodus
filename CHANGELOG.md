@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
+  surface the compact chrome keeps every command by scrolling its strips (title bar, tab
+  strip, ribbon panels, anchor rail) — but the clipped edge read as a squashed, broken
+  layout on a phone. Each strip now dissolves its content at whichever edge hides more
+  controls (a scroll-position-driven fade mask, the horizontal twin of the document
+  scroller's gradient veils), and the fade lifts as soon as the strip fits.
+- **DOCX Golf is playable on a phone.** The caddie no longer collapses into a hidden
+  sidebar strip: in compact mode it docks as a fixed bottom scorecard bar — live
+  strokes/par/diffs plus a one-line hole brief, so the objective is readable without
+  opening anything — and the full caddie (holes, how-to, score, target/redline views,
+  Reset/Show me/Next) raises as a bottom sheet over the document, with a grab handle and
+  a scrim. Clearing a hole raises the sheet so the banner and the unlocked Next hole are
+  never celebrated off-screen. Demo-content change (`docs/demo/`), not npm surface.
+
 ## [10.0.0] - 2026-08-27
 
 ### Removed

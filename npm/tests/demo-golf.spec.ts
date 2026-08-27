@@ -212,24 +212,44 @@ test.describe('DOCX GOLF', () => {
 test.describe('DOCX GOLF on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  test('the caddie collapses to a strip and expands on demand', async ({ page }) => {
+  test('the caddie docks as a scorecard bar and raises as a bottom sheet', async ({ page }) => {
     test.setTimeout(180000);
     await bootCourse(page);
 
-    // Compact: the panel body starts collapsed behind a toggle, with a mini
-    // score strip keeping strokes/par/diffs visible, and the document keeps
-    // the bulk of the screen.
+    // Compact: the caddie starts lowered — a bottom scorecard bar with the
+    // live mini score AND the hole's one-line brief, so the objective is
+    // readable without opening anything and the document keeps the screen.
     const panel = page.locator('#caddie.dxg');
     await expect(panel).toHaveAttribute('data-compact', 'true');
     await expect(page.locator('[data-dxg="brief"]')).not.toBeVisible();
     await expect(page.locator('[data-dxg="mini"]')).toBeVisible();
     await expect(page.locator('[data-dxg="mini"]')).toContainText('2'); // hole 1 tees with 2 diffs
+    await expect(page.locator('[data-dxg="minibrief"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="minibrief"]')).toContainText('First tee');
 
+    // The toggle raises the full caddie as a bottom sheet over the document.
     await page.locator('[data-dxg="toggle"]').click();
     await expect(page.locator('[data-dxg="brief"]')).toBeVisible();
     await expect(page.locator('[data-dxg="hints"]')).toBeVisible();
 
+    // Tapping the scrim above the sheet lowers it again…
+    await page.locator('[data-dxg="scrim"]').click({ position: { x: 20, y: 20 } });
+    await expect(page.locator('[data-dxg="brief"]')).not.toBeVisible();
+
+    // …and the toggle keeps working both ways.
+    await page.locator('[data-dxg="toggle"]').click();
+    await expect(page.locator('[data-dxg="brief"]')).toBeVisible();
     await page.locator('[data-dxg="toggle"]').click();
     await expect(page.locator('[data-dxg="brief"]')).not.toBeVisible();
+  });
+
+  test('clearing a hole raises the sheet, so the banner and Next are seen', async ({ page }) => {
+    test.setTimeout(180000);
+    await bootCourse(page);
+
+    await page.evaluate(async () => { await (window as any).__golf.playReference(); });
+    await expect(page.locator('#caddie.dxg')).toHaveAttribute('data-open', 'true');
+    await expect(page.locator('[data-dxg="banner"]')).toBeVisible();
+    await expect(page.locator('[data-dxg="banner"]')).toContainText('HOLE CLEAR');
   });
 });

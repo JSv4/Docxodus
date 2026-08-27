@@ -456,25 +456,73 @@ const PANEL_CSS = `
   font: 13px/1.5 system-ui, sans-serif; color: #1c2733; background: #f4f7f5;
   border-left: 1px solid #d7dfd9; }
 .dxg * { box-sizing: border-box; }
-.dxg-head { padding: 12px 14px 10px; border-bottom: 1px solid #d7dfd9; }
-.dxg-headrow { display: flex; align-items: center; gap: 10px; }
-.dxg-brand { font: 700 15px/1 "SF Mono", Consolas, monospace; letter-spacing: .08em; color: #14532d; }
+.dxg-head { flex: none; padding: 12px 14px 10px; border-bottom: 1px solid #d7dfd9; }
+.dxg-headrow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dxg-brand { font: 700 15px/1 "SF Mono", Consolas, monospace; letter-spacing: .08em;
+  color: #14532d; white-space: nowrap; }
 .dxg-mini { display: none; font: 600 11.5px/1 "SF Mono", Consolas, monospace; color: #45524b;
-  margin-left: auto; white-space: nowrap; }
-.dxg-toggle { display: none; font: 600 11.5px/1 system-ui, sans-serif; padding: 6px 10px;
-  border: 1px solid #c3cfc6; border-radius: 8px; background: #fff; color: #33413a; cursor: pointer; }
-.dxg-toggle[aria-expanded="true"] { background: #14532d; border-color: #14532d; color: #fff; }
-/* Compact (phone) mode: the panel collapses to its head — brand, mini score,
-   toggle, hole nav — and the body/foot appear only while the toggle is open,
-   so the document keeps the screen. Driver sets data-compact from a media
-   query and data-open from the toggle. */
+  margin-left: auto; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dxg-toggle { display: none; font: 600 11.5px/1 system-ui, sans-serif; padding: 7px 12px;
+  border: 1px solid #14532d; border-radius: 8px; background: #14532d; color: #fff;
+  cursor: pointer; white-space: nowrap; }
+.dxg-toggle[aria-expanded="true"] { background: #fff; color: #14532d; }
+/* The sheet is an invisible wrapper on a desk (holes, body, foot flow as one
+   column) and becomes the phone bottom sheet in compact mode below. */
+.dxg-sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.dxg-minibrief, .dxg-grab, .dxg-scrim { display: none; }
+.dxg-holesrow { display: flex; align-items: baseline; gap: 8px; flex: none;
+  padding: 10px 14px; border-bottom: 1px solid #d7dfd9; }
+
+/* ── Compact (phone) mode ─────────────────────────────────────────────────────
+   The caddie docks as a fixed scorecard bar along the bottom edge — brand,
+   live mini score, a one-line hole brief, and the Caddie button — so the
+   document keeps the whole screen and the objective stays readable without
+   opening anything. The toggle raises the full panel as a bottom sheet OVER
+   the document (grab handle, rounded top, scrim behind), the pattern a thumb
+   already knows, instead of squeezing the editor into a sliver. Driver sets
+   data-compact from a media query and data-open from the toggle/scrim/grab;
+   it also opens the sheet itself when a hole clears, so the banner and the
+   unlocked Next hole are never celebrated off-screen. */
+.dxg[data-compact="true"] { position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+  z-index: 60; height: auto;
+  max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px);
+  background: transparent; border-left: 0; }
 .dxg[data-compact="true"] .dxg-mini { display: inline; }
 .dxg[data-compact="true"] .dxg-toggle { display: inline-block; }
-.dxg[data-compact="true"]:not([data-open="true"]) .dxg-body,
-.dxg[data-compact="true"]:not([data-open="true"]) .dxg-foot { display: none; }
-.dxg[data-compact="true"] .dxg-view { max-height: 30vh; }
-.dxg[data-compact="true"] .dxg-view iframe { height: 28vh; }
-.dxg-holesrow { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+.dxg[data-compact="true"] .dxg-brand { font-size: 13px; }
+.dxg[data-compact="true"] .dxg-head { order: 2; position: relative; z-index: 1;
+  padding: 9px 12px calc(9px + env(safe-area-inset-bottom));
+  background: rgba(244, 247, 245, .96);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border-top: 1px solid #d7dfd9; border-bottom: 0;
+  box-shadow: 0 -6px 18px rgba(16, 42, 26, .08); }
+.dxg[data-compact="true"]:not([data-open="true"]) .dxg-minibrief { display: block;
+  width: 100%; margin: 7px 0 0; padding: 0; border: 0; background: none;
+  cursor: pointer; text-align: left; font: 12px/1.4 system-ui, sans-serif;
+  color: #45524b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dxg-minibrief b { color: #14532d; font-weight: 700; }
+.dxg[data-compact="true"] .dxg-sheet { display: none; order: 1; position: relative;
+  z-index: 1; min-height: 0; margin-bottom: -1px; max-height: 76vh; max-height: 76dvh;
+  background: #f4f7f5; border: 1px solid #d7dfd9; border-bottom: 0;
+  border-radius: 16px 16px 0 0; overflow: hidden;
+  box-shadow: 0 -18px 44px rgba(16, 42, 26, .2); }
+.dxg[data-compact="true"][data-open="true"] .dxg-sheet { display: flex;
+  animation: dxg-rise .28s cubic-bezier(.32, .72, .28, 1); }
+.dxg[data-compact="true"][data-open="true"] .dxg-scrim { display: block;
+  position: fixed; inset: 0; z-index: 0; background: rgba(16, 42, 26, .35);
+  -webkit-tap-highlight-color: transparent; }
+.dxg[data-compact="true"] .dxg-grab { display: grid; place-items: center; flex: none;
+  width: 100%; height: 24px; margin: 4px 0 0; padding: 0; border: 0;
+  background: none; cursor: pointer; }
+.dxg-grab i { display: block; width: 44px; height: 5px; border-radius: 999px;
+  background: #c3cfc6; }
+.dxg[data-compact="true"] .dxg-holesrow { padding: 4px 14px 10px; }
+.dxg[data-compact="true"] .dxg-view { max-height: 38vh; max-height: 38dvh; }
+.dxg[data-compact="true"] .dxg-view iframe { height: 36vh; height: 36dvh; }
+@keyframes dxg-rise { from { transform: translateY(26px); opacity: .4; }
+  to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .dxg[data-compact="true"][data-open="true"] .dxg-sheet { animation: none; } }
 .dxg-holeslabel { font: 600 10.5px/1 "SF Mono", Consolas, monospace; letter-spacing: .07em;
   text-transform: uppercase; color: #6b7a71; }
 .dxg-holes { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -540,17 +588,23 @@ export function mountGolfPanel(root) {
 
   root.classList.add('dxg');
   root.innerHTML = `
+    <div class="dxg-scrim" data-dxg="scrim" aria-hidden="true"></div>
     <div class="dxg-head">
       <div class="dxg-headrow">
         <div class="dxg-brand">⛳ DOCX GOLF</div>
-        <span class="dxg-mini" data-dxg="mini"></span>
+        <span class="dxg-mini" data-dxg="mini" title="Strokes / par · diffs left"></span>
         <button class="dxg-toggle" data-dxg="toggle" aria-expanded="false"
           title="Show the caddie">☰ Caddie</button>
       </div>
-      <div class="dxg-holesrow">
-        <span class="dxg-holeslabel">Holes</span>
-        <div class="dxg-holes" data-dxg="holes" role="group" aria-label="Pick a hole"></div>
-      </div>
+      <button class="dxg-minibrief" data-dxg="minibrief"
+        title="Open the caddie"></button>
+    </div>
+    <div class="dxg-sheet" data-dxg="sheet">
+    <button class="dxg-grab" data-dxg="grab" aria-label="Close the caddie"
+      title="Close the caddie"><i></i></button>
+    <div class="dxg-holesrow">
+      <span class="dxg-holeslabel">Holes</span>
+      <div class="dxg-holes" data-dxg="holes" role="group" aria-label="Pick a hole"></div>
     </div>
     <div class="dxg-body">
       <div class="dxg-banner" data-dxg="banner"></div>
@@ -594,6 +648,7 @@ export function mountGolfPanel(root) {
       <button data-dxg="reset" title="Re-tee this hole: the document and your strokes go back to the start">↻ Reset</button>
       <button data-dxg="showme" title="Concede: the caddie makes the edits for you — the hole clears but is not scored">🏳 Show me</button>
       <button class="dxg-next" data-dxg="next" disabled title="Clear the hole to unlock">Next hole ▶</button>
+    </div>
     </div>`;
 
   const grab = (name) => root.querySelector(`[data-dxg="${name}"]`);
@@ -607,7 +662,8 @@ export function mountGolfPanel(root) {
       view: grab('view'), hints: grab('hints'),
       reset: grab('reset'), next: grab('next'),
       showme: grab('showme'), toggle: grab('toggle'), mini: grab('mini'),
-      howto: grab('howto'),
+      howto: grab('howto'), sheet: grab('sheet'), scrim: grab('scrim'),
+      grabber: grab('grab'), minibrief: grab('minibrief'),
     },
   };
 }
@@ -670,6 +726,12 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     ui.parchip.textContent = `par ${hole.par}`;
     ui.surface.textContent = hole.surface ?? 'document';
     ui.brief.textContent = hole.brief;
+    // The bar's one-line brief: on a phone the objective must be readable
+    // without opening the sheet, or the course reads as a bare document.
+    ui.minibrief.replaceChildren();
+    const miniTitle = document.createElement('b');
+    miniTitle.textContent = `Hole ${holeIndex + 1} · ${hole.title}`;
+    ui.minibrief.append(miniTitle, ` — ${hole.brief}`);
     ui.par.textContent = String(hole.par);
     ui.strokes.textContent = String(counter.strokes());
     ui.score.dataset.cleared = String(cleared);
@@ -690,8 +752,9 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     revisionsLeft = revisions.length;
     ui.diffs.textContent = String(revisionsLeft);
     ui.strokes.textContent = String(counter.strokes());
+    // Scorecard notation, same as the clear banner: strokes/par, then work left.
     ui.mini.textContent =
-      `${counter.strokes()} strokes · par ${course[holeIndex]?.par ?? '–'} · ${revisionsLeft} left`;
+      `${counter.strokes()}/${course[holeIndex]?.par ?? '–'} · ${revisionsLeft} left`;
     ui.hints.innerHTML = '';
     if (revisionsLeft === 0) {
       const li = document.createElement('li');
@@ -849,6 +912,9 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
         : `Running total ${totalText}${assistedNote} · next hole when you are ready.`,
     );
     paintChrome();
+    // On a phone the banner and the unlocked Next hole live in the sheet —
+    // raise it so the clear is never celebrated off-screen.
+    if (isCompact()) setOpen(true);
   }
 
   // ── hole lifecycle ───────────────────────────────────────────────
@@ -924,22 +990,34 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     }
   });
 
-  // Compact (phone) mode: collapse the panel to its head behind a toggle.
+  // Compact (phone) mode: the caddie docks as a bottom scorecard bar and the
+  // toggle raises it as a bottom sheet over the document. The scrim, the grab
+  // handle, Escape, and the toggle itself all lower it again.
   const compactQuery = typeof window.matchMedia === 'function'
     ? window.matchMedia('(max-width: 640px)')
     : null;
+  const isCompact = () => ui.panel.dataset.compact === 'true';
+  const setOpen = (open) => {
+    ui.panel.dataset.open = String(open);
+    ui.toggle.setAttribute('aria-expanded', String(open));
+    ui.toggle.textContent = open ? '✕ Close' : '☰ Caddie';
+    ui.toggle.title = open ? 'Close the caddie' : 'Show the caddie';
+  };
   const applyCompact = () => {
     const compact = Boolean(compactQuery?.matches);
     ui.panel.dataset.compact = String(compact);
-    if (!compact) delete ui.panel.dataset.open;
+    setOpen(false); // a density flip never strands an open sheet
   };
   compactQuery?.addEventListener('change', applyCompact);
   applyCompact();
-  ui.toggle.addEventListener('click', () => {
-    const open = ui.panel.dataset.open === 'true';
-    ui.panel.dataset.open = String(!open);
-    ui.toggle.setAttribute('aria-expanded', String(!open));
-  });
+  ui.toggle.addEventListener('click', () => setOpen(ui.panel.dataset.open !== 'true'));
+  ui.minibrief.addEventListener('click', () => setOpen(true));
+  ui.scrim.addEventListener('click', () => setOpen(false));
+  ui.grabber.addEventListener('click', () => setOpen(false));
+  const onKeydown = (event) => {
+    if (event.key === 'Escape' && isCompact() && ui.panel.dataset.open === 'true') setOpen(false);
+  };
+  document.addEventListener('keydown', onKeydown);
 
   const controller = {
     course,
@@ -970,6 +1048,7 @@ export function startGolf({ editor, session, engine, ui, course = COURSE }) {
     dispose: () => {
       clearInterval(pollTimer);
       clearTimeout(scoreTimer);
+      document.removeEventListener('keydown', onKeydown);
     },
   };
 

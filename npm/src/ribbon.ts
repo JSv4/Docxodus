@@ -296,6 +296,8 @@ class RibbonSurface implements RibbonEditor {
   private featureTimer: ReturnType<typeof setInterval> | null = null;
   private featureIndex = 0;
   private resizeObserver: ResizeObserver | null = null;
+  private strips: HTMLElement[] = [];
+  private stripObserver: ResizeObserver | null = null;
   private lastAnchorText = "";
   private selectionFrame: number | null = null;
   private readonly onSelectionChange: () => void;
@@ -339,6 +341,7 @@ class RibbonSurface implements RibbonEditor {
     this.applyStaticOptions();
     this.buildGrid();
     this.wire();
+    this.wireScrollFades();
     this.applyChrome();
 
     this.loader = this.createLoaderController();
@@ -440,6 +443,48 @@ class RibbonSurface implements RibbonEditor {
     this.element.dataset.chrome = next;
     // The picker's absolute position is meaningless after a density flip.
     this.closePicker();
+    // A density flip relays out every strip; re-measure without waiting for
+    // the observer so the fades never lag a frame behind the new layout.
+    this.syncAllStripFades();
+  }
+
+  // ── scroll-edge affordances ─────────────────────────────────────────────────
+
+  /**
+   * The chrome's strips scroll horizontally instead of squashing ("no command
+   * is removed in compact"), so each one reports which edges hide more content
+   * via `data-fade` and the stylesheet dissolves content at exactly those
+   * edges. Without this a strip hard-clips mid-control and reads as broken.
+   */
+  private syncStripFade(strip: HTMLElement): void {
+    const max = strip.scrollWidth - strip.clientWidth;
+    const tokens =
+      max <= 1 ? "" : `${strip.scrollLeft > 1 ? "l " : ""}${strip.scrollLeft < max - 1 ? "r" : ""}`.trim();
+    if (tokens) strip.setAttribute("data-fade", tokens);
+    else strip.removeAttribute("data-fade");
+  }
+
+  private syncAllStripFades(): void {
+    for (const strip of this.strips) this.syncStripFade(strip);
+  }
+
+  private wireScrollFades(): void {
+    this.strips = Array.from(
+      this.element.querySelectorAll<HTMLElement>(".dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail"),
+    );
+    if (typeof ResizeObserver !== "undefined") {
+      // One observer for all strips. It also fires when a panel becomes the
+      // active one (display flips from none), which is what keeps a freshly
+      // selected tab's fades honest without per-tab wiring.
+      this.stripObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) this.syncStripFade(entry.target as HTMLElement);
+      });
+    }
+    for (const strip of this.strips) {
+      strip.addEventListener("scroll", () => this.syncStripFade(strip), { passive: true });
+      this.stripObserver?.observe(strip);
+      this.syncStripFade(strip);
+    }
   }
 
   // ── status ──────────────────────────────────────────────────────────────────
@@ -547,6 +592,8 @@ class RibbonSurface implements RibbonEditor {
     doc.removeEventListener("mousedown", this.onDocumentMouseDown);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.stripObserver?.disconnect();
+    this.stripObserver = null;
     if (this.selectionFrame != null) cancelAnimationFrame(this.selectionFrame);
     this.selectionFrame = null;
     this.stopRotation();
@@ -887,6 +934,10 @@ class RibbonSurface implements RibbonEditor {
       }
       host.appendChild(row);
     }
+    // The thread list is the one strip content that grows while its panel is
+    // already visible, which a ResizeObserver on the panel cannot see.
+    const panel = this.element.querySelector<HTMLElement>('.dxr-panel[data-panel="review"]');
+    if (panel) this.syncStripFade(panel);
   }
 
   // ── selection-driven state ──────────────────────────────────────────────────
