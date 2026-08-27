@@ -17,7 +17,7 @@ browser-wasm) and copies the AppBundle's `_framework/` into `npm/dist/wasm/`:
   precompressed content
 - **no** `.map` / `.symbols` debug artifacts (use a Debug build when you need them)
 
-| Metric | Before (≤ 9.0.0) | Now (v10.0.0) |
+| Metric | Before (≤ 9.0.0) | Now |
 |---|---|---|
 | Browser-fetched payload, uncompressed | 16.7 MB | **14.7 MB** |
 | Wire transfer on a brotli-serving host | *(no .br shipped)* | **3.60 MB** |
@@ -27,7 +27,7 @@ browser-wasm) and copies the AppBundle's `_framework/` into `npm/dist/wasm/`:
 
 The `Docxodus.wasm` row grew rather than shrank: the trimmer already removed the
 SpreadsheetML/PresentationML modules from the browser payload long before they were deleted
-from the source tree in v10.0.0, so that purge moved this number by nothing. What moved it is
+from the source tree, so that purge moved this number by nothing. What moved it is
 everything added since 9.0.0 — the session op surface, the delivery/verification subsystems,
 and pagination. The guardrail that matters is the brotli wire total, which
 `scripts/build-wasm.sh` prints and holds under a 4096 KB budget.
@@ -66,7 +66,7 @@ Both paths have permanent browser canaries in `npm/tests/trim-validation.spec.ts
 either fails after an SDK bump, suspect the descriptor first.
 
 `SuppressTrimAnalysisWarnings` stays `true` deliberately: the one reflective pattern is
-pinned and canaried, and trim safety is enforced by the Playwright suite (312 tests run
+pinned and canaried, and trim safety is enforced by the Playwright suite (669 tests run
 against the trimmed artifacts; also `dotnet test` for the non-WASM side).
 
 ## Compression and serving
@@ -77,10 +77,10 @@ loader is unchanged — compression is the host's job:
 - **Hosts with content negotiation** (nginx `brotli_static on`, Caddy `precompressed`,
   Netlify, Vercel, Cloudflare Pages): serve the `.br` sibling with
   `Content-Encoding: br` + `Vary: Accept-Encoding`, keeping the original
-  `Content-Type` (`application/wasm`). Wire ≈ 3.3 MB; the browser's network stack
+  `Content-Type` (`application/wasm`). Wire ≈ 3.6 MB; the browser's network stack
   decompresses while streaming — **cold open is not slowed** (measured below).
-- **Hosts that gzip on the fly**: wire ≈ 4.1 MB, nothing to configure.
-- **Dumb static hosts**: raw ~12.9 MB. (A JS-side brotli decode fallback was evaluated
+- **Hosts that gzip on the fly**: wire ≈ 4.6 MB, nothing to configure.
+- **Dumb static hosts**: raw ~14.7 MB. (A JS-side brotli decode fallback was evaluated
   and deliberately **not** shipped: `DecompressionStream` has no brotli support, and a
   JS/wasm decoder decompressing the whole payload single-threaded is the pattern that
   makes brotli *feel* slow. If a fallback is ever wanted, prefer gzip via
@@ -111,13 +111,13 @@ is worth ~80 ms even on localhost (less IL to parse) and ~700 ms at 50 Mbps.
 ## Size guardrail
 
 `build-wasm.sh` computes the brotli wire total on every build and **fails above 4 MB**
-(measured ~3.3 MB). If it trips: look for a re-rooted assembly (`TrimmerRootAssembly`),
+(measured 3.60 MB). If it trips: look for a re-rooted assembly (`TrimmerRootAssembly`),
 a dependency bump growing the SDK, or a new package reference. The npm CI job runs the
 same script, so regressions surface at PR time.
 
 ## Future size work (not implemented)
 
-The remaining uncompressed ceiling is `DocumentFormat.OpenXml.wasm` (5.1 MB): the SDK's
+The remaining uncompressed ceiling is `DocumentFormat.OpenXml.wasm` (5.0 MB): the SDK's
 typed part factory statically roots every schema family a part *could* contain
 (Spreadsheet, Presentation, Charts, CustomUI, InkML ≈ 2–2.5 MB of webcil a DOCX-only
 pipeline never touches — upstream issue

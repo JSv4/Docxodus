@@ -222,7 +222,8 @@ WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured 
 Docxodus handles `.docx`/`.docm`/`.dotx`/`.dotm`. The inherited OpenXmlPowerTools
 SpreadsheetML and PresentationML modules (`SpreadsheetWriter`, `WorksheetAccessor`,
 `SmlToHtmlConverter`, `XlsxTables`, `ChartUpdater`, `PresentationBuilder`, `TextReplacer`,
-and the `SmlDocument`/`PmlDocument` wrappers) were removed in v10.0.0. `GetDocumentType()`
+and the `SmlDocument`/`PmlDocument` wrappers) were removed when the library narrowed to
+WordprocessingML — see the `### Removed` entry in `CHANGELOG.md`. `GetDocumentType()`
 still recognises XLSX and PPTX packages so that feeding one in throws a clear
 `PowerToolsDocumentException` instead of failing deeper in the stack. Don't reintroduce
 non-Wordprocessing format support here.
@@ -306,7 +307,8 @@ SDK 2.8.1 → 3.x. Artifacts of that migration worth knowing:
   helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper`). Remember the WASM build excludes it.
 - **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives remain in some
   files; safe to remove when you touch one.
-- The upstream `archived-examples/` console projects were removed in v10.0.0 — they exercised
+- The upstream `archived-examples/` console projects were removed with the SpreadsheetML and
+  PresentationML modules — they exercised
   the spreadsheet/presentation modules and were never in the solution. `git log` has them.
 
 For bugfix history, use `git log` rather than maintaining a list here.
