@@ -18,8 +18,6 @@ namespace OxPt
     public class MgTests
     {
         [Theory]
-        [InlineData("Presentation.pptx")]
-        [InlineData("Spreadsheet.xlsx")]
         [InlineData("DA001-TemplateDocument.docx")]
         [InlineData("DA002-TemplateDocument.docx")]
         [InlineData("DA003-Select-XPathFindsNoData.docx")]
@@ -34,7 +32,6 @@ namespace OxPt
             MetricsGetterSettings settings = new MetricsGetterSettings()
             {
                 IncludeTextInContentControls = false,
-                IncludeXlsxTableCellData = false,
                 RetrieveNamespaceList = true,
                 RetrieveContentTypeList = true,
             };
@@ -45,16 +42,6 @@ namespace OxPt
             {
                 WmlDocument wmlDocument = new WmlDocument(fi.FullName);
                 metrics = MetricsGetter.GetDocxMetrics(wmlDocument, settings);
-            }
-            else if (Util.IsSpreadsheetML(extension))
-            {
-                SmlDocument smlDocument = new SmlDocument(fi.FullName);
-                metrics = MetricsGetter.GetXlsxMetrics(smlDocument, settings);
-            }
-            else if (Util.IsPresentationML(extension))
-            {
-                PmlDocument pmlDocument = new PmlDocument(fi.FullName);
-                metrics = MetricsGetter.GetPptxMetrics(pmlDocument, settings);
             }
 
             Assert.NotNull(metrics);

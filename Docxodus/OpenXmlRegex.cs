@@ -84,7 +84,7 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// This overload enables not coalescing content, which is necessary for DocumentAssembler.
+        /// This overload enables not coalescing content, for callers that need runs left as-is.
         /// </summary>
         public static int Replace(IEnumerable<XElement> content, Regex regex, string replacement,
             Func<XElement, Match, bool> doReplacement, bool coalesceContent)
@@ -258,9 +258,8 @@ namespace Docxodus
                         {
                             if (replacement != "")
                             {
-                                // We coalesce runs as some methods, e.g., in DocumentAssembler,
-                                // will try to find the replacement string even though they
-                                // set coalesceContent to false.
+                                // We coalesce runs because a caller can pass coalesceContent:false
+                                // and still expect to find the replacement string afterwards.
                                 string newTextValue = match.Result(replacement);
                                 List<XElement> newRuns = UnicodeMapper.StringToCoalescedRunList(newTextValue,
                                     firstRunProperties);
@@ -328,9 +327,8 @@ namespace Docxodus
                                 else
                                     runToDelete.Remove();
 
-                            // We coalesce runs as some methods, e.g., in DocumentAssembler,
-                            // will try to find the replacement string even though they
-                            // set coalesceContent to false.
+                            // We coalesce runs because a caller can pass coalesceContent:false
+                            // and still expect to find the replacement string afterwards.
                             string newTextValue = match.Result(replacement);
                             List<XElement> newRuns = UnicodeMapper.StringToCoalescedRunList(newTextValue,
                                 firstRunProperties);

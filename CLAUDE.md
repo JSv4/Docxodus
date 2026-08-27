@@ -39,8 +39,9 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**115 warnings**, the test project with **~618** (mostly StyleCop `SA1633` file headers and
-xUnit analyzer suggestions). Don't add to either baseline.
+**131 warnings**, the test project with **774** (mostly StyleCop `SA1633`/`SA1636` file
+headers and `SA1206` using-order). Don't add to either baseline. Measure with
+`--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
 ## Repository Layout
 
@@ -49,17 +50,21 @@ usually ripple through all of it.
 
 | Layer | Path | Purpose |
 |-------|------|---------|
-| Core library | `Docxodus/` | All OOXML logic. NuGet package `Docxodus`. |
+| Core library | `Docxodus/` | All WordprocessingML logic. NuGet package `Docxodus`. |
 | Shared facades | `Docxodus/Internal/{DocxSessionOps,DocxDiffOps,HtmlConversionOps,SessionRegistry,DocxSessionJson}.cs` | Single-owner op + wire-shape layer every transport routes through. |
-| Unit tests | `Docxodus.Tests/` | xUnit, **~3,440 tests**, ~4 min. |
+| Delivery | `Docxodus/Delivery/` | Delivery bundles: manifest, publisher, revision policy, host renderer. See `delivery_bundle.md`. |
+| Verification | `Docxodus/Verification/` | Package manifests, semantic diff, redline-reversibility proof, deliverable inspection. See `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md`. |
+| Unit tests | `Docxodus.Tests/` | xUnit, **~4,260 tests**, ~4 min. |
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells over the facades. |
 | Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
 | Agent server | `tools/mcp-server/` | JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): lifecycle, grouped-intent, and sessionless tools. See `docs/architecture/docx_agent_server.md`. |
 | Python client | `python/` | `docx-scalpel` on PyPI. |
 | npm/TypeScript | `npm/` | Browser package: `src/index.ts` (API), `src/editor.ts` (block editor), `src/ribbon.ts` (shipped UI surface), `src/embed.ts` (CDN entries), `src/react.ts`, worker proxy. |
+| Export package | `npm-export/` | `@docxodus/export` — deterministic standalone HTML + PDF through a pinned Chromium. Has its own `dist/`, tests, and `docxodus doctor` preflight. See `standalone_paginated_export.md`. |
 | Workflow evals | `eval/` + `Docxodus.Tests/Eval/` | Deterministic document-workflow scenarios scored on task completion, target precision, and collateral change. Corpus and contract in `eval/README.md`. |
 | Pages demo | `docs/demo/` | Static pages hosting the **shipped** surface via `createRibbonEditor`. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
+| Out-of-solution tools | `tools/diffharness/`, `tools/manifest-fuzz/`, `tools/screenshots/`, `benchmarks/` | Not in `Docxodus.sln`; build them by path. LibreOffice-backed diff verification, AFL manifest fuzzing, README screenshot capture, and a form-document edit benchmark. |
 
 ### The single-owner rule
 
@@ -126,10 +131,10 @@ npx tsc --noEmit
 Playwright serves from `npm/dist/wasm/`. **If you edit C#, `.ts`, or the harness HTML,
 re-run `npm run build` first** or you will test stale artifacts.
 
-**Running the .NET suite dirties the working tree.** The `SH*` spreadsheet tests write back
-to their own committed fixtures under `TestFiles/`, leaving ~47 modified `.xlsx` files in
-`git status`. They are test-run noise, not your changes — `git checkout -- TestFiles/` before
-committing.
+The .NET suite no longer dirties `TestFiles/` — the `SH*` spreadsheet tests that used to
+write back to their own committed `.xlsx` fixtures were removed with the SpreadsheetML
+modules. If `git status` shows modified fixtures after a run, a test is writing where it
+should be using a temp copy; fix the test rather than reflexively `git checkout -- TestFiles/`.
 
 ## WASM Conditional Compilation
 
@@ -153,8 +158,8 @@ pre-isolation artifact is lingering: delete `Docxodus*/bin` + `Docxodus*/obj` on
 ## Core Concepts
 
 **Document wrappers.** `DocxodusDocument` (base, holds `DocumentByteArray` + `FileName`) with
-`WmlDocument` / `SmlDocument` / `PmlDocument` for Word / Excel / PowerPoint. Immutable-style
-manipulation goes through `OpenXmlMemoryStreamDocument`:
+`WmlDocument` for Word. Immutable-style manipulation goes through
+`OpenXmlMemoryStreamDocument`:
 
 ```csharp
 using (var streamDoc = new OpenXmlMemoryStreamDocument(doc))
@@ -191,24 +196,50 @@ detail; this file deliberately does not restate them.
 | `ExternalAnnotationProjector.cs` | Incremental annotation overlay on pre-converted HTML | `incremental_annotation_overlay.md`, `custom_annotations.md` |
 | `OpenContractExporter.cs` | Export to OpenContracts format | `opencontracts_export.md` |
 | `DocumentBuilder.cs` | Merge / split DOCX | — |
-| `DocumentAssembler.cs` | Template population from XML via content controls | — |
-| `PresentationBuilder.cs` | Merge / split PPTX | — |
-| `SpreadsheetWriter.cs` | Simplified XLSX creation, streaming | — |
-| `OpenXmlRegex.cs` | Regex search/replace in DOCX/PPTX | — |
+| `OpenXmlRegex.cs` | Regex search/replace in DOCX | — |
 | `RevisionProcessor.cs` | Accept/reject tracked revisions | `tracked_changes.md` |
 | `FormattingAssembler.cs` | Resolve and flatten formatting | — |
 | `MetricsGetter.cs` | Document metrics (styles, fonts, languages) | — |
+| `PageMap.cs` + `npm/src/pagination.ts` | Page geometry and the paginated view | `page_map.md`, `paginated_headers_footers.md` |
+| `Ir/` | The structure-aware IR the diff and markdown projection read | `document_ir.md` |
+| `Delivery/` | Delivery bundles and change receipts | `delivery_bundle.md`, `delivery_change_receipt.md` |
+| `Verification/` | Package manifests, semantic change sets, reversibility proof | `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md` |
+| `npm-export/` | Standalone HTML/PDF export via pinned Chromium | `standalone_paginated_export.md` |
+
+Editor internals: `editor_block_drag_handles.md`, `editor_inline_formatting_on_edit.md`,
+`native_content_controls.md`, `native_images.md`, `unsupported_content_placeholders.md`,
+`browser_llm_demo.md`. Diff/comparison detail: `docxdiff_libreoffice_findings.md`,
+`move_detection_implementation_plan.md`. Smoke-test contracts: `s1_smoke_test_features.md`,
+`epic_435_acceptance_smoke.md`.
 
 WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured payload),
 `wasm-optimization-plan.md`, `skiasharp-removal-plan.md`, `ui_responsiveness.md`,
 `profiling-results.md`. Python wrapper: `python_docxodus.md`.
 
-### Coverage gaps worth knowing
+### Scope: the DOCX toolchain, nothing else
 
-The DOCX path is exhaustively tested. The inherited spreadsheet/presentation modules are not:
-`WorksheetAccessor` and `TextReplacer` have **zero** references in `Docxodus.Tests/`, and
-`PresentationBuilder`, `SpreadsheetWriter`, `ChartUpdater` and `SmlToHtmlConverter` have one
-test file each. Treat changes there as unguarded.
+Docxodus handles `.docx`/`.docm`/`.dotx`/`.dotm`, and every module in `Docxodus/` earns its
+place by serving `DocxSession`, `DocxDiff`, `WmlComparer`, or the render/projection paths.
+Two rounds of the inherited OpenXmlPowerTools fork were removed on that rule — see the
+`### Removed` entry in `CHANGELOG.md` for the full list:
+
+- **Non-Wordprocessing formats.** `SpreadsheetWriter`, `WorksheetAccessor`,
+  `SmlToHtmlConverter`, `XlsxTables`, `ChartUpdater`, `PresentationBuilder`, `TextReplacer`,
+  and the `SmlDocument`/`PmlDocument` wrappers. `GetDocumentType()` still recognises XLSX and
+  PPTX packages so that feeding one in throws a clear `PowerToolsDocumentException` instead of
+  failing deeper in the stack.
+- **DOCX code with no callers.** `WmlToXml` (DOCX → custom XML), `DocumentAssembler`
+  (content-control templating), `ReferenceAdder` (TOC/TOF/TOA fields, plus the `WmlDocument`
+  partial that exposed them), `PowerToolsBlock`, `PowerToolsBlockExtensions`,
+  `StronglyTypedBlock`, and `OxPtHelpers`.
+
+Don't reintroduce either category. Before adding a module here, ask which of the three
+engines it serves; if the answer is "none", it belongs somewhere else.
+
+The `TestFiles/DA*.docx` fixtures outlived `DocumentAssembler` deliberately — they are
+content-control-heavy real Word documents, and the `Ir*` tests glob `TestFiles/**/*.docx` as
+a corpus. Deleting an unreferenced `.docx` silently shrinks that corpus; check the globs
+before you do.
 
 ## Feature Development Workflow
 
@@ -282,6 +313,8 @@ SDK 2.8.1 → 3.x. Artifacts of that migration worth knowing:
   helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper`). Remember the WASM build excludes it.
 - **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives remain in some
   files; safe to remove when you touch one.
-- Legacy example projects live in `archived-examples/` and are not in the solution.
+- The upstream `archived-examples/` console projects were removed with the SpreadsheetML and
+  PresentationML modules — they exercised
+  the spreadsheet/presentation modules and were never in the solution. `git log` has them.
 
 For bugfix history, use `git log` rather than maintaining a list here.

@@ -7,46 +7,57 @@ labels: technical-debt, good-first-issue
 
 ## Summary
 
-The `OpenXmlPowerTools` library currently has `TreatWarningsAsErrors` disabled and several warning codes suppressed due to legacy code issues. These should be fixed to improve code quality.
+`Directory.Build.props` sets `TreatWarningsAsErrors=true` for Release, but `Docxodus.csproj`
+and `Docxodus.Tests.csproj` both override it to `false` — the inherited OpenXmlPowerTools core
+carries too much legacy debt to fail the build on. The CLI tools, MCP server, python-host and
+WASM project do inherit the strict setting. The goal is to clear the two overrides.
 
-## Current Suppressions
+## Current suppressions
 
-In `OpenXmlPowerTools/OpenXmlPowerTools.csproj`:
+`Docxodus/Docxodus.csproj`:
 ```xml
 <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-<NoWarn>$(NoWarn);CS8073;CA2200</NoWarn>
+<NoWarn>$(NoWarn);CS8073;CA2200;CS8632</NoWarn>
 ```
 
-## Warnings to Fix
+`Docxodus.Tests/Docxodus.Tests.csproj`:
+```xml
+<TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+<NoWarn>$(NoWarn);xUnit1012;xUnit2020</NoWarn>
+```
 
-### CS8632 - Nullable annotations without context
-Files with `?` nullable annotations but project has `<Nullable>disable</Nullable>`:
-- `PtOpenXmlUtil.cs`
-- `WmlToHtmlConverter.cs`
-- `WmlComparer.cs`
+## Current baseline
 
-**Fix**: Either enable nullable for the project and fix all nullable warnings, or remove the `?` annotations.
+Measure with a clean rebuild — an incremental build reports zero because nothing recompiles:
 
-### CS8073 - Comparison always true/false
-`PresentationBuilder.cs` has comparisons of `IdPartPair` (a struct) to null, which is always true.
+```bash
+dotnet build Docxodus/Docxodus.csproj --no-incremental
+dotnet build Docxodus.Tests/Docxodus.Tests.csproj --no-incremental
+```
 
-**Fix**: Remove unnecessary null checks or change the logic.
+The library builds with **134 warnings**, the test project with **808**. Don't add to either
+baseline. The mix is dominated by StyleCop file-header rules (`SA1633`, `SA1636`) and
+using-directive ordering (`SA1206`); the genuinely interesting remainder is a handful of
+nullable-flow warnings (`CS8600`, `CS8604`) and `CA2022` (ignored `Stream.Read` return value).
 
-### CA2200 - Re-throwing changes stack information
-Files using `throw e;` instead of `throw;`:
-- `DocumentBuilder.cs`
-- `PresentationBuilder.cs`
-- `SpreadsheetWriter.cs`
+## Where the debt lives
 
-**Fix**: Change `throw e;` to `throw;` to preserve stack trace.
+The library is `<Nullable>enable</Nullable>` (issue #13); the exception is the inherited core,
+where legacy files carry an explicit `#nullable disable` header. List them with:
+
+```bash
+grep -l "^#nullable disable" Docxodus/*.cs
+```
+
+When substantially refactoring one of those files, consider removing its header and fixing that
+file's warnings. `CS8632` stays in `NoWarn` deliberately: with the project context enabled it can
+only fire inside the opted-out files, where some inert `?` annotations are kept for the day each
+file migrates.
 
 ## Goal
 
-Once all warnings are fixed:
-1. Remove `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>`
-2. Remove `<NoWarn>` entries
-3. Let `Directory.Build.props` handle warning-as-error for Release builds
-
-## Related
-
-Part of the .NET 8 migration effort.
+Once a file's warnings are fixed:
+1. Remove its `#nullable disable` header.
+2. When the whole project is clean, drop `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>`
+   and the `<NoWarn>` entries.
+3. Let `Directory.Build.props` handle warning-as-error for Release builds.

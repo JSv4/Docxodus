@@ -388,10 +388,7 @@ namespace Docxodus
         /// <summary>
         /// Creates a complete list of all parts contained in the <see cref="OpenXmlPartContainer"/>.
         /// </summary>
-        /// <param name="container">
-        /// A <see cref="WordprocessingDocument"/>, <see cref="SpreadsheetDocument"/>, or
-        /// <see cref="PresentationDocument"/>.
-        /// </param>
+        /// <param name="container">A <see cref="WordprocessingDocument"/> or one of its parts.</param>
         /// <returns>list of <see cref="OpenXmlPart"/>s contained in the <see cref="OpenXmlPartContainer"/>.</returns>
         public static List<OpenXmlPart> GetAllParts(this OpenXmlPartContainer container)
         {
@@ -487,12 +484,6 @@ namespace Docxodus
             if (Util.IsWordprocessingML(fi.Extension))
                 return new XProcessingInstruction("mso-application",
                             "progid=\"Word.Document\"");
-            if (Util.IsPresentationML(fi.Extension))
-                return new XProcessingInstruction("mso-application",
-                            "progid=\"PowerPoint.Show\"");
-            if (Util.IsSpreadsheetML(fi.Extension))
-                return new XProcessingInstruction("mso-application",
-                            "progid=\"Excel.Sheet\"");
             return null;
         }
 
@@ -1737,149 +1728,6 @@ listSeparator
         }
     }
 
-    public static class PresentationMLUtil
-    {
-        public static void FixUpPresentationDocument(PresentationDocument pDoc)
-        {
-            foreach (var part in pDoc.GetAllParts())
-            {
-                if (part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.slide+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.theme+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml" ||
-                    part.ContentType == "application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml" ||
-                    part.ContentType == "application/vnd.ms-office.drawingml.diagramDrawing+xml")
-                {
-                    XDocument xd = part.GetXDocument();
-                    xd.Descendants().Attributes("smtClean").Remove();
-                    xd.Descendants().Attributes("smtId").Remove();
-                    part.PutXDocument();
-                }
-                if (part.ContentType == "application/vnd.openxmlformats-officedocument.vmlDrawing")
-                {
-                    string fixedContent = null;
-
-                    using (var stream = part.GetStream(FileMode.Open, FileAccess.ReadWrite))
-                    {
-                        using (var sr = new StreamReader(stream))
-                        {
-                            //string input = @"    <![if gte mso 9]><v:imagedata o:relid=""rId15""";
-                            var input = sr.ReadToEnd();
-                            string pattern = @"<!\[(?<test>.*)\]>";
-                            //string replacement = "<![CDATA[${test}]]>";
-                            //fixedContent = Regex.Replace(input, pattern, replacement, RegexOptions.Multiline);
-                            fixedContent = Regex.Replace(input, pattern, m =>
-                            {
-                                var g = m.Groups[1].Value;
-                                if (g.StartsWith("CDATA["))
-                                    return "<![" + g + "]>";
-                                else
-                                    return "<![CDATA[" + g + "]]>";
-                            },
-                            RegexOptions.Multiline);
-
-                            //var input = @"xxxxx o:relid=""rId1"" o:relid=""rId1"" xxxxx";
-                            pattern = @"o:relid=[""'](?<id1>.*)[""'] o:relid=[""'](?<id2>.*)[""']";
-                            fixedContent = Regex.Replace(fixedContent, pattern, m =>
-                            {
-                                var g = m.Groups[1].Value;
-                                return @"o:relid=""" + g + @"""";
-                            },
-                            RegexOptions.Multiline);
-
-                            fixedContent = fixedContent.Replace("</xml>ml>", "</xml>");
-
-                            stream.SetLength(fixedContent.Length);
-                        }
-                    }
-                    using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(fixedContent)))
-                        part.FeedData(ms);
-                }
-            }
-        }
-    }
-
-    public static class SpreadsheetMLUtil
-    {
-        public static string GetCellType(string value)
-        {
-            if (value.Any(c => !Char.IsDigit(c) && c != '.'))
-                return "str";
-            return null;
-        }
-
-        public static string IntToColumnId(int i)
-        {
-            if (i >= 0 && i <= 25)
-                return ((char)(((int)'A') + i)).ToString();
-            if (i >= 26 && i <= 701)
-            {
-                int v = i - 26;
-                int h = v / 26;
-                int l = v % 26;
-                return ((char)(((int)'A') + h)).ToString() + ((char)(((int)'A') + l)).ToString();
-            }
-            // 17576
-            if (i >= 702 && i <= 18277)
-            {
-                int v = i - 702;
-                int h = v / 676;
-                int r = v % 676;
-                int m = r / 26;
-                int l = r % 26;
-                return ((char)(((int)'A') + h)).ToString() +
-                    ((char)(((int)'A') + m)).ToString() +
-                    ((char)(((int)'A') + l)).ToString();
-            }
-            throw new ColumnReferenceOutOfRange(i.ToString());
-        }
-
-        private static int CharToInt(char c)
-        {
-            return (int)c - (int)'A';
-        }
-
-        public static int ColumnIdToInt(string cid)
-        {
-            if (cid.Length == 1)
-                return CharToInt(cid[0]);
-            if (cid.Length == 2)
-            {
-                return CharToInt(cid[0]) * 26 + CharToInt(cid[1]) + 26;
-            }
-            if (cid.Length == 3)
-            {
-
-                return CharToInt(cid[0]) * 676 + CharToInt(cid[1]) * 26 + CharToInt(cid[2]) + 702;
-            }
-            throw new ColumnReferenceOutOfRange(cid);
-        }
-
-        public static IEnumerable<string> ColumnIDs()
-        {
-            for (var c = (int)'A'; c <= (int)'Z'; ++c)
-                yield return ((char)c).ToString();
-            for (var c1 = (int)'A'; c1 <= (int)'Z'; ++c1)
-                for (var c2 = (int)'A'; c2 <= (int)'Z'; ++c2)
-                    yield return ((char)c1).ToString() + ((char)c2).ToString();
-            for (var d1 = (int)'A'; d1 <= (int)'Z'; ++d1)
-                for (var d2 = (int)'A'; d2 <= (int)'Z'; ++d2)
-                    for (var d3 = (int)'A'; d3 <= (int)'Z'; ++d3)
-                        yield return ((char)d1).ToString() + ((char)d2).ToString() + ((char)d3).ToString();
-        }
-
-        public static string ColumnIdOf(string cellReference)
-        {
-            string columnIdOf = cellReference.Split('0', '1', '2', '3', '4', '5', '6', '7', '8', '9').First();
-            return columnIdOf;
-        }
-    }
-
     public class Util
     {
         public static string[] WordprocessingExtensions = new[] {
@@ -1892,34 +1740,6 @@ listSeparator
         public static bool IsWordprocessingML(string ext)
         {
             return WordprocessingExtensions.Contains(ext.ToLower());
-        }
-
-        public static string[] SpreadsheetExtensions = new[] {
-            ".xlsx",
-            ".xlsm",
-            ".xltx",
-            ".xltm",
-            ".xlam",
-        };
-
-        public static bool IsSpreadsheetML(string ext)
-        {
-            return SpreadsheetExtensions.Contains(ext.ToLower());
-        }
-
-        public static string[] PresentationExtensions = new[] {
-            ".pptx",
-            ".potx",
-            ".ppsx",
-            ".pptm",
-            ".potm",
-            ".ppsm",
-            ".ppam",
-        };
-
-        public static bool IsPresentationML(string ext)
-        {
-            return PresentationExtensions.Contains(ext.ToLower());
         }
 
         public static bool? GetBoolProp(XElement rPr, XName propertyName)

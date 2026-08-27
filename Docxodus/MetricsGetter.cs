@@ -23,7 +23,6 @@ namespace Docxodus
     public class MetricsGetterSettings
     {
         public bool IncludeTextInContentControls;
-        public bool IncludeXlsxTableCellData;
         public bool RetrieveNamespaceList;
         public bool RetrieveContentTypeList;
     }
@@ -39,16 +38,6 @@ namespace Docxodus
             {
                 WmlDocument wmlDoc = new WmlDocument(fi.FullName, true);
                 return GetDocxMetrics(wmlDoc, settings);
-            }
-            if (Util.IsSpreadsheetML(fi.Extension))
-            {
-                SmlDocument smlDoc = new SmlDocument(fi.FullName, true);
-                return GetXlsxMetrics(smlDoc, settings);
-            }
-            if (Util.IsPresentationML(fi.Extension))
-            {
-                PmlDocument pmlDoc = new PmlDocument(fi.FullName, true);
-                return GetPptxMetrics(pmlDoc, settings);
             }
             return null;
         }
@@ -466,56 +455,6 @@ namespace Docxodus
             return valid;
         }
 
-        private static bool ValidateAgainstSpecificVersion(SpreadsheetDocument sDoc, List<XElement> metrics, DocumentFormat.OpenXml.FileFormatVersions versionToValidateAgainst, XName versionSpecificMetricName)
-        {
-            OpenXmlValidator validator = new OpenXmlValidator(versionToValidateAgainst);
-            var errors = validator.Validate(sDoc);
-            bool valid = errors.Count() == 0;
-            if (!valid)
-            {
-                if (!metrics.Any(e => e.Name == H.SdkValidationError))
-                    metrics.Add(new XElement(H.SdkValidationError, new XAttribute(H.Val, true)));
-                metrics.Add(new XElement(versionSpecificMetricName, new XAttribute(H.Val, true),
-                    errors.Take(3).Select(err =>
-                    {
-                        StringBuilder sb = new StringBuilder();
-                        if (err.Description.Length > 300)
-                            sb.Append(PtUtils.MakeValidXml(err.Description.Substring(0, 300) + " ... elided ...") + Environment.NewLine);
-                        else
-                            sb.Append(PtUtils.MakeValidXml(err.Description) + Environment.NewLine);
-                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part.Uri.ToString()) + Environment.NewLine);
-                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path.XPath) + Environment.NewLine);
-                        return sb.ToString();
-                    })));
-            }
-            return valid;
-        }
-
-        private static bool ValidateAgainstSpecificVersion(PresentationDocument pDoc, List<XElement> metrics, DocumentFormat.OpenXml.FileFormatVersions versionToValidateAgainst, XName versionSpecificMetricName)
-        {
-            OpenXmlValidator validator = new OpenXmlValidator(versionToValidateAgainst);
-            var errors = validator.Validate(pDoc);
-            bool valid = errors.Count() == 0;
-            if (!valid)
-            {
-                if (!metrics.Any(e => e.Name == H.SdkValidationError))
-                    metrics.Add(new XElement(H.SdkValidationError, new XAttribute(H.Val, true)));
-                metrics.Add(new XElement(versionSpecificMetricName, new XAttribute(H.Val, true),
-                    errors.Take(3).Select(err =>
-                    {
-                        StringBuilder sb = new StringBuilder();
-                        if (err.Description.Length > 300)
-                            sb.Append(PtUtils.MakeValidXml(err.Description.Substring(0, 300) + " ... elided ...") + Environment.NewLine);
-                        else
-                            sb.Append(PtUtils.MakeValidXml(err.Description) + Environment.NewLine);
-                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part.Uri.ToString()) + Environment.NewLine);
-                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path.XPath) + Environment.NewLine);
-                        return sb.ToString();
-                    })));
-            }
-            return valid;
-        }
-
         private static void IncrementMetric(Dictionary<XName, int> metricCountDictionary, XName xName)
         {
             if (metricCountDictionary.ContainsKey(xName))
@@ -747,121 +686,6 @@ namespace Docxodus
                     return csa.HAnsiFont;
                 default: // dummy
                     return csa.AsciiFont;
-            }
-        }
-
-        public static XElement GetXlsxMetrics(SmlDocument smlDoc, MetricsGetterSettings settings)
-        {
-            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(smlDoc))
-            {
-                using (SpreadsheetDocument sDoc = streamDoc.GetSpreadsheetDocument())
-                {
-                    List<XElement> metrics = new List<XElement>();
-
-                    bool valid = ValidateAgainstSpecificVersion(sDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2007, H.SdkValidationError2007);
-                    valid |= ValidateAgainstSpecificVersion(sDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2010, H.SdkValidationError2010);
-#if !NET35
-                    valid |= ValidateAgainstSpecificVersion(sDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2013, H.SdkValidationError2013);
-#endif
-
-                    return new XElement(H.Metrics,
-                        new XAttribute(H.FileName, smlDoc.FileName),
-                        new XAttribute(H.FileType, "SpreadsheetML"),
-                        metrics,
-                        GetTableInfoForWorkbook(sDoc, settings),
-                        settings.RetrieveNamespaceList ? RetrieveNamespaceList(sDoc) : null,
-                        settings.RetrieveContentTypeList ? RetrieveContentTypeList(sDoc) : null);
-                }
-            }
-        }
-
-        private static XElement GetTableInfoForWorkbook(SpreadsheetDocument spreadsheet, MetricsGetterSettings settings)
-        {
-            var workbookPart = spreadsheet.WorkbookPart;
-            var xd = workbookPart.GetXDocument();
-            var partInformation =
-                new XElement(H.Sheets,
-                    xd.Root
-                    .Element(S.sheets)
-                    .Elements(S.sheet)
-                    .Select(sh =>
-                    {
-                        var rid = (string)sh.Attribute(R.id);
-                        var sheetName = (string)sh.Attribute("name");
-                        WorksheetPart worksheetPart = (WorksheetPart)workbookPart.GetPartById(rid);
-                        return GetTableInfoForSheet(spreadsheet, worksheetPart, sheetName, settings);
-                    }));
-            return partInformation;
-        }
-
-        public static XElement GetTableInfoForSheet(SpreadsheetDocument spreadsheetDocument, WorksheetPart sheetPart, string sheetName,
-            MetricsGetterSettings settings)
-        {
-            var xd = sheetPart.GetXDocument();
-            XElement sheetInformation = new XElement(H.Sheet,
-                    new XAttribute(H.Name, sheetName),
-                    xd.Root.Elements(S.tableParts).Elements(S.tablePart).Select(tp =>
-                    {
-                        string rId = (string)tp.Attribute(R.id);
-                        TableDefinitionPart tablePart = (TableDefinitionPart)sheetPart.GetPartById(rId);
-                        var txd = tablePart.GetXDocument();
-                        var tableName = (string)txd.Root.Attribute("displayName");
-                        XElement tableCellData = null;
-                        if (settings.IncludeXlsxTableCellData)
-                        {
-                            var xlsxTable = spreadsheetDocument.Table(tableName);
-                            tableCellData = new XElement(H.TableData,
-                                xlsxTable.TableRows()
-                                    .Select(row =>
-                                    {
-                                        var rowElement = new XElement(H.Row,
-                                            xlsxTable.TableColumns().Select(col =>
-                                            {
-                                                var cellElement = new XElement(H.Cell,
-                                                    new XAttribute(H.Name, col.Name),
-                                                    new XAttribute(H.Val, (string)row[col.Name]));
-                                                return cellElement;
-                                            }));
-                                        return rowElement;
-                                    }));
-                        }
-                        var table = new XElement(H.Table,
-                            new XAttribute(H.Name, (string)txd.Root.Attribute("name")),
-                            new XAttribute(H.DisplayName, tableName),
-                            new XElement(H.Columns,
-                                txd.Root.Element(S.tableColumns).Elements(S.tableColumn)
-                                .Select(tc => new XElement(H.Column,
-                                    new XAttribute(H.Name, (string)tc.Attribute("name"))))),
-                                    tableCellData
-                            );
-                        return table;
-                    })
-                );
-            if (!sheetInformation.HasElements)
-                return null;
-            return sheetInformation;
-        }
-
-        public static XElement GetPptxMetrics(PmlDocument pmlDoc, MetricsGetterSettings settings)
-        {
-            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(pmlDoc))
-            {
-                using (PresentationDocument pDoc = streamDoc.GetPresentationDocument())
-                {
-                    List<XElement> metrics = new List<XElement>();
-
-                    bool valid = ValidateAgainstSpecificVersion(pDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2007, H.SdkValidationError2007);
-                    valid |= ValidateAgainstSpecificVersion(pDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2010, H.SdkValidationError2010);
-#if !NET35
-                    valid |= ValidateAgainstSpecificVersion(pDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2013, H.SdkValidationError2013);
-#endif
-                    return new XElement(H.Metrics,
-                        new XAttribute(H.FileName, pmlDoc.FileName),
-                        new XAttribute(H.FileType, "PresentationML"),
-                        metrics,
-                        settings.RetrieveNamespaceList ? RetrieveNamespaceList(pDoc) : null,
-                        settings.RetrieveContentTypeList ? RetrieveContentTypeList(pDoc) : null);
-                }
             }
         }
 
