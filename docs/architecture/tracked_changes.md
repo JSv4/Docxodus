@@ -644,6 +644,32 @@ var html = WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
 
 See [Pagination Architecture](pagination.md) for details on the pagination system.
 
+## Known gap: note insertion under `render_inline` recording is not reversible
+
+`DocxSession.insertFootnote` / `insertEndnote` applied while the session records
+mutations as tracked changes (`TrackedChangeMode.RenderInline`) produce a mark that
+**reject-all does not undo**. The reference in the body is wrapped in `w:ins` and is
+removed on rejection, but the note *definition* written into `/word/footnotes.xml`
+(or `/word/endnotes.xml`) stays, so the rejected document does not reproduce the
+baseline. `proveRedlineReversibility` reports it as a reject-path divergence in that
+part, and the note's text is still present in the projection afterwards.
+
+What makes this a defect rather than a documented limitation is the inconsistency:
+the neighbouring operations **fail closed**. `ApplyListFormatRange` under the same
+recording mode refuses with `tracked_operation_unsupported` ("no reversible native
+tracked-change encoding on this document shape; no changes were made") rather than
+writing something it cannot take back. Note insertion should refuse the same way
+until it can encode reversibly — silently writing an irreversible mark is the worse
+of the two failure modes, because the redline looks complete and only fails when
+someone rejects it.
+
+Found while building `docs/demo/redline.html`, whose Act II originally footnoted the
+negotiated liability cap; the demo now inserts a paragraph instead and its
+`docs/demo/tools/redline-theater.test.mjs` guards the step from coming back. The
+demo's finale is what surfaces it: it runs `proveRedlineReversibility` on every run
+and classifies reject-path divergences against a closed set of parts that review
+comments legitimately explain, so a note part shows up as unexplained.
+
 ## Conclusion
 
 This design provides a comprehensive approach to rendering tracked changes in HTML while:

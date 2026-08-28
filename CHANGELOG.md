@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
 ### Changed
 - **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
   surface the compact chrome keeps every command by scrolling its strips (title bar, tab
