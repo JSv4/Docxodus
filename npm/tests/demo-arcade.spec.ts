@@ -181,7 +181,10 @@ test.describe('THE DOCX ARCADE page', () => {
   }
 
   test('boots the shipped surface, animates incrementally, and steers with the keyboard', async ({ page }) => {
-    await page.goto(`/demo-arcade.html?${OVERRIDE}`);
+    // Pinned to the platformer: this test exercises PILCROW's-quest-specific
+    // mechanics (the ArrowRight side-scroll), not whichever cart ships as the
+    // page's default.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=quest`);
     await waitForBoot(page);
 
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 4, { timeout: 30000 });
@@ -225,7 +228,9 @@ test.describe('THE DOCX ARCADE page', () => {
   });
 
   test('pause → type terrain into the document → resume makes it real; save yields a real DOCX', async ({ page }) => {
-    await page.goto(`/demo-arcade.html?${OVERRIDE}`);
+    // Pinned to the platformer: the row-6-is-open-sky / § coin-tile assertions
+    // below are quest-specific, not a property of whichever cart is default.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=quest`);
     await waitForBoot(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 2, { timeout: 30000 });
 
