@@ -885,7 +885,9 @@ export function startTheater({ editor, session, engine, ui, script = SCRIPT, aut
   const endpoint = createBrowserMcpEndpoint({
     session,
     sessionId: 'sess_theater_01',
-    onMutate: () => scheduleRepaint(),
+    // No `onMutate` here on purpose: `dispatchStep` schedules the repaint
+    // itself, because it also knows WHICH anchor the call touched and the
+    // camera follows it. Wiring both would schedule every repaint twice.
     // Inject the real enum rather than leaning on the wire module's copy of its
     // ordinals — the engine is right here, and the recording mode is the one
     // setting the whole show depends on being correct.

@@ -28,6 +28,7 @@ import {
   requestFrame,
   summarizeArgs,
   toolResultFrame,
+  resultMutated,
   TRACKED_CHANGE_MODES,
 } from '../mcp-wire.js';
 
@@ -112,6 +113,33 @@ test('escapeRegex keeps docxodus_search mode "text" literal', () => {
   assert.equal(escapeRegex('two times (2x)'), 'two times \\(2x\\)');
   assert.equal(new RegExp(escapeRegex('a.b')).test('a.b'), true);
   assert.equal(new RegExp(escapeRegex('a.b')).test('axb'), false);
+});
+
+test('resultMutated tells a repaint-worthy call from a read', () => {
+  // A host that repaints on every successful call repaints after searches too,
+  // which touch nothing — wasted work, and it hides whether repaints coalesce.
+  assert.equal(resultMutated('docxodus_search', { matches: [{}, {}] }), false);
+  assert.equal(resultMutated('docxodus_comment', { comments: [{}] }), false);
+  assert.equal(resultMutated('docxodus_track_changes', { revisions: [{}] }), false);
+  assert.equal(resultMutated('docxodus_edit', { success: true, modified: [{ id: 'p:body:a' }] }), true);
+  assert.equal(resultMutated('docxodus_create', { success: true, created: [{ id: 'p:body:b' }] }), true);
+  assert.equal(resultMutated('docxodus_edit', { success: false }), false);
+  // Switching the recording mode is session configuration, not a document edit.
+  assert.equal(resultMutated('docxodus_track_changes', { success: true, mode: 'accept' }), false);
+  // Undo reports nothing but its own success, and does need a repaint.
+  assert.equal(resultMutated('docxodus_edit', { success: true }), true);
+  // A batch mutated if any of its steps did.
+  assert.equal(resultMutated('docxodus_mutations', {
+    success: true,
+    applied: [{ tool: 'docxodus_search', result: { matches: [{}] } }],
+  }), false);
+  assert.equal(resultMutated('docxodus_mutations', {
+    success: true,
+    applied: [
+      { tool: 'docxodus_search', result: { matches: [{}] } },
+      { tool: 'docxodus_edit', result: { success: true, modified: [{ id: 'x' }] } },
+    ],
+  }), true);
 });
 
 // ─── Latency statistics ───────────────────────────────────────────────

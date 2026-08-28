@@ -229,6 +229,27 @@ export function createLatencyStats() {
 
 // ─── The endpoint (engine-dependent) ──────────────────────────────────
 
+/** Did this tool result actually change the document? Search and list results
+ *  carry matches or anchors and touch nothing, so a host that repaints on every
+ *  successful call repaints for reads too. `EditResult` reports what it touched;
+ *  a bare `{success: true}` (undo/redo, set_mode) is judged by the tool. */
+export function resultMutated(tool, result) {
+  if (!result || typeof result !== 'object') return false;
+  if (Array.isArray(result.matches) || Array.isArray(result.anchors)
+    || Array.isArray(result.comments) || Array.isArray(result.revisions)) {
+    return false;
+  }
+  if (result.success === false) return false;
+  if (result.created?.length || result.modified?.length || result.removed?.length) return true;
+  // A batch reports its steps; it mutated if any of them did.
+  if (Array.isArray(result.applied)) {
+    return result.applied.some((step) => resultMutated(step.tool, step.result));
+  }
+  // Session configuration is not a document mutation, so it needs no repaint.
+  if (tool === 'docxodus_track_changes' && result.mode !== undefined) return false;
+  return result.success === true;
+}
+
 /** Catalog mode name → `TrackedChangeMode` enum value. These mirror the .NET
  *  enum's ordinals, which the TypeScript `TrackedChangeMode` re-declares; a host
  *  that has the engine module should inject the real enum rather than rely on
@@ -522,7 +543,11 @@ export function createBrowserMcpEndpoint({
       }
       const ms = performance.now() - started;
       stats.record(tool, ms);
-      if (!isError && onMutate) onMutate(tool, args);
+      // Only a call that changed the document earns a repaint — a search that
+      // found six matches changed nothing.
+      if (!isError && onMutate && resultMutated(tool, safeParse(resultJson))) {
+        onMutate(tool, args);
+      }
       return { response: toolResultFrame(frame.id, resultJson, isError), ms };
     },
 

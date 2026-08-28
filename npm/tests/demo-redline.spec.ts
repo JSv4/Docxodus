@@ -246,10 +246,13 @@ test.describe('REDLINE THEATER', () => {
     // accidental full-document reconvert per edit), not to benchmark.
     expect(stats.p50, `p50 was ${stats.p50}ms`).toBeLessThan(120);
     expect(stats.p95, `p95 was ${stats.p95}ms`).toBeLessThan(600);
-    // The repaint is frame-dropped, so there are strictly fewer repaints than
-    // mutations — that coalescing is what keeps the run smooth.
-    expect(stats.renderCount).toBeLessThan(stats.calls);
+    // Repaints are driven by mutations, not by calls: the seven searches and the
+    // two set_mode frames change nothing and must not repaint. Plus the repaint
+    // is frame-dropped, so several mutations landing inside one animation frame
+    // coalesce into a single refresh. Both together put this comfortably below
+    // the call count rather than one under it.
     expect(stats.renderCount).toBeGreaterThan(0);
+    expect(stats.renderCount).toBeLessThanOrEqual(stats.calls - 9);
   });
 
   test('reset returns to a clean stage and can run again', async ({ page }) => {
