@@ -26,6 +26,10 @@ All notable changes to this project will be documented in this file.
   the raycasters' HUD readable. The landing page's arcade card also hugs the game screen
   after boot instead of stretching 80dvh of blank paper, so the thumb D-pad and FIRE land
   directly under the action. Demo-content change (`docs/demo/`), not npm surface.
+- **The arcade now opens on Freedoom's E1M1 by default**, on both the landing page and the
+  full-screen cabinet — a visitor's first coin drop is the real Doom-format level rather
+  than the platformer. `?cart=quest|dungeon` still pick the other two cartridges explicitly.
+  Demo-content change (`docs/demo/`), not npm surface.
 
 ## [10.0.0] - 2026-08-27
 
