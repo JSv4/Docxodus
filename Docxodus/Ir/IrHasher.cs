@@ -92,11 +92,20 @@ internal static class IrHasher
     }
 
     /// <summary>SHA-256 of <see cref="Canonicalize(XElement)"/>.</summary>
-    public static IrHash CanonicalHash(XElement element) => IrHash.Compute(Canonicalize(element, resolver: null));
+    public static IrHash CanonicalHash(XElement element) => CanonicalHash(element, resolver: null);
 
     /// <summary>Part-aware SHA-256 of <see cref="Canonicalize(XElement, IrRelResolver?)"/>.</summary>
-    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) =>
-        IrHash.Compute(Canonicalize(element, resolver));
+    /// <remarks>
+    /// Hashes the same bytes <see cref="Canonicalize(XElement, IrRelResolver?)"/> returns without
+    /// materializing them: the canonical XML is encoded straight into a pooled buffer. Every paragraph,
+    /// run and section read takes this path, so the per-call array mattered.
+    /// </remarks>
+    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver)
+    {
+        var clone = new XElement(element);
+        Clean(clone, resolver);
+        return IrHash.ComputeUtf8(clone.ToString(SaveOptions.DisableFormatting));
+    }
 
     /// <summary>
     /// Canonical SHA-256 with a caller-supplied attribute rewriter. This keeps the shared XML-noise
@@ -118,13 +127,20 @@ internal static class IrHasher
         XElement element, IrRelResolver? resolver,
         Func<XAttribute, XAttribute>? attributeRewrite = null)
     {
-        // Remove noise child elements first (proofErr/noProof, anywhere in the subtree).
-        var toRemove = element
-            .Descendants()
-            .Where(d => d.Name == ProofErr || d.Name == NoProof)
-            .ToList();
-        foreach (var d in toRemove)
-            d.Remove();
+        // Remove noise child elements first (proofErr/noProof, anywhere in the subtree). Most subtrees
+        // carry none, so the removal list is allocated only once one is actually found.
+        List<XElement>? toRemove = null;
+        foreach (var d in element.Descendants())
+        {
+            if (d.Name == ProofErr || d.Name == NoProof)
+                (toRemove ??= new List<XElement>()).Add(d);
+        }
+
+        if (toRemove is not null)
+        {
+            foreach (var d in toRemove)
+                d.Remove();
+        }
 
         foreach (var el in element.DescendantsAndSelf())
             CleanAttributes(el, resolver, attributeRewrite);
@@ -134,6 +150,30 @@ internal static class IrHasher
         XElement element, IrRelResolver? resolver,
         Func<XAttribute, XAttribute>? attributeRewrite)
     {
+        // This runs on every element of every canonicalized subtree, and in WordprocessingML the
+        // overwhelming majority of elements carry no attributes or exactly one. Neither case can be
+        // reordered, so both skip the sort and its LINQ machinery entirely; only elements with two or
+        // more attributes take the ordering path below. All three produce the same attributes in the
+        // same order as the single LINQ chain they replace.
+        var first = element.FirstAttribute;
+        if (first is null)
+            return;
+
+        if (first.NextAttribute is null)
+        {
+            // Decide and rewrite while the attribute is still ATTACHED. ShouldStripAttribute consults
+            // attribute.Parent (the wp:docPr/@id rule) and a rewrite callback may too, so removing first
+            // would silently change the verdict — the LINQ chain below is likewise fully evaluated by
+            // ToList() before RemoveAttributes runs.
+            var replacement = ShouldStripAttribute(first)
+                ? null
+                : attributeRewrite is null ? RewriteRelAttribute(first, resolver) : attributeRewrite(first);
+            element.RemoveAttributes();
+            if (replacement is not null)
+                element.Add(replacement);
+            return;
+        }
+
         var kept = element.Attributes()
             .Where(a => !ShouldStripAttribute(a))
             .OrderBy(a => a.Name.NamespaceName, StringComparer.Ordinal)

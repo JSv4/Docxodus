@@ -1,0 +1,85 @@
+# DocxDiff performance stress harness
+
+A standalone harness that times the `DocxDiff` pipeline against one heavyweight legal
+`.docx` and its own generated edit variants, and proves that an optimization changed
+nothing about the output. It is deliberately **not** part of `Docxodus.sln`, so it never
+affects CI, packaging, or the warning baselines.
+
+Its sibling `benchmarks/complex-form-doc` answers "does the toolchain get this document
+right?". This one answers "how fast, and where does the time go?".
+
+## Variants
+
+The generator edits the source package's XML directly rather than driving `DocxSession`,
+so the generator's own cost never lands in the measured numbers and the same input always
+produces byte-identical variants.
+
+| Case | What it is | What it stresses |
+|---|---|---|
+| `identical` | no change at all | the byte-identical fast paths |
+| `light` | 8 scattered word-level edits | a typical counsel pass |
+| `heavy` | an edit in every fifth paragraph | many small in-place modifications |
+| `churn` | an edit in every second text node | the token differ |
+| `reorder` | 24 blocks relocated across the body | move detection and the LIS spine |
+| `structural` | 20 paragraphs deleted, 20 inserted | gap filling and in-gap pairing |
+| `footnotes` | an edit in every second footnote paragraph | the note-scope diff |
+| `rewrite` | every paragraph's text replaced | the worst case: nothing aligns cheaply |
+
+Plus an N-way `DocxDiff.Consolidate` over four of those variants as reviewers, which is
+where read cost scales with reviewer count.
+
+## Output parity
+
+Timing a change is only half the job; the other half is proving the change was free. Each
+run records SHA-256 digests of the redline package, the rendered revision list, the
+edit-script JSON, and the four consolidate products, for every variant:
+
+```bash
+# before the change
+dotnet run -c Release --project benchmarks/docxdiff-stress -- doc.docx --baseline before.json
+# after
+dotnet run -c Release --project benchmarks/docxdiff-stress -- doc.docx --check before.json
+```
+
+`--check` exits 2 on any mismatch and prints which product diverged. A perf change that
+prints `[parity] OK` produced byte-identical output on every case.
+
+## Running
+
+```bash
+dotnet run -c Release --project benchmarks/docxdiff-stress -- path/to/document.docx [options]
+```
+
+| Option | Effect |
+|---|---|
+| `--iterations N` | timed iterations per case (default 5) |
+| `--warmup N` | untimed warm-up iterations per case (default 2) |
+| `--cases a,b,c` | restrict to named pairwise cases (the N-way case always runs) |
+| `--stages` | per-stage timings: IR reads, edit-script build, markup render, revision render |
+| `--products` | also time `GetRevisions`, `GetEditScriptJson`, and the fused multi-product pass |
+| `--probe` | sub-stage attribution inside `IrReader` and `UnidHelper`, plus the pipeline decomposition |
+| `--baseline FILE` / `--check FILE` | write / verify output digests |
+| `--out DIR` | write the generated variants as `.docx` for inspection |
+
+Build in `Release`. A `Debug` build's numbers are not meaningful.
+
+### Reading the numbers
+
+`Compare` on this document allocates hundreds of megabytes, so whichever case runs first
+after a quiet stretch would otherwise absorb the Gen2 collection for everything before it;
+the harness forces a collection between cases to keep them comparable. Medians are the
+figure to quote — the max column regularly catches a collection and is not the steady
+state.
+
+The `--probe` timings warm each stage past the tiered-JIT promotion threshold before
+timing any of them. Without that, the first stages in the series report several times
+their steady-state cost, because the later ones inherit code they paid to compile.
+
+## Reference document
+
+Written against the NVCA Model Certificate of Incorporation (October 2025): ~51 pages, 234
+body paragraphs, 15,360 elements in `word/document.xml`, 97 footnotes (5,461 elements),
+16 abstract numbering definitions, 4 sections, 8 headers and 10 footers. Publicly
+available from the NVCA; not committed here. Any comparable form document works.
+
+See `FINDINGS.md` for what the harness measured and what it cost.

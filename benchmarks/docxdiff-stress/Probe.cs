@@ -63,7 +63,7 @@ internal static class Probe
             var t = Stopwatch.GetTimestamp();
             UnidHelper.AssignToAllElementsDeterministic(root);
             return (int)(Stopwatch.GetTimestamp() - t);
-        }, subtractOpen: true);
+        });
 
         Time("IrReader.Read (RetainSources=false)", n,
             () => IrReader.Read(doc, new IrReaderOptions { RetainSources = false, RevisionView = RevisionView.Accept }).Body.Blocks.Count);
@@ -76,6 +76,28 @@ internal static class Probe
 
         Time("IrReader.Read (body scope only)", n,
             () => IrReader.Read(doc, new IrReaderOptions { RetainSources = false, RevisionView = RevisionView.Accept, Scopes = IrScopes.Body }).Body.Blocks.Count);
+
+        // The floor: what any pipeline pays just to get the bytes in and a package back out.
+        Time("open + reserialize package unchanged (redline floor)", n, () =>
+        {
+            using var sd = new OpenXmlMemoryStreamDocument(new WmlDocument(doc));
+            using (var wd = sd.GetWordprocessingDocument())
+            {
+                _ = wd.MainDocumentPart!.GetXDocument();
+            }
+
+            return sd.GetModifiedWmlDocument().DocumentByteArray.Length;
+        });
+
+        Time("parse every reader part, no IR built (read floor)", n, () =>
+        {
+            using var sd = new OpenXmlMemoryStreamDocument(new WmlDocument(doc));
+            using var wd = sd.GetWordprocessingDocument();
+            var n2 = 0;
+            foreach (var part in ScannableParts(wd.MainDocumentPart!))
+                n2 += part.GetXDocument().Root?.DescendantsAndSelf().Count() ?? 0;
+            return n2;
+        });
 
         // Element counts, for context on what the walks are traversing.
         using var s2 = new OpenXmlMemoryStreamDocument(new WmlDocument(doc));
@@ -100,9 +122,15 @@ internal static class Probe
         if (main.WordprocessingCommentsPart != null) yield return main.WordprocessingCommentsPart;
     }
 
-    private static void Time<T>(string label, int n, Func<T> act, bool subtractOpen = false)
+    // Tiered JIT promotes a method only after it has been called many times, so two warm-up passes
+    // leave the first cases in a series paying for JIT that the later ones inherit warm — enough to
+    // report a stage as several times its steady-state cost. Every case gets the same promotion
+    // budget before any of them is timed.
+    private const int JitWarmup = 30;
+
+    private static void Time<T>(string label, int n, Func<T> act)
     {
-        for (var i = 0; i < 2; i++) _ = act();
+        for (var i = 0; i < JitWarmup; i++) _ = act();
         var samples = new double[n];
         for (var i = 0; i < n; i++)
         {
@@ -119,6 +147,8 @@ internal static class Probe
 
 internal static class UnidProbe
 {
+    private const int JitWarmup = 30;
+
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private static readonly XName Unid = "{http://powertools.codeplex.com/2011}Unid";
 
@@ -215,7 +245,7 @@ internal static class UnidProbe
 
     private static void Median<T>(string label, int n, Func<T> act)
     {
-        for (var i = 0; i < 2; i++) _ = act();
+        for (var i = 0; i < JitWarmup; i++) _ = act();
         var s = new double[n];
         for (var i = 0; i < n; i++)
         {
@@ -233,6 +263,8 @@ internal static class UnidProbe
 // End-to-end decomposition of DocxDiff.Compare, replicating DocxDiffComparison's own steps.
 internal static class PipelineProbe
 {
+    private const int JitWarmup = 30;
+
     public static void Run(byte[] leftBytes, byte[] rightBytes, int n)
     {
         var left = new WmlDocument("l.docx", leftBytes);
@@ -303,7 +335,7 @@ internal static class PipelineProbe
 
     private static void Median<T>(string label, int n, Func<T> act)
     {
-        for (var i = 0; i < 2; i++) _ = act();
+        for (var i = 0; i < JitWarmup; i++) _ = act();
         var s = new double[n];
         for (var i = 0; i < n; i++)
         {

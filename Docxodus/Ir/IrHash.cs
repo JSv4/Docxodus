@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,7 +43,34 @@ internal readonly struct IrHash : IEquatable<IrHash>
     /// <summary>Compute the SHA-256 digest of the UTF-8 encoding of <paramref name="text"/>.</summary>
     public static IrHash Compute(string text)
     {
-        return Compute(Encoding.UTF8.GetBytes(text));
+        return ComputeUtf8(text);
+    }
+
+    /// <summary>
+    /// The digest of <paramref name="text"/>'s UTF-8 encoding, computed without materializing that
+    /// encoding: short strings encode into a stack buffer, longer ones into a pooled array. Identical
+    /// bytes in, identical digest out — this is purely the allocation-free spelling of
+    /// <see cref="Compute(string)"/>, for the hot canonical-XML hashing paths.
+    /// </summary>
+    public static IrHash ComputeUtf8(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        Span<byte> inline = stackalloc byte[1024];
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(text.Length);
+        byte[]? rented = maxBytes <= inline.Length ? null : ArrayPool<byte>.Shared.Rent(maxBytes);
+        Span<byte> buffer = rented is null ? inline : rented;
+
+        try
+        {
+            int written = Encoding.UTF8.GetBytes(text, buffer);
+            return Compute(buffer[..written]);
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>

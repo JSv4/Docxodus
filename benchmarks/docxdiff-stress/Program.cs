@@ -95,6 +95,7 @@ foreach (var v in variants)
     var right = new WmlDocument($"{v.Name}.docx", v.Bytes);
 
     for (var i = 0; i < warmup; i++) _ = DocxDiff.Compare(left, right);
+    Settle();
 
     var row = new Row(v.Name, Measure(iterations, () => DocxDiff.Compare(left, right)));
 
@@ -121,6 +122,38 @@ foreach (var v in variants)
     digests[$"{v.Name}/revisions"] = Sha(Encoding.UTF8.GetBytes(RevisionsFingerprint(revs)));
     digests[$"{v.Name}/editscript"] = Sha(Encoding.UTF8.GetBytes(DocxDiff.GetEditScriptJson(left, right)));
     digests[$"{v.Name}/revcount"] = revs.Count.ToString(CultureInfo.InvariantCulture);
+}
+
+// ---- N-way consolidate: one base, several reviewers, the path whose read count scales with N ----
+{
+    var baseDoc = new WmlDocument("baseline.docx", baseBytes);
+    var reviewerNames = new[] { "light", "heavy", "reorder", "structural" };
+    // Built from the full variant set, not the (possibly filtered) compare list, so --cases still
+    // selects which pairwise comparisons run without silently dropping the N-way case.
+    var reviewers = Docxodus.Stress.Variants.Build(baseBytes)
+        .Where(v => reviewerNames.Contains(v.Name))
+        .Select((v, i) => new DocxDiffReviewer { Author = $"Reviewer {i + 1}", Document = new WmlDocument($"{v.Name}.docx", v.Bytes) })
+        .ToList();
+
+    if (reviewers.Count > 1)
+    {
+        for (var i = 0; i < warmup; i++) _ = DocxDiff.Consolidate(baseDoc, reviewers);
+        Settle();
+        var stat = Measure(iterations, () => DocxDiff.Consolidate(baseDoc, reviewers));
+        Console.WriteLine();
+        Console.WriteLine($"=== DocxDiff.Consolidate ({reviewers.Count} reviewers) ===");
+        Console.WriteLine($"{"case",-12} {"min ms",9} {"median",9} {"max ms",9} {"runs/s",9} {"alloc MB",10}");
+        Console.WriteLine($"{"consolidate",-12} {stat.Min,9:F1} {stat.Median,9:F1} {stat.Max,9:F1} {1000 / stat.Median,9:F2} {stat.AllocBytes / 1048576.0,10:F1}");
+
+        digests["consolidate/document"] = Sha(DocxDiff.Consolidate(baseDoc, reviewers).DocumentByteArray);
+        digests["consolidate/conflicts"] = Sha(Encoding.UTF8.GetBytes(
+            string.Join("\n", DocxDiff.GetConflicts(baseDoc, reviewers)
+                .Select(c => $"{c.Id}|{c.BaseAnchor}|{c.TokenStart}-{c.TokenEnd}|{string.Join(";", c.Competitors.Select(x => $"{x.Author}={x.ResultText}"))}"))));
+        digests["consolidate/script"] = Sha(Encoding.UTF8.GetBytes(DocxDiff.GetConsolidatedEditScriptJson(baseDoc, reviewers)));
+        digests["consolidate/revisions"] = Sha(Encoding.UTF8.GetBytes(
+            string.Join("\n", DocxDiff.GetConsolidatedRevisions(baseDoc, reviewers)
+                .Select(r => $"{r.Type}|{r.Author}|{r.Text}|{r.MoveGroupId}|{r.IsMoveSource}"))));
+    }
 }
 
 Report(rows, wantProducts, wantStages);
@@ -152,6 +185,16 @@ if (checkAgainst != null)
 return exit;
 
 // ---------------- measurement ----------------
+
+// A comparison of this document allocates hundreds of megabytes, so whichever case runs first after a
+// quiet stretch otherwise absorbs the Gen2 collection for everything before it. Collecting to a known
+// state between cases keeps them comparable with each other.
+static void Settle()
+{
+    GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+    GC.WaitForPendingFinalizers();
+    GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+}
 
 static Stat Measure<T>(int n, Func<T> act)
 {

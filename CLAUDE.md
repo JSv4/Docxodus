@@ -65,7 +65,7 @@ usually ripple through all of it.
 | Export package | `npm-export/` | `@docxodus/export` — deterministic standalone HTML + PDF through a pinned Chromium. Has its own `dist/`, tests, and `docxodus doctor` preflight. See `standalone_paginated_export.md`. |
 | Workflow evals | `eval/` + `Docxodus.Tests/Eval/` | Deterministic document-workflow scenarios scored on task completion, target precision, and collateral change. Corpus and contract in `eval/README.md`. |
 | Pages demo | `docs/demo/` | Static pages hosting the **shipped** surface via `createRibbonEditor`. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
-| Out-of-solution tools | `tools/diffharness/`, `tools/manifest-fuzz/`, `tools/screenshots/`, `benchmarks/` | Not in `Docxodus.sln`; build them by path. LibreOffice-backed diff verification, AFL manifest fuzzing, README screenshot capture, and a form-document edit benchmark. |
+| Out-of-solution tools | `tools/diffharness/`, `tools/manifest-fuzz/`, `tools/screenshots/`, `benchmarks/` | Not in `Docxodus.sln`; build them by path. LibreOffice-backed diff verification, AFL manifest fuzzing, README screenshot capture, a form-document edit benchmark, and a `DocxDiff` perf/output-parity stress harness. |
 
 ### The single-owner rule
 
