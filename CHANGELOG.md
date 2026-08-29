@@ -19,6 +19,15 @@ All notable changes to this project will be documented in this file.
   a closed set of parts that review comments legitimately explain. One scripted call is
   *expected to be refused* — list membership has no reversible tracked-change encoding,
   so the engine declines it rather than writing a mark reject-all could not undo.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~184 ms (`docxDiffGetRevisions`), ~324 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~515 ms (plus `convertDocxToHtml`) — that is 74× to 283× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between 2 and 6 frames per second rather than at any animation rate. The panel reports
+  the ratio it just measured, not a number written into the page.
   A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
   (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
   shape, business failures as tool results rather than protocol errors) over `DocxSession`

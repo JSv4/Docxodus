@@ -48,6 +48,8 @@ import {
   IMPLEMENTED_TOOLS,
 } from './mcp-wire.js';
 
+import { mountStressPanel, createStressRunner, clauseFor } from './diff-stress.js';
+
 // ─── Binding substitution (pure) ──────────────────────────────────────
 //
 // A real agent does not know anchor ids up front: it searches, reads an id out of
@@ -692,6 +694,21 @@ const PANEL_CSS = `
 .dxt-hud b { display: block; font: 700 16px/1.15 "SF Mono", Consolas, monospace; color: #f8fafc; }
 .dxt-hud span { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
 
+.dxt-modes { display: flex; gap: 4px; padding: 0 14px 10px; flex: none; }
+.dxt-modes button { flex: 1; font: 600 11px/1 system-ui, sans-serif; padding: 7px 0;
+  border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #cbd5e1;
+  cursor: pointer; }
+.dxt-modes button[aria-pressed="true"] { background: #f87171; border-color: #f87171;
+  color: #0f172a; }
+.dxt-pane { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+/* The proof and author roll-up describe the NEGOTIATION. While the stress meter
+   is up they are stale context competing for the same column, so the foot
+   collapses to the download button until the wire comes back. */
+.dxt[data-mode="stress"] .dxt-proof,
+.dxt[data-mode="stress"] .dxt-authors { display: none; }
+.dxt-pane[data-on="true"] { display: block; }
+.dxt-pane.dxt-wire[data-on="true"] { display: block; }
+
 .dxt-now { flex: none; padding: 9px 14px; border-bottom: 1px solid #1e293b; min-height: 46px; }
 .dxt-act { font: 600 11px/1.3 system-ui, sans-serif; }
 .dxt-note { font-size: 12px; color: #cbd5e1; margin-top: 2px; }
@@ -770,7 +787,14 @@ export function mountTheaterPanel(root) {
       <div class="dxt-act" data-dxt="act">Idle — press Run</div>
       <div class="dxt-note" data-dxt="note">The document below is clean. Nothing is recorded yet.</div>
     </div>
-    <div class="dxt-wire" data-dxt="wire" role="log" aria-label="MCP wire"></div>
+    <div class="dxt-modes" data-dxt="modes" role="group" aria-label="Panel mode">
+      <button data-mode="wire" aria-pressed="true"
+        title="The MCP frames the negotiation dispatches">MCP wire</button>
+      <button data-mode="stress" aria-pressed="false"
+        title="Run the comparison engine flat out and measure it">Diff stress</button>
+    </div>
+    <div class="dxt-wire dxt-pane" data-dxt="wire" data-on="true" role="log" aria-label="MCP wire"></div>
+    <div class="dxt-pane" data-dxt="stress"></div>
     <div class="dxt-foot">
       <div class="dxt-error" data-dxt="error"></div>
       <div class="dxt-proof" data-dxt="proof"></div>
@@ -786,6 +810,7 @@ export function mountTheaterPanel(root) {
       run: grab('run'), reset: grab('reset'), speeds: grab('speeds'),
       calls: grab('calls'), revisions: grab('revisions'), p50: grab('p50'), rate: grab('rate'),
       act: grab('act'), note: grab('note'), wire: grab('wire'),
+      modes: grab('modes'), stress: grab('stress'),
       error: grab('error'), proof: grab('proof'), authors: grab('authors'), save: grab('save'),
     },
   };
@@ -1224,6 +1249,79 @@ export function startTheater({ editor, session, engine, ui, script = SCRIPT, aut
     }
   }
 
+  // ── the diff-stress mode ─────────────────────────────────────────
+  // The theater RECORDS its redline; this COMPUTES one from scratch after every
+  // edit and times it. Both halves go through the same MCP endpoint, so the
+  // mutation cost the meter compares against is the real one, not a shortcut.
+  const { ui: stressUi } = mountStressPanel(ui.stress);
+  let stressClause = null;
+
+  const stress = createStressRunner({
+    engine,
+    session,
+    ui: stressUi,
+    /** Append one clause through a real `docxodus_create` frame and return what
+     *  the mutation cost. Each frame lands after the previous one, so the
+     *  document grows downward the way a document actually does. */
+    applyEdit: async (frame) => {
+      const anchorId = stressClause
+        ?? session.findByKind('p', 'body').slice(-1)[0]?.id;
+      if (!anchorId) throw new Error('stress: no body paragraph to append to');
+      const outcome = endpoint.call('docxodus_create', {
+        action: 'insert_paragraph',
+        anchorId,
+        position: 'after',
+        markdown: clauseFor(frame),
+      });
+      callCount++;
+      if (outcome.isError) {
+        throw new Error(`stress frame ${frame} failed: `
+          + `${outcome.result?.error?.message ?? 'unknown'}`);
+      }
+      stressClause = bindFromResult(outcome.result) ?? anchorId;
+      scheduleRepaint(stressClause);
+      paintHud();
+      return outcome.ms;
+    },
+    onFrame: (result) => {
+      // At `full` depth the computed redline is rendered as HTML — show it, so
+      // the mode is not only numbers. The editor beside it keeps showing the
+      // RECORDED markup, which is the contrast worth seeing.
+      if (result.html) showComputedRedline(result.html);
+    },
+  });
+
+  /** Render the computed redline into the stage caption area's sibling frame.
+   *  Kept sandboxed: it is generated HTML, shown as a static preview. */
+  let computedFrame = null;
+  function showComputedRedline(html) {
+    if (!computedFrame) {
+      computedFrame = ui.panel.ownerDocument.createElement('iframe');
+      computedFrame.setAttribute('sandbox', '');
+      computedFrame.style.cssText =
+        'display:block;width:100%;height:210px;border:1px solid #1e293b;'
+        + 'border-radius:9px;background:#fff;margin-top:9px';
+      stressUi.panel.appendChild(computedFrame);
+    }
+    computedFrame.srcdoc = html;
+  }
+
+  const modeButtons = [...ui.modes.querySelectorAll('button')];
+  function setMode(mode) {
+    for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+    ui.wire.dataset.on = String(mode === 'wire');
+    ui.stress.dataset.on = String(mode === 'stress');
+    ui.panel.dataset.mode = mode;
+  }
+  for (const b of modeButtons) {
+    b.addEventListener('click', () => {
+      // Never leave a stress loop running behind a hidden pane.
+      if (b.dataset.mode !== 'stress') stress.stop();
+      setMode(b.dataset.mode);
+    });
+  }
+  setMode('wire');
+
   // ── wiring ───────────────────────────────────────────────────────
   ui.run.addEventListener('click', () => {
     if (running) { cancelled = true; return; }
@@ -1231,6 +1329,8 @@ export function startTheater({ editor, session, engine, ui, script = SCRIPT, aut
   });
   ui.reset.addEventListener('click', () => {
     if (running) cancelled = true;
+    stress.stop();
+    stressClause = null;
     ui.proof.dataset.on = 'false';
     ui.authors.innerHTML = '';
     ui.save.disabled = true;
@@ -1272,6 +1372,8 @@ export function startTheater({ editor, session, engine, ui, script = SCRIPT, aut
       }
     },
     endpoint,
+    stress,
+    setMode,
     stats: () => ({
       calls: callCount,
       refusals,

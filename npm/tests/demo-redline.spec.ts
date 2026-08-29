@@ -272,3 +272,96 @@ test.describe('REDLINE THEATER', () => {
     await expect(page.locator('[data-dxt="error"]')).not.toHaveAttribute('data-on', 'true');
   });
 });
+
+// ─── DIFF STRESS ──────────────────────────────────────────────────────
+//
+// The theater RECORDS its redline; this mode COMPUTES one from scratch after
+// every edit and times it. The point of the mode is the gap between those two
+// costs, so these assertions are about the measurement being real: a diff
+// genuinely runs each frame, the deeper pipelines genuinely cost more, and the
+// ratio the panel reports is derived from both halves rather than hardcoded.
+
+async function runStress(page: Page, depth: string, frames: number) {
+  await page.evaluate(() => (window as any).__theater.setMode('stress'));
+  await page.evaluate((d) => (window as any).__theater.stress.setDepth(d), depth);
+  // Fire and forget: run() resolves only when the whole loop is done.
+  await page.evaluate(() => { void (window as any).__theater.stress.run(); });
+  await page.waitForFunction(
+    (n) => (window as any).__theater.stress.stats().frames >= n,
+    frames, { timeout: 180000 });
+  await page.evaluate(() => (window as any).__theater.stress.stop());
+  await page.waitForFunction(
+    () => !(window as any).__theater.stress.isRunning(), { timeout: 60000 });
+  return page.evaluate(() => (window as any).__theater.stress.stats());
+}
+
+test.describe('DIFF STRESS', () => {
+  test('computes a real redline every frame, against a growing document', async ({ page }) => {
+    await bootTheater(page);
+    const stats = await runStress(page, 'revisions', 6);
+
+    expect(stats.frames).toBeGreaterThanOrEqual(6);
+    // One clause appended per frame, so the revision count tracks the frames —
+    // this is what proves a diff actually ran rather than a cached number being
+    // re-displayed.
+    expect(stats.revisions).toBeGreaterThanOrEqual(6);
+    // The document grew under the engine; a fixed input would measure nothing.
+    expect(stats.documentBytes).toBeGreaterThan(stats.startBytes);
+    expect(stats.fps).toBeGreaterThan(0);
+    expect(stats.p50).toBeGreaterThan(0);
+
+    // The panel shows the measurement, not a placeholder.
+    await expect(page.locator('[data-dxs="fps"]')).not.toHaveText('–');
+    await expect(page.locator('[data-dxs="frames"]')).not.toHaveText('0');
+    const path = await page.locator('[data-dxs="path"]').getAttribute('d');
+    expect(path, 'the frame-time trace is drawn').toBeTruthy();
+    expect(path!.split('L').length).toBeGreaterThan(3);
+  });
+
+  test('a deeper pipeline costs more, and the panel says so', async ({ page }) => {
+    await bootTheater(page);
+    const cheap = await runStress(page, 'revisions', 5);
+    const full = await runStress(page, 'full', 5);
+
+    // Rendering the redline to HTML on top of computing it cannot be free. This
+    // is the assertion that would catch the depth selector silently not applying
+    // — the bug the first draft of this mode actually had.
+    expect(full.p50, `revisions ${cheap.p50}ms vs full ${full.p50}ms`)
+      .toBeGreaterThan(cheap.p50);
+    expect(full.fps).toBeLessThan(cheap.fps);
+    expect(full.depth).toBe('full');
+
+    // Each run is its own experiment — the meter resets, so the second run's
+    // frame count is not the first run's plus more.
+    expect(full.frames).toBeLessThan(cheap.frames + full.frames);
+  });
+
+  test('reports how much dearer computing a redline is than recording one', async ({ page }) => {
+    await bootTheater(page);
+    const stats = await runStress(page, 'redline', 5);
+
+    // Both halves are measured through the same MCP endpoint: the mutation is a
+    // real docxodus_create frame, the diff is a real comparison pass.
+    expect(stats.avgMutateMs).toBeGreaterThan(0);
+    expect(stats.avgMutateMs).toBeLessThan(60);
+    // Computing is expected to be at least an order of magnitude dearer. The
+    // bound is deliberately loose — the claim is the order of magnitude, not a
+    // number a slower runner would fail.
+    expect(stats.ratio, `ratio was ${stats.ratio}`).toBeGreaterThan(10);
+    await expect(page.locator('[data-dxs="ratiox"]')).toContainText('×');
+  });
+
+  test('switching away from the stress pane stops the loop', async ({ page }) => {
+    await bootTheater(page);
+    await page.evaluate(() => (window as any).__theater.setMode('stress'));
+    await page.evaluate(() => { void (window as any).__theater.stress.run(); });
+    await page.waitForFunction(
+      () => (window as any).__theater.stress.stats().frames >= 2, { timeout: 120000 });
+
+    // A loop left running behind a hidden pane would keep burning the engine.
+    await page.locator('[data-dxt="modes"] button[data-mode="wire"]').click();
+    await page.waitForFunction(
+      () => !(window as any).__theater.stress.isRunning(), { timeout: 60000 });
+    expect(await page.evaluate(() => (window as any).__theater.stress.isRunning())).toBe(false);
+  });
+});

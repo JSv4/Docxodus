@@ -5,9 +5,21 @@
 // mystery binary. Frames land as PNGs; `frames-to-gif.py` beside it assembles
 // them. The behaviour the GIF depicts is what npm/tests/demo-redline.spec.ts
 // actually asserts.
-import { chromium } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+
+// This file lives in docs/demo/tools/ but is run from npm/, where Playwright and
+// the built webroot are. A bare `import '@playwright/test'` resolves relative to
+// THIS file and fails; resolve it from the working directory instead.
+const require = createRequire(pathToFileURL(`${process.cwd()}/`));
+// Playwright's entry is CommonJS, so its named exports arrive under `default`
+// when imported by URL.
+const playwright = await import(
+  pathToFileURL(require.resolve('@playwright/test')).href);
+const chromium = playwright.chromium ?? playwright.default?.chromium;
+if (!chromium) throw new Error('could not load Playwright — run this from npm/');
 
 // Run from the npm/ directory, which is where @playwright/test and the built
 // webroot both live:
@@ -46,25 +58,46 @@ if (err) { console.error('boot failed:', err); process.exit(1); }
 await page.evaluate(() => window.__theater.ready);
 await page.evaluate((s) => window.__theater.setSpeed(s), SPEED);
 
-// Let the clean baseline sit on screen for a beat before the first mark lands,
-// so the GIF opens on "an ordinary contract" rather than mid-edit.
+// MODE=stress records the diff-stress meter instead of the negotiation: the
+// theater is run first (at MAX, off camera) so the stress loop has a realistic
+// edited document to compare against.
+const MODE = process.env.MODE ?? 'theater';
+const DEPTH = process.env.DEPTH ?? 'redline';
+
 const total = FPS * SECONDS;
 let frame = 0;
 const shoot = async () => {
   await page.screenshot({ path: `${OUT}/f${String(frame).padStart(4, '0')}.png` });
   frame++;
 };
+if (MODE === 'stress') {
+  // Off camera: play the negotiation so the document under test is a real
+  // redlined agreement rather than the pristine baseline.
+  await page.evaluate(() => window.__theater.setSpeed('max'));
+  await page.evaluate(() => window.__theater.run());
+  await page.evaluate((d) => {
+    window.__theater.setMode('stress');
+    window.__theater.stress.setDepth(d);
+  }, DEPTH);
+  await page.waitForTimeout(400);
+}
+
 for (let i = 0; i < FPS; i++) { await shoot(); await page.waitForTimeout(1000 / FPS); }
 
-// Fire and forget: `run()` resolves only when the whole negotiation is over, so
-// awaiting it here would start the recording after the show had finished.
-await page.evaluate(() => { void window.__theater.run(); });
+// Fire and forget: `run()` resolves only when the whole loop is over, so
+// awaiting it here would start the recording after it had finished.
+await page.evaluate((mode) => {
+  if (mode === 'stress') void window.__theater.stress.run();
+  else void window.__theater.run();
+}, MODE);
 
 const interval = 1000 / FPS;
 while (frame < total) {
   const started = Date.now();
   await shoot();
-  const done = await page.evaluate(() => window.__theater.redline() != null);
+  const done = await page.evaluate((mode) => (mode === 'stress'
+    ? !window.__theater.stress.isRunning() && window.__theater.stress.stats().frames > 0
+    : window.__theater.redline() != null), MODE);
   // Once the proof is up, hold on it for a couple of seconds and stop — the
   // verdict is the payoff and the loop should end there, not on a blank tail.
   if (done) {
