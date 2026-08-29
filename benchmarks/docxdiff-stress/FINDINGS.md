@@ -130,9 +130,12 @@ Three levers remain, in descending value, none of them taken here:
 
 `wasm/DocxodusWasm/DocxodusWasm.csproj` does not set `WasmEnableThreads`, so the browser runtime is
 single-threaded. There `Task.Run` does not start a thread — it queues the delegate for the one thread
-that is about to block on the result, so an unguarded blocking join hangs the page rather than
-speeding anything up. `Docxodus.Internal.ParallelWork` compiles the fan-out out under `WASM_BUILD`
-and checks `Environment.ProcessorCount` besides.
+that would then block on the result, and the runtime refuses rather than deadlocking: the join throws
+`PlatformNotSupportedException: Cannot wait on monitors on this runtime`. An unguarded fan-out
+therefore does not merely fail to be faster, it fails every browser comparison outright — measured,
+by forcing the guard open and watching all ten `npm/tests/docx-diff.spec.ts` cases fail with exactly
+that exception. `Docxodus.Internal.ParallelWork` compiles the fan-out out under `WASM_BUILD` and
+checks `Environment.ProcessorCount` besides.
 
 That matters for how the gain is attributed: **the read sharing is the larger half, and it does not
 depend on threads.** With the fan-out forced off (medians of nine, same box):
@@ -167,6 +170,12 @@ choice.
 - **`--check` is the point.** A perf change to a diff engine is only interesting if the diff
   is unchanged, and "the tests still pass" is a weaker claim than "all 36 output digests are
   byte-identical across eight edit shapes and a four-way consolidate".
+- **Verify a suspected failure mode; do not infer it from timing.** The threading problem above was
+  first blamed on a CI Playwright job that had run 51 minutes without finishing. That reasoning was
+  wrong twice over: the job was cancelled by the next push rather than timing out, and the actual
+  defect throws immediately rather than hanging. Building the WASM bundle with the guard forced open
+  and running one spec settled it in ten minutes and produced the exact exception text now quoted in
+  `ParallelWork`. A slow job is evidence of a slow job.
 - **Digest parity on one document is not coverage.** One optimization here — skipping the
   attribute sort for elements carrying a single attribute — was briefly wrong: canonicalization
   strips `wp:docPr/@id` by consulting `attribute.Parent`, so deciding an attribute's fate after

@@ -15,8 +15,9 @@ All notable changes to this project will be documented in this file.
   hands that snapshot to the renderer, and the revision-view scan runs against the package
   the walk is about to use. The two sides' pre-accept and IR reads run concurrently
   where the runtime has threads to run them on — the browser build keeps the sequential
-  schedule, its WASM project does not set `WasmEnableThreads`, so a blocking join there
-  would hang the page rather than speed it up; it still gets the read-sharing win, which is the larger
+  schedule, its WASM project does not set `WasmEnableThreads`, so blocking on a queued
+  task there throws `PlatformNotSupportedException: Cannot wait on monitors on this runtime`
+  and fails the comparison outright; it still gets the read-sharing win, which is the larger
   half (roughly 1.4-1.6x with no parallelism at all). `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
   instead of running the whole pipeline to prove there is nothing to report. The N-way
   `Consolidate` carried the same duplication multiplied by reviewer count (`2*(N+1)` reads

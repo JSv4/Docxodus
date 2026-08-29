@@ -14,11 +14,15 @@ namespace Docxodus.Internal;
 /// holds on a server. It does not hold in the browser.</para>
 ///
 /// <para><b>Why the guard exists.</b> <c>wasm/DocxodusWasm/DocxodusWasm.csproj</c> does not set
-/// <c>WasmEnableThreads</c>, so the browser runtime is single-threaded. There <c>Task.Run</c> does not
-/// start a second thread: it queues the delegate for the ONE thread — which is the very thread about to
-/// block on the result. A blocking join would then wait forever for work that cannot start, hanging the
-/// page rather than merely failing to be faster. The fan-out is therefore compiled out of the WASM
-/// assembly entirely, and gated at runtime besides, since a single-core host gains nothing from it.</para>
+/// <c>WasmEnableThreads</c>, so the browser runtime is single-threaded: <c>Task.Run</c> queues the
+/// delegate for the ONE thread, which is the very thread that would then block on the result. The
+/// runtime refuses rather than deadlocking — the blocking join throws
+/// <c>PlatformNotSupportedException: Cannot wait on monitors on this runtime</c>, so an unguarded
+/// fan-out does not merely fail to be faster, it fails every browser comparison outright. (Measured:
+/// with the guard forced open, all ten <c>npm/tests/docx-diff.spec.ts</c> cases fail with exactly that
+/// exception; those specs are this guard's regression test.) The fan-out is therefore compiled out of
+/// the WASM assembly entirely, and gated at runtime besides, since a single-core host gains nothing
+/// from it.</para>
 ///
 /// <para>Both paths compute the same values in the same order. This is a scheduling decision, never a
 /// semantic one.</para>

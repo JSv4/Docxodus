@@ -121,8 +121,11 @@ order.
 `Environment.ProcessorCount > 1`. `wasm/DocxodusWasm/DocxodusWasm.csproj` does not set
 `WasmEnableThreads`, so the browser runtime is single-threaded, and there `Task.Run` does not start a
 second thread — it queues the delegate for
-the ONE thread, which is the thread about to block on the result. An unguarded blocking join there
-would hang the page rather than merely fail to be faster. The browser therefore keeps the sequential
+the ONE thread, which is the thread that would then block on the result. The runtime refuses rather
+than deadlocking: the join throws `PlatformNotSupportedException: Cannot wait on monitors on this
+runtime`, so an unguarded fan-out fails every browser comparison outright. (Measured — with the guard
+forced open, all ten `npm/tests/docx-diff.spec.ts` cases fail with exactly that exception; those specs
+are this guard's regression test.) The browser therefore keeps the sequential
 schedule and still gets the read-sharing win, which is the larger half: on the reference document a
 two-way `Compare` runs roughly 1.4-1.6x faster than before with no parallelism at all, against
 ~2.3x with it.
