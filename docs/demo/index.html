@@ -525,10 +525,11 @@
           cart: params.get("cart") ?? "doom",
           intro: params.get("intro") !== "0",
           ui: dock.ui,
-          // Same overrides the cabinet takes; see docs/demo/vendor/NOTICE.md.
+          // Same overrides the cabinet takes — a same-origin IWAD and a mute
+          // switch, and deliberately no engine override. See
+          // docs/demo/vendor/NOTICE.md.
           doom: {
             wadUrl: params.get("wad") ?? undefined,
-            engineUrl: params.get("doomEngine") ?? undefined,
             sound: params.get("sound") !== "0",
           },
         });

@@ -180,6 +180,40 @@ test.describe('DOOM inside a Word document', () => {
     expect(turningStatusBar, 'the status bar should not move while turning').toBeLessThan(2);
   });
 
+  test('a cross-origin IWAD is refused rather than fetched', async ({ page }) => {
+    test.setTimeout(120000);
+    // `import()` executes whatever it fetches, on this page's origin, so the
+    // cartridge takes no engine URL from a link at all and gates the one URL
+    // it does take. This is the regression guard on that: a crafted link must
+    // land in the cartridge's error state without a request going out.
+    let requested = false;
+    await page.route('https://example.com/**', (route) => {
+      requested = true;
+      return route.abort();
+    });
+
+    await page.goto(
+      `/demo-arcade.html?${OVERRIDE}&cart=doom&wad=${encodeURIComponent('https://example.com/evil.wad.gz')}`,
+    );
+    await page.waitForFunction(
+      () => (window as any).__arcade !== undefined || (window as any).__arcadeError !== undefined,
+      null,
+      { timeout: 120000 },
+    );
+    await page.waitForFunction(
+      () => (window as any).__arcade.game().status === 'error',
+      null,
+      { timeout: 60000 },
+    );
+
+    const state = await page.evaluate(() => (window as any).__arcade.game());
+    expect(state.error).toContain('same-origin');
+    expect(requested, 'no request should have been made to the cross-origin host').toBe(false);
+    // The cabinet stays a document even when the cartridge refuses to load.
+    expect(await page.evaluate(() => (window as any).__arcade.canvasText() as string))
+      .toContain('DOOM');
+  });
+
   test('pause hands the frame back as an ordinary paragraph, and it saves as a real .docx', async ({ page }) => {
     test.setTimeout(240000);
     await bootDoom(page);

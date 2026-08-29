@@ -117,12 +117,14 @@
     const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
 
     // The Doom cartridge's engine and IWAD are vendored beside this page
-    // (docs/demo/vendor/ — see its NOTICE.md), and both are overridable:
-    // ?wad= points the cartridge at any IWAD you are licensed to play,
-    // ?sound=0 boots it mute, and ?doomEngine= swaps the engine build.
+    // (docs/demo/vendor/ — see its NOTICE.md). ?wad= points the cartridge at a
+    // SAME-ORIGIN IWAD you host yourself and are licensed to play; ?sound=0
+    // boots it mute. There is deliberately no engine override: a dynamic
+    // import() runs whatever it is given, on this origin, so letting a link
+    // choose the module would be remote code execution rather than a knob.
+    // The cartridge enforces the same-origin rule itself as well.
     const doomOptions = {
       wadUrl: params.get("wad") ?? undefined,
-      engineUrl: params.get("doomEngine") ?? undefined,
       sound: params.get("sound") !== "0",
     };
 

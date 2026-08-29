@@ -110,9 +110,15 @@ browser assembles when the Doom cartridge is selected is GPL-2.0.
 
 The engine is behind a dynamic `import()` inside `doom-cart.js`, so a visitor
 who plays the platformer or the dungeon never downloads the 3 MB build or the
-10 MB IWAD. Both are overridable from the URL: `?wad=` points the cartridge at
-any IWAD you are licensed to play (a retail `doom.wad` works), `?sound=0` boots
-it mute, `?doomEngine=` swaps the engine build.
+10 MB IWAD. `?wad=` points the cartridge at a **same-origin** IWAD you host
+yourself and are licensed to play (a retail `doom.wad` works), and `?sound=0`
+boots it mute.
+
+There is deliberately no engine override. `import()` executes whatever it
+fetches, on this page's origin and with its privileges, so a URL parameter
+naming the module would be remote code execution from a crafted link rather
+than a knob — the cartridge refuses a cross-origin engine or IWAD URL on its
+own, and the pages do not offer the engine one at all.
 
 The demo stays a documentation-site concern. Neither its runtime nor anything
 under `vendor/` is included in the `docxodus` npm tarball: the package

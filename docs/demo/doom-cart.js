@@ -212,6 +212,28 @@ let enginePromise = null;
 const DEFAULT_ENGINE = new URL('./vendor/doomgeneric/doomgeneric_module.js', import.meta.url).href;
 const DEFAULT_WAD = new URL('./vendor/freedoom/freedoom1.wad.gz', import.meta.url).href;
 
+/** Resolve a URL and refuse it unless it is same-origin.
+ *
+ *  `import()` EXECUTES what it fetches, with this page's privileges and on
+ *  this page's origin, so an engine URL that a link can choose is remote code
+ *  execution rather than a convenience — which is why `?doomEngine=` no longer
+ *  exists and why this guard stands behind the option that remains. The IWAD
+ *  is only data and is magic-checked before use, but it goes through the same
+ *  gate: `?wad=` is for pointing the cartridge at an IWAD you host yourself,
+ *  and nothing is lost by requiring you to host it.
+ *
+ *  In Node (the headless logic tests) there is no location and nothing is ever
+ *  loaded, so the guard is inert there. */
+function sameOrigin(url, what) {
+  const here = globalThis.location;
+  if (!here) return url;
+  const resolved = new URL(url, here.href);
+  if (resolved.origin !== here.origin) {
+    throw new Error(`${what} must be same-origin (refusing ${resolved.origin})`);
+  }
+  return resolved.href;
+}
+
 /** Fetch the gzipped IWAD, reporting progress, and inflate it in the browser.
  *
  *  The WAD ships gzipped (28.8 MB → 10.3 MB) because GitHub Pages will not
@@ -246,6 +268,8 @@ function loadEngine({ engineUrl, wadUrl, sound, onProgress }) {
   if (enginePromise) return enginePromise;
 
   enginePromise = (async () => {
+    engineUrl = sameOrigin(engineUrl, 'the Doom engine');
+    wadUrl = sameOrigin(wadUrl, 'the IWAD');
     onProgress({ phase: 'wad', ratio: 0 });
     const wad = await fetchWad(wadUrl, (ratio, got, total) =>
       onProgress({ phase: 'wad', ratio, got, total }));
@@ -271,7 +295,10 @@ function loadEngine({ engineUrl, wadUrl, sound, onProgress }) {
     // Doom's IWAD table (d_iwad.c) knows "freedoom1.wad" as Freedoom: Phase 1
     // and treats it as a retail Doom, so mounting it under its own name is
     // all the configuration this needs — no argv, no -iwad.
-    const name = '/' + wadUrl.split('/').pop().replace(/\.gz$/, '').toLowerCase();
+    // From the PATH, so a query string or fragment cannot end up in the
+    // filename Doom's IWAD table is matched against.
+    const path = globalThis.location ? new URL(wadUrl, globalThis.location.href).pathname : wadUrl;
+    const name = '/' + path.split('/').pop().replace(/\.gz$/, '').toLowerCase();
     const stream = module.FS.open(name, 'w+');
     module.FS.write(stream, wad, 0, wad.length, 0);
     module.FS.close(stream);

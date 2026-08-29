@@ -93,6 +93,7 @@ repository already made that choice once — the cartridge this one replaced was
 built from Freedoom's E1M1.
 
 Nothing in the code prefers one IWAD over the other: `doomCart({ wadUrl })`
-takes any IWAD URL, and `arcade.html?wad=…` passes one through, so anyone who
-holds a licensed `doom.wad` or `doom2.wad` can point the cartridge at their own
-copy and play the retail maps locally.
+takes an IWAD URL and `arcade.html?wad=…` passes one through, so anyone holding
+a licensed `doom.wad` or `doom2.wad` can point the cartridge at their own copy
+and play the retail maps. The URL must be same-origin — host the WAD beside the
+page — and the filename has to be one Doom's own IWAD table recognises.
