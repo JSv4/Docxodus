@@ -39,15 +39,21 @@ usage: DocxDiffStress <document.docx> [options]
   --baseline FILE    write output digests to FILE
   --check FILE       compare output digests against FILE and fail on any mismatch
   --out DIR          write the generated variants here (default: skip)
+  --corpus DIR       instead of the generated variants, run EVERY .docx under DIR through the
+                     products and digest the results (use with --baseline / --check)
+  --limit N          corpus mode: stop after N documents
+  --threads N        corpus mode: documents in flight (default: processor count)
 """;
 
-if (args.Length < 1 || args[0].StartsWith("--"))
+// Corpus mode takes its input from --corpus, so it is the one shape with no positional document.
+var corpusMode = args.Contains("--corpus");
+if (args.Length < 1 || (!corpusMode && args[0].StartsWith("--")))
 {
     Console.Error.WriteLine(Usage);
     return 1;
 }
 
-var docPath = args[0];
+var docPath = corpusMode ? string.Empty : args[0];
 var iterations = IntArg("--iterations", 5);
 var warmup = IntArg("--warmup", 2);
 var wantStages = args.Contains("--stages");
@@ -58,6 +64,16 @@ var outDir = StrArg("--out");
 var caseFilter = StrArg("--cases")?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 if (outDir != null) Directory.CreateDirectory(outDir);
+
+if (StrArg("--corpus") is { } corpusRoot)
+{
+    return Docxodus.Stress.Corpus.Run(
+        corpusRoot,
+        baselineOut ?? Path.Combine(Path.GetTempPath(), "corpus-digests.json"),
+        checkAgainst,
+        IntArg("--limit", 0) is var lim && lim > 0 ? lim : null,
+        IntArg("--threads", Environment.ProcessorCount));
+}
 
 var baseBytes = File.ReadAllBytes(docPath);
 Console.WriteLine($"document : {docPath} ({baseBytes.Length:N0} bytes)");

@@ -44,6 +44,55 @@ dotnet run -c Release --project benchmarks/docxdiff-stress -- doc.docx --check b
 `--check` exits 2 on any mismatch and prints which product diverged. A perf change that
 prints `[parity] OK` produced byte-identical output on every case.
 
+## Corpus differential — the regression evidence
+
+The eight generated variants answer "did this change the diff of one heavyweight legal form".
+They do not answer "did this change the diff of anything else", and the reference document
+happens to carry **no tracked revisions, no tables and no drawings** — three shapes the
+engine's riskiest paths are keyed on. `--corpus` closes that: it runs every document in a
+directory through the products and digests the results, so two builds can be compared.
+
+```bash
+# baseline on one build
+dotnet run -c Release --project benchmarks/docxdiff-stress -- --corpus TestFiles --baseline before.json
+# ...switch builds, then
+dotnet run -c Release --project benchmarks/docxdiff-stress -- --corpus TestFiles --check before.json
+```
+
+Against `TestFiles/` that is **678 documents → 8,136 digests**, about 4 minutes on four threads.
+Each document contributes four comparisons — an edited variant under default settings, the
+document against itself (the byte-identical shortcuts), and the edited variant again under
+`PreAcceptInputRevisions` and `PreserveInputRevisions`, which are the only way to reach the
+revision-transform path — times three products (redline, revision list, edit script).
+
+A thrown exception is digested too, as `FAIL <Type>: <message>`. Malformed and unsupported
+fixtures are expected to throw; a change in **which** exception they throw is still a regression.
+
+### The redline digest is rename-invariant, and why
+
+Media and diagram parts imported into a redline are named `P` + a fresh GUID, and the
+relationships pointing at them get ids of `R` + a fresh GUID. **`DocxDiff.Compare` is therefore
+not byte-deterministic on any document whose redline imports media**, contradicting
+`DocxDiffSettings.Deterministic`. This is pre-existing — `origin/main` disagrees with itself on
+exactly those documents — and it affects 54 of the 678 fixtures here. Digesting raw package bytes
+reports 161 differences on every run and would drown a real regression in noise.
+
+So the redline is digested with those generated names folded to a placeholder, in entry names and
+inside XML content, with entries hashed in canonical-name order. Content still has to match
+exactly: this hides the naming churn and nothing else. See #620.
+
+### Confirm the harness can actually fail
+
+An always-green check is worthless, so verify it detects a change before trusting a pass.
+Reintroducing a real defect — dropping the `w:t` skip in `UnidHelper.ContentSignature`'s
+descendant-name walk — moves **3,905 of the 8,136 digests**.
+
+**It is not omniscient.** Reintroducing the `wp:docPr/@id` stripping-order bug that
+`IrHasherTests.Canonicalize_LoneDocPrId_StillStripped` guards produces **zero** corpus
+mismatches: real Word documents emit `<wp:docPr id=".." name=".."/>`, so the lone-attribute
+shape that bug needs does not occur in this corpus at all. Corpus parity and unit tests cover
+different things; neither replaces the other.
+
 ## Running
 
 ```bash

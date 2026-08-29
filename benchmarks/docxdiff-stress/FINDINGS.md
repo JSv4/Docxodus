@@ -188,6 +188,11 @@ choice.
   probe reported `UnidHelper` at 108 ms and the package parse at 48 ms; with every stage
   given the same promotion budget those became 51 ms and 13 ms. Stages measured first in a
   series pay for code the later ones inherit already compiled.
+- **One document is not a corpus.** The digests over eight generated variants of the reference
+  document say nothing about the shapes that document lacks — and it lacks tracked revisions,
+  tables and drawings, which between them gate the revision-transform path, the table differ
+  and every media import. `--corpus TestFiles` is the answer: 678 documents, 8,136 digests,
+  ~4 minutes. Run it before believing a perf change to this engine is free.
 - **`--check` is the point.** A perf change to a diff engine is only interesting if the diff
   is unchanged, and "the tests still pass" is a weaker claim than "all 36 output digests are
   byte-identical across eight edit shapes and a four-way consolidate".
