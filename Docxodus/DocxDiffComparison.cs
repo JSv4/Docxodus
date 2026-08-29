@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Verification;
@@ -61,18 +62,30 @@ public sealed class DocxDiffComparison
         _originalRight = right;
         _settings = settings ?? new DocxDiffSettings();
 
+        // PreAccept re-reads and can rewrite the whole package (strict-namespace normalization,
+        // mc:AlternateContent resolution, optional accept-flatten). The two sides never look at each
+        // other, so they run concurrently; the preflight that DOES span both runs after the join.
         _preflighted = new(() =>
         {
-            var preLeft = DocxDiff.PreAccept(_settings, _originalLeft);
+            var leftTask = Task.Run(() => DocxDiff.PreAccept(_settings, _originalLeft));
             var preRight = DocxDiff.PreAccept(_settings, _originalRight);
+            var preLeft = leftTask.GetAwaiter().GetResult();
             DocxDiff.PreflightCompatibility(_settings, preLeft, preRight);
             return (preLeft, preRight);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
+        // ONE read per side serves every product, including the markup renderer's clone-from-provenance
+        // pass — hence DocxDiff.RenderReadOpts (RetainSources ON) rather than DocxDiff.ReadOpts. Provenance
+        // is equality-neutral (see IrProvenance), so this snapshot is node-for-node value-equal to the
+        // retention-off one and the edit script built over it is unchanged; what it buys is the renderer's
+        // two full re-reads of these same documents, which on a heavyweight document dominate the compare.
+        // The two sides are independent pure reads, so they run concurrently.
         _ir = new(() =>
         {
             var (preLeft, preRight) = _preflighted.Value;
-            return (IrReader.Read(preLeft, DocxDiff.ReadOpts), IrReader.Read(preRight, DocxDiff.ReadOpts));
+            var leftTask = Task.Run(() => IrReader.Read(preLeft, DocxDiff.RenderReadOpts));
+            var irRight = IrReader.Read(preRight, DocxDiff.RenderReadOpts);
+            return (leftTask.GetAwaiter().GetResult(), irRight);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // The DATA script: CrossParagraphTokenDiff forced off, exactly as GetRevisions and
@@ -88,6 +101,15 @@ public sealed class DocxDiffComparison
 
         _revisions = new(() =>
         {
+            // Byte-identical packages have nothing to report, and proving that by running the whole
+            // pipeline costs as much as a real comparison. This is the same guard ToRedline uses, for
+            // the same reason and with the same exception: an explicit accept-all request rewrites the
+            // input even when the two sides match, so it is not a no-op. Note the edit script has no
+            // equivalent shortcut — its all-Equal operations are the answer callers asked for.
+            if (DocxCompare.HasIdenticalPackageBytes(_originalLeft, _originalRight) &&
+                !(_settings.PreAcceptInputRevisions && !_settings.PreserveInputRevisions))
+                return Array.Empty<DocxDiffRevision>();
+
             var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
             return IrRevisionRenderer.Render(_dataScript.Value, irLeft, irRight, diff)
@@ -175,7 +197,8 @@ public sealed class DocxDiffComparison
         var script = diff.CrossParagraphTokenDiff
             ? BuildFusedScript(diff)
             : _dataScript.Value;
-        return IrMarkupRenderer.Render(script, left, right, diff);
+        var (irLeft, irRight) = _ir.Value;
+        return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight);
     }
 
     private IrEditScript BuildFusedScript(IrDiffSettings diff)

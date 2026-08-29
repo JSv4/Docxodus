@@ -51,6 +51,14 @@ public static class DocxDiff
     internal static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };
 
+    // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
+    // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
+    // equality-neutral (see IrProvenance), so the script built over it is identical to one built over
+    // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
+    // footprint (the consolidate scoreboard, compatibility probes).
+    internal static readonly IrReaderOptions RenderReadOpts =
+        new() { RetainSources = true, RevisionView = RevisionView.Accept };
+
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and produce a tracked-changes
     /// <see cref="WmlDocument"/> carrying native Word revision markup
