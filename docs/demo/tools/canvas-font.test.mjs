@@ -14,6 +14,13 @@
 // cartridges under input scripts that reach the banners, deaths and win
 // screens — rather than by scanning the source for literals.
 //
+// The Doom cartridge is driven differently from the other two, because its
+// picture comes from a WebAssembly Doom that will not boot in a Node test: its
+// framebuffer painter is exported and fed synthetic frames instead, which is
+// enough because the glyph a picture cell can hold is decided entirely by
+// whether its two half-pixels match. Its chrome, loading and error screens
+// come from render() as usual.
+//
 // If this fails, either widen the subset (edit UNICODES in
 // tools/build-canvas-font.sh and rebuild) or pick a character already in it.
 import assert from 'node:assert/strict';
@@ -21,7 +28,8 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
-import { platformerCart, dungeonCart, freedoomCart, introFrame } from '../ascii-arcade.js';
+import { platformerCart, dungeonCart, introFrame } from '../ascii-arcade.js';
+import { doomCart, paintFramebuffer } from '../doom-cart.js';
 
 const manifest = JSON.parse(
   readFileSync(new URL('../fonts/docxodus-canvas-mono.json', import.meta.url), 'utf8'));
@@ -59,7 +67,7 @@ function drawnCharacters() {
     for (let i = 0; i < 400; i++) collect(scene.gen(i * 0.08), `scene:${scene.name}`);
   }
   for (let i = 0; i < 900; i++) collect(introFrame(i * 0.02).grid, 'attract screen');
-  for (const make of [platformerCart, dungeonCart, freedoomCart]) {
+  for (const make of [platformerCart, dungeonCart]) {
     for (const script of SCRIPTS) {
       const cart = make();
       const input = new ScriptedInput(script);
@@ -71,6 +79,27 @@ function drawnCharacters() {
       }
     }
   }
+
+  // Doom: the chrome and the pre-game screens, straight from render().
+  const doom = doomCart({ engineUrl: 'about:blank', wadUrl: 'about:blank' });
+  for (let i = 0; i < 40; i++) collect(doom.render().grid, 'cart:doom');
+
+  // Doom: the picture itself. A framebuffer whose halves sometimes match and
+  // sometimes do not exercises both cell glyphs; the gradient makes sure the
+  // painter is not accidentally emitting anything else.
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const i = (y * 320 + x) * 4;
+      fb[i] = (x * 7) & 0xff;                       // B
+      fb[i + 1] = (y * 5) & 0xff;                   // G
+      fb[i + 2] = y < 100 ? 0x40 : (x ^ y) & 0xff;  // R — flat above, noisy below
+    }
+  }
+  const doomGrid = doom.render().grid;
+  paintFramebuffer(doomGrid, fb);
+  collect(doomGrid, 'cart:doom framebuffer');
+
   return seen;
 }
 
@@ -98,8 +127,8 @@ test('the shipped subset is single-advance, which is the whole guarantee', () =>
 
 test('the non-ASCII characters the art depends on are all in the subset', () => {
   // The ones the bug was actually about, named so a regression reads clearly.
-  const loadBearing = ['█', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
-    '▲', '▼', '§', '¶', '·', '→'];
+  const loadBearing = ['█', '▀', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
+    '▲', '▼', '§', '¶', '·', '→', '←'];
   for (const ch of loadBearing) {
     assert.ok(covers(ch.codePointAt(0)),
       `${hex(ch.codePointAt(0))} ${ch} is not in the pinned font`);

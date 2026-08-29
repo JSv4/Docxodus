@@ -277,10 +277,41 @@ function rowRuns(chars, colors) {
   return runs;
 }
 
+/** The same merge for a grid that also carries per-cell BACKGROUNDS (the Doom
+ *  cartridge's half-block framebuffer: `▀` with the top pixel as ink and the
+ *  bottom pixel as run shading, which doubles the vertical resolution of the
+ *  screen paragraph).
+ *
+ *  A background makes a space VISIBLE, so unlike rowRuns above, every cell
+ *  counts here: a run breaks whenever either the ink or the shading changes.
+ *  `null` shading means "no w:shd on this run" — the paragraph fill shows
+ *  through, which is what the chrome and the side panel want. */
+function rowRunsShaded(chars, colors, bgs) {
+  const runs = [];
+  let text = '', color = null, bg;
+  for (let x = 0; x < COLS; x++) {
+    const cellBg = bgs[x] ?? null;
+    if (text !== '' && (colors[x] !== color || cellBg !== bg)) {
+      runs.push([text, color, bg]); text = '';
+    }
+    color = colors[x] ?? color; bg = cellBg;
+    text += chars[x];
+  }
+  if (text !== '') runs.push([text, color ?? '9CB3C9', bg ?? null]);
+  return runs;
+}
+
 /** The whole frame as one w:p: the captured opening tag (which carries the
  *  paragraph's Unid — THE thing that keeps the anchor stable across frames),
  *  a pPr with shading + exact line height, then per row: colored runs joined
- *  by w:br. */
+ *  by w:br.
+ *
+ *  `grid.bgs` is optional. When a grid supplies it — the Doom cartridge does,
+ *  because a real 320×200 framebuffer needs more than one color per cell — a
+ *  run also carries `w:shd`, so a cell can paint an ink color and a background
+ *  color independently. Grids without it (the Observatory's phenomena, the
+ *  attract screen, the other two cartridges) emit exactly the XML they always
+ *  did. */
 export function frameXml(openTag, grid, bg) {
   const parts = [openTag,
     '<w:pPr>',
@@ -290,11 +321,18 @@ export function frameXml(openTag, grid, bg) {
   let runs = 0;
   for (let y = 0; y < ROWS; y++) {
     if (y > 0) parts.push('<w:r><w:br/></w:r>');
-    for (const [text, color] of rowRuns(grid.chars[y], grid.colors[y])) {
+    const row = grid.bgs
+      ? rowRunsShaded(grid.chars[y], grid.colors[y], grid.bgs[y])
+      : rowRuns(grid.chars[y], grid.colors[y]);
+    for (const [text, color, cellBg] of row) {
       runs++;
       parts.push(
         `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-        `<w:color w:val="${color}"/><w:sz w:val="${SZ}"/><w:szCs w:val="${SZ}"/></w:rPr>` +
+        `<w:color w:val="${color}"/><w:sz w:val="${SZ}"/><w:szCs w:val="${SZ}"/>` +
+        // w:shd is last in CT_RPr's sequence among the properties we emit, so
+        // appending it here keeps the run properties schema-ordered.
+        (cellBg ? `<w:shd w:val="clear" w:color="auto" w:fill="${cellBg}"/>` : '') +
+        `</w:rPr>` +
         `<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`);
     }
   }
@@ -366,7 +404,15 @@ export function createCanvasPin() {
     pinned = unid;
     style.textContent =
       `[data-anchor="${unid}"], [data-anchor="${unid}"] span {${CANVAS_GRID_RULES} }\n` +
-      `[data-anchor="${unid}"] { overflow-x: hidden; }`;
+      `[data-anchor="${unid}"] { overflow-x: hidden; }\n` +
+      // Run shading (the Doom cartridge's half-block framebuffer) paints the
+      // INLINE box, whose height is the font's content area — a shade under
+      // the exact 10pt line box the canvas pins. Left alone that leaves a hair
+      // of paragraph fill between every pair of rows, which reads as scan
+      // lines across the picture. Vertical padding on an inline element grows
+      // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
+      // this closes the seam and changes no metric the grid depends on.
+      `[data-anchor="${unid}"] span { padding-top: 0.06em; padding-bottom: 0.06em; }`;
   };
 }
 

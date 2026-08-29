@@ -522,9 +522,15 @@
         const controller = startArcade({
           editor,
           session,
-          cart: params.get("cart") ?? "e1m1",
+          cart: params.get("cart") ?? "doom",
           intro: params.get("intro") !== "0",
           ui: dock.ui,
+          // Same overrides the cabinet takes; see docs/demo/vendor/NOTICE.md.
+          doom: {
+            wadUrl: params.get("wad") ?? undefined,
+            engineUrl: params.get("doomEngine") ?? undefined,
+            sound: params.get("sound") !== "0",
+          },
         });
         dock.show();
 

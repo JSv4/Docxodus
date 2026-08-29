@@ -1,0 +1,11 @@
+# NOTICE.md pins a SHA-256 for every file in this directory, and those hashes
+# are the only thing tying the vendored artifacts to their upstream releases.
+# The repository root sets `* text=auto`, which would rewrite the engine's line
+# endings on a Windows checkout and make its documented hash fail to verify
+# there. Vendored bytes are vendored bytes: keep them exactly as upstream
+# shipped them.
+*                     -text
+*.js                  -text -diff linguist-vendored
+*.gz    binary
+COPYING               -text linguist-vendored
+COPYING.txt           -text linguist-vendored

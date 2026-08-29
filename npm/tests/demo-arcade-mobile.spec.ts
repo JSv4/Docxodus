@@ -229,14 +229,15 @@ test.describe('Arcade on a phone-shaped viewport', () => {
 
   test('every cartridge keeps its grid on the same platform', async ({ page }) => {
     test.setTimeout(180000); // one boot, then three cartridges animated in turn
-    // The games draw a box-drawing bezel on every row and the raycaster shades
-    // its walls with ▒ █, so the tilt is not an attract-screen-only property.
+    // The games draw a box-drawing bezel on every row, the raycaster shades its
+    // walls with ▒ █ and Doom's framebuffer is a solid field of █ and ▀, so the
+    // tilt is not an attract-screen-only property.
     await emulateAndroidFontCoverage(page);
     await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
     await page.locator('#boot').click();
     await waitForBoot(page);
 
-    for (const cart of ['quest', 'dungeon', 'e1m1']) {
+    for (const cart of ['quest', 'dungeon', 'doom']) {
       await page.evaluate((name) => {
         (window as any).__arcade.setCart(name);
         (window as any).__arcade.resume();
@@ -278,8 +279,8 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     // document: four 44px arrows on a row of their own beneath the cartridge
     // chips, the transport row and the telemetry — a stack that ate the bottom
     // of a phone screen, sat nowhere near a thumb, and offered no Space at all,
-    // so Freedoom could be walked but never fought on a touch screen.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=e1m1`);
+    // so Doom could be walked but never fought on a touch screen.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=doom&sound=0`);
     await page.locator('#boot').click();
     await waitForBoot(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });

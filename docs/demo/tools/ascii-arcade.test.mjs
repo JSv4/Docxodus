@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { dungeonCart, freedoomCart } from '../ascii-arcade.js';
+import { dungeonCart } from '../ascii-arcade.js';
 
 const MAP_TOP = 4;
 
@@ -120,8 +120,13 @@ function bfsNext(state) {
   return null;
 }
 
+// This used to drive the Freedoom E1M1 cartridge, which was the same
+// raycaster fed a bigger level pack. That cartridge is real Doom now (see
+// doom-cart.js), whose world lives in a WebAssembly heap and cannot be walked
+// by a headless script — so the raycaster's own "clear the level" logic is
+// proved on the pack that still ships.
 test('the fast headless cartridge run reaches every objective and the exit', () => {
-  const cart = freedoomCart();
+  const cart = dungeonCart();
   const input = new TestInput();
   let goal = null;
   let goalTicks = 0;
