@@ -88,6 +88,14 @@ Two floors, for calibration: parsing every part the reader consumes costs ~13 ms
 opening a package and re-serializing it unchanged costs ~17 ms. So roughly 45 ms of a
 330 ms comparison is package I/O that no design avoids.
 
+## Filed follow-ups
+
+| | |
+|---|---|
+| [#617](https://github.com/JSv4/Docxodus/issues/617) | Reusable snapshot so bulk pipelines read a document once — the lever that decides 10/s |
+| [#618](https://github.com/JSv4/Docxodus/issues/618) | `UnidHelper` hashes twice per element for elements the IR never reads back |
+| [#619](https://github.com/JSv4/Docxodus/issues/619) | `MarkupCompatibilityNormalizer` full-parses `document.xml` on every call to find nothing |
+
 ## On the 10 comparisons/second target
 
 Not reached for a cold pairwise redline of a document this size, and worth being precise
@@ -100,9 +108,11 @@ read, about 60 ms of that is the diff itself. **If the question is "10 analyses 
 that is reachable now with snapshot reuse; if it is "10 redlined .docx packages per second",
 the zip round-trip is a hard floor and the answer on this hardware is no.**
 
-Three levers remain, in descending value, none of them taken here:
+Four things remain, in descending value, none of them taken here. The first three are filed
+so they are trackable rather than buried in this file:
 
-1. **Reuse reads across comparisons.** Nothing in the pipeline lets a caller say "I already
+1. **Reuse reads across comparisons — [#617](https://github.com/JSv4/Docxodus/issues/617).**
+   Nothing in the pipeline lets a caller say "I already
    read this document." Every realistic bulk workload — one baseline against many
    counterparties' markups, a version chain, an N-way consolidate — reads the same document
    over and over. A snapshot type carrying the pre-accepted document plus its IR, accepted
@@ -112,7 +122,8 @@ Three levers remain, in descending value, none of them taken here:
    es across every transport (see the ripple checklist in `CLAUDE.md`), which is why it was
    left out of a change set whose remit was to not alter the surface.
 
-2. **Assign Unids only where they are read.** ~51 ms of every read hashes twice per element
+2. **Assign Unids only where they are read — [#618](https://github.com/JSv4/Docxodus/issues/618).**
+   ~51 ms of every read hashes twice per element
    for all 15,360 elements, but the IR reads a Unid back only on blocks, content controls
    and `w:drawing`. A block's Unid derives from its ancestors, never its descendants, so
    pruning the assignment would leave every anchor byte-identical. It was not taken because
@@ -120,11 +131,21 @@ Three levers remain, in descending value, none of them taken here:
    saved packages, and "which elements carry an identity" is exactly the kind of contract
    a green test suite can fail to protect.
 
-3. **Spend the other two cores.** Pre-accept and the two IR reads are concurrent now, which
+3. **Stop full-parsing `document.xml` to prove there is nothing to normalize —
+   [#619](https://github.com/JSv4/Docxodus/issues/619).** `MarkupCompatibilityNormalizer`
+   gates its parse on the part containing the literal `pPr`, which every real
+   `word/document.xml` does, so the gate never closes: ~18 ms per side, ~10% of a
+   comparison, spent building a DOM that finds nothing. The reference document has zero
+   paragraphs carrying the duplicate-`w:pPr` shape the repair targets.
+
+4. **Spend the other two cores.** Pre-accept and the two IR reads are concurrent now, which
    uses about two of four cores; the build and the render are single-threaded. Per-block
    token diffs are independent and the per-scope reads within one document are nearly so.
-   Worth perhaps 15-20% and a real risk of introducing order-dependence into a pipeline
-   whose determinism is a documented guarantee.
+   Deliberately NOT filed: it is worth perhaps 15-20% against a real risk of introducing
+   order-dependence into a pipeline whose determinism is a documented guarantee, it is
+   unavailable in the browser at all (see below), and an issue saying "consider more
+   threads" is not a unit of work anyone can pick up. It belongs here as a note, not in the
+   tracker.
 
 ## The concurrency is not available everywhere
 
