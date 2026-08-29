@@ -282,8 +282,17 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     // document: four 44px arrows on a row of their own beneath the cartridge
     // chips, the transport row and the telemetry — a stack that ate the bottom
     // of a phone screen, sat nowhere near a thumb, and offered no Space at all,
-    // so Doom could be walked but never fought on a touch screen.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=doom&sound=0`);
+    // so a shooter could be walked but never fought on a touch screen.
+    //
+    // Pinned to the raycaster, not to Doom. This is a test of the DOCK — the
+    // geometry of the pad and that a tap reaches the game's input — and the
+    // raycaster answers that crisply, because it exposes the player's heading
+    // and a tap can be shown to turn it. Doom's own state is a framebuffer, so
+    // the equivalent assertion there is a fuzzy pixel-motion probe that also
+    // wants a 10 MB IWAD in a phone-emulated browser; its input path already
+    // has precise coverage in demo-arcade-doom.spec.ts. The FIRE assertion
+    // below is cart-agnostic either way — it reads the arcade's own input.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=dungeon`);
     await page.locator('#boot').click();
     await waitForBoot(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
