@@ -114,8 +114,17 @@ test.describe('DOOM inside a Word document', () => {
     expect(first.fallback).toBeNull(); // frames stay incremental
 
     // Doom's own counter, not the arcade's: it must keep climbing on its own.
+    //
+    // The margin is small on purpose. Each painted frame is ~1,400 runs of
+    // OOXML through replaceXml + refresh, so the frame RATE is a property of
+    // how loaded the machine is — on a busy CI runner it lands near 1 fps,
+    // which made a +60 margin sit right on this timeout and flake. The claim
+    // being made here is liveness, not throughput: a frozen or crashed engine
+    // produces no further frames at all, so any sustained advance falsifies
+    // it. Sustained real-time play is proved separately, by the turning test
+    // below.
     await page.waitForFunction(
-      (n) => (window as any).__arcade.game().doomFrames > n + 60,
+      (n) => (window as any).__arcade.game().doomFrames > n + 10,
       first.doomFrames,
       { timeout: 60000 },
     );
