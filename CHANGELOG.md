@@ -13,8 +13,11 @@ All notable changes to this project will be documented in this file.
   parsed the whole package twice, because deciding the accepted-revision view scanned a
   second package and then discarded the parse. The comparison now reads once per side and
   hands that snapshot to the renderer, and the revision-view scan runs against the package
-  the walk is about to use. The two sides' pre-accept and IR reads run concurrently, and
-  `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
+  the walk is about to use. The two sides' pre-accept and IR reads run concurrently
+  where the runtime has threads to run them on — the browser build keeps the sequential
+  schedule, its WASM project does not set `WasmEnableThreads`, so a blocking join there
+  would hang the page rather than speed it up; it still gets the read-sharing win, which is the larger
+  half (roughly 1.4-1.6x with no parallelism at all). `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
   instead of running the whole pipeline to prove there is nothing to report. The N-way
   `Consolidate` carried the same duplication multiplied by reviewer count (`2*(N+1)` reads
   to compare `N+1` documents) and is fixed the same way. Supporting cuts: `ContentSignature`

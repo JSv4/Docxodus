@@ -4,7 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
+using Docxodus.Internal;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Verification;
@@ -64,12 +64,13 @@ public sealed class DocxDiffComparison
 
         // PreAccept re-reads and can rewrite the whole package (strict-namespace normalization,
         // mc:AlternateContent resolution, optional accept-flatten). The two sides never look at each
-        // other, so they run concurrently; the preflight that DOES span both runs after the join.
+        // other, so they run concurrently where the runtime has threads (see ParallelWork); the
+        // preflight that DOES span both runs after the join.
         _preflighted = new(() =>
         {
-            var leftTask = Task.Run(() => DocxDiff.PreAccept(_settings, _originalLeft));
-            var preRight = DocxDiff.PreAccept(_settings, _originalRight);
-            var preLeft = leftTask.GetAwaiter().GetResult();
+            var (preLeft, preRight) = ParallelWork.Pair(
+                () => DocxDiff.PreAccept(_settings, _originalLeft),
+                () => DocxDiff.PreAccept(_settings, _originalRight));
             DocxDiff.PreflightCompatibility(_settings, preLeft, preRight);
             return (preLeft, preRight);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -83,9 +84,9 @@ public sealed class DocxDiffComparison
         _ir = new(() =>
         {
             var (preLeft, preRight) = _preflighted.Value;
-            var leftTask = Task.Run(() => IrReader.Read(preLeft, DocxDiff.RenderReadOpts));
-            var irRight = IrReader.Read(preRight, DocxDiff.RenderReadOpts);
-            return (leftTask.GetAwaiter().GetResult(), irRight);
+            return ParallelWork.Pair(
+                () => IrReader.Read(preLeft, DocxDiff.RenderReadOpts),
+                () => IrReader.Read(preRight, DocxDiff.RenderReadOpts));
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // The DATA script: CrossParagraphTokenDiff forced off, exactly as GetRevisions and

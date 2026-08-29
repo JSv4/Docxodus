@@ -113,8 +113,19 @@ for the `RevisionProcessor` round-trip and the reopen that follows it.
 
 The left and right sides are independent pure reads, so pre-accept and the IR reads run
 concurrently; `Consolidate` reads the base and all reviewers the same way. Nothing about the output
-depends on this — the reads share no state — but it is why `DocxDiffComparison` takes a dependency
-on `System.Threading.Tasks`.
+depends on this — the reads share no state — and both schedules produce the same values in the same
+order.
+
+**The fan-out is gated, and the gate is not an optimization.** It runs through
+`Docxodus.Internal.ParallelWork`, which is compiled out under `WASM_BUILD` and additionally checks
+`Environment.ProcessorCount > 1`. `wasm/DocxodusWasm/DocxodusWasm.csproj` does not set
+`WasmEnableThreads`, so the browser runtime is single-threaded, and there `Task.Run` does not start a
+second thread — it queues the delegate for
+the ONE thread, which is the thread about to block on the result. An unguarded blocking join there
+would hang the page rather than merely fail to be faster. The browser therefore keeps the sequential
+schedule and still gets the read-sharing win, which is the larger half: on the reference document a
+two-way `Compare` runs roughly 1.4-1.6x faster than before with no parallelism at all, against
+~2.3x with it.
 
 On a 574 KB `document.xml` with 15,360 elements, collapsing four reads to two concurrent ones took
 a two-way `Compare` from ~820 ms to ~350 ms and a four-reviewer `Consolidate` from ~1870 ms to

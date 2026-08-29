@@ -126,6 +126,34 @@ Three levers remain, in descending value, none of them taken here:
    Worth perhaps 15-20% and a real risk of introducing order-dependence into a pipeline
    whose determinism is a documented guarantee.
 
+## The concurrency is not available everywhere
+
+`wasm/DocxodusWasm/DocxodusWasm.csproj` does not set `WasmEnableThreads`, so the browser runtime is
+single-threaded. There `Task.Run` does not start a thread — it queues the delegate for the one thread
+that is about to block on the result, so an unguarded blocking join hangs the page rather than
+speeding anything up. `Docxodus.Internal.ParallelWork` compiles the fan-out out under `WASM_BUILD`
+and checks `Environment.ProcessorCount` besides.
+
+That matters for how the gain is attributed: **the read sharing is the larger half, and it does not
+depend on threads.** With the fan-out forced off (medians of nine, same box):
+
+| Case | `main` | sequential | concurrent |
+|---|---|---|---|
+| `light` | 821 ms | 575 ms | 351 ms |
+| `heavy` | 868 ms | 604 ms | 395 ms |
+| `reorder` | 792 ms | 514 ms | 338 ms |
+| `structural` | 803 ms | 531 ms | 334 ms |
+| `footnotes` | 959 ms | 717 ms | 510 ms |
+| `rewrite` | 1279 ms | 1025 ms | 868 ms |
+
+So roughly 1.4-1.6x from reading each document once, and the rest from reading the two of them at
+the same time. Treat the split as approximate — the two columns come from different runs and this
+box's medians move by 10-15% with load — but the ordering is stable and the mechanism is not in
+doubt: the stage decomposition puts the two reads at ~235 ms sequential against ~134 ms concurrent.
+
+All 36 output digests match on both schedules, which is the point: the schedule is not a semantic
+choice.
+
 ## Notes for anyone re-running this
 
 - **Measure medians, and force a collection between cases.** A comparison here allocates

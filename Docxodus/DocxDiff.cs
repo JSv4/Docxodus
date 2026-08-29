@@ -4,7 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Threading.Tasks;
+using Docxodus.Internal;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Verification;
@@ -490,18 +490,18 @@ public static class DocxDiff
     private static (IrDocument BaseIr, List<(string Author, IrDocument Ir)> ReviewerIrs) ReadReviewerSet(
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers, IrReaderOptions opts)
     {
-        var baseTask = Task.Run(() => IrReader.Read(baseDocument, opts));
-        var reviewerTasks = new Task<IrDocument>[reviewers.Count];
+        var reads = new Func<IrDocument>[reviewers.Count];
         for (var i = 0; i < reviewers.Count; i++)
         {
             var doc = reviewers[i].Document;
-            reviewerTasks[i] = Task.Run(() => IrReader.Read(doc, opts));
+            reads[i] = () => IrReader.Read(doc, opts);
         }
 
-        var baseIr = baseTask.GetAwaiter().GetResult();
+        var (baseIr, reviewerIrs) = ParallelWork.Fan(() => IrReader.Read(baseDocument, opts), reads);
+
         var revIr = new List<(string Author, IrDocument Ir)>(reviewers.Count);
         for (var i = 0; i < reviewers.Count; i++)
-            revIr.Add((reviewers[i].Author, reviewerTasks[i].GetAwaiter().GetResult()));
+            revIr.Add((reviewers[i].Author, reviewerIrs[i]));
         return (baseIr, revIr);
     }
 
