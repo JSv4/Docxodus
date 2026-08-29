@@ -79,7 +79,7 @@ reports 161 differences on every run and would drown a real regression in noise.
 
 So the redline is digested with those generated names folded to a placeholder, in entry names and
 inside XML content, with entries hashed in canonical-name order. Content still has to match
-exactly: this hides the naming churn and nothing else. See #620.
+exactly: this hides the naming churn and nothing else. See #621.
 
 ### Confirm the harness can actually fail
 
