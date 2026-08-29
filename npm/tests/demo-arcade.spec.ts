@@ -16,7 +16,10 @@ import { test, expect, Page } from '@playwright/test';
 
 // intro=0 skips the attract screen: these specs test the cartridges, and the
 // intro has its own dedicated coverage.
-const OVERRIDE = 'engine=./embed.bundle.js&intro=0';
+// wad= is the webroot copy fetch-doom-iwad.mjs provides, so the Doom
+// cartridge shows its real picture here rather than a failed load.
+const OVERRIDE = 'engine=./embed.bundle.js&intro=0&sound=0'
+  + '&wad=' + encodeURIComponent('./vendor/freedoom1.wad.gz');
 
 async function waitForBoot(page: Page) {
   await page.waitForFunction(

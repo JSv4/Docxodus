@@ -10,7 +10,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
-| `arcade.html` | THE DOCX ARCADE — the Observatory's interactive sequel: three playable games (a ¶-starring platformer, a Doom-style raycaster, and **DOOM** — id Software's own engine, GPL-2.0, compiled to JavaScript, running on Freedoom's BSD-licensed IWAD) whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` paragraph, plus keyboard input both ways. WASD/arrows are claimed only while playing. For the two ASCII cartridges the input goes both directions: on resume the driver re-parses the game world FROM the document, so terrain typed into the paused screen (or letters typed into the raycaster's MAP panel) becomes real. Doom cannot do that and does not pretend to — its world is BSP geometry in a WebAssembly heap and the paragraph holds a picture of it — so there the round trip is pause, edit, undo and save, without the level parse. Doom's 320×200 framebuffer becomes 64×46 pixels in the bezel by packing two pixels per cell: `▀` with the top pixel as ink and the bottom as `w:shd` run shading (`█` where they agree). The games live in `ascii-arcade.js` in this directory (importing shared plumbing from `ascii-scenes.js`); Doom lives in `doom-cart.js` beside it, the one GPL file in the repository — see the licensing section below. Same `?engine=` split as the Observatory, plus `?cart=quest\|dungeon\|doom`, `?wad=`, `?sound=0` and `?intro=0` to skip the "OS LEGAL presents DOCXODUS" attract screen (the title card is drawn on the same canvas paragraph; Space drops the coin). Boots on tap when iframed. Its controls come from `arcade-dock.js` (below), which the landing page mounts identically. Specs: `npm/tests/demo-arcade.spec.ts` and `npm/tests/demo-arcade-doom.spec.ts` (the latter proves real play — the engine names its own IWAD, the paragraph carries shaded half-block runs, and holding a turn key swings Doom's 3-D view while its status bar stays nailed down). |
+| `arcade.html` | THE DOCX ARCADE — the Observatory's interactive sequel: three playable games (a ¶-starring platformer, a Doom-style raycaster, and **DOOM** — id Software's own engine, GPL-2.0, compiled to JavaScript, running on Freedoom's BSD-licensed IWAD) whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` paragraph, plus keyboard input both ways. WASD/arrows are claimed only while playing. For the two ASCII cartridges the input goes both directions: on resume the driver re-parses the game world FROM the document, so terrain typed into the paused screen (or letters typed into the raycaster's MAP panel) becomes real. Doom cannot do that and does not pretend to — its world is BSP geometry in a WebAssembly heap and the paragraph holds a picture of it — so there the round trip is pause, edit, undo and save, without the level parse. Doom's 320×200 framebuffer becomes 64×46 pixels in the bezel by packing two pixels per cell: `▀` with the top pixel as ink and the bottom as `w:shd` run shading (`█` where they agree). The games live in `ascii-arcade.js` in this directory (importing shared plumbing from `ascii-scenes.js`); Doom lives in `doom-cart.js` beside it, the one GPL file in the repository; its engine and IWAD are not in the repository at all but pinned on jsDelivr — see the licensing section below. Same `?engine=` split as the Observatory, plus `?cart=quest\|dungeon\|doom`, `?wad=`, `?sound=0` and `?intro=0` to skip the "OS LEGAL presents DOCXODUS" attract screen (the title card is drawn on the same canvas paragraph; Space drops the coin). Boots on tap when iframed. Its controls come from `arcade-dock.js` (below), which the landing page mounts identically. Specs: `npm/tests/demo-arcade.spec.ts` and `npm/tests/demo-arcade-doom.spec.ts` (the latter proves real play — the engine names its own IWAD, the paragraph carries shaded half-block runs, and holding a turn key swings Doom's 3-D view while its status bar stays nailed down). |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
 ### The arcade's controls (`arcade-dock.js`)
@@ -97,31 +97,44 @@ Cartridge 3 is the actual game. `doom-cart.js` drives
 [doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — id Software's
 Doom source, GPL-2.0, compiled to JavaScript — on Freedoom's BSD-licensed
 IWAD, and downsamples its 320×200 framebuffer into the canvas paragraph every
-frame. Both artifacts are vendored under `vendor/`, with their upstream
-commits, hashes, licenses and rebuild steps in
-[`vendor/NOTICE.md`](vendor/NOTICE.md).
+frame.
 
-**This is the one place the repository is not MIT.** `doom-cart.js` is
-combined with a GPL engine at runtime, so that single file is offered under
+**Neither the engine nor the IWAD is in this repository.** They are 13 MB of
+binary that would show up in every clone forever and never diff usefully, so
+both are pinned jsDelivr URLs instead — by 40-hex commit for the engine, by tag
+for the IWAD, both served with `access-control-allow-origin: *` and cached
+immutably. Upstream commits, SHA-256s, license texts and verification commands
+are in [`vendor/NOTICE.md`](vendor/NOTICE.md), along with what the IWAD's
+sibling repository has to contain and why it needs to exist at all (GitHub
+serves release assets without CORS, so a browser cannot fetch Freedoom's
+release directly).
+
+The Playwright specs do not touch the CDN for game data:
+`npm/scripts/fetch-doom-iwad.mjs` pulls the release asset server-side, verifies
+its digest, and drops a gzipped copy into the test webroot for the specs to
+load same-origin.
+
+**This is the one place the repository is not MIT.** `doom-cart.js` is combined
+with a GPL engine at runtime, so that single file is offered under
 GPL-2.0-or-later and says so in its header. Everything else — `ascii-arcade.js`
 included, which imports it — stays MIT, which is GPL-compatible: each file
 remains separately available under its own terms, and only the combination a
 browser assembles when the Doom cartridge is selected is GPL-2.0.
 
 The engine is behind a dynamic `import()` inside `doom-cart.js`, so a visitor
-who plays the platformer or the dungeon never downloads the 3 MB build or the
-10 MB IWAD. `?wad=` points the cartridge at a **same-origin** IWAD you host
-yourself and are licensed to play (a retail `doom.wad` works), and `?sound=0`
-boots it mute.
+who plays the platformer or the dungeon fetches neither. `?wad=` points the
+cartridge at a **same-origin** IWAD you host yourself and are licensed to play
+(a retail `doom.wad` works), and `?sound=0` boots it mute.
 
 There is deliberately no engine override. `import()` executes whatever it
 fetches, on this page's origin and with its privileges, so a URL parameter
 naming the module would be remote code execution from a crafted link rather
-than a knob — the cartridge refuses a cross-origin engine or IWAD URL on its
-own, and the pages do not offer the engine one at all.
+than a knob. The cartridge's URL gate allows exactly its own pin plus
+same-origin, and nothing else.
 
-The demo stays a documentation-site concern. Neither its runtime nor anything
-under `vendor/` is included in the `docxodus` npm tarball: the package
+The demo stays a documentation-site concern. Neither its runtime nor the Doom
+cartridge's third-party dependencies are included in the `docxodus` npm
+tarball: the package
 publishes an explicit allowlist of library JavaScript, declarations, and WASM
 runtime files, and `npm run test:package-boundary` audits the actual packed
 manifest after the Playwright webroot has been populated.

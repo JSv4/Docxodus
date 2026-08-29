@@ -4,12 +4,12 @@
 // LICENSE NOTE — THIS FILE IS GPL-2.0-or-later, NOT MIT.
 // Docxodus is MIT (see the root LICENSE) and every other file in this
 // directory stays MIT. This one is different: it is written against, and at
-// runtime combined with, `vendor/doomgeneric/doomgeneric_module.js` — a build
-// of id Software's Doom source, which id released under the GNU General
-// Public License v2. So this glue is offered under GPL-2.0-or-later too, and
-// the arcade reaches it only through a dynamic `import()` (see
-// ascii-arcade.js), which is also why the 3 MB engine never loads for a
-// visitor who plays the other two cartridges. See vendor/NOTICE.md.
+// runtime combined with, doomgeneric — a build of id Software's Doom source,
+// which id released under the GNU General Public License v2. So this glue is
+// offered under GPL-2.0-or-later too. The engine itself is not in this
+// repository: it is a pinned jsDelivr URL loaded through a dynamic `import()`,
+// which is also why the 3 MB build never downloads for a visitor who plays the
+// other two cartridges. See vendor/NOTICE.md.
 //
 // WHAT THIS REPLACES
 // ------------------
@@ -209,22 +209,44 @@ export function paintFramebuffer(g, fb) {
 // singleton rather than per-cartridge state.
 let enginePromise = null;
 
-const DEFAULT_ENGINE = new URL('./vendor/doomgeneric/doomgeneric_module.js', import.meta.url).href;
-const DEFAULT_WAD = new URL('./vendor/freedoom/freedoom1.wad.gz', import.meta.url).href;
+// ─── Where the engine and the game data come from ────────────────────
+// Neither is in this repository. Together they are 13 MB of binary that would
+// sit in a docs directory forever, show up in every clone, and never diff
+// usefully — so both are pinned on jsDelivr instead, which serves them with
+// `access-control-allow-origin: *` and an immutable cache.
+//
+// Both pins are IMMUTABLE by construction: jsDelivr resolves `gh/…@<40-hex>`
+// to that exact commit, so the bytes behind these URLs cannot change under us.
+// The recorded SHA-256 of each is in vendor/NOTICE.md, along with how to
+// re-derive it.
+//
+// The engine is upstream's own published build, straight from the doomgenericjs
+// tree — vendoring it only ever meant copying it. The IWAD is Freedoom's
+// release asset, which lives in a small sibling repository because GitHub
+// serves release assets without CORS and a browser therefore cannot fetch one.
+const DEFAULT_ENGINE =
+  'https://cdn.jsdelivr.net/gh/grubbyplaya/doomgenericjs'
+  + '@99d7a55651b5f774e9b8911ef96e91a3652ef85f/doomgeneric/doomgeneric_module.js';
+const DEFAULT_WAD =
+  'https://cdn.jsdelivr.net/gh/JSv4/freedoom-iwad@v0.13.0/freedoom1.wad.gz';
 
-/** Resolve a URL and refuse it unless it is same-origin.
+/** Refuse any URL that is neither one of our own pinned constants nor
+ *  same-origin.
  *
  *  `import()` EXECUTES what it fetches, with this page's privileges and on
- *  this page's origin, so an engine URL that a link can choose is remote code
- *  execution rather than a convenience — which is why `?doomEngine=` no longer
- *  exists and why this guard stands behind the option that remains. The IWAD
+ *  this page's origin, so an engine URL a link could choose would be remote
+ *  code execution rather than a convenience — which is why `?doomEngine=` does
+ *  not exist and why the engine is only ever the hardcoded pin above. The IWAD
  *  is only data and is magic-checked before use, but it goes through the same
  *  gate: `?wad=` is for pointing the cartridge at an IWAD you host yourself,
- *  and nothing is lost by requiring you to host it.
+ *  and nothing is lost by requiring you to host it. The allowlist is therefore
+ *  exactly {our pin} ∪ {same-origin} — a pin is trusted because it is written
+ *  here, not because of where it points.
  *
  *  In Node (the headless logic tests) there is no location and nothing is ever
  *  loaded, so the guard is inert there. */
-function sameOrigin(url, what) {
+function allowedUrl(url, pinned, what) {
+  if (url === pinned) return url;
   const here = globalThis.location;
   if (!here) return url;
   const resolved = new URL(url, here.href);
@@ -236,10 +258,10 @@ function sameOrigin(url, what) {
 
 /** Fetch the gzipped IWAD, reporting progress, and inflate it in the browser.
  *
- *  The WAD ships gzipped (28.8 MB → 10.3 MB) because GitHub Pages will not
- *  content-encode an `application/octet-stream`, so compressing it in the
- *  repository is the only way the visitor's download is the small number.
- *  DecompressionStream does the inflate natively — no library. */
+ *  The WAD is stored gzipped (28.8 MB → 10.3 MB): a CDN will not
+ *  content-encode an `application/octet-stream`, so pre-compressing it is the
+ *  only way the visitor's download is the small number. DecompressionStream
+ *  does the inflate natively — no library. */
 async function fetchWad(url, onProgress) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`IWAD fetch failed: HTTP ${res.status}`);
@@ -268,8 +290,8 @@ function loadEngine({ engineUrl, wadUrl, sound, onProgress }) {
   if (enginePromise) return enginePromise;
 
   enginePromise = (async () => {
-    engineUrl = sameOrigin(engineUrl, 'the Doom engine');
-    wadUrl = sameOrigin(wadUrl, 'the IWAD');
+    engineUrl = allowedUrl(engineUrl, DEFAULT_ENGINE, 'the Doom engine');
+    wadUrl = allowedUrl(wadUrl, DEFAULT_WAD, 'the IWAD');
     onProgress({ phase: 'wad', ratio: 0 });
     const wad = await fetchWad(wadUrl, (ratio, got, total) =>
       onProgress({ phase: 'wad', ratio, got, total }));
@@ -297,7 +319,7 @@ function loadEngine({ engineUrl, wadUrl, sound, onProgress }) {
     // all the configuration this needs — no argv, no -iwad.
     // From the PATH, so a query string or fragment cannot end up in the
     // filename Doom's IWAD table is matched against.
-    const path = globalThis.location ? new URL(wadUrl, globalThis.location.href).pathname : wadUrl;
+    const path = new URL(wadUrl, globalThis.location?.href ?? 'https://localhost/').pathname;
     const name = '/' + path.split('/').pop().replace(/\.gz$/, '').toLowerCase();
     const stream = module.FS.open(name, 'w+');
     module.FS.write(stream, wad, 0, wad.length, 0);

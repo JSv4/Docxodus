@@ -30,7 +30,14 @@ import { test, expect, Page } from '@playwright/test';
 //
 // sound=0 keeps CI off the audio hardware; the cartridge's WebAudio path is
 // guarded everywhere and never load-bearing for play.
-const OVERRIDE = 'engine=./embed.bundle.js&intro=0&sound=0';
+//
+// wad= points at the copy npm/scripts/fetch-doom-iwad.mjs puts in the webroot.
+// The shipped pages fetch their IWAD from a pinned CDN, but a browser suite
+// that depends on a CDN being up fails for reasons that have nothing to do
+// with the change under test — and the local copy is same-origin, so it goes
+// through the cartridge's URL gate exactly as a self-hosted IWAD would.
+const LOCAL_WAD = 'wad=' + encodeURIComponent('./vendor/freedoom1.wad.gz');
+const OVERRIDE = `engine=./embed.bundle.js&intro=0&sound=0&${LOCAL_WAD}`;
 
 /** Boot the cabinet on the Doom cartridge and wait for the engine to come up.
  *  The budget is generous on purpose: this is a 3 MB engine plus a 10 MB
@@ -192,8 +199,11 @@ test.describe('DOOM inside a Word document', () => {
       return route.abort();
     });
 
+    // Deliberately NOT the OVERRIDE above: this one supplies the hostile wad=
+    // as the only IWAD, so nothing else can satisfy the load.
     await page.goto(
-      `/demo-arcade.html?${OVERRIDE}&cart=doom&wad=${encodeURIComponent('https://example.com/evil.wad.gz')}`,
+      '/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0&cart=doom'
+      + `&wad=${encodeURIComponent('https://example.com/evil.wad.gz')}`,
     );
     await page.waitForFunction(
       () => (window as any).__arcade !== undefined || (window as any).__arcadeError !== undefined,

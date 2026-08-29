@@ -1,11 +1,7 @@
-# NOTICE.md pins a SHA-256 for every file in this directory, and those hashes
-# are the only thing tying the vendored artifacts to their upstream releases.
-# The repository root sets `* text=auto`, which would rewrite the engine's line
-# endings on a Windows checkout and make its documented hash fail to verify
-# there. Vendored bytes are vendored bytes: keep them exactly as upstream
-# shipped them.
-*                     -text
-*.js                  -text -diff linguist-vendored
-*.gz    binary
-COPYING               -text linguist-vendored
-COPYING.txt           -text linguist-vendored
+# The engine and the IWAD are NOT in this repository — they are pinned on a CDN
+# (see NOTICE.md). What is left here is license text, which must not be
+# reflowed or line-ending-normalized by the root's `* text=auto`: these files
+# are reproduced verbatim from upstream and a diff against upstream should be
+# empty.
+COPYING       -text linguist-vendored
+COPYING.txt   -text linguist-vendored

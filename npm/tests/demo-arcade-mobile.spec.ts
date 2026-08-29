@@ -40,7 +40,10 @@ import { test, expect, Page } from '@playwright/test';
 // free to win, and aborting the font's request is the control that shows the
 // pin is what's doing the work.
 
-const OVERRIDE = 'engine=./embed.bundle.js';
+// wad= is the webroot copy fetch-doom-iwad.mjs provides; the grid specs
+// below animate the Doom cartridge and want its real framebuffer.
+const OVERRIDE = 'engine=./embed.bundle.js&sound=0'
+  + '&wad=' + encodeURIComponent('./vendor/freedoom1.wad.gz');
 
 async function waitForBoot(page: Page) {
   await page.waitForFunction(

@@ -11,11 +11,14 @@ All notable changes to this project will be documented in this file.
   single Word paragraph every frame through the same `raw.replaceXml` + `editor.refresh()`
   loop the rest of the arcade uses. Real BSP rendering, real monsters, doors, weapons, menus
   and status bar, in a document you can pause, edit, undo and save as a `.docx`. The engine
-  and IWAD are vendored under `docs/demo/vendor/` behind a dynamic `import()`, so a visitor
-  who plays the other two cartridges downloads neither; `?wad=` points the cartridge at any
-  IWAD you are licensed to play and `?sound=0` boots it mute. `docs/demo/doom-cart.js` is
+  and IWAD are not in the repository at all — they are pinned jsDelivr URLs (by commit for
+  the engine, by tag for the IWAD) behind a dynamic `import()`, so a visitor who plays the
+  other two cartridges fetches neither. `?wad=` points the cartridge at a same-origin IWAD
+  you host and are licensed to play; `?sound=0` boots it mute; there is deliberately no
+  engine override, since `import()` executes what it fetches. `docs/demo/doom-cart.js` is
   offered under GPL-2.0-or-later because it is combined with the GPL engine at runtime — the
-  one file in the repository that is not MIT; see `docs/demo/vendor/NOTICE.md`.
+  one file in the repository that is not MIT. Upstream commits, digests, license texts and
+  verification commands are in `docs/demo/vendor/NOTICE.md`.
   Demo-content change (`docs/demo/`), not npm surface.
 
 ### Changed
