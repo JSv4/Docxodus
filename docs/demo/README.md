@@ -32,12 +32,12 @@ Three depths, because "how fast is the diff engine" has three honest answers:
 
 | depth | engine calls | measured |
 |---|---|---|
-| `revisions` | `docxDiffGetRevisions` | ~5.4 diffs/s, p50 **184 ms** |
-| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~3.1 diffs/s, p50 **324 ms** |
-| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~1.9 diffs/s, p50 **515 ms** |
+| `revisions` | `docxDiffGetRevisions` | ~7.0 diffs/s, p50 **144 ms** |
+| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~4.9 diffs/s, p50 **206 ms** |
+| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~2.4 diffs/s, p50 **422 ms** |
 
-Against a mutation costing ~2 ms through the same MCP endpoint, that is **74× to
-283×**, and the panel reports the ratio it just measured rather than the one
+Against a mutation costing ~2 ms through the same MCP endpoint, that is **75× to
+196×**, and the panel reports the ratio it just measured rather than the one
 written here. So the honest answer to "can we animate a diff per edit at 60fps"
 is no, and was never going to be: a redline-per-edit loop lives between 2 and 6
 frames per second on a document this size. That gap is the entire argument for
@@ -47,8 +47,18 @@ markup; the meter shows what each costs to get there.
 
 The `redline` depth uses `docxDiffCompareProducts` rather than `docxDiffCompare`
 followed by `docxDiffGetRevisions`, because one memoized alignment pass yielding
-both products measured **268 ms against 337 ms** for the two calls separately —
-about 20% saved, which is what that API is for.
+both products measured **167 ms against 247 ms** for the two calls separately —
+about a third saved, which is what that API is for.
+
+These figures are from the engine as of #616, which roughly halved
+`docxDiffCompare` on this document (278 ms → 153 ms) by removing a read
+amplification. They moved without a line changing here, which is the argument for
+a panel that measures rather than a page that quotes: the numbers above are what
+the meter happened to read on one machine, and yours will differ. The rigorous
+headless counterpart — the same question asked of a 147 KB certificate of
+incorporation, with stage attribution and allocation figures — lives in
+`benchmarks/docxdiff-stress/FINDINGS.md`. That harness is the authority on engine
+performance; this mode is the one you can watch.
 
 The meter resets on every run: carrying frames across a depth change would report
 a p50 describing neither pipeline. Switching back to the wire stops the loop, so

@@ -7,11 +7,20 @@
 // current, and measures how fast that can possibly go.
 //
 // The honest headline is that it is not 60fps and it was never going to be.
-// Measured on the theater's own ~3KB agreement in a browser: a mutation is ~4ms,
-// `docxDiffGetRevisions` is ~160ms, `docxDiffCompare` ~280ms, and adding the
-// tracked-changes HTML render puts a full frame around ~420ms. So the comparison
-// engine runs roughly 40x the cost of the mutation path, and a redline-per-edit
-// loop tops out somewhere between 2 and 6 frames per second.
+// Measured on the theater's own ~3KB agreement in a browser, against the engine
+// as of PR #616: a mutation is ~2ms, `docxDiffGetRevisions` ~136ms,
+// `docxDiffCompare` ~153ms, and adding the tracked-changes HTML render puts a
+// full frame around ~420ms. So the comparison engine runs two orders of
+// magnitude above the mutation path, and a redline-per-edit loop tops out
+// between roughly 2 and 7 frames per second.
+//
+// Those numbers move, which is the point of measuring them live rather than
+// printing them: #616 halved `docxDiffCompare` on this document (278ms -> 153ms)
+// by fixing a read amplification, and the panel picked the improvement up with
+// no change here. For the rigorous headless version of this measurement on a
+// 147KB certificate of incorporation, see benchmarks/docxdiff-stress/FINDINGS.md
+// — that harness is the authority on engine performance; this mode is the one
+// you can watch.
 //
 // That gap IS the demo. Both pipelines emit the same native markup, and the
 // stress meter shows you what each one costs to get there — which is the whole
