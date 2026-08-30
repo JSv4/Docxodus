@@ -27,11 +27,19 @@ All notable changes to this project will be documented in this file.
   linear in runs (~35 ms fixed + ~0.70 ms per run, measured across a 24× range) — and a run
   breaks on an ink or shading change but *not* on a glyph change, since every character in a
   span shares one `w:t`. The default `bitmap` projection spends the expensive axis on every
-  cell (two pixels per cell, ~1,420 runs, about one repaint a second); the new `ascii` one
-  spends the free axis instead — luminance into a ` ·░▒▓█` ramp with `▀`/`▄` for hard edges
-  inside a cell, one grey ink across whole rows, and colour only where the source is
-  genuinely saturated — for ~250 runs and several repaints a second. Same engine, same
-  document, same `.docx` on Save; `?projection=ascii` picks the starting mode.
+  cell (two pixels per cell, ~1,445 runs, about one repaint a second); the new `ascii` one
+  splits the picture between the two channels by what each costs. Brightness goes into the
+  glyph — a ` ░▒▓█` ramp with `▀`/`▄` for a hard edge inside a cell — and the ink is left to
+  say what a surface *is*: seven hue families (concrete, brick, sky, blood, armour, a key)
+  across three brightness tiers, ordered into a single nine-rung tone ladder by ink value
+  times the glyph's fill fraction. Exposure is fitted per frame from the framebuffer's own
+  6th and 96th percentiles, because Doom's median luminance moves by two thirds between a
+  corridor and an open lit area and one fixed curve serves neither. Cells snap to a
+  neighbour's ink when the two are indistinguishable at this size, which is most of what
+  texture noise was costing — but only toward grey and never away from it, since losing a
+  tint is a smaller lie than gaining one. Walking and turning through E1M1 that is ~470 runs
+  at 2.7 repaints a second against ~1,445 at 0.7. Same engine, same document, same `.docx` on
+  Save; `?projection=ascii` picks the starting mode.
   Demo-content change (`docs/demo/`), not npm surface.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,

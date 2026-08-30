@@ -235,14 +235,17 @@ test.describe('DOOM inside a Word document', () => {
 
     const ascii = await shape();
     expect(ascii.projection).toBe('ascii');
-    // The whole point: far fewer runs. Measured ~1,420 against ~250 on real
-    // frames, so a third is a wide margin either side of the real ratio.
-    expect(ascii.spans).toBeLessThan(bitmap.spans / 3);
-    // Glyph carries the detail; shading is gone entirely.
+    // The whole point: far fewer runs. Measured walking and turning through
+    // E1M1, ~470 against ~1,445 — so half is a wide margin either side of the
+    // real ratio and still fails loudly if the projection stops saving.
+    expect(ascii.spans).toBeLessThan(bitmap.spans / 2);
+    // Glyph carries the brightness; shading is gone entirely.
     expect(ascii.shaded).toBe(0);
-    expect(ascii.text).toMatch(/[·░▒▓█]/);
-    // Colour is spent sparingly rather than per cell.
-    expect(ascii.inks).toBeLessThan(bitmap.inks);
+    expect(ascii.text).toMatch(/[░▒▓█]/);
+    // The ASCII palette is closed by construction — seven hue families times
+    // three brightness tiers — where the bitmap's is the whole framebuffer.
+    expect(ascii.inks).toBeLessThan(bitmap.inks / 5);
+    expect(ascii.inks).toBeLessThanOrEqual(40);
     // Still a document, still the markdown-safe bezel.
     expect(ascii.text).toContain('┌');
     for (const row of ascii.text.split('\n')) expect(row.trim()).not.toBe('');
