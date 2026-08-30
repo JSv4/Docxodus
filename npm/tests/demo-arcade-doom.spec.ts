@@ -153,17 +153,21 @@ test.describe('DOOM inside a Word document', () => {
       };
     });
 
-    // The picture: solid cells where a character row's two half-pixels agree,
-    // upper-half blocks where they differ.
+    // The picture: solid cells where a character row's two halves agree, and
+    // half blocks where they differ.
     expect(screen.text).toMatch(/█/);
-    expect(screen.text).toMatch(/▀/);
+    expect(screen.text).toMatch(/[▀▄]/);
     // Still the arcade's markdown-safe bezel — no row can open a heading or a
     // bullet, and no row is blank.
     expect(screen.text).toContain('┌');
     for (const row of screen.text.split('\n')) expect(row.trim()).not.toBe('');
-    // Doom's palette arriving as real run formatting: many inks, and run
-    // shading actually rendered rather than silently dropped.
-    expect(screen.inks).toBeGreaterThan(20);
+    // Doom arriving as real run formatting: several inks, and run shading
+    // actually rendered rather than silently dropped. The default projection's
+    // palette is CLOSED at 18 entries plus one chrome colour, so this counts a
+    // picture being drawn rather than a framebuffer being copied — an
+    // upper bound here is as meaningful as the lower one.
+    expect(screen.inks).toBeGreaterThan(6);
+    expect(screen.inks).toBeLessThanOrEqual(40);
     expect(screen.shaded).toBeGreaterThan(50);
     expect(screen.fallback).toBeNull();
   });
@@ -219,50 +223,53 @@ test.describe('DOOM inside a Word document', () => {
       };
     });
 
-    const bitmap = await shape();
-    expect(bitmap.projection).toBe('bitmap');
-    expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
-    // Pair-snapping is the whole frame budget of this projection: without it a
-    // photographic downsample gives nearly every cell its own run and a frame
-    // lands near 1,470 spans. Measured ~550 walking and turning through E1M1,
-    // so this fails loudly if the merge ever stops happening.
-    expect(bitmap.spans).toBeLessThan(900);
+    // 8-bit is the default, because it is the one that is playable.
+    const eight = await shape();
+    expect(eight.projection).toBe('8bit');
+    // This projection does not merge runs to a tolerance, it ALLOCATES them:
+    // the frame is squeezed to a fixed budget, so its cost is a constant the
+    // cartridge chooses rather than a property of the view. Measured flat at
+    // ~157 spans across four very different views of E1M1, which is what buys
+    // the frame rate; a scene-dependent number here means the budget broke.
+    expect(eight.spans).toBeLessThan(230);
+    // Every picture cell carries both an ink and a shading — they are the two
+    // endpoints of the ramp the glyph interpolates along.
+    expect(eight.shaded).toBeGreaterThan(50);
+    // The palette is closed by construction: 18 entries, plus the chrome.
+    expect(eight.inks).toBeLessThanOrEqual(40);
+    // Solid blocks only — the shade and checkerboard glyphs read as dots at
+    // the shipped cell size and were dropped deliberately.
+    expect(eight.text).toMatch(/[█▀▄]/);
+    expect(eight.text).not.toMatch(/[░▒▓▚▞]/);
 
     // The key is claimed by the arcade and handled inside the cartridge — it
     // must never reach Doom, which has its own meaning for most letters.
     await page.keyboard.press('KeyP');
     await page.waitForFunction(
-      () => (window as any).__arcade.game().projection === 'ascii', null, { timeout: 60000 });
+      () => (window as any).__arcade.game().projection === 'bitmap', null, { timeout: 60000 });
     // Let a frame paint in the new projection before measuring.
     const before = await page.evaluate(() => (window as any).__arcade.frames());
     await page.waitForFunction((n) => (window as any).__arcade.frames() > n + 1, before,
       { timeout: 120000 });
 
-    const ascii = await shape();
-    expect(ascii.projection).toBe('ascii');
-    // Deliberately NOT asserted: that ascii costs fewer runs than bitmap.
-    // It did by 3.7x until the bitmap painter learned to merge neighbouring
-    // cells too, and now the two are within about 1.5x — close enough that on
-    // some frames the ascii projection is the more expensive of the two. An
-    // ordering assertion here would be flaky, and would be measuring the
-    // wrong thing: each projection's own budget is what matters.
-    expect(ascii.spans).toBeLessThan(900);
-    // Glyph carries the brightness; shading is gone entirely.
-    expect(ascii.shaded).toBe(0);
-    expect(ascii.text).toMatch(/[░▒▓█]/);
-    // The ASCII palette is closed by construction — seven hue families times
-    // three brightness tiers — where the bitmap's is the whole framebuffer.
-    // This is the assertion that actually separates the two projections.
-    expect(ascii.inks).toBeLessThan(bitmap.inks / 3);
-    expect(ascii.inks).toBeLessThanOrEqual(40);
+    const bitmap = await shape();
+    expect(bitmap.projection).toBe('bitmap');
+    expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
+    // Pair-snapping is this projection's whole frame budget: without it a
+    // photographic downsample gives nearly every cell its own run and a frame
+    // lands near 1,470 spans. Measured ~400 walking and turning through E1M1.
+    expect(bitmap.spans).toBeLessThan(900);
+    // The faithful projection's palette is the framebuffer's, so it is open
+    // where the 8-bit one is closed. That, not speed, is what separates them.
+    expect(bitmap.inks).toBeGreaterThan(eight.inks);
     // Still a document, still the markdown-safe bezel.
-    expect(ascii.text).toContain('┌');
-    for (const row of ascii.text.split('\n')) expect(row.trim()).not.toBe('');
+    expect(bitmap.text).toContain('┌');
+    for (const row of bitmap.text.split('\n')) expect(row.trim()).not.toBe('');
 
     // And back again.
     await page.keyboard.press('KeyP');
     await page.waitForFunction(
-      () => (window as any).__arcade.game().projection === 'bitmap', null, { timeout: 60000 });
+      () => (window as any).__arcade.game().projection === '8bit', null, { timeout: 60000 });
   });
 
   test('a cross-origin IWAD is refused rather than fetched', async ({ page }) => {

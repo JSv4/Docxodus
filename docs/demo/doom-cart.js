@@ -56,11 +56,23 @@ const PANEL_W = COLS - 1 - PANEL_X;       // 25 columns
 /** Two half-pixels per cell row. */
 const PIX_H = FIELD_ROWS * 2;             // 46
 
-const BEZEL_INK = '33465B';
-const HUD_INK = '9CB3C9';
-const PANEL_INK = '8FA3B8';
-const PANEL_HI = 'FFD166';
-const DEAD_INK = '5D6975';
+// Chrome colours. There is exactly one, and that is a frame-budget decision
+// rather than a taste one: a run breaks when the ink changes, a null ink
+// inherits the previous cell's, and every row of this paragraph is redrawn
+// every frame. The bezel, the divider and the side panel were five colours,
+// which cost five runs on every one of the 23 picture rows — 166 runs, more
+// than half the frame, for a column of static text. Sharing one ink makes the
+// divider, the panel and the right bezel a single run per row.
+//
+// Rows are independent (each is its own sequence of runs, joined by w:br), so
+// a row MAY use a second colour when it earns one — see PANEL_HI, spent on
+// the two lines that change.
+const CHROME_INK = '8FA3B8';
+const BEZEL_INK = CHROME_INK;
+const HUD_INK = CHROME_INK;
+const PANEL_INK = CHROME_INK;
+const PANEL_HI = CHROME_INK;
+const DEAD_INK = CHROME_INK;
 const BG = '000000';
 
 // Nearest-neighbour sample offsets, precomputed once: Doom's own palette
@@ -242,285 +254,297 @@ export function paintFramebuffer(g, fb) {
   }
 }
 
-// ─── Framebuffer → grid, the ASCII way ────────────────────────────────
-// The bitmap painter above treats the paragraph as a screen. That is the
-// faithful reading and it is also the expensive one: a photographic
-// downsample of Doom agrees with its neighbour about 1.07 cells in a row, so
-// nearly every cell starts a new run, and a frame landed near 1,370 runs.
+// ─── Framebuffer → grid, the 8-bit way ────────────────────────────────
+// The bitmap painter above treats the paragraph as a screen. This one treats
+// it as a console with a fixed palette and a run budget, and the difference
+// between them is where each spends a cell's two channels.
 //
-// The cost of a frame is the OOXML→HTML conversion of that paragraph, and it
-// is LINEAR in runs (measured: ~35 ms fixed + ~0.70 ms per run across a 24×
-// range). So runs are the dial. And the thing that turns it is this:
+// A cell has an INK and a w:shd SHADING, and a GLYPH. A run breaks when the
+// ink or the shading changes; it never breaks on the glyph, because every
+// character in a span shares one w:t. So colour is scarce and glyphs are free,
+// and the measured frame cost is
 //
-//   a run breaks only when INK or SHADING changes — the glyph does not
-//   break it, because every character in a span shares one w:t.
+//     frame_ms  ~=  63 + 0.67 * runs
 //
-// So a cell has two channels with completely different prices. The glyph is
-// free and the ink is not, and the job is to route each part of the picture
-// to the channel that carries it best.
+// which makes five frames a second a budget of roughly 200 runs for the whole
+// paragraph. Two ideas get a Doom frame inside it.
 //
-// THE FIRST ATTEMPT AT THAT WAS WRONG, and it is worth writing down why.
-// It sent luminance to the glyph and kept the ink at one grey, which drove a
-// frame to 23 picture runs — and produced something unreadable. Measuring the
-// framebuffer says exactly what went wrong:
+// ENDPOINTS, NOT PIXELS. Both earlier projections used the ink and shading as
+// two independent samples — a top pixel and a bottom pixel. That wastes them.
+// A glyph with fill fraction f renders as f*ink + (1-f)*bg, so those two
+// colours are really the ENDPOINTS of a small ramp the whole run shares, and
+// each cell picks its own weight along it for nothing. It is the same trade
+// block texture compression makes, for the same reason: two endpoints plus
+// cheap per-pixel weights beat two exact colours. Doom's shading is mostly
+// light falling off along a surface, which is exactly what a ramp represents.
 //
-//   * Doom is dark AND its exposure moves. Median luminance is 0.110 in a
-//     corridor and 0.185 in an open lit area, with the 90th percentile at
-//     0.19 and 0.36. One fixed tone curve cannot serve both: the curve that
-//     was there clipped 14% of a corridor to black and 7.5% of a lit area to
-//     white, and squeezed everything left into two of its six ramp steps.
-//   * Luminance alone does not separate a Doom frame anyway. 39% of the lit
-//     area is a single hue — E1M1's brick and wood are all the same brown —
-//     so a greyscale projection of it is a grey rectangle with dithering on.
-//
-// Hence three changes, in order of what they bought:
-//
-//   1. EXPOSE PER FRAME. Fit the curve to this frame's own 6th and 96th
-//      percentiles instead of to a constant. Free — no run costs anything —
-//      and on its own it is the difference between mush and architecture.
-//   2. PUT HUE BACK, COARSELY. Seven families, chosen so the ink says WHAT a
-//      surface is (brick, sky, blood, a key) while the glyph says how bright
-//      it is. Hue is spatially coherent in a way exact colour is not, so a
-//      whole wall is one family and therefore one run.
-//   3. SPEND THE INK ON THREE BRIGHTNESS TIERS. Five ramp glyphs is not
-//      enough tonal range; three tiers × the ramp is a nine-rung ladder,
-//      ordered by ink value × the glyph's fill fraction so that it is
-//      actually monotone in brightness.
-//
-// (2) and (3) do cost runs — but most of what they were costing was texture
-// noise flipping neighbouring cells between two palette entries nobody can
-// tell apart at 6.4 pixels per cell. Snapping a cell back to its neighbour's
-// ink when the two are that close took a frame from 431 runs to ~216 with no
-// visible change; see SNAP_NEAR for the one direction of that substitution
-// which turned out not to be free.
-//
-// Measured over three captured E1M1 frames the picture is ~216 runs, and in
-// the live editor, walking and turning through E1M1, the whole paragraph is
-// ~470 runs at 2.7 fps.
-//
-// That used to be 3.7× the bitmap projection, which is what justified this
-// mode existing. It is now about 1.5×, because the bitmap painter learned the
-// same trick — see PAIR_SNAP_TOLERANCE. On some frames this one is the more
-// expensive of the two. What still separates them is the palette: this one is
-// closed at 21 inks and degrades by flattening colour, the other is open and
-// degrades by smearing horizontally.
-const RAMP = [' ', '░', '▒', '▓', '█'];
-/** How much of a cell each ramp glyph inks — the other half of "how bright
- *  does this cell look", the half the ink does not carry. */
-const RAMP_FILL = [0, 0.25, 0.5, 0.75, 1];
-const EDGE_SPLIT = 0.38;   // half-tone gap that earns a ▀ / ▄ instead of a ramp glyph
-const EDGE_FLOOR = 0.12;   // …but not in near-black, where it is only noise
+// A BUDGET, NOT A TOLERANCE. A tolerance spends whatever the scene happens to
+// cost, so a busy frame blows the budget and a plain one wastes it. This
+// allocates instead: quantise, then repeatedly merge the two adjacent runs
+// whose merge adds the least error, until the frame is down to its allowance.
+// Every run that survives is one the picture could least afford to lose, the
+// allowance floats between rows — a blank ceiling keeps one run, the status
+// bar keeps twenty — and the frame cost becomes a constant you choose rather
+// than a property of the view. Measured: 128 runs on every frame, flat.
+const BUDGET = 110;
 
-/** Ink brightness tiers. Three, because two is visibly banded and four costs
- *  runs for a rung the eye does not resolve at this cell size. */
-const TIERS = [0.40, 0.68, 1];
-
-/** The tone ladder: every (tier, glyph) pair, ordered by what it actually
- *  looks like — ink value times fill fraction — then thinned so each rung is
- *  visibly brighter than the one below. Where two rungs tie, the dimmer INK
- *  wins, because that is the one more likely to match the cell to its left. */
-const LADDER_MIN_STEP = 0.055;
-const LADDER = (() => {
-  const all = [];
-  for (let t = 0; t < TIERS.length; t++) {
-    for (let r = 0; r < RAMP.length; r++) all.push({ tier: t, glyph: r, v: TIERS[t] * RAMP_FILL[r] });
-  }
-  all.sort((a, b) => a.v - b.v || a.tier - b.tier);
-  const out = [];
-  for (const rung of all) {
-    const prev = out[out.length - 1];
-    if (!prev) { out.push(rung); continue; }
-    if (rung.v - prev.v < LADDER_MIN_STEP) {
-      if (rung.tier < prev.tier) out[out.length - 1] = rung;
-      continue;
-    }
-    out.push(rung);
-  }
-  return out;
-})();
-
-/** Hue families, at full tier. Named for what they are in Doom, because that
- *  is what decides whether a family earns its place: each one has to be a
- *  thing a player needs to tell apart from the others at a glance. */
-const FAMILIES = [
-  [0.82, 0.84, 0.88],   // grey    — concrete, tech panels, the status bar
-  [1.00, 0.34, 0.30],   // red     — blood, damage, the health numerals
-  [1.00, 0.66, 0.32],   // orange  — brick, wood, floor: 39% of an E1M1 frame
-  [0.98, 0.94, 0.40],   // yellow  — lights, ammo, the yellow key
-  [0.42, 0.92, 0.44],   // green   — armour, slime, the green key
-  [0.46, 0.62, 1.00],   // blue    — sky, the blue key
-  [0.94, 0.46, 0.94],   // magenta
+/** A console palette: few entries, well separated, deliberately more saturated
+ *  than Doom's own. Every run's two endpoints are drawn from here, which is
+ *  what keeps this reading as 8-bit art rather than as a blurred photograph. */
+const PAL = [
+  [0x00, 0x00, 0x00], [0x24, 0x1c, 0x18], [0x48, 0x41, 0x3c],   // shadow
+  [0x7d, 0x7a, 0x80], [0xb9, 0xb6, 0xbd], [0xf2, 0xf0, 0xf5],   // concrete → highlight
+  [0x3a, 0x24, 0x16], [0x6b, 0x44, 0x23], [0xa8, 0x6a, 0x30],   // brick and wood:
+  [0xd9, 0xa0, 0x5b], [0xf0, 0xcb, 0x8a],                       //   most of E1M1
+  [0x8c, 0x14, 0x14], [0xe0, 0x28, 0x28],                       // blood, the numerals
+  [0x2e, 0x7a, 0x2e], [0x58, 0xd8, 0x58],                       // armour, slime
+  [0x2a, 0x4a, 0x9c], [0x4a, 0x9a, 0xe0], [0xe8, 0xc8, 0x28],   // sky, keys, lights
 ];
-/** Below this saturation a cell is grey. Low enough that the brown holds —
- *  brown is what the level is made of — and high enough that concrete and
- *  metal do not pick up a tint they do not have. */
-const SAT_GATE = 0.26;
-/** Index of the grey family in FAMILIES — the only one a cell may be pulled
- *  into from another, because losing a tint is a smaller lie than gaining one. */
-const GREY = 0;
+const PAL_HEX = PAL.map((c) => HEX[c[0]] + HEX[c[1]] + HEX[c[2]]);
 
-/** The whole palette: one ink per (family, tier). 21 of them, and a picture
- *  run boundary can only ever be a move between two of these. */
-const INK = [];
-const INK_RGB = [];
-for (const fam of FAMILIES) {
-  for (const tier of TIERS) {
-    const rgb = fam.map((v) => Math.min(255, Math.round(v * tier * 255)));
-    INK_RGB.push(rgb);
-    INK.push(HEX[rgb[0]] + HEX[rgb[1]] + HEX[rgb[2]]);
+/** Glyphs, as the fraction of the TOP half and of the BOTTOM half that the ink
+ *  covers. Each cell picks one, and the choice is free — a run never breaks on
+ *  a glyph — so this list is decided purely on how it looks.
+ *
+ *  It is deliberately SOLID ONLY. The shade characters (░▒▓) and the
+ *  checkerboards (▚▞) give five tonal steps between the endpoints instead of
+ *  two, and offline at 3x they looked like the better choice. At the size this
+ *  actually ships — 6.4 x 13.3 px per cell — they do not read as tone at all,
+ *  they read as dots, and a screenshot of the real editor was visibly noisier
+ *  for them. Flat colour with hard edges is both cleaner here and what 8-bit
+ *  art actually looks like; consoles dithered because they had four colours,
+ *  not because dithering was the goal. */
+const GLYPHS = [
+  [' ', 0, 0], ['█', 1, 1], ['▀', 1, 0], ['▄', 0, 1],
+];
+/** Fill fractions available when scoring a candidate endpoint pair. */
+const FILLS = [0, 0.5, 1];
+
+// Luma-weighted distance: the eye resolves green far better than blue, so an
+// even metric spends its budget where it will not be seen.
+const LR = 0.30, LG = 0.59, LB = 0.11;
+const dist3 = (ar, ag, ab, br, bg, bb) =>
+  LR * Math.abs(ar - br) + LG * Math.abs(ag - bg) + LB * Math.abs(ab - bb);
+
+/** Nearest palette entry, as a 16³ lookup built once — this is called for
+ *  every endpoint of every trial merge, and a linear scan showed up. */
+const PAL_LUT = new Uint8Array(4096);
+for (let r = 0; r < 16; r++) {
+  for (let g = 0; g < 16; g++) {
+    for (let b = 0; b < 16; b++) {
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < PAL.length; i++) {
+        const d = dist3(PAL[i][0], PAL[i][1], PAL[i][2], r * 17, g * 17, b * 17);
+        if (d < bd) { bd = d; best = i; }
+      }
+      PAL_LUT[(r << 8) | (g << 4) | b] = best;
+    }
   }
 }
+const palOf = (r, g, b) => PAL_LUT[((r & 255) >> 4 << 8) | ((g & 255) >> 4 << 4) | ((b & 255) >> 4)];
 
-/** Which palette entries are close enough to substitute for each other.
- *  This is the hysteresis: texture noise makes neighbouring cells flip
- *  between two nearby inks, and every flip buys a run boundary for a
- *  difference invisible at 6.4 pixels per cell. Precomputed as a table so the
- *  per-cell test is one array lookup.
- *
- *  It is applied twice per cell, in this order: match the cell to the LEFT
- *  first, because that is the substitution that actually saves a run; failing
- *  that, match the cell ABOVE, which saves nothing but stops each row from
- *  settling on its own ink independently and striping the picture. */
-const SNAP_TOLERANCE = 160;
-const SNAP_NEAR = INK_RGB.map((a, i) => INK_RGB.map((b, j) => {
-  if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > SNAP_TOLERANCE) return false;
-  // Distance alone is not enough, and the asymmetry matters. At the dark end
-  // a dim grey and a dim brown are only 94 apart, so a distance-only rule let
-  // the chain carry brown UP a concrete ceiling and painted the whole level
-  // one colour. Substituting a tier is fine — it is a shade of the same
-  // thing. Substituting a family is a claim about what the surface is, and
-  // only one direction of that claim is safe: a faint tint may collapse into
-  // the grey beside it, but grey may never pick a colour up.
-  const keep = Math.floor(i / TIERS.length), want = Math.floor(j / TIERS.length);
-  return keep === want || keep === GREY;
-}));
-
-function familyOf(r, g, b) {
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-  if (d === 0 || mx === 0 || d / mx < SAT_GATE) return 0;
-  let h;
-  if (mx === r) h = ((g - b) / d + 6) % 6;
-  else if (mx === g) h = (b - r) / d + 2;
-  else h = (r - g) / d + 4;
-  const deg = h * 60;
-  if (deg < 15 || deg >= 330) return 1;
-  if (deg < 52) return 2;
-  if (deg < 80) return 3;
-  if (deg < 160) return 4;
-  if (deg < 265) return 5;
-  return 6;
-}
-
-// ─── Auto-exposure ────────────────────────────────────────────────────
-// Fit the tone curve to this frame. A 64-bucket histogram over every fifth
-// pixel of the picture area is enough to place two percentiles and costs a
-// fraction of the downsample that follows it; sorting was never needed.
-// Doom's status bar is excluded because it is bright and constant, and
-// letting it into the histogram would stop a dark room from opening up.
-const EXPOSE_ROWS = 168;
-const EXPOSE_STRIDE = 5;
-const EXPOSE_LO = 0.06, EXPOSE_HI = 0.96;
-const EXPOSE_MIN_RANGE = 0.08;   // a nearly uniform frame must not amplify its own noise
-const EXPOSE_BUCKETS = 64;
-const EXPOSE_GAMMA = 0.85;
-const exposeHisto = new Uint32Array(EXPOSE_BUCKETS);
+// ─── Per-frame auto-exposure ──────────────────────────────────────────
+// Doom is dark and its exposure moves — median luminance is 0.110 in a
+// corridor and 0.185 in an open lit area — so one fixed curve serves neither.
+// This was rejected in an earlier projection because it amplifies dark-region
+// noise into extra runs; under a hard run budget that objection disappears,
+// because the merge brings the frame back to its allowance whatever it is fed.
+// Contrast is now free, and it is the single biggest legibility win available.
+const EXP_ROWS = 168;          // Doom's picture; its status bar is fixed and bright
+const EXP_BUCKETS = 64;
+const EXP_LO = 0.04, EXP_HI = 0.98, EXP_MIN_RANGE = 0.08;
+const expHisto = new Uint32Array(EXP_BUCKETS);
 
 function exposure(fb) {
-  exposeHisto.fill(0);
+  expHisto.fill(0);
   let n = 0;
-  const end = DOOM_W * EXPOSE_ROWS;
-  for (let i = 0; i < end; i += EXPOSE_STRIDE) {
+  for (let i = 0, end = DOOM_W * EXP_ROWS; i < end; i += 5) {
     const j = i * 4;   // BGRA
-    const lum = 0.2126 * fb[j + 2] + 0.7152 * fb[j + 1] + 0.0722 * fb[j];
-    exposeHisto[Math.min(EXPOSE_BUCKETS - 1, (lum * EXPOSE_BUCKETS / 256) | 0)]++;
+    const l = 0.2126 * fb[j + 2] + 0.7152 * fb[j + 1] + 0.0722 * fb[j];
+    expHisto[Math.min(EXP_BUCKETS - 1, (l * EXP_BUCKETS / 256) | 0)]++;
     n++;
   }
-  const percentile = (q) => {
-    let seen = 0;
-    const target = q * n;
-    for (let b = 0; b < EXPOSE_BUCKETS; b++) {
-      seen += exposeHisto[b];
-      if (seen >= target) return (b + 0.5) / EXPOSE_BUCKETS;
-    }
+  const at = (q) => {
+    let seen = 0; const target = q * n;
+    for (let b = 0; b < EXP_BUCKETS; b++) { seen += expHisto[b]; if (seen >= target) return (b + 0.5) / EXP_BUCKETS; }
     return 1;
   };
-  const lo = percentile(EXPOSE_LO);
-  return [lo, Math.max(lo + EXPOSE_MIN_RANGE, percentile(EXPOSE_HI))];
+  const lo = at(EXP_LO);
+  return [lo, Math.max(lo + EXP_MIN_RANGE, at(EXP_HI))];
 }
 
-// Cell → source-block bounds, precomputed once. Unlike the bitmap painter,
-// which point-samples so that Doom's own palette survives, this one averages
-// each cell's top and bottom halves: the glyph is chosen from a tone ladder,
-// so smooth input is what it wants, and averaging is also what lets a cell
-// notice a horizontal edge inside itself.
+// ─── Cell geometry, and the buffers the painter reuses ────────────────
 const CELL_X0 = Array.from({ length: VIEW_W }, (_, x) => Math.floor(x * DOOM_W / VIEW_W));
 const CELL_X1 = Array.from({ length: VIEW_W }, (_, x) => Math.max(
   Math.floor(x * DOOM_W / VIEW_W) + 1, Math.floor((x + 1) * DOOM_W / VIEW_W)));
-const CELL_Y0 = Array.from({ length: FIELD_ROWS }, (_, y) => Math.floor(y * DOOM_H / FIELD_ROWS));
-const CELL_Y1 = Array.from({ length: FIELD_ROWS }, (_, y) => Math.max(
-  Math.floor(y * DOOM_H / FIELD_ROWS) + 1, Math.floor((y + 1) * DOOM_H / FIELD_ROWS)));
+const HALF_H = FIELD_ROWS * 2;
+const CELL_Y0 = Array.from({ length: HALF_H }, (_, y) => Math.floor(y * DOOM_H / HALF_H));
+const CELL_Y1 = Array.from({ length: HALF_H }, (_, y) => Math.max(
+  Math.floor(y * DOOM_H / HALF_H) + 1, Math.floor((y + 1) * DOOM_H / HALF_H)));
 
-/** Paint one frame as ASCII: brightness in the glyph, identity in the ink.
+/** Exposed mean colour of every cell half, as flat RGB triples indexed
+ *  [(row * 2 + half) * VIEW_W + x] * 3. Allocated once. */
+const halfRGB = new Float32Array(HALF_H * VIEW_W * 3);
+
+/** A binary heap of candidate merges, cheapest first. */
+class MergeHeap {
+  constructor() { this.a = []; }
+  push(x) {
+    const a = this.a; a.push(x);
+    let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (a[p].cost <= a[i].cost) break; const t = a[p]; a[p] = a[i]; a[i] = t; i = p; }
+  }
+  pop() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      for (let i = 0; ;) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && a[l].cost < a[m].cost) m = l;
+        if (r < a.length && a[r].cost < a[m].cost) m = r;
+        if (m === i) break;
+        const t = a[m]; a[m] = a[i]; a[i] = t; i = m;
+      }
+    }
+    return top;
+  }
+}
+
+/** Paint one frame as 8-bit: colour allocated by budget, detail by glyph.
  *
  *  Exported and pure for the same reason the bitmap painter is — the headless
  *  tests drive it with synthetic frames, and the canvas-font guard needs to
  *  see every glyph this can emit. */
-const aboveInk = new Int16Array(VIEW_W);
-
-export function paintFramebufferAscii(g, fb) {
+export function paintFramebuffer8Bit(g, fb) {
   const [lo, hi] = exposure(fb);
   const range = hi - lo;
-  const tone = (lum) => {
-    const t = (lum / 255 - lo) / range;
-    return t <= 0 ? 0 : t >= 1 ? 1 : t ** EXPOSE_GAMMA;
-  };
 
-  aboveInk.fill(-1);
-  for (let row = 0; row < FIELD_ROWS; row++) {
-    const gy = FIELD_TOP + row;
-    const y0 = CELL_Y0[row], y1 = CELL_Y1[row];
-    const mid = Math.min(y1 - 1, Math.max(y0 + 1, (y0 + y1) >> 1));
-    // Runs are built per row, so the left-neighbour hysteresis resets here.
-    let prevInk = -1;
+  // Average the raw block, then expose ONCE per cell half. Exposing every
+  // source pixel instead cost seven times as much for no visible difference.
+  for (let h = 0; h < HALF_H; h++) {
+    const y0 = CELL_Y0[h], y1 = CELL_Y1[h];
     for (let x = 0; x < VIEW_W; x++) {
       const x0 = CELL_X0[x], x1 = CELL_X1[x];
-      let tr = 0, tg = 0, tb = 0, tn = 0;
-      let br = 0, bg = 0, bb = 0, bn = 0;
+      let r = 0, gg = 0, b = 0, n = 0;
       for (let y = y0; y < y1; y++) {
-        const rowBase = y * DOOM_W;
-        const lower = y >= mid;
-        for (let sx = x0; sx < x1; sx++) {
-          // BGRA in memory: blue first.
-          const i = (rowBase + sx) * 4;
-          if (lower) { br += fb[i + 2]; bg += fb[i + 1]; bb += fb[i]; bn++; }
-          else { tr += fb[i + 2]; tg += fb[i + 1]; tb += fb[i]; tn++; }
-        }
+        const base = y * DOOM_W;
+        for (let sx = x0; sx < x1; sx++) { const i = (base + sx) * 4; r += fb[i + 2]; gg += fb[i + 1]; b += fb[i]; n++; }
       }
-      if (!tn) { tr = br; tg = bg; tb = bb; tn = bn || 1; }
-      if (!bn) { br = tr; bg = tg; bb = tb; bn = tn || 1; }
-      tr /= tn; tg /= tn; tb /= tn;
-      br /= bn; bg /= bn; bb /= bn;
+      r /= n; gg /= n; b /= n;
+      const l = (0.2126 * r + 0.7152 * gg + 0.0722 * b) / 255;
+      let er = 0, eg = 0, eb = 0;
+      if (l > 0) {
+        let t = (l - lo) / range;
+        t = t <= 0 ? 0 : t >= 1 ? 1 : t;
+        const gain = t / l;
+        er = r * gain; eg = gg * gain; eb = b * gain;
+        // Clamping each channel on its own walks a lit brown wall toward
+        // white, because the channels clip at different points. Scale the
+        // whole triple so the hue survives.
+        const m = Math.max(er, eg, eb);
+        if (m > 255) { const k = 255 / m; er *= k; eg *= k; eb *= k; }
+      }
+      const o = (h * VIEW_W + x) * 3;
+      halfRGB[o] = er; halfRGB[o + 1] = eg; halfRGB[o + 2] = eb;
+    }
+  }
 
-      const lt = tone(0.2126 * tr + 0.7152 * tg + 0.0722 * tb);
-      const lb = tone(0.2126 * br + 0.7152 * bg + 0.0722 * bb);
-      const l = (lt + lb) / 2;
+  /** Endpoints for one row's [x0,x1) span, plus the error of fitting the
+   *  span's cell halves to the ramp between them. The endpoints are the
+   *  span's luminance extremes, snapped to the palette — the ramp then covers
+   *  everything between, which is what the glyph interpolates across. */
+  const fit = (row, x0, x1) => {
+    let loR = 0, loG = 0, loB = 0, hiR = 0, hiG = 0, hiB = 0;
+    let loL = Infinity, hiL = -Infinity;
+    for (let half = 0; half < 2; half++) {
+      const rowBase = (row * 2 + half) * VIEW_W;
+      for (let x = x0; x < x1; x++) {
+        const o = (rowBase + x) * 3;
+        const r = halfRGB[o], gg = halfRGB[o + 1], b = halfRGB[o + 2];
+        const l = 0.2126 * r + 0.7152 * gg + 0.0722 * b;
+        if (l < loL) { loL = l; loR = r; loG = gg; loB = b; }
+        if (l > hiL) { hiL = l; hiR = r; hiG = gg; hiB = b; }
+      }
+    }
+    const bgIdx = palOf(loR, loG, loB), inkIdx = palOf(hiR, hiG, hiB);
+    const ink = PAL[inkIdx], bgc = PAL[bgIdx];
+    let err = 0;
+    for (let half = 0; half < 2; half++) {
+      const rowBase = (row * 2 + half) * VIEW_W;
+      for (let x = x0; x < x1; x++) {
+        const o = (rowBase + x) * 3;
+        const r = halfRGB[o], gg = halfRGB[o + 1], b = halfRGB[o + 2];
+        let bd = Infinity;
+        for (let k = 0; k < FILLS.length; k++) {
+          const f = FILLS[k], inv = 1 - f;
+          const d = dist3(ink[0] * f + bgc[0] * inv, ink[1] * f + bgc[1] * inv, ink[2] * f + bgc[2] * inv, r, gg, b);
+          if (d < bd) bd = d;
+        }
+        err += bd;
+      }
+    }
+    return { ink: inkIdx, bg: bgIdx, err };
+  };
 
-      const rung = LADDER[Math.min(LADDER.length - 1, Math.round(l * (LADDER.length - 1)))];
-      // A strong top/bottom split is an edge: draw it with a half block, which
-      // is sub-cell vertical detail at no run cost because the ink is one value.
-      const ch = (l > EDGE_FLOOR && Math.abs(lt - lb) > EDGE_SPLIT)
-        ? (lt > lb ? '▀' : '▄')
-        : RAMP[rung.glyph];
+  // Start from one run per cell, then merge down to the allowance.
+  const rows = [];
+  let total = 0;
+  for (let row = 0; row < FIELD_ROWS; row++) {
+    const seg = [];
+    for (let x = 0; x < VIEW_W; x++) {
+      const s = { row, x0: x, x1: x + 1, alive: true, ver: 0, prev: null, next: null };
+      s.fit = fit(row, x, x + 1);
+      seg.push(s);
+    }
+    for (let i = 0; i < seg.length; i++) { seg[i].prev = seg[i - 1] ?? null; seg[i].next = seg[i + 1] ?? null; }
+    rows.push(seg); total += seg.length;
+  }
 
-      let ink = familyOf((tr + br) / 2, (tg + bg) / 2, (tb + bb) / 2) * TIERS.length + rung.tier;
-      if (prevInk >= 0 && SNAP_NEAR[prevInk][ink]) ink = prevInk;
-      else if (aboveInk[x] >= 0 && SNAP_NEAR[aboveInk[x]][ink]) ink = aboveInk[x];
-      prevInk = ink;
-      aboveInk[x] = ink;
+  const heap = new MergeHeap();
+  const offer = (a) => {
+    if (!a || !a.next) return;
+    const f = fit(a.row, a.x0, a.next.x1);
+    heap.push({ cost: f.err - a.fit.err - a.next.fit.err, a, b: a.next, va: a.ver, vb: a.next.ver, fit: f });
+  };
+  for (const seg of rows) for (const s of seg) offer(s);
 
-      g.chars[gy][1 + x] = ch;
-      g.colors[gy][1 + x] = INK[ink];
-      g.bgs[gy][1 + x] = null;      // no shading: the glyph carries the brightness
+  while (total > BUDGET && heap.a.length) {
+    const e = heap.pop();
+    // Lazy invalidation: an entry is stale if either side has been merged
+    // away or has since changed, which is cheaper than deleting from a heap.
+    if (!e.a.alive || !e.b.alive || e.a.ver !== e.va || e.b.ver !== e.vb || e.a.next !== e.b) continue;
+    const merged = { row: e.a.row, x0: e.a.x0, x1: e.b.x1, fit: e.fit, alive: true, ver: 0, prev: e.a.prev, next: e.b.next };
+    if (merged.prev) merged.prev.next = merged;
+    if (merged.next) merged.next.prev = merged;
+    e.a.alive = false; e.b.alive = false;
+    const seg = rows[merged.row];
+    seg.splice(seg.indexOf(e.a), 2, merged);
+    total--;
+    if (merged.prev) { merged.prev.ver++; offer(merged.prev); }
+    offer(merged);
+  }
+
+  // The free channel: inside its run, every cell picks its own weight.
+  for (let row = 0; row < FIELD_ROWS; row++) {
+    const gy = FIELD_TOP + row;
+    for (const s of rows[row]) {
+      const ink = PAL[s.fit.ink], bgc = PAL[s.fit.bg];
+      const inkHex = PAL_HEX[s.fit.ink], bgHex = PAL_HEX[s.fit.bg];
+      for (let x = s.x0; x < s.x1; x++) {
+        const ot = ((row * 2) * VIEW_W + x) * 3, ob = ((row * 2 + 1) * VIEW_W + x) * 3;
+        let best = 4, bd = Infinity;
+        for (let k = 0; k < GLYPHS.length; k++) {
+          const ft = GLYPHS[k][1], fb2 = GLYPHS[k][2], it = 1 - ft, ib = 1 - fb2;
+          const d = dist3(ink[0] * ft + bgc[0] * it, ink[1] * ft + bgc[1] * it, ink[2] * ft + bgc[2] * it,
+                          halfRGB[ot], halfRGB[ot + 1], halfRGB[ot + 2])
+                  + dist3(ink[0] * fb2 + bgc[0] * ib, ink[1] * fb2 + bgc[1] * ib, ink[2] * fb2 + bgc[2] * ib,
+                          halfRGB[ob], halfRGB[ob + 1], halfRGB[ob + 2]);
+          if (d < bd) { bd = d; best = k; }
+        }
+        g.chars[gy][1 + x] = GLYPHS[best][0];
+        g.colors[gy][1 + x] = inkHex;
+        g.bgs[gy][1 + x] = bgHex;
+      }
     }
   }
 }
@@ -801,21 +825,19 @@ const CONTROLS = [
 
 /** The two ways this cartridge can put Doom on a Word paragraph.
  *
- *  `bitmap` is the faithful reading of the framebuffer: two pixels per cell,
- *  ~550 runs a frame and ~1.8 through the converter. `ascii` spends the free
- *  axis (the glyph) instead of the expensive one (the ink) for ~470 runs and
- *  ~2.7. They were 3.7× apart before the bitmap painter learned to merge
- *  neighbouring cells; now they are close enough that the choice is about how
- *  each one FAILS, not how fast it is — the bitmap smears horizontally, the
- *  ASCII flattens to a 21-ink palette. Default is `bitmap`, because it is
- *  both the picture worth showing first and, now, a playable one. */
-export const PROJECTIONS = ['bitmap', 'ascii'];
+ *  `8bit` is the default because it is the one you can play: a fixed console
+ *  palette, a hard run budget, and per-cell detail carried by the glyph, which
+ *  is free. `bitmap` is the faithful reading — two pixels per cell, every
+ *  colour the framebuffer had — and is three times the cost for it. The
+ *  honest way to describe the pair is that one is the photograph and the other
+ *  is the game. */
+export const PROJECTIONS = ['8bit', 'bitmap'];
 
 export function doomCart(options = {}) {
   const engineUrl = options.engineUrl ?? DEFAULT_ENGINE;
   const wadUrl = options.wadUrl ?? DEFAULT_WAD;
   const sound = options.sound !== false;
-  let projection = PROJECTIONS.includes(options.projection) ? options.projection : 'bitmap';
+  let projection = PROJECTIONS.includes(options.projection) ? options.projection : '8bit';
 
   let handle = null;
   let status = 'idle';           // idle → loading → playing | error
@@ -853,7 +875,7 @@ export function doomCart(options = {}) {
       if (code === PROJECTION_KEY) {
         // Local to the cartridge: Doom never sees it, and only the press edge
         // toggles, so holding the key does not flicker between projections.
-        if (down) projection = projection === 'bitmap' ? 'ascii' : 'bitmap';
+        if (down) projection = projection === '8bit' ? 'bitmap' : '8bit';
         continue;
       }
       const key = KEY_MAP[code];
@@ -903,7 +925,7 @@ export function doomCart(options = {}) {
       y++;
     }
     y = ROWS - 5;
-    write(g, y, x, projection === 'ascii' ? 'ASCII · fast' : 'BITMAP · faithful', PANEL_HI);
+    write(g, y, x, projection === '8bit' ? '8-BIT · playable' : 'BITMAP · faithful', PANEL_HI);
     y += 1;
     write(g, y, x, `frame ${handle?.frames ?? 0}`, DEAD_INK);
     write(g, y + 1, x, 'id Software engine,', DEAD_INK);
@@ -913,13 +935,13 @@ export function doomCart(options = {}) {
   function render() {
     const g = makeGrid();
     if (status === 'playing' && handle) {
-      if (projection === 'ascii') paintFramebufferAscii(g, handle.framebuffer);
+      if (projection === '8bit') paintFramebuffer8Bit(g, handle.framebuffer);
       else paintFramebuffer(g, handle.framebuffer);
       paintedFrames++;
       drawDivider(g);
       drawPanel(g);
-      drawChrome(g, projection === 'ascii'
-        ? 'DOOM — id Software’s own engine, projected to ASCII in one Word paragraph'
+      drawChrome(g, projection === '8bit'
+        ? 'DOOM — id Software’s own engine, projected to 8-bit in one Word paragraph'
         : 'DOOM — id Software’s own engine, drawing into one Word paragraph');
     } else {
       drawLoading(g);
@@ -934,19 +956,20 @@ export function doomCart(options = {}) {
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
-      'BSD-licensed game data. Its 320×200 framebuffer is downsampled every frame into this Word ' +
-      'paragraph as half-block characters: the ink of each `▀` is the top pixel and its `w:shd` ' +
-      'run shading is the bottom one. **P** switches projection — that faithful bitmap costs ' +
-      '~550 colored runs a frame, because neighbouring cells that are within a luma-weighted ' +
-      'tolerance of each other are given the *same* color and merge into one run — without that ' +
-      'a frame costs ~1,370 and repaints about once a second. The ASCII projection instead splits ' +
-      'the picture between a cell’s two channels by what each one costs: brightness goes in the ' +
-      'GLYPH, which is free because a run only breaks when the ink changes, and the ink is left ' +
-      'to say what a surface *is* — brick, concrete, sky, blood, a key. Move **W/S** · strafe ' +
+      'BSD-licensed game data. Its 320×200 framebuffer is redrawn into this Word paragraph every ' +
+      'frame, and what it costs is *colored runs*: a run breaks when the ink or the `w:shd` ' +
+      'shading changes, never when the glyph does, and the measured frame is `63 ms + 0.67 ms × ' +
+      'runs`. So the default **8-bit** projection treats that as a budget and spends it — it ' +
+      'squeezes the frame to a fixed ~110 runs by repeatedly merging whichever two neighbouring ' +
+      'runs cost the least picture to lose, then gives each surviving run *two* colors to be the ' +
+      'endpoints of a ramp, and lets every cell pick its own place along that ramp with a glyph, ' +
+      'which is free. Flat cost, whatever you are looking at, and about five repaints a second. ' +
+      '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +
+      'cell, three times the runs and a third of the rate. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — bitmap is the faithful one and smears when pushed, ASCII flattens to a fixed palette instead.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit plays at ~5 fps on a fixed run budget, bitmap is faithful at ~2.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
 import { platformerCart, dungeonCart, introFrame } from '../ascii-arcade.js';
-import { doomCart, paintFramebuffer, paintFramebufferAscii } from '../doom-cart.js';
+import { doomCart, paintFramebuffer, paintFramebuffer8Bit } from '../doom-cart.js';
 
 const manifest = JSON.parse(
   readFileSync(new URL('../fonts/docxodus-canvas-mono.json', import.meta.url), 'utf8'));
@@ -103,9 +103,9 @@ function drawnCharacters() {
   // The ASCII projection draws from a ramp the bitmap painter never touches
   // (`·` and the shade blocks) plus both half blocks, so it needs its own
   // pass — the pinned subset has to cover every glyph EITHER can emit.
-  const asciiGrid = doom.render().grid;
-  paintFramebufferAscii(asciiGrid, fb);
-  collect(asciiGrid, 'cart:doom ascii projection');
+  const eightBitGrid = doom.render().grid;
+  paintFramebuffer8Bit(eightBitGrid, fb);
+  collect(eightBitGrid, 'cart:doom 8-bit projection');
 
   // A second frame with a hard horizontal split in every cell, to force the
   // edge glyphs the gradient above may never trigger.
@@ -120,8 +120,8 @@ function drawnCharacters() {
     }
   }
   const edgeGrid = doom.render().grid;
-  paintFramebufferAscii(edgeGrid, split);
-  collect(edgeGrid, 'cart:doom ascii edges');
+  paintFramebuffer8Bit(edgeGrid, split);
+  collect(edgeGrid, 'cart:doom 8-bit edges');
 
   return seen;
 }

@@ -41,6 +41,39 @@ All notable changes to this project will be documented in this file.
   at 2.7 repaints a second. Same engine, same document, same `.docx` on Save;
   `?projection=ascii` picks the starting mode.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The Doom cartridge gets an 8-bit projection, and it is now the default — it plays at ~5.7
+  repaints a second where the faithful bitmap plays at ~2.7.** The frame cost is one OOXML→HTML
+  conversion of the screen paragraph, measured at `63 ms + 0.67 ms × runs`, and a run breaks when
+  the ink or `w:shd` shading changes but *never* when the glyph does. Five frames a second is
+  therefore a budget of about 200 runs for the whole paragraph, and this projection spends it as
+  one rather than hoping a tolerance lands inside it: each frame starts as one run per cell and is
+  squeezed to a fixed allowance by repeatedly merging whichever two adjacent runs add the least
+  error, cheapest merge first, across the whole frame rather than per row — so a blank ceiling
+  keeps one run and the status bar keeps twenty. Each surviving run's two colours are then used as
+  the *endpoints* of a ramp rather than as a top and a bottom pixel, and every cell picks its own
+  place along that ramp with a solid block glyph, which is free. It is the trade block texture
+  compression makes, for the same reason: two endpoints plus cheap per-cell weights beat two exact
+  colours. Colours come from a fixed 18-entry console palette, so the result reads as 8-bit art
+  rather than as a degraded photograph. Two things fall out of budgeting rather than thresholding:
+  the frame cost stops depending on the view (measured flat at ~157 spans across four very
+  different parts of E1M1, where the tolerance-based projection swung by a factor of two), and
+  per-frame auto-exposure becomes free — it had been rejected earlier for costing runs, and under a
+  budget that objection disappears. The glyph set is deliberately solid blocks only: the shade and
+  checkerboard characters give more tonal steps and looked better at 3×, but at the shipped cell
+  size of 6.4 × 13.3 px they read as dots rather than tone. `P` still switches to the faithful
+  bitmap; `?projection=bitmap` picks it as the starting mode.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **The Doom cartridge's chrome costs a third of what it did.** The bezel, the divider and the side
+  panel were five colours, and a run breaks on a colour *change* — so those five cost five runs on
+  every one of the 23 picture rows: 166 runs, more than half the frame, for a column of static
+  text. They now share one ink, which takes the chrome to ~47 runs and was worth more frame rate
+  than any change to the picture itself. Rows are independent sequences of runs, so a row may still
+  spend a second colour where it earns one. (A first attempt at this went the wrong way and is
+  recorded here because the reason is easy to trip over twice: it gave every *invisible* cell an
+  explicit ink, on the theory that a space with no shading paints nothing. But a null ink inherits
+  the previous cell's, so those cells were already free — naming a colour for them created spans
+  that had not existed, and the frame got more expensive.)
+  Demo-content change (`docs/demo/`), not npm surface.
 - **The Doom cartridge's faithful bitmap projection is about two and a half times faster.**
   Neighbouring cells whose colours are within a luma-weighted tolerance of each other are now
   assigned the *same* pair of colours, so they merge into one run: walking and turning through
