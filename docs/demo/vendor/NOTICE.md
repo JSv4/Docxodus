@@ -70,7 +70,8 @@ configuration.
 
 | | |
 |---|---|
-| URL | `https://cdn.jsdelivr.net/gh/JSv4/freedoom-iwad@v0.13.0/freedoom1.wad.gz` |
+| URL | `https://cdn.jsdelivr.net/gh/JSv4/freedoom-iwad@70ee6ec942d090b4dd7ba04927f09ac79c8dc085/freedoom1.wad.gz` |
+| Republished in | `https://github.com/JSv4/freedoom-iwad` at `70ee6ec942d090b4dd7ba04927f09ac79c8dc085` |
 | Upstream | `https://github.com/freedoom/freedoom/releases/tag/v0.13.0` |
 | Release asset | `freedoom-0.13.0.zip` → `freedoom-0.13.0/freedoom1.wad` |
 | SHA-256 (uncompressed) | `7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d` |
@@ -92,7 +93,7 @@ can. jsDelivr will serve any file in a public repository's tree with
 are not in its tree. So the file is republished in a small sibling repository
 whose only purpose is to be CDN-addressable.
 
-`JSv4/freedoom-iwad` should contain exactly:
+[`JSv4/freedoom-iwad`](https://github.com/JSv4/freedoom-iwad) contains exactly:
 
 - `freedoom1.wad.gz` — `gzip -9` of the release asset above;
 - `COPYING.txt` — Freedoom's license, verbatim (BSD 3-Clause requires the
@@ -100,18 +101,20 @@ whose only purpose is to be CDN-addressable.
   redistribution);
 - a `README.md` pointing back here.
 
-Build and tag it with:
+Rebuild its contents with:
 
 ```bash
 curl -LO https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip
 unzip -j freedoom-0.13.0.zip freedoom-0.13.0/freedoom1.wad freedoom-0.13.0/COPYING.txt
 sha256sum freedoom1.wad   # must be 7323bcc1…
 gzip -9 freedoom1.wad
-git tag v0.13.0 && git push origin v0.13.0   # jsDelivr pins the tag immutably
 ```
 
-Re-tag rather than force-push if the contents ever change: jsDelivr caches a
-tag immutably, and `doom-cart.js` names the tag.
+**The pin is a commit, not a tag** — the same shape as the engine's. jsDelivr
+resolves `@<40-hex>` to exactly those bytes, so unlike a tag it cannot be moved
+under us. Changing the IWAD therefore means a new commit there and a new SHA
+here; nothing needs re-tagging, and nothing can silently change beneath a
+version that is already published.
 
 ### The tests do not use the CDN
 
@@ -119,8 +122,8 @@ tag immutably, and `doom-cart.js` names the tag.
 Freedoom (server-side, where CORS does not apply), verifies the SHA-256 above,
 and writes a gzipped copy into the Playwright webroot. The specs then pass
 `?wad=./vendor/freedoom1.wad.gz`, which is same-origin. A browser suite that
-depended on a CDN being up, and on a sibling repository having been tagged,
-would fail for reasons that have nothing to do with the change under test.
+depended on a CDN being up, and on a sibling repository being reachable, would
+fail for reasons that have nothing to do with the change under test.
 
 ### Why not the shareware `doom1.wad`
 

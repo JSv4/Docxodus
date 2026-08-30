@@ -228,7 +228,7 @@ const DEFAULT_ENGINE =
   'https://cdn.jsdelivr.net/gh/grubbyplaya/doomgenericjs'
   + '@99d7a55651b5f774e9b8911ef96e91a3652ef85f/doomgeneric/doomgeneric_module.js';
 const DEFAULT_WAD =
-  'https://cdn.jsdelivr.net/gh/JSv4/freedoom-iwad@v0.13.0/freedoom1.wad.gz';
+  'https://cdn.jsdelivr.net/gh/JSv4/freedoom-iwad@70ee6ec942d090b4dd7ba04927f09ac79c8dc085/freedoom1.wad.gz';
 
 /** Refuse any URL that is neither one of our own pinned constants nor
  *  same-origin.
