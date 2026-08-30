@@ -196,6 +196,12 @@ choice.
 - **`--check` is the point.** A perf change to a diff engine is only interesting if the diff
   is unchanged, and "the tests still pass" is a weaker claim than "all 36 output digests are
   byte-identical across eight edit shapes and a four-way consolidate".
+- **One negative control validates one half of a pipeline.** The first perturbation used to
+  prove the corpus check could fail — corrupting a content signature — moved 82-84% of the
+  revision and edit-script digests and **0%** of the redline digests, because Unids are stripped
+  from the rendered package. The redline column was entirely unvalidated until a second control
+  (swapping the snapshots handed to the renderer) moved 64% of it and none of the others. When a
+  check covers several products, perturb each one's inputs before believing any of them.
 - **Verify a suspected failure mode; do not infer it from timing.** The threading problem above was
   first blamed on a CI Playwright job that had run 51 minutes without finishing. That reasoning was
   wrong twice over: the job was cancelled by the next push rather than timing out, and the actual

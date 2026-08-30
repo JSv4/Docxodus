@@ -83,9 +83,21 @@ exactly: this hides the naming churn and nothing else. See #621.
 
 ### Confirm the harness can actually fail
 
-An always-green check is worthless, so verify it detects a change before trusting a pass.
-Reintroducing a real defect — dropping the `w:t` skip in `UnidHelper.ContentSignature`'s
-descendant-name walk — moves **3,905 of the 8,136 digests**.
+An always-green check is worthless, so verify it detects a change before trusting a pass. **One
+perturbation is not enough**, because the three products are sensitive to different halves of the
+pipeline — a control that moves two of them can leave the third completely unexercised:
+
+| Perturbation | redline | revisions | editscript |
+|---|---|---|---|
+| drop the `w:t` skip in `UnidHelper.ContentSignature` | **0%** | 82% | 84% |
+| swap the snapshots handed to `IrMarkupRenderer.Render` | **64%** | 0% | 0% |
+
+The split is not an accident, and it is worth understanding before trusting either column.
+Unids feed block anchors, so corrupting a content signature shows up all over the edit script and
+the revision list — but the markup renderer strips `PtOpenXml.Unid` on the way out, so the
+rendered package is byte-identical and the redline digest never moves. Conversely the hand-off
+only affects rendering: the script and revisions were already computed, so they are untouched
+while the redline scrambles. Run both, or you are validating half the harness.
 
 **It is not omniscient.** Reintroducing the `wp:docPr/@id` stripping-order bug that
 `IrHasherTests.Canonicalize_LoneDocPrId_StillStripped` guards produces **zero** corpus
