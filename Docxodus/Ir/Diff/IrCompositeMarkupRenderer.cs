@@ -6,6 +6,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Ir;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir.Diff;
 
@@ -43,7 +44,9 @@ internal static class IrCompositeMarkupRenderer
         IrCompositeScript script,
         WmlDocument baseDoc,
         IReadOnlyList<(string Author, WmlDocument Doc)> reviewers,
-        IrDiffSettings settings)
+        IrDiffSettings settings,
+        IrDocument? sourceBaseIr = null,
+        IReadOnlyList<IrDocument>? sourceReviewerIrs = null)
     {
         ArgumentNullException.ThrowIfNull(script);
         ArgumentNullException.ThrowIfNull(baseDoc);
@@ -57,11 +60,26 @@ internal static class IrCompositeMarkupRenderer
         // the table-shell/section slices stay OFF (B2). Mirrors IrCompositeMerger's forcing.
         settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
-        // Re-read base + each reviewer WITH provenance (RetainSources=true) + Accept view — the SAME options the
-        // two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to clone.
-        var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
-        var baseIr = IrReader.Read(baseDoc, readOpts);
-        var reviewerIrs = reviewers.Select(r => IrReader.Read(r.Doc, readOpts)).ToList();
+        // Base + each reviewer are needed WITH provenance (RetainSources=true) + Accept view — the SAME options
+        // the two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to
+        // clone. A caller that already read these exact documents that way passes them in and the reads are
+        // skipped; that matters more here than in the two-way case, because re-reading meant 2*(N+1) reads of
+        // heavyweight packages for an N-reviewer consolidate. Provenance is equality-neutral (see
+        // IrProvenance), so a supplied snapshot renders identically to one read here. A partial or
+        // wrong-length hand-off is ignored rather than mixed with fresh reads.
+        IrDocument baseIr;
+        List<IrDocument> reviewerIrs;
+        if (sourceBaseIr is not null && sourceReviewerIrs is not null && sourceReviewerIrs.Count == reviewers.Count)
+        {
+            baseIr = sourceBaseIr;
+            reviewerIrs = sourceReviewerIrs.ToList();
+        }
+        else
+        {
+            var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
+            baseIr = IrReader.Read(baseDoc, readOpts);
+            reviewerIrs = reviewers.Select(r => IrReader.Read(r.Doc, readOpts)).ToList();
+        }
 
         // One shared RenderState (single ascending id counter, single move-name allocator). Left = base. The
         // RightSource / AuthorOverride / RightSourceId are switched per op below. RightSourcedClones are bucketed
@@ -438,7 +456,9 @@ internal static class IrCompositeMarkupRenderer
 
         var rootName = isFootnote ? W.footnotes : W.endnotes;
         var noteName = isFootnote ? W.footnote : W.endnote;
-        var newPart = isFootnote ? (OpenXmlPart)main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+        var newPart = isFootnote
+            ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
+            : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
         var newRoot = new XElement(rootName, reviewerRoot.Attributes());
         foreach (var note in reviewerRoot.Elements(noteName)
                      .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))

@@ -72,6 +72,43 @@ public class IrHasherTests
         Assert.NotEqual(IrHasher.CanonicalHash(bare), IrHasher.CanonicalHash(Drawing(null, null, "99", cx: "101")));
     }
 
+    // The stripping rules consult attribute.Parent (wp:docPr/@id), so canonicalization must decide an
+    // attribute's fate while it is still attached to its element. Elements carrying exactly ONE attribute
+    // take a separate no-sort path, and this is the shape that catches it stripping too late: a lone
+    // wp:docPr/@id, with no sibling attribute to force the general path.
+    [Fact]
+    public void Canonicalize_LoneDocPrId_StillStripped()
+    {
+        XElement Drawing(string docPrId) =>
+            new(W + "drawing",
+                new XElement(Wp + "inline",
+                    new XElement(Wp + "docPr", new XAttribute("id", docPrId)),
+                    new XElement(Wp + "extent", new XAttribute("cx", "100"), new XAttribute("cy", "200"))));
+
+        Assert.Equal(IrHasher.CanonicalHash(Drawing("1")), IrHasher.CanonicalHash(Drawing("4823")));
+        Assert.Equal(IrHasher.Canonicalize(Drawing("1")), IrHasher.Canonicalize(Drawing("4823")));
+    }
+
+    // The one-attribute path must also keep an attribute it should not strip, and keep its value.
+    [Fact]
+    public void Canonicalize_LoneKeptAttribute_Survives()
+    {
+        var a = new XElement(W + "p", new XAttribute(W + "val", "left"));
+        var b = new XElement(W + "p", new XAttribute(W + "val", "right"));
+
+        Assert.NotEqual(IrHasher.CanonicalHash(a), IrHasher.CanonicalHash(b));
+        Assert.Equal(IrHasher.CanonicalHash(a), IrHasher.CanonicalHash(new XElement(W + "p", new XAttribute(W + "val", "left"))));
+    }
+
+    // A lone strippable attribute in the pt14/rsid families takes the same path.
+    [Fact]
+    public void Canonicalize_LoneStrippableAttribute_Removed()
+    {
+        var bare = new XElement(W + "p");
+        Assert.Equal(IrHasher.CanonicalHash(bare), IrHasher.CanonicalHash(new XElement(W + "p", new XAttribute(W + "rsidR", "00AB12CD"))));
+        Assert.Equal(IrHasher.CanonicalHash(bare), IrHasher.CanonicalHash(new XElement(W + "p", new XAttribute(Pt + "Unid", "deadbeef"))));
+    }
+
     [Fact]
     public void Canonicalize_ContentChange_Detected()
     {

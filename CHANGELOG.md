@@ -11,8 +11,8 @@ All notable changes to this project will be documented in this file.
   single Word paragraph every frame through the same `raw.replaceXml` + `editor.refresh()`
   loop the rest of the arcade uses. Real BSP rendering, real monsters, doors, weapons, menus
   and status bar, in a document you can pause, edit, undo and save as a `.docx`. The engine
-  and IWAD are not in the repository at all — they are pinned jsDelivr URLs (by commit for
-  the engine, by tag for the IWAD) behind a dynamic `import()`, so a visitor who plays the
+  and IWAD are not in the repository at all — they are pinned jsDelivr URLs (by 40-hex commit
+  for both) behind a dynamic `import()`, so a visitor who plays the
   other two cartridges fetches neither. `?wad=` points the cartridge at a same-origin IWAD
   you host and are licensed to play; `?sound=0` boots it mute; there is deliberately no
   engine override, since `import()` executes what it fetches. `docs/demo/doom-cart.js` is
@@ -22,6 +22,37 @@ All notable changes to this project will be documented in this file.
   Demo-content change (`docs/demo/`), not npm surface.
 
 ### Changed
+- **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
+  legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
+  15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,
+  reading each side twice — once to build the edit script, once again inside the markup
+  renderer for the source elements it clones from — and each of those reads opened and
+  parsed the whole package twice, because deciding the accepted-revision view scanned a
+  second package and then discarded the parse. The comparison now reads once per side and
+  hands that snapshot to the renderer, and the revision-view scan runs against the package
+  the walk is about to use. The two sides' pre-accept and IR reads run concurrently
+  where the runtime has threads to run them on — the browser build keeps the sequential
+  schedule, its WASM project does not set `WasmEnableThreads`, so blocking on a queued
+  task there throws `PlatformNotSupportedException: Cannot wait on monitors on this runtime`
+  and fails the comparison outright; it still gets the read-sharing win, which is the larger
+  half (roughly 1.4-1.6x with no parallelism at all). `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
+  instead of running the whole pipeline to prove there is nothing to report — the shortcut
+  skips the work, not the compatibility pre-flight, so
+  `OnCompatibilityWarning`/`ThrowOnCompatibilityWarning` still report on the inputs whether
+  or not the two sides happen to match. The N-way
+  `Consolidate` carried the same duplication multiplied by reviewer count (`2*(N+1)` reads
+  to compare `N+1` documents) and is fixed the same way. Supporting cuts: `ContentSignature`
+  walks each subtree once instead of three times, its repeated hash inputs (about seven in
+  eight on a real document) are served from a per-call cache, canonical-XML hashing no
+  longer materializes a byte array per call, and attribute canonicalization skips the sort
+  for the elements that carry none or one. Measured medians: `Compare` 821 → 351 ms on a
+  scattered-edit pass, 1279 → 868 ms on a whole-document rewrite; `GetRevisions` 395 →
+  216 ms and 371 → 0 ms on identical inputs; a four-reviewer `Consolidate` 1870 → 675 ms;
+  allocation per comparison 528 → 276 MB. **Output is unchanged** — the new
+  `benchmarks/docxdiff-stress` harness digests the redline package, revision list, edit
+  script, all four consolidate products and the compatibility report across eight generated
+  edit shapes and every one of the 678 documents in `TestFiles/`, and every digest is
+  byte-identical before and after.
 - **The canvas frame emitter can give a cell a background as well as an ink.** A grid may
   now carry a `bgs` layer, which `frameXml` emits as `w:shd` in each run's `w:rPr`; the
   canvas pin pads those inline boxes so the shading fills the exact line height instead of
@@ -197,6 +228,25 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **`DocxDiff.Compare` is byte-reproducible again once a redline creates or imports a part
+  (#621).** `Deterministic` promises that two comparisons of the same inputs are byte-identical,
+  and that only held for text-only documents. Two generators were reseeded on every run: parts
+  imported alongside right-sourced content were named `P` + a fresh GUID with the relationships
+  pointing at them named `R` + another (one SmartArt comparison churned nine
+  `word/diagrams/P*.xml` parts plus their `_rels`), and parts the renderer *creates* — numbering,
+  notes, comments, an inserted header or footer — took the Open XML SDK's own `AddNewPart` id,
+  which is `R` + sixteen random hex characters. The churn propagated into `document.xml`, the
+  `_rels` and the `[Content_Types].xml` overrides, so the same comparison produced a different
+  artifact hash every time, defeating content-addressed storage, caching, signing and byte-level
+  regression testing. An imported part is now named for a SHA-256 of the source bytes it carries
+  (identical bytes fold onto one name; a copy that must stay distinct takes the next free `-N`
+  suffix), its relationship takes the lowest free `R`*n* on the owning part, and every created
+  part is added under a named id. Fixing this also uncovered a latent corruption: the import
+  fixup rewrote a copied part through `GetStream()` — OpenOrCreate, no truncation — so a rewrite
+  that *shrank* the part left the tail of the original behind. Nothing shrank while the ids were
+  33 characters wide; the short deterministic ids made SmartArt diagram parts stop parsing until
+  the rewrite was switched to `FileMode.Create`. Verified across the `TestFiles` corpus: 1,356
+  comparisons, 168 media parts, byte-identical in a second process.
 - **DOCX GOLF: the Redline tab now shows an actual redline.** The view compares the
   player's document against the target (`docxDiffCompare`) and rendered the result with
   default conversion options — and `convertDocxToHtml` *accepts* revisions by default, so

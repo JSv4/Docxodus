@@ -84,7 +84,7 @@ right ─ IrReader.Read ──▶ IrDocument ─┘                             
 
 Internal stages (all `internal`, under `Docxodus/Ir/Diff/`):
 
-- **`IrReader`** — reads a `WmlDocument` to an `IrDocument` (anchor-indexed blocks; accepted-revision view; provenance off for the diff path). Shared with the markdown projection.
+- **`IrReader`** — reads a `WmlDocument` to an `IrDocument` (anchor-indexed blocks; accepted-revision view). Shared with the markdown projection.
 - **`IrDiffTokenizer`** — splits IR runs into word/separator/atomic tokens with match keys (case folding, NBSP conflation, hyperlink-target-in-key, field transparency). The diff's tokenization, NOT an IR fact.
 - **`IrBlockAligner`** — unique-hash `(ContentHash, FormatFingerprint)` anchoring → LIS spine → in-order gap fill; relocations fall off the spine as moves; similarity-based in-gap pairing + cross-gap fuzzy moves. When a reorder admits several equal-length spines, a **structural-anchor tie-break** keeps heavy blocks (tables / section breaks / opaque) anchored and relocates the lighter paragraph instead (a max-WEIGHT LIS, cardinality-primary so the move count is unchanged; fires only when the plain LIS relocated a structural block, so the paragraph-only path is byte-identical). Beyond cleaner two-way markup, this stops an ambiguous paragraph move across a table boundary from spuriously moving the table — which in `Consolidate` would contest the whole table block and block per-cell composition of a second reviewer's disjoint table edit (issue #229).
   - **The in-place ORDER invariant (`EnforceInPlaceOrderMonotonicity`, issue #288).** `EmitEntries` walks the RIGHT document and emits each left-owning unit at its right position, so `reject ≡ left` is exact in ORDER — not merely as a word multiset — only when the left → right map is strictly increasing across **every** in-place unit: 1:1 pairs *and* split/merge groups. Each forming pass enforces order-preservation against the pairings that existed when it ran (`InOrderRefine`'s crossing bounds, `SameSlotPair`/`JunctionPair`'s `maxBelow`/`minAbove` sweeps, `ReleaseCrossingModifiedPairs`' post-normalization), but nothing re-checked what a LATER pass added — and the split/merge containment scan runs after the refinement passes. A **verbatim-duplicate** block never anchors (`BuildUniqueIndex` keys on content unique to each side), so which occurrence pairs with which is settled in-gap, and the losing occurrence can end up on the wrong side of a group formed afterwards. A single global pass therefore enforces the invariant once: keep a maximum-**weight** strictly-increasing subsequence of (left → right position) and release the rest to plain Deleted/Inserted (always reversible), weight = blocks kept paired, so an ambiguous cut sacrifices the pairing holding the least content. It runs BEFORE cross-gap move detection, so a released pair that IS a relocation comes straight back as a `Moved` — usually a better reading than the in-place pairing it replaced. Fast path: an already-monotone alignment returns after one linear scan, untouched. Pinned by `IrAlignmentAsserts.AssertLeftOrderReconstructible` (asserted on **every** aligner test) and by `DocxDiffFuzzRoundTripTests`' block-sequence comparison.
@@ -92,6 +92,60 @@ Internal stages (all `internal`, under `Docxodus/Ir/Diff/`):
 - **`IrTableDiffer`** — nested table row/cell diffs (a cell-text edit surfaces as a token diff inside that cell, not a whole-table blob).
 - **`IrEditScriptBuilder`** — assembles the `IrEditScript` from the alignment + token/table diffs, including footnote/endnote scope ops.
 - **`IrMarkupRenderer` / `IrRevisionRenderer` / `IrEditScriptJson`** — the three renderers above.
+
+### One read per document per comparison
+
+The pipeline reads each input **once**, with `RetainSources` ON, and every stage works off that
+snapshot. This is worth stating because the obvious reading of the stage list suggests otherwise:
+`IrMarkupRenderer` clones source `w:p`/`w:tbl` elements, so it needs provenance the script builder
+does not — and it used to obtain that by re-reading both documents itself. It cannot tell the
+difference: `RetainSources` decides only whether `IrProvenance` pins the source `XElement`, and
+`IrProvenance` is equality-neutral by construction (it equals any other instance and hashes to
+zero), so a retention-on snapshot is node-for-node value-equal to a retention-off one. `Render`
+therefore takes an optional pre-read pair and `DocxDiffComparison` supplies it; the same hand-off
+exists on `IrCompositeMarkupRenderer` for the N-way path, where re-reading meant `2*(N+1)` package
+reads to compare `N+1` documents.
+
+`GetRevisions` gained the byte-identical shortcut `Compare` already had: two packages with the
+same bytes have nothing to report, and running the pipeline to establish that costs as much as a
+real comparison. Both shortcuts skip the **work** and not the compatibility pre-flight — that
+pre-flight is a property of the inputs, so a caller who asked to be warned about an under-tested
+construct gets the same answer whether or not the two sides happen to match. This distinction has
+no output-digest signature (a product that stops warning still returns the right answer), so it is
+covered by unit tests and by the pre-flight digests in `benchmarks/docxdiff-stress`' corpus mode
+rather than by output parity. The edit script deliberately keeps no such shortcut: its all-Equal
+operations are the answer the caller asked for.
+
+`IrReader.Read` likewise opens each package once. Deciding the accepted-revision view needs every
+story parsed, and so does the body walk, so the scan runs against the package the walk is about to
+use (`GetXDocument` caches per part). Only a document that genuinely carries revision markup pays
+for the `RevisionProcessor` round-trip and the reopen that follows it.
+
+The left and right sides are independent pure reads, so pre-accept and the IR reads run
+concurrently; `Consolidate` reads the base and all reviewers the same way. Nothing about the output
+depends on this — the reads share no state — and both schedules produce the same values in the same
+order.
+
+**The fan-out is gated, and the gate is not an optimization.** It runs through
+`Docxodus.Internal.ParallelWork`, which is compiled out under `WASM_BUILD` and additionally checks
+`Environment.ProcessorCount > 1`. `wasm/DocxodusWasm/DocxodusWasm.csproj` does not set
+`WasmEnableThreads`, so the browser runtime is single-threaded, and there `Task.Run` does not start a
+second thread — it queues the delegate for
+the ONE thread, which is the thread that would then block on the result. The runtime refuses rather
+than deadlocking: the join throws `PlatformNotSupportedException: Cannot wait on monitors on this
+runtime`, so an unguarded fan-out fails every browser comparison outright. (Measured — with the guard
+forced open, all ten `npm/tests/docx-diff.spec.ts` cases fail with exactly that exception; those specs
+are this guard's regression test.) The browser therefore keeps the sequential
+schedule and still gets the read-sharing win, which is the larger half: on the reference document a
+two-way `Compare` runs roughly 1.4-1.6x faster than before with no parallelism at all, against
+~2.3x with it.
+
+On a 574 KB `document.xml` with 15,360 elements, collapsing four reads to two concurrent ones took
+a two-way `Compare` from ~820 ms to ~350 ms and a four-reviewer `Consolidate` from ~1870 ms to
+~675 ms. `benchmarks/docxdiff-stress` measures this and digests every product — pairwise and N-way, plus
+the compatibility report — across all of `TestFiles/` to prove the output did not move; see its
+`FINDINGS.md` for the full stage attribution and for what still stands between the engine and 10
+comparisons per second.
 
 ## Edit script
 
@@ -162,6 +216,8 @@ A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDi
 ### Two honest defaults that deviate from `WmlComparerSettings`
 
 1. **Deterministic dates.** `WmlComparerSettings.DateTimeForRevisions` defaults to `DateTime.Now` — the same compare twice yields different dates. `DocxDiff` pins a fixed epoch by default so output is reproducible. Opt into wall-clock via `Deterministic = false`.
+
+   Reproducibility is a whole-package property, not just a date: two comparisons of the same inputs are byte-identical, media and diagram parts included (#621). It rests on two naming rules. A part imported alongside right-sourced content is named `P` + a SHA-256 of the SOURCE bytes it carries — the copy's own bytes cannot be the address, because an XML part is fixed up *after* it is copied and that fixup embeds the names of the parts below it — and identical bytes that must stay distinct copies (the per-owner diagram-data rule in `RelatedPartImportState`) take the lowest free `-N` suffix. Relationship ids are likewise named, never minted: an imported relationship takes the lowest free `R`*n* on the owning part, and a part the renderer creates is added through `DeterministicPartIds.AddDeterministicPart`, because the SDK's own `AddNewPart` id is `R` + sixteen random hex characters. Anything that adds a part or a relationship to the output belongs on one of those two rules.
 2. **`FormatComparison = ModeledOnly`.** A `w:rPrChange`-grade report can only DESCRIBE modeled fields, so a format change driven by an undescribable unmodeled-only rPr flip (`w:lang`, `w:bCs`, complex-script toggles) is noise. `ModeledOnly` collapses that noise; the trade-off is a false negative on a visible-but-unmodeled change (e.g. `w:shd` run shading). `Full` restores byte-fidelity comparison.
 
 ### Paragraph-and-above formatting changes (the block-format-change family)
