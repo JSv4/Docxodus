@@ -231,16 +231,19 @@ test.describe('DOOM inside a Word document', () => {
     // cartridge chooses rather than a property of the view. Measured flat at
     // ~157 spans across four very different views of E1M1, which is what buys
     // the frame rate; a scene-dependent number here means the budget broke.
-    expect(eight.spans).toBeLessThan(230);
+    expect(eight.spans).toBeLessThan(200);
     // Every picture cell carries both an ink and a shading — they are the two
-    // endpoints of the ramp the glyph interpolates along.
+    // endpoints of the ramp its glyph picks quadrants from.
     expect(eight.shaded).toBeGreaterThan(50);
     // The palette is closed by construction: 18 entries, plus the chrome.
     expect(eight.inks).toBeLessThanOrEqual(40);
-    // Solid blocks only — the shade and checkerboard glyphs read as dots at
-    // the shipped cell size and were dropped deliberately.
-    expect(eight.text).toMatch(/[█▀▄]/);
-    expect(eight.text).not.toMatch(/[░▒▓▚▞]/);
+    // Quadrant blocks are where the resolution comes from: they carry four
+    // sub-pixels per cell instead of two, for no extra runs. Seeing them is
+    // the evidence the picture is sampled at 128 x 46 rather than 64 x 46.
+    expect(eight.text).toMatch(/[▘▝▖▗▌▐▚▞▛▜▙▟]/);
+    // Solid quadrants only. The shade characters approximate TONE rather than
+    // carrying detail, and at the shipped cell size they read as dots.
+    expect(eight.text).not.toMatch(/[░▒▓]/);
 
     // The key is claimed by the arcade and handled inside the cartridge — it
     // must never reach Doom, which has its own meaning for most letters.

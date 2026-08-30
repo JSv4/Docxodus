@@ -25,20 +25,25 @@
 // The screen is the same 92×26 character grid the rest of the arcade draws on
 // (see ascii-scenes.js), so it inherits the pinned canvas font and the
 // markdown-safe bezel unchanged. A character cell is far too coarse to hold a
-// Doom frame at one color per cell, so each cell holds TWO pixels: the glyph
-// is `▀` (upper half block), its ink is the top pixel and its run shading
-// (`w:shd` in `w:rPr`) is the bottom one. That buys 64 × 46 pixels inside the
-// bezel — still tiny, but enough that E1M1's courtyard, the shotgun guy in
-// front of you and the face on the status bar all read.
+// Doom frame at one color per cell — but a cell is not one pixel. It has an
+// ink, a `w:shd` shading, and a glyph, and only the two colors cost anything:
+// a run breaks when the ink or the shading changes and NEVER when the glyph
+// does, because every character in a span shares one `w:t`.
 //
-// Where both pixels agree — most of a Doom frame, which is large flat spans
-// of wall and floor — the glyph degrades to a plain `█` and the two colors
-// collapse to one, so the whole span merges into a single run. That run
-// merging, not the glyph, is what the per-frame cost is actually made of.
+// Both projections are answers to that. The faithful `bitmap` one spends the
+// expensive channel on every cell — `▀` with the top pixel as ink and the
+// bottom as shading, 64 × 46 pixels. The default `8bit` one spends the FREE
+// channel instead: the sixteen quadrant block characters can draw every 2×2
+// arrangement of two colors, so one cell carries four sub-pixels and the same
+// 64 × 23 cells sample the framebuffer at 128 × 46. The extra resolution is
+// genuinely free — it adds no runs and no colors — which is why the colors can
+// then be rationed hard (see BUDGET) without the picture falling apart.
 //
 // The viewport is 64 columns wide because that is 4:3 at this cell's aspect:
-// a cell advances 4.8pt and a half-cell is 5pt tall, so 64 × 46 half-pixels
-// is 307.2pt × 230pt — Doom's own picture shape, not a stretched one.
+// a cell advances 4.8pt and is 10pt tall, so the 64 × 23 cells are
+// 307.2pt × 230pt — Doom's own picture shape, not a stretched one. The
+// sub-pixels inside them are 2.4pt × 5pt, finer across than down, which suits
+// a game whose structure is mostly vertical edges.
 // ═══════════════════════════════════════════════════════════════════════
 
 import { COLS, ROWS } from './ascii-scenes.js';
@@ -285,8 +290,8 @@ export function paintFramebuffer(g, fb) {
 // Every run that survives is one the picture could least afford to lose, the
 // allowance floats between rows — a blank ceiling keeps one run, the status
 // bar keeps twenty — and the frame cost becomes a constant you choose rather
-// than a property of the view. Measured: 128 runs on every frame, flat.
-const BUDGET = 110;
+// than a property of the view. Measured: flat on every frame, whatever the view.
+const BUDGET = 90;
 
 /** A console palette: few entries, well separated, deliberately more saturated
  *  than Doom's own. Every run's two endpoints are drawn from here, which is
@@ -302,22 +307,31 @@ const PAL = [
 ];
 const PAL_HEX = PAL.map((c) => HEX[c[0]] + HEX[c[1]] + HEX[c[2]]);
 
-/** Glyphs, as the fraction of the TOP half and of the BOTTOM half that the ink
- *  covers. Each cell picks one, and the choice is free — a run never breaks on
- *  a glyph — so this list is decided purely on how it looks.
+/** Glyphs, as which of a cell's four QUADRANTS the ink covers: top-left,
+ *  top-right, bottom-left, bottom-right.
  *
- *  It is deliberately SOLID ONLY. The shade characters (░▒▓) and the
- *  checkerboards (▚▞) give five tonal steps between the endpoints instead of
- *  two, and offline at 3x they looked like the better choice. At the size this
- *  actually ships — 6.4 x 13.3 px per cell — they do not read as tone at all,
- *  they read as dots, and a screenshot of the real editor was visibly noisier
- *  for them. Flat colour with hard edges is both cleaner here and what 8-bit
- *  art actually looks like; consoles dithered because they had four colours,
- *  not because dithering was the goal. */
+ *  This is where the resolution comes from, and it is free. A run breaks on an
+ *  ink or shading change and never on a glyph, so the number of picture
+ *  samples is not what the frame costs — the run budget is, and the merge caps
+ *  that regardless. A cell drawn with `▀` carries two sub-pixels; drawn with
+ *  the quadrant blocks it carries FOUR, because all sixteen 2x2 patterns have
+ *  a character. So the same 64 x 23 cells sample the framebuffer at 128 x 46
+ *  instead of 64 x 46, for no extra runs and no extra colours.
+ *
+ *  Still solid only — every quadrant is fully one endpoint or the other. The
+ *  shade characters (░▒▓) are deliberately absent: they approximate TONE
+ *  rather than carrying detail, and at the size this ships (6.4 x 13.3 px per
+ *  cell) they read as dots, not as a blend. `▚` and `▞` appear here for the
+ *  opposite reason to why they were dropped before — as two of the sixteen
+ *  real 2x2 patterns, not as a 50% grey. */
 const GLYPHS = [
-  [' ', 0, 0], ['█', 1, 1], ['▀', 1, 0], ['▄', 0, 1],
+  [' ', 0, 0, 0, 0], ['▘', 1, 0, 0, 0], ['▝', 0, 1, 0, 0], ['▀', 1, 1, 0, 0],
+  ['▖', 0, 0, 1, 0], ['▌', 1, 0, 1, 0], ['▞', 0, 1, 1, 0], ['▛', 1, 1, 1, 0],
+  ['▗', 0, 0, 0, 1], ['▚', 1, 0, 0, 1], ['▐', 0, 1, 0, 1], ['▜', 1, 1, 0, 1],
+  ['▄', 0, 0, 1, 1], ['▙', 1, 0, 1, 1], ['▟', 0, 1, 1, 1], ['█', 1, 1, 1, 1],
 ];
-/** Fill fractions available when scoring a candidate endpoint pair. */
+/** Fill fractions one HALF of a cell can render, which is what the endpoint
+ *  fit below scores against: both quadrants background, one each, or both ink. */
 const FILLS = [0, 0.5, 1];
 
 // Luma-weighted distance: the eye resolves green far better than blue, so an
@@ -382,8 +396,20 @@ const CELL_Y0 = Array.from({ length: HALF_H }, (_, y) => Math.floor(y * DOOM_H /
 const CELL_Y1 = Array.from({ length: HALF_H }, (_, y) => Math.max(
   Math.floor(y * DOOM_H / HALF_H) + 1, Math.floor((y + 1) * DOOM_H / HALF_H)));
 
-/** Exposed mean colour of every cell half, as flat RGB triples indexed
- *  [(row * 2 + half) * VIEW_W + x] * 3. Allocated once. */
+/** Horizontal sub-sampling: two quadrant columns per cell. */
+const QUAD_W = VIEW_W * 2;
+const QUAD_X0 = Array.from({ length: QUAD_W }, (_, x) => Math.floor(x * DOOM_W / QUAD_W));
+const QUAD_X1 = Array.from({ length: QUAD_W }, (_, x) => Math.max(
+  Math.floor(x * DOOM_W / QUAD_W) + 1, Math.floor((x + 1) * DOOM_W / QUAD_W)));
+
+/** Exposed mean colour of every QUADRANT, as flat RGB triples indexed
+ *  [(row * 2 + half) * QUAD_W + qx] * 3. This is the 128 x 46 picture. */
+const quadRGB = new Float32Array(HALF_H * QUAD_W * 3);
+/** The same thing averaged to cell halves, [(row * 2 + half) * VIEW_W + x] * 3.
+ *  The endpoint merge runs on this rather than on the quadrants: it only needs
+ *  to know the colour RANGE a span covers, which the halves capture just as
+ *  well, and running it at half the samples keeps the merge — the expensive
+ *  part — exactly as cheap as it was before the resolution went up. */
 const halfRGB = new Float32Array(HALF_H * VIEW_W * 3);
 
 /** A binary heap of candidate merges, cheapest first. */
@@ -419,12 +445,12 @@ export function paintFramebuffer8Bit(g, fb) {
   const [lo, hi] = exposure(fb);
   const range = hi - lo;
 
-  // Average the raw block, then expose ONCE per cell half. Exposing every
+  // Average the raw block, then expose ONCE per quadrant. Exposing every
   // source pixel instead cost seven times as much for no visible difference.
   for (let h = 0; h < HALF_H; h++) {
     const y0 = CELL_Y0[h], y1 = CELL_Y1[h];
-    for (let x = 0; x < VIEW_W; x++) {
-      const x0 = CELL_X0[x], x1 = CELL_X1[x];
+    for (let qx = 0; qx < QUAD_W; qx++) {
+      const x0 = QUAD_X0[qx], x1 = QUAD_X1[qx];
       let r = 0, gg = 0, b = 0, n = 0;
       for (let y = y0; y < y1; y++) {
         const base = y * DOOM_W;
@@ -444,8 +470,15 @@ export function paintFramebuffer8Bit(g, fb) {
         const m = Math.max(er, eg, eb);
         if (m > 255) { const k = 255 / m; er *= k; eg *= k; eb *= k; }
       }
-      const o = (h * VIEW_W + x) * 3;
-      halfRGB[o] = er; halfRGB[o + 1] = eg; halfRGB[o + 2] = eb;
+      const o = (h * QUAD_W + qx) * 3;
+      quadRGB[o] = er; quadRGB[o + 1] = eg; quadRGB[o + 2] = eb;
+    }
+    // Cell halves, for the merge.
+    for (let x = 0; x < VIEW_W; x++) {
+      const a = (h * QUAD_W + x * 2) * 3, b2 = a + 3, o = (h * VIEW_W + x) * 3;
+      halfRGB[o] = (quadRGB[a] + quadRGB[b2]) / 2;
+      halfRGB[o + 1] = (quadRGB[a + 1] + quadRGB[b2 + 1]) / 2;
+      halfRGB[o + 2] = (quadRGB[a + 2] + quadRGB[b2 + 2]) / 2;
     }
   }
 
@@ -531,14 +564,19 @@ export function paintFramebuffer8Bit(g, fb) {
       const ink = PAL[s.fit.ink], bgc = PAL[s.fit.bg];
       const inkHex = PAL_HEX[s.fit.ink], bgHex = PAL_HEX[s.fit.bg];
       for (let x = s.x0; x < s.x1; x++) {
-        const ot = ((row * 2) * VIEW_W + x) * 3, ob = ((row * 2 + 1) * VIEW_W + x) * 3;
-        let best = 4, bd = Infinity;
+        // The four quadrant samples this cell has to represent, using only
+        // its run's two colours. Sixteen patterns, so this is an exhaustive
+        // search over every 2x2 arrangement the character set can draw.
+        const q = [((row * 2) * QUAD_W + x * 2) * 3, ((row * 2) * QUAD_W + x * 2 + 1) * 3,
+                   ((row * 2 + 1) * QUAD_W + x * 2) * 3, ((row * 2 + 1) * QUAD_W + x * 2 + 1) * 3];
+        let best = 15, bd = Infinity;
         for (let k = 0; k < GLYPHS.length; k++) {
-          const ft = GLYPHS[k][1], fb2 = GLYPHS[k][2], it = 1 - ft, ib = 1 - fb2;
-          const d = dist3(ink[0] * ft + bgc[0] * it, ink[1] * ft + bgc[1] * it, ink[2] * ft + bgc[2] * it,
-                          halfRGB[ot], halfRGB[ot + 1], halfRGB[ot + 2])
-                  + dist3(ink[0] * fb2 + bgc[0] * ib, ink[1] * fb2 + bgc[1] * ib, ink[2] * fb2 + bgc[2] * ib,
-                          halfRGB[ob], halfRGB[ob + 1], halfRGB[ob + 2]);
+          const gl = GLYPHS[k];
+          let d = 0;
+          for (let i = 0; i < 4; i++) {
+            const c = gl[i + 1] ? ink : bgc, o = q[i];
+            d += dist3(c[0], c[1], c[2], quadRGB[o], quadRGB[o + 1], quadRGB[o + 2]);
+          }
           if (d < bd) { bd = d; best = k; }
         }
         g.chars[gy][1 + x] = GLYPHS[best][0];
@@ -932,6 +970,23 @@ export function doomCart(options = {}) {
     write(g, y + 2, x, 'GPL-2.0 · Freedoom data', DEAD_INK);
   }
 
+/** Let the left bezel merge into the picture.
+ *
+ *  Every row of this paragraph starts with a box-drawing character so the
+ *  editor's markdown blur-commit can never read a row as a heading or a
+ *  bullet. That safety is a property of the CHARACTER, not of its colour — but
+ *  giving the column its own ink cost it its own run on all 23 picture rows,
+ *  23 of the frame's 184, for a one-cell grey line. Painting the bezel in its
+ *  neighbour's colours keeps the character exactly where it was and merges the
+ *  run away. */
+function mergeBezelIntoPicture(g) {
+  for (let row = 0; row < FIELD_ROWS; row++) {
+    const y = FIELD_TOP + row;
+    g.colors[y][0] = g.colors[y][1];
+    g.bgs[y][0] = g.bgs[y][1];
+  }
+}
+
   function render() {
     const g = makeGrid();
     if (status === 'playing' && handle) {
@@ -943,6 +998,7 @@ export function doomCart(options = {}) {
       drawChrome(g, projection === '8bit'
         ? 'DOOM — id Software’s own engine, projected to 8-bit in one Word paragraph'
         : 'DOOM — id Software’s own engine, drawing into one Word paragraph');
+      mergeBezelIntoPicture(g);
     } else {
       drawLoading(g);
       drawChrome(g, 'DOOM — the real engine, compiled to JavaScript');
@@ -960,16 +1016,19 @@ export function doomCart(options = {}) {
       'frame, and what it costs is *colored runs*: a run breaks when the ink or the `w:shd` ' +
       'shading changes, never when the glyph does, and the measured frame is `63 ms + 0.67 ms × ' +
       'runs`. So the default **8-bit** projection treats that as a budget and spends it — it ' +
-      'squeezes the frame to a fixed ~110 runs by repeatedly merging whichever two neighbouring ' +
+      'squeezes the frame to a fixed ~90 runs by repeatedly merging whichever two neighbouring ' +
       'runs cost the least picture to lose, then gives each surviving run *two* colors to be the ' +
-      'endpoints of a ramp, and lets every cell pick its own place along that ramp with a glyph, ' +
-      'which is free. Flat cost, whatever you are looking at, and about five repaints a second. ' +
+      'endpoints of a ramp. Every cell then picks its own arrangement of those two colors with a ' +
+      'quadrant block — all sixteen 2×2 patterns have a character — so the picture is sampled at ' +
+      '**128 × 46** even though only 64 × 23 cells are spent on it, and the extra resolution ' +
+      'costs nothing at all: a run breaks on a color change, never on a glyph. Flat cost, ' +
+      'whatever you are looking at, and about five repaints a second. ' +
       '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +
       'cell, three times the runs and a third of the rate. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit plays at ~5 fps on a fixed run budget, bitmap is faithful at ~2.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 128×46 on a fixed run budget and plays at ~5 fps, bitmap is faithful at ~2.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

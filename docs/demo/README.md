@@ -154,7 +154,7 @@ colour variation is not.
 
 | projection | what it does | runs/frame | repaints |
 |---|---|---|---|
-| `8bit` (default) | A fixed 18-colour console palette and a hard run budget. Each frame is squeezed to its allowance by repeatedly merging the two adjacent runs whose merge adds the least error; each surviving run's ink and shading are then the two *endpoints* of a ramp, and every cell picks its own place along that ramp with a solid block glyph, which costs nothing. | ~110 | ~5.7/s |
+| `8bit` (default) | A fixed 18-colour console palette and a hard run budget. Each frame is squeezed to its allowance by repeatedly merging the two adjacent runs whose merge adds the least error; each surviving run's ink and shading are then the two *endpoints* of a ramp. Every cell picks its own 2×2 arrangement of those two colours from the sixteen quadrant block characters, so the picture is sampled at **128 × 46** on 64 × 23 cells. | ~90 | ~5/s |
 | `bitmap` | Every cell is two pixels — `▀` with the top pixel as ink and the bottom as `w:shd` shading. Neighbouring cells within a luma-weighted tolerance are given the same pair of colours so they merge into one run. | ~400 | ~2.7/s |
 
 Getting there took being wrong twice, both times in the same way — treating a
@@ -174,6 +174,15 @@ and the ink is not**, so the right split is to allocate colour as the scarce
 resource it is and let the glyph carry everything else. That is what the two
 endpoints per run buy, and it is the same trade block texture compression
 makes, for the same reason.
+
+Resolution follows from the same fact. Since a run never breaks on a glyph, the
+number of picture samples is not what a frame costs — the run budget is, and the
+merge caps that regardless. So the quadrant blocks, which can draw all sixteen
+2×2 arrangements of two colours, carry four sub-pixels per cell instead of two:
+128 × 46 on the same 64 × 23 cells, measured at a 3% cost. And because the fine
+structure now rides in the free channel, the colour budget can be *lower* than
+it was before without the picture suffering — the two changes pay for each
+other.
 
 Two things fall out of budgeting rather than thresholding. The frame cost stops
 depending on the view — measured flat at ~157 spans across four very different

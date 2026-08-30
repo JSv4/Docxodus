@@ -51,7 +51,14 @@ All notable changes to this project will be documented in this file.
   error, cheapest merge first, across the whole frame rather than per row — so a blank ceiling
   keeps one run and the status bar keeps twenty. Each surviving run's two colours are then used as
   the *endpoints* of a ramp rather than as a top and a bottom pixel, and every cell picks its own
-  place along that ramp with a solid block glyph, which is free. It is the trade block texture
+  2×2 arrangement of those two colours from the sixteen quadrant block characters, which is free.
+  That is also where the resolution comes from: since a run never breaks on a glyph, the number of
+  picture samples is not what a frame costs, so a cell carries **four** sub-pixels instead of two
+  and the picture is sampled at **128 × 46** on the same 64 × 23 cells — measured at a 3% cost,
+  A/B'd against the two-sub-pixel glyph set in one process so the container's load could not be
+  mistaken for the change. Because the fine structure now rides in the free channel, the colour
+  budget could be *lowered* (110 → 90 runs) with no visible loss; the two changes pay for each
+  other. It is the trade block texture
   compression makes, for the same reason: two endpoints plus cheap per-cell weights beat two exact
   colours. Colours come from a fixed 18-entry console palette, so the result reads as 8-bit art
   rather than as a degraded photograph. Two things fall out of budgeting rather than thresholding:
@@ -63,6 +70,12 @@ All notable changes to this project will be documented in this file.
   size of 6.4 × 13.3 px they read as dots rather than tone. `P` still switches to the faithful
   bitmap; `?projection=bitmap` picks it as the starting mode.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The Doom cartridge's left bezel no longer costs a run per row.** Every row of the screen
+  paragraph starts with a box-drawing character so the editor's markdown blur-commit can never read
+  a row as a heading or a bullet. That safety is a property of the *character*, not of its colour —
+  but giving the column its own ink cost it its own run on all 23 picture rows, 23 of the frame's
+  184, for a one-cell grey line. It now takes its neighbour's ink and shading, so the character
+  stays exactly where it was and the run merges away.
 - **The Doom cartridge's chrome costs a third of what it did.** The bezel, the divider and the side
   panel were five colours, and a run breaks on a colour *change* — so those five cost five runs on
   every one of the 23 picture rows: 166 runs, more than half the frame, for a column of static
