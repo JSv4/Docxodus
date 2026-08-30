@@ -59,11 +59,28 @@ dotnet run -c Release --project benchmarks/docxdiff-stress -- --corpus TestFiles
 dotnet run -c Release --project benchmarks/docxdiff-stress -- --corpus TestFiles --check before.json
 ```
 
-Against `TestFiles/` that is **678 documents → 8,136 digests**, about 4 minutes on four threads.
-Each document contributes four comparisons — an edited variant under default settings, the
-document against itself (the byte-identical shortcuts), and the edited variant again under
-`PreAcceptInputRevisions` and `PreserveInputRevisions`, which are the only way to reach the
-revision-transform path — times three products (redline, revision list, edit script).
+> **Building the baseline branch.** The harness reaches internal types, so the branch you take the
+> baseline on needs `<InternalsVisibleTo Include="DocxDiffStress" />` in `Docxodus/Docxodus.csproj`.
+> Any branch predating that line fails to compile the harness with a wall of `CS0122`, which looks
+> like a harness bug and is not one — add the line to the checkout you are baselining, or the
+> "before" half of the differential cannot be produced at all.
+
+Against `TestFiles/` each document contributes:
+
+- **four pairwise comparisons** — an edited variant under default settings, the document against
+  itself (the byte-identical shortcuts), and the edited variant again under
+  `PreAcceptInputRevisions` and `PreserveInputRevisions`, the only settings that reach the
+  revision-transform path — times three products (redline, revision list, edit script);
+- **one N-way consolidate** of two reviewers off that document as base, times four products
+  (redline, consolidated revision list, conflicts, consolidated edit script). The consolidate path
+  has its own reader fan-out, merger and markup renderer; not one of the pairwise products touches
+  any of them, so without this the whole N-way half of the engine sits outside the differential;
+- **two pre-flight digests per pairwise product** (edited and identical), recording the
+  compatibility warnings each product reports. Output digests cannot see this: a product that stops
+  running the pre-flight and a product that runs it and finds nothing produce identical output. The
+  identical-bytes shortcuts are where that gap is most tempting, so they are digested too.
+
+That is **678 documents → 22,374 digests**, roughly 15 minutes on four threads.
 
 A thrown exception is digested too, as `FAIL <Type>: <message>`. Malformed and unsupported
 fixtures are expected to throw; a change in **which** exception they throw is still a regression.
@@ -87,17 +104,20 @@ An always-green check is worthless, so verify it detects a change before trustin
 perturbation is not enough**, because the three products are sensitive to different halves of the
 pipeline — a control that moves two of them can leave the third completely unexercised:
 
-| Perturbation | redline | revisions | editscript |
-|---|---|---|---|
-| drop the `w:t` skip in `UnidHelper.ContentSignature` | **0%** | 82% | 84% |
-| swap the snapshots handed to `IrMarkupRenderer.Render` | **64%** | 0% | 0% |
+| Perturbation | redline | revisions | editscript | preflight |
+|---|---|---|---|---|
+| drop the `w:t` skip in `UnidHelper.ContentSignature` | **0%** | 82% | 84% | 0% |
+| swap the snapshots handed to `IrMarkupRenderer.Render` | **64%** | 0% | 0% | 0% |
+| skip the pre-flight on the identical-bytes shortcut | **0%** | **0%** | **0%** | fires |
 
-The split is not an accident, and it is worth understanding before trusting either column.
+The split is not an accident, and it is worth understanding before trusting any column.
 Unids feed block anchors, so corrupting a content signature shows up all over the edit script and
 the revision list — but the markup renderer strips `PtOpenXml.Unid` on the way out, so the
 rendered package is byte-identical and the redline digest never moves. Conversely the hand-off
 only affects rendering: the script and revisions were already computed, so they are untouched
-while the redline scrambles. Run both, or you are validating half the harness.
+while the redline scrambles. And the third row is why the pre-flight column exists at all: a
+product that stops warning still returns the right answer, so **every output digest stays green**
+while a documented behaviour is gone. Run all of them, or you are validating part of the harness.
 
 **It is not omniscient.** Reintroducing the `wp:docPr/@id` stripping-order bug that
 `IrHasherTests.Canonicalize_LoneDocPrId_StillStripped` guards produces **zero** corpus

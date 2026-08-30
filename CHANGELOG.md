@@ -19,7 +19,10 @@ All notable changes to this project will be documented in this file.
   task there throws `PlatformNotSupportedException: Cannot wait on monitors on this runtime`
   and fails the comparison outright; it still gets the read-sharing win, which is the larger
   half (roughly 1.4-1.6x with no parallelism at all). `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
-  instead of running the whole pipeline to prove there is nothing to report. The N-way
+  instead of running the whole pipeline to prove there is nothing to report — the shortcut
+  skips the work, not the compatibility pre-flight, so
+  `OnCompatibilityWarning`/`ThrowOnCompatibilityWarning` still report on the inputs whether
+  or not the two sides happen to match. The N-way
   `Consolidate` carried the same duplication multiplied by reviewer count (`2*(N+1)` reads
   to compare `N+1` documents) and is fixed the same way. Supporting cuts: `ContentSignature`
   walks each subtree once instead of three times, its repeated hash inputs (about seven in
@@ -30,8 +33,9 @@ All notable changes to this project will be documented in this file.
   216 ms and 371 → 0 ms on identical inputs; a four-reviewer `Consolidate` 1870 → 675 ms;
   allocation per comparison 528 → 276 MB. **Output is unchanged** — the new
   `benchmarks/docxdiff-stress` harness digests the redline package, revision list, edit
-  script and all four consolidate products across eight generated edit shapes, and all 36
-  digests are byte-identical before and after.
+  script, all four consolidate products and the compatibility report across eight generated
+  edit shapes and every one of the 678 documents in `TestFiles/`, and every digest is
+  byte-identical before and after.
 - **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
   surface the compact chrome keeps every command by scrolling its strips (title bar, tab
   strip, ribbon panels, anchor rail) — but the clipped edge read as a squashed, broken

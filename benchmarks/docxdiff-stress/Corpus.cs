@@ -53,9 +53,16 @@ internal static class Corpus
             try { edited = CorpusVariant.Edit(bytes); }
             catch (Exception ex) { digests[$"{name}#variant"] = $"VARIANT-FAIL {ex.GetType().Name}"; edited = bytes; }
 
+            // A second, differently-offset edit of the same document: the N-way case needs two
+            // reviewers who actually disagree, or the merger never has a competitor to order.
+            byte[] editedAlt;
+            try { editedAlt = CorpusVariant.Edit(bytes, offset: 2); }
+            catch (Exception ex) { digests[$"{name}#variant-alt"] = $"VARIANT-FAIL {ex.GetType().Name}"; editedAlt = bytes; }
+
             var left = new WmlDocument("left.docx", bytes);
             var right = new WmlDocument("right.docx", edited);
             var same = new WmlDocument("same.docx", bytes);
+            var alt = new WmlDocument("alt.docx", editedAlt);
 
             // Default settings over the edited pair: the ordinary comparison path.
             Record(digests, name, "edited", left, right, new DocxDiffSettings());
@@ -71,6 +78,20 @@ internal static class Corpus
                 new DocxDiffSettings { PreAcceptInputRevisions = true });
             Record(digests, name, "preserve", left, right,
                 new DocxDiffSettings { PreserveInputRevisions = true });
+
+            // The compatibility pre-flight is a SECOND observable output, and it is invisible to
+            // everything above: with it disengaged, a product that never runs it and a product that
+            // runs it and finds nothing produce the same digest. Digest the report itself, so a
+            // shortcut that skips the pre-flight rather than the work shows up as a mismatch — on the
+            // identical pair as well, where a shortcut is most tempting and least observable.
+            RecordPreflight(digests, name, "edited", left, right);
+            RecordPreflight(digests, name, "identical", left, same);
+
+            // N-way. The consolidate path has its own reader fan-out, its own merger and its own
+            // markup renderer, and NONE of the three products above touches any of them. Two
+            // reviewers off the same base is the smallest shape that exercises reviewer ordering and
+            // conflict competitor order.
+            RecordConsolidate(digests, name, left, right, alt);
 
             var n = Interlocked.Increment(ref done);
             if (n % 50 == 0) Console.WriteLine($"  {n,5}/{files.Count} ...");
@@ -131,6 +152,80 @@ internal static class Corpus
             return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
         });
         sink[$"{name}#{mode}/editscript"] = Try(() => Sha(Encoding.UTF8.GetBytes(DocxDiff.GetEditScriptJson(left, right, settings))));
+    }
+
+    // Every consolidate product, over two reviewers off one base. Reviewer order is significant to
+    // conflict reporting, so the digest carries the authors and the per-revision order as emitted.
+    private static void RecordConsolidate(
+        ConcurrentDictionary<string, string> sink, string name,
+        WmlDocument baseDoc, WmlDocument reviewerA, WmlDocument reviewerB)
+    {
+        var reviewers = new List<DocxDiffReviewer>
+        {
+            new() { Author = "Reviewer A", Document = reviewerA },
+            new() { Author = "Reviewer B", Document = reviewerB },
+        };
+        var settings = new DocxDiffConsolidateSettings();
+
+        sink[$"{name}#consolidate/redline"] = Try(() =>
+            StableRedlineDigest(DocxDiff.Consolidate(baseDoc, reviewers, settings).DocumentByteArray));
+
+        sink[$"{name}#consolidate/revisions"] = Try(() =>
+        {
+            var revs = DocxDiff.GetConsolidatedRevisions(baseDoc, reviewers, settings);
+            var sb = new StringBuilder().Append(revs.Count).Append('\n');
+            foreach (var r in revs)
+                sb.Append(r.Type).Append('|').Append(r.Author).Append('|').Append(r.Text).Append('|')
+                  .Append(r.LeftAnchor).Append('|').Append(r.RightAnchor).Append('|')
+                  .Append(r.ConflictId).Append('\n');
+            return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
+        });
+
+        sink[$"{name}#consolidate/conflicts"] = Try(() =>
+        {
+            var conflicts = DocxDiff.GetConflicts(baseDoc, reviewers, settings);
+            var sb = new StringBuilder().Append(conflicts.Count).Append('\n');
+            foreach (var c in conflicts)
+                sb.Append(c.Id).Append('|').Append(c.BaseAnchor).Append('|')
+                  .Append(c.TokenStart).Append('-').Append(c.TokenEnd).Append('|')
+                  .Append(string.Join(",", c.Competitors.Select(x => x.Author + "=" + x.ResultText))).Append('\n');
+            return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
+        });
+
+        sink[$"{name}#consolidate/editscript"] = Try(() =>
+            Sha(Encoding.UTF8.GetBytes(DocxDiff.GetConsolidatedEditScriptJson(baseDoc, reviewers, settings))));
+    }
+
+    // The compatibility report each product hands back through the OnCompatibilityWarning callback,
+    // digested per product. A product that stops running the pre-flight records "none" where it used
+    // to record a report — which no output digest can tell you, because the output was already right.
+    private static void RecordPreflight(
+        ConcurrentDictionary<string, string> sink, string name, string mode,
+        WmlDocument left, WmlDocument right)
+    {
+        foreach (var (product, run) in PreflightProducts(left, right))
+            sink[$"{name}#{mode}/preflight-{product}"] = Try(() =>
+            {
+                var seen = new List<string>();
+                var settings = new DocxDiffSettings
+                {
+                    OnCompatibilityWarning = report =>
+                    {
+                        foreach (var w in report.Warnings.OrderBy(w => w.Feature.Id, StringComparer.Ordinal))
+                            seen.Add(w.Feature.Id);
+                    },
+                };
+                run(settings);
+                return seen.Count == 0 ? "none" : string.Join(",", seen);
+            });
+    }
+
+    private static IEnumerable<(string Product, Action<DocxDiffSettings> Run)> PreflightProducts(
+        WmlDocument left, WmlDocument right)
+    {
+        yield return ("redline", s => DocxDiff.Compare(left, right, s));
+        yield return ("revisions", s => DocxDiff.GetRevisions(left, right, s));
+        yield return ("editscript", s => DocxDiff.GetEditScriptJson(left, right, s));
     }
 
     // A thrown exception is a recorded outcome, not a crash: the type and message are digested so a

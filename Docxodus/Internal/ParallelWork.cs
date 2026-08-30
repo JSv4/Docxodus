@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 
 namespace Docxodus.Internal;
@@ -115,9 +116,27 @@ internal static class ParallelWork
             throw;
         }
 
+        // Collect in argument order so the FIRST failure in sequential order is the one that
+        // propagates — but drain every task before throwing. Rethrowing straight out of the loop
+        // would leave a later task's exception unobserved, which is the very thing the head-failure
+        // path above takes care to avoid.
         var results = new T[rest.Length];
+        Exception? failure = null;
         for (var i = 0; i < rest.Length; i++)
-            results[i] = tasks[i].GetAwaiter().GetResult();
+        {
+            try
+            {
+                results[i] = tasks[i].GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                failure ??= ex;
+            }
+        }
+
+        if (failure is not null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
+
         return (headResult, results);
     }
 }

@@ -106,6 +106,16 @@ therefore takes an optional pre-read pair and `DocxDiffComparison` supplies it; 
 exists on `IrCompositeMarkupRenderer` for the N-way path, where re-reading meant `2*(N+1)` package
 reads to compare `N+1` documents.
 
+`GetRevisions` gained the byte-identical shortcut `Compare` already had: two packages with the
+same bytes have nothing to report, and running the pipeline to establish that costs as much as a
+real comparison. Both shortcuts skip the **work** and not the compatibility pre-flight — that
+pre-flight is a property of the inputs, so a caller who asked to be warned about an under-tested
+construct gets the same answer whether or not the two sides happen to match. This distinction has
+no output-digest signature (a product that stops warning still returns the right answer), so it is
+covered by unit tests and by the pre-flight digests in `benchmarks/docxdiff-stress`' corpus mode
+rather than by output parity. The edit script deliberately keeps no such shortcut: its all-Equal
+operations are the answer the caller asked for.
+
 `IrReader.Read` likewise opens each package once. Deciding the accepted-revision view needs every
 story parsed, and so does the body walk, so the scan runs against the package the walk is about to
 use (`GetXDocument` caches per part). Only a document that genuinely carries revision markup pays
@@ -132,9 +142,10 @@ two-way `Compare` runs roughly 1.4-1.6x faster than before with no parallelism a
 
 On a 574 KB `document.xml` with 15,360 elements, collapsing four reads to two concurrent ones took
 a two-way `Compare` from ~820 ms to ~350 ms and a four-reviewer `Consolidate` from ~1870 ms to
-~675 ms. `benchmarks/docxdiff-stress` measures this and digests every product to prove the output
-did not move; see its `FINDINGS.md` for the full stage attribution and for what still stands
-between the engine and 10 comparisons per second.
+~675 ms. `benchmarks/docxdiff-stress` measures this and digests every product — pairwise and N-way, plus
+the compatibility report — across all of `TestFiles/` to prove the output did not move; see its
+`FINDINGS.md` for the full stage attribution and for what still stands between the engine and 10
+comparisons per second.
 
 ## Edit script
 

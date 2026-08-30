@@ -84,15 +84,24 @@ internal static class IrReader
         // XML parsing cost of every read. GetXDocument caches per part, so keeping this package alive means
         // the walk reuses the very trees the scan already parsed. Only a document that genuinely needs a
         // revision transform pays for a second open, and it pays it inside RevisionProcessor regardless.
-        var stream = new OpenXmlMemoryStreamDocument(working);
-        var wdoc = stream.GetWordprocessingDocument();
+        // The pair is opened inside the try and the finally is null-tolerant, because
+        // GetWordprocessingDocument throws on a package that is not Wordprocessing (an .xlsx handed to
+        // the reader) or is structurally damaged. `using` used to cover that; a bare assignment before
+        // the try would leak the open package on exactly those inputs.
+        OpenXmlMemoryStreamDocument? stream = null;
+        WordprocessingDocument? wdoc = null;
         try
         {
+            stream = new OpenXmlMemoryStreamDocument(working);
+            wdoc = stream.GetWordprocessingDocument();
+
             var transformed = ApplyRevisionView(working, wdoc, options.RevisionView);
             if (transformed is not null)
             {
                 wdoc.Dispose();
+                wdoc = null;
                 stream.Dispose();
+                stream = null;
                 working = transformed;
                 stream = new OpenXmlMemoryStreamDocument(working);
                 wdoc = stream.GetWordprocessingDocument();
@@ -102,8 +111,8 @@ internal static class IrReader
         }
         finally
         {
-            wdoc.Dispose();
-            stream.Dispose();
+            wdoc?.Dispose();
+            stream?.Dispose();
         }
     }
 

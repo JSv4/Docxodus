@@ -22,7 +22,12 @@ internal static class CorpusVariant
     /// zip entry directly rather than through the SDK, so a package the SDK rejects still produces a
     /// usable right-hand side instead of aborting the document's whole row.
     /// </summary>
-    public static byte[] Edit(byte[] source)
+    /// <param name="source">The document to edit.</param>
+    /// <param name="offset">Which of the four residues to edit. The default (0) is the ordinary
+    /// variant; a second reviewer built with a different offset edits DIFFERENT text nodes in the
+    /// same paragraphs, which is what gives an N-way consolidate real competitors to order and real
+    /// conflicts to report instead of one reviewer's edits applied unopposed.</param>
+    public static byte[] Edit(byte[] source, int offset = 0)
     {
         using var ms = new MemoryStream();
         ms.Write(source, 0, source.Length);
@@ -46,9 +51,9 @@ internal static class CorpusVariant
                 if (texts.Count == 0) return source;
 
                 var edits = 0;
-                for (var i = 0; i < texts.Count; i += 4)
+                for (var i = offset % 4; i < texts.Count; i += 4)
                 {
-                    texts[i].Value = MutateWord(texts[i].Value, i);
+                    texts[i].Value = MutateWord(texts[i].Value, i + offset);
                     edits++;
                 }
 
