@@ -16,6 +16,7 @@ using System.Linq;
 using System.Xml.Linq;
 using System.Collections.Generic;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 // ReSharper disable InconsistentNaming
 
@@ -1662,7 +1663,8 @@ listSeparator
         /// </summary>
         internal static void EnsureEvenAndOddHeaders(MainDocumentPart main)
         {
-            var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+            var settingsPart = main.DocumentSettingsPart
+                ?? main.AddDeterministicPart<DocumentSettingsPart>("rIdSettings");
             var xDoc = settingsPart.GetXDocument();
             var root = xDoc.Root;
             if (root == null)
