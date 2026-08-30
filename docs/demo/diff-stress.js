@@ -17,7 +17,15 @@
 // Those numbers move, which is the point of measuring them live rather than
 // printing them: #616 halved `docxDiffCompare` on this document (278ms -> 153ms)
 // by fixing a read amplification, and the panel picked the improvement up with
-// no change here. For the rigorous headless version of this measurement on a
+// no change here.
+//
+// What this meter is NOT is a way to compare engine builds. Its p50 is taken
+// while the document is growing under the loop, so it depends on how far the run
+// got, and repeated medians on one container still spread 5-20%. After #623 the
+// stress readout appeared to move by a third while a controlled fixed-input
+// measurement showed no regression at all — the controlled one was right. Judge
+// builds with a fixed input and medians of many; judge this meter on whether you
+// can watch the cost. For the rigorous headless version of this measurement on a
 // 147KB certificate of incorporation, see benchmarks/docxdiff-stress/FINDINGS.md
 // — that harness is the authority on engine performance; this mode is the one
 // you can watch.

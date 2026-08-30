@@ -53,8 +53,17 @@ about a third saved, which is what that API is for.
 These figures are from the engine as of #616, which roughly halved
 `docxDiffCompare` on this document (278 ms → 153 ms) by removing a read
 amplification. They moved without a line changing here, which is the argument for
-a panel that measures rather than a page that quotes: the numbers above are what
-the meter happened to read on one machine, and yours will differ. The rigorous
+a panel that measures rather than a page that quotes.
+
+Read them as one machine's order of magnitude, not as a benchmark. Two things
+make the last digit meaningless. Repeated medians on the same container spread
+5–20% run to run. And the p50 the meter reports is taken over a run during which
+the document is *growing*, so it depends on how far the loop got — which makes
+stress p50 unsuitable for comparing one engine build against another, however
+tempting the number looks sitting there. (Checked after #623: a controlled
+fixed-input measurement showed no regression, while the stress readout appeared
+to move by a third. The controlled one was right.) To compare builds, use a fixed
+input and medians of many — which is what the harness below does properly. The rigorous
 headless counterpart — the same question asked of a 147 KB certificate of
 incorporation, with stage attribution and allocation figures — lives in
 `benchmarks/docxdiff-stress/FINDINGS.md`. That harness is the authority on engine
