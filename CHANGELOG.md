@@ -37,6 +37,37 @@ All notable changes to this project will be documented in this file.
   proof and a latency budget. Demo content only — not shipped in the npm package.
 
 ### Changed
+- **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
+  legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
+  15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,
+  reading each side twice — once to build the edit script, once again inside the markup
+  renderer for the source elements it clones from — and each of those reads opened and
+  parsed the whole package twice, because deciding the accepted-revision view scanned a
+  second package and then discarded the parse. The comparison now reads once per side and
+  hands that snapshot to the renderer, and the revision-view scan runs against the package
+  the walk is about to use. The two sides' pre-accept and IR reads run concurrently
+  where the runtime has threads to run them on — the browser build keeps the sequential
+  schedule, its WASM project does not set `WasmEnableThreads`, so blocking on a queued
+  task there throws `PlatformNotSupportedException: Cannot wait on monitors on this runtime`
+  and fails the comparison outright; it still gets the read-sharing win, which is the larger
+  half (roughly 1.4-1.6x with no parallelism at all). `GetRevisions` on byte-identical packages takes the same shortcut `Compare` already had
+  instead of running the whole pipeline to prove there is nothing to report — the shortcut
+  skips the work, not the compatibility pre-flight, so
+  `OnCompatibilityWarning`/`ThrowOnCompatibilityWarning` still report on the inputs whether
+  or not the two sides happen to match. The N-way
+  `Consolidate` carried the same duplication multiplied by reviewer count (`2*(N+1)` reads
+  to compare `N+1` documents) and is fixed the same way. Supporting cuts: `ContentSignature`
+  walks each subtree once instead of three times, its repeated hash inputs (about seven in
+  eight on a real document) are served from a per-call cache, canonical-XML hashing no
+  longer materializes a byte array per call, and attribute canonicalization skips the sort
+  for the elements that carry none or one. Measured medians: `Compare` 821 → 351 ms on a
+  scattered-edit pass, 1279 → 868 ms on a whole-document rewrite; `GetRevisions` 395 →
+  216 ms and 371 → 0 ms on identical inputs; a four-reviewer `Consolidate` 1870 → 675 ms;
+  allocation per comparison 528 → 276 MB. **Output is unchanged** — the new
+  `benchmarks/docxdiff-stress` harness digests the redline package, revision list, edit
+  script, all four consolidate products and the compatibility report across eight generated
+  edit shapes and every one of the 678 documents in `TestFiles/`, and every digest is
+  byte-identical before and after.
 - **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
   surface the compact chrome keeps every command by scrolling its strips (title bar, tab
   strip, ribbon panels, anchor rail) — but the clipped edge read as a squashed, broken

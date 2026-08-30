@@ -27,9 +27,12 @@ namespace Docxodus.Ir.Diff;
 /// just its IR. (2) <b>Provenance.</b> Building runs from provenance-cloned source XML preserves ALL run
 /// properties — including the UNMODELED rPr the <see cref="IrRunFormat"/> model does not capture. The
 /// adapter/scoreboard reads its IRs with <c>RetainSources=false</c> (no per-node <c>Source.Element</c>), so
-/// the renderer re-reads both documents internally with <c>RetainSources=true</c> + <c>RevisionView=Accept</c>
-/// to obtain the accept-clean source <c>w:p</c>/<c>w:tbl</c> elements it clones from. (Reading with Accept
-/// matches the IR the script was built over — the adapter reads Accept too — so anchors resolve identically.)</para>
+/// the renderer needs snapshots read with <c>RetainSources=true</c> + <c>RevisionView=Accept</c> to obtain the
+/// accept-clean source <c>w:p</c>/<c>w:tbl</c> elements it clones from. (Reading with Accept matches the IR the
+/// script was built over — the adapter reads Accept too — so anchors resolve identically.) It reads them
+/// itself unless the caller supplies them: <see cref="DocxDiffComparison"/> already holds provenance-bearing
+/// snapshots of the same inputs and hands them over, which is why <see cref="Render"/> takes the optional
+/// <c>sourceIrLeft</c>/<c>sourceIrRight</c> pair.</para>
 ///
 /// <para><b>Why clone from provenance, split at token boundaries.</b> For a Modified paragraph we must wrap
 /// only the changed runs in <c>w:ins</c>/<c>w:del</c> while leaving Equal runs untouched. The token diff
@@ -201,19 +204,37 @@ internal static class IrMarkupRenderer
     /// <c>RejectRevisions(result)</c> content-equals <paramref name="left"/> at the per-block text level.
     /// </summary>
     public static WmlDocument Render(
-        IrEditScript script, WmlDocument left, WmlDocument right, IrDiffSettings settings)
+        IrEditScript script, WmlDocument left, WmlDocument right, IrDiffSettings settings,
+        IrDocument? sourceIrLeft = null, IrDocument? sourceIrRight = null)
     {
         ArgumentNullException.ThrowIfNull(script);
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         ArgumentNullException.ThrowIfNull(settings);
 
-        // Re-read both documents WITH provenance so we can clone source w:p/w:tbl elements. RevisionView is
-        // Accept to match the IR the script was built over (the adapter reads Accept), so every block anchor
-        // in the script resolves to a block in these snapshots' AnchorIndex.
-        var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
-        var irLeft = IrReader.Read(left, readOpts);
-        var irRight = IrReader.Read(right, readOpts);
+        // Both documents are needed WITH provenance so we can clone source w:p/w:tbl elements. RevisionView
+        // is Accept to match the IR the script was built over (the adapter reads Accept), so every block
+        // anchor in the script resolves to a block in these snapshots' AnchorIndex.
+        //
+        // A caller that already holds such a snapshot of these exact documents passes it in and the read is
+        // skipped: on a heavyweight document the two reads cost more than everything else this method does
+        // put together, and DocxDiffComparison holds provenance-bearing snapshots of precisely these inputs.
+        // Provenance is equality-neutral (see IrProvenance), so a RetainSources snapshot is node-for-node
+        // value-equal to the retention-off one the script was built over — passing it in cannot change what
+        // is rendered. When either side is absent both are re-read, so a partial hand-off is never mixed
+        // with a fresh read of the other side.
+        IrDocument irLeft, irRight;
+        if (sourceIrLeft is not null && sourceIrRight is not null)
+        {
+            irLeft = sourceIrLeft;
+            irRight = sourceIrRight;
+        }
+        else
+        {
+            var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
+            irLeft = IrReader.Read(left, readOpts);
+            irRight = IrReader.Read(right, readOpts);
+        }
 
         var state = new RenderState(irLeft, irRight, settings);
         state.LeftStyleIds = ReadStyleIds(left);
