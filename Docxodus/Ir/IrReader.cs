@@ -78,18 +78,57 @@ internal static class IrReader
         // 1. Work over a private copy so the caller's bytes are never mutated.
         var working = new WmlDocument(doc);
 
-        // 2. Normalize tracked revisions (rule N13).
-        working = ApplyRevisionView(working, options.RevisionView);
+        // 2. Normalize tracked revisions (rule N13), then walk the body — both over ONE open package.
+        // The revision-view decision needs every story parsed (see ApplyRevisionView), and so does the walk
+        // below; opening a second package to make that decision and then throwing the parse away doubled the
+        // XML parsing cost of every read. GetXDocument caches per part, so keeping this package alive means
+        // the walk reuses the very trees the scan already parsed. Only a document that genuinely needs a
+        // revision transform pays for a second open, and it pays it inside RevisionProcessor regardless.
+        // The pair is opened inside the try and the finally is null-tolerant, because
+        // GetWordprocessingDocument throws on a package that is not Wordprocessing (an .xlsx handed to
+        // the reader) or is structurally damaged. `using` used to cover that; a bare assignment before
+        // the try would leak the open package on exactly those inputs.
+        OpenXmlMemoryStreamDocument? stream = null;
+        WordprocessingDocument? wdoc = null;
+        try
+        {
+            stream = new OpenXmlMemoryStreamDocument(working);
+            wdoc = stream.GetWordprocessingDocument();
+
+            var transformed = ApplyRevisionView(working, wdoc, options.RevisionView);
+            if (transformed is not null)
+            {
+                wdoc.Dispose();
+                wdoc = null;
+                stream.Dispose();
+                stream = null;
+                working = transformed;
+                stream = new OpenXmlMemoryStreamDocument(working);
+                wdoc = stream.GetWordprocessingDocument();
+            }
+
+            return ReadOpenPackage(working, wdoc, options);
+        }
+        finally
+        {
+            wdoc?.Dispose();
+            stream?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The body of <see cref="Read"/> once the revision view is settled and <paramref name="wdoc"/> is the
+    /// open package for <paramref name="working"/>.
+    /// </summary>
+    private static IrDocument ReadOpenPackage(
+        WmlDocument working, WordprocessingDocument wdoc, IrReaderOptions options)
+    {
         // Only a graph that exceeds its normal inspection budget needs this package-level fallback. Keep the
         // SHA lazy so ordinary documents pay no whole-package hashing cost; when a cutoff occurs it prevents an
         // uninspected nested chart/SmartArt target from comparing Equal across distinct source packages.
         var normalizedDocumentBytes = working.DocumentByteArray;
         var drawingGraphFallbackDocumentHash =
             new Lazy<IrHash>(() => IrHash.Compute(normalizedDocumentBytes));
-
-        // 3. Open the copy, assign deterministic Unids, and walk the body.
-        using var stream = new OpenXmlMemoryStreamDocument(working);
-        using var wdoc = stream.GetWordprocessingDocument();
 
         var main = wdoc.MainDocumentPart
             ?? throw new DocxodusException("Document has no MainDocumentPart.");
@@ -497,7 +536,14 @@ internal static class IrReader
 
     // --- revisions --------------------------------------------------------
 
-    private static WmlDocument ApplyRevisionView(WmlDocument working, RevisionView view)
+    /// <summary>
+    /// Decide the revision view over the ALREADY-OPEN <paramref name="wdoc"/>: returns the transformed
+    /// document when a <see cref="RevisionProcessor"/> round-trip is required, or <c>null</c> when
+    /// <paramref name="working"/> is already its own accepted/rejected view and the caller should keep
+    /// reading the open package.
+    /// </summary>
+    private static WmlDocument? ApplyRevisionView(
+        WmlDocument working, WordprocessingDocument wdoc, RevisionView view)
     {
         switch (view)
         {
@@ -506,10 +552,10 @@ internal static class IrReader
                 // IrReaderTests.Read_UnknownElement_BecomesOpaque deliberately feeds a
                 // w:customXmlInsRangeStart under FailIfPresent expecting it to survive as an opaque
                 // block, i.e. it is intentionally NOT treated as "present revision markup" here.
-                if (HasRevisionMarkup(working, FailIfPresentNameSet))
+                if (HasRevisionMarkup(wdoc, FailIfPresentNameSet))
                     throw new DocxodusException(
                         "Document contains tracked revisions and RevisionView is FailIfPresent.");
-                return working;
+                return null;
 
             case RevisionView.Accept:
             case RevisionView.Reject:
@@ -521,14 +567,14 @@ internal static class IrReader
                 // consumes, so any document that actually needs a revision transform still takes that
                 // path.  See the masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are
                 // deliberately omitted (covered by their w:ins ancestor).
-                if (!HasRevisionMarkup(working, ProcessorActsOnNameSet))
-                    return working;
+                if (!HasRevisionMarkup(wdoc, ProcessorActsOnNameSet))
+                    return null;
                 return view == RevisionView.Accept
                     ? RevisionProcessor.AcceptRevisionsForIrReader(working)
                     : RevisionProcessor.RejectRevisions(working);
 
             default:
-                return working;
+                return null;
         }
     }
 
@@ -584,10 +630,8 @@ internal static class IrReader
     // A w:ins child of w:numPr (inserted numbering, RevisionProcessor.cs:96) is itself a w:ins element,
     // so the local-name "ins" scan above already catches it — no separate numPr probe is needed. The
     // scan matches by full XName via DescendantsAndSelf, which visits that nested w:ins like any other.
-    private static bool HasRevisionMarkup(WmlDocument working, HashSet<XName> names)
+    private static bool HasRevisionMarkup(WordprocessingDocument wdoc, HashSet<XName> names)
     {
-        using var stream = new OpenXmlMemoryStreamDocument(working);
-        using var wdoc = stream.GetWordprocessingDocument();
         var main = wdoc.MainDocumentPart;
         if (main is null)
             return false;

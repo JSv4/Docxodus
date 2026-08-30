@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using Docxodus.Internal;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Verification;
@@ -50,6 +51,14 @@ public static class DocxDiff
     // the accepted view of each side). The markup renderer re-reads internally with its own options.
     internal static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };
+
+    // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
+    // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
+    // equality-neutral (see IrProvenance), so the script built over it is identical to one built over
+    // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
+    // footprint (the consolidate scoreboard, compatibility probes).
+    internal static readonly IrReaderOptions RenderReadOpts =
+        new() { RetainSources = true, RevisionView = RevisionView.Accept };
 
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and produce a tracked-changes
@@ -233,11 +242,14 @@ public static class DocxDiff
         baseDocument = PreAccept(s.Diff, baseDocument);
         reviewers = PreAccept(s.Diff, reviewers);
         PreflightCompatibility(s.Diff, new[] { baseDocument }.Concat(reviewers.Select(r => r.Document)).ToArray());
-        var baseIr = IrReader.Read(baseDocument, ReadOpts);
-        var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
+        // ONE read per document, with provenance, serving both the merge and the renderer's
+        // clone-from-provenance pass — the renderer used to re-read all of them, so an N-reviewer
+        // consolidate read 2*(N+1) packages to compare N+1.
+        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, RenderReadOpts);
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
         return IrCompositeMarkupRenderer.Render(
-            script, baseDocument, reviewers.Select(r => (r.Author, r.Document)).ToList(), diff);
+            script, baseDocument, reviewers.Select(r => (r.Author, r.Document)).ToList(), diff,
+            baseIr, revIr.Select(x => x.Ir).ToList());
     }
 
     /// <summary>
@@ -284,8 +296,7 @@ public static class DocxDiff
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConflict>();
         baseDocument = PreAccept(s.Diff, baseDocument);
         reviewers = PreAccept(s.Diff, reviewers);
-        var baseIr = IrReader.Read(baseDocument, ReadOpts);
-        var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
+        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
         return script.Conflicts.Select(DocxDiffConflict.FromIr).ToList();
     }
@@ -326,8 +337,7 @@ public static class DocxDiff
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConsolidatedRevision>();
         baseDocument = PreAccept(s.Diff, baseDocument);
         reviewers = PreAccept(s.Diff, reviewers);
-        var baseIr = IrReader.Read(baseDocument, ReadOpts);
-        var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
+        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
         var rendered = IrCompositeRevisionRenderer.Render(script, baseIr, revIr, diff);
         return rendered.Select(x => new DocxDiffConsolidatedRevision(
@@ -383,8 +393,7 @@ public static class DocxDiff
                 IrNodeList.From(System.Array.Empty<IrConflict>())));
         baseDocument = PreAccept(s.Diff, baseDocument);
         reviewers = PreAccept(s.Diff, reviewers);
-        var baseIr = IrReader.Read(baseDocument, ReadOpts);
-        var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
+        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
         return IrCompositeScriptJson.Write(script);
     }
@@ -471,6 +480,29 @@ public static class DocxDiff
                     $"reviewers[{i}].Document is null (author '{reviewers[i].Author}').", nameof(reviewers));
         }
         return s;
+    }
+
+    /// <summary>
+    /// Read the base document and every reviewer's document into IR. The reads are independent pure
+    /// functions of their inputs, so they run concurrently; reviewer order in the result matches
+    /// <paramref name="reviewers"/>, which is significant for conflict competitor order.
+    /// </summary>
+    private static (IrDocument BaseIr, List<(string Author, IrDocument Ir)> ReviewerIrs) ReadReviewerSet(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers, IrReaderOptions opts)
+    {
+        var reads = new Func<IrDocument>[reviewers.Count];
+        for (var i = 0; i < reviewers.Count; i++)
+        {
+            var doc = reviewers[i].Document;
+            reads[i] = () => IrReader.Read(doc, opts);
+        }
+
+        var (baseIr, reviewerIrs) = ParallelWork.Fan(() => IrReader.Read(baseDocument, opts), reads);
+
+        var revIr = new List<(string Author, IrDocument Ir)>(reviewers.Count);
+        for (var i = 0; i < reviewers.Count; i++)
+            revIr.Add((reviewers[i].Author, reviewerIrs[i]));
+        return (baseIr, revIr);
     }
 
     /// <summary>

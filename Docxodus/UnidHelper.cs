@@ -136,7 +136,14 @@ internal static class UnidHelper
         }
 
         var parentUnid = (string?)contentParent.Attribute(PtOpenXml.Unid) ?? contentParent.Name.LocalName;
-        AssignDescendantsDeterministic(contentParent, parentUnid, live);
+        // ContentSignature hashes a string built from an element's subtree, and in real OOXML those
+        // strings repeat heavily — on a 15k-element legal document roughly seven in eight are a
+        // duplicate of one already seen (identical rPr blobs, repeated empty runs, boilerplate
+        // properties). SHA-256 dominates this walk, so the repeats are worth remembering. The cache
+        // lives for one call only: it is keyed on the exact string that is hashed, so a hit returns
+        // precisely what a fresh hash would have, and nothing survives to leak between documents.
+        var sigCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        AssignDescendantsDeterministic(contentParent, parentUnid, live, sigCache);
         ContentControlIdentity.AssignStableUnids(contentParent);
         return true;
     }
@@ -256,7 +263,8 @@ internal static class UnidHelper
 
     // ─── Deterministic derivation internals ──────────────────────────────
 
-    private static void AssignDescendantsDeterministic(XElement parent, string parentUnid, HashSet<XElement> live)
+    private static void AssignDescendantsDeterministic(
+        XElement parent, string parentUnid, HashSet<XElement> live, Dictionary<string, string> sigCache)
     {
         // Signature/dup-index bookkeeping is only needed when THIS parent has a child
         // to assign — for fully-assigned parents (the overwhelming majority after the
@@ -272,7 +280,7 @@ internal static class UnidHelper
         {
             if (child.Attribute(PtOpenXml.Unid) == null)
             {
-                var sig = ContentSignature(child);
+                var sig = ContentSignature(child, sigCache);
                 var key = (child.Name.LocalName, sig);
                 dup!.TryGetValue(key, out var dupIndex);
                 dup[key] = dupIndex + 1;
@@ -285,7 +293,7 @@ internal static class UnidHelper
                 // AssignToSelfAndDescendants). Still count it for dup-index of its
                 // same-content siblings so unassigned later siblings get a
                 // consistent index regardless of which subset already had Unids.
-                var sig = ContentSignature(child);
+                var sig = ContentSignature(child, sigCache);
                 var key = (child.Name.LocalName, sig);
                 dup!.TryGetValue(key, out var dupIndex);
                 dup[key] = dupIndex + 1;
@@ -298,7 +306,7 @@ internal static class UnidHelper
             if (live.Contains(child))
             {
                 var childUnid = (string?)child.Attribute(PtOpenXml.Unid)!;
-                AssignDescendantsDeterministic(child, childUnid, live);
+                AssignDescendantsDeterministic(child, childUnid, live, sigCache);
             }
         }
     }
@@ -320,31 +328,121 @@ internal static class UnidHelper
     /// fields get distinct sigs).
     /// </para>
     /// </summary>
-    private static string ContentSignature(XElement element)
+    private static string ContentSignature(XElement element) => ContentSignature(element, sigCache: null);
+
+    /// <summary>
+    /// The content signature of <paramref name="element"/>: a 16-hex-char digest of its own text,
+    /// paragraph style/numbering, and descendant element names. With <paramref name="sigCache"/>
+    /// supplied, digests are reused across elements whose signature input is identical — the digest
+    /// is a pure function of that string, so a cache hit is indistinguishable from a fresh hash.
+    /// </summary>
+    private static string ContentSignature(XElement element, Dictionary<string, string>? sigCache)
     {
         // Container elements (those that contain block-level descendants like
         // nested w:p or w:tbl) collapse to a tag-name-only signature. Their
         // Unid is used as parent_unid for the blocks inside; we don't want
         // editing/inserting one paragraph to invalidate every other paragraph
         // by shifting their parent's signature.
-        bool hasBlockDescendants = element.Descendants().Any(d => d.Name == W.p || d.Name == W.tbl);
-        if (hasBlockDescendants)
+        //
+        // The block-descendant test, the text concatenation and the descendant-name list all used to
+        // walk the subtree separately, with a string materialized per walk. One walk now feeds all
+        // three: the same characters land in the builder in the same order, so the hashed string —
+        // and therefore the signature — is unchanged.
+        var sb = AcquireSignatureBuilder();
+        try
         {
-            return ShortHash(element.Name.LocalName, hexChars: 16);
+            if (AppendSignatureInput(element, sb))
+                return Digest(element.Name.LocalName, sigCache);
+
+            return Digest(sb.ToString(), sigCache);
+        }
+        finally
+        {
+            ReleaseSignatureBuilder(sb);
         }
 
-        var text = string.Concat(element.Descendants(W.t).Select(t => (string)t));
-        var pPr = element.Element(W.pPr);
-        var styleId = pPr?.Element(W.pStyle)?.Attribute(W.val)?.Value ?? string.Empty;
-        var numId = pPr?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val)?.Value ?? string.Empty;
-        var sb2 = new StringBuilder(text.Length + 64);
-        sb2.Append(text).Append('|').Append(styleId).Append('|').Append(numId).Append('|');
-        foreach (var d in element.Descendants())
+        static string Digest(string input, Dictionary<string, string>? cache)
         {
-            if (d.Name == W.t) continue;
-            sb2.Append(d.Name.LocalName).Append(',');
+            if (cache is null)
+                return ShortHash(input, hexChars: 16);
+            if (cache.TryGetValue(input, out var hit))
+                return hit;
+            var computed = ShortHash(input, hexChars: 16);
+            cache[input] = computed;
+            return computed;
         }
-        return ShortHash(sb2.ToString(), hexChars: 16);
+    }
+
+    /// <summary>
+    /// Append <paramref name="element"/>'s signature input to <paramref name="sb"/> in the exact order
+    /// the original three-walk form produced — all descendant <c>w:t</c> text, <c>'|'</c>, the pStyle id,
+    /// <c>'|'</c>, the numId, <c>'|'</c>, then every non-<c>w:t</c> descendant's local name followed by a
+    /// comma. Returns <c>true</c> as soon as a block-level descendant (<c>w:p</c>/<c>w:tbl</c>) is seen,
+    /// in which case the caller discards the builder and uses the tag-name-only signature instead.
+    /// </summary>
+    private static bool AppendSignatureInput(XElement element, StringBuilder sb)
+    {
+        // Text first, bailing out the moment the element proves to be a block container.
+        if (AppendDescendantText(element, sb))
+            return true;
+
+        var pPr = element.Element(W.pPr);
+        sb.Append('|')
+          .Append(pPr?.Element(W.pStyle)?.Attribute(W.val)?.Value ?? string.Empty)
+          .Append('|')
+          .Append(pPr?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val)?.Value ?? string.Empty)
+          .Append('|');
+
+        AppendDescendantNames(element, sb);
+        return false;
+    }
+
+    /// <summary>Depth-first <c>w:t</c> text append; <c>true</c> if a <c>w:p</c>/<c>w:tbl</c> descendant exists.</summary>
+    private static bool AppendDescendantText(XElement element, StringBuilder sb)
+    {
+        foreach (var child in element.Elements())
+        {
+            if (child.Name == W.p || child.Name == W.tbl)
+                return true;
+            if (child.Name == W.t)
+                sb.Append(child.Value);
+            if (AppendDescendantText(child, sb))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Depth-first append of every non-<c>w:t</c> descendant's local name, comma-separated.</summary>
+    private static void AppendDescendantNames(XElement element, StringBuilder sb)
+    {
+        foreach (var child in element.Elements())
+        {
+            if (child.Name != W.t)
+                sb.Append(child.Name.LocalName).Append(',');
+            AppendDescendantNames(child, sb);
+        }
+    }
+
+    // One builder per thread, reused across the thousands of signatures a single walk computes.
+    // Oversized builders are dropped rather than parked so a pathological element cannot pin memory.
+    [ThreadStatic]
+    private static StringBuilder? t_signatureBuilder;
+
+    private static StringBuilder AcquireSignatureBuilder()
+    {
+        var sb = t_signatureBuilder;
+        if (sb is null)
+            return new StringBuilder(256);
+        t_signatureBuilder = null;
+        sb.Clear();
+        return sb;
+    }
+
+    private static void ReleaseSignatureBuilder(StringBuilder sb)
+    {
+        if (sb.Capacity <= 8192)
+            t_signatureBuilder = sb;
     }
 
     private static string DeriveUnid(string rootSeed, string tag, string sig, int dupIndex)

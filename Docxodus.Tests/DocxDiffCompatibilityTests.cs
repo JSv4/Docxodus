@@ -74,6 +74,79 @@ public class DocxDiffCompatibilityTests
         Assert.Contains(captured!.Warnings, w => w.Feature.Id == "contentControls");
     }
 
+    // ---- the identical-bytes shortcuts must not swallow the pre-flight ------------------------
+    //
+    // Compare and GetRevisions both short-circuit byte-identical packages. The shortcut skips the
+    // WORK; the pre-flight is a property of the INPUTS, so a caller who asked to be warned about an
+    // under-tested construct still has to be. These pin every product on the shortcut path, because
+    // a shortcut added to one product and not wired to the pre-flight is invisible to output-parity
+    // evidence: the answer (nothing changed) is right, and the warning simply never arrives.
+
+    [Fact]
+    public void GetRevisions_IdenticalPackages_StillThrowsOnCompatibilityWarning()
+    {
+        var doc = Math();
+        var ex = Assert.Throws<DocxDiffCompatibilityException>(() =>
+            DocxDiff.GetRevisions(doc, new WmlDocument(doc),
+                new DocxDiffSettings { ThrowOnCompatibilityWarning = true }));
+        Assert.Contains(ex.Report.Warnings, w => w.Feature.Id == "math");
+    }
+
+    [Fact]
+    public void GetRevisions_IdenticalPackages_StillFiresCompatibilityCallback()
+    {
+        var doc = Math();
+        DocxDiffCompatibilityReport? captured = null;
+        var revisions = DocxDiff.GetRevisions(doc, new WmlDocument(doc),
+            new DocxDiffSettings { OnCompatibilityWarning = r => captured = r });
+        Assert.Empty(revisions);
+        Assert.NotNull(captured);
+        Assert.Contains(captured!.Warnings, w => w.Feature.Id == "math");
+    }
+
+    [Fact]
+    public void Compare_IdenticalPackages_StillThrowsOnCompatibilityWarning()
+    {
+        var doc = Math();
+        var ex = Assert.Throws<DocxDiffCompatibilityException>(() =>
+            DocxDiff.Compare(doc, new WmlDocument(doc),
+                new DocxDiffSettings { ThrowOnCompatibilityWarning = true }));
+        Assert.Contains(ex.Report.Warnings, w => w.Feature.Id == "math");
+    }
+
+    /// <summary>One comparison, every product: the pre-flight fires on whichever product is asked for
+    /// first, so a shortcut on any one of them cannot be the reason a warning goes missing.</summary>
+    [Theory]
+    [InlineData("revisions")]
+    [InlineData("redline")]
+    [InlineData("editscript")]
+    public void Comparison_IdenticalPackages_EveryProductPreflights(string product)
+    {
+        var doc = Math();
+        DocxDiffCompatibilityReport? captured = null;
+        var comparison = DocxDiff.CreateComparison(doc, new WmlDocument(doc),
+            new DocxDiffSettings { OnCompatibilityWarning = r => captured = r });
+
+        switch (product)
+        {
+            case "revisions": Assert.Empty(comparison.GetRevisions()); break;
+            case "redline": Assert.NotNull(comparison.ToRedline()); break;
+            default: Assert.NotNull(comparison.GetEditScriptJson()); break;
+        }
+
+        Assert.NotNull(captured);
+        Assert.Contains(captured!.Warnings, w => w.Feature.Id == "math");
+    }
+
+    /// <summary>The shortcut is still a shortcut: with the pre-flight not engaged, an identical pair
+    /// reports nothing and never opens either package.</summary>
+    [Fact]
+    public void GetRevisions_IdenticalPackages_DefaultSettings_ReportNothing()
+    {
+        var doc = Math();
+        Assert.Empty(DocxDiff.GetRevisions(doc, new WmlDocument(doc)));
+    }
+
     /// <summary>A minimal valid DOCX whose body is <paramref name="bodyInner"/>. The document element declares the
     /// w/m/v/o namespaces so any construct in bodyInner parses under the right namespace. extraParts can add a
     /// footnotes/header/etc. part for multi-part tests.</summary>

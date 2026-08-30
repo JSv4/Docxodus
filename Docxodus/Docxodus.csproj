@@ -63,6 +63,9 @@
     <InternalsVisibleTo Include="docxodus-pyhost" />
     <InternalsVisibleTo Include="docxodus-mcp" />
     <InternalsVisibleTo Include="Docxodus.Tests" />
+    <!-- Out-of-solution perf harness (benchmarks/docxdiff-stress); times internal
+         pipeline stages directly. Never referenced by shipped code. -->
+    <InternalsVisibleTo Include="DocxDiffStress" />
   </ItemGroup>
 
 </Project>
