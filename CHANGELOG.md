@@ -22,6 +22,17 @@ All notable changes to this project will be documented in this file.
   Demo-content change (`docs/demo/`), not npm surface.
 
 ### Changed
+- **The Doom cartridge can project its framebuffer as ASCII, and `P` switches between the
+  two.** The frame budget is one OOXML→HTML conversion of the screen paragraph and it is
+  linear in runs (~35 ms fixed + ~0.70 ms per run, measured across a 24× range) — and a run
+  breaks on an ink or shading change but *not* on a glyph change, since every character in a
+  span shares one `w:t`. The default `bitmap` projection spends the expensive axis on every
+  cell (two pixels per cell, ~1,420 runs, about one repaint a second); the new `ascii` one
+  spends the free axis instead — luminance into a ` ·░▒▓█` ramp with `▀`/`▄` for hard edges
+  inside a cell, one grey ink across whole rows, and colour only where the source is
+  genuinely saturated — for ~250 runs and several repaints a second. Same engine, same
+  document, same `.docx` on Save; `?projection=ascii` picks the starting mode.
+  Demo-content change (`docs/demo/`), not npm surface.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,

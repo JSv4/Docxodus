@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
 import { platformerCart, dungeonCart, introFrame } from '../ascii-arcade.js';
-import { doomCart, paintFramebuffer } from '../doom-cart.js';
+import { doomCart, paintFramebuffer, paintFramebufferAscii } from '../doom-cart.js';
 
 const manifest = JSON.parse(
   readFileSync(new URL('../fonts/docxodus-canvas-mono.json', import.meta.url), 'utf8'));
@@ -100,6 +100,29 @@ function drawnCharacters() {
   paintFramebuffer(doomGrid, fb);
   collect(doomGrid, 'cart:doom framebuffer');
 
+  // The ASCII projection draws from a ramp the bitmap painter never touches
+  // (`·` and the shade blocks) plus both half blocks, so it needs its own
+  // pass — the pinned subset has to cover every glyph EITHER can emit.
+  const asciiGrid = doom.render().grid;
+  paintFramebufferAscii(asciiGrid, fb);
+  collect(asciiGrid, 'cart:doom ascii projection');
+
+  // A second frame with a hard horizontal split in every cell, to force the
+  // edge glyphs the gradient above may never trigger.
+  const split = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const i = (y * 320 + x) * 4;
+      const bright = (y % 9) < 4;
+      split[i] = bright ? 0xF0 : 0x08;
+      split[i + 1] = bright ? 0x30 : 0x08;
+      split[i + 2] = bright ? 0xC0 : 0x08;
+    }
+  }
+  const edgeGrid = doom.render().grid;
+  paintFramebufferAscii(edgeGrid, split);
+  collect(edgeGrid, 'cart:doom ascii edges');
+
   return seen;
 }
 
@@ -127,7 +150,7 @@ test('the shipped subset is single-advance, which is the whole guarantee', () =>
 
 test('the non-ASCII characters the art depends on are all in the subset', () => {
   // The ones the bug was actually about, named so a regression reads clearly.
-  const loadBearing = ['█', '▀', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
+  const loadBearing = ['█', '▀', '▄', '·', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
     '▲', '▼', '§', '¶', '·', '→', '←'];
   for (const ch of loadBearing) {
     assert.ok(covers(ch.codePointAt(0)),

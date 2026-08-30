@@ -101,10 +101,15 @@ const KEY_MAP = {
   Digit5: 0x35, Digit6: 0x36, Digit7: 0x37,
 };
 
+/** Switches the projection rather than reaching Doom — see PROJECTIONS. */
+export const PROJECTION_KEY = 'KeyP';
+
 /** The arcade key codes this cartridge wants to be handed. ascii-arcade.js
  *  unions this into the set its capture-phase listener claims while playing,
- *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring. */
-export const DOOM_KEY_CODES = Object.keys(KEY_MAP);
+ *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring.
+ *  PROJECTION_KEY is claimed too, so the browser never sees it, but it is
+ *  handled here and deliberately not in KEY_MAP: Doom must not receive it. */
+export const DOOM_KEY_CODES = [...Object.keys(KEY_MAP), PROJECTION_KEY];
 
 // ─── Grid helpers ─────────────────────────────────────────────────────
 function makeGrid() {
@@ -197,6 +202,144 @@ export function paintFramebuffer(g, fb) {
       g.chars[gy][gx] = bottom === top ? '█' : '▀';
       g.colors[gy][gx] = top;
       g.bgs[gy][gx] = bottom;
+    }
+  }
+}
+
+// ─── Framebuffer → grid, the ASCII way ────────────────────────────────
+// The bitmap painter above treats the paragraph as a screen. That is the
+// faithful reading and it is also the expensive one: a photographic
+// downsample of Doom agrees with its neighbour about 1.07 cells in a row, so
+// nearly every cell starts a new run, and a frame lands near 1,370 runs.
+//
+// The cost of a frame is the OOXML→HTML conversion of that paragraph, and it
+// is LINEAR in runs (measured: ~35 ms fixed + ~0.70 ms per run across a 24×
+// range). So runs are the dial. And the thing that turns it is this:
+//
+//   a run breaks only when INK or SHADING changes — the glyph does not
+//   break it, because every character in a span shares one w:t.
+//
+// Glyph variation is therefore free and colour variation is not, which is
+// exactly the shape classic ASCII art is built for. This painter spends the
+// free axis and hoards the expensive one: luminance goes into the glyph,
+// while the ink stays one grey across whole rows and only breaks where the
+// source is genuinely saturated — the status bar's numerals, blood, keys,
+// pickups. Measured against two captured E1M1 frames: 199 runs against 1,370,
+// which is why this mode plays at several frames a second instead of one.
+const RAMP = ' ·░▒▓█';
+// The accent gate needs BOTH saturation and brightness, and the reason is
+// E1M1 itself: its architecture is brown, and brown is high-saturation — just
+// dark. A saturation-only gate therefore lets ordinary wall texture through
+// and, once snapped to a hue family, paints the whole corridor red and yellow.
+// The things an accent is for — status-bar numerals, keys, pickups, blood —
+// are saturated AND bright, so requiring both separates them cleanly.
+//
+// Measured over three captured E1M1 frames (spawn, a corridor, and an open
+// lit area), as the share of picture cells that take an accent:
+//
+//   sat .32 / v  40   17.9% / 9.4% / 41.2%   — the walls; garish and costly
+//   sat .45 / v 110    2.2% / 2.2% /  7.3%   — the status bar, keys, pickups
+//   sat .55 / v 150    0.5% / 0.6% /  1.2%   — nearly mono
+//
+// Tightening it is not only better looking, it is cheaper: the noise WAS the
+// run count, and this took a frame from ~250 runs to ~70.
+const ACCENT_SAT = 0.45;      // below this a cell stays grey and extends the run
+const ACCENT_VAL = 110;       // and it must be bright, or brown walls qualify
+const EDGE_SPLIT = 0.38;      // half-tone gap that earns a ▀ / ▄ instead of a ramp glyph
+const MONO_INK = 'C8C8C8';
+
+// Doom is a dark game: raw luminance clusters in the bottom third of the ramp
+// and would waste the one axis that costs nothing. Stretch it first.
+const STRETCH_LO = 0.02, STRETCH_HI = 0.42;
+const stretch = (l) => {
+  const t = (l - STRETCH_LO) / (STRETCH_HI - STRETCH_LO);
+  return t <= 0 ? 0 : t >= 1 ? 1 : t ** 0.85;
+};
+
+// Cell → source-block bounds, precomputed once. Each cell averages its own
+// top and bottom halves so the glyph can draw a horizontal edge inside it.
+const CELL_X0 = Array.from({ length: VIEW_W }, (_, x) => Math.floor(x * DOOM_W / VIEW_W));
+const CELL_X1 = Array.from({ length: VIEW_W }, (_, x) => Math.max(
+  Math.floor(x * DOOM_W / VIEW_W) + 1, Math.floor((x + 1) * DOOM_W / VIEW_W)));
+const CELL_Y0 = Array.from({ length: FIELD_ROWS }, (_, y) => Math.floor(y * DOOM_H / FIELD_ROWS));
+const CELL_Y1 = Array.from({ length: FIELD_ROWS }, (_, y) => Math.max(
+  Math.floor(y * DOOM_H / FIELD_ROWS) + 1, Math.floor((y + 1) * DOOM_H / FIELD_ROWS)));
+
+/** Six hue families at one fixed bright value, so an accent never darkens a
+ *  cell far enough to swallow the glyph that carries the luminance — and so
+ *  that a whole lit wall shares ONE ink and stays one run.
+ *
+ *  Precomputed: red, yellow, green, cyan, blue, magenta at v=242 / s=0.72,
+ *  which is what HSV yields for the six whole-sector hues. */
+const ACCENTS = [
+  HEX[242] + HEX[68] + HEX[68],    // red      — blood, health, the status numerals
+  HEX[242] + HEX[242] + HEX[68],   // yellow   — ammo, the yellow key
+  HEX[68] + HEX[242] + HEX[68],    // green    — armour, the green key
+  HEX[68] + HEX[242] + HEX[242],   // cyan
+  HEX[68] + HEX[68] + HEX[242],    // blue     — the blue key, sky
+  HEX[242] + HEX[68] + HEX[242],   // magenta
+];
+
+function accentInk(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const d = mx - mn;
+  if (d === 0) return ACCENTS[0];
+  let h;
+  if (mx === r) h = ((g - b) / d + 6) % 6;
+  else if (mx === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return ACCENTS[Math.round(h) % 6];
+}
+
+/** Paint one frame as ASCII: detail in the glyph, colour only where earned.
+ *
+ *  Exported and pure for the same reason the bitmap painter is — the headless
+ *  tests drive it with synthetic frames, and the canvas-font guard needs to
+ *  see every glyph this can emit. */
+export function paintFramebufferAscii(g, fb) {
+  for (let row = 0; row < FIELD_ROWS; row++) {
+    const gy = FIELD_TOP + row;
+    const y0 = CELL_Y0[row], y1 = CELL_Y1[row];
+    const mid = Math.min(y1 - 1, Math.max(y0 + 1, (y0 + y1) >> 1));
+    for (let x = 0; x < VIEW_W; x++) {
+      const x0 = CELL_X0[x], x1 = CELL_X1[x];
+      let tr = 0, tg = 0, tb = 0, tn = 0;
+      let br = 0, bg = 0, bb = 0, bn = 0;
+      for (let y = y0; y < y1; y++) {
+        const rowBase = y * DOOM_W;
+        const lower = y >= mid;
+        for (let sx = x0; sx < x1; sx++) {
+          // BGRA in memory: blue first.
+          const i = (rowBase + sx) * 4;
+          if (lower) { br += fb[i + 2]; bg += fb[i + 1]; bb += fb[i]; bn++; }
+          else { tr += fb[i + 2]; tg += fb[i + 1]; tb += fb[i]; tn++; }
+        }
+      }
+      if (!tn) { tr = br; tg = bg; tb = bb; tn = bn || 1; }
+      if (!bn) { br = tr; bg = tg; bb = tb; bn = tn || 1; }
+      tr /= tn; tg /= tn; tb /= tn;
+      br /= bn; bg /= bn; bb /= bn;
+
+      const lt = stretch((0.2126 * tr + 0.7152 * tg + 0.0722 * tb) / 255);
+      const lb = stretch((0.2126 * br + 0.7152 * bg + 0.0722 * bb) / 255);
+
+      // A strong top/bottom split is an edge: draw it with a half block, which
+      // is sub-cell vertical detail at no run cost because the ink is one value.
+      let ch;
+      if (Math.abs(lt - lb) > EDGE_SPLIT) ch = lt > lb ? '▀' : '▄';
+      else {
+        const l = (lt + lb) / 2;
+        ch = RAMP[Math.min(RAMP.length - 1, Math.round(l * (RAMP.length - 1)))];
+      }
+
+      const r = (tr + br) / 2, gg2 = (tg + bg) / 2, b2 = (tb + bb) / 2;
+      const mx = Math.max(r, gg2, b2), mn = Math.min(r, gg2, b2);
+      const sat = mx === 0 ? 0 : (mx - mn) / mx;
+
+      g.chars[gy][1 + x] = ch;
+      g.colors[gy][1 + x] = (sat >= ACCENT_SAT && mx >= ACCENT_VAL)
+        ? accentInk(r, gg2, b2) : MONO_INK;
+      g.bgs[gy][1 + x] = null;      // no shading: the glyph carries everything
     }
   }
 }
@@ -471,13 +614,25 @@ const CONTROLS = [
   ['M', 'automap'],
   ['Enter', 'confirm'],
   ['Q', "Doom's menu"],
+  ['P', 'projection'],
   ['Esc', 'pause & edit'],
 ];
+
+/** The two ways this cartridge can put Doom on a Word paragraph.
+ *
+ *  They are a genuine trade rather than a better and a worse: `bitmap` is the
+ *  faithful reading of the framebuffer and costs ~1,370 runs a frame, which is
+ *  about one frame a second through the converter; `ascii` spends the free
+ *  axis (the glyph) instead of the expensive one (the ink) and costs ~199,
+ *  which is several frames a second and actually playable. Default is
+ *  `bitmap`, because the picture is the thing worth showing first. */
+export const PROJECTIONS = ['bitmap', 'ascii'];
 
 export function doomCart(options = {}) {
   const engineUrl = options.engineUrl ?? DEFAULT_ENGINE;
   const wadUrl = options.wadUrl ?? DEFAULT_WAD;
   const sound = options.sound !== false;
+  let projection = PROJECTIONS.includes(options.projection) ? options.projection : 'bitmap';
 
   let handle = null;
   let status = 'idle';           // idle → loading → playing | error
@@ -512,6 +667,12 @@ export function doomCart(options = {}) {
     // cartridge wants the log rather than the held/pressed sets the other two
     // cartridges use.
     for (const { code, down } of input.drain?.() ?? []) {
+      if (code === PROJECTION_KEY) {
+        // Local to the cartridge: Doom never sees it, and only the press edge
+        // toggles, so holding the key does not flicker between projections.
+        if (down) projection = projection === 'bitmap' ? 'ascii' : 'bitmap';
+        continue;
+      }
       const key = KEY_MAP[code];
       if (key !== undefined) handle.keys.push([key, down ? 1 : 0]);
     }
@@ -558,7 +719,9 @@ export function doomCart(options = {}) {
       write(g, y, x + 7, what.slice(0, PANEL_W - 9), PANEL_INK);
       y++;
     }
-    y = ROWS - 4;
+    y = ROWS - 5;
+    write(g, y, x, projection === 'ascii' ? 'ASCII · fast' : 'BITMAP · faithful', PANEL_HI);
+    y += 1;
     write(g, y, x, `frame ${handle?.frames ?? 0}`, DEAD_INK);
     write(g, y + 1, x, 'id Software engine,', DEAD_INK);
     write(g, y + 2, x, 'GPL-2.0 · Freedoom data', DEAD_INK);
@@ -567,11 +730,14 @@ export function doomCart(options = {}) {
   function render() {
     const g = makeGrid();
     if (status === 'playing' && handle) {
-      paintFramebuffer(g, handle.framebuffer);
+      if (projection === 'ascii') paintFramebufferAscii(g, handle.framebuffer);
+      else paintFramebuffer(g, handle.framebuffer);
       paintedFrames++;
       drawDivider(g);
       drawPanel(g);
-      drawChrome(g, 'DOOM — id Software’s own engine, drawing into one Word paragraph');
+      drawChrome(g, projection === 'ascii'
+        ? 'DOOM — id Software’s own engine, projected to ASCII in one Word paragraph'
+        : 'DOOM — id Software’s own engine, drawing into one Word paragraph');
     } else {
       drawLoading(g);
       drawChrome(g, 'DOOM — the real engine, compiled to JavaScript');
@@ -587,10 +753,14 @@ export function doomCart(options = {}) {
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
       'BSD-licensed game data. Its 320×200 framebuffer is downsampled every frame into this Word ' +
       'paragraph as half-block characters: the ink of each `▀` is the top pixel and its `w:shd` ' +
-      'run shading is the bottom one. Move **W/S** · strafe **A/D** · turn **←/→** · **Space** ' +
+      'run shading is the bottom one. **P** switches projection — that faithful bitmap costs ' +
+      '~1,400 colored runs a frame and repaints about once a second, while the ASCII projection ' +
+      'puts the detail in the GLYPH (which is free — a run only breaks when the ink changes) and ' +
+      'spends color only where the source is saturated, costing ~250 runs and playing several ' +
+      'times faster. Move **W/S** · strafe **A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu — the real engine, one Word paragraph as the screen.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — bitmap is faithful, ASCII is ~5× faster and actually playable.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q
@@ -608,11 +778,17 @@ export function doomCart(options = {}) {
      *  stays editable, undoable and saveable like any paragraph, and the next
      *  frame paints over whatever was typed. */
     syncFromRows() { edited = true; },
+    /** Switch projection from outside the keyboard (the specs use this). */
+    setProjection(next) {
+      if (PROJECTIONS.includes(next)) projection = next;
+      return projection;
+    },
     state: () => ({
       status,
       error,
       progress,
       edited,
+      projection,
       title: handle?.title ?? null,
       doomFrames: handle?.frames ?? 0,
       paintedFrames,

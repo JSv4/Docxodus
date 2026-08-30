@@ -126,6 +126,27 @@ who plays the platformer or the dungeon fetches neither. `?wad=` points the
 cartridge at a **same-origin** IWAD you host yourself and are licensed to play
 (a retail `doom.wad` works), and `?sound=0` boots it mute.
 
+### Two projections, and why the fast one is ASCII
+
+**P** switches how the framebuffer reaches the paragraph, and `?projection=`
+picks the starting one.
+
+The frame budget is a single OOXML→HTML conversion of the screen paragraph,
+and that is **linear in runs** — measured at roughly 35 ms fixed plus 0.70 ms
+per run, across a 24× range. What makes a run is the thing worth knowing: a
+run breaks when the **ink or shading** changes, and *not* when the glyph does,
+because every character in a span shares one `w:t`. Glyph variation is free;
+colour variation is not.
+
+| projection | what it does | runs/frame | repaints |
+|---|---|---|---|
+| `bitmap` (default) | Every cell is two pixels — `▀` with the top pixel as ink and the bottom as `w:shd` shading. The faithful reading of a framebuffer. | ~1,420 | ~1/s |
+| `ascii` | Luminance goes into the **glyph** (a ` ·░▒▓█` ramp, with `▀`/`▄` drawing a hard edge inside a cell), ink stays one grey across whole rows, and colour is spent only where the source is genuinely saturated — the status bar's numerals, blood, keys, pickups. | ~250 | several/s |
+
+So the bitmap is the better photograph and ASCII is the better *game*, at
+about five times the rate. Both are the same Doom and the same document; only
+the projection differs, and either one saves as a `.docx` the same way.
+
 There is deliberately no engine override. `import()` executes whatever it
 fetches, on this page's origin and with its privileges, so a URL parameter
 naming the module would be remote code execution from a crafted link rather

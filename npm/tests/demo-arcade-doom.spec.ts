@@ -196,6 +196,63 @@ test.describe('DOOM inside a Word document', () => {
     expect(turningStatusBar, 'the status bar should not move while turning').toBeLessThan(2);
   });
 
+  test('P switches projection, and the ASCII one costs a fraction of the runs', async ({ page }) => {
+    test.setTimeout(300000);
+    await bootDoom(page);
+    await startLevel(page);
+
+    /** Spans in the canvas paragraph are the rendered form of OOXML runs, so
+     *  this counts the thing the frame budget is actually made of. */
+    const shape = () => page.evaluate(() => {
+      const el = (window as any).__arcade.canvasElement() as HTMLElement;
+      const spans = Array.from(el.querySelectorAll('span'));
+      const shaded = spans.filter((s) => {
+        const f = getComputedStyle(s).backgroundColor;
+        return f && f !== 'transparent' && f !== 'rgba(0, 0, 0, 0)';
+      });
+      return {
+        spans: spans.length,
+        shaded: shaded.length,
+        inks: new Set(spans.map((s) => getComputedStyle(s).color)).size,
+        text: (window as any).__arcade.canvasText() as string,
+        projection: (window as any).__arcade.game().projection as string,
+      };
+    });
+
+    const bitmap = await shape();
+    expect(bitmap.projection).toBe('bitmap');
+    expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
+
+    // The key is claimed by the arcade and handled inside the cartridge — it
+    // must never reach Doom, which has its own meaning for most letters.
+    await page.keyboard.press('KeyP');
+    await page.waitForFunction(
+      () => (window as any).__arcade.game().projection === 'ascii', null, { timeout: 60000 });
+    // Let a frame paint in the new projection before measuring.
+    const before = await page.evaluate(() => (window as any).__arcade.frames());
+    await page.waitForFunction((n) => (window as any).__arcade.frames() > n + 1, before,
+      { timeout: 120000 });
+
+    const ascii = await shape();
+    expect(ascii.projection).toBe('ascii');
+    // The whole point: far fewer runs. Measured ~1,420 against ~250 on real
+    // frames, so a third is a wide margin either side of the real ratio.
+    expect(ascii.spans).toBeLessThan(bitmap.spans / 3);
+    // Glyph carries the detail; shading is gone entirely.
+    expect(ascii.shaded).toBe(0);
+    expect(ascii.text).toMatch(/[·░▒▓█]/);
+    // Colour is spent sparingly rather than per cell.
+    expect(ascii.inks).toBeLessThan(bitmap.inks);
+    // Still a document, still the markdown-safe bezel.
+    expect(ascii.text).toContain('┌');
+    for (const row of ascii.text.split('\n')) expect(row.trim()).not.toBe('');
+
+    // And back again.
+    await page.keyboard.press('KeyP');
+    await page.waitForFunction(
+      () => (window as any).__arcade.game().projection === 'bitmap', null, { timeout: 60000 });
+  });
+
   test('a cross-origin IWAD is refused rather than fetched', async ({ page }) => {
     test.setTimeout(120000);
     // `import()` executes whatever it fetches, on this page's origin, so the

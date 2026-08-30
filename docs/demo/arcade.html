@@ -126,6 +126,10 @@
     const doomOptions = {
       wadUrl: params.get("wad") ?? undefined,
       sound: params.get("sound") !== "0",
+      // "bitmap" (default) is the faithful framebuffer; "ascii" spends the
+      // glyph instead of the ink and plays several times faster. P toggles it
+      // in game either way.
+      projection: params.get("projection") ?? undefined,
     };
 
     const embedSnippet = `<iframe
