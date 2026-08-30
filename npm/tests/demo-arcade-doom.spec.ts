@@ -196,7 +196,7 @@ test.describe('DOOM inside a Word document', () => {
     expect(turningStatusBar, 'the status bar should not move while turning').toBeLessThan(2);
   });
 
-  test('P switches projection, and the ASCII one costs a fraction of the runs', async ({ page }) => {
+  test('P switches projection, and both stay inside their run budget', async ({ page }) => {
     test.setTimeout(300000);
     await bootDoom(page);
     await startLevel(page);
@@ -222,6 +222,11 @@ test.describe('DOOM inside a Word document', () => {
     const bitmap = await shape();
     expect(bitmap.projection).toBe('bitmap');
     expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
+    // Pair-snapping is the whole frame budget of this projection: without it a
+    // photographic downsample gives nearly every cell its own run and a frame
+    // lands near 1,470 spans. Measured ~550 walking and turning through E1M1,
+    // so this fails loudly if the merge ever stops happening.
+    expect(bitmap.spans).toBeLessThan(900);
 
     // The key is claimed by the arcade and handled inside the cartridge — it
     // must never reach Doom, which has its own meaning for most letters.
@@ -235,16 +240,20 @@ test.describe('DOOM inside a Word document', () => {
 
     const ascii = await shape();
     expect(ascii.projection).toBe('ascii');
-    // The whole point: far fewer runs. Measured walking and turning through
-    // E1M1, ~470 against ~1,445 — so half is a wide margin either side of the
-    // real ratio and still fails loudly if the projection stops saving.
-    expect(ascii.spans).toBeLessThan(bitmap.spans / 2);
+    // Deliberately NOT asserted: that ascii costs fewer runs than bitmap.
+    // It did by 3.7x until the bitmap painter learned to merge neighbouring
+    // cells too, and now the two are within about 1.5x — close enough that on
+    // some frames the ascii projection is the more expensive of the two. An
+    // ordering assertion here would be flaky, and would be measuring the
+    // wrong thing: each projection's own budget is what matters.
+    expect(ascii.spans).toBeLessThan(900);
     // Glyph carries the brightness; shading is gone entirely.
     expect(ascii.shaded).toBe(0);
     expect(ascii.text).toMatch(/[░▒▓█]/);
     // The ASCII palette is closed by construction — seven hue families times
     // three brightness tiers — where the bitmap's is the whole framebuffer.
-    expect(ascii.inks).toBeLessThan(bitmap.inks / 5);
+    // This is the assertion that actually separates the two projections.
+    expect(ascii.inks).toBeLessThan(bitmap.inks / 3);
     expect(ascii.inks).toBeLessThanOrEqual(40);
     // Still a document, still the markdown-safe bezel.
     expect(ascii.text).toContain('┌');

@@ -27,7 +27,7 @@ All notable changes to this project will be documented in this file.
   linear in runs (~35 ms fixed + ~0.70 ms per run, measured across a 24× range) — and a run
   breaks on an ink or shading change but *not* on a glyph change, since every character in a
   span shares one `w:t`. The default `bitmap` projection spends the expensive axis on every
-  cell (two pixels per cell, ~1,445 runs, about one repaint a second); the new `ascii` one
+  cell (two pixels per cell); the new `ascii` one
   splits the picture between the two channels by what each costs. Brightness goes into the
   glyph — a ` ░▒▓█` ramp with `▀`/`▄` for a hard edge inside a cell — and the ink is left to
   say what a surface *is*: seven hue families (concrete, brick, sky, blood, armour, a key)
@@ -38,8 +38,24 @@ All notable changes to this project will be documented in this file.
   neighbour's ink when the two are indistinguishable at this size, which is most of what
   texture noise was costing — but only toward grey and never away from it, since losing a
   tint is a smaller lie than gaining one. Walking and turning through E1M1 that is ~470 runs
-  at 2.7 repaints a second against ~1,445 at 0.7. Same engine, same document, same `.docx` on
-  Save; `?projection=ascii` picks the starting mode.
+  at 2.7 repaints a second. Same engine, same document, same `.docx` on Save;
+  `?projection=ascii` picks the starting mode.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **The Doom cartridge's faithful bitmap projection is about two and a half times faster.**
+  Neighbouring cells whose colours are within a luma-weighted tolerance of each other are now
+  assigned the *same* pair of colours, so they merge into one run: walking and turning through
+  E1M1 a frame is ~550 runs at ~1.8 repaints a second, against ~1,445 at ~0.7 before. The
+  picture is unchanged in kind — the beams, the weapon, the pickups and every status-bar
+  numeral survive — because the tolerance is compared against the previous cell's *emitted*
+  colour rather than its true one, which bounds accumulated drift along a row instead of each
+  step of it. An earlier attempt quantised each channel and snapped the top and bottom pixels
+  independently, barely moved the run count, and led to ~1 repaint a second being described as
+  a property of the medium. It is not: a run needs **both** halves of a cell to match, so
+  deciding the halves separately makes a merge the product of two chances and it almost never
+  happens. Deciding the pair jointly is what turns the same tolerance into a two-thirds cut.
+  This narrows the gap to the `ascii` projection from 3.7× to about 1.5×, so the two are now a
+  choice about how each degrades — the bitmap smears horizontally, the ASCII flattens into its
+  21-ink palette — rather than about speed.
   Demo-content change (`docs/demo/`), not npm surface.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,

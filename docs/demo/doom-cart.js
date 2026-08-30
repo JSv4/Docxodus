@@ -168,6 +168,32 @@ function wrap(text, width) {
 }
 
 // ─── Framebuffer → grid ───────────────────────────────────────────────
+// A run breaks when the ink or the shading changes, and this projection
+// changes both on almost every cell: a photographic downsample of Doom agrees
+// with its neighbour about 1.02 cells in a row, so nearly every cell is its
+// own run and a frame lands near 1,370 of them. That is the entire frame
+// budget — the OOXML→HTML conversion of this paragraph is linear in runs.
+//
+// So neighbouring cells that are nearly the same colour should be exactly the
+// same colour, and merge. An earlier attempt at that quantised each channel
+// and snapped the top and bottom pixels INDEPENDENTLY, barely moved the run
+// count, and led me to call ~1 fps a property of the medium. It is not. It
+// was a property of that rule: a run needs BOTH halves to match, so deciding
+// the halves separately makes the merge probability a product of two chances
+// and almost guarantees it fails. Decide the PAIR jointly — adopt both of the
+// previous cell's colours or neither — and the same tolerance that did
+// nothing before takes a frame from ~1,370 runs to ~420.
+//
+// The comparison is deliberately not RGB distance. The eye resolves green far
+// better than blue, so an even tolerance spends most of its budget where it
+// is least visible; weighting by luma puts the error where it will not be
+// seen. And the previous cell's EMITTED colour is what a candidate is
+// compared against, not the previous cell's true colour, so the tolerance
+// bounds accumulated drift along a row rather than each step of it — a long
+// gradient still ends up the colour it should be.
+const PAIR_SNAP_TOLERANCE = 40 * 100;   // luma-weighted, summed over both halves
+const LUMA_R = 30, LUMA_G = 59, LUMA_B = 11;
+
 /** Paint one 320×200 BGRA frame into the grid's viewport as half-block cells.
  *
  *  Exported (and pure) so the headless logic tests can drive it with a
@@ -178,13 +204,23 @@ export function paintFramebuffer(g, fb) {
     const gy = FIELD_TOP + row;
     const topBase = SY[row * 2] * DOOM_W;
     const botBase = SY[row * 2 + 1] * DOOM_W;
+    // Runs are built per row, so the snap chain starts fresh on each one.
+    let ptr = -1, ptg = 0, ptb = 0, pbr = 0, pbg = 0, pbb = 0;
     for (let x = 0; x < VIEW_W; x++) {
       const sx = SX[x];
       // BGRA in memory: blue first, alpha always 0 — hence the explicit swap
       // rather than a straight copy.
       const t = (topBase + sx) * 4, b = (botBase + sx) * 4;
-      const tr = fb[t + 2], tg = fb[t + 1], tb = fb[t];
-      const br = fb[b + 2], bg2 = fb[b + 1], bb = fb[b];
+      let tr = fb[t + 2], tg = fb[t + 1], tb = fb[t];
+      let br = fb[b + 2], bg2 = fb[b + 1], bb = fb[b];
+
+      if (ptr >= 0) {
+        const d = LUMA_R * Math.abs(ptr - tr) + LUMA_G * Math.abs(ptg - tg) + LUMA_B * Math.abs(ptb - tb)
+                + LUMA_R * Math.abs(pbr - br) + LUMA_G * Math.abs(pbg - bg2) + LUMA_B * Math.abs(pbb - bb);
+        if (d <= PAIR_SNAP_TOLERANCE) { tr = ptr; tg = ptg; tb = ptb; br = pbr; bg2 = pbg; bb = pbb; }
+      }
+      ptr = tr; ptg = tg; ptb = tb; pbr = br; pbg = bg2; pbb = bb;
+
       const gx = 1 + x;
       const top = HEX[tr] + HEX[tg] + HEX[tb];
       const bottom = (tr === br && tg === bg2 && tb === bb)
@@ -210,7 +246,7 @@ export function paintFramebuffer(g, fb) {
 // The bitmap painter above treats the paragraph as a screen. That is the
 // faithful reading and it is also the expensive one: a photographic
 // downsample of Doom agrees with its neighbour about 1.07 cells in a row, so
-// nearly every cell starts a new run, and a frame lands near 1,370 runs.
+// nearly every cell starts a new run, and a frame landed near 1,370 runs.
 //
 // The cost of a frame is the OOXML→HTML conversion of that paragraph, and it
 // is LINEAR in runs (measured: ~35 ms fixed + ~0.70 ms per run across a 24×
@@ -258,10 +294,16 @@ export function paintFramebuffer(g, fb) {
 // visible change; see SNAP_NEAR for the one direction of that substitution
 // which turned out not to be free.
 //
-// Measured over three captured E1M1 frames the picture is ~216 runs against
-// the bitmap painter's ~1,370, and in the live editor, walking and turning
-// through E1M1, the whole paragraph is ~470 runs at 2.7 fps against ~1,445
-// at 0.7 — 3.7× the frame rate, and the first version of it you can read.
+// Measured over three captured E1M1 frames the picture is ~216 runs, and in
+// the live editor, walking and turning through E1M1, the whole paragraph is
+// ~470 runs at 2.7 fps.
+//
+// That used to be 3.7× the bitmap projection, which is what justified this
+// mode existing. It is now about 1.5×, because the bitmap painter learned the
+// same trick — see PAIR_SNAP_TOLERANCE. On some frames this one is the more
+// expensive of the two. What still separates them is the palette: this one is
+// closed at 21 inks and degrades by flattening colour, the other is open and
+// degrades by smearing horizontally.
 const RAMP = [' ', '░', '▒', '▓', '█'];
 /** How much of a cell each ramp glyph inks — the other half of "how bright
  *  does this cell look", the half the ink does not carry. */
@@ -759,12 +801,14 @@ const CONTROLS = [
 
 /** The two ways this cartridge can put Doom on a Word paragraph.
  *
- *  They are a genuine trade rather than a better and a worse: `bitmap` is the
- *  faithful reading of the framebuffer and costs ~1,370 runs a frame, which is
- *  about one frame a second through the converter; `ascii` spends the free
- *  axis (the glyph) instead of the expensive one (the ink) and costs ~199,
- *  which is several frames a second and actually playable. Default is
- *  `bitmap`, because the picture is the thing worth showing first. */
+ *  `bitmap` is the faithful reading of the framebuffer: two pixels per cell,
+ *  ~550 runs a frame and ~1.8 through the converter. `ascii` spends the free
+ *  axis (the glyph) instead of the expensive one (the ink) for ~470 runs and
+ *  ~2.7. They were 3.7× apart before the bitmap painter learned to merge
+ *  neighbouring cells; now they are close enough that the choice is about how
+ *  each one FAILS, not how fast it is — the bitmap smears horizontally, the
+ *  ASCII flattens to a 21-ink palette. Default is `bitmap`, because it is
+ *  both the picture worth showing first and, now, a playable one. */
 export const PROJECTIONS = ['bitmap', 'ascii'];
 
 export function doomCart(options = {}) {
@@ -893,14 +937,16 @@ export function doomCart(options = {}) {
       'BSD-licensed game data. Its 320×200 framebuffer is downsampled every frame into this Word ' +
       'paragraph as half-block characters: the ink of each `▀` is the top pixel and its `w:shd` ' +
       'run shading is the bottom one. **P** switches projection — that faithful bitmap costs ' +
-      '~1,450 colored runs a frame and repaints about once a second, while the ASCII projection ' +
-      'splits the picture between a cell’s two channels by what each one costs: brightness goes ' +
-      'in the GLYPH, which is free because a run only breaks when the ink changes, and the ink is ' +
-      'left to say what a surface *is* — brick, concrete, sky, blood, a key. That is ~470 runs and ' +
-      'about 3.7× the frame rate. Move **W/S** · strafe **A/D** · turn **←/→** · **Space** ' +
+      '~550 colored runs a frame, because neighbouring cells that are within a luma-weighted ' +
+      'tolerance of each other are given the *same* color and merge into one run — without that ' +
+      'a frame costs ~1,370 and repaints about once a second. The ASCII projection instead splits ' +
+      'the picture between a cell’s two channels by what each one costs: brightness goes in the ' +
+      'GLYPH, which is free because a run only breaks when the ink changes, and the ink is left ' +
+      'to say what a surface *is* — brick, concrete, sky, blood, a key. Move **W/S** · strafe ' +
+      '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — bitmap is faithful, ASCII is ~3.7× faster and actually playable.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — bitmap is the faithful one and smears when pushed, ASCII flattens to a fixed palette instead.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q
