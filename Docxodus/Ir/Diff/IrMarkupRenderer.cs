@@ -8,6 +8,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Ir;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir.Diff;
 
@@ -480,7 +481,7 @@ internal static class IrMarkupRenderer
                 // default so tab metrics match the oracle (tool-generated corpus inputs ship without).
                 if (main.DocumentSettingsPart is null)
                 {
-                    var settingsPart = main.AddNewPart<DocumentSettingsPart>("rIdSettingsBackfill");
+                    var settingsPart = main.AddDeterministicPart<DocumentSettingsPart>("rIdSettingsBackfill");
                     settingsPart.GetXDocument().Add(new XElement(W.settings,
                         new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
                         new XElement(W.defaultTabStop, new XAttribute(W.val, 720))));
@@ -2309,7 +2310,9 @@ internal static class IrMarkupRenderer
         // Create the part and seed it with the right part's BOILERPLATE notes only (the reserved separator /
         // continuation notes, ids ≤ 0), under a fresh root — so the real inserted notes start from a clean
         // LEFT-side (empty) baseline and reject-all yields no real note content.
-        var newPart = isFootnote ? (OpenXmlPart)main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+        var newPart = isFootnote
+            ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
+            : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
         var rootName = isFootnote ? W.footnotes : W.endnotes;
         var noteName = isFootnote ? W.footnote : W.endnote;
         var rightRoot = rightPart.GetXDocument().Root;
@@ -2518,8 +2521,8 @@ internal static class IrMarkupRenderer
             return null;
 
         OpenXmlPart clonePart = isHeader
-            ? main.AddNewPart<HeaderPart>()
-            : main.AddNewPart<FooterPart>();
+            ? main.AddDeterministicPart<HeaderPart>("rIdHeader")
+            : main.AddDeterministicPart<FooterPart>("rIdFooter");
         var cloneRoot = new XElement(sourceRoot);
         var cloneXDoc = clonePart.GetXDocument();
         if (cloneXDoc.Root is null)
@@ -2605,8 +2608,8 @@ internal static class IrMarkupRenderer
             return null;
 
         OpenXmlPart newPart = diff.IsHeader
-            ? main.AddNewPart<HeaderPart>()
-            : main.AddNewPart<FooterPart>();
+            ? main.AddDeterministicPart<HeaderPart>("rIdHeader")
+            : main.AddDeterministicPart<FooterPart>("rIdFooter");
         state.StoryOutputParts[diff.RightPartUri] = newPart;
         var newRoot = new XElement(rightRoot.Name, rightRoot.Attributes());
         var xDoc = newPart.GetXDocument();
@@ -3150,13 +3153,15 @@ internal static class IrMarkupRenderer
             // non-threaded right-added comment whose definition paragraph carries a w14:paraId.
             if (rightMain!.WordprocessingCommentsExPart != null)
                 MergeRightThreadingEntries(
-                    main.WordprocessingCommentsExPart ?? main.AddNewPart<WordprocessingCommentsExPart>(),
+                    main.WordprocessingCommentsExPart
+                        ?? main.AddDeterministicPart<WordprocessingCommentsExPart>("rIdCommentsEx"),
                     rightMain.WordprocessingCommentsExPart,
                     W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds,
                     $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
             if (rightMain.WordprocessingCommentsIdsPart != null)
                 MergeRightThreadingEntries(
-                    main.WordprocessingCommentsIdsPart ?? main.AddNewPart<WordprocessingCommentsIdsPart>(),
+                    main.WordprocessingCommentsIdsPart
+                        ?? main.AddDeterministicPart<WordprocessingCommentsIdsPart>("rIdCommentsIds"),
                     rightMain.WordprocessingCommentsIdsPart,
                     W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds,
                     $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
@@ -3190,7 +3195,8 @@ internal static class IrMarkupRenderer
     /// none (a right-added comment with no left comments at all).</summary>
     private static XElement EnsureCommentsRoot(MainDocumentPart main)
     {
-        var part = main.WordprocessingCommentsPart ?? main.AddNewPart<WordprocessingCommentsPart>();
+        var part = main.WordprocessingCommentsPart
+            ?? main.AddDeterministicPart<WordprocessingCommentsPart>("rIdComments");
         return EnsurePartRoot(part, $"<w:comments xmlns:w=\"{W.w.NamespaceName}\" xmlns:w14=\"{W14ns.NamespaceName}\"/>");
     }
 
@@ -6785,7 +6791,7 @@ internal static class IrMarkupRenderer
         if (dangling.Count == 0)
             return;
 
-        numberingPart ??= main.AddNewPart<NumberingDefinitionsPart>();
+        numberingPart ??= main.AddDeterministicPart<NumberingDefinitionsPart>("rIdNumbering");
         var numXDoc = numberingPart.GetXDocument();
         if (numXDoc.Root is null)
             numXDoc.Add(new XElement(W.numbering,
@@ -7297,7 +7303,7 @@ internal static class IrMarkupRenderer
         var stylesPart = main.StyleDefinitionsPart;
         if (stylesPart is null)
         {
-            stylesPart = main.AddNewPart<StyleDefinitionsPart>("rIdStylesBackfill");
+            stylesPart = main.AddDeterministicPart<StyleDefinitionsPart>("rIdStylesBackfill");
             var stylesDoc = stylesPart.GetXDocument();
             stylesDoc.Add(new XElement(W.styles,
                 new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName)));
@@ -7317,9 +7323,7 @@ internal static class IrMarkupRenderer
     /// instead.</summary>
     private static void BackfillDefaultTheme(MainDocumentPart main)
     {
-        // Explicit relationship id: AddNewPart's auto-generated ids are RANDOM, which breaks
-        // byte-determinism between identical Compare invocations.
-        var themePart = main.AddNewPart<ThemePart>("rIdThemeBackfill");
+        var themePart = main.AddDeterministicPart<ThemePart>("rIdThemeBackfill");
         using var writer = new StreamWriter(themePart.GetStream(FileMode.Create), new System.Text.UTF8Encoding(false));
         writer.Write(WordStockTheme.Xml);
     }
@@ -7478,8 +7482,8 @@ internal static class IrMarkupRenderer
                 // graph did not come along, and a dangling id INSIDE the story part would make the
                 // package unloadable again. Text, fields and page numbers survive.
                 target = isHeader
-                    ? main.AddNewPart<HeaderPart>()
-                    : (OpenXmlPart)main.AddNewPart<FooterPart>();
+                    ? main.AddDeterministicPart<HeaderPart>("rIdHeader")
+                    : (OpenXmlPart)main.AddDeterministicPart<FooterPart>("rIdFooter");
                 var clone = new XElement(rightPart.GetXDocument().Root!);
                 clone.Descendants()
                     .Where(d => d.Attributes().Any(a => a.Name.Namespace == R.r))
@@ -7521,15 +7525,8 @@ internal static class IrMarkupRenderer
 
     /// <summary>Every relationship id currently in use on <paramref name="part"/>, all kinds
     /// (part, hyperlink, external, data-part reference).</summary>
-    private static HashSet<string> UsedRelationshipIds(OpenXmlPart part)
-    {
-        var used = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var rel in part.Parts) used.Add(rel.RelationshipId);
-        foreach (var rel in part.HyperlinkRelationships) used.Add(rel.Id);
-        foreach (var rel in part.ExternalRelationships) used.Add(rel.Id);
-        foreach (var rel in part.DataPartReferenceRelationships) used.Add(rel.Id);
-        return used;
-    }
+    private static HashSet<string> UsedRelationshipIds(OpenXmlPart part) =>
+        DeterministicPartIds.UsedRelationshipIds(part);
 
     /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Ir;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir.Diff;
 
@@ -455,7 +456,9 @@ internal static class IrCompositeMarkupRenderer
 
         var rootName = isFootnote ? W.footnotes : W.endnotes;
         var noteName = isFootnote ? W.footnote : W.endnote;
-        var newPart = isFootnote ? (OpenXmlPart)main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+        var newPart = isFootnote
+            ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
+            : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
         var newRoot = new XElement(rootName, reviewerRoot.Attributes());
         foreach (var note in reviewerRoot.Elements(noteName)
                      .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
