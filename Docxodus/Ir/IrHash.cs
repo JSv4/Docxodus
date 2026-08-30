@@ -40,6 +40,11 @@ internal readonly struct IrHash : IEquatable<IrHash>
             BinaryPrimitives.ReadUInt64BigEndian(digest.Slice(24, 8)));
     }
 
+    /// <summary>The largest buffer <see cref="ArrayPool{T}.Shared"/> actually pools (1 MiB). A rent
+    /// above it allocates a fresh array and a return discards it, so the pooled-buffer trade stops
+    /// paying and an exact size becomes the cheaper one.</summary>
+    private const int PooledCeiling = 1024 * 1024;
+
     /// <summary>Compute the SHA-256 digest of the UTF-8 encoding of <paramref name="text"/>.</summary>
     public static IrHash Compute(string text)
     {
@@ -57,7 +62,16 @@ internal readonly struct IrHash : IEquatable<IrHash>
         ArgumentNullException.ThrowIfNull(text);
 
         Span<byte> inline = stackalloc byte[1024];
+
+        // GetMaxByteCount is 3n+3, and ArrayPool.Shared stops pooling above 1 MB: renting the
+        // worst case for a large canonical subtree (a block content control, an opaque table) would
+        // allocate three times the string's actual UTF-8 length and then drop it, which is WORSE than
+        // the single exact-sized array this method exists to avoid. Past that threshold, pay one
+        // counting pass and rent the exact size instead.
         int maxBytes = Encoding.UTF8.GetMaxByteCount(text.Length);
+        if (maxBytes > PooledCeiling)
+            maxBytes = Encoding.UTF8.GetByteCount(text);
+
         byte[]? rented = maxBytes <= inline.Length ? null : ArrayPool<byte>.Shared.Rent(maxBytes);
         Span<byte> buffer = rented is null ? inline : rented;
 

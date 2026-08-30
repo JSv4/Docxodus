@@ -34,10 +34,16 @@ namespace Docxodus;
 /// <see cref="DocxDiffSettings"/> flow into the semantic pass (as
 /// <see cref="SemanticDiffOptions.DiffSettings"/>) and the result is memoized. Passing explicit
 /// <see cref="SemanticDiffOptions"/> bypasses the memo and runs the semantic pipeline with those
-/// options verbatim. The semantic pipeline keeps its own package-preflighted read (its reader
-/// retains sources, the diff read does not), so it shares the snapshot but not the IR pass.</para>
+/// options verbatim. The semantic pipeline keeps its own package-preflighted read, so it shares the
+/// snapshot but not the IR pass.</para>
 /// <para><b>Memory.</b> The instance retains the input packages and every materialized product
-/// for its lifetime; scope it to the pipeline run that needs the products.</para>
+/// for its lifetime; scope it to the pipeline run that needs the products. What it retains includes
+/// the two IR snapshots, once a product has forced them. Those are read with provenance retained, so
+/// that the markup renderer can clone source elements out of them rather than re-reading both
+/// documents — which means they pin the parsed <c>XDocument</c> of every story on both sides, not
+/// only the IR values. That is the price of reading each input once instead of four times: bounded
+/// by the inputs, but not small, and one more reason not to hold a comparison beyond the run that
+/// uses it.</para>
 /// <para><b>Thread-safety.</b> All memoization is <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/>;
 /// concurrent product calls are safe.</para>
 /// </remarks>
@@ -107,9 +113,20 @@ public sealed class DocxDiffComparison
             // the same reason and with the same exception: an explicit accept-all request rewrites the
             // input even when the two sides match, so it is not a no-op. Note the edit script has no
             // equivalent shortcut — its all-Equal operations are the answer callers asked for.
+            //
+            // The shortcut skips the WORK, never the compatibility preflight. That preflight is a
+            // property of the inputs, not of whether they differ: a caller who asked to be told about
+            // an under-tested construct is asking about THIS document, and gets the same answer
+            // whether or not the other side happens to be byte-identical. ToRedline's identical-bytes
+            // path runs it for exactly that reason, and this class documents the preflight as firing
+            // on the first product call; dropping it here would silently make GetRevisions the one
+            // product that never warns.
             if (DocxCompare.HasIdenticalPackageBytes(_originalLeft, _originalRight) &&
                 !(_settings.PreAcceptInputRevisions && !_settings.PreserveInputRevisions))
+            {
+                RunGatedPreflight();
                 return Array.Empty<DocxDiffRevision>();
+            }
 
             var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
@@ -180,13 +197,7 @@ public sealed class DocxDiffComparison
         if (DocxCompare.HasIdenticalPackageBytes(_originalLeft, _originalRight) &&
             !(s.PreAcceptInputRevisions && !s.PreserveInputRevisions))
         {
-            if (s.OnCompatibilityWarning != null || s.ThrowOnCompatibilityWarning)
-            {
-                var preflightLeft = DocxDiff.PreAccept(s, _originalLeft);
-                var preflightRight = DocxDiff.PreAccept(s, _originalRight);
-                DocxDiff.PreflightCompatibility(s, preflightLeft, preflightRight);
-            }
-
+            RunGatedPreflight();
             return new WmlDocument(_originalLeft);
         }
 
@@ -200,6 +211,23 @@ public sealed class DocxDiffComparison
             : _dataScript.Value;
         var (irLeft, irRight) = _ir.Value;
         return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight);
+    }
+
+    /// <summary>
+    /// The compatibility preflight a product's identical-bytes shortcut still owes its caller, run
+    /// only when the caller actually asked for it. Both shortcuts (<see cref="BuildRedline"/> and the
+    /// revision list) route through here so they cannot drift apart again: the pre-accept pair is
+    /// built the same way <c>_preflighted</c> builds it, but nothing else on the shortcut path needs
+    /// those documents, so they are not memoized.
+    /// </summary>
+    private void RunGatedPreflight()
+    {
+        var s = _settings;
+        if (s.OnCompatibilityWarning == null && !s.ThrowOnCompatibilityWarning)
+            return;
+        var preflightLeft = DocxDiff.PreAccept(s, _originalLeft);
+        var preflightRight = DocxDiff.PreAccept(s, _originalRight);
+        DocxDiff.PreflightCompatibility(s, preflightLeft, preflightRight);
     }
 
     private IrEditScript BuildFusedScript(IrDiffSettings diff)
