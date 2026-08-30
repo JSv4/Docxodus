@@ -229,6 +229,25 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **`DocxDiff.Compare` is byte-reproducible again once a redline creates or imports a part
+  (#621).** `Deterministic` promises that two comparisons of the same inputs are byte-identical,
+  and that only held for text-only documents. Two generators were reseeded on every run: parts
+  imported alongside right-sourced content were named `P` + a fresh GUID with the relationships
+  pointing at them named `R` + another (one SmartArt comparison churned nine
+  `word/diagrams/P*.xml` parts plus their `_rels`), and parts the renderer *creates* — numbering,
+  notes, comments, an inserted header or footer — took the Open XML SDK's own `AddNewPart` id,
+  which is `R` + sixteen random hex characters. The churn propagated into `document.xml`, the
+  `_rels` and the `[Content_Types].xml` overrides, so the same comparison produced a different
+  artifact hash every time, defeating content-addressed storage, caching, signing and byte-level
+  regression testing. An imported part is now named for a SHA-256 of the source bytes it carries
+  (identical bytes fold onto one name; a copy that must stay distinct takes the next free `-N`
+  suffix), its relationship takes the lowest free `R`*n* on the owning part, and every created
+  part is added under a named id. Fixing this also uncovered a latent corruption: the import
+  fixup rewrote a copied part through `GetStream()` — OpenOrCreate, no truncation — so a rewrite
+  that *shrank* the part left the tail of the original behind. Nothing shrank while the ids were
+  33 characters wide; the short deterministic ids made SmartArt diagram parts stop parsing until
+  the rewrite was switched to `FileMode.Create`. Verified across the `TestFiles` corpus: 1,356
+  comparisons, 168 media parts, byte-identical in a second process.
 - **DOCX GOLF: the Redline tab now shows an actual redline.** The view compares the
   player's document against the target (`docxDiffCompare`) and rendered the result with
   default conversion options — and `convertDocxToHtml` *accepts* revisions by default, so

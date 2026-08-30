@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus.Ir.Diff;
 
@@ -162,14 +163,14 @@ internal static class WordCompareFontTableBackfill
         }
         sb.Append("</w:fonts>");
 
-        var part = main.AddNewPart<FontTablePart>("rIdFontTableBackfill");
+        var part = main.AddDeterministicPart<FontTablePart>("rIdFontTableBackfill");
         using var writer = new StreamWriter(part.GetStream(FileMode.Create), new System.Text.UTF8Encoding(false));
         writer.Write(sb.ToString());
     }
 
     private static void BackfillWebSettings(MainDocumentPart main)
     {
-        var part = main.AddNewPart<WebSettingsPart>("rIdWebSettingsBackfill");
+        var part = main.AddDeterministicPart<WebSettingsPart>("rIdWebSettingsBackfill");
         using var writer = new StreamWriter(part.GetStream(FileMode.Create), new System.Text.UTF8Encoding(false));
         writer.Write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             "<w:webSettings xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +

@@ -19,6 +19,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using System.Security.Cryptography;
 using Docxodus;
+using Docxodus.Internal;
 
 // It is possible to optimize DescendantContentAtoms
 
@@ -1616,7 +1617,7 @@ namespace Docxodus
             var mdp = wDoc.MainDocumentPart;
             if (mdp.FootnotesPart == null)
             {
-                mdp.AddNewPart<FootnotesPart>();
+                mdp.AddDeterministicPart<FootnotesPart>("rIdFootnotes");
                 var newFootnotes = wDoc.MainDocumentPart.FootnotesPart.GetXDocument();
                 newFootnotes.Declaration.Standalone = "yes";
                 newFootnotes.Declaration.Encoding = "UTF-8";
@@ -1625,7 +1626,7 @@ namespace Docxodus
             }
             if (mdp.EndnotesPart == null)
             {
-                mdp.AddNewPart<EndnotesPart>();
+                mdp.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
                 var newEndnotes = wDoc.MainDocumentPart.EndnotesPart.GetXDocument();
                 newEndnotes.Declaration.Standalone = "yes";
                 newEndnotes.Declaration.Encoding = "UTF-8";
@@ -2187,7 +2188,8 @@ namespace Docxodus
             if (toNumberingPart == null)
             {
                 // Create a new NumberingDefinitionsPart if one doesn't exist
-                toNumberingPart = wDocTo.MainDocumentPart.AddNewPart<NumberingDefinitionsPart>();
+                toNumberingPart =
+                    wDocTo.MainDocumentPart.AddDeterministicPart<NumberingDefinitionsPart>("rIdNumbering");
                 toNumberingXDoc = new XDocument(
                     new XDeclaration("1.0", "UTF-8", "yes"),
                     new XElement(W.numbering,
@@ -6557,7 +6559,7 @@ namespace Docxodus
         private static string ImportExternalRelationship(
             PackagePart destinationOwner, PackageRelationship sourceRelationship)
         {
-            var newRid = NewRelationshipId();
+            var newRid = NewRelationshipId(destinationOwner);
             destinationOwner.CreateRelationship(
                 sourceRelationship.TargetUri, TargetMode.External, sourceRelationship.RelationshipType, newRid);
             return newRid;
@@ -6571,7 +6573,7 @@ namespace Docxodus
             if (!state.TryGetDestination(sourceTarget, sourceOwner, sourceRelationship, out var destinationTarget))
             {
                 destinationTarget = destinationOwner.Package.CreatePart(
-                    NewRelatedPartUri(sourceTarget), sourceTarget.ContentType);
+                    NewRelatedPartUri(sourceTarget, destinationOwner.Package), sourceTarget.ContentType);
                 state.Remember(sourceTarget, sourceOwner, sourceRelationship, destinationTarget);
                 using (var oldPartStream = sourceTarget.GetStream())
                 using (var newPartStream = destinationTarget.GetStream())
@@ -6582,7 +6584,7 @@ namespace Docxodus
                     skipDanglingRelationships, skipHeaderFooterReferences);
             }
 
-            var newRid = NewRelationshipId();
+            var newRid = NewRelationshipId(destinationOwner);
             destinationOwner.CreateRelationship(
                 destinationTarget.Uri, TargetMode.Internal, sourceRelationship.RelationshipType, newRid);
             return newRid;
@@ -6616,7 +6618,11 @@ namespace Docxodus
             MoveRelatedPartsToDestination(
                 sourcePart, copiedPart, copiedXDoc.Root, state,
                 skipDanglingRelationships, skipHeaderFooterReferences);
-            using (var stream = copiedPart.GetStream())
+            // FileMode.Create TRUNCATES. The plain GetStream() overload opens OpenOrCreate, so a rewrite
+            // shorter than the bytes just copied in leaves the tail of the original behind and the part stops
+            // parsing. Remapping only ever GREW a part while relationship ids were "R" + a 32-character Guid;
+            // with the deterministic ids (see NewRelationshipId) a fixed-up part is routinely shorter.
+            using (var stream = copiedPart.GetStream(FileMode.Create, FileAccess.Write))
                 copiedXDoc.Save(stream);
 
             // SmartArt's PREBUILT drawing rides an extension inside the DATA part (dsp:dataModelExt/@relId)
@@ -6652,22 +6658,62 @@ namespace Docxodus
             return false;
         }
 
-        private static Uri NewRelatedPartUri(PackagePart sourcePart)
+        /// <summary>
+        /// Deterministic destination name for an imported part, keeping the historic "P" + 32 lowercase hex
+        /// shape. A fresh <c>Guid</c> here used to churn the name of every imported media/diagram part on
+        /// every run, and that churn propagated into <c>document.xml</c>, the <c>_rels</c> and the
+        /// <c>[Content_Types].xml</c> overrides — so a redline that imported media was never byte-reproducible,
+        /// contrary to what <see cref="Ir.Diff.IrDiffSettings.Deterministic"/> promises.
+        ///
+        /// The address is taken over the SOURCE part's bytes, not the copy's: an XML part is fixed up AFTER
+        /// it is copied, and that fixup embeds the names of the parts below it, so the copy's own bytes are
+        /// not yet known when the name has to be chosen. Identical source bytes therefore land on one name,
+        /// and the lowest free "-N" suffix separates copies that must stay distinct anyway — a second import
+        /// of the same source part (each cloned block imports under its own <see cref="RelatedPartImportState"/>)
+        /// or the per-owner diagram-data rule that state documents. The suffix is stable because the import
+        /// walk is document-ordered.
+        /// </summary>
+        private static Uri NewRelatedPartUri(PackagePart sourcePart, Package destinationPackage)
         {
             var uriSplit = sourcePart.Uri.ToString().Split('/');
             var last = uriSplit[uriSplit.Length - 1].Split('.');
-            var uriString = last.Length == 2
-                ? uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
-                    "P" + Guid.NewGuid().ToString().Replace("-", "") + "." + last[1]
-                : uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
-                    "P" + Guid.NewGuid().ToString().Replace("-", "");
-            return sourcePart.Uri.IsAbsoluteUri
-                ? new Uri(uriString, UriKind.Absolute)
-                : new Uri(uriString, UriKind.Relative);
+            var stem = uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
+                "P" + ContentAddress(sourcePart);
+            var extension = last.Length == 2 ? "." + last[1] : string.Empty;
+            var kind = sourcePart.Uri.IsAbsoluteUri ? UriKind.Absolute : UriKind.Relative;
+
+            var candidate = new Uri(stem + extension, kind);
+            for (var n = 1; destinationPackage.PartExists(candidate); n++)
+                candidate = new Uri(
+                    stem + "-" + n.ToString(CultureInfo.InvariantCulture) + extension, kind);
+            return candidate;
         }
 
-        private static string NewRelationshipId() =>
-            "R" + Guid.NewGuid().ToString().Replace("-", "");
+        /// <summary>Lowercase hex SHA-256 of a part's bytes, truncated to the 32 characters the
+        /// replaced <c>Guid</c> occupied. Collision only costs a "-N" suffix, never correctness.</summary>
+        private static string ContentAddress(PackagePart part)
+        {
+            using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
+            return Convert.ToHexStringLower(SHA256.HashData(stream)).Substring(0, 32);
+        }
+
+        /// <summary>
+        /// Deterministic relationship id: the lowest free "R"+ordinal on the owner that will carry the
+        /// relationship. Relationship ids are part-scoped, so clearing the ids already on this one owner is
+        /// enough for validity, and the result is reproducible where the replaced <c>Guid</c> was not.
+        /// Same probe shape as <c>IrMarkupRenderer.FreshRelationshipId</c>.
+        /// </summary>
+        private static string NewRelationshipId(PackagePart destinationOwner)
+        {
+            var n = 1;
+            string candidate;
+            do
+            {
+                candidate = "R" + n++.ToString(CultureInfo.InvariantCulture);
+            }
+            while (destinationOwner.RelationshipExists(candidate));
+            return candidate;
+        }
 
         /// <summary>See the call site: copy the MS-2007 prebuilt diagram drawing referenced by the
         /// copied data part's <c>dsp:dataModelExt/@relId</c> (resolved against the top-level source
@@ -6716,7 +6762,7 @@ namespace Docxodus
             }
 
             if (changed)
-                using (var s = copiedDataPart.GetStream())
+                using (var s = copiedDataPart.GetStream(FileMode.Create, FileAccess.Write))
                     dataXDoc.Save(s);
         }
 
