@@ -28,6 +28,12 @@ instead of sitting at one fixed size that would measure nothing.
 
 ![DIFF STRESS](../images/demo/diff-stress.gif)
 
+The meter in that GIF reads slower than the table below, and should: capturing it
+runs a screenshot recorder at 10fps against the same CPU, and the clip starts
+after a full negotiation has already grown the document. Both are the confound
+described further down — the stress p50 measures the machine and the input as much
+as the engine. The GIF is there to show the loop running, not to be read off.
+
 Three depths, because "how fast is the diff engine" has three honest answers:
 
 | depth | engine calls | measured |
